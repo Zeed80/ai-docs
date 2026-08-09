@@ -1,0 +1,42 @@
+{
+  "graph_id": "example:shaft-with-hole",
+  "schema_version": "emg/1.0",
+  "revision": 0,
+  "parent_revision": null,
+  "canonical_sha256": "eda40c870e0ae35e19cbeccd51e7a706afdb959435a72e08385ff43206e654ad",
+  "profile": "mechanical",
+  "sources": [{"id": "source:drawing", "document_id": "drawing-126", "uri": "documents/detal_126.png", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "revision": "A", "media_type": "image/png"}],
+  "nodes": [
+    {"id": "set:1", "type": "DocumentSet", "name": "Комплект детали"},
+    {"id": "document:1", "type": "Document", "name": "Деталь 126"},
+    {"id": "sheet:1", "type": "Sheet", "name": "Лист 1"},
+    {"id": "view:front", "type": "View", "name": "Главный вид"},
+    {"id": "region:diameter", "type": "SourceRegion", "name": "Размер диаметра"},
+    {"id": "product:shaft", "type": "Product", "name": "Вал"},
+    {"id": "feature:hole", "type": "Feature", "name": "Сквозное отверстие"},
+    {"id": "parameter:diameter", "type": "Parameter", "name": "Диаметр отверстия"},
+    {"id": "operation:cut", "type": "BuildOperation", "name": "Вырез отверстия"},
+    {"id": "artifact:step", "type": "Artifact", "name": "Provisional STEP"},
+    {"id": "topology:hole-face", "type": "TopologyElement", "name": "Цилиндрическая грань"}
+  ],
+  "edges": [
+    {"id": "e1", "type": "contains", "source_id": "set:1", "target_id": "document:1"},
+    {"id": "e2", "type": "contains", "source_id": "document:1", "target_id": "sheet:1"},
+    {"id": "e3", "type": "contains", "source_id": "sheet:1", "target_id": "view:front"},
+    {"id": "e4", "type": "located_in", "source_id": "region:diameter", "target_id": "view:front"},
+    {"id": "e5", "type": "represented_by", "source_id": "product:shaft", "target_id": "view:front"},
+    {"id": "e6", "type": "part_of", "source_id": "feature:hole", "target_id": "product:shaft"},
+    {"id": "e7", "type": "defines", "source_id": "parameter:diameter", "target_id": "feature:hole"},
+    {"id": "e8", "type": "depends_on", "source_id": "operation:cut", "target_id": "parameter:diameter"},
+    {"id": "e9", "type": "generated_by", "source_id": "artifact:step", "target_id": "operation:cut"},
+    {"id": "e10", "type": "maps_to_topology", "source_id": "feature:hole", "target_id": "topology:hole-face"}
+  ],
+  "assertions": [{"id": "assertion:diameter", "subject_id": "parameter:diameter", "predicate": "diameter", "value": {"kind": "exact", "value": 15.7}, "unit": "mm", "origin": "observed", "assurance": "observed", "evidence_ids": ["evidence:diameter"], "confidence": 0.96, "impacts": ["connection_opening"], "hypothesis_id": "option:observed"}],
+  "evidence": [{"id": "evidence:diameter", "kind": "dimension", "source_id": "source:drawing", "source_region_id": "region:diameter", "payload": {"bbox_normalized": [0.1, 0.2, 0.3, 0.28], "text": "Ø15,7"}}],
+  "hypothesis_options": [{"id": "option:observed", "assertion_ids": ["assertion:diameter"], "hard_constraints_satisfied": true, "evidence_coverage": 1.0, "cross_view_consistency": 1.0, "assumption_count": 0, "domain_prior": 0.8, "hybrid_trace_score": 0.0}],
+  "hypothesis_sets": [{"id": "hypothesis:hole", "option_ids": ["option:observed"], "selected_option_id": "option:observed"}],
+  "requirements": [{"id": "requirement:hole", "kind": "interface", "target_node_ids": ["feature:hole"], "assertion_ids": ["assertion:diameter"], "mandatory": true}],
+  "build_targets": [{"id": "provisional", "kind": "provisional_step", "root_node_ids": ["product:shaft"], "requirement_ids": ["requirement:hole"], "mass_tolerance_percent": 1.0}],
+  "verification": {"comprehension": "converged", "build": "preview_ready", "release": "blocked", "issue_codes": ["human_approval_required"], "critical_unresolved_assertion_ids": ["assertion:diameter"], "checked_levels": [1, 2, 3, 4, 6]},
+  "reader_manifest": {"max_wall_seconds": 900, "max_model_calls": 32, "call_timeout_seconds": 90, "no_progress_pass_limit": 2, "calls_used": 2, "elapsed_seconds": 41.2, "no_progress_passes": 0, "ordinary_attempts": {"assertion:diameter": 1}, "stop_reason": "frontier_resolved"}
+}

@@ -333,6 +333,15 @@ export default function EngineeringModelGraphPanel({
         {selected && (
           <div className="flex items-center gap-3 text-xs">
             <span className="text-zinc-400">r{selected.revision} · {selected.canonical_sha256.slice(0, 12)}</span>
+            {generationId && (
+              <a
+                href={engineeringApi.generationModelGraphDownloadUrl(generationId)}
+                download
+                className="text-emerald-300"
+              >
+                Скачать .emg.json
+              </a>
+            )}
             <button disabled={busy} onClick={() => void verify()} className="text-sky-300 disabled:text-zinc-600">
               Проверить 12 уровней
             </button>

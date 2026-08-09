@@ -146,6 +146,7 @@ D3 (revolve/sweep/loft/shell/threads), D4-хвост (self-intersection, асс�
 Статус: **backend-контракт и вертикальный rollout-срез реализованы; primary pipeline включён как production canary только для профиля `mechanical`** через `EMG_PIPELINE_ENABLED=true` + `EMG_PIPELINE_PROFILES=mechanical`.
 
 - [x] Закрытый Pydantic-контракт `emg/1.0`: document-set root, типизированные nodes/edges, assertion values (`exact`, `interval`, `enum_set`, `expression`, `unknown`), origin/assurance/evidence, hypotheses, requirements, build targets, три независимых статуса и versioned extension registry.
+- [x] Публичный файловый контракт описан в `ENGINEERING_MODEL_GRAPH_SPEC.md`: versioned `.emg.json`/`.emg-patch.json`, генерируемые Draft 2020-12 JSON Schemas, sealed mechanical examples и CLI/Make validation. В generation Graph Inspector добавлено владельчески защищённое скачивание latest canonical revision с revision/SHA headers; UI явно показывает число узлов и инженерных связей.
 - [x] Каноническая сериализация и SHA-256; broken refs, duplicate IDs и незарегистрированные extensions fail closed.
 - [x] Атомарный `GraphPatch`: stale revision/SHA и idempotency gates, журнал отклонённых payload/errors, запрет reader/tracer/verifier повышать assurance до `constraint_validated`/`human_approved`, сохранение superseded assertions.
 - [x] Dependency-based impact analyzer: критичность вычисляется для build target; тип feature сам по себе ничего не решает; mass/material quantity учитывают target tolerance.

@@ -1,0 +1,18 @@
+{
+  "graph_id": "example:minimal-shaft",
+  "schema_version": "emg/1.0",
+  "revision": 0,
+  "parent_revision": null,
+  "canonical_sha256": "adb421d93a55bee90dc55620c167712b118c2c5bc0ab164facca9620e9062c98",
+  "profile": "mechanical",
+  "nodes": [
+    {"id": "document-set:1", "type": "DocumentSet", "name": "Комплект чертежа"},
+    {"id": "product:shaft", "type": "Product", "name": "Вал"}
+  ],
+  "edges": [
+    {"id": "edge:contains-product", "type": "contains", "source_id": "document-set:1", "target_id": "product:shaft"}
+  ],
+  "build_targets": [
+    {"id": "preview", "kind": "preview_brep", "root_node_ids": ["product:shaft"]}
+  ]
+}

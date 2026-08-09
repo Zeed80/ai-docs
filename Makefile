@@ -4,7 +4,7 @@
         clean rebuild nuke \
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
-        test test-cov e2e regression emg-regression emg-live-regression agent-regression agent-test agent-ws-smoke \
+        test test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression agent-regression agent-test agent-ws-smoke \
         studio-queue-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval \
         cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
         turboquant-benchmark turboquant-quality \
@@ -64,6 +64,9 @@ help:
 	@echo "    make test-cov         — backend tests with HTML coverage report"
 	@echo "    make e2e              — Playwright E2E tests"
 	@echo "    make regression       — manifest regression checks"
+	@echo "    make emg-schema       — regenerate public EMG v1 JSON Schemas"
+	@echo "    make emg-schema-check — fail when checked-in EMG Schemas are stale"
+	@echo "    make emg-validate     — validate checked-in .emg.json examples"
 	@echo "    make emg-regression   — four-domain EngineeringModelGraph golden gate"
 	@echo "    make emg-live-regression — live CAD/STEP/IFC/system matrix in production stack"
 	@echo "    make cad-regression   — scan-to-DXF golden regression"
@@ -212,6 +215,18 @@ e2e:
 regression:
 	python3 scripts/regression_manifest_check.py example-invoices/manifest.json docs/drawing-samples-manifest.json docs/technology-regression-manifest.json
 	python3 scripts/agent_role_regression_check.py
+
+emg-schema:
+	cd backend && PYTHONPATH=. python3 scripts/export_emg_schemas.py
+
+emg-schema-check:
+	cd backend && PYTHONPATH=. python3 scripts/export_emg_schemas.py --check
+
+emg-validate:
+	cd backend && PYTHONPATH=. python3 scripts/validate_emg_file.py \
+		../examples/emg/minimal-mechanical.emg.json \
+		../examples/emg/full-mechanical.emg.json \
+		../examples/emg/human-correction.emg-patch.json
 
 emg-regression:
 	cd backend && PYTHONPATH=. python3 scripts/eval_emg_domains.py \

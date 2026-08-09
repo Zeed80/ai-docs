@@ -1,0 +1,12 @@
+{
+  "schema_version": "emg-patch/1.0",
+  "patch_id": "patch:approve-diameter",
+  "base_revision": 0,
+  "base_sha256": "eda40c870e0ae35e19cbeccd51e7a706afdb959435a72e08385ff43206e654ad",
+  "producer": "human",
+  "pass_id": "human-review-1",
+  "idempotency_key": "example:human-review-1",
+  "add_assertions": [{"id": "assertion:diameter-approved", "subject_id": "parameter:diameter", "predicate": "diameter", "value": {"kind": "exact", "value": 15.7}, "unit": "mm", "origin": "human", "assurance": "human_approved", "evidence_ids": ["evidence:diameter"], "confidence": 1.0, "impacts": ["connection_opening"], "hypothesis_id": "option:observed", "supersedes_assertion_id": "assertion:diameter"}],
+  "supersede_assertion_ids": ["assertion:diameter"],
+  "resolved_question_ids": ["confirm:hole-diameter"]
+}

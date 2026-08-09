@@ -1,0 +1,1006 @@
+{
+  "$defs": {
+    "Assertion": {
+      "additionalProperties": false,
+      "properties": {
+        "assurance": {
+          "default": "proposed",
+          "enum": [
+            "proposed",
+            "observed",
+            "corroborated",
+            "constraint_validated",
+            "human_approved",
+            "contradicted"
+          ],
+          "title": "Assurance",
+          "type": "string"
+        },
+        "confidence": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "coordinate_system": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Coordinate System"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "extension": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extension"
+        },
+        "hypothesis_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hypothesis Id"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "impact_magnitude_percent": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Impact Magnitude Percent",
+          "type": "object"
+        },
+        "impacts": {
+          "items": {
+            "enum": [
+              "base_topology",
+              "component_count",
+              "assembly_interface",
+              "mate",
+              "fit",
+              "interchangeability",
+              "envelope",
+              "connection_opening",
+              "load_path",
+              "structural_capacity",
+              "regulatory_check",
+              "connectivity",
+              "required_view",
+              "required_section",
+              "required_dimension",
+              "manufacturing_safety",
+              "operational_safety",
+              "material_quantity",
+              "mass",
+              "visual_only"
+            ],
+            "type": "string"
+          },
+          "title": "Impacts",
+          "type": "array"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Namespace"
+        },
+        "origin": {
+          "enum": [
+            "observed",
+            "traced",
+            "derived",
+            "standard",
+            "assumed",
+            "human"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "predicate": {
+          "title": "Predicate",
+          "type": "string"
+        },
+        "state": {
+          "default": "active",
+          "enum": [
+            "active",
+            "superseded",
+            "retracted"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "subject_id": {
+          "title": "Subject Id",
+          "type": "string"
+        },
+        "supersedes_assertion_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes Assertion Id"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "value": {
+          "discriminator": {
+            "mapping": {
+              "enum_set": "#/$defs/EnumSetValue",
+              "exact": "#/$defs/ExactValue",
+              "expression": "#/$defs/ExpressionValue",
+              "interval": "#/$defs/IntervalValue",
+              "unknown": "#/$defs/UnknownValue"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ExactValue"
+            },
+            {
+              "$ref": "#/$defs/IntervalValue"
+            },
+            {
+              "$ref": "#/$defs/EnumSetValue"
+            },
+            {
+              "$ref": "#/$defs/ExpressionValue"
+            },
+            {
+              "$ref": "#/$defs/UnknownValue"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "id",
+        "subject_id",
+        "predicate",
+        "value",
+        "origin"
+      ],
+      "title": "Assertion",
+      "type": "object"
+    },
+    "BuildTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "critical_impacts": {
+          "items": {
+            "enum": [
+              "base_topology",
+              "component_count",
+              "assembly_interface",
+              "mate",
+              "fit",
+              "interchangeability",
+              "envelope",
+              "connection_opening",
+              "load_path",
+              "structural_capacity",
+              "regulatory_check",
+              "connectivity",
+              "required_view",
+              "required_section",
+              "required_dimension",
+              "manufacturing_safety",
+              "operational_safety",
+              "material_quantity",
+              "mass",
+              "visual_only"
+            ],
+            "type": "string"
+          },
+          "title": "Critical Impacts",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "preview_brep",
+            "production_step",
+            "provisional_step",
+            "preview_ifc",
+            "production_ifc",
+            "provisional_ifc",
+            "stl",
+            "dxf",
+            "pdf"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "mass_tolerance_percent": {
+          "default": 1.0,
+          "minimum": 0.0,
+          "title": "Mass Tolerance Percent",
+          "type": "number"
+        },
+        "requirement_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requirement Ids",
+          "type": "array"
+        },
+        "root_node_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Root Node Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "root_node_ids"
+      ],
+      "title": "BuildTarget",
+      "type": "object"
+    },
+    "EnumSetValue": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "enum_set",
+          "title": "Kind",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "values"
+      ],
+      "title": "EnumSetValue",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "raster_region",
+            "vector_entity",
+            "text",
+            "dimension",
+            "standard",
+            "calculation",
+            "trace_run",
+            "visual_verification",
+            "human_decision",
+            "kernel_topology",
+            "projection_comparison",
+            "model_raw_output"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Id"
+        },
+        "source_region_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Region Id"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "ExactValue": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "exact",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "items": {},
+              "type": "array"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "ExactValue",
+      "type": "object"
+    },
+    "ExpressionValue": {
+      "additionalProperties": false,
+      "properties": {
+        "expression": {
+          "minLength": 1,
+          "title": "Expression",
+          "type": "string"
+        },
+        "kind": {
+          "const": "expression",
+          "title": "Kind",
+          "type": "string"
+        },
+        "variable_assertion_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Variable Assertion Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "expression"
+      ],
+      "title": "ExpressionValue",
+      "type": "object"
+    },
+    "GraphEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "extension": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extension"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Namespace"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "target_id": {
+          "title": "Target Id",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "contains",
+            "part_of",
+            "instance_of",
+            "located_in",
+            "represented_by",
+            "same_object_across_views",
+            "defines",
+            "depends_on",
+            "constrains",
+            "applies_to",
+            "mates_with",
+            "connects_to",
+            "opens_in",
+            "generated_by",
+            "maps_to_topology"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "source_id",
+        "target_id"
+      ],
+      "title": "GraphEdge",
+      "type": "object"
+    },
+    "GraphNode": {
+      "additionalProperties": false,
+      "properties": {
+        "extension": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extension"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Namespace"
+        },
+        "type": {
+          "enum": [
+            "DocumentSet",
+            "Document",
+            "Sheet",
+            "View",
+            "SourceRegion",
+            "Product",
+            "Component",
+            "Feature",
+            "Geometry",
+            "Material",
+            "Parameter",
+            "Constraint",
+            "System",
+            "Port",
+            "BuildOperation",
+            "Artifact",
+            "TopologyElement"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "title": "GraphNode",
+      "type": "object"
+    },
+    "HypothesisOption": {
+      "additionalProperties": false,
+      "properties": {
+        "assertion_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assertion Ids",
+          "type": "array"
+        },
+        "assumption_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Assumption Count",
+          "type": "integer"
+        },
+        "cross_view_consistency": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Cross View Consistency",
+          "type": "number"
+        },
+        "domain_prior": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Domain Prior",
+          "type": "number"
+        },
+        "evidence_coverage": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Evidence Coverage",
+          "type": "number"
+        },
+        "hard_constraints_satisfied": {
+          "default": false,
+          "title": "Hard Constraints Satisfied",
+          "type": "boolean"
+        },
+        "hybrid_trace_score": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Hybrid Trace Score",
+          "type": "number"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "assertion_ids"
+      ],
+      "title": "HypothesisOption",
+      "type": "object"
+    },
+    "HypothesisSet": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "option_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Option Ids",
+          "type": "array"
+        },
+        "selected_option_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selected Option Id"
+        }
+      },
+      "required": [
+        "id",
+        "option_ids"
+      ],
+      "title": "HypothesisSet",
+      "type": "object"
+    },
+    "IntervalValue": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "interval",
+          "title": "Kind",
+          "type": "string"
+        },
+        "lower": {
+          "title": "Lower",
+          "type": "number"
+        },
+        "lower_inclusive": {
+          "default": true,
+          "title": "Lower Inclusive",
+          "type": "boolean"
+        },
+        "upper": {
+          "title": "Upper",
+          "type": "number"
+        },
+        "upper_inclusive": {
+          "default": true,
+          "title": "Upper Inclusive",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "lower",
+        "upper"
+      ],
+      "title": "IntervalValue",
+      "type": "object"
+    },
+    "Requirement": {
+      "additionalProperties": false,
+      "properties": {
+        "assertion_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assertion Ids",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "topology",
+            "interface",
+            "envelope",
+            "load",
+            "connectivity",
+            "view",
+            "section",
+            "dimension",
+            "safety",
+            "quantity",
+            "mass",
+            "domain"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "mandatory": {
+          "default": true,
+          "title": "Mandatory",
+          "type": "boolean"
+        },
+        "target_node_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Node Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "title": "Requirement",
+      "type": "object"
+    },
+    "UnknownValue": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "unknown",
+          "title": "Kind",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "UnknownValue",
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.ptsai.local/emg/graph-patch-1.0.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "add_assertions": {
+      "items": {
+        "$ref": "#/$defs/Assertion"
+      },
+      "title": "Add Assertions",
+      "type": "array"
+    },
+    "add_edges": {
+      "items": {
+        "$ref": "#/$defs/GraphEdge"
+      },
+      "title": "Add Edges",
+      "type": "array"
+    },
+    "add_evidence": {
+      "items": {
+        "$ref": "#/$defs/Evidence"
+      },
+      "title": "Add Evidence",
+      "type": "array"
+    },
+    "add_hypothesis_options": {
+      "items": {
+        "$ref": "#/$defs/HypothesisOption"
+      },
+      "title": "Add Hypothesis Options",
+      "type": "array"
+    },
+    "add_hypothesis_sets": {
+      "items": {
+        "$ref": "#/$defs/HypothesisSet"
+      },
+      "title": "Add Hypothesis Sets",
+      "type": "array"
+    },
+    "add_nodes": {
+      "items": {
+        "$ref": "#/$defs/GraphNode"
+      },
+      "title": "Add Nodes",
+      "type": "array"
+    },
+    "base_revision": {
+      "minimum": 0,
+      "title": "Base Revision",
+      "type": "integer"
+    },
+    "base_sha256": {
+      "title": "Base Sha256",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "pass_id": {
+      "title": "Pass Id",
+      "type": "string"
+    },
+    "patch_id": {
+      "title": "Patch Id",
+      "type": "string"
+    },
+    "producer": {
+      "enum": [
+        "reader",
+        "tracer",
+        "visual_verifier",
+        "system",
+        "human"
+      ],
+      "title": "Producer",
+      "type": "string"
+    },
+    "reader_attempt_assertion_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reader Attempt Assertion Ids",
+      "type": "array"
+    },
+    "reader_call_count": {
+      "default": 0,
+      "maximum": 4,
+      "minimum": 0,
+      "title": "Reader Call Count",
+      "type": "integer"
+    },
+    "reader_call_elapsed_seconds": {
+      "default": 0.0,
+      "minimum": 0.0,
+      "title": "Reader Call Elapsed Seconds",
+      "type": "number"
+    },
+    "reader_stop_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reader Stop Reason"
+    },
+    "remaining_contradictions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Remaining Contradictions",
+      "type": "array"
+    },
+    "replace_build_targets": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/BuildTarget"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Replace Build Targets"
+    },
+    "replace_requirements": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/Requirement"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Replace Requirements"
+    },
+    "resolved_question_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Resolved Question Ids",
+      "type": "array"
+    },
+    "retract_assertion_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Retract Assertion Ids",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "emg-patch/1.0",
+      "default": "emg-patch/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "supersede_assertion_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Supersede Assertion Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "patch_id",
+    "base_revision",
+    "base_sha256",
+    "producer",
+    "pass_id",
+    "idempotency_key"
+  ],
+  "title": "GraphPatch",
+  "type": "object"
+}

@@ -150,6 +150,10 @@ test("blocked DXF digitization opens canonical EMG before legacy spec", async ({
   await expect(page.getByText("Чтение и граф сохранены; построение заблокировано до уточнения critical assertions.")).toBeVisible();
   await expect(page.getByText("hole.location_mm", { exact: true })).toBeVisible();
   await expect(page.getByText("Выпуск: blocked")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Скачать .emg.json" })).toHaveAttribute(
+    "href",
+    `/api/image-gen/${generationId}/model-graph/download`,
+  );
   await expect(page.getByText(/SourceRegion: region:hole · точный ROI/)).toBeVisible();
   await expect(page.getByAltText("Исходный crop")).toBeVisible();
 

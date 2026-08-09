@@ -312,6 +312,7 @@ class EngineeringModelGraph(StrictModel):
 
 
 class GraphPatch(StrictModel):
+    schema_version: Literal["emg-patch/1.0"] = "emg-patch/1.0"
     patch_id: str
     base_revision: int = Field(ge=0)
     base_sha256: str

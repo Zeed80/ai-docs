@@ -252,6 +252,8 @@ export const engineeringApi = {
     request<EngineeringModelGraphRevision>(
       `/api/image-gen/${generationId}/model-graph`,
     ),
+  generationModelGraphDownloadUrl: (generationId: string) =>
+    `${getApiBaseUrl()}/api/image-gen/${generationId}/model-graph/download`,
   listGenerationGraphPatches: (generationId: string) =>
     request<EngineeringGraphPatch[]>(
       `/api/image-gen/${generationId}/model-graph/patches`,

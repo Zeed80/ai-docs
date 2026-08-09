@@ -635,6 +635,33 @@ async def get_generation_model_graph(
     return _generation_graph_response(gen, row, graph)
 
 
+@router.get("/{generation_id}/model-graph/download")
+async def download_generation_model_graph(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> Response:
+    """Download the latest owner-scoped immutable EMG revision."""
+    _gen, row, graph = await _owned_generation_graph(generation_id, db, user)
+    payload = json.dumps(
+        graph.model_dump(mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    filename = f"{row.graph_id.replace(':', '-')}-r{row.revision}.emg.json"
+    return Response(
+        content=payload,
+        media_type="application/vnd.ptsai.emg+json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Engineering-Graph-Revision": str(row.revision),
+            "X-Engineering-Graph-SHA256": row.canonical_sha256,
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/{generation_id}/model-graph/patches")
 async def list_generation_model_graph_patches(
     generation_id: uuid.UUID,

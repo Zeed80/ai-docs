@@ -176,6 +176,18 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert body["workflow_status"] == "review_required"
     assert any(item.get("name") == "Blocked shaft" for item in body["graph"]["nodes"])
 
+    downloaded = await client.get(
+        f"/api/image-gen/{generation.id}/model-graph/download"
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-type"].startswith(
+        "application/vnd.ptsai.emg+json"
+    )
+    assert downloaded.headers["x-engineering-graph-sha256"] == row.canonical_sha256
+    assert downloaded.headers["x-engineering-graph-revision"] == "0"
+    assert downloaded.headers["content-disposition"].endswith('.emg.json"')
+    assert downloaded.json()["canonical_sha256"] == row.canonical_sha256
+
     trace_overlay = await client.get(
         f"/api/image-gen/{generation.id}/model-graph/assertions/"
         "assertion:hole-diameter/source-overlay?mode=overlay&proposal_id=trace-test"
@@ -264,6 +276,10 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     await db_session.commit()
     denied = await client.get(f"/api/image-gen/{other.id}/model-graph")
     assert denied.status_code == 404
+    denied_download = await client.get(
+        f"/api/image-gen/{other.id}/model-graph/download"
+    )
+    assert denied_download.status_code == 404
 
 
 @pytest.mark.asyncio
