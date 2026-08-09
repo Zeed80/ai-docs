@@ -1035,6 +1035,126 @@ async def build_construction_model_graph(
     }
 
 
+@router.post("/revisions/{revision_id}/system-model-graph")
+async def sync_system_model_graph(
+    revision_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Project MEP/P&ID/electrical/hydraulic ports into immutable EMG."""
+    import hashlib
+
+    require_permission(user, "engineering.revision_create")
+    from app.ai.system_emg import EngineeringSystemModel, system_as_graph
+    from app.domain.engineering_model_graph import Evidence, GraphPatch
+    from app.services.engineering_model_graph import (
+        create_initial_graph,
+        latest_graph_revision,
+        load_graph,
+        merge_and_persist_patch,
+    )
+
+    revision = await db.get(EngineeringRevision, revision_id)
+    if revision is None:
+        raise HTTPException(404, "Инженерная ревизия не найдена")
+    try:
+        model = EngineeringSystemModel.model_validate(
+            revision.payload.get("system_model")
+        )
+    except Exception as exc:
+        raise HTTPException(422, f"system_model невалиден: {exc}") from exc
+    graph_id = f"system:{revision_id}"
+    latest = await latest_graph_revision(db, graph_id, lock=True)
+    if latest is None:
+        graph = system_as_graph(
+            graph_id=graph_id,
+            model=model,
+            source_revision_id=str(revision_id),
+            source_approved=revision.status == "approved",
+        )
+        latest = await create_initial_graph(
+            db,
+            graph,
+            engineering_project_id=revision.engineering_project_id,
+            engineering_revision_id=revision.id,
+        )
+        await db.commit()
+    else:
+        graph = load_graph(latest)
+        approvable = [
+            item for item in graph.assertions
+            if item.state == "active"
+            and item.origin == "human"
+            and item.assurance == "observed"
+            and item.value.kind != "unknown"
+        ]
+        if revision.status == "approved" and approvable:
+            approval_seed = f"system:{revision_id}:{revision.approved_by or 'approved'}"
+            approval_digest = hashlib.sha256(approval_seed.encode()).hexdigest()
+            evidence_id = f"evidence:system-approval:{approval_digest[:20]}"
+            replacements = [
+                item.model_copy(update={
+                    "id": f"assertion:system-approved:{hashlib.sha256(item.id.encode()).hexdigest()[:20]}",
+                    "assurance": "human_approved",
+                    "evidence_ids": [evidence_id],
+                    "supersedes_assertion_id": item.id,
+                })
+                for item in approvable
+            ]
+            patch = GraphPatch(
+                patch_id=f"system-approval:{approval_digest}",
+                base_revision=graph.revision,
+                base_sha256=graph.canonical_sha256,
+                producer="human",
+                pass_id=f"system-approval:r{graph.revision + 1}",
+                idempotency_key=f"system-approval:{graph.canonical_sha256}:{approval_digest}",
+                add_assertions=replacements,
+                add_evidence=[Evidence(
+                    id=evidence_id,
+                    kind="human_decision",
+                    payload={
+                        "engineering_revision_id": str(revision_id),
+                        "approved_by": revision.approved_by,
+                        "approved_at": (
+                            revision.approved_at.isoformat()
+                            if revision.approved_at else None
+                        ),
+                    },
+                    sha256=approval_digest,
+                )],
+                supersede_assertion_ids=[item.id for item in approvable],
+            )
+            row, errors = await merge_and_persist_patch(
+                db,
+                patch,
+                expected_graph_id=graph_id,
+            )
+            if row is None:
+                await db.rollback()
+                raise HTTPException(409, "Approval GraphPatch отклонён: " + ", ".join(errors))
+            await db.commit()
+            latest = row
+            graph = load_graph(row)
+    from app.domain.engineering_model_graph import compile_build_plan
+
+    production = compile_build_plan(graph, "production")
+    return {
+        "id": str(latest.id),
+        "engineering_project_id": str(latest.engineering_project_id),
+        "engineering_revision_id": str(latest.engineering_revision_id),
+        "graph_id": latest.graph_id,
+        "revision": latest.revision,
+        "canonical_sha256": latest.canonical_sha256,
+        "profile": latest.profile,
+        "comprehension_status": latest.comprehension_status,
+        "build_status": latest.build_status,
+        "release_status": latest.release_status,
+        "production_export_allowed": production.production_export_allowed,
+        "critical_assumption_ids": production.critical_assumption_ids,
+        "graph": graph.model_dump(mode="json"),
+    }
+
+
 @router.get("/revisions/{revision_id}/validation-runs", response_model=list[EngineeringValidationRunOut])
 async def list_validation_runs(revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringValidationRun]:
     return list((await db.execute(

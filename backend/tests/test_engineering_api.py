@@ -396,6 +396,91 @@ async def test_construction_graph_builds_reopened_ifc_and_replays_idempotently(
 
 
 @pytest.mark.asyncio
+async def test_system_graph_connectivity_is_approval_gated_and_idempotent(
+    client: AsyncClient,
+    monkeypatch,
+):
+    graph_objects: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.upload_file",
+        lambda content, path, _content_type: graph_objects.setdefault(path, content),
+    )
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.download_file",
+        lambda path: graph_objects[path],
+    )
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.delete_file",
+        lambda path: graph_objects.pop(path, None),
+    )
+    project = (await client.post(
+        "/api/engineering/projects", json={"name": "Hydraulic system"}
+    )).json()
+    revision = (await client.post(
+        f"/api/engineering/projects/{project['id']}/revisions",
+        json={
+            "base_revision": None,
+            "payload": {"system_model": {
+                "profile": "hydraulic",
+                "name": "Power unit",
+                "system_kind": "hydraulic_power",
+                "equipment": [
+                    {"id": "pump", "name": "Pump", "equipment_type": "pump"},
+                    {"id": "tank", "name": "Tank", "equipment_type": "reservoir"},
+                ],
+                "ports": [
+                    {
+                        "id": "pump-out",
+                        "equipment_id": "pump",
+                        "kind": "pressure",
+                        "direction": "out",
+                        "medium": "oil",
+                    },
+                    {
+                        "id": "tank-in",
+                        "equipment_id": "tank",
+                        "kind": "return",
+                        "direction": "in",
+                        "medium": "oil",
+                    },
+                ],
+                "connections": [{
+                    "id": "line-1",
+                    "first_port_id": "pump-out",
+                    "second_port_id": "tank-in",
+                }],
+            }},
+        },
+    )).json()
+
+    initial = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/system-model-graph"
+    )
+    assert initial.status_code == 200
+    assert initial.json()["profile"] == "hydraulic"
+    assert initial.json()["revision"] == 0
+    assert initial.json()["production_export_allowed"] is False
+
+    approved = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/approve",
+        json={"approved_by": "chief-engineer"},
+    )
+    assert approved.status_code == 200
+    promoted = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/system-model-graph"
+    )
+    assert promoted.status_code == 200
+    assert promoted.json()["revision"] == 1
+    assert promoted.json()["production_export_allowed"] is True
+
+    replay = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/system-model-graph"
+    )
+    assert replay.status_code == 200
+    assert replay.json()["revision"] == 1
+
+
+@pytest.mark.asyncio
 async def test_release_validation_promotes_clean_revision(client: AsyncClient):
     project = (await client.post("/api/engineering/projects", json={"name": "Втулка"})).json()
     revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
