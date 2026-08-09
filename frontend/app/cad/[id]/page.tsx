@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 
 import CadWorkspace from "@/components/cad/CadWorkspace";
+import EngineeringModelGraphPanel from "@/components/engineering/EngineeringModelGraphPanel";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { Generation, getGeneration } from "@/lib/studio-api";
 
@@ -151,6 +152,7 @@ export default function CadEditorPage() {
   const id = params?.id;
   const [gen, setGen] = useState<Generation | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<"model_graph" | "drawing">("drawing");
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -165,6 +167,11 @@ export default function CadEditorPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const hasModelGraph = Boolean(gen?.params?.engineering_model_graph);
+  useEffect(() => {
+    setActiveView(hasModelGraph ? "model_graph" : "drawing");
+  }, [hasModelGraph, id]);
 
   // A digitization still in flight: poll until it lands.
   const processing = gen?.status === "queued" || gen?.status === "running";
@@ -225,37 +232,45 @@ export default function CadEditorPage() {
           <p className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
             {gen.error || t("status_failed")}
           </p>
-          <div className="flex min-h-0 flex-1 flex-col gap-2 lg:flex-row">
-            <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded border border-zinc-800 bg-zinc-900/40">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`${API}/api/image-gen/${gen.id}/source`}
-                alt={gen.source_image_paths?.[0] ?? ""}
-                className="max-h-full max-w-full object-contain"
-              />
+          {hasModelGraph && (
+            <CadResultTabs active={activeView} onChange={setActiveView} />
+          )}
+          {activeView === "model_graph" && hasModelGraph ? (
+            <div className="min-h-0 flex-1 overflow-auto">
+              <EngineeringModelGraphPanel generationId={gen.id} onError={setError} />
             </div>
-            {(gen.params?.spec as Record<string, unknown> | undefined) && (
-              <div className="min-h-0 space-y-2 overflow-auto lg:w-[46%]">
-                <ReadSoFar
-                  spec={gen.params.spec as Record<string, unknown>}
-                  note={t("reading_kept_note")}
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col gap-2 lg:flex-row">
+              <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded border border-zinc-800 bg-zinc-900/40">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`${API}/api/image-gen/${gen.id}/source`}
+                  alt={gen.source_image_paths?.[0] ?? ""}
+                  className="max-h-full max-w-full object-contain"
                 />
-                {(gen.params?.solid_input as Record<string, unknown> | undefined) && (
-                  <BlockedSolidInput
-                    input={gen.params.solid_input as Record<string, unknown>}
-                    solid={gen.params.solid_3d as Record<string, unknown> | undefined}
-                    t={t}
-                  />
-                )}
-                {/* The reading survives a failed build on purpose: it is the
-                    expensive half, and it is usually one value short of a
-                    part. */}
-                <p className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                  {t("reading_kept_after_failure")}
-                </p>
               </div>
-            )}
-          </div>
+              {(gen.params?.spec as Record<string, unknown> | undefined) && (
+                <div className="min-h-0 space-y-2 overflow-auto lg:w-[46%]">
+                  <ReadSoFar
+                    spec={gen.params.spec as Record<string, unknown>}
+                    note={t("reading_kept_note")}
+                  />
+                  {(gen.params?.solid_input as Record<string, unknown> | undefined) && (
+                    <BlockedSolidInput
+                      input={gen.params.solid_input as Record<string, unknown>}
+                      solid={gen.params.solid_3d as Record<string, unknown> | undefined}
+                      t={t}
+                    />
+                  )}
+                  {/* EngineeringDrawingSpec is retained as an editable
+                      compatibility view, not the canonical source of truth. */}
+                  <p className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    {t("reading_kept_after_failure")}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
       {gen && processing && (
@@ -264,10 +279,48 @@ export default function CadEditorPage() {
         </p>
       )}
       {gen && gen.status === "done" && gen.operation === "vectorize" && (
-        <div className="min-h-0 flex-1">
-          <CadWorkspace gen={gen} onChanged={load} />
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          {hasModelGraph && (
+            <CadResultTabs active={activeView} onChange={setActiveView} />
+          )}
+          {activeView === "model_graph" && hasModelGraph ? (
+            <div className="min-h-0 flex-1 overflow-auto">
+              <EngineeringModelGraphPanel generationId={gen.id} onError={setError} />
+            </div>
+          ) : (
+            <div className="min-h-0 flex-1">
+              <CadWorkspace gen={gen} onChanged={load} />
+            </div>
+          )}
         </div>
       )}
     </main>
+  );
+}
+
+function CadResultTabs({
+  active,
+  onChange,
+}: {
+  active: "model_graph" | "drawing";
+  onChange: (value: "model_graph" | "drawing") => void;
+}) {
+  return (
+    <nav className="flex w-fit gap-1 rounded border border-white/10 bg-zinc-900 p-1 text-xs">
+      <button
+        type="button"
+        onClick={() => onChange("model_graph")}
+        className={`rounded px-3 py-1.5 ${active === "model_graph" ? "bg-sky-500/20 text-sky-200" : "text-zinc-400"}`}
+      >
+        Engineering Model Graph
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("drawing")}
+        className={`rounded px-3 py-1.5 ${active === "drawing" ? "bg-white/10 text-zinc-200" : "text-zinc-400"}`}
+      >
+        Чертёж и compatibility-view
+      </button>
+    </nav>
   );
 }

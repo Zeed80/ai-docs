@@ -30,9 +30,11 @@ const ASSURANCE: Record<string, string> = {
 
 export default function EngineeringModelGraphPanel({
   projectId,
+  generationId,
   onError,
 }: {
-  projectId: string;
+  projectId?: string;
+  generationId?: string;
   onError: (message: string) => void;
 }) {
   const [graphs, setGraphs] = useState<EngineeringModelGraphRevision[]>([]);
@@ -55,13 +57,24 @@ export default function EngineeringModelGraphPanel({
   const targets = useMemo(() => selected?.graph.build_targets ?? [], [selected]);
   const load = useCallback(async () => {
     try {
-      const rows = await engineeringApi.listModelGraphs(projectId);
+      const rows = generationId
+        ? [await engineeringApi.getGenerationModelGraph(generationId)]
+        : projectId
+          ? await engineeringApi.listModelGraphs(projectId)
+          : [];
       setGraphs(rows);
-      setSelectedId((current) => current ?? rows[0]?.id ?? null);
+      setSelectedId((current) => (
+        rows.some((item) => item.id === current) ? current : rows[0]?.id ?? null
+      ));
     } catch (error) {
-      onError(String(error));
+      if (generationId && String(error).startsWith("Error: 404")) {
+        setGraphs([]);
+        setSelectedId(null);
+      } else {
+        onError(String(error));
+      }
     }
-  }, [onError, projectId]);
+  }, [generationId, onError, projectId]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
@@ -91,14 +104,17 @@ export default function EngineeringModelGraphPanel({
       setTraces([]);
       return;
     }
-    Promise.all([
-      engineeringApi.listGraphPatches(selectedGraphId),
-      engineeringApi.listTraceProposals(selectedRevisionId),
-    ]).then(([patchRows, traceRows]) => {
+    const patchRequest = generationId
+      ? engineeringApi.listGenerationGraphPatches(generationId)
+      : engineeringApi.listGraphPatches(selectedGraphId);
+    const traceRequest = generationId
+      ? engineeringApi.listGenerationTraceProposals(generationId)
+      : engineeringApi.listTraceProposals(selectedRevisionId);
+    Promise.all([patchRequest, traceRequest]).then(([patchRows, traceRows]) => {
       setPatches(patchRows);
       setTraces(traceRows);
     }).catch((error) => onError(String(error)));
-  }, [onError, selectedGraphId, selectedRevisionId]);
+  }, [generationId, onError, selectedGraphId, selectedRevisionId]);
 
   useEffect(() => {
     const preferred = targets.find((item) => item.id === "production") ?? targets[0];
@@ -168,7 +184,14 @@ export default function EngineeringModelGraphPanel({
     let active = true;
     setImpactLoading(true);
     setImpactError(null);
-    engineeringApi.getAssertionImpact(selectedRevisionId, selectedAssertionId, targetId)
+    const request = generationId
+      ? engineeringApi.getGenerationAssertionImpact(
+          generationId, selectedAssertionId, targetId,
+        )
+      : engineeringApi.getAssertionImpact(
+          selectedRevisionId, selectedAssertionId, targetId,
+        );
+    request
       .then((result) => { if (active) setImpact(result); })
       .catch((error) => {
         if (active) {
@@ -178,13 +201,14 @@ export default function EngineeringModelGraphPanel({
       })
       .finally(() => { if (active) setImpactLoading(false); });
     return () => { active = false; };
-  }, [selectedAssertionId, selectedRevisionId, targetId]);
+  }, [generationId, selectedAssertionId, selectedRevisionId, targetId]);
 
   async function verify() {
     if (!selected) return;
     setBusy(true);
     try {
-      await engineeringApi.verifyModelGraph(selected.id);
+      if (generationId) await engineeringApi.verifyGenerationModelGraph(generationId);
+      else await engineeringApi.verifyModelGraph(selected.id);
       await load();
     } catch (error) {
       onError(String(error));
@@ -198,7 +222,13 @@ export default function EngineeringModelGraphPanel({
     setBusy(true);
     setReaderStatus("QUEUED");
     try {
-      const task = await engineeringApi.startModelReader(selectedGraphId);
+      const task = generationId
+        ? await engineeringApi.startGenerationModelReader(
+            generationId, targetId || "preview",
+          )
+        : await engineeringApi.startModelReader(
+            selectedGraphId, targetId || "preview",
+          );
       setReaderTaskId(task.task_id);
     } catch (error) {
       setBusy(false);
@@ -229,6 +259,11 @@ export default function EngineeringModelGraphPanel({
         <div>
           <h2 className="text-sm font-medium text-zinc-100">Engineering Model Graph</h2>
           <p className="mt-1 text-xs text-zinc-500">Канонический граф, evidence, patch и влияние на построение</p>
+          {selected?.workflow_status === "review_required" && (
+            <p className="mt-1 text-xs text-amber-300">
+              Чтение и граф сохранены; построение заблокировано до уточнения critical assertions.
+            </p>
+          )}
         </div>
         {selected && (
           <div className="flex items-center gap-3 text-xs">
@@ -277,7 +312,7 @@ export default function EngineeringModelGraphPanel({
           </div>
           {artifactMessage && <p className="text-xs text-emerald-300">{artifactMessage}</p>}
 
-          <DomainArtifacts revisionId={selected.id} artifacts={artifacts} />
+          {!generationId && <DomainArtifacts revisionId={selected.id} artifacts={artifacts} />}
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.7fr)]">
             <div className="max-h-80 overflow-auto border border-white/10">

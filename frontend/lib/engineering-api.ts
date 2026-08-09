@@ -77,6 +77,9 @@ export type EngineeringModelGraphRevision = {
   comprehension_status: string;
   build_status: string;
   release_status: string;
+  generation_id?: string;
+  source_generation_status?: string;
+  workflow_status?: string;
   graph: {
     nodes: Array<{ id: string; type: string; name?: string | null }>;
     edges: Array<{ id: string; type: string; source_id: string; target_id: string }>;
@@ -243,6 +246,36 @@ export const engineeringApi = {
   listModelGraphs: (projectId: string) =>
     request<EngineeringModelGraphRevision[]>(
       `/api/engineering-model-graphs/projects/${projectId}/graphs`,
+    ),
+  getGenerationModelGraph: (generationId: string) =>
+    request<EngineeringModelGraphRevision>(
+      `/api/image-gen/${generationId}/model-graph`,
+    ),
+  listGenerationGraphPatches: (generationId: string) =>
+    request<EngineeringGraphPatch[]>(
+      `/api/image-gen/${generationId}/model-graph/patches`,
+    ),
+  listGenerationTraceProposals: (generationId: string) =>
+    request<EngineeringTraceProposal[]>(
+      `/api/image-gen/${generationId}/model-graph/trace-proposals`,
+    ),
+  getGenerationAssertionImpact: (
+    generationId: string,
+    assertionId: string,
+    targetId: string,
+  ) =>
+    request<EngineeringAssertionImpact>(
+      `/api/image-gen/${generationId}/model-graph/assertions/${encodeURIComponent(assertionId)}/impact?target_id=${encodeURIComponent(targetId)}`,
+    ),
+  verifyGenerationModelGraph: (generationId: string) =>
+    request<{ state: Record<string, unknown>; issues: Array<Record<string, unknown>> }>(
+      `/api/image-gen/${generationId}/model-graph/verify`,
+      { method: "POST" },
+    ),
+  startGenerationModelReader: (generationId: string, targetId = "preview") =>
+    request<{ task_id: string; graph_id: string; base_revision: number; target_id: string }>(
+      `/api/image-gen/${generationId}/model-graph/reader-runs?target_id=${encodeURIComponent(targetId)}`,
+      { method: "POST" },
     ),
   listGraphPatches: (graphId: string) =>
     request<EngineeringGraphPatch[]>(

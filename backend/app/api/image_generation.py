@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 import httpx
 import structlog
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
@@ -527,6 +527,204 @@ async def get_generation(
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     return _gen_out(gen)
+
+
+async def _owned_generation_graph(
+    generation_id: uuid.UUID,
+    db: AsyncSession,
+    user: UserInfo,
+    *,
+    lock: bool = False,
+):
+    """Resolve the latest EMG revision without exposing cross-owner graph IDs."""
+    from app.services.engineering_model_graph import latest_graph_revision, load_graph
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    row = await latest_graph_revision(
+        db, f"image-generation:{generation_id}", lock=lock
+    )
+    if row is None:
+        raise HTTPException(404, "EngineeringModelGraph для оцифровки ещё не создан")
+    return gen, row, load_graph(row)
+
+
+def _generation_graph_response(gen, row, graph) -> dict:
+    return {
+        "generation_id": str(gen.id),
+        "source_generation_status": gen.status.value,
+        "workflow_status": (
+            "review_required"
+            if gen.status == ImageGenStatus.failed
+            else gen.status.value
+        ),
+        "id": str(row.id),
+        "engineering_project_id": None,
+        "engineering_revision_id": None,
+        "graph_id": row.graph_id,
+        "revision": row.revision,
+        "parent_revision": row.parent_revision,
+        "canonical_sha256": row.canonical_sha256,
+        "profile": row.profile,
+        "comprehension_status": row.comprehension_status,
+        "build_status": row.build_status,
+        "release_status": row.release_status,
+        "graph": graph.model_dump(mode="json"),
+    }
+
+
+@router.get("/{generation_id}/model-graph")
+async def get_generation_model_graph(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Return the latest immutable EMG even when the CAD build was blocked."""
+    gen, row, graph = await _owned_generation_graph(generation_id, db, user)
+    return _generation_graph_response(gen, row, graph)
+
+
+@router.get("/{generation_id}/model-graph/patches")
+async def list_generation_model_graph_patches(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> list[dict]:
+    from app.db.models import GraphPatchRecord
+
+    _gen, row, _graph = await _owned_generation_graph(generation_id, db, user)
+    rows = list((await db.execute(
+        select(GraphPatchRecord)
+        .where(GraphPatchRecord.graph_id == row.graph_id)
+        .order_by(GraphPatchRecord.created_at.desc())
+    )).scalars())
+    return [{
+        "id": str(item.id),
+        "patch_id": item.patch_id,
+        "producer": item.producer,
+        "pass_id": item.pass_id,
+        "accepted": item.accepted,
+        "payload": item.payload,
+        "validation_errors": item.validation_errors,
+        "result_revision_id": (
+            str(item.result_revision_id) if item.result_revision_id else None
+        ),
+        "created_at": item.created_at,
+    } for item in rows]
+
+
+@router.get("/{generation_id}/model-graph/trace-proposals")
+async def list_generation_model_graph_traces(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> list[dict]:
+    from app.db.models import TraceProposalRecord, VisualVerificationRun
+
+    _gen, row, _graph = await _owned_generation_graph(generation_id, db, user)
+    proposals = list((await db.execute(
+        select(TraceProposalRecord)
+        .where(TraceProposalRecord.graph_revision_id == row.id)
+        .order_by(TraceProposalRecord.source_region_id, TraceProposalRecord.rank)
+    )).scalars())
+    proposal_ids = [item.id for item in proposals]
+    visuals = list((await db.execute(
+        select(VisualVerificationRun).where(
+            VisualVerificationRun.trace_proposal_id.in_(proposal_ids)
+        )
+    )).scalars()) if proposal_ids else []
+    visual_by_proposal = {}
+    for visual in visuals:
+        visual_by_proposal.setdefault(visual.trace_proposal_id, []).append(visual)
+    return [{
+        "id": str(item.id),
+        "proposal_id": item.proposal_id,
+        "source_region_id": item.source_region_id,
+        "assertion_id": item.assertion_id,
+        "rank": item.rank,
+        "status": item.status,
+        "score": item.score,
+        "payload": item.payload,
+        "visual_verifications": [
+            run.result | {"raw_output": run.raw_output}
+            for run in visual_by_proposal.get(item.id, [])
+        ],
+    } for item in proposals]
+
+
+@router.get("/{generation_id}/model-graph/assertions/{assertion_id}/impact")
+async def get_generation_assertion_impact(
+    generation_id: uuid.UUID,
+    assertion_id: str,
+    target_id: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    from app.domain.engineering_model_graph import assertion_impact_report
+
+    _gen, _row, graph = await _owned_generation_graph(generation_id, db, user)
+    try:
+        return assertion_impact_report(
+            graph, assertion_id, target_id
+        ).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(404, "Assertion или build target не найден") from exc
+
+
+@router.post("/{generation_id}/model-graph/verify")
+async def verify_generation_model_graph(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    from app.services.engineering_model_graph import (
+        persist_verification_run,
+        verify_graph,
+    )
+
+    gen, row, graph = await _owned_generation_graph(generation_id, db, user)
+    state, issues = verify_graph(graph)
+    run = await persist_verification_run(db, row, state, issues)
+    row.comprehension_status = state.comprehension
+    row.build_status = state.build
+    row.release_status = state.release
+    await db.commit()
+    return {
+        "run_id": str(run.id),
+        "workflow_status": (
+            "review_required"
+            if gen.status == ImageGenStatus.failed
+            else gen.status.value
+        ),
+        "state": state.model_dump(mode="json"),
+        "issues": issues,
+    }
+
+
+@router.post("/{generation_id}/model-graph/reader-runs", status_code=202)
+async def start_generation_model_reader(
+    generation_id: uuid.UUID,
+    target_id: str = Query(default="preview"),
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    _gen, row, graph = await _owned_generation_graph(generation_id, db, user)
+    if not any(item.id == target_id for item in graph.build_targets):
+        raise HTTPException(404, "Build target не найден")
+    from app.tasks.engineering_model_reader import run_engineering_model_reader
+
+    task = run_engineering_model_reader.apply_async(
+        args=[row.graph_id, target_id], queue="gpu"
+    )
+    return {
+        "task_id": task.id,
+        "generation_id": str(generation_id),
+        "graph_id": row.graph_id,
+        "base_revision": row.revision,
+        "base_sha256": row.canonical_sha256,
+        "target_id": target_id,
+    }
 
 
 def _cad_trace_payload(gen: ImageGeneration, key: str) -> Any:

@@ -27,6 +27,76 @@ INVALID_SHAFT = {
 
 
 @pytest.mark.asyncio
+async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
+    client, db_session, monkeypatch,
+):
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.domain.engineering_model_graph import (
+        BuildTarget,
+        EngineeringModelGraph,
+        GraphNode,
+    )
+    from app.services.engineering_model_graph import persist_pipeline_graph
+
+    objects: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.upload_file",
+        lambda content, path, _content_type: objects.setdefault(path, content),
+    )
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.download_file",
+        lambda path: objects[path],
+    )
+    generation = ImageGeneration(
+        owner_sub="dev-user",
+        operation="vectorize",
+        status=ImageGenStatus.failed,
+        params={"spec": {"part": "Blocked shaft"}},
+        error="critical dimensions unresolved",
+    )
+    db_session.add(generation)
+    await db_session.flush()
+    graph = EngineeringModelGraph(
+        graph_id=f"image-generation:{generation.id}",
+        profile="mechanical",
+        nodes=[GraphNode(id="product:part", type="Product", name="Blocked shaft")],
+        build_targets=[BuildTarget(
+            id="preview", kind="preview_brep", root_node_ids=["product:part"]
+        )],
+    ).sealed()
+    row = await persist_pipeline_graph(db_session, graph)
+    generation.params = {
+        **generation.params,
+        "engineering_model_graph": {"revision_id": str(row.id)},
+    }
+    await db_session.commit()
+
+    response = await client.get(f"/api/image-gen/{generation.id}/model-graph")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == str(row.id)
+    assert body["source_generation_status"] == "failed"
+    assert body["workflow_status"] == "review_required"
+    assert body["graph"]["nodes"][0]["name"] == "Blocked shaft"
+
+    verification = await client.post(
+        f"/api/image-gen/{generation.id}/model-graph/verify"
+    )
+    assert verification.status_code == 200
+    assert verification.json()["workflow_status"] == "review_required"
+
+    other = ImageGeneration(
+        owner_sub="another-user",
+        operation="vectorize",
+        status=ImageGenStatus.failed,
+    )
+    db_session.add(other)
+    await db_session.commit()
+    denied = await client.get(f"/api/image-gen/{other.id}/model-graph")
+    assert denied.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_workflows_seeded_and_listed(client, db_session):
     from app.db.seeds.comfyui_workflows import seed_builtin_workflows
 
