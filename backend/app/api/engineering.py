@@ -1304,6 +1304,259 @@ async def sync_mixed_model_graph(
     }
 
 
+@router.post("/revisions/{revision_id}/mixed-model-graph/bundle")
+async def build_mixed_model_bundle(
+    revision_id: uuid.UUID,
+    mode: str = "provisional",
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Create a deterministic ZIP of pinned graphs and verified domain artifacts."""
+    if mode not in {"provisional", "production"}:
+        raise HTTPException(422, "mode должен быть provisional или production")
+    import hashlib
+
+    from anyio import to_thread
+
+    from app.ai.mixed_bundle import (
+        build_mixed_artifact_bundle,
+        mixed_bundle_fingerprint,
+    )
+    from app.ai.mixed_emg import MixedModel
+    from app.db.models import EngineeringGraphRevision
+    from app.domain.engineering_model_graph import (
+        Assertion,
+        Evidence,
+        ExactValue,
+        GraphEdge,
+        GraphNode,
+        GraphPatch,
+        compile_build_plan,
+    )
+    from app.services.engineering_model_graph import (
+        latest_graph_revision,
+        load_graph,
+        merge_and_persist_patch,
+    )
+    from app.storage import delete_file, download_file, upload_file
+
+    await sync_mixed_model_graph(revision_id, db, user)
+    revision = await db.get(EngineeringRevision, revision_id)
+    if revision is None:
+        raise HTTPException(404, "Инженерная ревизия не найдена")
+    model = MixedModel.model_validate(revision.payload["mixed_model"])
+    mixed_row = await latest_graph_revision(db, f"mixed:{revision_id}", lock=True)
+    if mixed_row is None:
+        raise HTTPException(409, "Mixed EngineeringModelGraph не создан")
+    mixed_graph = load_graph(mixed_row)
+    members = {}
+    for member in model.members:
+        row = (await db.execute(select(EngineeringGraphRevision).where(
+            EngineeringGraphRevision.graph_id == member.graph_id,
+            EngineeringGraphRevision.revision == member.revision,
+            EngineeringGraphRevision.canonical_sha256 == member.canonical_sha256,
+        ))).scalar_one_or_none()
+        if row is None or row.engineering_project_id != revision.engineering_project_id:
+            raise HTTPException(409, f"Pinned member {member.alias} больше недоступен")
+        members[member.alias] = load_graph(row)
+    production_plan = compile_build_plan(mixed_graph, "production")
+    if mode == "production" and not production_plan.production_export_allowed:
+        raise HTTPException(
+            409,
+            "Production bundle заблокирован critical assertions: "
+            + ", ".join(production_plan.critical_assumption_ids),
+        )
+    fingerprint = mixed_bundle_fingerprint(mixed_graph, members, mode)
+    replay = next(
+        (
+            item for item in reversed(mixed_graph.evidence)
+            if item.kind == "calculation"
+            and item.payload.get("bundle_kind") == "mixed_artifact_bundle"
+            and item.payload.get("input_fingerprint") == fingerprint
+            and item.payload.get("mode") == mode
+        ),
+        None,
+    )
+    if replay is not None:
+        return {
+            "graph_id": mixed_graph.graph_id,
+            "revision": mixed_row.revision,
+            "canonical_sha256": mixed_row.canonical_sha256,
+            "mode": mode,
+            "bundle_path": replay.payload["bundle_path"],
+            "manifest_path": replay.payload["manifest_path"],
+            "bundle_sha256": replay.payload["bundle_sha256"],
+            "complete": replay.payload["complete"],
+            "missing_required_artifacts": replay.payload["missing_required_artifacts"],
+            "production_export_allowed": production_plan.production_export_allowed,
+            "idempotent_replay": True,
+        }
+    try:
+        bundle_bytes, manifest_bytes, manifest = await to_thread.run_sync(
+            lambda: build_mixed_artifact_bundle(
+                graph=mixed_graph,
+                members=members,
+                mode=mode,
+                load_artifact=download_file,
+            )
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(409, f"Bundle verification failed: {exc}") from exc
+    if mode == "production" and not manifest["complete"]:
+        missing = ", ".join(
+            f"{item['member']}:{item['reason']}"
+            for item in manifest["missing_required_artifacts"]
+        )
+        raise HTTPException(409, "Production bundle неполон: " + missing)
+    bundle_sha = manifest["bundle_sha256"]
+    base = f"engineering/mixed/{revision_id}/{mode}-{bundle_sha}"
+    bundle_path = base + ".zip"
+    manifest_path = base + ".manifest.json"
+    operation_id = f"operation:mixed-bundle:{bundle_sha[:20]}"
+    artifact_id = f"artifact:mixed-bundle:{bundle_sha[:20]}"
+    evidence_id = f"evidence:mixed-bundle:{bundle_sha[:20]}"
+    patch = GraphPatch(
+        patch_id=f"mixed-bundle:{mode}:{bundle_sha}",
+        base_revision=mixed_graph.revision,
+        base_sha256=mixed_graph.canonical_sha256,
+        producer="system",
+        pass_id=f"mixed-bundle:r{mixed_graph.revision + 1}",
+        idempotency_key=f"mixed-bundle:{fingerprint}",
+        add_nodes=[
+            GraphNode(id=operation_id, type="BuildOperation", name="Build mixed artifact bundle"),
+            GraphNode(id=artifact_id, type="Artifact", name=f"Mixed {mode} bundle"),
+        ],
+        add_edges=[
+            GraphEdge(
+                id=f"depends:{operation_id}",
+                type="depends_on",
+                source_id=operation_id,
+                target_id="document-set:mixed",
+            ),
+            GraphEdge(
+                id=f"generated:{artifact_id}",
+                type="generated_by",
+                source_id=artifact_id,
+                target_id=operation_id,
+            ),
+        ],
+        add_assertions=[
+            Assertion(
+                id=f"assertion:mixed-bundle-sha:{bundle_sha[:20]}",
+                subject_id=artifact_id,
+                predicate="artifact.bundle_sha256",
+                value=ExactValue(kind="exact", value=bundle_sha),
+                origin="derived",
+                assurance="constraint_validated",
+                evidence_ids=[evidence_id],
+                confidence=1.0,
+            ),
+            Assertion(
+                id=f"assertion:mixed-bundle-complete:{bundle_sha[:20]}",
+                subject_id=artifact_id,
+                predicate="artifact.bundle_complete",
+                value=ExactValue(kind="exact", value=manifest["complete"]),
+                origin="derived",
+                assurance="constraint_validated",
+                evidence_ids=[evidence_id],
+                confidence=1.0,
+            ),
+        ],
+        add_evidence=[Evidence(
+            id=evidence_id,
+            kind="calculation",
+            payload={
+                "bundle_kind": "mixed_artifact_bundle",
+                "mode": mode,
+                "input_fingerprint": fingerprint,
+                "bundle_path": bundle_path,
+                "manifest_path": manifest_path,
+                "bundle_sha256": bundle_sha,
+                "complete": manifest["complete"],
+                "missing_required_artifacts": manifest["missing_required_artifacts"],
+            },
+            sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        )],
+    )
+    uploaded = []
+    try:
+        await to_thread.run_sync(upload_file, bundle_bytes, bundle_path, "application/zip")
+        uploaded.append(bundle_path)
+        await to_thread.run_sync(upload_file, manifest_bytes, manifest_path, "application/json")
+        uploaded.append(manifest_path)
+        row, errors = await merge_and_persist_patch(
+            db,
+            patch,
+            expected_graph_id=mixed_graph.graph_id,
+        )
+        if row is None:
+            raise ValueError("Bundle GraphPatch отклонён: " + ", ".join(errors))
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        for path in reversed(uploaded):
+            try:
+                await to_thread.run_sync(delete_file, path)
+            except Exception:  # noqa: BLE001 - preserve primary bundle error
+                pass
+        if isinstance(exc, ValueError):
+            raise HTTPException(409, str(exc)) from exc
+        raise
+    return {
+        "graph_id": mixed_graph.graph_id,
+        "revision": row.revision,
+        "canonical_sha256": row.canonical_sha256,
+        "mode": mode,
+        "bundle_path": bundle_path,
+        "manifest_path": manifest_path,
+        "bundle_sha256": bundle_sha,
+        "complete": manifest["complete"],
+        "missing_required_artifacts": manifest["missing_required_artifacts"],
+        "production_export_allowed": production_plan.production_export_allowed,
+        "idempotent_replay": False,
+    }
+
+
+@router.get("/revisions/{revision_id}/mixed-model-graph/bundle")
+async def download_mixed_model_bundle(
+    revision_id: uuid.UUID,
+    mode: str = "provisional",
+    db: AsyncSession = Depends(get_db),
+):
+    """Download the latest recorded coordinated bundle for a mixed revision."""
+    from anyio import to_thread
+    from fastapi.responses import Response
+
+    from app.services.engineering_model_graph import latest_graph_revision, load_graph
+    from app.storage import download_file
+
+    row = await latest_graph_revision(db, f"mixed:{revision_id}")
+    if row is None:
+        raise HTTPException(404, "Mixed EngineeringModelGraph не найден")
+    graph = load_graph(row)
+    evidence = next(
+        (
+            item for item in reversed(graph.evidence)
+            if item.kind == "calculation"
+            and item.payload.get("bundle_kind") == "mixed_artifact_bundle"
+            and item.payload.get("mode") == mode
+        ),
+        None,
+    )
+    if evidence is None:
+        raise HTTPException(404, "Bundle для выбранного mode не найден")
+    content = await to_thread.run_sync(download_file, evidence.payload["bundle_path"])
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="mixed-{revision_id}-{mode}.zip"',
+            "X-Engineering-Artifact-SHA256": evidence.payload["bundle_sha256"],
+            "X-Engineering-Artifact-Status": mode,
+        },
+    )
+
+
 @router.get("/revisions/{revision_id}/validation-runs", response_model=list[EngineeringValidationRunOut])
 async def list_validation_runs(revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringValidationRun]:
     return list((await db.execute(
