@@ -311,6 +311,35 @@ def spec_feature_tree_as_graph(
     edges = list(graph.edges)
     assertions = list(graph.assertions)
     operation_assertion_ids: list[str] = []
+    spec_payload = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
+    title_block = spec_payload.get("title_block")
+    material_designation = (
+        title_block.get("material") if isinstance(title_block, dict) else None
+    )
+    if isinstance(material_designation, str) and material_designation.strip():
+        nodes.append(GraphNode(
+            id="material:primary",
+            type="Material",
+            name=material_designation.strip(),
+        ))
+        edges.append(GraphEdge(
+            id="applies:material:primary",
+            type="applies_to",
+            source_id="material:primary",
+            target_id="product:legacy-spec",
+        ))
+        material_assertion_id = "assertion:material:designation"
+        assertions.append(Assertion(
+            id=material_assertion_id,
+            subject_id="material:primary",
+            predicate="material.designation",
+            value=ExactValue(kind="exact", value=material_designation.strip()),
+            origin="derived",
+            assurance="proposed",
+            confidence=0.25,
+            impacts=["material_quantity", "manufacturing_safety"],
+        ))
+        operation_assertion_ids.append(material_assertion_id)
     provenance_origin = {
         "measured": "observed",
         "stated": "observed",

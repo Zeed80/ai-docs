@@ -25,6 +25,7 @@ from app.domain.engineering_model_graph import (
     VerificationState,
     apply_graph_patch,
     compile_build_plan,
+    domain_adapter_for,
 )
 from app.storage import delete_file, download_file, upload_file
 
@@ -345,6 +346,101 @@ def _has_cycle(graph: EngineeringModelGraph) -> bool:
     return any(visit(node.id) for node in graph.nodes)
 
 
+def _domain_rule_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
+    """Check adapter structure independently from reader/build assertions."""
+    if graph.profile == "mixed":
+        return []
+    adapter = domain_adapter_for(graph.profile)
+    issues: list[dict[str, Any]] = []
+    unsupported_nodes = sorted({
+        item.type for item in graph.nodes
+        if item.type not in adapter.supported_node_types
+    })
+    unsupported_edges = sorted({
+        item.type for item in graph.edges
+        if item.type not in adapter.supported_edge_types
+    })
+    active_predicates = {
+        item.predicate for item in graph.assertions if item.state == "active"
+    }
+    missing_predicates = sorted(
+        set(adapter.mandatory_assertions) - active_predicates
+    )
+    for code, values in (
+        ("domain_unsupported_node_type", unsupported_nodes),
+        ("domain_unsupported_edge_type", unsupported_edges),
+        ("domain_mandatory_assertion_missing", missing_predicates),
+    ):
+        if values:
+            issues.append({
+                "level": 7, "code": code, "values": values, "severity": "error",
+            })
+
+    node_type = {item.id: item.type for item in graph.nodes}
+    if graph.profile == "assembly":
+        if not any(item.type == "Product" for item in graph.nodes):
+            issues.append({"level": 7, "code": "assembly_product_missing", "severity": "error"})
+        instance_ids = {edge.source_id for edge in graph.edges if edge.type == "instance_of"}
+        unconstrained = sorted(
+            item_id for item_id in instance_ids
+            if not any(
+                edge.type == "mates_with"
+                and item_id in {edge.source_id, edge.target_id}
+                for edge in graph.edges
+            )
+            and len(instance_ids) > 1
+        )
+        if unconstrained:
+            issues.append({
+                "level": 7, "code": "assembly_instances_without_mate",
+                "node_ids": unconstrained, "severity": "error",
+            })
+    elif graph.profile == "construction":
+        feature_ids = {item.id for item in graph.nodes if item.type == "Feature"}
+        located = {edge.source_id for edge in graph.edges if edge.type == "located_in"}
+        if missing := sorted(feature_ids - located):
+            issues.append({
+                "level": 7, "code": "construction_element_without_storey",
+                "node_ids": missing, "severity": "error",
+            })
+        opening_ids = {
+            item.subject_id for item in graph.assertions
+            if item.state == "active"
+            and item.predicate == "element.kind"
+            and item.value.kind == "exact"
+            and item.value.value == "opening"
+        }
+        hosted = {edge.source_id for edge in graph.edges if edge.type == "opens_in"}
+        if missing := sorted(opening_ids - hosted):
+            issues.append({
+                "level": 7, "code": "construction_opening_without_host",
+                "node_ids": missing, "severity": "error",
+            })
+    elif graph.profile in {"mep", "electrical", "hydraulic", "pid"}:
+        port_ids = {item.id for item in graph.nodes if item.type == "Port"}
+        ownership = defaultdict(int)
+        for edge in graph.edges:
+            if edge.type == "part_of" and edge.source_id in port_ids:
+                ownership[edge.source_id] += 1
+        invalid = sorted(item_id for item_id in port_ids if ownership[item_id] != 1)
+        if invalid:
+            issues.append({
+                "level": 7, "code": "system_port_ownership_invalid",
+                "node_ids": invalid, "severity": "error",
+            })
+        if not any(node_type.get(edge.source_id) == "Port" and node_type.get(edge.target_id) == "Port" for edge in graph.edges if edge.type == "connects_to"):
+            connectivity = next((
+                item for item in graph.assertions
+                if item.state == "active" and item.predicate == "system.connectivity_closed"
+            ), None)
+            if connectivity and connectivity.value.kind == "exact" and connectivity.value.value is True:
+                issues.append({
+                    "level": 7, "code": "system_connectivity_claim_without_edges",
+                    "severity": "error",
+                })
+    return issues
+
+
 def verify_graph(graph: EngineeringModelGraph) -> tuple[VerificationState, list[dict[str, Any]]]:
     """Run the twelve verification levels with explicit unavailable evidence."""
     issues: list[dict[str, Any]] = []
@@ -374,6 +470,7 @@ def verify_graph(graph: EngineeringModelGraph) -> tuple[VerificationState, list[
         issues.append({"level": 6, "code": "cross_view_not_available", "severity": "warning"})
     if not graph.requirements:
         issues.append({"level": 7, "code": "domain_requirements_missing", "severity": "warning"})
+    issues.extend(_domain_rule_issues(graph))
     traced = [item for item in graph.assertions if item.origin == "traced" and item.state == "active"]
     evidence = {item.id: item for item in graph.evidence}
     for item in traced:
@@ -393,8 +490,20 @@ def verify_graph(graph: EngineeringModelGraph) -> tuple[VerificationState, list[
     if "projection_comparison" not in artifact_evidence:
         issues.append({"level": 11, "code": "projection_comparison_not_available", "severity": "warning"})
     mandatory_2d = [item for item in graph.requirements if item.mandatory and item.kind in {"view", "section", "dimension"}]
-    artifacts = {node.id for node in graph.nodes if node.type == "Artifact"}
-    if mandatory_2d and not artifacts:
+    artifact_ids = {node.id for node in graph.nodes if node.type == "Artifact"}
+    supported_2d_media = {"application/pdf", "application/dxf", "image/svg+xml"}
+    verified_2d_artifacts = {
+        item.subject_id
+        for item in graph.assertions
+        if item.state == "active"
+        and item.subject_id in artifact_ids
+        and item.predicate == "artifact.media_type"
+        and item.value.kind == "exact"
+        and item.value.value in supported_2d_media
+        and item.assurance in {"constraint_validated", "human_approved"}
+        and item.evidence_ids
+    }
+    if mandatory_2d and not verified_2d_artifacts:
         issues.append({"level": 12, "code": "required_2d_artifacts_missing", "severity": "error"})
 
     errors = [item for item in issues if item["severity"] == "error"]

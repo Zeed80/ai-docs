@@ -293,6 +293,7 @@ def assembly_as_graph(
         impacts=["assembly_interface", "operational_safety"],
     ))
     reopen_id = "assertion:assembly:artifact-reopen"
+    required_2d_id = "assertion:assembly:required-2d"
     assertions.append(Assertion(
         id=reopen_id,
         subject_id="product:assembly",
@@ -302,12 +303,30 @@ def assembly_as_graph(
         assurance="proposed",
         impacts=["base_topology", "operational_safety"],
     ))
-    required.extend([interference_id, reopen_id])
+    assertions.append(Assertion(
+        id=required_2d_id,
+        subject_id="product:assembly",
+        predicate="assembly.required_2d_complete",
+        value=UnknownValue(
+            kind="unknown",
+            reason="assembly drawing or exploded view has not been verified",
+        ),
+        origin="derived",
+        assurance="proposed",
+        impacts=["required_view"],
+    ))
+    required.extend([interference_id, reopen_id, required_2d_id])
     requirement = Requirement(
         id="requirement:assembly-release",
         kind="interface",
         target_node_ids=["product:assembly"],
         assertion_ids=required,
+    )
+    view_requirement = Requirement(
+        id="requirement:assembly-2d",
+        kind="view",
+        target_node_ids=["product:assembly"],
+        assertion_ids=[required_2d_id],
     )
     return EngineeringModelGraph(
         graph_id=graph_id,
@@ -316,7 +335,7 @@ def assembly_as_graph(
         edges=edges,
         assertions=assertions,
         evidence=evidence,
-        requirements=[requirement],
+        requirements=[requirement, view_requirement],
         build_targets=[
             BuildTarget(
                 id="preview",
@@ -328,7 +347,7 @@ def assembly_as_graph(
                 id="production",
                 kind="production_step",
                 root_node_ids=["product:assembly"],
-                requirement_ids=[requirement.id],
+                requirement_ids=[requirement.id, view_requirement.id],
             ),
         ],
     ).sealed()
@@ -356,6 +375,10 @@ def assembly_revision_patch(
         item for item in desired.evidence if item.id not in existing_evidence
     ]
     reopen_key = ("product:assembly", "assembly.artifact_reopen_valid")
+    contract_gate_keys = {
+        reopen_key,
+        ("product:assembly", "assembly.required_2d_complete"),
+    }
     extra_subject_ids = current_nodes - desired_nodes
 
     def _same_value(existing: Assertion | None, wanted: Assertion) -> bool:
@@ -377,11 +400,11 @@ def assembly_revision_patch(
         or desired_edges - current_edges
         or add_evidence
         or any(
-            key != reopen_key and not _same_value(active.get(key), wanted)
+            key not in contract_gate_keys and not _same_value(active.get(key), wanted)
             for key, wanted in desired_by_key.items()
         )
         or any(
-            key != reopen_key
+            key not in contract_gate_keys
             and item.subject_id not in extra_subject_ids
             and key not in desired_by_key
             for key, item in active.items()
@@ -404,7 +427,10 @@ def assembly_revision_patch(
             continue
         suffix = hashlib.sha256(f"{key}:{wanted.model_dump_json()}".encode()).hexdigest()[:16]
         replacement = wanted.model_copy(update={
-            "id": f"assertion:r{current.revision + 1}:{suffix}",
+            "id": (
+                f"assertion:r{current.revision + 1}:{suffix}"
+                if existing else wanted.id
+            ),
             "supersedes_assertion_id": existing.id if existing else None,
         })
         add_assertions.append(replacement)
@@ -421,16 +447,22 @@ def assembly_revision_patch(
         "edges": [item.model_dump(mode="json") for item in desired.edges],
         "assertions": [item.model_dump(mode="json") for item in desired.assertions],
         "evidence": [item.model_dump(mode="json") for item in desired.evidence],
+        "requirements": [item.model_dump(mode="json") for item in desired.requirements],
+        "build_targets": [item.model_dump(mode="json") for item in desired.build_targets],
     }
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    requirements_changed = current.requirements != desired.requirements
+    targets_changed = current.build_targets != desired.build_targets
     if not any((
         set(item.id for item in desired.nodes) - current_nodes,
         set(item.id for item in desired.edges) - current_edges,
         add_assertions,
         retract,
         add_evidence,
+        requirements_changed,
+        targets_changed,
     )):
         return None
     return GraphPatch(
@@ -450,4 +482,6 @@ def assembly_revision_patch(
         add_evidence=add_evidence,
         supersede_assertion_ids=supersede,
         retract_assertion_ids=retract,
+        replace_requirements=desired.requirements if requirements_changed else None,
+        replace_build_targets=desired.build_targets if targets_changed else None,
     )

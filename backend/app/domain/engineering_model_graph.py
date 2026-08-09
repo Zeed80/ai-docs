@@ -324,6 +324,8 @@ class GraphPatch(StrictModel):
     add_evidence: list[Evidence] = Field(default_factory=list)
     add_hypothesis_options: list[HypothesisOption] = Field(default_factory=list)
     add_hypothesis_sets: list[HypothesisSet] = Field(default_factory=list)
+    replace_requirements: list[Requirement] | None = None
+    replace_build_targets: list[BuildTarget] | None = None
     supersede_assertion_ids: list[str] = Field(default_factory=list)
     retract_assertion_ids: list[str] = Field(default_factory=list)
     resolved_question_ids: list[str] = Field(default_factory=list)
@@ -368,6 +370,21 @@ def apply_graph_patch(
         patch.reader_call_elapsed_seconds or patch.reader_attempt_assertion_ids
     ):
         errors.append("reader_runtime_metadata_requires_call")
+    if (
+        patch.replace_requirements is not None
+        or patch.replace_build_targets is not None
+    ) and patch.producer not in {"system", "human"}:
+        errors.append("contract_replacement_requires_system_or_human")
+    if patch.replace_requirements is not None:
+        current_ids = {item.id for item in graph.requirements}
+        replacement_ids = {item.id for item in patch.replace_requirements}
+        if current_ids - replacement_ids:
+            errors.append("contract_replacement_cannot_remove_requirements")
+    if patch.replace_build_targets is not None:
+        current_ids = {item.id for item in graph.build_targets}
+        replacement_ids = {item.id for item in patch.replace_build_targets}
+        if current_ids - replacement_ids:
+            errors.append("contract_replacement_cannot_remove_build_targets")
     current = {item.id: item for item in graph.assertions}
     unknown_attempts = sorted(set(patch.reader_attempt_assertion_ids) - current.keys())
     if unknown_attempts:
@@ -452,12 +469,80 @@ def apply_graph_patch(
             "evidence": [*graph.evidence, *patch.add_evidence],
             "hypothesis_options": [*graph.hypothesis_options, *patch.add_hypothesis_options],
             "hypothesis_sets": [*graph.hypothesis_sets, *patch.add_hypothesis_sets],
+            "requirements": (
+                patch.replace_requirements
+                if patch.replace_requirements is not None
+                else graph.requirements
+            ),
+            "build_targets": (
+                patch.replace_build_targets
+                if patch.replace_build_targets is not None
+                else graph.build_targets
+            ),
             "reader_manifest": reader_manifest,
         })
         merged = EngineeringModelGraph.model_validate(merged.model_dump(mode="json"))
     except ValueError as exc:
         raise PatchMergeError(["graph_integrity", str(exc)]) from exc
     return merged.sealed()
+
+
+def graph_contract_upgrade_patch(
+    current: EngineeringModelGraph,
+    desired: EngineeringModelGraph,
+    *,
+    patch_prefix: str,
+) -> GraphPatch | None:
+    """Create a non-destructive system patch for a newer adapter contract."""
+    active_keys = {
+        (item.subject_id, item.predicate)
+        for item in current.assertions if item.state == "active"
+    }
+    known_assertion_ids = {item.id for item in current.assertions}
+    add_assertions = [
+        item for item in desired.assertions
+        if (item.subject_id, item.predicate) not in active_keys
+        and item.id not in known_assertion_ids
+    ]
+    current_requirements = {item.id: item for item in current.requirements}
+    desired_requirements = {item.id: item for item in desired.requirements}
+    merged_requirements = [
+        desired_requirements.get(item.id, item) for item in current.requirements
+    ]
+    merged_requirements.extend(
+        item for item in desired.requirements if item.id not in current_requirements
+    )
+    current_targets = {item.id: item for item in current.build_targets}
+    desired_targets = {item.id: item for item in desired.build_targets}
+    merged_targets = [
+        desired_targets.get(item.id, item) for item in current.build_targets
+    ]
+    merged_targets.extend(
+        item for item in desired.build_targets if item.id not in current_targets
+    )
+    requirements_changed = merged_requirements != current.requirements
+    targets_changed = merged_targets != current.build_targets
+    if not add_assertions and not requirements_changed and not targets_changed:
+        return None
+    payload = {
+        "assertions": [item.model_dump(mode="json") for item in add_assertions],
+        "requirements": [item.model_dump(mode="json") for item in merged_requirements],
+        "build_targets": [item.model_dump(mode="json") for item in merged_targets],
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return GraphPatch(
+        patch_id=f"{patch_prefix}:{digest[:20]}",
+        base_revision=current.revision,
+        base_sha256=current.canonical_sha256,
+        producer="system",
+        pass_id=f"{patch_prefix}:r{current.revision + 1}",
+        idempotency_key=f"{patch_prefix}:{current.canonical_sha256}:{digest}",
+        add_assertions=add_assertions,
+        replace_requirements=merged_requirements if requirements_changed else None,
+        replace_build_targets=merged_targets if targets_changed else None,
+    )
 
 
 def select_hypothesis(options: list[HypothesisOption]) -> str | None:
@@ -958,8 +1043,8 @@ class DomainAdapter(StrictModel):
 DOMAIN_ADAPTERS: dict[str, DomainAdapter] = {
     "mechanical": DomainAdapter(
         profile="mechanical",
-        supported_node_types=["Product", "Component", "Feature", "Geometry", "Material", "Parameter", "Constraint", "BuildOperation", "Artifact", "TopologyElement"],
-        supported_edge_types=["contains", "part_of", "represented_by", "same_object_across_views", "defines", "depends_on", "constrains", "generated_by", "maps_to_topology"],
+        supported_node_types=["DocumentSet", "Document", "Sheet", "View", "SourceRegion", "Product", "Component", "Feature", "Geometry", "Material", "Parameter", "Constraint", "BuildOperation", "Artifact", "TopologyElement"],
+        supported_edge_types=["contains", "part_of", "represented_by", "same_object_across_views", "defines", "depends_on", "constrains", "applies_to", "generated_by", "maps_to_topology"],
         critical_impacts=["base_topology", "envelope", "assembly_interface", "fit", "connection_opening", "manufacturing_safety", "mass"],
         hybrid_trace_cases=["decorative_profile", "secondary_fillet", "visual_local_contour"],
         mandatory_assertions=["operation.kind", "material.designation"],
@@ -968,13 +1053,13 @@ DOMAIN_ADAPTERS: dict[str, DomainAdapter] = {
     ),
     "assembly": DomainAdapter(
         profile="assembly",
-        supported_node_types=["Product", "Component", "Feature", "Geometry", "Material", "Parameter", "Constraint", "BuildOperation", "Artifact", "TopologyElement"],
-        supported_edge_types=["contains", "part_of", "instance_of", "mates_with", "depends_on", "maps_to_topology"],
+        supported_node_types=["DocumentSet", "Document", "Sheet", "View", "SourceRegion", "Product", "Component", "Feature", "Geometry", "Material", "Parameter", "Constraint", "BuildOperation", "Artifact", "TopologyElement"],
+        supported_edge_types=["contains", "part_of", "instance_of", "represented_by", "applies_to", "mates_with", "depends_on", "generated_by", "maps_to_topology"],
         critical_impacts=["component_count", "assembly_interface", "mate", "fit", "interchangeability", "envelope", "operational_safety", "mass"],
         hybrid_trace_cases=["non_functional_instance_outline"],
         mandatory_assertions=["component.quantity", "mate.type"],
         build_gates=["components_resolved", "mates_solvable"],
-        release_gates=["critical_mates_approved", "degrees_of_freedom_validated"],
+        release_gates=["critical_mates_approved", "degrees_of_freedom_validated", "required_2d_complete"],
     ),
     "construction": DomainAdapter(
         profile="construction",
@@ -988,13 +1073,13 @@ DOMAIN_ADAPTERS: dict[str, DomainAdapter] = {
     ),
     "mep": DomainAdapter(
         profile="mep",
-        supported_node_types=["Component", "Feature", "Geometry", "System", "Port", "Parameter", "Constraint", "Artifact", "TopologyElement"],
-        supported_edge_types=["contains", "part_of", "connects_to", "opens_in", "depends_on", "maps_to_topology"],
+        supported_node_types=["DocumentSet", "Document", "Sheet", "View", "SourceRegion", "Component", "Feature", "Geometry", "System", "Port", "Parameter", "Constraint", "BuildOperation", "Artifact", "TopologyElement"],
+        supported_edge_types=["contains", "part_of", "represented_by", "connects_to", "opens_in", "depends_on", "generated_by", "maps_to_topology"],
         critical_impacts=["connectivity", "connection_opening", "envelope", "regulatory_check", "operational_safety"],
         hybrid_trace_cases=["symbol_outline", "non_connective_route_shape"],
         mandatory_assertions=["system.kind", "port.kind"],
         build_gates=["ports_typed", "connectivity_closed"],
-        release_gates=["connectivity_validated", "system_rules_passed"],
+        release_gates=["connectivity_validated", "system_rules_passed", "required_2d_complete"],
     ),
 }
 

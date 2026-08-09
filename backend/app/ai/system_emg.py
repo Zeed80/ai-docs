@@ -223,6 +223,7 @@ def system_as_graph(
 
     unresolved = model.unresolved_port_ids()
     connectivity_id = "assertion:system:connectivity-closed"
+    required_2d_id = "assertion:system:required-diagram"
     assertions.append(Assertion(
         id=connectivity_id,
         subject_id=system_id,
@@ -241,11 +242,30 @@ def system_as_graph(
         impacts=["connectivity", "operational_safety"],
     ))
     required.append(connectivity_id)
+    assertions.append(Assertion(
+        id=required_2d_id,
+        subject_id=system_id,
+        predicate="system.required_diagram_complete",
+        value=UnknownValue(
+            kind="unknown",
+            reason="P&ID, schematic or system diagram has not been verified",
+        ),
+        origin="derived",
+        assurance="proposed",
+        impacts=["required_view"],
+    ))
+    required.append(required_2d_id)
     requirement = Requirement(
         id="requirement:system-release",
         kind="connectivity",
         target_node_ids=[system_id],
         assertion_ids=required,
+    )
+    diagram_requirement = Requirement(
+        id="requirement:system-2d",
+        kind="view",
+        target_node_ids=[system_id],
+        assertion_ids=[required_2d_id],
     )
     return EngineeringModelGraph(
         graph_id=graph_id,
@@ -254,14 +274,14 @@ def system_as_graph(
         edges=edges,
         assertions=assertions,
         evidence=[evidence],
-        requirements=[requirement],
+        requirements=[requirement, diagram_requirement],
         build_targets=[
             BuildTarget(id="preview", kind="dxf", root_node_ids=[system_id], critical_impacts=[]),
             BuildTarget(
                 id="production",
                 kind="pdf",
                 root_node_ids=[system_id],
-                requirement_ids=[requirement.id],
+                requirement_ids=[requirement.id, diagram_requirement.id],
             ),
         ],
     ).sealed()

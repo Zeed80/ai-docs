@@ -503,7 +503,14 @@ async def build_assembly_model_graph(
     )
     if reopen_assertion is None:
         raise HTTPException(409, "В assembly graph отсутствует artifact reopen gate")
-    blockers = set(plan.critical_assumption_ids) - {reopen_assertion.id}
+    non_step_blockers = {
+        item.id for item in graph.assertions
+        if item.state == "active"
+        and item.predicate == "assembly.required_2d_complete"
+    }
+    blockers = set(plan.critical_assumption_ids) - {
+        reopen_assertion.id, *non_step_blockers,
+    }
     if blockers:
         raise HTTPException(
             409,
@@ -712,7 +719,11 @@ async def sync_construction_model_graph(
 
     require_permission(user, "engineering.revision_create")
     from app.ai.construction_emg import ConstructionModel, construction_as_graph
-    from app.domain.engineering_model_graph import Evidence, GraphPatch
+    from app.domain.engineering_model_graph import (
+        Evidence,
+        GraphPatch,
+        graph_contract_upgrade_patch,
+    )
     from app.services.engineering_model_graph import (
         create_initial_graph,
         latest_graph_revision,
@@ -730,14 +741,15 @@ async def sync_construction_model_graph(
     except Exception as exc:
         raise HTTPException(422, f"construction_model невалиден: {exc}") from exc
     graph_id = f"construction:{revision_id}"
+    desired = construction_as_graph(
+        graph_id=graph_id,
+        model=model,
+        source_revision_id=str(revision_id),
+        source_approved=revision.status == "approved",
+    )
     latest = await latest_graph_revision(db, graph_id, lock=True)
     if latest is None:
-        graph = construction_as_graph(
-            graph_id=graph_id,
-            model=model,
-            source_revision_id=str(revision_id),
-            source_approved=revision.status == "approved",
-        )
+        graph = desired
         latest = await create_initial_graph(
             db,
             graph,
@@ -747,6 +759,23 @@ async def sync_construction_model_graph(
         await db.commit()
     else:
         graph = load_graph(latest)
+        upgrade = graph_contract_upgrade_patch(
+            graph,
+            desired,
+            patch_prefix="construction-contract-upgrade",
+        )
+        if upgrade is not None:
+            upgraded, errors = await merge_and_persist_patch(
+                db, upgrade, expected_graph_id=graph_id,
+            )
+            if upgraded is None:
+                await db.rollback()
+                raise HTTPException(
+                    409, "Construction contract GraphPatch отклонён: " + ", ".join(errors),
+                )
+            await db.commit()
+            latest = upgraded
+            graph = load_graph(upgraded)
         approvable = [
             item for item in graph.assertions
             if item.state == "active"
@@ -1046,7 +1075,11 @@ async def sync_system_model_graph(
 
     require_permission(user, "engineering.revision_create")
     from app.ai.system_emg import EngineeringSystemModel, system_as_graph
-    from app.domain.engineering_model_graph import Evidence, GraphPatch
+    from app.domain.engineering_model_graph import (
+        Evidence,
+        GraphPatch,
+        graph_contract_upgrade_patch,
+    )
     from app.services.engineering_model_graph import (
         create_initial_graph,
         latest_graph_revision,
@@ -1064,14 +1097,15 @@ async def sync_system_model_graph(
     except Exception as exc:
         raise HTTPException(422, f"system_model невалиден: {exc}") from exc
     graph_id = f"system:{revision_id}"
+    desired = system_as_graph(
+        graph_id=graph_id,
+        model=model,
+        source_revision_id=str(revision_id),
+        source_approved=revision.status == "approved",
+    )
     latest = await latest_graph_revision(db, graph_id, lock=True)
     if latest is None:
-        graph = system_as_graph(
-            graph_id=graph_id,
-            model=model,
-            source_revision_id=str(revision_id),
-            source_approved=revision.status == "approved",
-        )
+        graph = desired
         latest = await create_initial_graph(
             db,
             graph,
@@ -1081,6 +1115,23 @@ async def sync_system_model_graph(
         await db.commit()
     else:
         graph = load_graph(latest)
+        upgrade = graph_contract_upgrade_patch(
+            graph,
+            desired,
+            patch_prefix="system-contract-upgrade",
+        )
+        if upgrade is not None:
+            upgraded, errors = await merge_and_persist_patch(
+                db, upgrade, expected_graph_id=graph_id,
+            )
+            if upgraded is None:
+                await db.rollback()
+                raise HTTPException(
+                    409, "System contract GraphPatch отклонён: " + ", ".join(errors),
+                )
+            await db.commit()
+            latest = upgraded
+            graph = load_graph(upgraded)
         approvable = [
             item for item in graph.assertions
             if item.state == "active"

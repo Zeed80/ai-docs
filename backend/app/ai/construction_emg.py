@@ -253,6 +253,7 @@ def construction_as_graph(
 
     contained_id = "assertion:construction:openings-contained"
     reopen_id = "assertion:construction:ifc-reopen"
+    required_2d_id = "assertion:construction:required-sheets"
     assertions.extend([
         Assertion(
             id=contained_id,
@@ -273,13 +274,31 @@ def construction_as_graph(
             assurance="proposed",
             impacts=["base_topology", "regulatory_check"],
         ),
+        Assertion(
+            id=required_2d_id,
+            subject_id=building_id,
+            predicate="construction.required_sheets_complete",
+            value=UnknownValue(
+                kind="unknown",
+                reason="mandatory plans and sections have not been verified",
+            ),
+            origin="derived",
+            assurance="proposed",
+            impacts=["required_view", "required_section"],
+        ),
     ])
-    required.extend([contained_id, reopen_id])
+    required.extend([contained_id, reopen_id, required_2d_id])
     requirement = Requirement(
         id="requirement:construction-release",
         kind="domain",
         target_node_ids=[building_id],
         assertion_ids=required,
+    )
+    sheet_requirement = Requirement(
+        id="requirement:construction-2d",
+        kind="view",
+        target_node_ids=[building_id],
+        assertion_ids=[required_2d_id],
     )
     return EngineeringModelGraph(
         graph_id=graph_id,
@@ -288,14 +307,14 @@ def construction_as_graph(
         edges=edges,
         assertions=assertions,
         evidence=[source_evidence],
-        requirements=[requirement],
+        requirements=[requirement, sheet_requirement],
         build_targets=[
             BuildTarget(id="preview", kind="preview_ifc", root_node_ids=[building_id], critical_impacts=[]),
             BuildTarget(
                 id="production",
                 kind="production_ifc",
                 root_node_ids=[building_id],
-                requirement_ids=[requirement.id],
+                requirement_ids=[requirement.id, sheet_requirement.id],
             ),
         ],
     ).sealed()

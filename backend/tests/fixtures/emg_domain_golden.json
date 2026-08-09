@@ -7,11 +7,11 @@
       "input": {"fixture": "detal_126_reference_spec_v2.json"},
       "expected": {
         "profile": "mechanical",
-        "canonical_sha256": "dc4deb1d9014cef06ac2c0ca12bfe2613427ffaa36353253d522561587ba3ce5",
-        "production_artifact_hash": "11b7c12974423ceb5e6d0fc45bc928c0e141ec12e6e40d5cd793c6635f985be9",
-        "assertion_count": 245,
-        "nodes_by_type": {"BuildOperation": 9, "DocumentSet": 1, "Product": 1},
-        "edges_by_type": {"contains": 1, "depends_on": 9},
+        "canonical_sha256": "f9964138ce0fa237393e77b9a9b8eaea921d2bb69e9def083eaee6dc3abcb2c4",
+        "production_artifact_hash": "63d19543bcda8e8e7f19372a504cfbe914de446b47919d31f5b84cd2fa478b12",
+        "assertion_count": 246,
+        "nodes_by_type": {"BuildOperation": 9, "DocumentSet": 1, "Material": 1, "Product": 1},
+        "edges_by_type": {"applies_to": 1, "contains": 1, "depends_on": 9},
         "feature_kinds": ["revolve", "thread", "keyway", "keyway", "hole", "hole", "hole", "chamfer", "chamfer"],
         "preview_export_allowed": true,
         "production_export_allowed": false,
@@ -37,16 +37,16 @@
       },
       "expected": {
         "profile": "assembly",
-        "canonical_sha256": "c6fe3e65201594b3fe03da4f5cd3a1cf62670fa58f21ce77a486e5f014f1a3e8",
-        "production_artifact_hash": "434eaf5216cbdb5bfcfea751efac6b476665e05789c65d994efdaea4c2230c93",
-        "assertion_count": 25,
+        "canonical_sha256": "46f369ebbf53eded9416ea7752b0f5a037c6633fa77eff61a3da97788dcc1cdb",
+        "production_artifact_hash": "39ec77d349988e82396dd54e5cd9170b3b16b38049d07770a9ca848a0603ecfe",
+        "assertion_count": 26,
         "nodes_by_type": {"BuildOperation": 2, "Component": 4, "Constraint": 1, "DocumentSet": 1, "Product": 1},
         "edges_by_type": {"applies_to": 2, "contains": 3, "depends_on": 2, "instance_of": 2, "mates_with": 1},
-        "critical_assumption_ids": ["assertion:assembly:artifact-reopen"],
+        "critical_assumption_ids": ["assertion:assembly:artifact-reopen", "assertion:assembly:required-2d"],
         "preview_export_allowed": true,
         "production_export_allowed": false,
         "checked_levels": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-        "error_codes": []
+        "error_codes": ["required_2d_artifacts_missing"]
       }
     },
     {
@@ -68,16 +68,16 @@
       },
       "expected": {
         "profile": "construction",
-        "canonical_sha256": "d9d0c70b2ea018e67b45e1937dff40eab33f36a1db3d16a39e7cb8768a9a0e47",
-        "production_artifact_hash": "bd37d352183896c827e17bafb8b9391c6e75481821c76b05a276a5eb42dc6493",
-        "assertion_count": 10,
+        "canonical_sha256": "af17d646405ee1a493a17fa36293167072430a2aa0a16174d81e54a95bd2d2a5",
+        "production_artifact_hash": "667667e29b20aabacdaf3aff0b37d3d9341410c792e80eb0c62cd802e95982e4",
+        "assertion_count": 11,
         "nodes_by_type": {"BuildOperation": 3, "Component": 2, "Feature": 3, "Product": 1},
         "edges_by_type": {"contains": 2, "depends_on": 3, "located_in": 3, "opens_in": 1},
-        "critical_assumption_ids": ["assertion:construction:ifc-reopen"],
+        "critical_assumption_ids": ["assertion:construction:ifc-reopen", "assertion:construction:required-sheets"],
         "preview_export_allowed": true,
         "production_export_allowed": false,
         "checked_levels": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-        "error_codes": []
+        "error_codes": ["required_2d_artifacts_missing"]
       }
     },
     {
@@ -103,16 +103,16 @@
       },
       "expected": {
         "profile": "hydraulic",
-        "canonical_sha256": "06f16cded295b82a737134dddfac171f4255280521ddc918018e8ffde8eb5550",
-        "production_artifact_hash": "77aea247b172d5f946d6c0f2aa7fe78c9ebde6890eed1706c0710c2e1a8bfaea",
-        "assertion_count": 12,
+        "canonical_sha256": "6651e2887c2432b0b0129257ecd106f422703944fcf6f4b54c74e6607478cda1",
+        "production_artifact_hash": "e1a8a54ec1f6eab1b0fc6344adb1572ff5e1240ae2fc3fd51cb5d0cd1c68001e",
+        "assertion_count": 13,
         "nodes_by_type": {"Component": 2, "Port": 2, "System": 1},
         "edges_by_type": {"connects_to": 1, "contains": 2, "part_of": 2},
-        "critical_assumption_ids": [],
+        "critical_assumption_ids": ["assertion:system:required-diagram"],
         "preview_export_allowed": true,
-        "production_export_allowed": true,
+        "production_export_allowed": false,
         "checked_levels": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-        "error_codes": []
+        "error_codes": ["required_2d_artifacts_missing"]
       }
     }
   ]

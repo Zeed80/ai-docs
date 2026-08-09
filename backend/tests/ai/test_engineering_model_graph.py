@@ -30,6 +30,7 @@ from app.domain.engineering_model_graph import (
     compile_build_plan,
     critical_assertion_ids,
     evaluate_trace_admission,
+    graph_contract_upgrade_patch,
     next_reader_manifest,
     plan_next_reader_pass,
     rank_trace_proposals,
@@ -127,6 +128,44 @@ def test_graph_patch_is_atomic_revision_safe_and_model_cannot_approve():
     })
     with pytest.raises(PatchMergeError, match="producer_cannot_validate_or_approve"):
         apply_graph_patch(graph, forbidden)
+
+
+def test_contract_upgrade_patch_adds_gates_without_removing_existing_contract():
+    current = _graph()
+    payload = current.model_dump(mode="json")
+    payload["canonical_sha256"] = ""
+    payload["assertions"].append({
+        "id": "a-required-view",
+        "subject_id": "product",
+        "predicate": "drawing.required_views_complete",
+        "value": {"kind": "unknown", "reason": "not generated"},
+        "origin": "derived",
+        "assurance": "proposed",
+        "confidence": 0.0,
+        "impacts": ["required_view"],
+    })
+    payload["requirements"].append({
+        "id": "r-view", "kind": "view", "target_node_ids": ["product"],
+        "assertion_ids": ["a-required-view"], "mandatory": True,
+    })
+    payload["build_targets"][0]["requirement_ids"].append("r-view")
+    desired = EngineeringModelGraph.model_validate(payload).sealed()
+
+    patch = graph_contract_upgrade_patch(
+        current, desired, patch_prefix="contract-upgrade:test",
+    )
+
+    assert patch is not None
+    upgraded = apply_graph_patch(current, patch)
+    assert {item.id for item in current.requirements} <= {
+        item.id for item in upgraded.requirements
+    }
+    assert "r-view" in upgraded.build_targets[0].requirement_ids
+    assert "a-required-view" in compile_build_plan(
+        upgraded, "production"
+    ).critical_assumption_ids
+    with pytest.raises(PatchMergeError, match="contract_replacement_requires"):
+        apply_graph_patch(current, patch.model_copy(update={"producer": "reader"}))
 
 
 def test_confirmed_assertion_can_only_be_superseded_by_human_with_replacement():

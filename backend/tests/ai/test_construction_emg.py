@@ -10,6 +10,7 @@ from app.domain.engineering_model_graph import (
     compile_build_plan,
     domain_adapter_for,
 )
+from app.services.engineering_model_graph import verify_graph
 
 
 def _model(*, material: str | None = "Concrete C30/37") -> ConstructionModel:
@@ -112,7 +113,9 @@ def test_construction_graph_projects_spatial_hierarchy_and_opening_host():
             supersede_assertion_ids=[reopen.id],
         ),
     )
-    assert compile_build_plan(built, "production").production_export_allowed is True
+    built_plan = compile_build_plan(built, "production")
+    assert built_plan.production_export_allowed is False
+    assert "assertion:construction:required-sheets" in built_plan.critical_assumption_ids
 
 
 def test_construction_release_keeps_unapproved_source_values_critical():
@@ -139,6 +142,31 @@ def test_construction_model_rejects_opening_outside_host():
 
     with pytest.raises(ValidationError, match="lies outside host"):
         ConstructionModel.model_validate(payload)
+
+
+def test_domain_verifier_rejects_construction_element_without_storey():
+    graph = construction_as_graph(
+        graph_id="construction:test",
+        model=_model(),
+        source_revision_id="revision-1",
+        source_approved=True,
+    )
+    payload = graph.model_dump(mode="json")
+    payload["canonical_sha256"] = ""
+    # Select by the opening assertion rather than relying on a fixture hash.
+    opening_id = next(
+        item["subject_id"] for item in payload["assertions"]
+        if item["predicate"] == "element.kind" and item["value"]["value"] == "opening"
+    )
+    payload["edges"] = [
+        edge for edge in payload["edges"]
+        if not (edge["type"] == "located_in" and edge["source_id"] == opening_id)
+    ]
+    broken = type(graph).model_validate(payload).sealed()
+
+    state, _ = verify_graph(broken)
+
+    assert "construction_element_without_storey" in state.issue_codes
 
 
 def test_construction_material_gap_blocks_production():

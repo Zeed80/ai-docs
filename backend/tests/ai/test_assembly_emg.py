@@ -142,6 +142,7 @@ def test_assembly_graph_projects_instances_bom_mates_and_release_gate():
     production = compile_build_plan(graph, "production")
     assert production.production_export_allowed is False
     assert "assertion:assembly:artifact-reopen" in production.critical_assumption_ids
+    assert "assertion:assembly:required-2d" in production.critical_assumption_ids
 
 
 def test_assembly_revision_patch_is_deterministic_and_supersedes_bom_value():
@@ -164,6 +165,38 @@ def test_assembly_revision_patch_is_deterministic_and_supersedes_bom_value():
         for assertion in merged.assertions
     )
     assert assembly_revision_patch(merged, desired) is None
+
+
+def test_assembly_revision_patch_upgrades_legacy_release_contract():
+    desired = _assembly_graph()
+    payload = desired.model_dump(mode="json")
+    payload["canonical_sha256"] = ""
+    payload["assertions"] = [
+        item for item in payload["assertions"]
+        if item["id"] != "assertion:assembly:required-2d"
+    ]
+    payload["requirements"] = [
+        item for item in payload["requirements"]
+        if item["id"] != "requirement:assembly-2d"
+    ]
+    payload["requirements"][0]["assertion_ids"] = [
+        item for item in payload["requirements"][0]["assertion_ids"]
+        if item != "assertion:assembly:required-2d"
+    ]
+    payload["build_targets"][1]["requirement_ids"] = [
+        "requirement:assembly-release"
+    ]
+    legacy = type(desired).model_validate(payload).sealed()
+
+    patch = assembly_revision_patch(legacy, desired)
+
+    assert patch is not None
+    upgraded = apply_graph_patch(legacy, patch)
+    assert any(
+        item.predicate == "assembly.required_2d_complete"
+        for item in upgraded.assertions if item.state == "active"
+    )
+    assert "requirement:assembly-2d" in upgraded.build_targets[1].requirement_ids
 
 
 def test_assembly_sync_preserves_reopen_only_for_unchanged_snapshot():
