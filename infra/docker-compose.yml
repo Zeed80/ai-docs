@@ -20,6 +20,9 @@ x-backend-env: &backend-env
   # when unreachable (NEURAL_UNAVAILABLE).
   TECHNICAL_VECTORIZER_URL: ${TECHNICAL_VECTORIZER_URL:-http://technical-vectorizer:8091}
   CAD_KERNEL_URL: ${CAD_KERNEL_URL:-http://cad-kernel:8092}
+  # Canary only until mechanical live regression and kernel/projection evidence pass.
+  EMG_PIPELINE_ENABLED: ${EMG_PIPELINE_ENABLED:-false}
+  EMG_PIPELINE_PROFILES: ${EMG_PIPELINE_PROFILES:-mechanical}
   # Self-hosted web search + human-like browsing. Default engine is the
   # keyless SearXNG metasearch service; the browser sidecar renders pages
   # like a real user. All overridable at runtime from /settings/web-search.

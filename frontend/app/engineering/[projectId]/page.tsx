@@ -12,6 +12,7 @@ import {
   EngineeringRevision,
 } from "@/lib/engineering-api";
 import ProjectionsPanel from "@/components/engineering/ProjectionsPanel";
+import EngineeringModelGraphPanel from "@/components/engineering/EngineeringModelGraphPanel";
 
 const STATUS: Record<string, string> = {
   validated: "Проверен",
@@ -354,6 +355,7 @@ export default function EngineeringProjectPage() {
         revisionApproved={selectedRevision?.status === "approved"}
         onError={setError}
       />
+      <EngineeringModelGraphPanel projectId={projectId} onError={setError} />
     </main>
   );
 }

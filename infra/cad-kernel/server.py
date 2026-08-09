@@ -587,8 +587,15 @@ def _operation_localization(
 ) -> dict[str, Any]:
     """Measure where one feature changed the B-Rep and whether it changed it there."""
     try:
-        actual = before.cut(after) if mode == "cut" else after.cut(before)
-        actual_volume = float(actual.Volume)
+        # A second boolean between two already-complex revisions is much less
+        # stable than the operation itself (observed on intersecting spindle
+        # cross-holes: a valid cut was reported as the whole previous body).
+        # Volume delta is exact for a pure add/cut; the tool intersection binds
+        # that delta to the requested location.
+        actual_volume = max(0.0, float(
+            before.Volume - after.Volume
+            if mode == "cut" else after.Volume - before.Volume
+        ))
         expected = None
         if expected_tool is not None:
             expected = (
@@ -601,11 +608,22 @@ def _operation_localization(
             volume_ok = volume_ok and expected_volume > 1e-6 and abs(
                 actual_volume - expected_volume
             ) <= max(1e-5, expected_volume * 0.005)
+        changed_bounds = None
+        try:
+            actual = before.cut(after) if mode == "cut" else after.cut(before)
+            if abs(float(actual.Volume) - actual_volume) <= max(
+                1e-5, actual_volume * 0.005
+            ):
+                changed_bounds = _shape_bounds(actual)
+        except Exception:  # noqa: BLE001 — volume/tool checks remain authoritative
+            pass
+        if changed_bounds is None and volume_ok and expected is not None:
+            changed_bounds = _shape_bounds(expected)
         return {
             "localization_kind": "brep_boolean_delta",
             "localization_ok": volume_ok,
             "changed_volume_mm3": actual_volume,
-            "changed_bounds_mm": _shape_bounds(actual),
+            "changed_bounds_mm": changed_bounds,
             "expected_volume_mm3": expected_volume,
             "expected_bounds_mm": _shape_bounds(expected) if expected is not None else None,
         }
@@ -752,9 +770,21 @@ def _build_shape(
             **_operation_localization(previous, shape, mode="cut", expected_tool=tool),
         })
 
-    for feature_index, feature in enumerate(request.candidate.features):
-        if feature.kind != "hole":
-            continue
+    hole_features = [
+        (feature_index, feature)
+        for feature_index, feature in enumerate(request.candidate.features)
+        if feature.kind == "hole"
+    ]
+    # Boolean cuts are set operations, so independent holes have no semantic
+    # order. OpenCascade is nevertheless order-sensitive on the reference
+    # spindle; applying narrow radial cuts first produces the valid common
+    # result where the reader's large-to-small order does not.
+    hole_features.sort(key=lambda item: (
+        0 if item[1].params.get("axis") == "radial" else 1,
+        float(item[1].params.get("diameter_mm") or 0.0),
+        item[0],
+    ))
+    for feature_index, feature in hole_features:
         diameter = _number(feature.params, "diameter_mm", maximum=min(width, height) * 2)
         x = _coordinate(feature.params, "center_x_mm")
         y = _coordinate(feature.params, "center_y_mm")
@@ -771,17 +801,21 @@ def _build_shape(
         if (feature.params.get("axis") or "z") == "radial":
             cutter = _radial_hole_tool(shape, feature, radius, through, warnings, request)
             previous = shape
+            warning_count = len(warnings)
             shape = _cut_feature(
                 shape,
                 cutter,
                 f"cross hole Ø{diameter:g} @ {feature.params.get('axial_position_mm')}",
                 warnings,
             )
-            operation_audit.append({
+            audit = {
                 "feature_index": feature_index,
                 "kind": feature.kind,
                 **_operation_localization(previous, shape, mode="cut", expected_tool=cutter),
-            })
+            }
+            if len(warnings) > warning_count:
+                audit["operation_warning"] = warnings[-1]
+            operation_audit.append(audit)
             continue
         if feature.params.get("axis") == "inclined":
             raw_inclination = feature.params.get("inclination_deg")
@@ -902,12 +936,16 @@ def _build_shape(
                 App.Vector(x, y, shape.BoundBox.ZMin - 1.0),
             )
         previous = shape
+        warning_count = len(warnings)
         shape = _cut_feature(shape, cutter, f"hole Ø{diameter:g}", warnings)
-        operation_audit.append({
+        audit = {
             "feature_index": feature_index,
             "kind": feature.kind,
             **_operation_localization(previous, shape, mode="cut", expected_tool=cutter),
-        })
+        }
+        if len(warnings) > warning_count:
+            audit["operation_warning"] = warnings[-1]
+        operation_audit.append(audit)
 
     # Edge operations come AFTER every cut: a chamfer belongs to the edge that
     # exists once the part is fully cut, and asking for one before the hole is
@@ -931,6 +969,7 @@ def _build_shape(
                 "localization_kind": "edge_delta",
                 "localization_ok": False,
                 "localization_error": str(exc.detail)[:200],
+                "operation_warning": warnings[-1],
             })
             continue
         size = _number(feature.params, "size_mm", maximum=max(width, height, depth))
@@ -956,6 +995,7 @@ def _build_shape(
                 "feature_index": feature_index, "kind": feature.kind,
                 "localization_kind": "edge_delta", "localization_ok": False,
                 "localization_error": str(exc)[:200],
+                "operation_warning": warnings[-1],
             })
             continue
         if candidate.isNull() or not candidate.isValid():
@@ -968,6 +1008,7 @@ def _build_shape(
                 "feature_index": feature_index, "kind": feature.kind,
                 "localization_kind": "edge_delta", "localization_ok": False,
                 "localization_error": "OpenCascade returned invalid geometry",
+                "operation_warning": warnings[-1],
             })
             continue
         shape = candidate
@@ -1811,6 +1852,7 @@ def _feature_results(
     }
     results: list[dict[str, Any]] = []
     for index, feature in enumerate(request.candidate.features):
+        audit = audit_by_index.get(index) or {}
         aliases = {
             "hole": ("hole",),
             "keyway": ("keyway",),
@@ -1822,21 +1864,23 @@ def _feature_results(
             (
                 position
                 for position, warning in enumerate(failures)
-                if position not in consumed
+                if position not in consumed and not audit
                 and any(alias in warning.lower() for alias in aliases)
             ),
             None,
         )
-        audit = audit_by_index.get(index) or {}
+        operation_warning = audit.get("operation_warning")
         localization_failed = audit.get("localization_ok") is False
         entry: dict[str, Any] = {
             "feature_index": index,
             "kind": feature.kind,
-            "status": "failed" if failed_index is not None or localization_failed else "built",
+            "status": "failed" if failed_index is not None or localization_failed or operation_warning else "built",
             "requested_params": feature.params,
             **{key: value for key, value in audit.items() if key not in {"feature_index", "kind"}},
         }
-        if failed_index is not None:
+        if operation_warning:
+            entry["reason"] = str(operation_warning)
+        elif failed_index is not None:
             consumed.add(failed_index)
             entry["reason"] = failures[failed_index]
         elif localization_failed:

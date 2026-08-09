@@ -248,10 +248,10 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
     from app.ai.cad_ir.schema import ValidationIssueIR
     from app.ai.cad_validate import validate_ir
     from app.db.models import ImageGeneration, ImageGenStatus
-    from app.db.session import get_sessionmaker
+    from app.db.session import _get_session_factory
     from app.services import cad_ir_store
 
-    factory = get_sessionmaker()
+    factory = _get_session_factory()
     gen_uuid = _uuid.UUID(generation_id)
     async with factory() as db:
         gen = await db.get(ImageGeneration, gen_uuid)
@@ -279,6 +279,52 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
         }
     sheet_format = str(params.get("sheet_format") or "").upper() or None
     landscape = str(params.get("sheet_orientation") or "landscape").lower() != "portrait"
+    engineering_graph = None
+    engineering_graph_row = None
+    engineering_graph_ref = None
+    from app.config import settings as _settings
+
+    if _settings.emg_enabled_for("mechanical"):
+        import hashlib
+        import json
+
+        from app.ai.cad_solid import feature_tree_from_spec
+        from app.services.engineering_model_graph import (
+            load_graph,
+            persist_feature_tree_revision,
+        )
+
+        rebuild_candidate = feature_tree_from_spec(spec)
+        if rebuild_candidate is not None:
+            patch_digest = hashlib.sha256(json.dumps(
+                {
+                    "spec": spec,
+                    "candidate": rebuild_candidate.model_dump(mode="json"),
+                    "human": bool(params.get("spec_corrected")),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+                separators=(",", ":"),
+            ).encode()).hexdigest()
+            async with factory() as db:
+                engineering_graph_row = await persist_feature_tree_revision(
+                    db,
+                    graph_id=f"image-generation:{generation_id}",
+                    spec=spec,
+                    candidate=rebuild_candidate,
+                    producer="human" if params.get("spec_corrected") else "system",
+                    pass_id=f"spec-rebuild:{generation_id}",
+                    idempotency_key=f"spec-rebuild:{generation_id}:{patch_digest}",
+                )
+                engineering_graph = load_graph(engineering_graph_row)
+                engineering_graph_ref = {
+                    "revision_id": str(engineering_graph_row.id),
+                    "graph_id": engineering_graph_row.graph_id,
+                    "revision": engineering_graph_row.revision,
+                    "canonical_sha256": engineering_graph_row.canonical_sha256,
+                }
+                await db.commit()
     solid_result = await _build_spec_solid(
         spec, generation_id, owner_sub,
         sheet_format=sheet_format,
@@ -287,6 +333,7 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
         # human correction is the explicit review action that may replace
         # missing model evidence for the corrected candidate.
         require_source_evidence=not bool(params.get("spec_corrected")),
+        engineering_graph_override=engineering_graph,
     )
     if not solid_result or not solid_result.get("built"):
         return {
@@ -298,6 +345,12 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
     solid_result["source_projection_verification"] = evaluate_source_projection(
         spec, params.get("spec_crosscheck") or {}, solid_result
     )
+    result_graph = solid_result.pop("_engineering_model_graph", None)
+    if engineering_graph is not None and (
+        result_graph is None
+        or result_graph.canonical_sha256 != engineering_graph.canonical_sha256
+    ):
+        return {"error": "CAD build returned a different EMG revision", "built": False}
     spec_ir = solid_result.pop("_sheet_ir", None)
     if spec_ir is None:
         return {"error": "CAD-ядро не построило лист", "built": False}
@@ -358,13 +411,19 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
             "solid_input": solid_result.get("kernel_input"),
             "solid_3d": solid_result,
             "rebuilt_from_spec": True,
+            **(
+                {"engineering_model_graph": engineering_graph_ref}
+                if engineering_graph_ref is not None else {}
+            ),
         }
         # A rebuild is a new REVISION, never an overwrite: the reader's own
         # attempt and the corrected one are both part of the record.
-        await cad_ir_store.save_revision(
+        cad_revision = await cad_ir_store.save_revision(
             db, gen, spec_ir, origin="human", created_by=owner_sub,
             keep_raster=None, thin_px=2, thick_px=4,
         )
+        if engineering_graph_row is not None:
+            cad_revision.engineering_graph_revision_id = engineering_graph_row.id
         gen.status = ImageGenStatus.done
         await db.commit()
     return {
@@ -841,6 +900,8 @@ async def _build_spec_solid(
     sheet_format: str | None = None,
     landscape: bool = True,
     require_source_evidence: bool = False,
+    source_sha256: str | None = None,
+    engineering_graph_override: Any | None = None,
 ) -> dict | None:
     """Compile the read spec into a solid, and draw the sheet from that solid.
 
@@ -874,6 +935,43 @@ async def _build_spec_solid(
         None,
     )
     candidate = feature_tree_from_spec(spec)
+    engineering_graph = engineering_graph_override
+    from app.config import settings as _settings
+
+    if engineering_graph is not None:
+        from app.ai.cad_emg_compat import feature_tree_from_graph
+
+        # Rebuilds prepare and persist their GraphPatch before entering the
+        # kernel. The supplied immutable revision is therefore the only build
+        # input, including when the corrected spec differs from the first read.
+        candidate = feature_tree_from_graph(engineering_graph, target_id="preview")
+    elif _settings.emg_enabled_for("mechanical"):
+        from app.ai.cad_emg_compat import (
+            feature_tree_from_graph,
+            legacy_spec_as_low_assurance,
+            spec_feature_tree_as_graph,
+        )
+
+        graph_id = f"image-generation:{generation_id}"
+        if candidate is None:
+            engineering_graph = legacy_spec_as_low_assurance(
+                spec,
+                graph_id=graph_id,
+                source_sha256=source_sha256,
+            )
+        else:
+            engineering_graph = spec_feature_tree_as_graph(
+                spec,
+                candidate,
+                graph_id=graph_id,
+                source_sha256=source_sha256,
+            )
+            # Under the canary flag the kernel boundary consumes only a
+            # deterministic projection of the sealed graph revision.
+            candidate = feature_tree_from_graph(
+                engineering_graph,
+                target_id="preview",
+            )
     if candidate is None:
         await record_cad_process_event(
             "solid.normalize",
@@ -889,6 +987,10 @@ async def _build_spec_solid(
                 "с длинами, либо плоский контур с толщиной"
             ),
             "label": str(spec.get("part") or ""),
+            **(
+                {"_engineering_model_graph": engineering_graph}
+                if engineering_graph is not None else {}
+            ),
         }
     build_gate = solid_build_gate(
         spec, candidate, require_source_evidence=require_source_evidence
@@ -942,6 +1044,10 @@ async def _build_spec_solid(
             "label": candidate.label,
             "feature_tree": candidate.model_dump(mode="json"),
             "kernel_input": kernel_input,
+            **(
+                {"_engineering_model_graph": engineering_graph}
+                if engineering_graph is not None else {}
+            ),
         }
     await record_cad_process_event(
         "kernel.compile",
@@ -978,14 +1084,32 @@ async def _build_spec_solid(
             "kernel.compile", "failed", "CAD-ядро отклонило feature tree",
             {"error": str(exc)[:400]},
         )
-        return {"built": False, "build_status": "blocked", "error": str(exc)[:400], "label": candidate.label}
+        return {
+            "built": False,
+            "build_status": "blocked",
+            "error": str(exc)[:400],
+            "label": candidate.label,
+            **(
+                {"_engineering_model_graph": engineering_graph}
+                if engineering_graph is not None else {}
+            ),
+        }
     except Exception as exc:  # noqa: BLE001
         logger.warning("cad_solid_error", generation_id=generation_id, error=str(exc))
         await record_cad_process_event(
             "kernel.compile", "failed", "Ошибка вызова CAD-ядра",
             {"error": f"{type(exc).__name__}: {exc}"[:400]},
         )
-        return {"built": False, "build_status": "blocked", "error": str(exc)[:400], "label": candidate.label}
+        return {
+            "built": False,
+            "build_status": "blocked",
+            "error": str(exc)[:400],
+            "label": candidate.label,
+            **(
+                {"_engineering_model_graph": engineering_graph}
+                if engineering_graph is not None else {}
+            ),
+        }
 
     report = artifacts.report or {}
     await record_cad_process_event(
@@ -1038,6 +1162,10 @@ async def _build_spec_solid(
                 "feature_results": report.get("feature_results") or [],
                 "warnings": report.get("warnings") or [],
             },
+            **(
+                {"_engineering_model_graph": engineering_graph}
+                if engineering_graph is not None else {}
+            ),
         }
     # The sheet itself: views, sections and dimensions all measured off this
     # solid. A kernel too old to draw returns nothing, and the caller says so
@@ -1141,6 +1269,10 @@ async def _build_spec_solid(
         # never reached the person editing it.
         "feature_tree": candidate.model_dump(mode="json"),
         "kernel_input": kernel_input,
+        **(
+            {"_engineering_model_graph": engineering_graph}
+            if engineering_graph is not None else {}
+        ),
     }
     if sheet is not None:
         result["sheet"] = {
@@ -1227,6 +1359,19 @@ async def _store_failed_reading(
             gen = await db.get(ImageGeneration, gen_uuid)
             if gen is None:
                 return
+            stored_solid = dict(solid_result or {"built": False})
+            engineering_graph = stored_solid.pop("_engineering_model_graph", None)
+            graph_ref = None
+            if engineering_graph is not None:
+                from app.services.engineering_model_graph import persist_pipeline_graph
+
+                graph_row = await persist_pipeline_graph(db, engineering_graph)
+                graph_ref = {
+                    "revision_id": str(graph_row.id),
+                    "graph_id": graph_row.graph_id,
+                    "revision": graph_row.revision,
+                    "canonical_sha256": graph_row.canonical_sha256,
+                }
             gen.params = {
                 **(gen.params or {}),
                 "vectorize_method": "spec",
@@ -1235,7 +1380,7 @@ async def _store_failed_reading(
                 "dimension_graph": build_dimension_graph(spec),
                 "spec_followup": followup_log,
                 "spec_review_warnings": list(dict.fromkeys(unresolved)),
-                "solid_3d": solid_result or {"built": False},
+                "solid_3d": stored_solid,
                 "cad_reading": {
                     "spec": spec,
                     "attempts": spec.get("reader_attempts") or [],
@@ -1251,10 +1396,18 @@ async def _store_failed_reading(
                 },
                 "solid_input": (solid_result or {}).get("kernel_input"),
                 "cad_pipeline_manifest": pipeline_manifest,
+                **(
+                    {"engineering_model_graph": graph_ref}
+                    if graph_ref is not None else {}
+                ),
             }
             await db.commit()
     except Exception as exc:  # noqa: BLE001 — the failure message matters more
         logger.warning("cad_spec_reading_not_stored", error=str(exc)[:200])
+        from app.config import settings as _settings
+
+        if _settings.emg_enabled_for("mechanical"):
+            raise
 
 
 def _unplaced_callouts(solid_result: dict, spec: dict) -> dict:
@@ -1897,6 +2050,35 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_normalized.png"
                     )
                     upload_file(content, normalized_path, "image/png")
+                    emg_row = None
+                    emg_ref = None
+                    from app.config import settings as _settings
+
+                    requested_emg_profile = str(requested_profile or "auto")
+                    if _settings.emg_enabled_for(requested_emg_profile):
+                        from app.ai.cad_emg_compat import (
+                            drawing_graph_as_observations,
+                        )
+                        from app.services.engineering_model_graph import (
+                            persist_pipeline_graph,
+                        )
+
+                        emg = drawing_graph_as_observations(
+                            graph,
+                            graph_id=f"image-generation:{generation_id}",
+                            profile=(
+                                "mechanical"
+                                if requested_emg_profile == "mechanical_eskd"
+                                else requested_emg_profile
+                            ),
+                        )
+                        emg_row = await persist_pipeline_graph(db, emg)
+                        emg_ref = {
+                            "revision_id": str(emg_row.id),
+                            "graph_id": emg_row.graph_id,
+                            "revision": emg_row.revision,
+                            "canonical_sha256": emg_row.canonical_sha256,
+                        }
                     gen.params = {
                         **(gen.params or {}),
                         "vectorize_method": "graph",
@@ -1914,8 +2096,12 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         ),
                         "cad_pipeline_manifest": pipeline_manifest,
                         "normalized_source_path": normalized_path,
+                        **(
+                            {"engineering_model_graph": emg_ref}
+                            if emg_ref is not None else {}
+                        ),
                     }
-                    await cad_ir_store.save_revision(
+                    cad_revision = await cad_ir_store.save_revision(
                         db,
                         gen,
                         graph_ir,
@@ -1925,6 +2111,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         thin_px=2,
                         thick_px=4,
                     )
+                    if emg_row is not None:
+                        cad_revision.engineering_graph_revision_id = emg_row.id
                     gen.status = ImageGenStatus.done
                     job = await studio_queue.job_for_generation(db, gen_uuid)
                     await studio_queue.mark_job_done(db, job)
@@ -2143,6 +2331,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 solid_result = await _build_spec_solid(
                     spec, generation_id, owner_sub, sheet_format=spec_sheet,
                     landscape=spec_landscape, require_source_evidence=True,
+                    source_sha256=source_sha256,
                 )
                 if not solid_result or not solid_result.get("built"):
                     # The part could not be built, but the READING is not lost:
@@ -2174,6 +2363,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
                 solid_result["source_projection_verification"] = (
                     evaluate_source_projection(spec, crosscheck, solid_result)
+                )
+                engineering_graph = solid_result.pop(
+                    "_engineering_model_graph", None
                 )
                 spec_ir = solid_result.pop("_sheet_ir", None)
                 if spec_ir is None:
@@ -2267,6 +2459,20 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_normalized.png"
                     )
                     upload_file(content, normalized_path, "image/png")
+                    graph_row = None
+                    graph_ref = None
+                    if engineering_graph is not None:
+                        from app.services.engineering_model_graph import (
+                            persist_pipeline_graph,
+                        )
+
+                        graph_row = await persist_pipeline_graph(db, engineering_graph)
+                        graph_ref = {
+                            "revision_id": str(graph_row.id),
+                            "graph_id": graph_row.graph_id,
+                            "revision": graph_row.revision,
+                            "canonical_sha256": graph_row.canonical_sha256,
+                        }
                     gen.params = {
                         **(gen.params or {}),
                         "vectorize_method": "spec",
@@ -2302,11 +2508,17 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "normalized_source_path": normalized_path,
                         "solid_input": (solid_result or {}).get("kernel_input"),
                         **({"solid_3d": solid_result} if solid_result else {}),
+                        **(
+                            {"engineering_model_graph": graph_ref}
+                            if graph_ref is not None else {}
+                        ),
                     }
-                    await cad_ir_store.save_revision(
+                    cad_revision = await cad_ir_store.save_revision(
                         db, gen, spec_ir, origin="auto", created_by=owner_sub,
                         keep_raster=None, thin_px=2, thick_px=4,
                     )
+                    if graph_row is not None:
+                        cad_revision.engineering_graph_revision_id = graph_row.id
                     gen.status = ImageGenStatus.done
                     job = await studio_queue.job_for_generation(db, gen_uuid)
                     await studio_queue.mark_job_done(db, job)

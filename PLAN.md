@@ -35,6 +35,7 @@ isProject: false
 # Единое рабочее пространство ИИ-документооборота для производства
 
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).
+> Там же зафиксирован реализованный вертикальный срез `EngineeringModelGraph v1`; после mechanical live regression primary pipeline включён как production canary только для mechanical-профиля.
 > Контракт основного метода «По описанию» и последовательность реализации полного координатного графа находятся в [`CAD_DRAWING_GRAPH_PLAN.md`](./CAD_DRAWING_GRAPH_PLAN.md).
 > Последовательный TODO по точности режима «Перечертить по чертежу», 3D-first построению и прозрачности данных находится в [`CAD_REDRAW_ACCURACY_TODO.md`](./CAD_REDRAW_ACCURACY_TODO.md).
 > Оставшийся универсальный roadmap по всем mechanical/construction классам и production-приёмке находится в [`CAD_UNIVERSAL_REMAINING_TODO.md`](./CAD_UNIVERSAL_REMAINING_TODO.md).

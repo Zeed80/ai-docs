@@ -1542,6 +1542,8 @@ document-invoices-ai/
 
 ## Верификация
 
+> CAD/3D source of truth, включая `EngineeringModelGraph v1`, GraphPatch, hybrid trace gates, активный mechanical canary и оставшийся rollout других профилей, ведётся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).
+
 ### По эпикам (основные тесты)
 
 | Эпик | Ключевой тест |

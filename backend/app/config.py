@@ -157,6 +157,22 @@ class Settings(BaseSettings):
     # Headless FreeCAD/OpenCascade service. The backend sends only a
     # human-confirmed feature tree; the kernel has no DB or object-storage access.
     cad_kernel_url: str = "http://cad-kernel:8092"
+    # EMG rollout: legacy drawing/spec APIs remain derived views until this
+    # flag is enabled for the adaptive reader pipeline.
+    emg_pipeline_enabled: bool = False
+    emg_pipeline_profiles: str = "mechanical"
+
+    def emg_enabled_for(self, profile: str) -> bool:
+        """Limit the rollout to explicit domain profiles."""
+        allowed = {
+            item.strip().lower()
+            for item in self.emg_pipeline_profiles.split(",")
+            if item.strip()
+        }
+        normalized = profile.strip().lower()
+        if normalized == "mechanical_eskd":
+            normalized = "mechanical"
+        return self.emg_pipeline_enabled and normalized in allowed
     llamacpp_n_gpu_layers: int = -1   # -1 = all layers on GPU
     llamacpp_parallel: int = 2        # 2 slots × 8 192 tokens; was 4 (too many, caused OOM)
     llamacpp_flash_attn: bool = True

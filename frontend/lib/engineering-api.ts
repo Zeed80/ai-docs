@@ -65,6 +65,54 @@ export type EngineeringProjection = {
   created_at: string;
 };
 
+export type EngineeringModelGraphRevision = {
+  id: string;
+  engineering_project_id?: string | null;
+  graph_id: string;
+  revision: number;
+  parent_revision: number | null;
+  canonical_sha256: string;
+  profile: string;
+  comprehension_status: string;
+  build_status: string;
+  release_status: string;
+  graph: {
+    nodes: Array<{ id: string; type: string; name?: string | null }>;
+    edges: Array<{ id: string; type: string; source_id: string; target_id: string }>;
+    assertions: Array<{
+      id: string; subject_id: string; predicate: string; value: Record<string, unknown>;
+      origin: string; assurance: string; confidence: number; impacts: string[];
+      evidence_ids: string[]; state: string; hypothesis_id?: string | null;
+    }>;
+    evidence: Array<{ id: string; kind: string; source_region_id?: string | null; payload: Record<string, unknown> }>;
+    hypothesis_sets: Array<{ id: string; option_ids: string[]; selected_option_id?: string | null }>;
+    verification: { critical_unresolved_assertion_ids: string[]; issue_codes: string[] };
+  };
+};
+
+export type EngineeringGraphPatch = {
+  id: string;
+  patch_id: string;
+  producer: string;
+  pass_id: string;
+  accepted: boolean;
+  payload: Record<string, unknown>;
+  validation_errors: string[];
+  created_at: string;
+};
+
+export type EngineeringTraceProposal = {
+  id: string;
+  proposal_id: string;
+  source_region_id: string;
+  assertion_id: string | null;
+  rank: number;
+  status: string;
+  score: number | null;
+  payload: Record<string, unknown>;
+  visual_verifications: Array<Record<string, unknown>>;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
@@ -146,5 +194,22 @@ export const engineeringApi = {
     request<EngineeringProjection>(
       `/api/engineering/revisions/${revisionId}/projections`,
       { method: "POST", body: JSON.stringify(body) },
+    ),
+  listModelGraphs: (projectId: string) =>
+    request<EngineeringModelGraphRevision[]>(
+      `/api/engineering-model-graphs/projects/${projectId}/graphs`,
+    ),
+  listGraphPatches: (graphId: string) =>
+    request<EngineeringGraphPatch[]>(
+      `/api/engineering-model-graphs/graphs/${encodeURIComponent(graphId)}/patches`,
+    ),
+  listTraceProposals: (revisionId: string) =>
+    request<EngineeringTraceProposal[]>(
+      `/api/engineering-model-graphs/revisions/${revisionId}/trace-proposals`,
+    ),
+  verifyModelGraph: (revisionId: string) =>
+    request<{ state: Record<string, unknown>; issues: Array<Record<string, unknown>> }>(
+      `/api/engineering-model-graphs/revisions/${revisionId}/verify`,
+      { method: "POST" },
     ),
 };

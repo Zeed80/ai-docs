@@ -276,6 +276,149 @@ class EngineeringProjection(UUIDPrimaryKey, TimestampMixin, Base):
     revision: Mapped["EngineeringRevision"] = relationship(back_populates="projections")
 
 
+# ── EngineeringModelGraph immutable revisions and query projections ─────────
+
+
+class EngineeringGraphRevision(UUIDPrimaryKey, TimestampMixin, Base):
+    """Immutable EMG snapshot; canonical JSON is stored in object storage."""
+
+    __tablename__ = "engineering_graph_revisions"
+    __table_args__ = (
+        Index("ix_emg_graph_revision", "graph_id", "revision", unique=True),
+        Index("ix_emg_project_created", "engineering_project_id", "created_at"),
+    )
+
+    engineering_project_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("engineering_projects.id"), nullable=True, index=True
+    )
+    engineering_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=True, index=True
+    )
+    graph_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    schema_version: Mapped[str] = mapped_column(String(30), nullable=False, default="emg/1.0")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_revision: Mapped[int | None] = mapped_column(Integer)
+    canonical_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    profile: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    storage_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    comprehension_status: Mapped[str] = mapped_column(String(30), nullable=False, default="accumulating")
+    build_status: Mapped[str] = mapped_column(String(30), nullable=False, default="not_ready")
+    release_status: Mapped[str] = mapped_column(String(30), nullable=False, default="blocked")
+    reader_manifest: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class GraphPatchRecord(UUIDPrimaryKey, TimestampMixin, Base):
+    """Accepted or rejected patch journal; rejected model output is retained."""
+
+    __tablename__ = "graph_patches"
+    __table_args__ = (
+        UniqueConstraint("graph_id", "idempotency_key", name="uq_graph_patch_idempotency"),
+    )
+
+    graph_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    patch_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    base_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("engineering_graph_revisions.id"), nullable=True, index=True
+    )
+    producer: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    pass_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    validation_errors: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+
+class GraphVerificationRun(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "graph_verification_runs"
+
+    graph_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_graph_revisions.id"), nullable=False, index=True
+    )
+    levels: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    result: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    artifact_hashes: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class TraceProposalRecord(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "trace_proposals"
+    __table_args__ = (
+        UniqueConstraint("graph_revision_id", "proposal_id", name="uq_trace_proposal_revision"),
+    )
+
+    graph_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_graph_revisions.id"), nullable=False, index=True
+    )
+    proposal_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_region_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    assertion_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    rank: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="proposed", index=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    score: Mapped[float | None] = mapped_column(Float)
+
+
+class VisualVerificationRun(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "visual_verification_runs"
+
+    trace_proposal_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("trace_proposals.id"), nullable=False, index=True
+    )
+    verifier_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    verdict: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    result: Mapped[dict] = mapped_column(JSON, nullable=False)
+    raw_output: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class EngineeringGraphNodeRecord(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "engineering_graph_nodes"
+    __table_args__ = (
+        UniqueConstraint("graph_revision_id", "node_id", name="uq_emg_node_revision"),
+    )
+
+    graph_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_graph_revisions.id"), nullable=False, index=True
+    )
+    node_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    node_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
+class EngineeringGraphEdgeRecord(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "engineering_graph_edges"
+    __table_args__ = (
+        UniqueConstraint("graph_revision_id", "edge_id", name="uq_emg_edge_revision"),
+    )
+
+    graph_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_graph_revisions.id"), nullable=False, index=True
+    )
+    edge_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    edge_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    source_node_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    target_node_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
+class EngineeringGraphAssertionRecord(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "engineering_graph_assertions"
+    __table_args__ = (
+        UniqueConstraint("graph_revision_id", "assertion_id", name="uq_emg_assertion_revision"),
+    )
+
+    graph_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_graph_revisions.id"), nullable=False, index=True
+    )
+    assertion_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject_node_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    predicate: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    origin: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    assurance: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
 class EngineeringMaterial(UUIDPrimaryKey, TimestampMixin, Base):
     """Normalized material properties used by design, technology and CAE."""
 
@@ -3516,6 +3659,9 @@ class CadIrRevision(UUIDPrimaryKey, TimestampMixin, Base):
 
     generation_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("image_generations.id"), nullable=False, index=True
+    )
+    engineering_graph_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("engineering_graph_revisions.id"), nullable=True, index=True
     )
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     ir_path: Mapped[str] = mapped_column(String(1000), nullable=False)

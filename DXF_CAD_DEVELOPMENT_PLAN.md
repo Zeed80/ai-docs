@@ -137,9 +137,36 @@ D3 (revolve/sweep/loft/shell/threads), D4-хвост (self-intersection, асс�
 
 ## Целевой результат
 
-Оцифровка должна создавать не пиксельный trace, а проверяемую инженерную модель: исходник -> сегментация и распознавание -> CAD IR -> ручное редактирование/параметризация -> validation/review -> неизменяемый выпуск DXF/PDF/STEP, связанный с инженерной ревизией. CAD IR является источником истины; DXF, SVG, PNG, DWG и 3D являются производными артефактами.
+Оцифровка должна создавать не пиксельный trace, а проверяемую инженерную модель: исходник -> наблюдения -> `EngineeringModelGraph` -> параметризация/build plan -> CAD IR и B-Rep/IFC -> validation/review -> неизменяемый выпуск DXF/PDF/STEP, связанный с graph revision. `EngineeringModelGraph` является источником инженерной истины; CAD IR остаётся редактируемой 2D-проекцией, а DXF, SVG, PNG, DWG и 3D — производными артефактами.
 
 Инварианты: все правки версионируются; ИИ не принимает выпуск; каждое замечание имеет объект и причину; инженерный проект связывается с конкретным CAD-снимком, а не с «последней версией»; конфиденциальный исходник не покидает локальный контур без policy/gate.
+
+## EngineeringModelGraph v1 — адаптивное чтение и гибридная трассировка (2026-08-09)
+
+Статус: **backend-контракт и вертикальный rollout-срез реализованы; primary pipeline включён как production canary только для профиля `mechanical`** через `EMG_PIPELINE_ENABLED=true` + `EMG_PIPELINE_PROFILES=mechanical`.
+
+- [x] Закрытый Pydantic-контракт `emg/1.0`: document-set root, типизированные nodes/edges, assertion values (`exact`, `interval`, `enum_set`, `expression`, `unknown`), origin/assurance/evidence, hypotheses, requirements, build targets, три независимых статуса и versioned extension registry.
+- [x] Каноническая сериализация и SHA-256; broken refs, duplicate IDs и незарегистрированные extensions fail closed.
+- [x] Атомарный `GraphPatch`: stale revision/SHA и idempotency gates, журнал отклонённых payload/errors, запрет reader/tracer/verifier повышать assurance до `constraint_validated`/`human_approved`, сохранение superseded assertions.
+- [x] Dependency-based impact analyzer: критичность вычисляется для build target; тип feature сам по себе ничего не решает; mass/material quantity учитывают target tolerance.
+- [x] Детерминированный hypothesis selection, build-plan и artifact hash; provisional build разрешён, production STEP/IFC/DXF/PDF блокируется при неподтверждённых critical assertions.
+- [x] Adaptive reader frontier и production budgets: 900 s, 32 calls, 90 s/call, fixed point после двух проходов без прогресса, partial revision не удаляется.
+- [x] Hybrid trace contracts: только `SourceRegion`, не более трёх proposals, geometry primitives/checks/pixel metrics, independent visual result с raw output, critical-impact abort и фиксированный scoring.
+- [x] 12-уровневый verifier с раздельными comprehension/build/release статусами и явным `not_available`, если kernel reopen или projection comparison ещё не приложены как evidence.
+- [x] Domain adapter manifests для mechanical, assembly, construction и MEP/system профилей; electrical/hydraulic/P&ID используют system adapter, mixed объединяет объявленные возможности и gates.
+- [x] Immutable storage: `engineering_graph_revisions`, `graph_patches`, `graph_verification_runs`, `trace_proposals`, `visual_verification_runs`; canonical JSON в MinIO, nodes/edges/assertions — поисковые PostgreSQL projections.
+- [x] Typed API `/api/engineering-model-graphs`: revisions, patch journal, verification, build plan, trace admission/runs и rollout status.
+- [x] Compatibility: `EngineeringDrawingGraph` импортируется только как observations; `EngineeringDrawingSpec` — как low-assurance assertions; `FeatureTreeCandidate` компилируется только из sealed graph revision.
+- [x] UI инженерного проекта показывает graph status/SHA, assertions по origin/assurance, impact/dependents/evidence, полный GraphPatch и trace/visual-verifier raw result.
+- [x] Unit-контракт: refs/hash, stale/idempotency, protected assurance, criticality/release, hypothesis tie-break, three-proposal trace, fixed point, 12 levels, deterministic FeatureTree и legacy compatibility.
+- [x] Pipeline canary integration: при `EMG_PIPELINE_ENABLED=true` первичный spec/graph path сохраняет immutable r0, компилирует kernel candidate только из sealed revision, связывает CadIR с graph revision; повторная сборка corrected spec создаёт human `GraphPatch` с superseded history и также строится только из новой graph revision. Legacy reading API остаются derived views.
+- [x] Live regression `detal_126_reference_spec_v2` (2026-08-09): direct legacy candidate и EMG projection имеют одинаковые kinds/params и kernel result. Исправлены две причины ложного/неполного результата OpenCascade: независимые radial cuts выполняются в устойчивом порядке от меньшего Ø, а localization использует volume delta + intersection с конкретным tool вместо нестабильного повторного boolean между двумя сложными B-Rep. После исправления построены **9/9** операций, engineering verification `true`, valid manifold B-Rep `470×Ø102`, STEP/IGES/STL и проекции `front 38+74`, `side 11+30` visible/hidden.
+- [x] STEP reopen для EMG canary: экспорт `164896` bytes, SHA-256 `6dcd6dc3b93f6717278b31fa644be9c46cab510facf3691f450b58cff16023f0`; повторный импорт FreeCAD/OpenCascade дал valid single solid/shell, `34` faces, `92` edges, envelope `102×102×470 mm`, volume отличается от исходного B-Rep лишь на STEP serialization tolerance.
+- [x] Production replay generation `1ba4f043-61af-4317-99a4-352b395503af`: сохранён standalone EMG r0 `5fd026e16059…` (canonical SHA повторно проверен), `11` nodes / `10` edges / `4576` assertions / `9` BuildOperation; создана immutable CadIR r1 с FK на graph revision `cdf54a1e-…`, прежняя CadIR r0 сохранена без FK. Kernel verification `true`, build остаётся честным `preview_review_required` с семью excluded blocker-группами, STEP/IGES/STL выпущены только как provisional artifacts.
+- [x] Mechanical canary активирован в production; `auto`, construction, assembly и system profiles явно не проходят profile gate. Default в `.env.example` остаётся `false`, поэтому новые установки не включают rollout автоматически.
+- [x] Production idempotency canary на неизменном stored spec вернул существующую revision r0: graph rows `1→1`, patch rows `0→0`. Kernel-семантика сравнивается по упорядоченным `kind+params`, поэтому отличающийся служебный provenance projection не создаёт ложную ревизию; `operation.sequence` сохраняет числовой порядок и после десяти операций.
+- [ ] GraphPatch persistence на production generation проверяется при первой реальной правке spec; искусственную human correction ради canary не создаём. До неё покрытие — atomic/idempotency unit tests и immutable patch API/storage contract.
+- [ ] Следующие адаптеры: production builders для assembly, construction/IFC и MEP connectivity; certified export остаётся закрытым до их domain-specific verification gates.
 
 ## Выполненный фундамент
 
