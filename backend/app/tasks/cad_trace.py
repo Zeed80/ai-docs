@@ -230,7 +230,11 @@ _TITLE_BLOCK_MIN_INK_FRACTION = 0.01
     soft_time_limit=600,
     time_limit=660,
 )
-def rebuild_from_spec(self, generation_id: str) -> dict:
+def rebuild_from_spec(
+    self,
+    generation_id: str,
+    correction_event_id: str | None = None,
+) -> dict:
     """Rebuild the part and its sheet from the CORRECTED spec — no model runs.
 
     Reading a sheet costs minutes of GPU and is where the mistakes come from;
@@ -239,10 +243,13 @@ def rebuild_from_spec(self, generation_id: str) -> dict:
     worse — it might come back with a different mistake. So this path starts
     from the stored spec and never looks at the image again.
     """
-    return run_async(_rebuild_from_spec(generation_id))
+    return run_async(_rebuild_from_spec(generation_id, correction_event_id))
 
 
-async def _rebuild_from_spec(generation_id: str) -> dict:
+async def _rebuild_from_spec(
+    generation_id: str,
+    correction_event_id: str | None = None,
+) -> dict:
     import uuid as _uuid
 
     from app.ai.cad_ir.schema import ValidationIssueIR
@@ -259,6 +266,17 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
             return {"error": "not found"}
         params = dict(gen.params or {})
         owner_sub = gen.owner_sub
+    current_correction_event_id = params.get("spec_correction_event_id")
+    if (
+        correction_event_id is not None
+        and current_correction_event_id != correction_event_id
+    ):
+        return {
+            "ok": True,
+            "superseded": True,
+            "generation_id": generation_id,
+            "correction_event_id": correction_event_id,
+        }
     spec = params.get("spec_corrected") or params.get("spec")
     if not spec:
         return {"error": "нет сохранённой спецификации для пересборки"}
@@ -307,6 +325,11 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
                 default=str,
                 separators=(",", ":"),
             ).encode()).hexdigest()
+            patch_key = (
+                f"spec-correction:{generation_id}:{correction_event_id}"
+                if correction_event_id is not None
+                else f"spec-rebuild:{generation_id}:{patch_digest}"
+            )
             async with factory() as db:
                 engineering_graph_row = await persist_feature_tree_revision(
                     db,
@@ -314,8 +337,12 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
                     spec=spec,
                     candidate=rebuild_candidate,
                     producer="human" if params.get("spec_corrected") else "system",
-                    pass_id=f"spec-rebuild:{generation_id}",
-                    idempotency_key=f"spec-rebuild:{generation_id}:{patch_digest}",
+                    pass_id=(
+                        f"spec-correction:{correction_event_id}"
+                        if correction_event_id is not None
+                        else f"spec-rebuild:{generation_id}"
+                    ),
+                    idempotency_key=patch_key,
                 )
                 engineering_graph = load_graph(engineering_graph_row)
                 engineering_graph_ref = {
@@ -395,6 +422,17 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
         gen = await db.get(ImageGeneration, gen_uuid)
         if gen is None:
             return {"error": "not found"}
+        if (
+            correction_event_id is not None
+            and (gen.params or {}).get("spec_correction_event_id")
+            != correction_event_id
+        ):
+            return {
+                "ok": True,
+                "superseded": True,
+                "generation_id": generation_id,
+                "correction_event_id": correction_event_id,
+            }
         gen.params = {
             **(gen.params or {}),
             "spec": spec,
@@ -429,6 +467,7 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
     return {
         "ok": True,
         "generation_id": generation_id,
+        "correction_event_id": correction_event_id,
         "entities": len(spec_ir.entities),
         "assumptions": len(assumptions),
     }

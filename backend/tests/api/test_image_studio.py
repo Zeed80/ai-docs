@@ -677,6 +677,78 @@ async def test_delete_generation_detaches_studio_job(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_spec_corrections_are_distinct_audited_rebuild_events(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+    from uuid import UUID
+
+    from app.api.image_generation import SpecCorrectionRequest, correct_vectorize_spec
+    from app.tasks.cad_trace import rebuild_from_spec
+
+    queued: list[tuple[list[object], str]] = []
+
+    def queue_rebuild(*, args, queue):
+        queued.append((args, queue))
+        return SimpleNamespace(id=f"task-{len(queued)}")
+
+    monkeypatch.setattr(rebuild_from_spec, "apply_async", queue_rebuild)
+    read_spec = {
+        "schema_version": 1,
+        "part": "Фланец",
+        "main_view": {
+            "type": "фланец",
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 100,
+                "thickness_mm": 12,
+                "holes": [],
+            },
+        },
+        "title_block": {"material": "Сталь 20", "scale": "1:1"},
+    }
+    gen = SimpleNamespace(
+        owner_sub="dev-user",
+        params={"spec": read_spec},
+    )
+
+    class Session:
+        async def get(self, *_args):
+            return gen
+
+        async def commit(self):
+            return None
+
+    generation_id = UUID("00000000-0000-0000-0000-000000000123")
+    first = await correct_vectorize_spec(
+        generation_id,
+        SpecCorrectionRequest(material="Сталь 45", rebuild=True),
+        Session(),
+        _user("dev-user"),
+    )
+    second = await correct_vectorize_spec(
+        generation_id,
+        SpecCorrectionRequest(material="Сталь 20", rebuild=True),
+        Session(),
+        _user("dev-user"),
+    )
+
+    first_event = first["correction_event_id"]
+    second_event = second["correction_event_id"]
+    assert first_event != second_event
+    assert queued == [
+        ([str(generation_id), first_event], "celery"),
+        ([str(generation_id), second_event], "celery"),
+    ]
+    assert gen.params["spec_correction_event_id"] == second_event
+    assert [
+        item["correction_event_id"]
+        for item in gen.params["spec_correction_history"]
+    ] == [first_event, second_event]
+    assert gen.params["spec_corrected"]["title_block"]["material"] == "Сталь 20"
+
+
+@pytest.mark.asyncio
 async def test_studio_queue_list_cleans_done_and_cancelled_jobs(client, db_session):
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.services import studio_queue

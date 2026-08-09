@@ -93,3 +93,41 @@ async def test_spec_rebuild_uses_available_session_factory(monkeypatch):
     )
 
     assert result == {"error": "not found"}
+
+
+@pytest.mark.asyncio
+async def test_spec_rebuild_drops_a_superseded_correction_before_build(monkeypatch):
+    class Generation:
+        owner_sub = "owner"
+        params = {
+            "spec": {"part": "test"},
+            "spec_corrected": {"part": "newest"},
+            "spec_correction_event_id": "event-newest",
+        }
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args):
+            return Generation()
+
+    monkeypatch.setattr(
+        "app.db.session._get_session_factory",
+        lambda: lambda: Session(),
+    )
+
+    result = await cad_trace._rebuild_from_spec(
+        "00000000-0000-0000-0000-000000000001",
+        "event-stale",
+    )
+
+    assert result == {
+        "ok": True,
+        "superseded": True,
+        "generation_id": "00000000-0000-0000-0000-000000000001",
+        "correction_event_id": "event-stale",
+    }

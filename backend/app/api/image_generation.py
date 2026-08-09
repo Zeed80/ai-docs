@@ -965,11 +965,14 @@ async def correct_vectorize_spec(
         raise HTTPException(400, "Не передано ни одного исправления")
 
     record = params.get("spec_correction_record") or {"diff": []}
+    correction_event_id = params.get("spec_correction_event_id")
     if supplied:
+        correction_event_id = str(uuid.uuid4())
         corrected = merge_correction(correction_base, supplied)
         corrected = reconcile_corrected_feature_blockers(corrected, set(supplied))
-        from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
         from pydantic import ValidationError
+
+        from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
 
         try:
             corrected = EngineeringDrawingSpec.model_validate(corrected).model_dump(
@@ -999,8 +1002,14 @@ async def correct_vectorize_spec(
                 .get("models", [])
             ),
         )
+        record["correction_event_id"] = correction_event_id
         params["spec_corrected"] = corrected
         params["spec_correction_record"] = record
+        params["spec_correction_event_id"] = correction_event_id
+        params["spec_correction_history"] = [
+            *(params.get("spec_correction_history") or []),
+            record,
+        ]
         gen.params = params
         await db.commit()
 
@@ -1011,9 +1020,17 @@ async def correct_vectorize_spec(
         # again would be slower AND might come back with a different mistake.
         from app.tasks.cad_trace import rebuild_from_spec
 
-        task = rebuild_from_spec.apply_async(args=[str(generation_id)], queue="celery")
+        task = rebuild_from_spec.apply_async(
+            args=[str(generation_id), correction_event_id],
+            queue="celery",
+        )
         task_id = task.id
-    return {"ok": True, "diff": record["diff"], "rebuild_task_id": task_id}
+    return {
+        "ok": True,
+        "diff": record["diff"],
+        "correction_event_id": correction_event_id,
+        "rebuild_task_id": task_id,
+    }
 
 
 @router.patch("/{generation_id}/cad-reading")
