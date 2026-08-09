@@ -1191,6 +1191,27 @@ print(json.dumps({
     return report
 
 
+def _canonicalize_step_file(step_path: Path, artifact_name: str) -> bytes:
+    """Remove exporter process metadata without changing the STEP DATA section."""
+    if not step_path.exists() or step_path.stat().st_size == 0:
+        raise HTTPException(500, f"{artifact_name} STEP export is empty")
+    step_bytes, replacements = re.subn(
+        rb"(FILE_NAME\([^,]+,)'[^']*'",
+        rb"\1'1970-01-01T00:00:00'",
+        step_path.read_bytes(),
+        count=1,
+    )
+    if replacements != 1:
+        raise HTTPException(500, f"{artifact_name} STEP has no canonical FILE_NAME header")
+    step_bytes = re.sub(
+        rb"Open CASCADE STEP translator 7\.9 [0-9]+",
+        b"Open CASCADE STEP translator 7.9 1",
+        step_bytes,
+    )
+    step_path.write_bytes(step_bytes)
+    return step_bytes
+
+
 def _component_solid(component: InterferenceComponent) -> Part.Shape:
     shape = component.shape if isinstance(component.shape, dict) else {}
     kind = shape.get("kind")
@@ -1278,29 +1299,7 @@ def compile_assembly(request: AssemblyCompileRequest) -> Response:
         step_path = root / "assembly.step"
         report_path = root / "assembly-report.json"
         compound.exportStep(str(step_path))
-        if not step_path.exists() or step_path.stat().st_size == 0:
-            raise HTTPException(500, "Assembly STEP export is empty")
-        # OpenCascade writes the wall-clock export time into FILE_NAME, which
-        # would give the same graph revision a different artifact SHA on every
-        # build.  Canonicalize that header field before reopen; the STEP DATA
-        # section and therefore the B-Rep remain untouched.
-        step_bytes = step_path.read_bytes()
-        step_bytes, replacements = re.subn(
-            rb"(FILE_NAME\([^,]+,)'[^']*'",
-            rb"\1'1970-01-01T00:00:00'",
-            step_bytes,
-            count=1,
-        )
-        if replacements != 1:
-            raise HTTPException(500, "Assembly STEP has no canonical FILE_NAME header")
-        # The exporter also appends a process-global sequence number to the
-        # PRODUCT label.  It is presentation metadata, not a topology id.
-        step_bytes = re.sub(
-            rb"Open CASCADE STEP translator 7\.9 [0-9]+",
-            b"Open CASCADE STEP translator 7.9 1",
-            step_bytes,
-        )
-        step_path.write_bytes(step_bytes)
+        _canonicalize_step_file(step_path, "Assembly")
         reopen_report = _reopen_step_report(step_path, len(positioned))
         report = {
             "kernel": "FreeCAD/OpenCascade",
@@ -2072,6 +2071,14 @@ def compile_candidate(request: CompileRequest) -> Response:
             report_path = root / "report.json"
 
             shape.exportStep(str(step_path))
+            step_bytes = _canonicalize_step_file(step_path, "Mechanical")
+            reopen_report = _reopen_step_report(step_path, 1)
+            if not reopen_report.get("valid"):
+                raise HTTPException(
+                    500,
+                    "Mechanical STEP reopen failed: "
+                    + str(reopen_report.get("error") or reopen_report),
+                )
             # D4: exact-geometry IGES export alongside STEP.
             try:
                 shape.exportIges(str(iges_path))
@@ -2095,6 +2102,10 @@ def compile_candidate(request: CompileRequest) -> Response:
                             request, warnings, operation_audit
                         ),
                         "kernel": "FreeCAD/OpenCascade",
+                        "reopen": {
+                            **reopen_report,
+                            "step_sha256": hashlib.sha256(step_bytes).hexdigest(),
+                        },
                     },
                     ensure_ascii=False,
                     sort_keys=True,

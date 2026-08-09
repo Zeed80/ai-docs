@@ -179,14 +179,27 @@ def _mechanical_cases() -> list[tuple[str, dict[str, Any]]]:
 
 
 def _run_mechanical(case_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
+    compile_payload = {
+        "candidate": candidate,
+        "confirm_assumptions": True,
+        "metadata": {"live_case": case_id},
+    }
     status, body, _ = _post(
         "/compile",
-        {"candidate": candidate, "confirm_assumptions": True, "metadata": {"live_case": case_id}},
+        compile_payload,
     )
     if status != 200:
         raise RuntimeError(f"/compile HTTP {status}: {body[:400].decode(errors='replace')}")
     members = _zip_members(body)
     report = json.loads(members["report.json"])
+    repeated_status, repeated_body, _ = _post("/compile", compile_payload)
+    if repeated_status != 200:
+        raise RuntimeError(
+            f"repeated /compile HTTP {repeated_status}: "
+            f"{repeated_body[:400].decode(errors='replace')}"
+        )
+    repeated_members = _zip_members(repeated_body)
+    repeated_report = json.loads(repeated_members["report.json"])
     status, projection_body, _ = _post(
         "/project",
         {"candidate": candidate, "views": ["front", "side", "top"], "confirm_assumptions": True},
@@ -204,6 +217,16 @@ def _run_mechanical(case_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
         "manifold": bool(report.get("manifold")),
         "single_solid": report.get("solid_count") == 1,
         "step_signature": members.get("model.step", b"")[:16].startswith(b"ISO-10303-21"),
+        "step_reopen_valid": bool(report.get("reopen", {}).get("valid")),
+        "step_reopen_sha_matches": (
+            report.get("reopen", {}).get("step_sha256")
+            == hashlib.sha256(members["model.step"]).hexdigest()
+        ),
+        "artifact_deterministic": (
+            members["model.step"] == repeated_members["model.step"]
+            and report.get("reopen", {}).get("step_sha256")
+            == repeated_report.get("reopen", {}).get("step_sha256")
+        ),
         "all_views_present": set(views) == {"front", "side", "top"},
         "projection_nonempty": primitive_count > 0,
     }
