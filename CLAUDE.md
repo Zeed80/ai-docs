@@ -55,6 +55,8 @@ make dev          # весь стек
 make test         # unit + API + integration
 make e2e          # Playwright
 make regression   # extraction quality
+make emg-regression       # deterministic four-domain EMG golden gate
+make emg-live-regression  # live CAD/STEP/IFC/system production matrix
 make agent-test   # AiAgent scenarios на mock skills
 ```
 

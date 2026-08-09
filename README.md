@@ -516,6 +516,8 @@ cd backend && alembic upgrade head
 make test          # unit + API тесты
 make e2e           # Playwright
 make regression    # регрессия качества извлечения и ролей агента
+make emg-regression       # детерминированный golden gate четырёх EMG-доменов
+make emg-live-regression  # live-матрица CAD/STEP/IFC/system в production stack
 make agent-test    # AiAgent scenarios на mock skills
 make lint          # ruff (backend) + ESLint (frontend)
 ```
