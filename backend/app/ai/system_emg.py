@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import html
+import json
 from collections import Counter
 from typing import Literal
+from xml.etree import ElementTree
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -16,6 +19,7 @@ from app.domain.engineering_model_graph import (
     ExactValue,
     GraphEdge,
     GraphNode,
+    GraphPatch,
     Requirement,
     UnknownValue,
 )
@@ -285,3 +289,178 @@ def system_as_graph(
             ),
         ],
     ).sealed()
+
+
+def build_system_diagram_svg(model: EngineeringSystemModel) -> tuple[bytes, dict]:
+    """Render and independently reopen a deterministic semantic system diagram."""
+    width = max(420, 120 + len(model.equipment) * 220)
+    height = max(300, 180 + max((
+        sum(port.equipment_id == item.id for port in model.ports)
+        for item in model.equipment
+    ), default=1) * 34)
+    equipment_positions: dict[str, tuple[float, float]] = {}
+    port_positions: dict[str, tuple[float, float]] = {}
+    equipment_ports = {
+        item.id: [port for port in model.ports if port.equipment_id == item.id]
+        for item in model.equipment
+    }
+    groups = []
+    for index, item in enumerate(model.equipment):
+        x = 70.0 + index * 220.0
+        y = 90.0
+        equipment_positions[item.id] = (x, y)
+        ports = equipment_ports[item.id]
+        port_items = []
+        for port_index, port in enumerate(ports):
+            port_y = y + 35.0 + port_index * 30.0
+            port_x = x if port.direction == "in" else x + 140.0
+            if port.direction == "bidirectional":
+                port_x = x + 70.0
+            port_positions[port.id] = (port_x, port_y)
+            port_items.append(
+                f'<circle data-port-id="{html.escape(port.id)}" '
+                f'cx="{port_x:.1f}" cy="{port_y:.1f}" r="5" />'
+            )
+        groups.append(
+            f'<g data-equipment-id="{html.escape(item.id)}">'
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="140" height="120" rx="8" />'
+            f'<text x="{x + 70:.1f}" y="{y + 24:.1f}" text-anchor="middle">'
+            f'{html.escape(item.name)}</text>{"".join(port_items)}</g>'
+        )
+    connections = []
+    for connection in model.connections:
+        first = port_positions[connection.first_port_id]
+        second = port_positions[connection.second_port_id]
+        mid_x = (first[0] + second[0]) / 2
+        points = (
+            f"{first[0]:.1f},{first[1]:.1f} {mid_x:.1f},{first[1]:.1f} "
+            f"{mid_x:.1f},{second[1]:.1f} {second[0]:.1f},{second[1]:.1f}"
+        )
+        connections.append(
+            f'<polyline data-connection-id="{html.escape(connection.id)}" '
+            f'data-first-port-id="{html.escape(connection.first_port_id)}" '
+            f'data-second-port-id="{html.escape(connection.second_port_id)}" '
+            f'points="{points}" />'
+        )
+    svg = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}">'
+        '<style>rect{fill:#fff;stroke:#111;stroke-width:2}'
+        'circle{fill:#fff;stroke:#111;stroke-width:2}'
+        'polyline{fill:none;stroke:#075985;stroke-width:3}'
+        'text{font:14px sans-serif;fill:#111}</style>'
+        f'<text x="20" y="30">{html.escape(model.name)} — {html.escape(model.system_kind)}</text>'
+        f'<g id="connections">{"".join(connections)}</g>'
+        f'<g id="equipment">{"".join(groups)}</g>'
+        '</svg>'
+    ).encode()
+    reopened = ElementTree.fromstring(svg)
+    namespace = {"svg": "http://www.w3.org/2000/svg"}
+    rendered_equipment = {
+        item.attrib["data-equipment-id"]
+        for item in reopened.findall(".//svg:g[@data-equipment-id]", namespace)
+    }
+    rendered_ports = {
+        item.attrib["data-port-id"]
+        for item in reopened.findall(".//svg:circle[@data-port-id]", namespace)
+    }
+    rendered_connections = {
+        item.attrib["data-connection-id"]
+        for item in reopened.findall(".//svg:polyline[@data-connection-id]", namespace)
+    }
+    report = {
+        "media_type": "image/svg+xml",
+        "equipment_ids": sorted(rendered_equipment),
+        "port_ids": sorted(rendered_ports),
+        "connection_ids": sorted(rendered_connections),
+        "required_views_complete": True,
+        "unresolved_port_ids": model.unresolved_port_ids(),
+    }
+    report["valid"] = bool(
+        rendered_equipment == {item.id for item in model.equipment}
+        and rendered_ports == {item.id for item in model.ports}
+        and rendered_connections == {item.id for item in model.connections}
+        and not report["unresolved_port_ids"]
+    )
+    report["artifact_sha256"] = hashlib.sha256(svg).hexdigest()
+    report["canonical_report_sha256"] = hashlib.sha256(
+        json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return svg, report
+
+
+def system_diagram_patch(
+    graph: EngineeringModelGraph,
+    *,
+    svg: bytes,
+    report: dict,
+) -> GraphPatch:
+    """Admit a reopened complete SVG diagram without granting human assurance."""
+    artifact_sha = hashlib.sha256(svg).hexdigest()
+    if (
+        not report.get("valid")
+        or report.get("media_type") != "image/svg+xml"
+        or report.get("artifact_sha256") != artifact_sha
+        or not report.get("required_views_complete")
+    ):
+        raise ValueError("system diagram report does not validate the supplied SVG")
+    required = next(
+        item for item in graph.assertions
+        if item.state == "active"
+        and item.predicate == "system.required_diagram_complete"
+    )
+    suffix = artifact_sha[:16]
+    artifact_id = f"artifact:system-diagram:{suffix}"
+    operation_id = f"operation:system-diagram:{suffix}"
+    evidence_id = f"evidence:system-diagram:{suffix}"
+    evidence = Evidence(
+        id=evidence_id,
+        kind="projection_comparison",
+        payload=report,
+        sha256=report["canonical_report_sha256"],
+    )
+    return GraphPatch(
+        patch_id=f"system-diagram:{suffix}",
+        base_revision=graph.revision,
+        base_sha256=graph.canonical_sha256,
+        producer="system",
+        pass_id=f"system-diagram:r{graph.revision + 1}",
+        idempotency_key=f"system-diagram:{artifact_sha}",
+        add_nodes=[
+            GraphNode(id=operation_id, type="BuildOperation", name="Build system diagram"),
+            GraphNode(id=artifact_id, type="Artifact", name="System diagram SVG"),
+        ],
+        add_edges=[GraphEdge(
+            id=f"generated-by:system-diagram:{suffix}",
+            type="generated_by",
+            source_id=artifact_id,
+            target_id=operation_id,
+        )],
+        add_evidence=[evidence],
+        add_assertions=[
+            Assertion(
+                id=f"assertion:system-diagram-media:{suffix}",
+                subject_id=artifact_id,
+                predicate="artifact.media_type",
+                value=ExactValue(kind="exact", value="image/svg+xml"),
+                origin="derived",
+                assurance="constraint_validated",
+                evidence_ids=[evidence_id],
+                confidence=1.0,
+            ),
+            Assertion(
+                id=f"assertion:system-diagram-complete:{suffix}",
+                subject_id="system:root",
+                predicate="system.required_diagram_complete",
+                value=ExactValue(kind="exact", value=True),
+                origin="derived",
+                assurance="constraint_validated",
+                evidence_ids=[evidence_id],
+                confidence=1.0,
+                impacts=["required_view"],
+                supersedes_assertion_id=required.id,
+            ),
+        ],
+        supersede_assertion_ids=[required.id],
+    )

@@ -424,6 +424,22 @@ def compile_construction_ifc(model: ConstructionModel) -> tuple[bytes, dict]:
             ifcopenshell,
             f"construction:{index}:{root.is_a()}:{getattr(root, 'Name', '')}",
         )
+    # IfcOpenShell relationship APIs collect members through sets.  Their
+    # serialization order can change between calls (and therefore change the
+    # artifact SHA) even though the building topology is identical.  Canonical
+    # member order is part of the immutable graph -> artifact contract.
+    def _product_key(product: object) -> tuple[str, str, str, int]:
+        return (
+            str(getattr(product, "Description", "") or ""),
+            str(getattr(product, "Tag", "") or ""),
+            str(getattr(product, "Name", "") or ""),
+            product.id(),  # type: ignore[attr-defined]
+        )
+
+    for relation in ifc.by_type("IfcRelContainedInSpatialStructure"):
+        relation.RelatedElements = tuple(sorted(relation.RelatedElements, key=_product_key))
+    for relation in ifc.by_type("IfcRelAggregates"):
+        relation.RelatedObjects = tuple(sorted(relation.RelatedObjects, key=_product_key))
     for assignment in ifc.by_type("IfcUnitAssignment"):
         assignment.Units = tuple(
             sorted(

@@ -56,3 +56,53 @@ def test_construction_ifc_is_reopenable_and_deterministic():
         "IfcWall": 1,
     }
     assert first_report["opening_relation_count"] == 1
+
+
+def test_multi_storey_ifc_relationship_members_have_canonical_order():
+    elements = []
+    for index, storey_id in enumerate(("l1", "l2")):
+        elements.extend([
+            {
+                "id": f"slab-{index}",
+                "kind": "slab",
+                "name": f"Slab {index}",
+                "storey_id": storey_id,
+                "material": "Concrete",
+                "box": {
+                    "x_mm": 0,
+                    "y_mm": 0,
+                    "z_mm": 0,
+                    "width_mm": 8000,
+                    "depth_mm": 6000,
+                    "height_mm": 250,
+                },
+            },
+            {
+                "id": f"column-{index}",
+                "kind": "column",
+                "name": f"Column {index}",
+                "storey_id": storey_id,
+                "material": "Concrete",
+                "box": {
+                    "x_mm": 500,
+                    "y_mm": 500,
+                    "z_mm": 250,
+                    "width_mm": 400,
+                    "depth_mm": 400,
+                    "height_mm": 3350,
+                },
+            },
+        ])
+    model = ConstructionModel.model_validate({
+        "site_name": "Test site",
+        "building_name": "Two storey frame",
+        "storeys": [
+            {"id": "l1", "name": "Level 1", "elevation_mm": 0},
+            {"id": "l2", "name": "Level 2", "elevation_mm": 3600},
+        ],
+        "elements": elements,
+    })
+
+    artifacts = [compile_construction_ifc(model)[0] for _ in range(3)]
+
+    assert artifacts[0] == artifacts[1] == artifacts[2]

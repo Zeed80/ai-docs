@@ -1,7 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from app.ai.system_emg import EngineeringSystemModel, system_as_graph
+from app.ai.system_emg import (
+    EngineeringSystemModel,
+    build_system_diagram_svg,
+    system_as_graph,
+    system_diagram_patch,
+)
 from app.domain.engineering_model_graph import (
     Assertion,
     Evidence,
@@ -133,6 +138,49 @@ def test_verified_system_pdf_is_required_before_production_release():
     state, issues = verify_graph(released)
     assert "required_2d_artifacts_missing" not in state.issue_codes
     assert not [item for item in issues if item["severity"] == "error"]
+
+
+def test_deterministic_system_svg_admits_the_required_diagram():
+    model = _model()
+    first_svg, first_report = build_system_diagram_svg(model)
+    second_svg, second_report = build_system_diagram_svg(model)
+    assert first_svg == second_svg
+    assert first_report == second_report
+    assert first_report["valid"] is True
+    assert first_report["equipment_ids"] == ["pump", "tank"]
+    assert first_report["port_ids"] == ["pump-out", "tank-in"]
+    assert first_report["connection_ids"] == ["line-1"]
+
+    graph = system_as_graph(
+        graph_id="system:test",
+        model=model,
+        source_revision_id="revision-1",
+        source_approved=True,
+    )
+    released = apply_graph_patch(
+        graph,
+        system_diagram_patch(graph, svg=first_svg, report=first_report),
+    )
+
+    assert compile_build_plan(released, "production").production_export_allowed is True
+    state, issues = verify_graph(released)
+    assert "required_2d_artifacts_missing" not in state.issue_codes
+    assert not [item for item in issues if item["severity"] == "error"]
+
+
+def test_incomplete_system_svg_cannot_be_admitted():
+    model = _model(connected=False)
+    svg, report = build_system_diagram_svg(model)
+    assert report["valid"] is False
+    graph = system_as_graph(
+        graph_id="system:test",
+        model=model,
+        source_revision_id="revision-1",
+        source_approved=True,
+    )
+
+    with pytest.raises(ValueError, match="does not validate"):
+        system_diagram_patch(graph, svg=svg, report=report)
 
 
 def test_unconnected_required_ports_are_critical_unknowns():

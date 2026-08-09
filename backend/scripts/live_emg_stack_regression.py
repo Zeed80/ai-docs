@@ -28,7 +28,13 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.ai.construction_emg import ConstructionModel, compile_construction_ifc
-from app.ai.system_emg import EngineeringSystemModel, system_as_graph
+from app.ai.system_emg import (
+    EngineeringSystemModel,
+    build_system_diagram_svg,
+    system_as_graph,
+    system_diagram_patch,
+)
+from app.domain.engineering_model_graph import apply_graph_patch, compile_build_plan
 from app.services.engineering_model_graph import verify_graph
 
 KERNEL_URL = os.environ.get("CAD_KERNEL_URL", "http://cad-kernel:8092").rstrip("/")
@@ -294,6 +300,7 @@ def _construction_cases() -> list[tuple[str, ConstructionModel]]:
 
 def _run_construction(case_id: str, model: ConstructionModel) -> dict[str, Any]:
     artifact, report = compile_construction_ifc(model)
+    repeated_artifact, repeated_report = compile_construction_ifc(model)
     checks = {
         "ifc_signature": artifact.startswith(b"ISO-10303-21"),
         "reopen_valid": bool(report.get("valid")),
@@ -301,6 +308,10 @@ def _run_construction(case_id: str, model: ConstructionModel) -> dict[str, Any]:
         "all_products_represented": report.get("represented_product_count") == len(model.elements),
         "geometry_reopened": not report.get("geometry_failures"),
         "artifact_sha_matches": report.get("ifc_sha256") == hashlib.sha256(artifact).hexdigest(),
+        "artifact_deterministic": (
+            artifact == repeated_artifact
+            and report.get("ifc_sha256") == repeated_report.get("ifc_sha256")
+        ),
     }
     return {
         "runtime": "production backend IfcOpenShell geometry runtime",
@@ -379,20 +390,34 @@ def _run_system(case_id: str, model: EngineeringSystemModel) -> dict[str, Any]:
         source_revision_id=f"live:{case_id}:r1",
         source_approved=True,
     )
-    state, issues = verify_graph(graph)
+    svg, diagram_report = build_system_diagram_svg(model)
+    released = apply_graph_patch(
+        graph,
+        system_diagram_patch(graph, svg=svg, report=diagram_report),
+    )
+    state, issues = verify_graph(released)
     error_codes = sorted(item["code"] for item in issues if item["severity"] == "error")
     checks = {
         "connectivity_closed": not model.unresolved_port_ids(),
         "canonical_graph_deterministic": graph.canonical_sha256 == repeated.canonical_sha256,
+        "diagram_svg_reopened": bool(diagram_report.get("valid")),
+        "diagram_covers_all_objects": (
+            len(diagram_report.get("equipment_ids", [])) == len(model.equipment)
+            and len(diagram_report.get("port_ids", [])) == len(model.ports)
+            and len(diagram_report.get("connection_ids", [])) == len(model.connections)
+        ),
         "all_verifier_levels_executed": state.checked_levels == list(range(1, 13)),
-        # The diagram builder is the intentional current release blocker.
-        "only_expected_release_blocker": error_codes == ["required_2d_artifacts_missing"],
+        "no_release_errors": error_codes == [],
+        "production_export_allowed": compile_build_plan(
+            released, "production"
+        ).production_export_allowed,
     }
     return {
-        "runtime": "production backend EMG domain adapter and verifier",
-        "evidence_level": "live_backend_semantic_validation_no_external_cad_kernel",
+        "runtime": "production backend EMG adapter, deterministic SVG builder and verifier",
+        "evidence_level": "live_backend_semantic_svg_reopen_and_release_gate",
         "passed": all(checks.values()),
         "checks": checks,
+        "artifact_sha256": hashlib.sha256(svg).hexdigest(),
         "canonical_sha256": graph.canonical_sha256,
         "equipment_count": len(model.equipment),
         "port_count": len(model.ports),
