@@ -1,6 +1,13 @@
 from app.ai.assembly_emg import assembly_as_graph, assembly_revision_patch
 from app.domain.assembly import analyze_assembly_dof
-from app.domain.engineering_model_graph import apply_graph_patch, compile_build_plan
+from app.domain.engineering_model_graph import (
+    Assertion,
+    ExactValue,
+    GraphNode,
+    GraphPatch,
+    apply_graph_patch,
+    compile_build_plan,
+)
 
 
 def _assembly_graph(*, shaft_quantity: int = 1):
@@ -157,3 +164,60 @@ def test_assembly_revision_patch_is_deterministic_and_supersedes_bom_value():
         for assertion in merged.assertions
     )
     assert assembly_revision_patch(merged, desired) is None
+
+
+def test_assembly_sync_preserves_reopen_only_for_unchanged_snapshot():
+    current = _assembly_graph()
+    reopen = next(
+        assertion
+        for assertion in current.assertions
+        if assertion.predicate == "assembly.artifact_reopen_valid"
+    )
+    built = apply_graph_patch(
+        current,
+        GraphPatch(
+            patch_id="assembly-build:test",
+            base_revision=current.revision,
+            base_sha256=current.canonical_sha256,
+            producer="system",
+            pass_id="assembly-build:r1",
+            idempotency_key="assembly-build:test",
+            add_nodes=[GraphNode(id="artifact:test", type="Artifact")],
+            add_assertions=[
+                Assertion(
+                    id="assertion:assembly-reopen:test",
+                    subject_id="product:assembly",
+                    predicate="assembly.artifact_reopen_valid",
+                    value=ExactValue(kind="exact", value=True),
+                    origin="derived",
+                    assurance="constraint_validated",
+                    confidence=1.0,
+                    supersedes_assertion_id=reopen.id,
+                ),
+                Assertion(
+                    id="assertion:artifact-sha:test",
+                    subject_id="artifact:test",
+                    predicate="artifact.sha256",
+                    value=ExactValue(kind="exact", value="abc"),
+                    origin="derived",
+                    assurance="constraint_validated",
+                    confidence=1.0,
+                ),
+            ],
+            supersede_assertion_ids=[reopen.id],
+        ),
+    )
+
+    assert assembly_revision_patch(built, _assembly_graph()) is None
+
+    changed = assembly_revision_patch(built, _assembly_graph(shaft_quantity=4))
+    assert changed is not None
+    assert "assertion:artifact-sha:test" in changed.retract_assertion_ids
+    merged = apply_graph_patch(built, changed)
+    active_reopen = next(
+        assertion
+        for assertion in merged.assertions
+        if assertion.state == "active"
+        and assertion.predicate == "assembly.artifact_reopen_valid"
+    )
+    assert active_reopen.value.kind == "unknown"

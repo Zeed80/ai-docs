@@ -340,7 +340,9 @@ def assembly_revision_patch(
 ) -> GraphPatch | None:
     """Create an append/supersede/retract patch for a changed assembly snapshot."""
     current_nodes = {item.id for item in current.nodes}
+    desired_nodes = {item.id for item in desired.nodes}
     current_edges = {item.id for item in current.edges}
+    desired_edges = {item.id for item in desired.edges}
     active = {
         (item.subject_id, item.predicate): item
         for item in current.assertions
@@ -349,13 +351,56 @@ def assembly_revision_patch(
     desired_by_key = {
         (item.subject_id, item.predicate): item for item in desired.assertions
     }
+    existing_evidence = {item.id for item in current.evidence}
+    add_evidence = [
+        item for item in desired.evidence if item.id not in existing_evidence
+    ]
+    reopen_key = ("product:assembly", "assembly.artifact_reopen_valid")
+    extra_subject_ids = current_nodes - desired_nodes
+
+    def _same_value(existing: Assertion | None, wanted: Assertion) -> bool:
+        return bool(
+            existing
+            and existing.model_dump(
+                exclude={"id", "supersedes_assertion_id", "state"}
+            ) == wanted.model_dump(
+                exclude={"id", "supersedes_assertion_id", "state"}
+            )
+        )
+
+    # A successful artifact patch is derived from the current editable
+    # snapshot.  Re-syncing that unchanged snapshot must preserve the reopen
+    # proof and remain idempotent.  Any BOM/mate/transform/interference change
+    # invalidates it and restores the unknown release gate below.
+    snapshot_changed = bool(
+        desired_nodes - current_nodes
+        or desired_edges - current_edges
+        or add_evidence
+        or any(
+            key != reopen_key and not _same_value(active.get(key), wanted)
+            for key, wanted in desired_by_key.items()
+        )
+        or any(
+            key != reopen_key
+            and item.subject_id not in extra_subject_ids
+            and key not in desired_by_key
+            for key, item in active.items()
+        )
+    )
     add_assertions = []
     supersede = []
     for key, wanted in desired_by_key.items():
         existing = active.get(key)
-        if existing and existing.model_dump(
-            exclude={"id", "supersedes_assertion_id", "state"}
-        ) == wanted.model_dump(exclude={"id", "supersedes_assertion_id", "state"}):
+        if (
+            key == reopen_key
+            and not snapshot_changed
+            and existing is not None
+            and existing.value.kind == "exact"
+            and existing.value.value is True
+            and existing.assurance == "constraint_validated"
+        ):
+            continue
+        if _same_value(existing, wanted):
             continue
         suffix = hashlib.sha256(f"{key}:{wanted.model_dump_json()}".encode()).hexdigest()[:16]
         replacement = wanted.model_copy(update={
@@ -365,10 +410,11 @@ def assembly_revision_patch(
         add_assertions.append(replacement)
         if existing:
             supersede.append(existing.id)
-    retract = [item.id for key, item in active.items() if key not in desired_by_key]
-    existing_evidence = {item.id for item in current.evidence}
-    add_evidence = [
-        item for item in desired.evidence if item.id not in existing_evidence
+    retract = [
+        item.id
+        for key, item in active.items()
+        if key not in desired_by_key
+        and (snapshot_changed or item.subject_id not in extra_subject_ids)
     ]
     payload = {
         "nodes": [item.model_dump(mode="json") for item in desired.nodes],

@@ -455,6 +455,252 @@ async def sync_assembly_model_graph(
     }
 
 
+@router.post("/assemblies/{assembly_id}/model-graph/build")
+async def build_assembly_model_graph(
+    assembly_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Build, reopen and attach a multi-solid STEP to the latest assembly EMG."""
+    import hashlib
+    import io
+    import json
+    import zipfile
+
+    import httpx
+
+    from app.config import settings
+    from app.domain.engineering_model_graph import (
+        Assertion,
+        Evidence,
+        ExactValue,
+        GraphEdge,
+        GraphNode,
+        GraphPatch,
+        compile_build_plan,
+    )
+    from app.services.engineering_model_graph import (
+        latest_graph_revision,
+        load_graph,
+        merge_and_persist_patch,
+    )
+    from app.storage import delete_file, upload_file
+
+    synced = await sync_assembly_model_graph(assembly_id, db, user)
+    graph_id = synced["graph_id"]
+    latest = await latest_graph_revision(db, graph_id, lock=True)
+    if latest is None:
+        raise HTTPException(409, "Assembly EngineeringModelGraph не создан")
+    graph = load_graph(latest)
+    plan = compile_build_plan(graph, "production")
+    reopen_assertion = next(
+        (
+            item for item in graph.assertions
+            if item.state == "active"
+            and item.predicate == "assembly.artifact_reopen_valid"
+        ),
+        None,
+    )
+    if reopen_assertion is None:
+        raise HTTPException(409, "В assembly graph отсутствует artifact reopen gate")
+    blockers = set(plan.critical_assumption_ids) - {reopen_assertion.id}
+    if blockers:
+        raise HTTPException(
+            409,
+            "Assembly STEP заблокирован: " + ", ".join(sorted(blockers)),
+        )
+    assembly = await db.get(EngineeringAssembly, assembly_id)
+    components = list((await db.execute(
+        select(EngineeringAssemblyComponent).where(
+            EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
+            EngineeringAssemblyComponent.suppressed.is_(False),
+        )
+    )).scalars())
+    if assembly is None or not components:
+        raise HTTPException(409, "Сборка не содержит активных компонентов")
+    if any(not isinstance(item.metadata_.get("shape"), dict) for item in components):
+        raise HTTPException(409, "Каждый компонент должен иметь exact metadata.shape")
+    payload = {
+        "name": assembly.name,
+        "components": [
+            {
+                "key": item.instance_key,
+                "shape": item.metadata_["shape"],
+                "transform": item.transform or {},
+            }
+            for item in components
+        ],
+        "metadata": {
+            "graph_id": graph.graph_id,
+            "graph_revision": graph.revision,
+            "graph_sha256": graph.canonical_sha256,
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(
+                f"{settings.cad_kernel_url.rstrip('/')}/assembly/compile",
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(503, f"cad-kernel недоступен: {exc}") from exc
+    if response.status_code != 200:
+        raise HTTPException(422, "cad-kernel отклонил сборку: " + response.text[:300])
+    try:
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            step_bytes = archive.read("assembly.step")
+            report_bytes = archive.read("assembly-report.json")
+        report = json.loads(report_bytes)
+    except (KeyError, ValueError, zipfile.BadZipFile) as exc:
+        raise HTTPException(502, "cad-kernel вернул повреждённый assembly artifact") from exc
+    if not report.get("reopen", {}).get("valid"):
+        raise HTTPException(422, "STEP reopen verification failed")
+    step_sha = hashlib.sha256(step_bytes).hexdigest()
+    if report["reopen"].get("step_sha256") != step_sha:
+        raise HTTPException(502, "STEP SHA не совпал с kernel report")
+    artifact_path = (
+        f"engineering/assemblies/{assembly_id}/"
+        f"r{graph.revision}-{step_sha}.step"
+    )
+    report_path = artifact_path.removesuffix(".step") + ".json"
+    artifact_id = f"artifact:assembly-step:{step_sha[:20]}"
+    operation_id = f"operation:assembly-compile:{step_sha[:20]}"
+    nodes = [
+        GraphNode(id=operation_id, type="BuildOperation", name="Compile assembly STEP"),
+        GraphNode(id=artifact_id, type="Artifact", name="Assembly STEP"),
+    ]
+    edges = [
+        GraphEdge(
+            id=f"depends:{operation_id}",
+            type="depends_on",
+            source_id=operation_id,
+            target_id="product:assembly",
+        ),
+        GraphEdge(
+            id=f"generated:{artifact_id}",
+            type="generated_by",
+            source_id=artifact_id,
+            target_id=operation_id,
+        ),
+    ]
+    instance_subjects = {
+        str(item.value.value): item.subject_id
+        for item in graph.assertions
+        if item.state == "active"
+        and item.predicate == "component.instance_key"
+        and item.value.kind == "exact"
+    }
+    for component_report in report.get("components", []):
+        key = str(component_report.get("instance_key"))
+        subject_id = instance_subjects.get(key)
+        if subject_id is None:
+            raise HTTPException(502, f"Kernel report содержит неизвестный instance {key}")
+        topology_id = f"topology:solid:{hashlib.sha256(key.encode()).hexdigest()[:16]}"
+        nodes.append(GraphNode(id=topology_id, type="TopologyElement", name=key))
+        edges.append(GraphEdge(
+            id=f"maps:{subject_id}:{topology_id}",
+            type="maps_to_topology",
+            source_id=subject_id,
+            target_id=topology_id,
+        ))
+    evidence_id = f"evidence:assembly-reopen:{step_sha[:20]}"
+    assertions = [
+        Assertion(
+            id=f"assertion:assembly-reopen:{step_sha[:20]}",
+            subject_id="product:assembly",
+            predicate="assembly.artifact_reopen_valid",
+            value=ExactValue(kind="exact", value=True),
+            origin="derived",
+            assurance="constraint_validated",
+            evidence_ids=[evidence_id],
+            confidence=1.0,
+            impacts=["base_topology", "operational_safety"],
+            supersedes_assertion_id=reopen_assertion.id,
+        ),
+        Assertion(
+            id=f"assertion:artifact-sha:{step_sha[:20]}",
+            subject_id=artifact_id,
+            predicate="artifact.sha256",
+            value=ExactValue(kind="exact", value=step_sha),
+            origin="derived",
+            assurance="constraint_validated",
+            evidence_ids=[evidence_id],
+            confidence=1.0,
+            impacts=["base_topology"],
+        ),
+        Assertion(
+            id=f"assertion:operation-kind:{step_sha[:20]}",
+            subject_id=operation_id,
+            predicate="operation.kind",
+            value=ExactValue(kind="exact", value="assembly_compile"),
+            origin="derived",
+            assurance="constraint_validated",
+            evidence_ids=[evidence_id],
+            confidence=1.0,
+            impacts=["base_topology", "component_count"],
+        ),
+    ]
+    patch = GraphPatch(
+        patch_id=f"assembly-build:{step_sha}",
+        base_revision=graph.revision,
+        base_sha256=graph.canonical_sha256,
+        producer="system",
+        pass_id=f"assembly-build:r{graph.revision + 1}",
+        idempotency_key=f"assembly-build:{graph.canonical_sha256}:{step_sha}",
+        add_nodes=nodes,
+        add_edges=edges,
+        add_assertions=assertions,
+        add_evidence=[Evidence(
+            id=evidence_id,
+            kind="kernel_topology",
+            payload={
+                "artifact_path": artifact_path,
+                "report_path": report_path,
+                "report": report,
+            },
+            sha256=hashlib.sha256(report_bytes).hexdigest(),
+        )],
+        supersede_assertion_ids=[reopen_assertion.id],
+    )
+    uploaded: list[str] = []
+    try:
+        upload_file(step_bytes, artifact_path, "model/step")
+        uploaded.append(artifact_path)
+        upload_file(report_bytes, report_path, "application/json")
+        uploaded.append(report_path)
+        row, errors = await merge_and_persist_patch(
+            db,
+            patch,
+            expected_graph_id=graph_id,
+        )
+        if row is None:
+            raise ValueError("Artifact GraphPatch отклонён: " + ", ".join(errors))
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        for path in reversed(uploaded):
+            try:
+                delete_file(path)
+            except Exception:  # noqa: BLE001 - preserve the primary build error
+                pass
+        if isinstance(exc, ValueError):
+            raise HTTPException(409, str(exc)) from exc
+        raise
+    built_graph = load_graph(row)
+    built_plan = compile_build_plan(built_graph, "production")
+    return {
+        "graph_id": graph_id,
+        "revision": row.revision,
+        "canonical_sha256": row.canonical_sha256,
+        "artifact_path": artifact_path,
+        "artifact_sha256": step_sha,
+        "report_path": report_path,
+        "solid_count": report["reopen"]["solid_count"],
+        "production_export_allowed": built_plan.production_export_allowed,
+        "critical_assumption_ids": built_plan.critical_assumption_ids,
+    }
+
+
 @router.get("/revisions/{revision_id}/validation-runs", response_model=list[EngineeringValidationRunOut])
 async def list_validation_runs(revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringValidationRun]:
     return list((await db.execute(

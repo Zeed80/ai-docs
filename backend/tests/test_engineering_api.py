@@ -1,6 +1,10 @@
 """Engineering-project API: immutable revisions and traceable projections."""
 
+import hashlib
+import io
+import json
 import uuid
+import zipfile
 
 import pytest
 from httpx import AsyncClient
@@ -136,6 +140,14 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
         "app.services.engineering_model_graph.delete_file",
         lambda path: graph_objects.pop(path, None),
     )
+
+    async def exact_interference(components):
+        return [], [item.instance_key for item in components], None
+
+    monkeypatch.setattr(
+        "app.api.engineering._exact_interference",
+        exact_interference,
+    )
     project = (await client.post(
         "/api/engineering/projects", json={"name": "EMG сборка"}
     )).json()
@@ -157,7 +169,15 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
             json={
                 "instance_key": key,
                 "designation": designation,
-                "metadata": metadata,
+                "metadata": {
+                    **metadata,
+                    "shape": {
+                        "kind": "box",
+                        "width_mm": 10,
+                        "height_mm": 10,
+                        "depth_mm": 10,
+                    },
+                },
             },
         ))
     assert all(response.status_code == 201 for response in component_responses)
@@ -179,6 +199,67 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
     assert first.json()["profile"] == "assembly"
     assert first.json()["release_status"] == "blocked"
 
+    step_bytes = b"ISO-10303-21; assembly test; END-ISO-10303-21;"
+    step_sha = hashlib.sha256(step_bytes).hexdigest()
+    report = {
+        "components": [
+            {"instance_key": "housing", "solid_count": 1, "edges": []},
+            {"instance_key": "shaft", "solid_count": 1, "edges": []},
+        ],
+        "reopen": {
+            "valid": True,
+            "solid_count": 2,
+            "step_sha256": step_sha,
+        },
+    }
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("assembly.step", step_bytes)
+        archive.writestr("assembly-report.json", json.dumps(report))
+
+    class KernelResponse:
+        status_code = 200
+        content = archive_buffer.getvalue()
+        text = ""
+
+    class KernelClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return KernelResponse()
+
+    monkeypatch.setattr("httpx.AsyncClient", KernelClient)
+    monkeypatch.setattr(
+        "app.storage.upload_file",
+        lambda content, path, _content_type: graph_objects.setdefault(path, content),
+    )
+    monkeypatch.setattr(
+        "app.storage.delete_file",
+        lambda path: graph_objects.pop(path, None),
+    )
+    built = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/model-graph/build"
+    )
+    assert built.status_code == 200
+    assert built.json()["revision"] == 1
+    assert built.json()["artifact_sha256"] == step_sha
+    assert built.json()["solid_count"] == 2
+    assert built.json()["production_export_allowed"] is True
+
+    unchanged = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/model-graph"
+    )
+    assert unchanged.status_code == 200
+    assert unchanged.json()["revision"] == 1
+    assert unchanged.json()["release_status"] == "approved"
+
     shaft_id = component_responses[1].json()["id"]
     shaft = await db_session.get(EngineeringAssemblyComponent, uuid.UUID(shaft_id))
     assert shaft is not None
@@ -189,7 +270,7 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
         f"/api/engineering/assemblies/{assembly['id']}/model-graph"
     )
     assert second.status_code == 200
-    assert second.json()["revision"] == 1
+    assert second.json()["revision"] == 2
     active_quantities = [
         assertion["value"]["value"]
         for assertion in second.json()["graph"]["assertions"]
@@ -202,7 +283,7 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
         f"/api/engineering/assemblies/{assembly['id']}/model-graph"
     )
     assert replay.status_code == 200
-    assert replay.json()["revision"] == 1
+    assert replay.json()["revision"] == 2
 
 
 @pytest.mark.asyncio

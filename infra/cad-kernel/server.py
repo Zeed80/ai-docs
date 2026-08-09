@@ -6,6 +6,9 @@ import hashlib
 import io
 import json
 import math
+import re
+import subprocess
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -1121,6 +1124,73 @@ class InterferenceRequest(BaseModel):
     tolerance_mm3: float = Field(default=1e-3, gt=0)
 
 
+class AssemblyCompileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=300)
+    components: list[InterferenceComponent] = Field(min_length=1, max_length=50)
+    metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+
+
+def _reopen_step_report(step_path: Path, expected_solids: int) -> dict[str, Any]:
+    """Reopen STEP in an isolated FreeCAD process so importer crashes fail closed."""
+    script = """
+import json
+import sys
+import FreeCAD as App
+import Import
+import Part
+
+Import.open(sys.argv[1])
+document = App.ActiveDocument
+# FreeCAD exposes both the imported leaf features and an App::Part aggregate
+# whose Shape repeats those same solids.  Count the leaf B-Reps only; including
+# the aggregate would double every topology and invalidate a sound STEP.
+shapes = [
+    obj.Shape for obj in document.Objects
+    if obj.TypeId == "Part::Feature" and hasattr(obj, "Shape") and not obj.Shape.isNull()
+]
+compound = Part.Compound(shapes)
+print(json.dumps({
+    "brep_valid": bool(not compound.isNull() and compound.isValid()),
+    "solid_count": len(compound.Solids),
+    "shell_count": len(compound.Shells),
+    "face_count": len(compound.Faces),
+    "edge_count": len(compound.Edges),
+    "vertex_count": len(compound.Vertexes),
+    "volume_mm3": float(compound.Volume),
+    "surface_area_mm2": float(compound.Area),
+}))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(step_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return {
+            "valid": False,
+            "expected_solid_count": expected_solids,
+            "error": (completed.stderr or "STEP importer crashed")[-500:],
+        }
+    try:
+        report = json.loads(completed.stdout.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError):
+        return {
+            "valid": False,
+            "expected_solid_count": expected_solids,
+            "error": "STEP importer returned no structured report",
+        }
+    report["expected_solid_count"] = expected_solids
+    report["valid"] = bool(
+        report.get("brep_valid")
+        and report.get("solid_count") == expected_solids
+    )
+    return report
+
+
 def _component_solid(component: InterferenceComponent) -> Part.Shape:
     shape = component.shape if isinstance(component.shape, dict) else {}
     kind = shape.get("kind")
@@ -1173,6 +1243,92 @@ def check_interference(request: InterferenceRequest) -> dict[str, Any]:
                     {"first": first_key, "second": second_key, "volume_mm3": volume}
                 )
     return {"collisions": collisions, "checked_pairs": len(solids) * (len(solids) - 1) // 2}
+
+
+@app.post("/assembly/compile")
+def compile_assembly(request: AssemblyCompileRequest) -> Response:
+    """Export positioned component solids as one multi-solid STEP and reopen it.
+
+    Components remain distinct solids: an assembly is not fused into a part.
+    The report maps every instance to its pre-export topology and records the
+    independently reopened STEP topology used by the release gate.
+    """
+    positioned = [
+        (component.key, _component_solid(component))
+        for component in request.components
+    ]
+    if len({key for key, _shape in positioned}) != len(positioned):
+        raise HTTPException(422, "Component keys must be unique")
+    invalid = [
+        key for key, shape in positioned
+        if shape.isNull() or not shape.isValid() or len(shape.Solids) != 1
+    ]
+    if invalid:
+        raise HTTPException(422, "Invalid component solids: " + ", ".join(invalid))
+    # FreeCAD 1.1's Part.makeCompound wrapper exits the interpreter for a
+    # multi-shape input in the headless build used here.  The Compound
+    # constructor reaches the same OpenCascade topology without that wrapper
+    # crash and preserves the component solids as separate assembly members.
+    compound = Part.Compound([shape for _key, shape in positioned])
+    if compound.isNull() or not compound.isValid():
+        raise HTTPException(422, "OpenCascade produced an invalid assembly compound")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        step_path = root / "assembly.step"
+        report_path = root / "assembly-report.json"
+        compound.exportStep(str(step_path))
+        if not step_path.exists() or step_path.stat().st_size == 0:
+            raise HTTPException(500, "Assembly STEP export is empty")
+        # OpenCascade writes the wall-clock export time into FILE_NAME, which
+        # would give the same graph revision a different artifact SHA on every
+        # build.  Canonicalize that header field before reopen; the STEP DATA
+        # section and therefore the B-Rep remain untouched.
+        step_bytes = step_path.read_bytes()
+        step_bytes, replacements = re.subn(
+            rb"(FILE_NAME\([^,]+,)'[^']*'",
+            rb"\1'1970-01-01T00:00:00'",
+            step_bytes,
+            count=1,
+        )
+        if replacements != 1:
+            raise HTTPException(500, "Assembly STEP has no canonical FILE_NAME header")
+        # The exporter also appends a process-global sequence number to the
+        # PRODUCT label.  It is presentation metadata, not a topology id.
+        step_bytes = re.sub(
+            rb"Open CASCADE STEP translator 7\.9 [0-9]+",
+            b"Open CASCADE STEP translator 7.9 1",
+            step_bytes,
+        )
+        step_path.write_bytes(step_bytes)
+        reopen_report = _reopen_step_report(step_path, len(positioned))
+        report = {
+            "kernel": "FreeCAD/OpenCascade",
+            "name": request.name,
+            "metadata": request.metadata,
+            "assembly": _brep_report(compound, request.metadata, []),
+            "components": [
+                {
+                    "instance_key": key,
+                    **_brep_report(shape, {}, []),
+                    "edges": _edge_descriptors(shape),
+                }
+                for key, shape in positioned
+            ],
+            "reopen": {
+                **reopen_report,
+                "step_sha256": hashlib.sha256(step_path.read_bytes()).hexdigest(),
+            },
+        }
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.write(step_path, step_path.name)
+            archive.write(report_path, report_path.name)
+        return Response(payload.getvalue(), media_type="application/zip")
 
 
 # --- Orthographic projection (ГОСТ 2.305) -----------------------------------
