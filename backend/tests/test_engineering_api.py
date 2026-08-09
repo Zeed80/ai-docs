@@ -251,13 +251,27 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
     assert built.json()["revision"] == 1
     assert built.json()["artifact_sha256"] == step_sha
     assert built.json()["solid_count"] == 2
-    assert built.json()["production_export_allowed"] is True
+    assert built.json()["production_export_allowed"] is False
+
+    drawing = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/model-graph/drawing"
+    )
+    assert drawing.status_code == 200
+    assert drawing.json()["revision"] == 2
+    assert drawing.json()["views"] == ["assembled", "exploded"]
+    assert drawing.json()["production_export_allowed"] is True
+    drawing_replay = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/model-graph/drawing"
+    )
+    assert drawing_replay.status_code == 200
+    assert drawing_replay.json()["revision"] == 2
+    assert drawing_replay.json()["idempotent_replay"] is True
 
     unchanged = await client.post(
         f"/api/engineering/assemblies/{assembly['id']}/model-graph"
     )
     assert unchanged.status_code == 200
-    assert unchanged.json()["revision"] == 1
+    assert unchanged.json()["revision"] == 2
     assert unchanged.json()["release_status"] == "approved"
 
     shaft_id = component_responses[1].json()["id"]
@@ -270,7 +284,7 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
         f"/api/engineering/assemblies/{assembly['id']}/model-graph"
     )
     assert second.status_code == 200
-    assert second.json()["revision"] == 2
+    assert second.json()["revision"] == 3
     active_quantities = [
         assertion["value"]["value"]
         for assertion in second.json()["graph"]["assertions"]
@@ -283,7 +297,7 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
         f"/api/engineering/assemblies/{assembly['id']}/model-graph"
     )
     assert replay.status_code == 200
-    assert replay.json()["revision"] == 2
+    assert replay.json()["revision"] == 3
 
 
 @pytest.mark.asyncio
@@ -384,14 +398,22 @@ async def test_construction_graph_builds_reopened_ifc_and_replays_idempotently(
     assert built.status_code == 200
     assert built.json()["revision"] == 2
     assert built.json()["ifc_reopen_valid"] is True
-    assert built.json()["production_export_allowed"] is True
-    assert built.json()["provisional"] is False
+    assert built.json()["production_export_allowed"] is False
+    assert built.json()["provisional"] is True
+
+    sheets = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/construction-model-graph/sheets"
+    )
+    assert sheets.status_code == 200
+    assert sheets.json()["revision"] == 3
+    assert sheets.json()["views"] == ["plan:l1", "section"]
+    assert sheets.json()["production_export_allowed"] is True
 
     replay = await client.post(
-        f"/api/engineering/revisions/{revision['id']}/construction-model-graph/build"
+        f"/api/engineering/revisions/{revision['id']}/construction-model-graph/sheets"
     )
     assert replay.status_code == 200
-    assert replay.json()["revision"] == 2
+    assert replay.json()["revision"] == 3
     assert replay.json()["idempotent_replay"] is True
 
 
@@ -411,6 +433,14 @@ async def test_system_graph_connectivity_is_approval_gated_and_idempotent(
     )
     monkeypatch.setattr(
         "app.services.engineering_model_graph.delete_file",
+        lambda path: graph_objects.pop(path, None),
+    )
+    monkeypatch.setattr(
+        "app.storage.upload_file",
+        lambda content, path, _content_type: graph_objects.setdefault(path, content),
+    )
+    monkeypatch.setattr(
+        "app.storage.delete_file",
         lambda path: graph_objects.pop(path, None),
     )
     project = (await client.post(
@@ -471,13 +501,26 @@ async def test_system_graph_connectivity_is_approval_gated_and_idempotent(
     )
     assert promoted.status_code == 200
     assert promoted.json()["revision"] == 1
-    assert promoted.json()["production_export_allowed"] is True
+    assert promoted.json()["production_export_allowed"] is False
+
+    diagram = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/system-model-graph/diagram"
+    )
+    assert diagram.status_code == 200
+    assert diagram.json()["revision"] == 2
+    assert diagram.json()["production_export_allowed"] is True
+    diagram_replay = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/system-model-graph/diagram"
+    )
+    assert diagram_replay.status_code == 200
+    assert diagram_replay.json()["revision"] == 2
+    assert diagram_replay.json()["idempotent_replay"] is True
 
     replay = await client.post(
         f"/api/engineering/revisions/{revision['id']}/system-model-graph"
     )
     assert replay.status_code == 200
-    assert replay.json()["revision"] == 1
+    assert replay.json()["revision"] == 2
 
 
 @pytest.mark.asyncio

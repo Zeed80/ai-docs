@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -50,6 +51,87 @@ _PROJECTABLE_MODELS = {
     "manufacturing_process_plan": ManufacturingProcessPlan,
     "cad_ir_revision": CadIrRevision,
 }
+
+
+def _artifact_report_with_storage(
+    report: dict,
+    *,
+    artifact_path: str,
+    report_path: str,
+) -> dict:
+    """Bind a deterministic verification report to content-addressed storage."""
+    import hashlib
+    import json
+
+    enriched = {
+        key: value for key, value in report.items()
+        if key != "canonical_report_sha256"
+    }
+    enriched.update({"artifact_path": artifact_path, "report_path": report_path})
+    enriched["canonical_report_sha256"] = hashlib.sha256(
+        json.dumps(enriched, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return enriched
+
+
+async def _persist_verified_svg_patch(
+    *,
+    db: AsyncSession,
+    latest_row: Any,
+    graph: Any,
+    graph_id: str,
+    svg: bytes,
+    report: dict,
+    patch: Any,
+) -> tuple[Any, Any, bool]:
+    """Atomically store SVG/report and merge its already validated GraphPatch."""
+    import json
+
+    from anyio import to_thread
+
+    from app.services.engineering_model_graph import load_graph, merge_and_persist_patch
+    from app.storage import delete_file, upload_file
+
+    artifact_sha = report["artifact_sha256"]
+    existing = next(
+        (
+            item for item in graph.evidence
+            if item.kind == "projection_comparison"
+            and item.payload.get("artifact_sha256") == artifact_sha
+            and item.payload.get("artifact_path") == report["artifact_path"]
+        ),
+        None,
+    )
+    if existing is not None:
+        return latest_row, graph, True
+    report_bytes = json.dumps(
+        report, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    uploaded: list[str] = []
+    try:
+        await to_thread.run_sync(
+            upload_file, svg, report["artifact_path"], "image/svg+xml"
+        )
+        uploaded.append(report["artifact_path"])
+        await to_thread.run_sync(
+            upload_file, report_bytes, report["report_path"], "application/json"
+        )
+        uploaded.append(report["report_path"])
+        row, errors = await merge_and_persist_patch(
+            db, patch, expected_graph_id=graph_id
+        )
+        if row is None:
+            raise ValueError("SVG GraphPatch отклонён: " + ", ".join(errors))
+        await db.commit()
+        return row, load_graph(row), False
+    except Exception:
+        await db.rollback()
+        for path in reversed(uploaded):
+            try:
+                await to_thread.run_sync(delete_file, path)
+            except Exception:  # noqa: BLE001 - preserve the primary error
+                pass
+        raise
 
 
 def _blocking_errors(validation: dict) -> bool:
@@ -708,6 +790,78 @@ async def build_assembly_model_graph(
     }
 
 
+@router.post("/assemblies/{assembly_id}/model-graph/drawing")
+async def build_assembly_model_graph_drawing(
+    assembly_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Build, reopen, store and admit assembled plus exploded SVG views."""
+    import hashlib
+
+    from app.ai.assembly_emg import assembly_drawing_patch, build_assembly_drawing_svg
+    from app.domain.engineering_model_graph import compile_build_plan
+    from app.services.engineering_model_graph import latest_graph_revision, load_graph
+
+    await sync_assembly_model_graph(assembly_id, db, user)
+    assembly = await db.get(EngineeringAssembly, assembly_id)
+    if assembly is None:
+        raise HTTPException(404, "Сборка не найдена")
+    components = list((await db.execute(select(EngineeringAssemblyComponent).where(
+        EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
+        EngineeringAssemblyComponent.suppressed.is_(False),
+    ))).scalars())
+    mates = list((await db.execute(select(EngineeringAssemblyMate).where(
+        EngineeringAssemblyMate.engineering_assembly_id == assembly_id,
+    ))).scalars())
+    if not components:
+        raise HTTPException(409, "Сборка не содержит активных компонентов")
+    graph_id = f"assembly:{assembly_id}"
+    latest = await latest_graph_revision(db, graph_id, lock=True)
+    if latest is None:
+        raise HTTPException(409, "Assembly EngineeringModelGraph не создан")
+    graph = load_graph(latest)
+    try:
+        svg, raw_report = build_assembly_drawing_svg(
+            components=components, mates=mates, name=assembly.name
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    artifact_sha = hashlib.sha256(svg).hexdigest()
+    base = f"engineering/assemblies/{assembly_id}/drawing-{artifact_sha}"
+    report = _artifact_report_with_storage(
+        raw_report,
+        artifact_path=base + ".svg",
+        report_path=base + ".json",
+    )
+    try:
+        patch = assembly_drawing_patch(graph, svg=svg, report=report)
+        row, built_graph, replay = await _persist_verified_svg_patch(
+            db=db,
+            latest_row=latest,
+            graph=graph,
+            graph_id=graph_id,
+            svg=svg,
+            report=report,
+            patch=patch,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    plan = compile_build_plan(built_graph, "production")
+    return {
+        "graph_id": graph_id,
+        "revision": row.revision,
+        "canonical_sha256": row.canonical_sha256,
+        "artifact_path": report["artifact_path"],
+        "artifact_sha256": artifact_sha,
+        "report_path": report["report_path"],
+        "views": report["views"],
+        "production_export_allowed": plan.production_export_allowed,
+        "critical_assumption_ids": plan.critical_assumption_ids,
+        "idempotent_replay": replay,
+    }
+
+
 @router.post("/revisions/{revision_id}/construction-model-graph")
 async def sync_construction_model_graph(
     revision_id: uuid.UUID,
@@ -1064,6 +1218,72 @@ async def build_construction_model_graph(
     }
 
 
+@router.post("/revisions/{revision_id}/construction-model-graph/sheets")
+async def build_construction_model_graph_sheets(
+    revision_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Build, reopen, store and admit every storey plan plus a section."""
+    import hashlib
+
+    from app.ai.construction_emg import (
+        ConstructionModel,
+        build_construction_sheets_svg,
+        construction_sheets_patch,
+    )
+    from app.domain.engineering_model_graph import compile_build_plan
+    from app.services.engineering_model_graph import latest_graph_revision, load_graph
+
+    await sync_construction_model_graph(revision_id, db, user)
+    revision = await db.get(EngineeringRevision, revision_id)
+    if revision is None:
+        raise HTTPException(404, "Инженерная ревизия не найдена")
+    try:
+        model = ConstructionModel.model_validate(revision.payload.get("construction_model"))
+    except Exception as exc:
+        raise HTTPException(422, f"construction_model невалиден: {exc}") from exc
+    graph_id = f"construction:{revision_id}"
+    latest = await latest_graph_revision(db, graph_id, lock=True)
+    if latest is None:
+        raise HTTPException(409, "Construction EngineeringModelGraph не создан")
+    graph = load_graph(latest)
+    svg, raw_report = build_construction_sheets_svg(model)
+    artifact_sha = hashlib.sha256(svg).hexdigest()
+    base = f"engineering/construction/{revision_id}/sheets-{artifact_sha}"
+    report = _artifact_report_with_storage(
+        raw_report,
+        artifact_path=base + ".svg",
+        report_path=base + ".json",
+    )
+    try:
+        patch = construction_sheets_patch(graph, svg=svg, report=report)
+        row, built_graph, replay = await _persist_verified_svg_patch(
+            db=db,
+            latest_row=latest,
+            graph=graph,
+            graph_id=graph_id,
+            svg=svg,
+            report=report,
+            patch=patch,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    plan = compile_build_plan(built_graph, "production")
+    return {
+        "graph_id": graph_id,
+        "revision": row.revision,
+        "canonical_sha256": row.canonical_sha256,
+        "artifact_path": report["artifact_path"],
+        "artifact_sha256": artifact_sha,
+        "report_path": report["report_path"],
+        "views": report["views"],
+        "production_export_allowed": plan.production_export_allowed,
+        "critical_assumption_ids": plan.critical_assumption_ids,
+        "idempotent_replay": replay,
+    }
+
+
 @router.post("/revisions/{revision_id}/system-model-graph")
 async def sync_system_model_graph(
     revision_id: uuid.UUID,
@@ -1203,6 +1423,72 @@ async def sync_system_model_graph(
         "production_export_allowed": production.production_export_allowed,
         "critical_assumption_ids": production.critical_assumption_ids,
         "graph": graph.model_dump(mode="json"),
+    }
+
+
+@router.post("/revisions/{revision_id}/system-model-graph/diagram")
+async def build_system_model_graph_diagram(
+    revision_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Build, reopen, store and admit a connectivity-complete system SVG."""
+    import hashlib
+
+    from app.ai.system_emg import (
+        EngineeringSystemModel,
+        build_system_diagram_svg,
+        system_diagram_patch,
+    )
+    from app.domain.engineering_model_graph import compile_build_plan
+    from app.services.engineering_model_graph import latest_graph_revision, load_graph
+
+    await sync_system_model_graph(revision_id, db, user)
+    revision = await db.get(EngineeringRevision, revision_id)
+    if revision is None:
+        raise HTTPException(404, "Инженерная ревизия не найдена")
+    try:
+        model = EngineeringSystemModel.model_validate(revision.payload.get("system_model"))
+    except Exception as exc:
+        raise HTTPException(422, f"system_model невалиден: {exc}") from exc
+    graph_id = f"system:{revision_id}"
+    latest = await latest_graph_revision(db, graph_id, lock=True)
+    if latest is None:
+        raise HTTPException(409, "System EngineeringModelGraph не создан")
+    graph = load_graph(latest)
+    svg, raw_report = build_system_diagram_svg(model)
+    artifact_sha = hashlib.sha256(svg).hexdigest()
+    base = f"engineering/systems/{revision_id}/diagram-{artifact_sha}"
+    report = _artifact_report_with_storage(
+        raw_report,
+        artifact_path=base + ".svg",
+        report_path=base + ".json",
+    )
+    try:
+        patch = system_diagram_patch(graph, svg=svg, report=report)
+        row, built_graph, replay = await _persist_verified_svg_patch(
+            db=db,
+            latest_row=latest,
+            graph=graph,
+            graph_id=graph_id,
+            svg=svg,
+            report=report,
+            patch=patch,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    plan = compile_build_plan(built_graph, "production")
+    return {
+        "graph_id": graph_id,
+        "revision": row.revision,
+        "canonical_sha256": row.canonical_sha256,
+        "artifact_path": report["artifact_path"],
+        "artifact_sha256": artifact_sha,
+        "report_path": report["report_path"],
+        "views": ["system-diagram"],
+        "production_export_allowed": plan.production_export_allowed,
+        "critical_assumption_ids": plan.critical_assumption_ids,
+        "idempotent_replay": replay,
     }
 
 

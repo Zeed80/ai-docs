@@ -599,9 +599,10 @@ def assembly_revision_patch(
         item for item in desired.evidence if item.id not in existing_evidence
     ]
     reopen_key = ("product:assembly", "assembly.artifact_reopen_valid")
+    drawing_key = ("product:assembly", "assembly.required_2d_complete")
     contract_gate_keys = {
         reopen_key,
-        ("product:assembly", "assembly.required_2d_complete"),
+        drawing_key,
     }
     extra_subject_ids = current_nodes - desired_nodes
 
@@ -639,7 +640,7 @@ def assembly_revision_patch(
     for key, wanted in desired_by_key.items():
         existing = active.get(key)
         if (
-            key == reopen_key
+            key in {reopen_key, drawing_key}
             and not snapshot_changed
             and existing is not None
             and existing.value.kind == "exact"

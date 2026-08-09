@@ -312,6 +312,8 @@ async def merge_and_persist_patch(
     await db.flush()
     if merged is None:
         return None, errors
+    state, _issues = verify_graph(merged)
+    merged = merged.model_copy(update={"verification": state}).sealed()
     row = await persist_graph_revision(
         db,
         merged,
