@@ -55,6 +55,7 @@ export default function EngineeringModelGraphPanel({
   const [correctionBbox, setCorrectionBbox] = useState("");
   const [correctionRebuild, setCorrectionRebuild] = useState(false);
   const [correctionMessage, setCorrectionMessage] = useState<string | null>(null);
+  const [batchDrafts, setBatchDrafts] = useState<Record<string, { value: string; bbox: string }>>({});
 
   const selected = graphs.find((item) => item.id === selectedId) ?? graphs[0] ?? null;
   const selectedGraphId = selected?.graph_id ?? null;
@@ -301,6 +302,64 @@ export default function EngineeringModelGraphPanel({
     }
   }
 
+  function addCurrentToBatch() {
+    if (!assertion) return;
+    setBatchDrafts((current) => ({
+      ...current,
+      [assertion.id]: { value: correctionValue, bbox: correctionBbox },
+    }));
+    setCorrectionMessage(`Добавлено в пакет: ${assertion.predicate}`);
+  }
+
+  async function submitBatchCorrection() {
+    if (!generationId || !selected || !correctionNote.trim()) return;
+    setBusy(true);
+    try {
+      const corrections = Object.entries(batchDrafts).map(([assertionId, draft]) => {
+        const value = JSON.parse(draft.value) as Record<string, unknown>;
+        const bboxValues = draft.bbox.trim()
+          ? draft.bbox.split(",").map((item) => Number(item.trim()))
+          : [];
+        if (bboxValues.length && (
+          bboxValues.length !== 4
+          || bboxValues.some((item) => !Number.isFinite(item) || item < 0 || item > 1)
+          || bboxValues[0] >= bboxValues[2]
+          || bboxValues[1] >= bboxValues[3]
+        )) throw new Error(`Некорректный bbox для ${assertionId}`);
+        return {
+          assertion_id: assertionId,
+          value,
+          source_bbox_normalized: bboxValues.length
+            ? bboxValues as [number, number, number, number]
+            : null,
+        };
+      });
+      const revised = await engineeringApi.correctGenerationAssertionsBatch(
+        generationId,
+        {
+          corrections,
+          note: correctionNote.trim(),
+          idempotency_key: `human-batch-ui:${crypto.randomUUID()}`,
+          rebuild: correctionRebuild,
+        },
+      );
+      setGraphs([revised]);
+      setSelectedId(revised.id);
+      setBatchDrafts({});
+      setCorrectionMessage(
+        `Атомарный GraphPatch принят: ${revised.corrected_assertion_ids.length} assertions · revision ${revised.revision}`,
+      );
+      if (revised.rebuild_task_id) {
+        setReaderStatus("BUILD_QUEUED");
+        setReaderTaskId(revised.rebuild_task_id);
+      }
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function buildDomainArtifact() {
     if (!artifactBuild) return;
     setBusy(true);
@@ -476,6 +535,13 @@ export default function EngineeringModelGraphPanel({
                   {generationId && assertion.state === "active" && (
                     <section className="space-y-2 border-t border-white/10 pt-3">
                       <p className="font-medium text-zinc-200">Исправить через human GraphPatch</p>
+                      <BboxSelector
+                        src={engineeringApi.generationAssertionOverlayUrl(
+                          generationId, assertion.id, "sheet",
+                        )}
+                        value={correctionBbox}
+                        onChange={setCorrectionBbox}
+                      />
                       <label className="block space-y-1">
                         <span>AssertionValue JSON</span>
                         <textarea
@@ -522,6 +588,14 @@ export default function EngineeringModelGraphPanel({
                       >
                         Создать human GraphPatch
                       </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={addCurrentToBatch}
+                        className="ml-2 rounded bg-violet-500/20 px-3 py-1.5 text-violet-200 disabled:opacity-40"
+                      >
+                        Добавить в атомарный пакет
+                      </button>
                       {correctionMessage && <p className="text-emerald-300">{correctionMessage}</p>}
                     </section>
                   )}
@@ -529,6 +603,47 @@ export default function EngineeringModelGraphPanel({
               ) : <p>Выберите assertion, чтобы увидеть значение, bbox/evidence и зависимые узлы.</p>}
             </div>
           </div>
+
+          {generationId && Object.keys(batchDrafts).length > 0 && (
+            <section className="space-y-3 border border-violet-500/30 bg-violet-500/5 p-3 text-xs">
+              <h3 className="font-medium text-violet-200">
+                Атомарная пакетная правка ({Object.keys(batchDrafts).length})
+              </h3>
+              {Object.entries(batchDrafts).map(([id, draft]) => (
+                <div key={id} className="grid gap-2 border-t border-white/10 pt-2 md:grid-cols-[minmax(180px,0.6fr)_1fr_1fr_auto]">
+                  <span className="font-mono text-[10px] text-zinc-400">{id}</span>
+                  <textarea
+                    aria-label={`Batch value ${id}`}
+                    value={draft.value}
+                    onChange={(event) => setBatchDrafts((current) => ({
+                      ...current, [id]: { ...current[id], value: event.target.value },
+                    }))}
+                    className="h-20 rounded border border-white/10 bg-black/30 p-2 font-mono text-[10px]"
+                  />
+                  <input
+                    aria-label={`Batch bbox ${id}`}
+                    value={draft.bbox}
+                    onChange={(event) => setBatchDrafts((current) => ({
+                      ...current, [id]: { ...current[id], bbox: event.target.value },
+                    }))}
+                    className="rounded border border-white/10 bg-black/30 px-2 font-mono text-[10px]"
+                  />
+                  <button type="button" onClick={() => setBatchDrafts((current) => {
+                    const next = { ...current }; delete next[id]; return next;
+                  })} className="text-red-300">Убрать</button>
+                </div>
+              ))}
+              <p className="text-zinc-400">Общее обоснование берётся из формы выбранного assertion. Весь пакет создаёт ровно одну revision.</p>
+              <button
+                type="button"
+                disabled={busy || !correctionNote.trim()}
+                onClick={() => void submitBatchCorrection()}
+                className="rounded bg-violet-500/20 px-3 py-1.5 text-violet-200 disabled:opacity-40"
+              >
+                Применить пакет одним GraphPatch
+              </button>
+            </section>
+          )}
 
           <div className="grid gap-4 lg:grid-cols-2">
             <Log title={`GraphPatch (${patches.length})`} empty="Patch пока не поступали">
@@ -653,6 +768,87 @@ function nodeLabel(id: string, nodes: Map<string, { id: string; type: string; na
 
 function ImpactLine({ label, ids, nodes }: { label: string; ids: string[]; nodes: Map<string, { id: string; type: string; name?: string | null }> }) {
   return <p>{label}: {ids.map((id) => nodeLabel(id, nodes)).join(", ") || "не затронуты"}</p>;
+}
+
+function BboxSelector({
+  src,
+  value,
+  onChange,
+}: {
+  src: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [start, setStart] = useState<[number, number] | null>(null);
+  const [dragBox, setDragBox] = useState<[number, number, number, number] | null>(null);
+  const parsed = useMemo(() => {
+    const values = value.split(",").map((item) => Number(item.trim()));
+    return values.length === 4 && values.every(Number.isFinite)
+      ? values as [number, number, number, number]
+      : null;
+  }, [value]);
+  const box = dragBox ?? parsed;
+
+  function point(event: React.PointerEvent<HTMLDivElement>): [number, number] {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return [
+      Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+      Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
+    ];
+  }
+
+  return (
+    <div className="space-y-1">
+      <p>Выделите bbox мышью непосредственно на исходном листе:</p>
+      <div
+        role="application"
+        aria-label="Выбор SourceRegion на исходном листе"
+        className="relative touch-none cursor-crosshair overflow-hidden border border-white/10 bg-white"
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          const next = point(event);
+          setStart(next);
+          setDragBox([next[0], next[1], next[0], next[1]]);
+        }}
+        onPointerMove={(event) => {
+          if (!start) return;
+          const next = point(event);
+          setDragBox([
+            Math.min(start[0], next[0]), Math.min(start[1], next[1]),
+            Math.max(start[0], next[0]), Math.max(start[1], next[1]),
+          ]);
+        }}
+        onPointerUp={(event) => {
+          if (!start) return;
+          const next = point(event);
+          const finished: [number, number, number, number] = [
+            Math.min(start[0], next[0]), Math.min(start[1], next[1]),
+            Math.max(start[0], next[0]), Math.max(start[1], next[1]),
+          ];
+          setStart(null);
+          setDragBox(null);
+          if (finished[2] - finished[0] > 0.002 && finished[3] - finished[1] > 0.002) {
+            onChange(finished.map((item) => item.toFixed(6)).join(", "));
+          }
+        }}
+      >
+        {/* Same-origin authenticated raster; coordinates map 1:1 to normalized sheet space. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt="Исходный лист для выбора bbox" className="block h-auto w-full select-none" draggable={false} />
+        {box && (
+          <span
+            data-testid="bbox-selection"
+            className="pointer-events-none absolute border-2 border-sky-400 bg-sky-400/20"
+            style={{
+              left: `${box[0] * 100}%`, top: `${box[1] * 100}%`,
+              width: `${(box[2] - box[0]) * 100}%`,
+              height: `${(box[3] - box[1]) * 100}%`,
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
 }
 
 function EvidenceImage({ label, src }: { label: string; src: string }) {

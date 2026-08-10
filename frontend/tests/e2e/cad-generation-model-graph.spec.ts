@@ -4,6 +4,7 @@ const generationId = "55555555-5555-4555-8555-555555555555";
 let verifyCalls = 0;
 let readerCalls = 0;
 let correctionCalls = 0;
+let batchCorrectionCalls = 0;
 
 const graph = {
   id: "66666666-6666-4666-8666-666666666666",
@@ -35,6 +36,17 @@ const graph = {
       assurance: "proposed",
       confidence: 0.4,
       impacts: ["connection_opening"],
+      evidence_ids: ["evidence:whole-sheet"],
+      state: "active",
+    }, {
+      id: "assertion:shaft-length",
+      subject_id: "product:legacy-spec",
+      predicate: "length_mm",
+      value: { kind: "unknown", reason: "needs review" },
+      origin: "observed",
+      assurance: "proposed",
+      confidence: 0.5,
+      impacts: ["envelope"],
       evidence_ids: ["evidence:whole-sheet"],
       state: "active",
     }],
@@ -91,6 +103,20 @@ async function mockApi(page: Page) {
         body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S8AAAAASUVORK5CYII=", "base64"),
       });
     }
+    if (url.pathname.endsWith("/model-graph/corrections") && request.method() === "POST") {
+      batchCorrectionCalls += 1;
+      return route.fulfill({
+        json: {
+          ...graph,
+          id: "88888888-8888-4888-8888-888888888888",
+          revision: 2,
+          parent_revision: 1,
+          corrected_assertion_ids: ["assertion:hole-location", "assertion:shaft-length"],
+          compatibility_spec_updated: true,
+          rebuild_task_id: null,
+        },
+      });
+    }
     if (url.pathname.endsWith("/corrections") && request.method() === "POST") {
       correctionCalls += 1;
       const replacement = {
@@ -113,6 +139,7 @@ async function mockApi(page: Page) {
             assertions: [
               { ...graph.graph.assertions[0], state: "superseded" },
               replacement,
+              ...graph.graph.assertions.slice(1),
             ],
           },
           compatibility_spec_updated: true,
@@ -142,6 +169,7 @@ test("blocked DXF digitization opens canonical EMG before legacy spec", async ({
   verifyCalls = 0;
   readerCalls = 0;
   correctionCalls = 0;
+  batchCorrectionCalls = 0;
   await setAuthCookie(context);
   await mockApi(page);
   await page.goto(`/cad/${generationId}`);
@@ -156,6 +184,17 @@ test("blocked DXF digitization opens canonical EMG before legacy spec", async ({
   );
   await expect(page.getByText(/SourceRegion: region:hole · точный ROI/)).toBeVisible();
   await expect(page.getByAltText("Исходный crop")).toBeVisible();
+
+  const selector = page.getByRole("application", { name: "Выбор SourceRegion на исходном листе" });
+  const selectorBox = await selector.boundingBox();
+  if (!selectorBox) throw new Error("bbox selector is not visible");
+  await page.mouse.move(selectorBox.x + selectorBox.width * 0.1, selectorBox.y + selectorBox.height * 0.2);
+  await page.mouse.down();
+  await page.mouse.move(selectorBox.x + selectorBox.width * 0.4, selectorBox.y + selectorBox.height * 0.5);
+  await page.mouse.up();
+  await expect(page.getByLabel("Source bbox normalized")).not.toHaveValue("");
+  await page.getByRole("button", { name: "Добавить в атомарный пакет" }).click();
+  await expect(page.getByText("Атомарная пакетная правка (1)")).toBeVisible();
 
   await page.getByLabel("AssertionValue JSON").fill('{"kind":"exact","value":15.7}');
   await page.getByLabel("Инженерное обоснование").fill("Подтверждено по выноске Ø15.7");
@@ -173,4 +212,22 @@ test("blocked DXF digitization opens canonical EMG before legacy spec", async ({
   await page.getByRole("button", { name: "Чертёж и compatibility-view" }).click();
   await expect(page.getByText("Что удалось прочитать с листа")).toBeVisible();
   await expect(page.getByText("Размеры (1):")).toBeVisible();
+});
+
+test("related assertions are submitted as one atomic GraphPatch", async ({ page, context }) => {
+  batchCorrectionCalls = 0;
+  await setAuthCookie(context);
+  await mockApi(page);
+  await page.goto(`/cad/${generationId}`);
+
+  await page.getByLabel("Инженерное обоснование").fill("Связанная размерная цепь проверена");
+  await page.getByRole("button", { name: "Добавить в атомарный пакет" }).click();
+  await page.getByRole("button", { name: /length_mm/ }).click();
+  await page.getByLabel("Инженерное обоснование").fill("Связанная размерная цепь проверена");
+  await page.getByRole("button", { name: "Добавить в атомарный пакет" }).click();
+  await expect(page.getByText("Атомарная пакетная правка (2)")).toBeVisible();
+  await page.getByRole("button", { name: "Применить пакет одним GraphPatch" }).click();
+
+  await expect.poll(() => batchCorrectionCalls).toBe(1);
+  await expect(page.getByText(/Атомарный GraphPatch принят: 2 assertions · revision 2/)).toBeVisible();
 });

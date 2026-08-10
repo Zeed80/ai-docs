@@ -84,6 +84,8 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
             "spec": {
                 "part": "Blocked shaft",
                 "hole": {"diameter_mm": None},
+                "length_mm": 100,
+                "outer_diameter_mm": 30,
             },
         },
         source_image_paths=[source_path],
@@ -116,6 +118,22 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
             evidence_ids=["evidence:whole"],
             confidence=0.2,
             impacts=["connection_opening"],
+        ), Assertion(
+            id="assertion:length",
+            subject_id="product:legacy-spec",
+            predicate="length_mm",
+            value=UnknownValue(kind="unknown", reason="needs review"),
+            unit="mm", origin="observed", assurance="proposed",
+            evidence_ids=["evidence:whole"], confidence=0.5,
+            impacts=["envelope"],
+        ), Assertion(
+            id="assertion:outer-diameter",
+            subject_id="product:legacy-spec",
+            predicate="outer_diameter_mm",
+            value=UnknownValue(kind="unknown", reason="needs review"),
+            unit="mm", origin="observed", assurance="proposed",
+            evidence_ids=["evidence:whole"], confidence=0.5,
+            impacts=["envelope"],
         )],
         evidence=[Evidence(
             id="evidence:whole",
@@ -254,6 +272,57 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert overlay.headers["content-type"] == "image/png"
     with Image.open(io.BytesIO(overlay.content)) as crop:
         assert crop.size == (30, 20)
+
+    sheet = await client.get(
+        f"/api/image-gen/{generation.id}/model-graph/assertions/"
+        f"{replacement['id']}/source-overlay?mode=sheet"
+    )
+    assert sheet.status_code == 200
+    with Image.open(io.BytesIO(sheet.content)) as full_sheet:
+        assert full_sheet.size == (100, 80)
+
+    batch = await client.post(
+        f"/api/image-gen/{generation.id}/model-graph/corrections",
+        json={
+            "corrections": [
+                {
+                    "assertion_id": "assertion:length",
+                    "value": {"kind": "exact", "value": 120},
+                    "source_bbox_normalized": [0.1, 0.1, 0.5, 0.2],
+                },
+                {
+                    "assertion_id": "assertion:outer-diameter",
+                    "value": {"kind": "exact", "value": 32},
+                    "source_bbox_normalized": [0.5, 0.1, 0.8, 0.2],
+                },
+            ],
+            "note": "Связанная размерная цепь подтверждена инженером",
+            "idempotency_key": "human-batch-length-diameter",
+        },
+    )
+    assert batch.status_code == 200, batch.text
+    batch_body = batch.json()
+    assert batch_body["revision"] == 2
+    assert batch_body["corrected_assertion_ids"] == [
+        "assertion:length", "assertion:outer-diameter",
+    ]
+    assert batch_body["compatibility_spec_updated"] is True
+    assert len([
+        item for item in batch_body["graph"]["assertions"]
+        if item.get("origin") == "human" and item.get("state") == "active"
+    ]) == 3
+    duplicate_batch = await client.post(
+        f"/api/image-gen/{generation.id}/model-graph/corrections",
+        json={
+            "corrections": [{
+                "assertion_id": "assertion:length",
+                "value": {"kind": "exact", "value": 120},
+            }],
+            "note": "Повтор",
+            "idempotency_key": "human-batch-length-diameter",
+        },
+    )
+    assert duplicate_batch.status_code in {404, 409}
 
     patches = await client.get(f"/api/image-gen/{generation.id}/model-graph/patches")
     assert patches.status_code == 200

@@ -140,6 +140,36 @@ class HumanAssertionCorrectionRequest(BaseModel):
         return self
 
 
+class HumanAssertionBatchItem(BaseModel):
+    assertion_id: str = Field(min_length=1)
+    value: dict[str, Any]
+    unit: str | None = None
+    source_bbox_normalized: tuple[float, float, float, float] | None = None
+
+    @model_validator(mode="after")
+    def validate_source_bbox(self) -> "HumanAssertionBatchItem":
+        if self.source_bbox_normalized is None:
+            return self
+        x0, y0, x1, y1 = self.source_bbox_normalized
+        if not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1):
+            raise ValueError("source bbox must be normalized and non-empty")
+        return self
+
+
+class HumanAssertionBatchCorrectionRequest(BaseModel):
+    corrections: list[HumanAssertionBatchItem] = Field(min_length=1, max_length=100)
+    note: str = Field(min_length=1, max_length=1000)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    rebuild: bool = False
+
+    @model_validator(mode="after")
+    def validate_unique_assertions(self) -> "HumanAssertionBatchCorrectionRequest":
+        ids = [item.assertion_id for item in self.corrections]
+        if len(ids) != len(set(ids)):
+            raise ValueError("batch correction contains duplicate assertion ids")
+        return self
+
+
 def _set_compat_spec_value(spec: dict[str, Any], predicate: str, value: Any) -> bool:
     """Update one existing legacy-spec leaf without inventing a parallel schema."""
     tokens: list[str | int] = []
@@ -167,6 +197,90 @@ def _set_compat_spec_value(spec: dict[str, Any], predicate: str, value: Any) -> 
             return False
         current[final] = value
     return True
+
+
+def _apply_compat_spec_update(
+    compatibility: dict[str, Any], previous: Any, value: Any
+) -> bool:
+    """Mirror one corrected assertion into the legacy compatibility spec.
+
+    Only ``product:legacy-spec`` assertions have a corresponding leaf there;
+    anything else (a Feature, a Constraint, …) has no compatibility-view
+    counterpart to update, and an ``interval``/``enum_set``/``expression``
+    value has no single scalar to mirror.
+    """
+    if previous.subject_id != "product:legacy-spec" or value.kind not in {"exact", "unknown"}:
+        return False
+    compatible_value = value.value if value.kind == "exact" else None
+    return _set_compat_spec_value(compatibility, previous.predicate, compatible_value)
+
+
+def _build_human_correction_change(
+    *,
+    previous: Any,
+    value: Any,
+    unit: str | None,
+    note: str,
+    actor_sub: str,
+    digest: str,
+    source_bbox_normalized: tuple[float, float, float, float] | None,
+    source: Any | None,
+    location_node_id: str | None,
+    batch_patch_id: str | None = None,
+) -> tuple[list[Any], list[Any], Any, list[Any]]:
+    """Build the node/edge/assertion/evidence set for ONE human correction.
+
+    Shared by the single-assertion and batch correction endpoints — a change
+    to how a bbox or an evidence record is shaped only has to happen here,
+    not in two near-identical copies.
+    """
+    from app.domain.engineering_model_graph import Assertion, Evidence, GraphEdge, GraphNode
+
+    decision_id = f"evidence:human:{digest}"
+    evidence_ids = [decision_id]
+    add_nodes: list[Any] = []
+    add_edges: list[Any] = []
+    decision_payload: dict[str, Any] = {
+        "actor_sub": actor_sub, "note": note, "superseded_assertion_id": previous.id,
+    }
+    if batch_patch_id is not None:
+        decision_payload["batch_patch_id"] = batch_patch_id
+    add_evidence = [Evidence(id=decision_id, kind="human_decision", payload=decision_payload)]
+    if source_bbox_normalized is not None:
+        if source is None:
+            raise HTTPException(422, "Граф не содержит источник для SourceRegion")
+        region_id = f"region:human:{digest}"
+        raster_id = f"evidence:raster:human:{digest}"
+        add_nodes.append(GraphNode(
+            id=region_id, type="SourceRegion",
+            name=f"Human region for {previous.predicate}",
+        ))
+        add_edges.append(GraphEdge(
+            id=f"located:{region_id}", type="located_in",
+            source_id=region_id, target_id=location_node_id or previous.subject_id,
+        ))
+        add_evidence.append(Evidence(
+            id=raster_id, kind="raster_region", source_id=source.id,
+            source_region_id=region_id,
+            payload={
+                "bbox_normalized": list(source_bbox_normalized),
+                "fallback": False, "selected_by": "human",
+            },
+            sha256=source.sha256,
+        ))
+        evidence_ids.append(raster_id)
+    replacement = Assertion(
+        id=f"assertion:human:{digest}", subject_id=previous.subject_id,
+        predicate=previous.predicate, value=value,
+        unit=unit if unit is not None else previous.unit,
+        coordinate_system=previous.coordinate_system, origin="human",
+        assurance="human_approved", evidence_ids=evidence_ids, confidence=1.0,
+        impacts=previous.impacts,
+        impact_magnitude_percent=previous.impact_magnitude_percent,
+        hypothesis_id=previous.hypothesis_id,
+        supersedes_assertion_id=previous.id,
+    )
+    return add_nodes, add_edges, replacement, add_evidence
 
 
 def _is_agent_service(user: UserInfo) -> bool:
@@ -804,7 +918,7 @@ async def start_generation_model_reader(
     }
 
 
-def _assertion_source_crop(gen, graph, assertion):
+def _assertion_source_crop(gen, graph, assertion, *, full_sheet: bool = False):
     """Resolve one assertion-owned raster ROI and return a verified PNG crop."""
     from PIL import Image
 
@@ -857,6 +971,8 @@ def _assertion_source_crop(gen, graph, assertion):
         )
     else:
         raise HTTPException(409, "SourceRegion не содержит поддерживаемый bbox")
+    if full_sheet:
+        bbox = (0, 0, image.width, image.height)
     if bbox[0] >= bbox[2] or bbox[1] >= bbox[3]:
         raise HTTPException(409, "SourceRegion выходит за границы источника")
     buffer = io.BytesIO()
@@ -870,7 +986,7 @@ def _assertion_source_crop(gen, graph, assertion):
 async def get_generation_assertion_source_overlay(
     generation_id: uuid.UUID,
     assertion_id: str,
-    mode: Literal["source", "candidate", "overlay", "difference"] = "source",
+    mode: Literal["sheet", "source", "candidate", "overlay", "difference"] = "source",
     proposal_id: str | None = None,
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
@@ -882,10 +998,12 @@ async def get_generation_assertion_source_overlay(
     assertion = next((item for item in graph.assertions if item.id == assertion_id), None)
     if assertion is None:
         raise HTTPException(404, "Assertion не найден")
-    evidence, crop = _assertion_source_crop(gen, graph, assertion)
+    evidence, crop = _assertion_source_crop(
+        gen, graph, assertion, full_sheet=mode == "sheet"
+    )
     content = crop
     resolved_proposal_id = None
-    if mode != "source":
+    if mode not in {"source", "sheet"}:
         query = select(TraceProposalRecord).where(
             TraceProposalRecord.graph_revision_id == row.id,
             TraceProposalRecord.assertion_id == assertion_id,
@@ -927,14 +1045,7 @@ async def correct_generation_model_assertion(
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
-    from app.domain.engineering_model_graph import (
-        Assertion,
-        AssertionValue,
-        Evidence,
-        GraphEdge,
-        GraphNode,
-        GraphPatch,
-    )
+    from app.domain.engineering_model_graph import AssertionValue, GraphPatch
     from app.services.engineering_model_graph import (
         DuplicatePatchError,
         load_graph,
@@ -960,97 +1071,32 @@ async def correct_generation_model_assertion(
     ).hexdigest()[:20]
     params = dict(gen.params or {})
     correction_event_id = None
-    compatibility_updated = False
-    if previous.subject_id == "product:legacy-spec":
-        compatible_value: Any
-        if value.kind == "exact":
-            compatible_value = value.value
-        elif value.kind == "unknown":
-            compatible_value = None
-        else:
-            compatible_value = None
-        compatibility = json.loads(json.dumps(
-            params.get("spec_corrected") or params.get("spec") or {}
-        ))
-        if isinstance(compatibility, dict) and value.kind in {"exact", "unknown"}:
-            compatibility_updated = _set_compat_spec_value(
-                compatibility, previous.predicate, compatible_value
-            )
-        if compatibility_updated:
-            correction_event_id = f"human-graph:{digest}"
-            params["spec_corrected"] = compatibility
-            params["spec_correction_event_id"] = correction_event_id
+    compatibility = json.loads(json.dumps(
+        params.get("spec_corrected") or params.get("spec") or {}
+    ))
+    compatibility_updated = (
+        isinstance(compatibility, dict)
+        and _apply_compat_spec_update(compatibility, previous, value)
+    )
+    if compatibility_updated:
+        correction_event_id = f"human-graph:{digest}"
+        params["spec_corrected"] = compatibility
+        params["spec_correction_event_id"] = correction_event_id
     if body.rebuild and not compatibility_updated:
         raise HTTPException(
             422,
             "Автопересборка доступна только для assertion, связанного с compatibility spec",
         )
-    assertion_new_id = f"assertion:human:{digest}"
-    decision_evidence_id = f"evidence:human:{digest}"
-    evidence_ids = [decision_evidence_id]
-    add_nodes = []
-    add_edges = []
-    add_evidence = [Evidence(
-        id=decision_evidence_id,
-        kind="human_decision",
-        payload={
-            "actor_sub": user.sub,
-            "note": body.note,
-            "superseded_assertion_id": previous.id,
-        },
-    )]
-    if body.source_bbox_normalized is not None:
-        source = next((item for item in graph.sources if item.uri), None)
-        if source is None:
-            raise HTTPException(422, "Граф не содержит источник для SourceRegion")
-        region_id = f"region:human:{digest}"
-        raster_evidence_id = f"evidence:raster:human:{digest}"
-        location = next(
-            (item.id for item in graph.nodes if item.type == "Sheet"),
-            next(
-                (item.id for item in graph.nodes if item.type == "DocumentSet"),
-                previous.subject_id,
-            ),
-        )
-        add_nodes.append(GraphNode(
-            id=region_id,
-            type="SourceRegion",
-            name=f"Human region for {previous.predicate}",
-        ))
-        add_edges.append(GraphEdge(
-            id=f"located:{region_id}",
-            type="located_in",
-            source_id=region_id,
-            target_id=location,
-        ))
-        add_evidence.append(Evidence(
-            id=raster_evidence_id,
-            kind="raster_region",
-            source_id=source.id,
-            source_region_id=region_id,
-            payload={
-                "bbox_normalized": list(body.source_bbox_normalized),
-                "fallback": False,
-                "selected_by": "human",
-            },
-            sha256=source.sha256,
-        ))
-        evidence_ids.append(raster_evidence_id)
-    replacement = Assertion(
-        id=assertion_new_id,
-        subject_id=previous.subject_id,
-        predicate=previous.predicate,
-        value=value,
-        unit=body.unit if body.unit is not None else previous.unit,
-        coordinate_system=previous.coordinate_system,
-        origin="human",
-        assurance="human_approved",
-        evidence_ids=evidence_ids,
-        confidence=1.0,
-        impacts=previous.impacts,
-        impact_magnitude_percent=previous.impact_magnitude_percent,
-        hypothesis_id=previous.hypothesis_id,
-        supersedes_assertion_id=previous.id,
+    source = next((item for item in graph.sources if item.uri), None)
+    location = next(
+        (item.id for item in graph.nodes if item.type == "Sheet"),
+        next((item.id for item in graph.nodes if item.type == "DocumentSet"), None),
+    )
+    add_nodes, add_edges, replacement, add_evidence = _build_human_correction_change(
+        previous=previous, value=value, unit=body.unit, note=body.note,
+        actor_sub=user.sub, digest=digest,
+        source_bbox_normalized=body.source_bbox_normalized,
+        source=source, location_node_id=location,
     )
     patch = GraphPatch(
         patch_id=f"patch:human:{digest}",
@@ -1095,6 +1141,116 @@ async def correct_generation_model_assertion(
         gen, revised_row, load_graph(revised_row)
     ) | {
         "compatibility_spec_updated": compatibility_updated,
+        "rebuild_task_id": rebuild_task_id,
+    }
+
+
+@router.post("/{generation_id}/model-graph/corrections")
+async def correct_generation_model_assertions_batch(
+    generation_id: uuid.UUID,
+    body: HumanAssertionBatchCorrectionRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Apply several related human corrections as one immutable GraphPatch."""
+    from app.domain.engineering_model_graph import AssertionValue, GraphPatch
+    from app.services.engineering_model_graph import (
+        DuplicatePatchError, load_graph, merge_and_persist_patch,
+    )
+
+    gen, row, graph = await _owned_generation_graph(generation_id, db, user)
+    active = {item.id: item for item in graph.assertions if item.state == "active"}
+    missing = [item.assertion_id for item in body.corrections if item.assertion_id not in active]
+    if missing:
+        raise HTTPException(404, {"inactive_or_missing_assertion_ids": missing})
+    try:
+        values = {
+            item.assertion_id: TypeAdapter(AssertionValue).validate_python(item.value)
+            for item in body.corrections
+        }
+    except ValueError as exc:
+        raise HTTPException(422, "Значение assertion не соответствует closed union") from exc
+
+    patch_digest = hashlib.sha256(
+        f"{graph.graph_id}:{body.idempotency_key}".encode()
+    ).hexdigest()[:20]
+    params = dict(gen.params or {})
+    compatibility = json.loads(json.dumps(
+        params.get("spec_corrected") or params.get("spec") or {}
+    ))
+    compatibility_updated = False
+    correction_event_id = f"human-graph:{patch_digest}"
+    source = next((item for item in graph.sources if item.uri), None)
+    location = next(
+        (item.id for item in graph.nodes if item.type == "Sheet"),
+        next((item.id for item in graph.nodes if item.type == "DocumentSet"), None),
+    )
+    add_nodes, add_edges, add_assertions, add_evidence = [], [], [], []
+    superseded_ids = []
+
+    batch_patch_id = f"patch:human:{patch_digest}"
+    for correction in body.corrections:
+        previous = active[correction.assertion_id]
+        value = values[correction.assertion_id]
+        digest = hashlib.sha256(
+            f"{graph.graph_id}:{body.idempotency_key}:{previous.id}".encode()
+        ).hexdigest()[:20]
+        item_nodes, item_edges, replacement, item_evidence = _build_human_correction_change(
+            previous=previous, value=value, unit=correction.unit, note=body.note,
+            actor_sub=user.sub, digest=digest,
+            source_bbox_normalized=correction.source_bbox_normalized,
+            source=source, location_node_id=location,
+            batch_patch_id=batch_patch_id,
+        )
+        add_nodes.extend(item_nodes)
+        add_edges.extend(item_edges)
+        add_evidence.extend(item_evidence)
+        add_assertions.append(replacement)
+        superseded_ids.append(previous.id)
+        compatibility_updated = (
+            _apply_compat_spec_update(compatibility, previous, value)
+            or compatibility_updated
+        )
+
+    if body.rebuild and not compatibility_updated:
+        raise HTTPException(422, "Автопересборка доступна только для assertions compatibility spec")
+    if compatibility_updated:
+        params["spec_corrected"] = compatibility
+        params["spec_correction_event_id"] = correction_event_id
+    patch = GraphPatch(
+        patch_id=f"patch:human:{patch_digest}", base_revision=graph.revision,
+        base_sha256=graph.canonical_sha256, producer="human",
+        pass_id="human-batch-correction", idempotency_key=body.idempotency_key,
+        add_nodes=add_nodes, add_edges=add_edges, add_assertions=add_assertions,
+        add_evidence=add_evidence, supersede_assertion_ids=superseded_ids,
+    )
+    try:
+        revised_row, errors = await merge_and_persist_patch(
+            db, patch, expected_graph_id=row.graph_id
+        )
+    except DuplicatePatchError as exc:
+        await db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    if revised_row is None:
+        await db.commit()
+        raise HTTPException(409, {"validation_errors": errors})
+    params["engineering_model_graph"] = {
+        "revision_id": str(revised_row.id), "graph_id": revised_row.graph_id,
+        "revision": revised_row.revision,
+        "canonical_sha256": revised_row.canonical_sha256,
+    }
+    gen.params = params
+    await db.commit()
+    rebuild_task_id = None
+    if body.rebuild:
+        from app.tasks.cad_trace import rebuild_from_spec
+
+        rebuild_task_id = rebuild_from_spec.apply_async(
+            args=[str(generation_id), correction_event_id], queue="celery"
+        ).id
+    return _generation_graph_response(gen, revised_row, load_graph(revised_row)) | {
+        "compatibility_spec_updated": compatibility_updated,
+        "corrected_assertion_ids": superseded_ids,
         "rebuild_task_id": rebuild_task_id,
     }
 

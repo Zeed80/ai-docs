@@ -273,7 +273,7 @@ export const engineeringApi = {
   generationAssertionOverlayUrl: (
     generationId: string,
     assertionId: string,
-    mode: "source" | "candidate" | "overlay" | "difference" = "source",
+    mode: "sheet" | "source" | "candidate" | "overlay" | "difference" = "source",
     proposalId?: string,
   ) => {
     const query = new URLSearchParams({ mode });
@@ -299,6 +299,27 @@ export const engineeringApi = {
       `/api/image-gen/${generationId}/model-graph/assertions/${encodeURIComponent(assertionId)}/corrections`,
       { method: "POST", body: JSON.stringify(body) },
     ),
+  correctGenerationAssertionsBatch: (
+    generationId: string,
+    body: {
+      corrections: Array<{
+        assertion_id: string;
+        value: Record<string, unknown>;
+        unit?: string | null;
+        source_bbox_normalized?: [number, number, number, number] | null;
+      }>;
+      note: string;
+      idempotency_key: string;
+      rebuild?: boolean;
+    },
+  ) => request<EngineeringModelGraphRevision & {
+    compatibility_spec_updated: boolean;
+    corrected_assertion_ids: string[];
+    rebuild_task_id?: string | null;
+  }>(
+    `/api/image-gen/${generationId}/model-graph/corrections`,
+    { method: "POST", body: JSON.stringify(body) },
+  ),
   verifyGenerationModelGraph: (generationId: string) =>
     request<{ state: Record<string, unknown>; issues: Array<Record<string, unknown>> }>(
       `/api/image-gen/${generationId}/model-graph/verify`,
