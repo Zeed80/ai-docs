@@ -419,6 +419,22 @@ def _domain_rule_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
                 "level": 7, "code": "construction_opening_without_host",
                 "node_ids": missing, "severity": "error",
             })
+    elif graph.profile == "mechanical":
+        feature_ids = {item.id for item in graph.nodes if item.type == "Feature"}
+        # Warning, not error: represented_by is sourced strictly from a
+        # view's own features_shown (native_feature_graph_additions), and the
+        # reader does not populate features_shown yet (Фаза 1.1 follow-up) —
+        # every Feature node is legitimately unlinked today. Track this as a
+        # regression metric (mirrors level 6's same_object_across_views
+        # precedent) rather than blocking every mechanical build before the
+        # data can pass a hard gate.
+        if feature_ids:
+            shown = {edge.source_id for edge in graph.edges if edge.type == "represented_by"}
+            if missing := sorted(feature_ids - shown):
+                issues.append({
+                    "level": 7, "code": "mechanical_feature_without_view",
+                    "node_ids": missing, "severity": "warning",
+                })
     elif graph.profile in {"mep", "electrical", "hydraulic", "pid"}:
         port_ids = {item.id for item in graph.nodes if item.type == "Port"}
         ownership = defaultdict(int)

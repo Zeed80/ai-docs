@@ -370,6 +370,67 @@ def test_verifier_runs_twelve_levels_and_requires_trace_evidence():
     assert any(item["level"] == 10 for item in issues)
 
 
+def _mechanical_graph_with_feature(*, linked: bool) -> EngineeringModelGraph:
+    """Minimal sealed mechanical graph with one Feature node, optionally
+    linked to a View by represented_by — Фаза 1.4's fail-closed contract:
+    unlinked is the honest default until the reader populates
+    features_shown, so it must warn, not block release outright."""
+    nodes = [
+        GraphNode(id="docs", type="DocumentSet"),
+        GraphNode(id="product", type="Product"),
+        GraphNode(id="op", type="BuildOperation"),
+        GraphNode(id="feature:0:chamfers:0", type="Feature"),
+    ]
+    edges = [
+        GraphEdge(id="e1", type="contains", source_id="docs", target_id="product"),
+        GraphEdge(id="e2", type="depends_on", source_id="op", target_id="product"),
+    ]
+    if linked:
+        nodes.append(GraphNode(id="view:front", type="View"))
+        edges.append(GraphEdge(
+            id="shown", type="represented_by",
+            source_id="feature:0:chamfers:0", target_id="view:front",
+        ))
+    return EngineeringModelGraph(
+        graph_id="emg:mech-feature-test", profile="mechanical",
+        nodes=nodes, edges=edges,
+        assertions=[
+            Assertion(
+                id="a-kind", subject_id="op", predicate="operation.kind",
+                value=ExactValue(kind="exact", value="extrude"),
+                origin="human", assurance="human_approved", confidence=1.0,
+            ),
+            Assertion(
+                id="a-material", subject_id="product", predicate="material.designation",
+                value=ExactValue(kind="exact", value="Steel"),
+                origin="human", assurance="human_approved", confidence=1.0,
+            ),
+        ],
+    ).sealed()
+
+
+def test_unlinked_mechanical_feature_warns_but_does_not_block_release():
+    graph = _mechanical_graph_with_feature(linked=False)
+    state, issues = verify_graph(graph)
+    assert "mechanical_feature_without_view" in state.issue_codes
+    detail = next(item for item in issues if item["code"] == "mechanical_feature_without_view")
+    assert detail["severity"] == "warning"
+    assert detail["node_ids"] == ["feature:0:chamfers:0"]
+
+
+def test_linked_mechanical_feature_clears_the_warning():
+    graph = _mechanical_graph_with_feature(linked=True)
+    _, issues = verify_graph(graph)
+    assert not any(item["code"] == "mechanical_feature_without_view" for item in issues)
+
+
+def test_mechanical_graph_without_feature_nodes_is_silent_on_the_new_rule():
+    # legacy-passthrough-only graphs (no Feature nodes at all) must not be
+    # caught by this rule retroactively — _graph() has none.
+    _, issues = verify_graph(_graph(critical_assurance="human_approved"))
+    assert not any(item["code"] == "mechanical_feature_without_view" for item in issues)
+
+
 def test_feature_tree_is_deterministic_projection_of_graph_revision():
     graph = _graph(critical_assurance="human_approved")
     candidate = feature_tree_from_graph(graph, target_id="production")
