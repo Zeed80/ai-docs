@@ -30,6 +30,11 @@ class ViewCircle:
     cx: float
     cy: float
     r: float  # pixels
+    # Which spec feature/section this circle observes, when the caller knows
+    # (e.g. a hole read from the spec, tagged by assign_stable_feature_ids).
+    # None for callers that only have raw CV-detected circles with no spec
+    # feature behind them (the drawings/multiview pipeline, historically).
+    feature_id: str | None = None
 
 
 @dataclass
@@ -42,6 +47,10 @@ class ViewGeometry:
     circles: list[ViewCircle] = field(default_factory=list)
     # labelled diameters read on this view, in mm
     diameters_mm: list[float] = field(default_factory=list)
+    # Feature/section id backing each diameters_mm[i], index-aligned. Shorter
+    # than diameters_mm (or absent) is fine — a missing entry just means that
+    # diameter's origin is unknown, never an error.
+    diameter_feature_ids: list[str | None] = field(default_factory=list)
     # centerline axis x-positions (vertical axes) and y-positions (horizontal)
     axes_x: list[float] = field(default_factory=list)
     axes_y: list[float] = field(default_factory=list)
@@ -50,6 +59,11 @@ class ViewGeometry:
     # does the view contain hidden (dashed) contour lines?
     has_hidden: bool = False
 
+    def diameter_feature_id(self, index: int) -> str | None:
+        if 0 <= index < len(self.diameter_feature_ids):
+            return self.diameter_feature_ids[index]
+        return None
+
 
 @dataclass
 class Correspondence:
@@ -57,6 +71,12 @@ class Correspondence:
     views: tuple[str, str]
     detail: str
     confidence: float
+    # The specific feature/section id on each side that matched, when known —
+    # what turns "these two views agree" into "THIS hole is the same physical
+    # feature as THAT one", the deterministic source for an EMG
+    # same_object_across_views edge. None on either side when the geometry
+    # behind the match carries no feature identity (e.g. a bare CV circle).
+    feature_ids: tuple[str | None, str | None] | None = None
 
 
 @dataclass
@@ -140,9 +160,12 @@ def build_correspondence_graph(views: list[ViewGeometry]) -> CorrespondenceGraph
                     )
 
             # 3. Diameter ↔ circle: a Ø label in one view matches a circle in
-            #    the other (the cylindrical feature seen end-on).
+            #    the other (the cylindrical feature seen end-on). When both
+            #    sides carry a feature/section id, name them on the edge —
+            #    that is what makes this a same_object_across_views source
+            #    instead of just a view-pair note.
             for src, dst in ((a, b), (b, a)):
-                for d in src.diameters_mm:
+                for d_index, d in enumerate(src.diameters_mm):
                     for c in dst.circles:
                         if not dst.scale:
                             continue
@@ -152,8 +175,30 @@ def build_correspondence_graph(views: list[ViewGeometry]) -> CorrespondenceGraph
                                 "diameter", (src.label, dst.label),
                                 f"Ø{d:g} мм подтверждён окружностью в «{dst.label}»",
                                 0.85,
+                                feature_ids=(
+                                    src.diameter_feature_id(d_index), c.feature_id,
+                                ),
                             ))
                             break
+
+            # 3b. Diameter ↔ diameter: two views each state a matching Ø
+            #     directly, with no detected circle needed on either side —
+            #     what a spec-only reader (no raster circle detection, only
+            #     labelled/read values) can offer. Symmetric, so each pair is
+            #     compared once here rather than via the (a,b)/(b,a) swap.
+            for a_index, d_a in enumerate(a.diameters_mm):
+                for b_index, d_b in enumerate(b.diameters_mm):
+                    if abs(d_a - d_b) <= _DIAMETER_REL_TOL * max(d_a, d_b, 1e-6):
+                        graph.correspondences.append(Correspondence(
+                            "diameter", (a.label, b.label),
+                            f"Ø{d_a:g} мм совпадает в «{a.label}» и «{b.label}»",
+                            0.8,
+                            feature_ids=(
+                                a.diameter_feature_id(a_index),
+                                b.diameter_feature_id(b_index),
+                            ),
+                        ))
+                        break
 
             # 4. Hidden ↔ visible: a hidden (dashed) contour in one view is a
             #    feature read as a visible circle in the orthogonal view.

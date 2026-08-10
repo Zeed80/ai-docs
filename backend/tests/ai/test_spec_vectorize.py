@@ -1282,6 +1282,7 @@ def test_assign_stable_feature_ids_uses_body_list_index_scheme():
     assert chamfers[0]["id"] == "0:chamfers:0"
     assert chamfers[1]["id"] == "0:chamfers:1"
     assert spec["main_view"]["keyways"][0]["id"] == "0:keyways:0"
+    assert spec["main_view"]["outer"][0]["id"] == "0:outer:0"
 
     # parts[] is body_index 1, 2, ... — [main_view, *parts] numbering, exactly
     # like SpecView.body_index / _rotation_parts.

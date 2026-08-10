@@ -282,6 +282,7 @@ class SpecCircularHolePattern(BaseModel):
 
 
 class SpecSection(BaseModel):
+    id: str | None = None  # see SpecChamfer.id — assigned to outer[]/bore[] too
     diameter_mm: float = Field(gt=0)
     length_mm: float | None = Field(default=None, gt=0)
     note: str | None = None
@@ -1737,29 +1738,37 @@ _BODY_FEATURE_FIELDS = (
 # slots live one level deeper, under body["profile"].
 _PROFILE_FEATURE_FIELDS = ("holes", "hole_patterns", "slots")
 
+# The stepped profile itself. Not a "feature cut into" the body, but the
+# correspondence graph (cad_ir/correspondence.py) needs to name a SPECIFIC
+# section — "outer step 2's Ø40" — not just "the body" when it matches a
+# stated diameter against another view, so these get the same id scheme.
+_BODY_SECTION_FIELDS = ("outer", "bore")
+
 
 def assign_stable_feature_ids(spec: dict) -> dict:
-    """Give every cut/hole feature a stable, referenceable id — in place.
+    """Give every cut/hole feature (and profile section) a stable id — in place.
 
     Format: ``f"{body_index}:{list_name}:{index}"`` (profile lists get a
     ``profile.`` prefix on ``list_name``), with ``body_index`` numbered exactly
     like ``_rotation_parts``/``SpecView.body_index``: ``[main_view, *parts]``.
 
     This is the reference surface ``SpecView.features_shown`` and the native
-    EMG graph's ``Feature`` nodes are built on (see ``cad_emg_native.py``) — a
-    dimension or a view can now name a SPECIFIC feature instead of only the
-    body it belongs to. Ids are assigned once, deterministically, right after
-    reading (``read_spec_best_effort``'s return path) — never invented by the
-    VLM itself, and never reassigned once present (a re-read/correction that
-    already carries an id keeps it, so a human's prior reference to it in
-    ``features_shown`` or a GraphPatch does not silently dangle).
+    EMG graph's ``Feature``/``Geometry`` nodes are built on (see
+    ``cad_emg_native.py``), and what ``spec_crosscheck``'s correspondence-graph
+    adapter tags a matched diameter with — a dimension or a view can now name a
+    SPECIFIC feature/section instead of only the body it belongs to. Ids are
+    assigned once, deterministically, right after reading (``read_spec_best_
+    effort``'s return path) — never invented by the VLM itself, and never
+    reassigned once present (a re-read/correction that already carries an id
+    keeps it, so a human's prior reference to it in ``features_shown`` or a
+    GraphPatch does not silently dangle).
     """
     bodies: list[Any] = [spec.get("main_view")]
     bodies.extend(spec.get("parts") or [])
     for body_index, body in enumerate(bodies):
         if not isinstance(body, dict):
             continue
-        for list_name in _BODY_FEATURE_FIELDS:
+        for list_name in (*_BODY_FEATURE_FIELDS, *_BODY_SECTION_FIELDS):
             items = body.get(list_name)
             if not isinstance(items, list):
                 continue

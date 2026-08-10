@@ -299,6 +299,114 @@ def _spec_circle_diameters(spec: dict) -> list[float]:
     return sorted({round(value, 3) for value in diameters}, reverse=True)
 
 
+_DIAMETER_FEATURE_LISTS = ("outer", "bore", "cross_holes")
+
+
+def _index_body_diameters(bodies: list[Any]) -> dict[str, float]:
+    """Every id-tagged diameter in the spec, by feature id.
+
+    Scoped to the fields with an unambiguous single ``diameter_mm`` (profile
+    steps, cross holes, prismatic holes) — bolt-circle/axial patterns state
+    several different diameters (hole vs pitch-circle vs thread nominal) and
+    are left for a follow-up rather than guessed at here.
+    """
+    index: dict[str, float] = {}
+    for body in bodies:
+        if not isinstance(body, dict):
+            continue
+        for list_name in _DIAMETER_FEATURE_LISTS:
+            for item in body.get(list_name) or []:
+                if not isinstance(item, dict):
+                    continue
+                feature_id = item.get("id")
+                value = _num(item.get("diameter_mm"))
+                if feature_id and value:
+                    index[str(feature_id)] = value
+        profile = body.get("profile")
+        if isinstance(profile, dict):
+            for item in profile.get("holes") or []:
+                if not isinstance(item, dict) or not item.get("id"):
+                    continue
+                value = _num(item.get("diameter_mm"))
+                if value:
+                    index[str(item["id"])] = value
+    return index
+
+
+def spec_view_geometries(spec: dict) -> list[Any]:
+    """Adapt a read spec into per-view ``cad_ir.correspondence.ViewGeometry``.
+
+    A view's diameters come ONLY from features its OWN ``features_shown``
+    names — never every diameter its body happens to have, which would make
+    every view of one body trivially "correspond" to every other and carry
+    no information. Until the reader populates ``features_shown``
+    (``assign_stable_feature_ids`` gives every feature the id to be named
+    by; nothing writes into ``features_shown`` yet — see
+    ``ENGINEERING_MODEL_GRAPH_SPEC``/roadmap Фаза 1.2), this correctly
+    returns geometry with nothing to match: silence, not a guessed link.
+    """
+    from app.ai.cad_ir.correspondence import ViewGeometry
+
+    bodies = [spec.get("main_view") or {}, *(spec.get("parts") or [])]
+    diameters_by_id = _index_body_diameters(bodies)
+
+    views_out: list[ViewGeometry] = []
+    for position, view in enumerate(spec.get("views") or []):
+        if not isinstance(view, dict):
+            continue
+        shown = [str(item) for item in (view.get("features_shown") or []) if item]
+        diameters: list[float] = []
+        feature_ids: list[str | None] = []
+        for feature_id in shown:
+            value = diameters_by_id.get(feature_id)
+            if value is None:
+                continue
+            diameters.append(value)
+            feature_ids.append(feature_id)
+        if not diameters:
+            continue
+        label = str(
+            view.get("view_id") or view.get("label")
+            or f"{view.get('kind', 'view')}:{position}"
+        )
+        views_out.append(ViewGeometry(
+            label=label, projection=str(view.get("kind") or ""),
+            diameters_mm=diameters, diameter_feature_ids=feature_ids,
+        ))
+    return views_out
+
+
+def check_view_correspondence(spec: dict) -> dict[str, Any]:
+    """Cross-view diameter agreement between explicitly-named features.
+
+    The deterministic half of ``same_object_across_views`` evidence — the
+    other half is a view directly naming a feature id in ``features_shown``,
+    consumed as-is by the native EMG graph builder. This function corroborates
+    that naming (two views that both claim to show the same feature actually
+    state a matching diameter) rather than inventing a link neither view's own
+    data states. Findings here are ``details``-only advisory data, not
+    ``CrossCheckFinding`` severities — a missing correspondence is not itself
+    an error, only a contradiction (an ``issue``) is.
+    """
+    from app.ai.cad_ir.correspondence import build_correspondence_graph
+
+    views = spec_view_geometries(spec)
+    graph = build_correspondence_graph(views)
+    return {
+        "correspondences": [
+            {
+                "kind": c.kind,
+                "views": list(c.views),
+                "detail": c.detail,
+                "confidence": c.confidence,
+                "feature_ids": list(c.feature_ids) if c.feature_ids else None,
+            }
+            for c in graph.correspondences
+        ],
+        "issues": list(graph.issues),
+    }
+
+
 def check_spec_against_raster(
     spec: dict, circle_radii_px: list[float]
 ) -> list[CrossCheckFinding]:
@@ -463,6 +571,7 @@ def cross_check_spec(spec: dict, ink: Any | None = None) -> dict[str, Any]:
         else ("checked" if len(measured) >= 2 and stated_circles >= 2
               else "insufficient_measurements")
     )
+    view_correspondence = check_view_correspondence(spec)
     return {
         "findings": [
             {
@@ -478,4 +587,9 @@ def cross_check_spec(spec: dict, ink: Any | None = None) -> dict[str, Any]:
         # reads as "the image agrees" when it can equally mean "there was
         # nothing to compare".
         "raster_check": raster_state,
+        # Фаза 1.1: cross-view feature correspondence — the deterministic
+        # source for same_object_across_views edges in the native EMG graph
+        # (see cad_emg_native.py). Empty until a view's features_shown is
+        # populated; never a guessed link.
+        "view_correspondence": view_correspondence,
     }

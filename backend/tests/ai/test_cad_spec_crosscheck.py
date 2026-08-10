@@ -227,3 +227,64 @@ def test_no_measurement_means_no_verdict_from_the_image():
     spec = {"main_view": {"profile": {"shape": "circle", "diameter_mm": 560}}}
     assert check_outline_against_image(spec, None) == []
     assert check_outline_against_image(spec, 0) == []
+
+
+# ── view correspondence (Фаза 1.1: cross-view feature linkage) ─────────────
+
+
+def _spec_with_named_cross_hole() -> dict:
+    return {
+        "main_view": {
+            "outer": [{"diameter_mm": 40, "length_mm": 100, "id": "0:outer:0"}],
+            "cross_holes": [
+                {"diameter_mm": 9, "axial_position_mm": 20, "id": "0:cross_holes:0"},
+            ],
+        },
+        "views": [
+            {"kind": "front", "view_id": "front", "body_index": 0,
+             "features_shown": ["0:cross_holes:0"]},
+            {"kind": "side", "view_id": "side", "body_index": 0,
+             "features_shown": ["0:cross_holes:0"]},
+        ],
+    }
+
+
+def test_spec_view_geometries_only_uses_features_shown():
+    from app.ai.cad_recognize.spec_crosscheck import spec_view_geometries
+
+    geometries = spec_view_geometries(_spec_with_named_cross_hole())
+
+    assert len(geometries) == 2
+    assert geometries[0].diameters_mm == [9]
+    assert geometries[0].diameter_feature_ids == ["0:cross_holes:0"]
+
+
+def test_spec_view_geometries_empty_without_features_shown():
+    """Silence, not a guessed link — the honest default before a view names
+    anything explicitly (features_shown is not populated by the reader yet)."""
+    from app.ai.cad_recognize.spec_crosscheck import spec_view_geometries
+
+    spec = _spec_with_named_cross_hole()
+    for view in spec["views"]:
+        view["features_shown"] = []
+
+    assert spec_view_geometries(spec) == []
+
+
+def test_check_view_correspondence_resolves_matching_feature_ids():
+    from app.ai.cad_recognize.spec_crosscheck import check_view_correspondence
+
+    result = check_view_correspondence(_spec_with_named_cross_hole())
+
+    assert result["correspondences"], result
+    match = result["correspondences"][0]
+    assert match["kind"] == "diameter"
+    assert match["feature_ids"] == ["0:cross_holes:0", "0:cross_holes:0"]
+    assert result["issues"] == []
+
+
+def test_cross_check_spec_carries_view_correspondence():
+    report = cross_check_spec(_spec_with_named_cross_hole())
+
+    assert "view_correspondence" in report
+    assert report["view_correspondence"]["correspondences"]

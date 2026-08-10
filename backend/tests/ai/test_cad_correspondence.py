@@ -68,6 +68,33 @@ def test_diameter_matches_circle_in_orthogonal_view():
     assert "diameter" in _kinds(graph)
 
 
+def test_diameter_match_names_the_two_feature_ids():
+    front = ViewGeometry(
+        label="Спереди", projection="front", scale=1.0,
+        diameters_mm=[40.0], diameter_feature_ids=["0:cross_holes:0"],
+    )
+    top = ViewGeometry(
+        label="Сверху", projection="top", scale=1.0,
+        circles=[ViewCircle(cx=50, cy=50, r=20, feature_id="0:cross_holes:0")],
+    )
+    graph = build_correspondence_graph([front, top])
+    diameter_edges = [c for c in graph.correspondences if c.kind == "diameter"]
+    assert diameter_edges
+    assert diameter_edges[0].feature_ids == ("0:cross_holes:0", "0:cross_holes:0")
+
+
+def test_diameter_match_without_ids_leaves_feature_ids_none():
+    # Same match as above, but neither side carries a feature id — the CV/
+    # raster-only path this module also serves (multiview_reconstruct.py).
+    front = ViewGeometry(label="Спереди", projection="front", scale=1.0, diameters_mm=[40.0])
+    top = ViewGeometry(label="Сверху", projection="top", scale=1.0,
+                       circles=[ViewCircle(cx=50, cy=50, r=20)])
+    graph = build_correspondence_graph([front, top])
+    diameter_edges = [c for c in graph.correspondences if c.kind == "diameter"]
+    assert diameter_edges
+    assert diameter_edges[0].feature_ids == (None, None)
+
+
 def test_diameter_mismatch_no_correspondence():
     front = ViewGeometry(label="Спереди", projection="front", scale=1.0, diameters_mm=[40.0])
     top = ViewGeometry(label="Сверху", projection="top", scale=1.0,
