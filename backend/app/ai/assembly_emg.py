@@ -9,6 +9,7 @@ from typing import Any
 from xml.etree import ElementTree
 
 from app.domain.assembly import AssemblyDofReport
+from app.domain.emg_predicates import OPERATION_PARAM_PREFIX, PREDICATE
 from app.domain.engineering_model_graph import (
     Assertion,
     BuildTarget,
@@ -60,8 +61,8 @@ def assembly_as_graph(
     assertions: list[Assertion] = []
     required: list[str] = []
     for predicate, value, impacts in (
-        ("product.name", name, ["interchangeability"]),
-        ("product.designation", designation, ["interchangeability"]),
+        (PREDICATE.PRODUCT_NAME, name, ["interchangeability"]),
+        (PREDICATE.PRODUCT_DESIGNATION, designation, ["interchangeability"]),
     ):
         if value is None:
             continue
@@ -120,27 +121,27 @@ def assembly_as_graph(
             ),
         ])
         values = [
-            ("component.instance_key", key, None, ["component_count"]),
+            (PREDICATE.COMPONENT_INSTANCE_KEY, key, None, ["component_count"]),
             (
-                "component.designation",
+                PREDICATE.COMPONENT_DESIGNATION,
                 component_designation,
                 None,
                 ["interchangeability"],
             ),
             (
-                "component.quantity",
+                PREDICATE.COMPONENT_QUANTITY,
                 int(_value(component, "quantity", 1)),
                 "1",
                 ["component_count", "mass"],
             ),
             (
-                "component.transform",
+                PREDICATE.COMPONENT_TRANSFORM,
                 _value(component, "transform", {}) or {},
                 None,
                 ["assembly_interface", "envelope"],
             ),
             (
-                "component.grounded",
+                PREDICATE.COMPONENT_GROUNDED,
                 key in dof.grounded_instances,
                 None,
                 ["mate"],
@@ -161,10 +162,10 @@ def assembly_as_graph(
             ))
             required.append(assertion_id)
         for predicate, value in (
-            ("operation.kind", "assembly_instance"),
-            ("operation.sequence", index),
-            ("operation.param.instance_key", key),
-            ("operation.param.transform", _value(component, "transform", {}) or {}),
+            (PREDICATE.OPERATION_KIND, "assembly_instance"),
+            (PREDICATE.OPERATION_SEQUENCE, index),
+            (f"{OPERATION_PARAM_PREFIX}instance_key", key),
+            (f"{OPERATION_PARAM_PREFIX}transform", _value(component, "transform", {}) or {}),
         ):
             assertion_id = _stable("assertion", f"{operation_id}:{predicate}")
             assertions.append(Assertion(
@@ -208,8 +209,8 @@ def assembly_as_graph(
             ),
         ])
         for predicate, value in (
-            ("mate.type", str(_value(mate, "mate_type"))),
-            ("mate.parameters", _value(mate, "parameters", {}) or {}),
+            (PREDICATE.MATE_TYPE, str(_value(mate, "mate_type"))),
+            (PREDICATE.MATE_PARAMETERS, _value(mate, "parameters", {}) or {}),
         ):
             assertion_id = _stable("assertion", f"{constraint_id}:{predicate}")
             assertions.append(Assertion(
@@ -238,7 +239,7 @@ def assembly_as_graph(
     assertions.append(Assertion(
         id=dof_assertion_id,
         subject_id="product:assembly",
-        predicate="assembly.degrees_of_freedom",
+        predicate=PREDICATE.ASSEMBLY_DEGREES_OF_FREEDOM,
         value=ExactValue(kind="exact", value=dof.degrees_of_freedom),
         unit="1",
         origin="derived",
@@ -278,7 +279,7 @@ def assembly_as_graph(
     assertions.append(Assertion(
         id=interference_id,
         subject_id="product:assembly",
-        predicate="assembly.interference_clear",
+        predicate=PREDICATE.ASSEMBLY_INTERFERENCE_CLEAR,
         value=(
             ExactValue(kind="exact", value=True)
             if exact_complete
@@ -299,7 +300,7 @@ def assembly_as_graph(
     assertions.append(Assertion(
         id=reopen_id,
         subject_id="product:assembly",
-        predicate="assembly.artifact_reopen_valid",
+        predicate=PREDICATE.ASSEMBLY_ARTIFACT_REOPEN_VALID,
         value=UnknownValue(kind="unknown", reason="assembly builder has not reopened an artifact"),
         origin="derived",
         assurance="proposed",
@@ -308,7 +309,7 @@ def assembly_as_graph(
     assertions.append(Assertion(
         id=required_2d_id,
         subject_id="product:assembly",
-        predicate="assembly.required_2d_complete",
+        predicate=PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE,
         value=UnknownValue(
             kind="unknown",
             reason="assembly drawing or exploded view has not been verified",
@@ -512,7 +513,7 @@ def assembly_drawing_patch(
         raise ValueError("assembly drawing report does not validate the supplied SVG")
     required = next(
         item for item in graph.assertions
-        if item.state == "active" and item.predicate == "assembly.required_2d_complete"
+        if item.state == "active" and item.predicate == PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE
     )
     suffix = artifact_sha[:16]
     artifact_id = f"artifact:assembly-drawing:{suffix}"
@@ -553,7 +554,7 @@ def assembly_drawing_patch(
             Assertion(
                 id=f"assertion:assembly-drawing-media:{suffix}",
                 subject_id=artifact_id,
-                predicate="artifact.media_type",
+                predicate=PREDICATE.ARTIFACT_MEDIA_TYPE,
                 value=ExactValue(kind="exact", value="image/svg+xml"),
                 origin="derived",
                 assurance="constraint_validated",
@@ -563,7 +564,7 @@ def assembly_drawing_patch(
             Assertion(
                 id=f"assertion:assembly-drawing-complete:{suffix}",
                 subject_id="product:assembly",
-                predicate="assembly.required_2d_complete",
+                predicate=PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE,
                 value=ExactValue(kind="exact", value=True),
                 origin="derived",
                 assurance="constraint_validated",
@@ -598,8 +599,8 @@ def assembly_revision_patch(
     add_evidence = [
         item for item in desired.evidence if item.id not in existing_evidence
     ]
-    reopen_key = ("product:assembly", "assembly.artifact_reopen_valid")
-    drawing_key = ("product:assembly", "assembly.required_2d_complete")
+    reopen_key = ("product:assembly", PREDICATE.ASSEMBLY_ARTIFACT_REOPEN_VALID)
+    drawing_key = ("product:assembly", PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE)
     contract_gate_keys = {
         reopen_key,
         drawing_key,

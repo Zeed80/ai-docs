@@ -15,6 +15,7 @@ from PIL import Image
 from pydantic import Field
 
 from app.ai.schemas import AIRequest, AITask, ChatMessage
+from app.domain.emg_predicates import PREDICATE
 from app.domain.engineering_model_graph import (
     Assertion,
     DeterministicTraceChecks,
@@ -79,7 +80,7 @@ def _active_scale(graph: EngineeringModelGraph) -> float:
         item
         for item in graph.assertions
         if item.state == "active"
-        and item.predicate == "scale.mm_per_px"
+        and item.predicate == PREDICATE.SCALE_MM_PER_PX
         and item.value.kind == "exact"
         and item.assurance in {"observed", "corroborated", "constraint_validated", "human_approved"}
         and isinstance(item.value.value, (int, float))

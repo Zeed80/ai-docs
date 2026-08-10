@@ -9,6 +9,7 @@ import zipfile
 from collections.abc import Callable
 from pathlib import PurePosixPath
 
+from app.domain.emg_predicates import PREDICATE
 from app.domain.engineering_model_graph import EngineeringModelGraph
 
 
@@ -40,7 +41,7 @@ def mixed_bundle_fingerprint(
         "cross_profile_assertions": [
             item.model_dump(mode="json")
             for item in sorted(graph.assertions, key=lambda assertion: assertion.id)
-            if item.state == "active" and item.predicate == "cross_profile.link"
+            if item.state == "active" and item.predicate == PREDICATE.CROSS_PROFILE_LINK
         ],
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -75,7 +76,7 @@ def build_mixed_artifact_bundle(
         for assertion in sorted(member.assertions, key=lambda item: item.id):
             if (
                 assertion.state != "active"
-                or assertion.predicate != "artifact.sha256"
+                or assertion.predicate != PREDICATE.ARTIFACT_SHA256
                 or assertion.value.kind != "exact"
                 or not isinstance(assertion.value.value, str)
             ):

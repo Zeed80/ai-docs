@@ -18,6 +18,7 @@ from app.db.models import (
     GraphPatchRecord,
     GraphVerificationRun,
 )
+from app.domain.emg_predicates import PREDICATE
 from app.domain.engineering_model_graph import (
     EngineeringModelGraph,
     GraphPatch,
@@ -408,7 +409,7 @@ def _domain_rule_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
         opening_ids = {
             item.subject_id for item in graph.assertions
             if item.state == "active"
-            and item.predicate == "element.kind"
+            and item.predicate == PREDICATE.ELEMENT_KIND
             and item.value.kind == "exact"
             and item.value.value == "opening"
         }
@@ -433,7 +434,8 @@ def _domain_rule_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
         if not any(node_type.get(edge.source_id) == "Port" and node_type.get(edge.target_id) == "Port" for edge in graph.edges if edge.type == "connects_to"):
             connectivity = next((
                 item for item in graph.assertions
-                if item.state == "active" and item.predicate == "system.connectivity_closed"
+                if item.state == "active"
+                and item.predicate == PREDICATE.SYSTEM_CONNECTIVITY_CLOSED
             ), None)
             if connectivity and connectivity.value.kind == "exact" and connectivity.value.value is True:
                 issues.append({
@@ -499,7 +501,7 @@ def verify_graph(graph: EngineeringModelGraph) -> tuple[VerificationState, list[
         for item in graph.assertions
         if item.state == "active"
         and item.subject_id in artifact_ids
-        and item.predicate == "artifact.media_type"
+        and item.predicate == PREDICATE.ARTIFACT_MEDIA_TYPE
         and item.value.kind == "exact"
         and item.value.value in supported_2d_media
         and item.assurance in {"constraint_validated", "human_approved"}

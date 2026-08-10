@@ -11,6 +11,7 @@ from xml.etree import ElementTree
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.domain.emg_predicates import PREDICATE
 from app.domain.engineering_model_graph import (
     Assertion,
     BuildTarget,
@@ -150,7 +151,7 @@ def system_as_graph(
     assertions.append(Assertion(
         id=system_kind_id,
         subject_id=system_id,
-        predicate="system.kind",
+        predicate=PREDICATE.SYSTEM_KIND,
         value=ExactValue(kind="exact", value=model.system_kind),
         origin="human",
         assurance=assurance,
@@ -174,7 +175,7 @@ def system_as_graph(
         assertions.append(Assertion(
             id=assertion_id,
             subject_id=node_id,
-            predicate="equipment.type",
+            predicate=PREDICATE.EQUIPMENT_TYPE,
             value=ExactValue(kind="exact", value=item.equipment_type),
             origin="human",
             assurance=assurance,
@@ -195,12 +196,12 @@ def system_as_graph(
             target_id=equipment_nodes[item.equipment_id],
         ))
         values = [
-            ("port.kind", item.kind, None),
-            ("port.direction", item.direction, None),
-            ("port.medium", item.medium, None),
+            (PREDICATE.PORT_KIND, item.kind, None),
+            (PREDICATE.PORT_DIRECTION, item.direction, None),
+            (PREDICATE.PORT_MEDIUM, item.medium, None),
         ]
         if item.nominal_size_mm is not None:
-            values.append(("port.nominal_size", item.nominal_size_mm, "mm"))
+            values.append((PREDICATE.PORT_NOMINAL_SIZE, item.nominal_size_mm, "mm"))
         for predicate, value, unit in values:
             assertion_id = _stable(f"assertion:{predicate}", item.id)
             assertions.append(Assertion(
@@ -231,7 +232,7 @@ def system_as_graph(
     assertions.append(Assertion(
         id=connectivity_id,
         subject_id=system_id,
-        predicate="system.connectivity_closed",
+        predicate=PREDICATE.SYSTEM_CONNECTIVITY_CLOSED,
         value=(
             ExactValue(kind="exact", value=True)
             if not unresolved
@@ -249,7 +250,7 @@ def system_as_graph(
     assertions.append(Assertion(
         id=required_2d_id,
         subject_id=system_id,
-        predicate="system.required_diagram_complete",
+        predicate=PREDICATE.SYSTEM_REQUIRED_DIAGRAM_COMPLETE,
         value=UnknownValue(
             kind="unknown",
             reason="P&ID, schematic or system diagram has not been verified",
@@ -408,7 +409,7 @@ def system_diagram_patch(
     required = next(
         item for item in graph.assertions
         if item.state == "active"
-        and item.predicate == "system.required_diagram_complete"
+        and item.predicate == PREDICATE.SYSTEM_REQUIRED_DIAGRAM_COMPLETE
     )
     suffix = artifact_sha[:16]
     artifact_id = f"artifact:system-diagram:{suffix}"
@@ -442,7 +443,7 @@ def system_diagram_patch(
             Assertion(
                 id=f"assertion:system-diagram-media:{suffix}",
                 subject_id=artifact_id,
-                predicate="artifact.media_type",
+                predicate=PREDICATE.ARTIFACT_MEDIA_TYPE,
                 value=ExactValue(kind="exact", value="image/svg+xml"),
                 origin="derived",
                 assurance="constraint_validated",
@@ -452,7 +453,7 @@ def system_diagram_patch(
             Assertion(
                 id=f"assertion:system-diagram-complete:{suffix}",
                 subject_id="system:root",
-                predicate="system.required_diagram_complete",
+                predicate=PREDICATE.SYSTEM_REQUIRED_DIAGRAM_COMPLETE,
                 value=ExactValue(kind="exact", value=True),
                 origin="derived",
                 assurance="constraint_validated",

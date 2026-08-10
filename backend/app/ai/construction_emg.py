@@ -12,6 +12,7 @@ from xml.etree import ElementTree
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.domain.emg_predicates import PREDICATE
 from app.domain.engineering_model_graph import (
     Assertion,
     BuildTarget,
@@ -176,7 +177,7 @@ def construction_as_graph(
         assertions.append(Assertion(
             id=assertion_id,
             subject_id=node_id,
-            predicate="spatial.level",
+            predicate=PREDICATE.SPATIAL_LEVEL,
             value=ExactValue(kind="exact", value=storey.elevation_mm),
             unit="mm",
             coordinate_system=building_id,
@@ -208,8 +209,8 @@ def construction_as_graph(
         ))
         impact = "connection_opening" if element.kind == "opening" else "base_topology"
         for predicate, value, unit in (
-            ("element.kind", element.kind, None),
-            ("geometry.box", element.box.model_dump(mode="json"), "mm"),
+            (PREDICATE.ELEMENT_KIND, element.kind, None),
+            (PREDICATE.GEOMETRY_BOX, element.box.model_dump(mode="json"), "mm"),
         ):
             assertion_id = _stable(f"assertion:{predicate}", element.id)
             assertions.append(Assertion(
@@ -218,7 +219,7 @@ def construction_as_graph(
                 predicate=predicate,
                 value=ExactValue(kind="exact", value=value),
                 unit=unit,
-                coordinate_system=building_id if predicate == "geometry.box" else None,
+                coordinate_system=building_id if predicate == PREDICATE.GEOMETRY_BOX else None,
                 origin="human",
                 assurance=source_assurance,
                 evidence_ids=[source_evidence.id],
@@ -231,7 +232,7 @@ def construction_as_graph(
             assertions.append(Assertion(
                 id=assertion_id,
                 subject_id=node_id,
-                predicate="element.material",
+                predicate=PREDICATE.ELEMENT_MATERIAL,
                 value=(
                     ExactValue(kind="exact", value=element.material)
                     if element.material
@@ -261,7 +262,7 @@ def construction_as_graph(
         Assertion(
             id=contained_id,
             subject_id=building_id,
-            predicate="construction.openings_contained",
+            predicate=PREDICATE.CONSTRUCTION_OPENINGS_CONTAINED,
             value=ExactValue(kind="exact", value=True),
             origin="derived",
             assurance="constraint_validated",
@@ -271,7 +272,7 @@ def construction_as_graph(
         Assertion(
             id=reopen_id,
             subject_id=building_id,
-            predicate="construction.ifc_reopen_valid",
+            predicate=PREDICATE.CONSTRUCTION_IFC_REOPEN_VALID,
             value=UnknownValue(kind="unknown", reason="IFC builder has not reopened an artifact"),
             origin="derived",
             assurance="proposed",
@@ -280,7 +281,7 @@ def construction_as_graph(
         Assertion(
             id=required_2d_id,
             subject_id=building_id,
-            predicate="construction.required_sheets_complete",
+            predicate=PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE,
             value=UnknownValue(
                 kind="unknown",
                 reason="mandatory plans and sections have not been verified",
@@ -442,7 +443,7 @@ def construction_sheets_patch(
     required = next(
         item for item in graph.assertions
         if item.state == "active"
-        and item.predicate == "construction.required_sheets_complete"
+        and item.predicate == PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE
     )
     suffix = artifact_sha[:16]
     artifact_id = f"artifact:construction-sheets:{suffix}"
@@ -483,7 +484,7 @@ def construction_sheets_patch(
             Assertion(
                 id=f"assertion:construction-sheets-media:{suffix}",
                 subject_id=artifact_id,
-                predicate="artifact.media_type",
+                predicate=PREDICATE.ARTIFACT_MEDIA_TYPE,
                 value=ExactValue(kind="exact", value="image/svg+xml"),
                 origin="derived",
                 assurance="constraint_validated",
@@ -493,7 +494,7 @@ def construction_sheets_patch(
             Assertion(
                 id=f"assertion:construction-sheets-complete:{suffix}",
                 subject_id="product:building",
-                predicate="construction.required_sheets_complete",
+                predicate=PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE,
                 value=ExactValue(kind="exact", value=True),
                 origin="derived",
                 assurance="constraint_validated",

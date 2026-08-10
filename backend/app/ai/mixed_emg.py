@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.domain.emg_predicates import PREDICATE
 from app.domain.engineering_model_graph import (
     Assertion,
     BuildTarget,
@@ -250,7 +251,7 @@ def compose_mixed_graph(
         assertions.append(Assertion(
             id=assertion_id,
             subject_id=constraint_id,
-            predicate="cross_profile.link",
+            predicate=PREDICATE.CROSS_PROFILE_LINK,
             value=ExactValue(kind="exact", value={
                 "id": link.id,
                 "type": link.type,

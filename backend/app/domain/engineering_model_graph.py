@@ -47,6 +47,14 @@ Impact = Literal[
     "operational_safety", "material_quantity", "mass", "visual_only",
 ]
 
+# The two BuildOperation predicates every domain agrees on — compile_build_plan
+# below orders operations by them regardless of profile. Canonical home for
+# the literal: app.domain.emg_predicates (the curated predicate registry)
+# re-exports these two rather than duplicating the string, since it imports
+# FROM this module and a reverse import here would cycle.
+PREDICATE_OPERATION_KIND = "operation.kind"
+PREDICATE_OPERATION_SEQUENCE = "operation.sequence"
+
 
 class ExactValue(StrictModel):
     kind: Literal["exact"]
@@ -832,7 +840,7 @@ def compile_build_plan(graph: EngineeringModelGraph, target_id: str) -> BuildPla
         item.subject_id
         for item in graph.assertions
         if item.state == "active"
-        and item.predicate == "operation.kind"
+        and item.predicate == PREDICATE_OPERATION_KIND
         and (item.hypothesis_id is None or item.hypothesis_id in selected_set)
     }
     node_order = {item.id: index for index, item in enumerate(graph.nodes)}
@@ -840,7 +848,7 @@ def compile_build_plan(graph: EngineeringModelGraph, target_id: str) -> BuildPla
         item.subject_id: int(item.value.value)
         for item in graph.assertions
         if item.state == "active"
-        and item.predicate == "operation.sequence"
+        and item.predicate == PREDICATE_OPERATION_SEQUENCE
         and item.value.kind == "exact"
         and isinstance(item.value.value, int)
         and not isinstance(item.value.value, bool)

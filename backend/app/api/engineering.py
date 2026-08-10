@@ -14,6 +14,7 @@ from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo, require_permission
 from app.db.models import BOM, CadIrRevision, Drawing, EngineeringAnalysisCase, EngineeringAnalysisRun, EngineeringAssembly, EngineeringAssemblyComponent, EngineeringAssemblyMate, EngineeringChangeRequest, EngineeringMaterial, EngineeringMaterialAssignment, EngineeringProject, EngineeringProjection, EngineeringRevision, EngineeringValidationRun, ManufacturingCheckResult, ManufacturingProcessPlan
 from app.db.session import get_db
+from app.domain.emg_predicates import PREDICATE
 from app.domain.engineering import (
     ChangeRequestCreate,
     ChangeRequestOut,
@@ -579,7 +580,7 @@ async def build_assembly_model_graph(
         (
             item for item in graph.assertions
             if item.state == "active"
-            and item.predicate == "assembly.artifact_reopen_valid"
+            and item.predicate == PREDICATE.ASSEMBLY_ARTIFACT_REOPEN_VALID
         ),
         None,
     )
@@ -588,7 +589,7 @@ async def build_assembly_model_graph(
     non_step_blockers = {
         item.id for item in graph.assertions
         if item.state == "active"
-        and item.predicate == "assembly.required_2d_complete"
+        and item.predicate == PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE
     }
     blockers = set(plan.critical_assumption_ids) - {
         reopen_assertion.id, *non_step_blockers,
@@ -676,7 +677,7 @@ async def build_assembly_model_graph(
         str(item.value.value): item.subject_id
         for item in graph.assertions
         if item.state == "active"
-        and item.predicate == "component.instance_key"
+        and item.predicate == PREDICATE.COMPONENT_INSTANCE_KEY
         and item.value.kind == "exact"
     }
     for component_report in report.get("components", []):
@@ -697,7 +698,7 @@ async def build_assembly_model_graph(
         Assertion(
             id=f"assertion:assembly-reopen:{step_sha[:20]}",
             subject_id="product:assembly",
-            predicate="assembly.artifact_reopen_valid",
+            predicate=PREDICATE.ASSEMBLY_ARTIFACT_REOPEN_VALID,
             value=ExactValue(kind="exact", value=True),
             origin="derived",
             assurance="constraint_validated",
@@ -709,7 +710,7 @@ async def build_assembly_model_graph(
         Assertion(
             id=f"assertion:artifact-sha:{step_sha[:20]}",
             subject_id=artifact_id,
-            predicate="artifact.sha256",
+            predicate=PREDICATE.ARTIFACT_SHA256,
             value=ExactValue(kind="exact", value=step_sha),
             origin="derived",
             assurance="constraint_validated",
@@ -720,7 +721,7 @@ async def build_assembly_model_graph(
         Assertion(
             id=f"assertion:operation-kind:{step_sha[:20]}",
             subject_id=operation_id,
-            predicate="operation.kind",
+            predicate=PREDICATE.OPERATION_KIND,
             value=ExactValue(kind="exact", value="assembly_compile"),
             origin="derived",
             assurance="constraint_validated",
@@ -1042,7 +1043,7 @@ async def build_construction_model_graph(
         (
             item for item in graph.assertions
             if item.state == "active"
-            and item.predicate == "construction.ifc_reopen_valid"
+            and item.predicate == PREDICATE.CONSTRUCTION_IFC_REOPEN_VALID
         ),
         None,
     )
@@ -1143,7 +1144,7 @@ async def build_construction_model_graph(
             Assertion(
                 id=f"assertion:construction-ifc-reopen:{ifc_sha[:20]}",
                 subject_id="product:building",
-                predicate="construction.ifc_reopen_valid",
+                predicate=PREDICATE.CONSTRUCTION_IFC_REOPEN_VALID,
                 value=ExactValue(kind="exact", value=True),
                 origin="derived",
                 assurance="constraint_validated",
@@ -1155,7 +1156,7 @@ async def build_construction_model_graph(
             Assertion(
                 id=f"assertion:construction-ifc-sha:{ifc_sha[:20]}",
                 subject_id=artifact_id,
-                predicate="artifact.sha256",
+                predicate=PREDICATE.ARTIFACT_SHA256,
                 value=ExactValue(kind="exact", value=ifc_sha),
                 origin="derived",
                 assurance="constraint_validated",
@@ -1563,7 +1564,7 @@ async def sync_mixed_model_graph(
         approvable = [
             item for item in graph.assertions
             if item.state == "active"
-            and item.predicate == "cross_profile.link"
+            and item.predicate == PREDICATE.CROSS_PROFILE_LINK
             and item.origin == "human"
             and item.assurance == "observed"
         ]
@@ -1781,7 +1782,7 @@ async def build_mixed_model_bundle(
             Assertion(
                 id=f"assertion:mixed-bundle-sha:{bundle_sha[:20]}",
                 subject_id=artifact_id,
-                predicate="artifact.bundle_sha256",
+                predicate=PREDICATE.ARTIFACT_BUNDLE_SHA256,
                 value=ExactValue(kind="exact", value=bundle_sha),
                 origin="derived",
                 assurance="constraint_validated",
@@ -1791,7 +1792,7 @@ async def build_mixed_model_bundle(
             Assertion(
                 id=f"assertion:mixed-bundle-complete:{bundle_sha[:20]}",
                 subject_id=artifact_id,
-                predicate="artifact.bundle_complete",
+                predicate=PREDICATE.ARTIFACT_BUNDLE_COMPLETE,
                 value=ExactValue(kind="exact", value=manifest["complete"]),
                 origin="derived",
                 assurance="constraint_validated",

@@ -17,6 +17,12 @@ from app.ai.cad_ir.feature_tree import (
     FeatureTreeCandidate,
     ParamProvenance,
 )
+from app.domain.emg_predicates import (
+    BUILD_REMOVED_ASSERTION_PREFIX,
+    BUILD_UNRESOLVED_PREFIX,
+    OPERATION_PARAM_PREFIX,
+    PREDICATE,
+)
 from app.domain.engineering_model_graph import (
     Assertion,
     BuildTarget,
@@ -91,7 +97,7 @@ def drawing_graph_as_observations(
         assertions.append(Assertion(
             id=f"assertion:geometry:{entity.id}",
             subject_id=node_id,
-            predicate="observation.cadir_entity_json",
+            predicate=PREDICATE.OBSERVATION_CADIR_ENTITY_JSON,
             value=ExactValue(
                 kind="exact",
                 value=json.dumps(entity.model_dump(mode="json"), sort_keys=True, separators=(",", ":")),
@@ -109,7 +115,7 @@ def drawing_graph_as_observations(
         ))
     if drawing.scale_mm_per_px is not None:
         assertions.append(Assertion(
-            id="assertion:sheet-scale", subject_id="sheet:0", predicate="scale.mm_per_px",
+            id="assertion:sheet-scale", subject_id="sheet:0", predicate=PREDICATE.SCALE_MM_PER_PX,
             value=ExactValue(kind="exact", value=drawing.scale_mm_per_px), unit="mm",
             origin="observed", assurance="observed", confidence=0.8,
         ))
@@ -308,7 +314,7 @@ def feature_tree_from_graph(
         values = {
             item.predicate: item for item in assertions_by_subject.get(operation_id, [])
         }
-        kind_assertion = values.get("operation.kind")
+        kind_assertion = values.get(PREDICATE.OPERATION_KIND)
         if not kind_assertion or kind_assertion.value.kind != "exact":
             missing.append(f"{operation_id}: operation.kind")
             continue
@@ -391,7 +397,7 @@ def spec_feature_tree_as_graph(
         assertions.append(Assertion(
             id=material_assertion_id,
             subject_id="material:primary",
-            predicate="material.designation",
+            predicate=PREDICATE.MATERIAL_DESIGNATION,
             value=ExactValue(kind="exact", value=material_designation.strip()),
             origin="derived",
             assurance="proposed",
@@ -423,7 +429,7 @@ def spec_feature_tree_as_graph(
         assertions.append(Assertion(
             id=kind_id,
             subject_id=operation_id,
-            predicate="operation.kind",
+            predicate=PREDICATE.OPERATION_KIND,
             value=ExactValue(kind="exact", value=feature.kind),
             origin="derived",
             assurance="proposed",
@@ -436,7 +442,7 @@ def spec_feature_tree_as_graph(
         assertions.append(Assertion(
             id=sequence_id,
             subject_id=operation_id,
-            predicate="operation.sequence",
+            predicate=PREDICATE.OPERATION_SEQUENCE,
             value=ExactValue(kind="exact", value=index),
             origin="derived",
             assurance="proposed",
@@ -456,7 +462,7 @@ def spec_feature_tree_as_graph(
             assertions.append(Assertion(
                 id=assertion_id,
                 subject_id=operation_id,
-                predicate=f"operation.param.{name}",
+                predicate=f"{OPERATION_PARAM_PREFIX}{name}",
                 value=ExactValue(kind="exact", value=value),
                 unit="mm" if name.endswith("_mm") else None,
                 origin=origin,
@@ -471,7 +477,7 @@ def spec_feature_tree_as_graph(
         assertions.append(Assertion(
             id=assertion_id,
             subject_id="product:legacy-spec",
-            predicate=f"build.unresolved.{index}",
+            predicate=f"{BUILD_UNRESOLVED_PREFIX}{index}",
             value=UnknownValue(kind="unknown", reason=str(item)),
             origin="derived",
             assurance="proposed",
@@ -630,9 +636,9 @@ def feature_tree_revision_patch(
             if value is None:
                 continue
             predicate = (
-                "operation.kind" if name == "kind"
-                else "operation.sequence" if name == "sequence"
-                else f"operation.param.{name}"
+                PREDICATE.OPERATION_KIND if name == "kind"
+                else PREDICATE.OPERATION_SEQUENCE if name == "sequence"
+                else f"{OPERATION_PARAM_PREFIX}{name}"
             )
             previous_operation_id = (
                 active_operation_ids[index]
@@ -690,7 +696,7 @@ def feature_tree_revision_patch(
         add_assertions.append(Assertion(
             id=assertion_id,
             subject_id="product:legacy-spec",
-            predicate=f"build.removed_assertion.{index}",
+            predicate=f"{BUILD_REMOVED_ASSERTION_PREFIX}{index}",
             value=ExactValue(kind="exact", value=old.id),
             origin="human" if producer == "human" else "derived",
             assurance="human_approved" if producer == "human" else "proposed",
