@@ -1388,7 +1388,11 @@ async def _store_failed_reading(
     unresolved: list[str],
     solid_result: dict | None,
     pipeline_manifest: dict,
-) -> None:
+    *,
+    build_note: str | None = None,
+    fallback_ir: Any | None = None,
+    owner_sub: str | None = None,
+) -> bool:
     """Keep what was read when the part could not be built.
 
     Reading the sheet is the expensive, fallible half; building from a complete
@@ -1396,15 +1400,30 @@ async def _store_failed_reading(
     the second half failed means paying for it again — and the reading is often
     nearly right, one missing length short of a part. Stored here, the editor
     can show it, a person can complete it, and the rebuild costs nothing.
-    """
-    from app.db.models import ImageGeneration
-    from app.ai.cad_dimension_graph import build_dimension_graph
+    A part that could not be built is not a failure of the run — it is a
+    review-required draft: the generation lands as ``done`` (mirroring the
+    post-build unresolved-dimension path below), never ``failed``. Landing
+    here as ``failed`` made the saved reading practically undiscoverable
+    (buried behind a red error banner, no CadIrRevision for the editor to
+    open) even though it was captured specifically so a person could finish
+    it and rebuild.
 
+    ``fallback_ir`` — when the 3D solid did not build but the deterministic or
+    generative Model-2 drafter still managed a 2D sheet from the same spec —
+    is persisted as a normal CadIrRevision, so the editor opens on real,
+    patchable geometry instead of a text-only params dump. Returns whether a
+    revision was actually created.
+    """
+    from app.ai.cad_dimension_graph import build_dimension_graph
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.services import studio_queue
+
+    revision_created = False
     try:
         async with factory() as db:
             gen = await db.get(ImageGeneration, gen_uuid)
             if gen is None:
-                return
+                return False
             stored_solid = dict(solid_result or {"built": False})
             engineering_graph = stored_solid.pop("_engineering_model_graph", None)
             graph_ref = None
@@ -1418,6 +1437,9 @@ async def _store_failed_reading(
                     "revision": graph_row.revision,
                     "canonical_sha256": graph_row.canonical_sha256,
                 }
+            review_warnings = list(dict.fromkeys(unresolved))
+            if build_note:
+                review_warnings.append(build_note)
             gen.params = {
                 **(gen.params or {}),
                 "vectorize_method": "spec",
@@ -1425,8 +1447,10 @@ async def _store_failed_reading(
                 "spec_crosscheck": crosscheck,
                 "dimension_graph": build_dimension_graph(spec),
                 "spec_followup": followup_log,
-                "spec_review_warnings": list(dict.fromkeys(unresolved)),
+                "spec_review_warnings": review_warnings,
                 "solid_3d": stored_solid,
+                "sheet_without_geometry": fallback_ir is None,
+                "digitization_status": "review_required",
                 "cad_reading": {
                     "spec": spec,
                     "attempts": spec.get("reader_attempts") or [],
@@ -1447,6 +1471,33 @@ async def _store_failed_reading(
                     if graph_ref is not None else {}
                 ),
             }
+            if fallback_ir is not None:
+                from app.ai.cad_ir.schema import ValidationIssueIR
+                from app.services import cad_ir_store
+
+                fallback_ir.source.generation_id = str(gen_uuid)
+                fallback_ir.digitization_status = "review_required"
+                if unresolved:
+                    fallback_ir.validation.issues.append(
+                        ValidationIssueIR(
+                            code="SPEC_READER_UNRESOLVED",
+                            severity="warn",
+                            level=3,
+                            message_ru=(
+                                "Геометрия черновика требует решения пользователя: "
+                                + "; ".join(dict.fromkeys(unresolved))
+                            ),
+                        )
+                    )
+                await cad_ir_store.save_revision(
+                    db, gen, fallback_ir, origin="auto", created_by=owner_sub,
+                    keep_raster=None, thin_px=2, thick_px=4,
+                )
+                revision_created = True
+            gen.status = ImageGenStatus.done
+            gen.error = None
+            job = await studio_queue.job_for_generation(db, gen_uuid)
+            await studio_queue.mark_job_done(db, job)
             await db.commit()
     except Exception as exc:  # noqa: BLE001 — the failure message matters more
         logger.warning("cad_spec_reading_not_stored", error=str(exc)[:200])
@@ -1454,6 +1505,7 @@ async def _store_failed_reading(
 
         if _settings.emg_enabled_for("mechanical"):
             raise
+    return revision_created
 
 
 def _unplaced_callouts(solid_result: dict, spec: dict) -> dict:
@@ -2399,13 +2451,10 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 if not solid_result or not solid_result.get("built"):
                     # The part could not be built, but the READING is not lost:
                     # it is the expensive half, it is often nearly right, and a
-                    # person can finish it in the editor and rebuild. Storing it
-                    # before failing is what makes that possible — and it is why
-                    # the message can honestly say so.
-                    await _store_failed_reading(
-                        factory, gen_uuid, spec, crosscheck, followup_log,
-                        unresolved, solid_result, pipeline_manifest,
-                    )
+                    # person can finish it in the editor and rebuild. This is a
+                    # review-required draft, not a terminal failure — the same
+                    # ``done`` outcome as the post-build unresolved-dimension
+                    # path further down, just without a solid to draw from.
                     reason = (solid_result or {}).get("error") or (
                         "по прочитанному не удалось собрать деталь"
                     )
@@ -2417,11 +2466,59 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         reason += ": " + "; ".join(blockers[:3])
                         if len(blockers) > 3:
                             reason += f"; и ещё {len(blockers) - 3} — см. журнал"
-                    return await _fail(
-                        "Оцифровка: деталь не построена — " + str(reason)[:700]
-                        + ". Прочитанное сохранено: откройте спецификацию, уточните "
-                        "недостающие размеры и пересоберите."
+                    build_note = "3D-тело не построено: " + str(reason)[:700]
+                    # The solid did not build, but a 2D draft from the SAME
+                    # spec often still can (deterministic for rotation
+                    # bodies; generative when one is assigned and the part is
+                    # prismatic/complex) — best-effort, never raises past
+                    # here, since a missing fallback must not sink the run.
+                    fallback_ir = None
+                    try:
+                        from app.ai.cad_recognize.spec_vectorize import (
+                            draft_from_spec_async,
+                        )
+                        from app.ai.schemas import AITask as _AITask
+                        from app.ai.task_routing import get_routing_for as _get_routing_for
+
+                        fallback_ir = await draft_from_spec_async(
+                            spec,
+                            draft_model=_get_routing_for(_AITask.CAD_SPEC_DRAFT).primary,
+                            sheet_format=spec_sheet, landscape=spec_landscape,
+                        )
+                    except Exception:  # noqa: BLE001 — best-effort fallback only
+                        fallback_ir = None
+                    revision_created = await _store_failed_reading(
+                        factory, gen_uuid, spec, crosscheck, followup_log,
+                        unresolved, solid_result, pipeline_manifest,
+                        build_note=build_note, fallback_ir=fallback_ir,
+                        owner_sub=owner_sub,
                     )
+                    await _record(
+                        "pipeline",
+                        "completed",
+                        (
+                            "Оцифровка завершена без 3D-тела; сохранён 2D-черновик "
+                            "для правки — "
+                            if revision_created else
+                            "Оцифровка завершена без геометрии; чтение сохранено — "
+                        ) + "откройте спецификацию, уточните недостающие размеры "
+                        "и пересоберите.",
+                        {
+                            "solid_built": False,
+                            "sheet_built": revision_created,
+                            "warnings": len(unresolved),
+                        },
+                    )
+                    return {
+                        "ok": True,
+                        "generation_id": generation_id,
+                        "method": "spec",
+                        "review_required": True,
+                        "warnings": len(unresolved),
+                        "solid_3d": False,
+                        "entities": len(fallback_ir.entities) if fallback_ir is not None else 0,
+                        "reason": reason,
+                    }
                 from app.ai.cad_source_projection import evaluate_source_projection
 
                 solid_result["source_projection_verification"] = (
