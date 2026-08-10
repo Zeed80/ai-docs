@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.ai.cad_recognize.spec_vectorize import (
@@ -428,8 +430,15 @@ def test_dsl_to_ir_decodes_all_primitive_kinds():
 
 
 class _FakeResp:
-    def __init__(self, text):
+    """Stand-in AIResponse: mirrors the real shape the process log reads from
+    (``model``/``usage.latency_ms``/``raw``), not just ``text`` — the drafter's
+    trace logging reads all four on a successful call."""
+
+    def __init__(self, text, *, model="apex"):
         self.text = text
+        self.model = model
+        self.usage = SimpleNamespace(latency_ms=0)
+        self.raw: dict[str, object] = {}
 
 
 class _FakeRouter:
