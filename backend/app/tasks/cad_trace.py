@@ -175,8 +175,20 @@ async def _append_cad_process_event(
 
 
 async def _load_cad_partial_spec(gen_uuid: uuid.UUID) -> dict[str, Any]:
-    """Load the last committed consensus after an outer reader timeout."""
+    """Load the last committed consensus after an outer reader timeout.
 
+    This snapshot was captured mid-read (``_record``'s ``_partial_spec``,
+    e.g. the fragment consensus logged before the whole-sheet fallback even
+    started) — never through ``read_spec_best_effort``'s own return path, so
+    it never got ``assign_stable_feature_ids``. A timed-out read is common
+    enough on a dense multi-view sheet (a live run on detal_126.png hit this
+    exact branch) that skipping the id pass here silently starved the native
+    EMG builder and every SpecView.features_shown reference downstream of a
+    stable id to point at — apply it here, once, idempotently, so a
+    timeout-recovered spec is not a second-class read.
+    """
+
+    from app.ai.cad_recognize.spec_vectorize import assign_stable_feature_ids
     from app.db.models import ImageGeneration
     from app.db.session import _get_session_factory
 
@@ -184,7 +196,7 @@ async def _load_cad_partial_spec(gen_uuid: uuid.UUID) -> dict[str, Any]:
     async with factory() as db:
         gen = await db.get(ImageGeneration, gen_uuid)
         value = (gen.params or {}).get("cad_partial_spec") if gen else None
-        return dict(value) if isinstance(value, dict) else {}
+        return assign_stable_feature_ids(dict(value)) if isinstance(value, dict) else {}
 
 
 async def _finalize_cad_task_failure(generation_id: str, message: str) -> None:
