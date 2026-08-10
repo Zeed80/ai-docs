@@ -20,6 +20,7 @@ from app.ai.cad_ir.feature_tree import (
 from app.domain.emg_predicates import (
     BUILD_REMOVED_ASSERTION_PREFIX,
     BUILD_UNRESOLVED_PREFIX,
+    FEATURE_PARAM_PREFIX,
     OPERATION_PARAM_PREFIX,
     PREDICATE,
 )
@@ -352,6 +353,197 @@ def feature_tree_from_graph(
     )
 
 
+# Numeric/text fields worth surfacing as feature.param.<name> assertions.
+# Deliberately not every key on the item — evidence/id/kind are structural,
+# not a build parameter; taper/thread are their own nested objects, left for
+# a follow-up once they need their own Feature/Parameter nodes.
+_FEATURE_PARAM_FIELDS = (
+    "diameter_mm", "length_mm", "width_mm", "depth_mm", "size_mm", "angle_deg",
+    "radius_mm", "root_diameter_mm", "axial_position_mm", "axial_start_mm",
+    "at_z_mm", "at_diameter_mm", "rotation_deg", "count",
+    "bolt_circle_diameter_mm", "hole_diameter_mm", "start_angle_deg",
+    "internal", "through",
+)
+
+# feature.kind value per spec list name — the spec's own vocabulary, not a
+# new taxonomy invented here.
+_FEATURE_LIST_KIND = {
+    "chamfers": "chamfer", "fillets": "fillet", "grooves": "groove",
+    "keyways": "keyway", "cross_holes": "cross_hole",
+    "axial_holes": "axial_hole_pattern",
+    "circular_hole_patterns": "circular_hole_pattern",
+    "outer": "section_outer", "bore": "section_bore",
+    "holes": "hole", "hole_patterns": "hole_pattern", "slots": "slot",
+}
+
+
+def _emit_native_feature(
+    item: Any,
+    list_name: str,
+    *,
+    nodes: list[GraphNode],
+    edges: list[GraphEdge],
+    assertions: list[Assertion],
+    features_shown_by_view: dict[str, list[str]],
+    evidence_ids: list[str],
+) -> None:
+    """One Feature node + its kind/location/param assertions + represented_by
+    edges to every view that names it — the body of
+    ``native_feature_graph_additions``, factored out for one item at a time.
+    """
+    if not isinstance(item, dict):
+        return
+    feature_id = item.get("id")
+    if not feature_id:
+        return
+    node_id = f"feature:{feature_id}"
+    kind = _FEATURE_LIST_KIND.get(list_name, list_name)
+    nodes.append(GraphNode(id=node_id, type="Feature", name=f"{kind} {feature_id}"))
+    # Confidence is a coarse, honest floor — 0.6 when the reader localized
+    # this element on the sheet (evidence bbox present), 0.3 when it did not.
+    # Neither is a real read confidence score (the reader does not compute
+    # one per feature today); refine once it does, rather than inventing a
+    # more precise-looking number now.
+    confidence = 0.6 if item.get("evidence") else 0.3
+    assertions.append(Assertion(
+        id=f"assertion:{node_id}:kind",
+        subject_id=node_id,
+        predicate=PREDICATE.FEATURE_KIND,
+        value=ExactValue(kind="exact", value=kind),
+        origin="observed",
+        assurance="proposed",
+        confidence=confidence,
+        evidence_ids=list(evidence_ids),
+        impacts=["base_topology"],
+    ))
+    location = item.get("location")
+    if isinstance(location, str) and location:
+        assertions.append(Assertion(
+            id=f"assertion:{node_id}:location",
+            subject_id=node_id,
+            predicate=PREDICATE.FEATURE_LOCATION,
+            value=ExactValue(kind="exact", value=location),
+            origin="observed",
+            assurance="proposed",
+            confidence=confidence,
+            evidence_ids=list(evidence_ids),
+            impacts=["base_topology"],
+        ))
+    for field in _FEATURE_PARAM_FIELDS:
+        value = item.get(field)
+        if value is None:
+            continue
+        assertions.append(Assertion(
+            id=f"assertion:{node_id}:param:{field}",
+            subject_id=node_id,
+            predicate=f"{FEATURE_PARAM_PREFIX}{field}",
+            value=ExactValue(kind="exact", value=value),
+            unit=(
+                "mm" if field.endswith("_mm")
+                else "deg" if field.endswith("_deg") else None
+            ),
+            origin="observed",
+            assurance="proposed",
+            confidence=confidence,
+            evidence_ids=list(evidence_ids),
+            impacts=["base_topology"],
+        ))
+    # Fail-closed by construction: the ONLY source for this edge is a view's
+    # own features_shown explicitly naming this feature id. No proximity, no
+    # body-membership heuristic — see native_feature_graph_additions.
+    for view_id, shown in features_shown_by_view.items():
+        if feature_id in shown:
+            edges.append(GraphEdge(
+                id=f"shown:{node_id}:{view_id}",
+                type="represented_by",
+                source_id=node_id,
+                target_id=f"view:{view_id}",
+            ))
+
+
+def native_feature_graph_additions(
+    spec_payload: dict,
+    *,
+    source_uri: str | None = None,
+) -> tuple[list[GraphNode], list[GraphEdge], list[Assertion]]:
+    """Sheet/View/Feature nodes for every id-tagged element of a read spec.
+
+    Additive to ``legacy_spec_as_low_assurance``'s flat dotted-path
+    passthrough, never a replacement for it — an element with no stable id
+    (``assign_stable_feature_ids`` never ran, or it is a leaf this function
+    does not cover yet, e.g. taper/thread as their own nodes) still only
+    exists as a legacy-spec assertion, which is exactly the honest fallback
+    the passthrough exists for.
+
+    Every ``represented_by`` edge is sourced from a view's OWN
+    ``features_shown`` — never inferred from proximity or body membership.
+    Until the reader populates ``features_shown``, every Feature node this
+    emits is legitimately disconnected from any View: a feature the sheet's
+    views were never asked to confirm is not "shown" anywhere as far as this
+    graph is concerned, and inventing that link would be exactly the guess
+    this pipeline's whole design refuses to make.
+    """
+    nodes: list[GraphNode] = [GraphNode(id="sheet:0", type="Sheet", name="Sheet 1")]
+    edges: list[GraphEdge] = [GraphEdge(
+        id="contains:root-sheet", type="contains",
+        source_id="document-set:root", target_id="sheet:0",
+    )]
+    assertions: list[Assertion] = []
+    evidence_ids = ["evidence:whole-sheet"] if source_uri else []
+
+    features_shown_by_view: dict[str, list[str]] = {}
+    seen_view_ids: set[str] = set()
+    for position, view in enumerate(spec_payload.get("views") or []):
+        if not isinstance(view, dict):
+            continue
+        view_id = str(view.get("view_id") or f"view:{position}")
+        if view_id in seen_view_ids:
+            continue
+        seen_view_ids.add(view_id)
+        node_id = f"view:{view_id}"
+        nodes.append(GraphNode(
+            id=node_id, type="View",
+            name=str(view.get("label") or view.get("kind") or view_id),
+        ))
+        edges.append(GraphEdge(
+            id=f"contains:sheet:{view_id}", type="contains",
+            source_id="sheet:0", target_id=node_id,
+        ))
+        features_shown_by_view[view_id] = [
+            str(item) for item in (view.get("features_shown") or []) if item
+        ]
+
+    from app.ai.cad_recognize.spec_vectorize import (
+        _BODY_FEATURE_FIELDS,
+        _BODY_SECTION_FIELDS,
+        _PROFILE_FEATURE_FIELDS,
+    )
+
+    bodies = [spec_payload.get("main_view"), *(spec_payload.get("parts") or [])]
+    for body in bodies:
+        if not isinstance(body, dict):
+            continue
+        for list_name in (*_BODY_FEATURE_FIELDS, *_BODY_SECTION_FIELDS):
+            for item in body.get(list_name) or []:
+                _emit_native_feature(
+                    item, list_name, nodes=nodes, edges=edges,
+                    assertions=assertions,
+                    features_shown_by_view=features_shown_by_view,
+                    evidence_ids=evidence_ids,
+                )
+        profile = body.get("profile")
+        if isinstance(profile, dict):
+            for list_name in _PROFILE_FEATURE_FIELDS:
+                for item in profile.get(list_name) or []:
+                    _emit_native_feature(
+                        item, list_name, nodes=nodes, edges=edges,
+                        assertions=assertions,
+                        features_shown_by_view=features_shown_by_view,
+                        evidence_ids=evidence_ids,
+                    )
+    return nodes, edges, assertions
+
+
 def spec_feature_tree_as_graph(
     spec: Any,
     candidate: FeatureTreeCandidate,
@@ -377,6 +569,16 @@ def spec_feature_tree_as_graph(
     assertions = list(graph.assertions)
     operation_assertion_ids: list[str] = []
     spec_payload = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
+    # Фаза 1.2: native Feature/Sheet/View nodes for every element the reader
+    # gave a stable id — alongside, not instead of, the legacy passthrough
+    # above. See native_feature_graph_additions for the fail-closed contract
+    # on represented_by edges.
+    native_nodes, native_edges, native_assertions = native_feature_graph_additions(
+        spec_payload, source_uri=source_uri,
+    )
+    nodes.extend(native_nodes)
+    edges.extend(native_edges)
+    assertions.extend(native_assertions)
     title_block = spec_payload.get("title_block")
     material_designation = (
         title_block.get("material") if isinstance(title_block, dict) else None

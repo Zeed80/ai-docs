@@ -260,29 +260,26 @@ _MECHANICAL = (
         "material.designation", "mechanical", ("Product", "Component"), ("exact",), None,
         "Material designation (ГОСТ/DIN/...).",
     ),
-)
-
-# ── Vocabulary demonstrated only in tests (no production builder emits these
-#    yet) — documents where a native, non-legacy-passthrough mechanical
-#    builder should land its Feature/Geometry assertions. ────────────────────
-
-_EXAMPLES = (
+    # native_feature_graph_additions (cad_emg_compat.py) — one Feature node
+    # per read chamfer/fillet/groove/keyway/cross_hole/hole-pattern/profile-
+    # section, replacing the flat legacy-spec dotted-path passthrough for
+    # elements the reader gave a stable id (assign_stable_feature_ids).
     PredicateDef(
         "feature.kind", "mechanical", ("Feature",), ("exact",), None,
-        "Feature kind (hole/groove/keyway/chamfer/...).", stage="example",
+        "Feature kind — the read spec's own list name (chamfer/fillet/groove/"
+        "keyway/cross_hole/axial_hole_pattern/circular_hole_pattern/hole/"
+        "hole_pattern/slot/section_outer/section_bore).",
     ),
     PredicateDef(
-        "envelope.width", "mechanical", ("Product", "Feature"), ("exact",), "mm",
-        "Overall envelope width.", stage="example",
-    ),
-    PredicateDef(
-        "local.radius", "mechanical", ("Feature",), ("exact",), "mm",
-        "Local fillet/round radius.", stage="example",
+        "feature.location", "mechanical", ("Feature",), ("exact",), None,
+        "Where on the body a chamfer/fillet sits (left_end/right_end/"
+        "shoulder/bore_mouth/bore) — the spec's own placement vocabulary, "
+        "never a resolved edge id (the kernel resolves the edge itself).",
     ),
 )
 
 PREDICATES: dict[str, PredicateDef] = _predicates(
-    *_SHARED, *_ASSEMBLY, *_CONSTRUCTION, *_SYSTEM, *_MIXED, *_MECHANICAL, *_EXAMPLES,
+    *_SHARED, *_ASSEMBLY, *_CONSTRUCTION, *_SYSTEM, *_MIXED, *_MECHANICAL,
 )
 
 # Templated families: one entry per *pattern*, matched by prefix. The
@@ -301,6 +298,14 @@ TEMPLATED_PREDICATES: dict[str, PredicateDef] = _predicates(
         "build.removed_assertion.", "mechanical", ("BuildOperation",), ("exact",), None,
         "Record of one assertion a correction rebuild superseded, by index.",
     ),
+    PredicateDef(
+        "feature.param.", "mechanical", ("Feature",), ("exact",), None,
+        "One named numeric/text field of a read feature, keyed by its spec "
+        "field name (feature.param.diameter_mm, feature.param.depth_mm, ...) "
+        "— mirrors operation.param. for the same reason: the field-name "
+        "vocabulary is the spec's own Pydantic model, not worth duplicating "
+        "one predicate per field here.",
+    ),
 )
 
 # Prefix constants for the templated families above — import these instead of
@@ -308,6 +313,7 @@ TEMPLATED_PREDICATES: dict[str, PredicateDef] = _predicates(
 OPERATION_PARAM_PREFIX = "operation.param."
 BUILD_UNRESOLVED_PREFIX = "build.unresolved."
 BUILD_REMOVED_ASSERTION_PREFIX = "build.removed_assertion."
+FEATURE_PARAM_PREFIX = "feature.param."
 
 # Subjects whose predicates are the legacy EngineeringDrawingSpec's own
 # dotted JSON paths (app.ai.cad_emg_compat.legacy_spec_as_low_assurance) —
