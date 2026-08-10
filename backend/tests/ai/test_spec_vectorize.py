@@ -14,6 +14,7 @@ from app.ai.cad_recognize.spec_vectorize import (
     _parse_spec_json,
     _spec_images,
     _whole_sheet_reader_schema,
+    assign_stable_feature_ids,
     choose_standard_scale,
     draft_from_spec_async,
     draft_prismatic_body,
@@ -1232,3 +1233,100 @@ def test_coerce_keeps_complete_profile_and_pattern():
 
     assert repaired["main_view"]["profile"]["diameter_mm"] == 100
     assert len(repaired["main_view"]["profile"]["hole_patterns"]) == 1
+
+
+# ── assign_stable_feature_ids (Фаза 1.1: referenceable feature identity) ────
+
+
+def _spec_with_two_bodies() -> dict:
+    return {
+        "schema_version": 1,
+        "part": "Вал ступенчатый",
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [{"diameter_mm": 40, "length_mm": 100}],
+            "chamfers": [
+                {"size_mm": 1, "angle_deg": 45, "location": "left_end"},
+                {"size_mm": 2, "angle_deg": 45, "location": "right_end"},
+            ],
+            "keyways": [{
+                "axial_start_mm": 10, "length_mm": 30, "width_mm": 8, "depth_mm": 4,
+            }],
+        },
+        "parts": [{
+            "type": "призматическая",
+            "outer": [],
+            "profile": {
+                "shape": "rectangle", "width_mm": 50, "height_mm": 30,
+                "thickness_mm": 10,
+                "holes": [{"center_x_mm": 5, "center_y_mm": 5, "diameter_mm": 6}],
+                "slots": [{
+                    "center_x_mm": 0, "center_y_mm": 0,
+                    "length_mm": 20, "width_mm": 6, "rotation_deg": 30,
+                }],
+            },
+        }],
+        "views": [],
+        "dimensions": [],
+        "annotations": [],
+        "title_block": {},
+        "unresolved": [],
+        "optional_unresolved": [],
+    }
+
+
+def test_assign_stable_feature_ids_uses_body_list_index_scheme():
+    spec = assign_stable_feature_ids(_spec_with_two_bodies())
+
+    chamfers = spec["main_view"]["chamfers"]
+    assert chamfers[0]["id"] == "0:chamfers:0"
+    assert chamfers[1]["id"] == "0:chamfers:1"
+    assert spec["main_view"]["keyways"][0]["id"] == "0:keyways:0"
+
+    # parts[] is body_index 1, 2, ... — [main_view, *parts] numbering, exactly
+    # like SpecView.body_index / _rotation_parts.
+    profile = spec["parts"][0]["profile"]
+    assert profile["holes"][0]["id"] == "1:profile.holes:0"
+    assert profile["slots"][0]["id"] == "1:profile.slots:0"
+
+
+def test_assign_stable_feature_ids_never_overwrites_an_existing_id():
+    spec = _spec_with_two_bodies()
+    spec["main_view"]["chamfers"][0]["id"] = "human:kept-this-one"
+
+    result = assign_stable_feature_ids(spec)
+
+    assert result["main_view"]["chamfers"][0]["id"] == "human:kept-this-one"
+    # its sibling without an id still gets the deterministic scheme
+    assert result["main_view"]["chamfers"][1]["id"] == "0:chamfers:1"
+
+
+def test_assign_stable_feature_ids_is_idempotent():
+    spec = _spec_with_two_bodies()
+
+    once = assign_stable_feature_ids(spec)
+    twice = assign_stable_feature_ids(once)
+
+    assert once == twice
+
+
+def test_assign_stable_feature_ids_tolerates_missing_bodies():
+    # No parts[], no feature lists at all — must not raise.
+    spec = {"main_view": {"outer": [{"diameter_mm": 10, "length_mm": 5}]}}
+
+    result = assign_stable_feature_ids(spec)
+
+    assert result["main_view"]["outer"][0]["diameter_mm"] == 10
+
+
+def test_feature_ids_survive_engineering_drawing_spec_round_trip():
+    """The id must be a declared Pydantic field — otherwise a later
+    EngineeringDrawingSpec.model_validate(...).model_dump() round-trip (as
+    _revalidated_spec does after every follow-up/assumption pass) would
+    silently drop it, and every downstream reference would dangle."""
+    spec = assign_stable_feature_ids(_spec_with_two_bodies())
+
+    round_tripped = EngineeringDrawingSpec.model_validate(spec).model_dump(mode="json")
+
+    assert round_tripped["main_view"]["chamfers"][0]["id"] == "0:chamfers:0"
+    assert round_tripped["parts"][0]["profile"]["holes"][0]["id"] == "1:profile.holes:0"

@@ -1358,7 +1358,10 @@ def _revalidated_spec(spec: dict) -> dict:
     free-text reasons (a consensus disagreement, a refused bore) are kept —
     nothing about them changed.
     """
-    from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
+    from app.ai.cad_recognize.spec_vectorize import (
+        EngineeringDrawingSpec,
+        assign_stable_feature_ids,
+    )
 
     candidate = dict(spec)
     candidate["unresolved"] = [
@@ -1376,7 +1379,11 @@ def _revalidated_spec(spec: dict) -> dict:
     for key, value in spec.items():
         if key not in revalidated:
             revalidated[key] = value
-    return revalidated
+    # Idempotent: a rebuild/correction path can reach here without ever having
+    # gone through read_spec_best_effort's own assignment — every feature
+    # still needs a stable id for SpecView.features_shown / the native EMG
+    # graph to reference, and re-running this never reassigns an existing one.
+    return assign_stable_feature_ids(revalidated)
 
 
 async def _store_failed_reading(

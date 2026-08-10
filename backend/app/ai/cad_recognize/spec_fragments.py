@@ -4225,8 +4225,11 @@ async def read_spec_best_effort(
     """
     import time
 
-    from app.ai.cad_recognize.spec_vectorize import read_drawing_spec_consensus
     from app.ai.cad_process_log import record_cad_process_event
+    from app.ai.cad_recognize.spec_vectorize import (
+        assign_stable_feature_ids,
+        read_drawing_spec_consensus,
+    )
 
     deadline = time.monotonic() + max(60.0, budget_seconds)
     fragments = await read_fragments_consensus(
@@ -4271,17 +4274,17 @@ async def read_spec_best_effort(
             fragments.setdefault("optional_unresolved", []).append(
                 "полное чтение не запускалось: сохранён лучший consensus в пределах времени"
             )
-        return _mark_observation_only_if_no_geometry(
+        return assign_stable_feature_ids(_mark_observation_only_if_no_geometry(
             _enrich_post_consensus_source_geometry(fragments, image_bytes)
-        )
+        ))
 
     whole = await read_drawing_spec_consensus(
         image_bytes, passes=passes, router=router, confidential=confidential
     )
     if not whole:
-        return _mark_observation_only_if_no_geometry(
+        return assign_stable_feature_ids(_mark_observation_only_if_no_geometry(
             _enrich_post_consensus_source_geometry(fragments, image_bytes)
-        )
+        ))
     if fragments:
         whole = _merge_fragment_truth(whole, fragments)
         if not (whole.get("title_block") or {}):
@@ -4302,6 +4305,6 @@ async def read_spec_best_effort(
                 "unresolved": whole.get("unresolved") or [],
             },
         )
-    return _mark_observation_only_if_no_geometry(
+    return assign_stable_feature_ids(_mark_observation_only_if_no_geometry(
         _enrich_post_consensus_source_geometry(whole, image_bytes)
-    )
+    ))

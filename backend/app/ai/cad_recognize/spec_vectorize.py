@@ -91,6 +91,10 @@ class SpecThread(BaseModel):
 class SpecChamfer(BaseModel):
     """A chamfer on one edge (ГОСТ 10948 sizes, "1x45°" on the sheet)."""
 
+    # Stable reference for cross-view linkage (SpecView.features_shown) and the
+    # native EMG graph's Feature nodes — assigned once by assign_stable_
+    # feature_ids() right after reading, never invented by the VLM itself.
+    id: str | None = None
     size_mm: float = Field(gt=0)
     angle_deg: float = Field(default=45.0, gt=0, lt=90)
     # Where on the part: an end face, or the shoulder between two steps. The
@@ -105,6 +109,7 @@ class SpecChamfer(BaseModel):
 class SpecFillet(BaseModel):
     """A fillet radius, most often at a shoulder (stress relief)."""
 
+    id: str | None = None  # see SpecChamfer.id
     radius_mm: float = Field(gt=0)
     location: Literal["shoulder", "left_end", "right_end", "bore"]
     at_z_mm: float | None = None
@@ -119,6 +124,7 @@ class SpecGroove(BaseModel):
     invites them to disagree, so exactly one is required.
     """
 
+    id: str | None = None  # see SpecChamfer.id
     kind: Literal[
         "relief", "o_ring", "retaining_ring", "thread_runout", "other"
     ] = "other"
@@ -144,6 +150,7 @@ class SpecKeyway(BaseModel):
     the standard tabulates it and the way the sheet dimensions it.
     """
 
+    id: str | None = None  # see SpecChamfer.id
     kind: Literal["parallel", "woodruff"] = "parallel"
     axial_start_mm: float
     length_mm: float = Field(gt=0)
@@ -164,6 +171,7 @@ class SpecKeyway(BaseModel):
 class SpecCrossHole(BaseModel):
     """A hole through the part ACROSS the axis — oil ways, cross-drillings."""
 
+    id: str | None = None  # see SpecChamfer.id
     diameter_mm: float = Field(gt=0)
     axial_position_mm: float
     angle_deg: float = 0.0
@@ -191,6 +199,7 @@ class SpecCrossHole(BaseModel):
 class SpecAxialHolePattern(BaseModel):
     """Holes drilled from an end face, parallel to the rotation axis."""
 
+    id: str | None = None  # see SpecChamfer.id
     count: int = Field(ge=1, le=64)
     bolt_circle_diameter_mm: float = Field(gt=0)
     start_angle_deg: float = 0.0
@@ -242,6 +251,7 @@ class SpecAxialHolePattern(BaseModel):
 class SpecCircularHolePattern(BaseModel):
     """A repeated unthreaded hole family resolved across end/section views."""
 
+    id: str | None = None  # see SpecChamfer.id
     count: int = Field(ge=1, le=128)
     hole_diameter_mm: float = Field(gt=0)
     bolt_circle_diameter_mm: float = Field(gt=0)
@@ -287,6 +297,7 @@ class SpecSection(BaseModel):
 class SpecHole(BaseModel):
     """Through-hole position relative to the profile centre, in millimetres."""
 
+    id: str | None = None  # see SpecChamfer.id
     center_x_mm: float
     center_y_mm: float
     diameter_mm: float = Field(gt=0)
@@ -297,6 +308,7 @@ class SpecHole(BaseModel):
 class SpecHolePattern(BaseModel):
     """Equally spaced through holes on a pitch circle."""
 
+    id: str | None = None  # see SpecChamfer.id
     kind: Literal["bolt_circle"] = "bolt_circle"
     count: int = Field(ge=2, le=128)
     bolt_circle_diameter_mm: float = Field(gt=0)
@@ -309,6 +321,7 @@ class SpecHolePattern(BaseModel):
 class SpecSlot(BaseModel):
     """Capsule slot; length is the overall end-to-end dimension."""
 
+    id: str | None = None  # see SpecChamfer.id
     center_x_mm: float
     center_y_mm: float
     length_mm: float = Field(gt=0)
@@ -1719,6 +1732,51 @@ _BODY_FEATURE_FIELDS = (
     "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
     "circular_hole_patterns",
 )
+
+# The prismatic-profile equivalent of _BODY_FEATURE_FIELDS — holes/patterns/
+# slots live one level deeper, under body["profile"].
+_PROFILE_FEATURE_FIELDS = ("holes", "hole_patterns", "slots")
+
+
+def assign_stable_feature_ids(spec: dict) -> dict:
+    """Give every cut/hole feature a stable, referenceable id — in place.
+
+    Format: ``f"{body_index}:{list_name}:{index}"`` (profile lists get a
+    ``profile.`` prefix on ``list_name``), with ``body_index`` numbered exactly
+    like ``_rotation_parts``/``SpecView.body_index``: ``[main_view, *parts]``.
+
+    This is the reference surface ``SpecView.features_shown`` and the native
+    EMG graph's ``Feature`` nodes are built on (see ``cad_emg_native.py``) — a
+    dimension or a view can now name a SPECIFIC feature instead of only the
+    body it belongs to. Ids are assigned once, deterministically, right after
+    reading (``read_spec_best_effort``'s return path) — never invented by the
+    VLM itself, and never reassigned once present (a re-read/correction that
+    already carries an id keeps it, so a human's prior reference to it in
+    ``features_shown`` or a GraphPatch does not silently dangle).
+    """
+    bodies: list[Any] = [spec.get("main_view")]
+    bodies.extend(spec.get("parts") or [])
+    for body_index, body in enumerate(bodies):
+        if not isinstance(body, dict):
+            continue
+        for list_name in _BODY_FEATURE_FIELDS:
+            items = body.get(list_name)
+            if not isinstance(items, list):
+                continue
+            for index, item in enumerate(items):
+                if isinstance(item, dict) and not item.get("id"):
+                    item["id"] = f"{body_index}:{list_name}:{index}"
+        profile = body.get("profile")
+        if not isinstance(profile, dict):
+            continue
+        for list_name in _PROFILE_FEATURE_FIELDS:
+            items = profile.get(list_name)
+            if not isinstance(items, list):
+                continue
+            for index, item in enumerate(items):
+                if isinstance(item, dict) and not item.get("id"):
+                    item["id"] = f"{body_index}:profile.{list_name}:{index}"
+    return spec
 
 
 def _rotation_body(node: dict, outer: list[dict], body_index: int) -> dict:
