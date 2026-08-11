@@ -1426,13 +1426,16 @@ _ARTIFACT_MEDIA_TYPES = {
     "fcstd": "application/vnd.freecad",
     "stl": "model/stl",
     "pdf": "application/pdf",
+    # Ф3.1/3.2: per-face topology mesh (content-stable face keys) for the
+    # interactive 3D viewer's raycasting.
+    "topology": "application/json",
 }
 
 
 @router.get("/{generation_id}/solid-preview")
 async def get_solid_preview(
     generation_id: uuid.UUID,
-    kind: Literal["step", "iges", "stl"] = "stl",
+    kind: Literal["step", "iges", "stl", "topology"] = "stl",
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> Response:
@@ -1468,7 +1471,9 @@ async def get_solid_preview(
 @router.get("/{generation_id}/artifact")
 async def get_artifact(
     generation_id: uuid.UUID,
-    kind: Literal["dxf", "dwg", "svg", "ir", "step", "iges", "fcstd", "stl", "pdf"] = "dxf",
+    kind: Literal[
+        "dxf", "dwg", "svg", "ir", "step", "iges", "fcstd", "stl", "pdf", "topology",
+    ] = "dxf",
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> Response:
@@ -1476,7 +1481,7 @@ async def get_artifact(
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     params = gen.params or {}
-    if kind in ("step", "iges", "fcstd", "stl"):
+    if kind in ("step", "iges", "fcstd", "stl", "topology"):
         revision, _ir = await _load_current_ir(db, gen)
         if (
             not gen.accepted
@@ -2469,6 +2474,14 @@ async def compile_feature_tree_candidate_to_step(
     if artifacts.iges:
         paths["iges_path"] = f"{base}.iges"
         uploads.append((artifacts.iges, paths["iges_path"], "model/iges"))
+    if artifacts.topology:
+        # Ф3.1/3.2: per-face tessellation an interactive viewer raycasts
+        # against, keyed by content-stable face id — kept alongside the
+        # solid, never a required artifact (an older kernel or a cached
+        # rebuild may legitimately not have it).
+        topology_bytes = json.dumps(artifacts.topology, ensure_ascii=False).encode("utf-8")
+        paths["topology_path"] = f"{base}_topology.json"
+        uploads.append((topology_bytes, paths["topology_path"], "application/json"))
     uploaded: list[str] = []
     try:
         for content, path, content_type in uploads:

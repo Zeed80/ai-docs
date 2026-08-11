@@ -964,7 +964,10 @@
       "prov_guessed": "догадка",
       "cad_mass": "Масса: {value} кг",
       "cad_brep_ok": "✓ B-Rep валиден (замкнут)",
-      "cad_brep_bad": "⚠ B-Rep невалиден/не замкнут"
+      "cad_brep_bad": "⚠ B-Rep невалиден/не замкнут",
+      "cad_face_surface": "Поверхность: {value}",
+      "cad_face_area": "Площадь: {value} мм²",
+      "cad_face_deselect": "Снять выделение"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

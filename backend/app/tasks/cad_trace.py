@@ -1267,14 +1267,22 @@ async def _build_spec_solid(
     }
     prefix = f"image-gen/{owner_sub or 'shared'}/{generation_id}_solid"
     paths: dict[str, str] = {}
-    for suffix, payload, content_type in (
-        ("step", artifacts.step, "application/step"),
-        ("iges", artifacts.iges, "application/iges"),
-        ("stl", artifacts.stl, "model/stl"),
+    topology_bytes = None
+    if artifacts.topology:
+        import json as _json
+
+        # Ф3.1/3.2: per-face tessellation for the interactive viewer's
+        # raycasting — same optional, best-effort treatment as IGES.
+        topology_bytes = _json.dumps(artifacts.topology, ensure_ascii=False).encode("utf-8")
+    for suffix, extension, payload, content_type in (
+        ("step", "step", artifacts.step, "application/step"),
+        ("iges", "iges", artifacts.iges, "application/iges"),
+        ("stl", "stl", artifacts.stl, "model/stl"),
+        ("topology", "topology.json", topology_bytes, "application/json"),
     ):
         if not payload:
             continue
-        path = f"{prefix}.{suffix}"
+        path = f"{prefix}.{extension}"
         _upload(payload, path, content_type)
         paths[suffix] = path
 

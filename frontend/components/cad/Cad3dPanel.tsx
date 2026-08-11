@@ -113,6 +113,12 @@ export default function Cad3dPanel({
   const [cadCandidatesLoading, setCadCandidatesLoading] = useState(false);
   const [cadBuilding, setCadBuilding] = useState(false);
   const [cadPreviewVersion, setCadPreviewVersion] = useState(0);
+  // Ф3.2: the currently clicked face, by its content-stable key — cleared
+  // whenever the built candidate changes underneath it, since a key from a
+  // previous build's report is meaningless (and, being content-hashed,
+  // could even coincidentally collide with an unrelated face of the new
+  // build) once cadArtifactCurrent goes false.
+  const [selectedFaceKey, setSelectedFaceKey] = useState<string | null>(null);
   const [cadReadyRevision, setCadReadyRevision] = useState<number | null>(
     typeof gen.params?.cad_artifact_revision === "number"
       ? (gen.params.cad_artifact_revision as number)
@@ -164,6 +170,15 @@ export default function Cad3dPanel({
       length_mm: number;
       vertices: Array<{ x: number; y: number; z: number }>;
     }>;
+    // Ф3.1/3.2: content-stable face keys — what a click on the model
+    // resolves to.
+    faces?: Array<{
+      key: string;
+      index: number;
+      surface: string;
+      area_mm2: number;
+      center_of_mass_mm: { x: number; y: number; z: number };
+    }>;
   } | null;
 
   const unresolvedCadAssumptions = useMemo(() => {
@@ -208,6 +223,14 @@ export default function Cad3dPanel({
     cadReadyRevision === revision &&
     cadBuiltCandidateIndex === selectedCandidateIndex &&
     !cadParametersDirty;
+
+  useEffect(() => {
+    if (!cadArtifactCurrent) setSelectedFaceKey(null);
+  }, [cadArtifactCurrent]);
+
+  const selectedFace = cadReport?.faces?.find(
+    (face) => face.key === selectedFaceKey,
+  );
 
   function featureOverride(
     index: number,
@@ -813,9 +836,31 @@ export default function Cad3dPanel({
         <>
           <CadModelViewer
             url={`${artifactUrl(gen.id, "stl")}&v=${cadPreviewVersion}`}
+            topologyUrl={`${artifactUrl(gen.id, "topology")}&v=${cadPreviewVersion}`}
             loadingLabel={t("vector.cad_preview_loading")}
             errorLabel={t("vector.cad_preview_error")}
+            selectedFaceKey={selectedFaceKey}
+            onFaceSelect={setSelectedFaceKey}
           />
+          {selectedFace && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] text-sky-200">
+              <span>
+                {t("vector.cad_face_surface", { value: selectedFace.surface })}
+              </span>
+              <span>
+                {t("vector.cad_face_area", {
+                  value: selectedFace.area_mm2.toFixed(2),
+                })}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedFaceKey(null)}
+                className="ml-auto text-sky-300 hover:text-sky-100"
+              >
+                {t("vector.cad_face_deselect")}
+              </button>
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-400">
             {cadReport?.bounds_mm && (
               <span>

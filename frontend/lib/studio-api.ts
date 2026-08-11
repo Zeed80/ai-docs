@@ -764,15 +764,41 @@ export function sourceUrl(
 }
 
 export type ArtifactKind =
-  "dxf" | "dwg" | "svg" | "ir" | "step" | "iges" | "fcstd" | "stl" | "pdf";
+  | "dxf"
+  | "dwg"
+  | "svg"
+  | "ir"
+  | "step"
+  | "iges"
+  | "fcstd"
+  | "stl"
+  | "pdf"
+  | "topology";
 
 export function artifactUrl(id: string, kind: ArtifactKind): string {
   return `${BASE}/${id}/artifact?kind=${encodeURIComponent(kind)}`;
 }
 
 /** Incomplete, non-releasable solid produced only for visual review. */
-export function solidPreviewUrl(id: string, kind: "stl" | "step" | "iges" = "stl"): string {
+export function solidPreviewUrl(
+  id: string,
+  kind: "stl" | "step" | "iges" | "topology" = "stl",
+): string {
   return `${BASE}/${id}/solid-preview?kind=${encodeURIComponent(kind)}`;
+}
+
+// Ф3.1/3.2: per-face tessellation (content-stable face keys) for the
+// interactive viewer's raycasting — see infra/cad-kernel/server.py's
+// _topology_mesh for the exact shape.
+export interface CadTopologyFace {
+  key: string;
+  vertices: [number, number, number][];
+  triangles: [number, number, number][];
+}
+
+export interface CadTopologyMesh {
+  schema: string;
+  faces: CadTopologyFace[];
 }
 
 // ── CAD IR (vectorize / manual drafting) ─────────────────────────────────────

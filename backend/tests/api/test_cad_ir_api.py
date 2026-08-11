@@ -817,6 +817,54 @@ async def test_feature_tree_compile_persists_revision_bound_step_fcstd_stl(
 
 
 @pytest.mark.asyncio
+async def test_feature_tree_compile_uploads_and_serves_optional_topology(
+    client, fake_storage, db_session, monkeypatch
+):
+    """Ф3.1/3.2 — when the kernel returns per-face topology alongside the
+    solid, it is uploaded and retrievable via /artifact?kind=topology, the
+    same optional treatment IGES already gets. This is also the regression
+    the ce02f3f hotfix targeted at the decoder layer — this test covers the
+    upload/serve layer built directly on top of it.
+    """
+    from app.services.cad_kernel import CadKernelArtifacts
+
+    topology_payload = {
+        "schema": "cad-kernel-topology/1.0",
+        "faces": [{"key": "face-abc", "vertices": [[0, 0, 0]], "triangles": [[0, 0, 0]]}],
+    }
+
+    async def _compile(candidate, **kwargs):
+        return CadKernelArtifacts(
+            step=b"ISO-10303-21;\nEND-ISO-10303-21;",
+            fcstd=b"PK\x03\x04fcstd",
+            stl=b"solid model\nendsolid model\n",
+            report={"valid": True, "solid_count": 1, "volume_mm3": 1200.0, "warnings": []},
+            topology=topology_payload,
+        )
+
+    monkeypatch.setattr("app.services.cad_kernel.compile_candidate", _compile)
+    gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
+    gen_id = gen["id"]
+    for p1, p2 in (
+        ((0, 0), (100, 0)), ((100, 0), (100, 100)),
+        ((100, 100), (0, 100)), ((0, 100), (0, 0)),
+    ):
+        await _add_segment(client, gen_id, {"x": p1[0], "y": p1[1]}, {"x": p2[0], "y": p2[1]})
+    await _mark_full_check_current(db_session, gen_id)
+    assert (await client.post(f"/api/image-gen/{gen_id}/accept-vectorize")).status_code == 200
+
+    compiled = await client.post(
+        f"/api/image-gen/{gen_id}/ir/feature-tree-candidates/0/step",
+        json={"confirm_assumptions": False},
+    )
+    assert compiled.status_code == 200
+
+    served = await client.get(f"/api/image-gen/{gen_id}/artifact?kind=topology")
+    assert served.status_code == 200
+    assert served.json() == topology_payload
+
+
+@pytest.mark.asyncio
 async def test_feature_tree_step_unknown_candidate_index_404s(client, fake_storage, db_session):
     gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
     gen_id = gen["id"]
