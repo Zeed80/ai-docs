@@ -540,6 +540,75 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
 
 
 @pytest.mark.asyncio
+async def test_construction_ifc_parse_endpoint_returns_model_and_report(
+    client: AsyncClient, monkeypatch
+):
+    fake_model = {
+        "site_name": "Площадка", "building_name": "Здание",
+        "storeys": [{"id": "l1", "name": "Этаж 1", "elevation_mm": 0}],
+        "elements": [{
+            "id": "w1", "kind": "wall", "name": "Стена", "storey_id": "l1",
+            "box": {
+                "x_mm": 0, "y_mm": 0, "z_mm": 0,
+                "width_mm": 5000, "depth_mm": 200, "height_mm": 3000,
+            },
+        }],
+    }
+    fake_report = {"ifc_schema": "IFC4", "mapped_elements": 1, "storeys": 1, "skipped": []}
+    captured: dict = {}
+
+    def _fake_reader(path, *, site_name=None, building_name=None):
+        captured["site_name"] = site_name
+        captured["building_name"] = building_name
+        from app.ai.construction_emg import ConstructionModel
+        return ConstructionModel.model_validate(fake_model), fake_report
+
+    monkeypatch.setattr("app.ai.ifc_reader.ifc_to_construction_model", _fake_reader)
+
+    resp = await client.post(
+        "/api/engineering/construction/ifc/parse",
+        params={"site_name": "Override"},
+        files={"file": ("model.ifc", b"ISO-10303-21; fake; END-ISO-10303-21;",
+                        "application/x-step")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["construction_model"]["building_name"] == "Здание"
+    assert body["report"] == fake_report
+    assert captured["site_name"] == "Override"
+    assert captured["building_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_construction_ifc_parse_returns_null_model_when_blocked(
+    client: AsyncClient, monkeypatch
+):
+    def _fake_reader(path, *, site_name=None, building_name=None):
+        return None, {"blocked": True, "blocked_reason": "no_storeys", "skipped": []}
+
+    monkeypatch.setattr("app.ai.ifc_reader.ifc_to_construction_model", _fake_reader)
+
+    resp = await client.post(
+        "/api/engineering/construction/ifc/parse",
+        files={"file": ("empty.ifc", b"ISO-10303-21; fake; END-ISO-10303-21;",
+                        "application/x-step")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["construction_model"] is None
+    assert body["report"]["blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_construction_ifc_parse_rejects_empty_upload(client: AsyncClient):
+    resp = await client.post(
+        "/api/engineering/construction/ifc/parse",
+        files={"file": ("empty.ifc", b"", "application/x-step")},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_construction_graph_builds_reopened_ifc_and_replays_idempotently(
     client: AsyncClient,
     monkeypatch,

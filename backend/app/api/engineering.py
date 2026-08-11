@@ -1,10 +1,11 @@
 """Canonical Engineering IR projects and revision-safe domain projections."""
 
+import pathlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -982,6 +983,56 @@ async def build_assembly_model_graph_drawing(
         "production_export_allowed": plan.production_export_allowed,
         "critical_assumption_ids": plan.critical_assumption_ids,
         "idempotent_replay": replay,
+    }
+
+
+@router.post(
+    "/construction/ifc/parse",
+    summary="Skill: engineering.construction_ifc_parse — read IFC into a ConstructionModel.",
+)
+async def parse_construction_ifc(
+    file: UploadFile = File(...),
+    site_name: str | None = None,
+    building_name: str | None = None,
+) -> dict:
+    """Фаза 5.1: promote the IFC reader from an offline script to a service call.
+
+    Stateless — writes nothing to the database. The caller submits the
+    returned `construction_model` as `payload.construction_model` when
+    creating an EngineeringRevision (POST /projects/{id}/revisions), which
+    the existing /construction-model-graph endpoints already consume
+    unchanged. `model` is null when the file yields no storeys/elements or
+    fails ConstructionModel's own validation (e.g. a rotated wall whose
+    opening doesn't corner-contain in an axis-aligned box) — check `report`
+    for why; nothing is ever guessed to force a result.
+    """
+    import functools
+    import tempfile
+
+    from anyio import to_thread
+
+    from app.ai.ifc_reader import ifc_to_construction_model
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(422, "Пустой IFC файл")
+    with tempfile.NamedTemporaryFile(suffix=".ifc") as tmp:
+        tmp.write(raw)
+        tmp.flush()
+        try:
+            model, report = await to_thread.run_sync(
+                functools.partial(
+                    ifc_to_construction_model,
+                    pathlib.Path(tmp.name),
+                    site_name=site_name,
+                    building_name=building_name,
+                ),
+            )
+        except Exception as exc:
+            raise HTTPException(422, f"IfcOpenShell не смог прочитать файл: {exc}") from exc
+    return {
+        "construction_model": model.model_dump(mode="json") if model else None,
+        "report": report,
     }
 
 
