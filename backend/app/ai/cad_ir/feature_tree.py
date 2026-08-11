@@ -52,7 +52,10 @@ class Feature3D(BaseModel):
     # kernel boundary is extra="forbid" — a mismatch breaks every 3D build).
     kind: Literal[
         "extrude", "hole", "boss", "pocket", "fillet", "chamfer",
-        "revolve", "loft", "shell", "thread",
+        # Ф2.4: sweep — a profile (circle or the sketch_profile below) swept
+        # along a real 3D path (params.path, [x,y,z] points), the tube/rail
+        # class of parts neither extrude nor revolve can express.
+        "revolve", "loft", "sweep", "shell", "thread",
         # A pocket is cut from the top face straight down; an annular groove
         # runs all the way round a turned surface and a keyway is milled into
         # it from the side. Neither is expressible as a pocket, and both are on

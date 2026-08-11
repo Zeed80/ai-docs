@@ -30,10 +30,12 @@ class Feature(BaseModel):
 
     kind: Literal[
         "extrude", "hole", "boss", "pocket", "fillet", "chamfer",
-        # D3: revolve/loft are alternative BASE features (a shaft profile spun
-        # about Z; circular sections lofted along Z); shell hollows the final
-        # solid; thread is cosmetic per ЕСКД (reported, not modeled).
-        "revolve", "loft", "shell", "thread",
+        # D3/Ф2.4: revolve/loft/sweep are alternative BASE features (a shaft
+        # profile spun about Z; circle-or-sketch sections lofted along Z; a
+        # circle-or-sketch profile swept along a real 3D path); shell
+        # hollows the final solid; thread is cosmetic per ЕСКД (reported,
+        # not modeled).
+        "revolve", "loft", "sweep", "shell", "thread",
         # Turned-part cuts a pocket cannot express: a pocket is cut from the top
         # face straight down -Z, while an annular groove goes all the way round
         # a cylindrical surface and a keyway is milled into that surface from
@@ -532,30 +534,111 @@ def _revolve_base(feature: Feature) -> Part.Shape:
 
 
 def _loft_base(feature: Feature) -> Part.Shape:
-    """D3: circular sections at increasing Z lofted into one solid — the
-    adapter/cone/transition class of parts."""
+    """D3/Ф2.4: sections at increasing Z lofted into one solid — the
+    adapter/cone/transition class of parts. Each section is EITHER a circle
+    (``diameter_mm`` — the original, still the common case: a round spindle
+    nose, a conical adapter) OR an arbitrary profile (``sketch_profile``,
+    Ф2.2's own line/arc chain, reused here rather than inventing a second
+    profile language) — a round-to-square transition duct is exactly this:
+    a circle section lofted into a rectangular sketch section.
+    """
     raw = feature.params.get("sections")
     if not isinstance(raw, list) or len(raw) < 2 or len(raw) > 50:
-        raise HTTPException(422, "loft requires sections: 2..50 items of {z, diameter_mm}")
+        raise HTTPException(
+            422, "loft requires sections: 2..50 items of {z, diameter_mm | sketch_profile}"
+        )
     wires = []
     last_z = None
-    for item in raw:
+    for index, item in enumerate(raw):
         if not isinstance(item, dict):
-            raise HTTPException(422, "loft section must be an object {z, diameter_mm}")
+            raise HTTPException(422, "loft section must be an object {z, diameter_mm|sketch_profile}")
         z = item.get("z")
         if isinstance(z, bool) or not isinstance(z, (int, float)) or not math.isfinite(float(z)) or abs(float(z)) > 100_000:
             raise HTTPException(422, "loft section 'z' must be a finite number")
-        diameter = _number(item, "diameter_mm")
         if last_z is not None and float(z) <= last_z:
             raise HTTPException(422, "loft sections must have strictly increasing z")
         last_z = float(z)
-        circle = Part.Circle(App.Vector(0, 0, float(z)), App.Vector(0, 0, 1), diameter / 2)
-        wires.append(Part.Wire(circle.toShape()))
+        if "sketch_profile" in item:
+            wire = _sketch_wire(item["sketch_profile"], (0.0, 0.0), f"loft section[{index}].sketch_profile")
+            wire.translate(App.Vector(0.0, 0.0, float(z)))
+            wires.append(wire)
+        else:
+            diameter = _number(item, "diameter_mm")
+            circle = Part.Circle(App.Vector(0, 0, float(z)), App.Vector(0, 0, 1), diameter / 2)
+            wires.append(Part.Wire(circle.toShape()))
     try:
         solid = Part.makeLoft(wires, True)
     except Exception as exc:
         raise HTTPException(422, f"OpenCascade rejected the loft sections: {exc}") from exc
+    if solid.isNull() or not solid.isValid() or solid.Volume <= 0:
+        raise HTTPException(422, "OpenCascade produced an invalid loft solid")
     return solid
+
+
+def _sweep_path(raw: Any) -> Part.Wire:
+    if not isinstance(raw, list) or not (2 <= len(raw) <= 200):
+        raise HTTPException(422, "sweep requires path: 2..200 points of [x, y, z]")
+    points: list[App.Vector] = []
+    for index, point in enumerate(raw):
+        if not (isinstance(point, list) and len(point) == 3):
+            raise HTTPException(422, f"sweep path[{index}] must be [x, y, z]")
+        coords: list[float] = []
+        for axis, value in zip("xyz", point, strict=True):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                raise HTTPException(422, f"sweep path[{index}].{axis} must be a finite number")
+            if abs(float(value)) > 100_000:
+                raise HTTPException(422, f"sweep path[{index}].{axis} is outside supported bounds")
+            coords.append(float(value))
+        points.append(App.Vector(*coords))
+    edges = []
+    for a, b in zip(points, points[1:]):
+        if a.distanceToPoint(b) <= 1e-9:
+            raise HTTPException(422, "sweep path has two consecutive identical points")
+        edges.append(Part.LineSegment(a, b).toShape())
+    try:
+        wire = Part.Wire(edges)
+    except Exception as exc:
+        raise HTTPException(422, f"OpenCascade rejected the sweep path: {exc}") from exc
+    if wire.isNull() or not wire.isValid():
+        raise HTTPException(422, "sweep path is not a valid wire")
+    return wire
+
+
+def _sweep_base(feature: Feature) -> Part.Shape:
+    """Ф2.4: a profile (circle or Ф2.2's sketch_profile) swept along a real
+    read path — a bent tube/rail/handle, the class of parts neither a
+    straight extrude nor an axis-symmetric revolve can express. The profile
+    is built in the XY plane at the origin (the SAME local convention every
+    other feature in this kernel already uses) and swept starting from the
+    path's own first point; OpenCascade orients it to the path itself
+    (``isFrenet=False`` keeps the profile's own up-direction stable along
+    straight runs rather than twisting it — the honest default absent an
+    explicit up-vector the reader does not give).
+
+    ``transition=1`` (mitered corners), not OCC's own default 0
+    ("Transformed"): measured directly against a real bent path — a
+    straight-then-90°-turn tube — transition=0 silently drops an entire
+    leg's material at the corner (volume matched exactly ONE leg's cylinder,
+    not both) while both transition=1 and transition=2 (rounded) integrate
+    correctly across the bend. A mitered corner is also the physically
+    honest default for a machined/bent part with no fillet radius stated.
+    """
+    path_wire = _sweep_path(feature.params.get("path"))
+    if "sketch_profile" in feature.params:
+        profile_wire = _sketch_wire(feature.params["sketch_profile"], (0.0, 0.0), "sweep sketch_profile")
+    else:
+        diameter = _number(feature.params, "diameter_mm")
+        circle = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), diameter / 2)
+        profile_wire = Part.Wire(circle.toShape())
+    start = path_wire.Vertexes[0].Point
+    profile_wire.translate(App.Vector(start.x, start.y, start.z))
+    try:
+        shape = path_wire.makePipeShell([profile_wire], True, False, 1)
+    except Exception as exc:
+        raise HTTPException(422, f"OpenCascade rejected the sweep: {exc}") from exc
+    if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
+        raise HTTPException(422, "OpenCascade produced an invalid sweep solid")
+    return shape
 
 
 def _sketch_point(raw: Any, label: str) -> tuple[float, float]:
@@ -778,7 +861,7 @@ def _build_shape(
     """
     bases = [
         (index, feature) for index, feature in enumerate(request.candidate.features)
-        if feature.kind in ("extrude", "revolve", "loft")
+        if feature.kind in ("extrude", "revolve", "loft", "sweep")
     ]
     if not bases:
         raise HTTPException(422, "Exactly one base feature (extrude, revolve or loft) is required")
@@ -802,7 +885,7 @@ def _build_shape(
             if f.body_index == body_index
         ]
         base_index, base = next(
-            (i, f) for i, f in body_features if f.kind in ("extrude", "revolve", "loft")
+            (i, f) for i, f in body_features if f.kind in ("extrude", "revolve", "loft", "sweep")
         )
         built.append(_build_one_body(request, body_features, base_index, base))
 
@@ -868,16 +951,41 @@ def _build_one_body(
     # vertices are centre-relative (like every hole already is on this
     # profile), not corner-anchored at (0, 0)..(width, height).
     footprint_axis_centred = axis_centred
+    # A swept body's material genuinely ends wherever its path ends (which
+    # need not be z=0..depth_mm at all, unlike an extrude) — the SAME
+    # "wherever the solid actually ends" z-convention revolve/loft already
+    # need, kept separate from axis_centred/footprint_axis_centred because
+    # a sweep's footprint approximation is corner-based (below), not the
+    # simpler symmetric-about-origin one revolve/loft use.
+    z_from_material_end = base.kind in ("revolve", "loft", "sweep")
     outer_radius = 0.0
     if base.kind == "revolve":
         shape = _revolve_base(base)
     elif base.kind == "loft":
         shape = _loft_base(base)
+    elif base.kind == "sweep":
+        shape = _sweep_base(base)
     if axis_centred:
         width = height = depth = max(
             shape.BoundBox.XLength, shape.BoundBox.YLength, shape.BoundBox.ZLength
         )
         outer_radius = max(shape.BoundBox.XLength, shape.BoundBox.YLength) / 2.0
+    elif base.kind == "sweep":
+        # A swept body has no fixed axis (its path can run anywhere in 3D,
+        # not through the origin) — same bounding-circle-around-origin
+        # approximation the sketch-profile extrude uses below; loose for a
+        # path far from the origin, but still a CORRECT (if generous) upper
+        # bound, and sweep params carry no natural "centre" a boss/pocket
+        # coordinate could otherwise be read against.
+        width = shape.BoundBox.XLength
+        height = shape.BoundBox.YLength
+        depth = shape.BoundBox.ZLength
+        footprint_axis_centred = True
+        bounds = shape.BoundBox
+        outer_radius = max(
+            math.hypot(bounds.XMin, bounds.YMin), math.hypot(bounds.XMin, bounds.YMax),
+            math.hypot(bounds.XMax, bounds.YMin), math.hypot(bounds.XMax, bounds.YMax),
+        )
     elif "sketch_profile" in base.params:
         depth = _number(base.params, "depth_mm")
         shape = _sketch_extrude_base(base, depth)
@@ -941,9 +1049,9 @@ def _build_one_body(
         # For an extrude box the top face is at z == depth; for a turned base it
         # is wherever the solid actually ends, and using the box convention
         # there would cut in mid-air above the part.
-        top_z = shape.BoundBox.ZMax if axis_centred else depth
+        top_z = shape.BoundBox.ZMax if z_from_material_end else depth
         material_depth = (
-            shape.BoundBox.ZMax - shape.BoundBox.ZMin if axis_centred else depth
+            shape.BoundBox.ZMax - shape.BoundBox.ZMin if z_from_material_end else depth
         )
         if feature.kind == "pocket" and operation_depth > material_depth + 1e-6:
             raise HTTPException(422, "Pocket depth exceeds base depth")

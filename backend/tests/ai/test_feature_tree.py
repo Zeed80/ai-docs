@@ -166,3 +166,11 @@ def test_compile_to_step_degrades_gracefully_without_cadquery() -> None:
         score=0.9, label="test",
     )
     assert compile_to_step(candidate) is None
+
+
+def test_sweep_is_a_valid_kind_kept_in_lockstep_with_the_kernel() -> None:
+    # Ф2.4 — infra/cad-kernel/server.py Feature.kind gained "sweep"; this
+    # schema (the boundary is extra="forbid" kernel-side) must match or
+    # every sweep candidate would be rejected at the kernel, not here.
+    feature = Feature3D(kind="sweep", params={"diameter_mm": 10.0, "path": [[0, 0, 0], [0, 0, 50]]})
+    assert feature.body_index == 0
