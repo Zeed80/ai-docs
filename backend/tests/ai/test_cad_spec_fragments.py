@@ -342,6 +342,44 @@ async def test_the_fallback_runs_for_missing_geometry(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fallback_grounds_whole_sheet_in_fragments_own_confirmed_diameters(
+    monkeypatch,
+):
+    """Live-found (shaft_detail.png): the whole-sheet reader's schema omits
+    evidence entirely (token-budget reasons), so on its own it has no way to
+    check an outer/bore diameter against the sheet — it invented a Ø70 that
+    appears nowhere on the drawing while the fragment pass's OWN dimensions
+    list, read moments earlier by the SAME pipeline, correctly had
+    Ø30/Ø50/Ø30. read_spec_best_effort must forward what fragments already
+    confirmed into the whole-sheet call as known_diameters_mm."""
+    captured: dict = {}
+
+    async def fake_fragments(*_a, **_k):
+        return {
+            "main_view": {},
+            "dimensions": [
+                {"value": "Ø50h6"}, {"value": "Ø30h6"}, {"value": "Ø30k6"},
+                {"value": "220"},  # not Ø-marked -- must not be treated as a diameter
+            ],
+            "fragments": {"geometry": False},
+        }
+
+    async def fake_whole(*_a, **kwargs):
+        captured["known_diameters_mm"] = kwargs.get("known_diameters_mm")
+        return {"main_view": {"outer": [{"diameter_mm": 50, "length_mm": 220}]}}
+
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.spec_fragments.read_spec_by_fragments", fake_fragments
+    )
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.spec_vectorize.read_drawing_spec_consensus", fake_whole
+    )
+    await read_spec_best_effort(b"x")
+
+    assert sorted(captured["known_diameters_mm"]) == [30.0, 50.0]
+
+
+@pytest.mark.asyncio
 async def test_unresolved_fragment_geometry_triggers_whole_sheet_fallback(monkeypatch):
     fragment_spec = {
         "main_view": {"outer": [{"diameter_mm": 80, "length_mm": 597.2}]},

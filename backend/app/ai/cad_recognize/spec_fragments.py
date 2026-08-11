@@ -4375,8 +4375,19 @@ async def read_spec_best_effort(
             )
         return _finalize_spec(fragments, image_bytes)
 
+    # Ground the whole-sheet fallback in what the fragment pass already
+    # confirmed, if anything -- its own schema omits evidence entirely to
+    # keep the JSON short (see _whole_sheet_reader_schema), so without this it
+    # has no way to check an outer/bore diameter against the sheet at
+    # generation time. See read_drawing_spec's docstring for the shaft where
+    # this mattered.
+    known_diameters_mm = _callout_numbers(
+        {"dimensions": (fragments or {}).get("dimensions") or [], "annotations": []},
+        "diameter",
+    )
     whole = await read_drawing_spec_consensus(
-        image_bytes, passes=passes, router=router, confidential=confidential
+        image_bytes, passes=passes, router=router, confidential=confidential,
+        known_diameters_mm=known_diameters_mm or None,
     )
     if not whole:
         return _finalize_spec(fragments, image_bytes)

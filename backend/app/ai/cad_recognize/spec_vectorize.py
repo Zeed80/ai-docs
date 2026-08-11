@@ -1008,6 +1008,7 @@ async def read_drawing_spec_consensus(
     passes: int = 3,
     router: Any | None = None,
     confidential: bool = True,
+    known_diameters_mm: list[float] | None = None,
 ) -> dict:
     """Read the sheet several times and keep only what the reads agree on.
 
@@ -1017,12 +1018,15 @@ async def read_drawing_spec_consensus(
     than aborting the set — the remaining passes may still agree — but if every
     pass fails, the last error is re-raised so the caller reports the real
     reason instead of a bare "no spec".
+
+    ``known_diameters_mm`` is forwarded to every pass — see read_drawing_spec.
     """
     from app.ai.cad_recognize.spec_consensus import consensus_spec
 
     if passes < 2:
         return await read_drawing_spec(
-            image_bytes, router=router, confidential=confidential
+            image_bytes, router=router, confidential=confidential,
+            known_diameters_mm=known_diameters_mm,
         )
 
     reads: list[dict] = []
@@ -1038,7 +1042,8 @@ async def read_drawing_spec_consensus(
         )
         try:
             spec = await read_drawing_spec(
-                image_bytes, router=router, confidential=confidential
+                image_bytes, router=router, confidential=confidential,
+                known_diameters_mm=known_diameters_mm,
             )
         except (SpecReadTruncatedError, SpecReadMalformedError) as exc:
             last_error = exc
@@ -1068,13 +1073,63 @@ async def read_drawing_spec_consensus(
     return merged
 
 
+def _known_diameters_hint(known_diameters_mm: list[float] | None) -> str:
+    """Prompt fragment grounding outer/bore diameters in already-confirmed
+    sheet callouts — empty string when there is nothing to ground against.
+
+    Explicitly NOT a shape hint (see read_drawing_spec's docstring): an
+    earlier wording that only said "diameters must be one of these" was
+    live-found to bias the reader toward describing a part as a stepped
+    rotation body just because valid diameters existed for one, even when
+    the sheet's own silhouette was a prismatic section (bearing_housing_
+    section.png went from an honest total refusal to a confidently WRONG
+    "тело вращения" reading). The disclaimer sentences here are the fix,
+    not decoration — verified live to restore the correct "призматическая"
+    classification while keeping the stepped-shaft fix (no more inventing a
+    diameter absent from the sheet) on the case that motivated this.
+    """
+    if not known_diameters_mm:
+        return ""
+    values = ", ".join(f"Ø{value:g}" for value in known_diameters_mm)
+    return (
+        "\nОГРАНИЧЕНИЕ, НЕ ПОДСКАЗКА О ФОРМЕ: отдельный точный проход уже "
+        f"подтвердил на этом листе диаметры {values} (и, возможно, не "
+        "только их — список неполный). Эти значения НИЧЕГО не говорят о "
+        "типе детали — определяй main_view.type СТРОГО по силуэту и "
+        "разрезу на чертеже, как обычно. ТОЛЬКО если деталь — тело "
+        "вращения со ступенчатым профилем: диаметр КАЖДОЙ ступени в "
+        "outer[]/bore[] должен совпадать с одним из перечисленных "
+        "значений (±2% или ±0.5мм). Если ни одно значение не подходит — "
+        "впиши точную позицию (например \"body:0:outer:1\") в unresolved "
+        "вместо того, чтобы придумывать диаметр, которого нет в списке."
+    )
+
+
 async def read_drawing_spec(
-    image_bytes: bytes, *, router: Any | None = None, confidential: bool = True
+    image_bytes: bytes,
+    *,
+    router: Any | None = None,
+    confidential: bool = True,
+    known_diameters_mm: list[float] | None = None,
 ) -> dict:
     """Model 1: a VLM reads the drawing into a structured feature/dimension spec.
 
     Robust to real scans (understanding, not pixel localisation). Returns {} on
     failure so the caller can fall back to the tracing method.
+
+    ``known_diameters_mm``: Ø-marked values a SEPARATE, already-completed pass
+    already confirmed on this sheet (typically the fragment reader's own
+    dimensions list, fed back in when read_spec_best_effort falls back to this
+    whole-sheet reader). This reader's own schema omits ``evidence`` entirely
+    (see _whole_sheet_reader_schema) to keep the JSON short enough to close on
+    a dense sheet — so unlike the fragment/small-feature readers, it has no
+    self-check for outer/bore diameters at generation time. Live-found on a
+    real shaft: three whole-sheet passes agreed on a diameter (Ø70) that
+    appears nowhere on the sheet, while the fragment pass's OWN dimensions
+    list correctly had Ø30/Ø50/Ø30 — the whole-sheet call simply never sees
+    that list to check itself against. Passing it back in is a prompt-level
+    constraint, not a guarantee; _flag_unconfirmed_outer_bore_diameters still
+    runs after this as the deterministic backstop.
     """
     import asyncio
     import base64
@@ -1133,12 +1188,14 @@ async def read_drawing_spec(
             f"({get_routing_for(read_task).primary}). Назначьте vision-модель "
             "в Настройки → Модели → Оцифровка."
         )
+    known_diameters_hint = _known_diameters_hint(known_diameters_mm)
     full_prompt = (
         _SPEC_PROMPT
         + "\nДЛЯ ЭТОГО ПОЛНОГО ПРОХОДА верни только геометрию: "
         "main_view, parts, views, unresolved и optional_unresolved. "
         "Не повторяй dimensions, annotations, title_block и evidence — "
         "они читаются отдельными специализированными проходами."
+        + known_diameters_hint
         + "\nКАРТА ИЗОБРАЖЕНИЙ:\n"
         + "\n".join(tile_descriptions)
     )

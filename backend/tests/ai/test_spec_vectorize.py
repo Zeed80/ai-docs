@@ -16,6 +16,7 @@ from app.ai.cad_recognize.spec_vectorize import (
     _coerce_spec_containers,
     _dsl_to_ir,
     _expanded_profile_holes,
+    _known_diameters_hint,
     _num,
     _parse_spec_json,
     _spec_images,
@@ -50,6 +51,29 @@ def test_whole_sheet_reader_schema_omits_fragment_owned_audit_payload():
     names = set(property_names(schema))
     assert "evidence" not in names
     assert "features" not in names
+
+
+def test_known_diameters_hint_empty_without_diameters():
+    assert _known_diameters_hint(None) == ""
+    assert _known_diameters_hint([]) == ""
+
+
+def test_known_diameters_hint_lists_the_values():
+    hint = _known_diameters_hint([50.0, 30.0, 10.0])
+    assert "Ø50, Ø30, Ø10" in hint
+    assert "тело вращения" in hint
+
+
+def test_known_diameters_hint_disclaims_shape_inference():
+    """Live-found regression (bearing_housing_section.png): an earlier
+    wording that only said "diameters must be one of these" biased the
+    reader into describing a prismatic section as a stepped rotation body
+    just because valid rotation-body diameters happened to exist on the
+    sheet. The disclaimer is the fix -- pin that it's actually present."""
+    hint = _known_diameters_hint([200.0, 120.0])
+    assert "НЕ ПОДСКАЗКА О ФОРМЕ" in hint
+    assert "ничего не говорят о" in hint.lower()
+    assert "силуэту" in hint
 
 
 def test_num_reads_values_from_messy_fields():
