@@ -34,10 +34,14 @@ class CadKernelArtifacts:
     stl: bytes
     report: dict[str, Any]
     iges: bytes | None = None  # D4: optional exact-geometry IGES export
+    # Ф3.1: per-face tessellation keyed by content-stable face id — what an
+    # interactive 3D viewer raycasts against. Optional for the same reason
+    # IGES is: a caller that only wants the solid must not break on it.
+    topology: dict[str, Any] | None = None
 
 
 _EXPECTED_FILES = {"model.step", "model.FCStd", "model.stl", "report.json"}
-_OPTIONAL_FILES = {"model.iges"}
+_OPTIONAL_FILES = {"model.iges", "topology.json"}
 _MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 _MAX_MEMBER_BYTES = 80 * 1024 * 1024
 
@@ -59,6 +63,9 @@ def _decode_artifacts(content: bytes) -> CadKernelArtifacts:
             stl = archive.read("model.stl")
             report = json.loads(archive.read("report.json"))
             iges = archive.read("model.iges") if "model.iges" in names else None
+            topology = (
+                json.loads(archive.read("topology.json")) if "topology.json" in names else None
+            )
     except (zipfile.BadZipFile, KeyError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise CadKernelError("cad-kernel вернул повреждённый пакет") from exc
 
@@ -66,13 +73,17 @@ def _decode_artifacts(content: bytes) -> CadKernelArtifacts:
         raise CadKernelError("cad-kernel вернул артефакт с неверной сигнатурой")
     if not isinstance(report, dict):
         raise CadKernelError("cad-kernel вернул некорректный отчёт валидации")
+    if topology is not None and not isinstance(topology, dict):
+        raise CadKernelError("cad-kernel вернул некорректную топологию")
     try:
         valid_solid = bool(report.get("valid")) and int(report.get("solid_count") or 0) >= 1
     except (TypeError, ValueError) as exc:
         raise CadKernelError("cad-kernel вернул некорректный отчёт валидации") from exc
     if not valid_solid:
         raise CadKernelError("OpenCascade не подтвердил валидный solid")
-    return CadKernelArtifacts(step=step, fcstd=fcstd, stl=stl, report=report, iges=iges)
+    return CadKernelArtifacts(
+        step=step, fcstd=fcstd, stl=stl, report=report, iges=iges, topology=topology,
+    )
 
 
 async def compile_candidate(

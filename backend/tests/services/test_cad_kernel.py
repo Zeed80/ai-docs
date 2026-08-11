@@ -12,7 +12,10 @@ from app.services.cad_kernel import (
 )
 
 
-def _archive(*, report: object | None = None, extra: bool = False, iges: bool = False) -> bytes:
+def _archive(
+    *, report: object | None = None, extra: bool = False, iges: bool = False,
+    topology: object | None = None,
+) -> bytes:
     payload = io.BytesIO()
     with zipfile.ZipFile(payload, "w") as archive:
         archive.writestr("model.step", b"ISO-10303-21;\nEND-ISO-10303-21;")
@@ -24,6 +27,8 @@ def _archive(*, report: object | None = None, extra: bool = False, iges: bool = 
         )
         if iges:
             archive.writestr("model.iges", b"IGES CONTENT".ljust(90, b" "))
+        if topology is not None:
+            archive.writestr("topology.json", json.dumps(topology))
         if extra:
             archive.writestr("unexpected.txt", "no")
     return payload.getvalue()
@@ -44,6 +49,27 @@ def test_decode_artifacts_accepts_optional_iges():
     artifacts = _decode_artifacts(_archive(iges=True))
     assert artifacts.iges is not None
     assert artifacts.iges.startswith(b"IGES CONTENT")
+
+
+def test_decode_artifacts_accepts_optional_topology():
+    # Ф3.1 — a zip WITHOUT topology.json (an older kernel, or one that
+    # genuinely omitted it) must still decode fine; this is the exact
+    # regression a live redeploy hit: the archive allowlist rejected the
+    # WHOLE package the moment the kernel started adding this file.
+    artifacts = _decode_artifacts(_archive())
+    assert artifacts.topology is None
+
+    topology = {
+        "schema": "cad-kernel-topology/1.0",
+        "faces": [{"key": "face-abc", "vertices": [], "triangles": []}],
+    }
+    with_topology = _decode_artifacts(_archive(topology=topology))
+    assert with_topology.topology == topology
+
+
+def test_decode_artifacts_rejects_non_dict_topology():
+    with pytest.raises(CadKernelError, match="топологию"):
+        _decode_artifacts(_archive(topology=["not", "a", "dict"]))
 
 
 @pytest.mark.parametrize(
