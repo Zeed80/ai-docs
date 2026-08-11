@@ -17,6 +17,7 @@ never stated a length produces no solid, exactly like the 2D drafter.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -208,6 +209,32 @@ def feature_tree_from_spec(spec: dict) -> FeatureTreeCandidate | None:
     return _prismatic_feature_tree(spec)
 
 
+# A closed loop the sheet's own read coordinates should return to exactly
+# (up to rounding in how the dimensions were transcribed) — not the 1e-6
+# used for values this module derives itself by arithmetic.
+_SKETCH_CLOSURE_TOLERANCE_MM = 0.01
+
+
+def _sketch_closure_error(sketch: list[dict]) -> float | None:
+    """Distance between where a line/arc chain ends and its implicit (0, 0)
+    start — a real geometric property of the read vertices, computed
+    directly rather than through a constraint solver: every vertex is
+    already an absolute coordinate the reader stated, not an unknown a
+    solver would need to find. None when a segment is malformed."""
+    x = y = 0.0
+    for segment in sketch:
+        if not isinstance(segment, dict):
+            return None
+        to = segment.get("to")
+        if not (isinstance(to, (list, tuple)) and len(to) == 2):
+            return None
+        try:
+            x, y = float(to[0]), float(to[1])
+        except (TypeError, ValueError):
+            return None
+    return math.hypot(x, y)
+
+
 def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
     """A plate or flange: the read outline given its read thickness.
 
@@ -290,6 +317,33 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         ))
         # A turned base is addressed from its axis, which is the same frame the
         # drawing uses for a flange — no conversion needed.
+        def to_base(x: float, y: float) -> tuple[float, float]:
+            return x, y
+    elif shape == "sketch":
+        sketch = profile.get("sketch")
+        if not sketch:
+            return None
+        closure_error = _sketch_closure_error(sketch)
+        if closure_error is None or closure_error > _SKETCH_CLOSURE_TOLERANCE_MM:
+            # A profile that does not return to its own start is not a
+            # rectangle read wrong — it is an open contour, and extruding an
+            # open wire is not a real solid. Refused, never force-closed.
+            return None
+        features.append(Feature3D(
+            kind="extrude",
+            params={"sketch_profile": sketch, "depth_mm": thickness},
+            param_provenance={
+                **provenance,
+                "sketch_profile": ParamProvenance(
+                    origin="stated",
+                    detail="контур прочитан как последовательность линий/дуг от центра профиля",
+                ),
+            },
+            confidence=0.85,
+        ))
+        # Every hole/slot on this profile is already given relative to the
+        # profile's own centre — the same origin the sketch's first implicit
+        # vertex (0, 0) starts from. No corner to translate to.
         def to_base(x: float, y: float) -> tuple[float, float]:
             return x, y
     else:

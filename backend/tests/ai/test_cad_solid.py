@@ -691,6 +691,71 @@ def test_a_flange_is_turned_and_keeps_the_sheet_frame():
     assert hole.params["center_y_mm"] == 0
 
 
+def _sketch_plate_spec(sketch, **profile_extra) -> dict:
+    profile = {"shape": "sketch", "sketch": sketch, "thickness_mm": 10}
+    profile.update(profile_extra)
+    return {"part": "Пластина произвольного контура", "main_view": {"profile": profile}}
+
+
+# A closed square: (0,0)->(40,0)->(40,30)->(0,30)->(0,0) — the implicit first
+# vertex is (0,0), so only the 4 "to" points after it need listing.
+_SKETCH_SQUARE = [
+    {"kind": "line", "to": [40.0, 0.0]},
+    {"kind": "line", "to": [40.0, 30.0]},
+    {"kind": "line", "to": [0.0, 30.0]},
+    {"kind": "line", "to": [0.0, 0.0]},
+]
+
+
+def test_a_closed_sketch_profile_becomes_an_extrude_with_sketch_profile_param():
+    candidate = feature_tree_from_spec(_sketch_plate_spec(_SKETCH_SQUARE))
+    assert candidate is not None
+    base = candidate.features[0]
+    assert base.kind == "extrude"
+    assert base.params["sketch_profile"] == _SKETCH_SQUARE
+    assert base.params["depth_mm"] == 10
+    assert base.param_provenance["sketch_profile"].origin == "stated"
+
+
+def test_an_open_sketch_loop_builds_no_solid():
+    open_loop = [
+        {"kind": "line", "to": [40.0, 0.0]},
+        {"kind": "line", "to": [40.0, 30.0]},
+        # never returns to (0, 0)
+    ]
+    assert feature_tree_from_spec(_sketch_plate_spec(open_loop)) is None
+
+
+def test_a_sketch_loop_off_by_more_than_tolerance_builds_no_solid():
+    almost_closed = [
+        {"kind": "line", "to": [40.0, 0.0]},
+        {"kind": "line", "to": [40.0, 30.0]},
+        {"kind": "line", "to": [0.0, 30.0]},
+        {"kind": "line", "to": [0.05, 0.05]},  # 0.07mm short of (0, 0)
+    ]
+    assert feature_tree_from_spec(_sketch_plate_spec(almost_closed)) is None
+
+
+def test_sketch_hole_centres_stay_in_the_profiles_own_frame_no_corner_shift():
+    spec = _sketch_plate_spec(
+        _SKETCH_SQUARE, holes=[{"center_x_mm": 20, "center_y_mm": 15, "diameter_mm": 6}],
+    )
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    hole = next(f for f in candidate.features if f.kind == "hole")
+    # Unlike a rectangle (corner-anchored), a sketch profile has no natural
+    # corner to shift to — the hole keeps the exact coordinates it was read
+    # with, the same frame the sketch segments themselves are given in.
+    assert hole.params["center_x_mm"] == 20
+    assert hole.params["center_y_mm"] == 15
+
+
+def test_sketch_without_thickness_builds_nothing():
+    spec = _sketch_plate_spec(_SKETCH_SQUARE)
+    spec["main_view"]["profile"].pop("thickness_mm")
+    assert feature_tree_from_spec(spec) is None
+
+
 def test_a_bolt_circle_expands_into_real_holes():
     spec = {
         "part": "Фланец",

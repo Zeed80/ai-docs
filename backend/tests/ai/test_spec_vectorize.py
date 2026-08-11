@@ -5,10 +5,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from app.ai.cad_recognize.spec_vectorize import (
     SHEET_FRAME_EVIDENCE,
     EngineeringDrawingSpec,
+    SpecPrismaticProfile,
+    SpecSketchSegment,
     _dsl_to_ir,
     _num,
     _parse_spec_json,
@@ -1331,3 +1334,48 @@ def test_feature_ids_survive_engineering_drawing_spec_round_trip():
 
     assert round_tripped["main_view"]["chamfers"][0]["id"] == "0:chamfers:0"
     assert round_tripped["parts"][0]["profile"]["holes"][0]["id"] == "1:profile.holes:0"
+
+
+# --- Ф2.2: SpecSketchSegment / sketch profile schema -----------------------
+
+
+def test_line_segment_rejects_center_and_clockwise():
+    SpecSketchSegment(kind="line", to=(10.0, 0.0))  # sanity: valid on its own
+    with pytest.raises(ValidationError, match="must not carry center/clockwise"):
+        SpecSketchSegment(kind="line", to=(10.0, 0.0), center=(0.0, 0.0), clockwise=True)
+
+
+def test_arc_segment_requires_center_and_clockwise():
+    with pytest.raises(ValidationError, match="requires center and clockwise"):
+        SpecSketchSegment(kind="arc", to=(10.0, 0.0))
+    SpecSketchSegment(kind="arc", to=(10.0, 0.0), center=(5.0, 0.0), clockwise=False)
+
+
+def test_sketch_shape_requires_at_least_one_segment():
+    with pytest.raises(ValidationError, match="sketch requires at least one segment"):
+        SpecPrismaticProfile(shape="sketch", thickness_mm=10, sketch=[])
+    with pytest.raises(ValidationError, match="sketch requires at least one segment"):
+        SpecPrismaticProfile(shape="sketch", thickness_mm=10)
+
+
+def test_sketch_field_is_rejected_on_rectangle_and_circle():
+    with pytest.raises(ValidationError, match="sketch is valid only for shape='sketch'"):
+        SpecPrismaticProfile(
+            shape="rectangle", width_mm=10, height_mm=10, thickness_mm=5,
+            sketch=[SpecSketchSegment(kind="line", to=(1.0, 1.0))],
+        )
+
+
+def test_valid_sketch_profile_round_trips():
+    profile = SpecPrismaticProfile(
+        shape="sketch", thickness_mm=8,
+        sketch=[
+            SpecSketchSegment(kind="line", to=(40.0, 0.0)),
+            SpecSketchSegment(kind="arc", to=(40.0, 40.0), center=(40.0, 20.0), clockwise=False),
+            SpecSketchSegment(kind="line", to=(0.0, 40.0)),
+            SpecSketchSegment(kind="line", to=(0.0, 0.0)),
+        ],
+    )
+    dumped = profile.model_dump(mode="json")
+    assert dumped["sketch"][1]["kind"] == "arc"
+    assert dumped["sketch"][1]["center"] == [40.0, 20.0]

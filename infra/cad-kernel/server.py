@@ -558,6 +558,92 @@ def _loft_base(feature: Feature) -> Part.Shape:
     return solid
 
 
+def _sketch_point(raw: Any, label: str) -> tuple[float, float]:
+    if not (isinstance(raw, list) and len(raw) == 2):
+        raise HTTPException(422, f"{label} must be [x, y]")
+    x, y = raw
+    for name, value in (("x", x), ("y", y)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            raise HTTPException(422, f"{label}.{name} must be a finite number")
+        if abs(float(value)) > 100_000:
+            raise HTTPException(422, f"{label}.{name} is outside supported bounds")
+    return float(x), float(y)
+
+
+def _sketch_extrude_base(base: Feature, depth: float) -> Part.Shape:
+    """D2.2: a general prismatic profile — a closed chain of lines/arcs from
+    the implicit (0, 0) start vertex — extruded ``depth`` along +Z.
+
+    Every vertex the wire touches is exactly what ``sketch_profile`` states;
+    the ONLY value computed here is an arc's own midpoint, needed for
+    FreeCAD's 3-point ``Part.Arc`` constructor — never a position the reader
+    did not give (start/end/centre/direction fully determine it).
+    """
+    segments = base.params.get("sketch_profile")
+    if not isinstance(segments, list) or not (1 <= len(segments) <= 200):
+        raise HTTPException(422, "sketch_profile must be a list of 1..200 segments")
+    edges: list[Part.Shape] = []
+    x0, y0 = 0.0, 0.0
+    for index, raw in enumerate(segments):
+        if not isinstance(raw, dict):
+            raise HTTPException(422, f"sketch_profile[{index}] must be an object")
+        kind = raw.get("kind")
+        x1, y1 = _sketch_point(raw.get("to"), f"sketch_profile[{index}].to")
+        p0 = App.Vector(x0, y0, 0.0)
+        p1 = App.Vector(x1, y1, 0.0)
+        if kind == "line":
+            if math.hypot(x1 - x0, y1 - y0) <= 1e-9:
+                raise HTTPException(422, f"sketch_profile[{index}] line has zero length")
+            edges.append(Part.LineSegment(p0, p1).toShape())
+        elif kind == "arc":
+            cx, cy = _sketch_point(raw.get("center"), f"sketch_profile[{index}].center")
+            clockwise = raw.get("clockwise")
+            if not isinstance(clockwise, bool):
+                raise HTTPException(422, f"sketch_profile[{index}].clockwise must be a boolean")
+            r0 = math.hypot(x0 - cx, y0 - cy)
+            r1 = math.hypot(x1 - cx, y1 - cy)
+            if r0 <= 1e-6 or abs(r0 - r1) > max(1e-3, 1e-3 * r0):
+                raise HTTPException(
+                    422, f"sketch_profile[{index}] arc start/end are not equidistant from its centre"
+                )
+            start_angle = math.atan2(y0 - cy, x0 - cx)
+            end_angle = math.atan2(y1 - cy, x1 - cx)
+            sweep = end_angle - start_angle
+            if clockwise:
+                while sweep >= 0:
+                    sweep -= 2 * math.pi
+            else:
+                while sweep <= 0:
+                    sweep += 2 * math.pi
+            mid_angle = start_angle + sweep / 2.0
+            mid = App.Vector(cx + r0 * math.cos(mid_angle), cy + r0 * math.sin(mid_angle), 0.0)
+            try:
+                edges.append(Part.Arc(p0, mid, p1).toShape())
+            except Exception as exc:
+                raise HTTPException(422, f"sketch_profile[{index}] arc is degenerate: {exc}") from exc
+        else:
+            raise HTTPException(422, f"sketch_profile[{index}].kind must be 'line' or 'arc'")
+        x0, y0 = x1, y1
+    if math.hypot(x0, y0) > 1e-2:
+        raise HTTPException(422, "sketch_profile does not close back onto its (0, 0) start vertex")
+    try:
+        wire = Part.Wire(edges)
+    except Exception as exc:
+        raise HTTPException(422, f"OpenCascade rejected the sketch wire: {exc}") from exc
+    if wire.isNull() or not wire.isValid() or not wire.isClosed():
+        raise HTTPException(422, "sketch_profile is not a valid closed loop")
+    try:
+        face = Part.Face(wire)
+    except Exception as exc:
+        raise HTTPException(422, f"OpenCascade rejected the sketch face: {exc}") from exc
+    if face.isNull() or not face.isValid():
+        raise HTTPException(422, "sketch_profile face is not valid")
+    shape = face.extrude(App.Vector(0.0, 0.0, depth))
+    if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
+        raise HTTPException(422, "OpenCascade produced an invalid sketch extrude base")
+    return shape
+
+
 def _apply_shell(shape: Part.Shape, feature: Feature) -> Part.Shape:
     """D3: hollow the solid leaving walls of the given thickness, opening the
     top face (the face whose centre sits highest)."""
@@ -741,6 +827,13 @@ def _build_one_body(
     # by the material radius — the convention a flange drawing already uses when
     # it gives hole coordinates from the centre.
     axis_centred = base.kind in ("revolve", "loft")
+    # A sketch-profile extrude behaves like a box for z/top-face purposes
+    # (axis_centred stays False — depth runs 0..depth_mm along +Z, not from
+    # wherever a turned solid happens to end) but its footprint check needs
+    # the SAME radius-from-origin form revolve/loft already use: its
+    # vertices are centre-relative (like every hole already is on this
+    # profile), not corner-anchored at (0, 0)..(width, height).
+    footprint_axis_centred = axis_centred
     outer_radius = 0.0
     if base.kind == "revolve":
         shape = _revolve_base(base)
@@ -751,6 +844,22 @@ def _build_one_body(
             shape.BoundBox.XLength, shape.BoundBox.YLength, shape.BoundBox.ZLength
         )
         outer_radius = max(shape.BoundBox.XLength, shape.BoundBox.YLength) / 2.0
+    elif "sketch_profile" in base.params:
+        depth = _number(base.params, "depth_mm")
+        shape = _sketch_extrude_base(base, depth)
+        width = shape.BoundBox.XLength
+        height = shape.BoundBox.YLength
+        footprint_axis_centred = True
+        bounds = shape.BoundBox
+        # A generous bounding CIRCLE around the profile's own (0, 0) centre
+        # — not the tightest possible footprint, but the same conservative
+        # approximation revolve/loft already rely on, and correct even when
+        # the sketch is not symmetric about its centre (unlike a plain
+        # bounding-box-length/2 radius would be).
+        outer_radius = max(
+            math.hypot(bounds.XMin, bounds.YMin), math.hypot(bounds.XMin, bounds.YMax),
+            math.hypot(bounds.XMax, bounds.YMin), math.hypot(bounds.XMax, bounds.YMax),
+        )
     else:
         width = _number(base.params, "width_mm")
         height = _number(base.params, "height_mm")
@@ -811,7 +920,7 @@ def _build_one_body(
             radius = diameter / 2
             _check_footprint(
                 feature.kind, x, y, radius,
-                axis_centred=axis_centred, outer_radius=outer_radius,
+                axis_centred=footprint_axis_centred, outer_radius=outer_radius,
                 width=width, height=height,
             )
             tool = Part.makeCylinder(radius, solid_height, App.Vector(x, y, z))
@@ -875,7 +984,7 @@ def _build_one_body(
         radius = diameter / 2
         _check_footprint(
             "Hole", x, y, radius,
-            axis_centred=axis_centred, outer_radius=outer_radius,
+            axis_centred=footprint_axis_centred, outer_radius=outer_radius,
             width=width, height=height,
         )
         through = feature.params.get("through")

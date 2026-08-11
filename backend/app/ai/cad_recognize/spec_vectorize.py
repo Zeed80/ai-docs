@@ -338,13 +338,48 @@ class SpecSlot(BaseModel):
         return self
 
 
+class SpecSketchSegment(BaseModel):
+    """One edge of a general prismatic profile (Ф2.2): a straight run to
+    ``to``, or an arc to ``to`` about an explicit ``center`` — the two
+    primitives ``cad_ir/constraints.py``'s own 2D IR already works with
+    (``Segment``/``Arc``). Coordinates are in the SAME profile-centre-
+    relative frame ``SpecHole``/``SpecSlot`` already use for this profile —
+    no separate corner convention for a shape with no natural corner.
+    """
+
+    kind: Literal["line", "arc"]
+    to: tuple[float, float]
+    # Arc only: the arc's own centre, and which way it turns from the
+    # previous vertex to ``to``. Never a bulge value — the reader states
+    # what it can see (a fillet's centre, or read off a section), not a
+    # DXF-specific encoding it would have to compute.
+    center: tuple[float, float] | None = None
+    clockwise: bool | None = None
+
+    @model_validator(mode="after")
+    def _arc_requires_center(self) -> SpecSketchSegment:
+        if self.kind == "arc" and (self.center is None or self.clockwise is None):
+            raise ValueError("arc segment requires center and clockwise")
+        if self.kind == "line" and (self.center is not None or self.clockwise is not None):
+            raise ValueError("line segment must not carry center/clockwise")
+        return self
+
+
 class SpecPrismaticProfile(BaseModel):
-    shape: Literal["rectangle", "circle"]
+    shape: Literal["rectangle", "circle", "sketch"]
     width_mm: float | None = Field(default=None, gt=0)
     height_mm: float | None = Field(default=None, gt=0)
     diameter_mm: float | None = Field(default=None, gt=0)
     corner_radius_mm: float | None = Field(default=None, gt=0)
     thickness_mm: float | None = Field(default=None, gt=0)
+    # Ф2.2: a closed line/arc loop for any contour a rectangle/circle cannot
+    # express — the FIRST vertex is implicit at (0, 0) (the profile's own
+    # centre, same origin every hole/slot on this profile is already given
+    # relative to); ``sketch`` is the ordered list of edges FROM there, and
+    # the loop must return to (0, 0) within tolerance (checked in
+    # cad_solid.py before this ever reaches the kernel — a sketch that does
+    # not close is refused, never silently forced shut).
+    sketch: list[SpecSketchSegment] | None = None
     holes: list[SpecHole] = Field(default_factory=list)
     hole_patterns: list[SpecHolePattern] = Field(default_factory=list)
     slots: list[SpecSlot] = Field(default_factory=list)
@@ -363,6 +398,10 @@ class SpecPrismaticProfile(BaseModel):
             raise ValueError("corner_radius_mm is valid only for rectangle")
         if self.shape == "circle" and self.diameter_mm is None:
             raise ValueError("circle requires diameter_mm")
+        if self.shape == "sketch" and not self.sketch:
+            raise ValueError("sketch requires at least one segment")
+        if self.shape != "sketch" and self.sketch is not None:
+            raise ValueError("sketch is valid only for shape='sketch'")
         return self
 
 
