@@ -1024,8 +1024,11 @@ async def _build_spec_solid(
                 source_sha256=source_sha256,
                 source_uri=source_uri,
             )
-            # Under the canary flag the kernel boundary consumes only a
-            # deterministic projection of the sealed graph revision.
+            # Ф2.6: the kernel never builds from the freshly-computed
+            # candidate directly. The candidate is sealed into an EMG graph
+            # revision first, then re-derived by compiling that same
+            # revision's BuildOperation nodes — the graph, not the flat
+            # spec read, is what the kernel boundary actually consumes.
             candidate = feature_tree_from_graph(
                 engineering_graph,
                 target_id="preview",

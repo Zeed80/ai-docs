@@ -17,7 +17,11 @@ def test_emg_rollout_is_limited_to_explicit_profiles(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_emg_canary_compiles_kernel_candidate_back_from_sealed_graph(monkeypatch):
+async def test_emg_pipeline_compiles_kernel_candidate_back_from_sealed_graph(monkeypatch):
+    """Ф2.6: with EMG enabled, the kernel candidate must be re-derived from the
+    sealed graph revision's BuildOperation nodes, not used straight off
+    ``feature_tree_from_spec``. This is the production default (see
+    ``infra/.env``: ``EMG_PIPELINE_ENABLED=true``), not an opt-in canary."""
     candidate = FeatureTreeCandidate(
         features=[Feature3D(
             kind="extrude",
