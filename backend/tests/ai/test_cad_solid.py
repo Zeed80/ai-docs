@@ -778,6 +778,49 @@ def test_a_bolt_circle_expands_into_real_holes():
     assert radii == {55.0}
 
 
+def test_a_linear_pattern_expands_into_evenly_spaced_holes():
+    spec = _plate_spec(hole_patterns=[{
+        "kind": "linear", "count": 4, "hole_diameter_mm": 6,
+        "spacing_mm": 20, "direction_deg": 0, "start_x_mm": -30, "start_y_mm": 0,
+    }])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    holes = sorted(
+        (f for f in candidate.features if f.kind == "hole"),
+        key=lambda f: f.params["center_x_mm"],
+    )
+    assert len(holes) == 4
+    xs = [round(h.params["center_x_mm"], 3) for h in holes]
+    # width_mm=120 → to_base offset +60; spec x -30,-10,10,30 → base 30,50,70,90.
+    assert xs == [30.0, 50.0, 70.0, 90.0]
+    assert all(h.params["diameter_mm"] == 6 for h in holes)
+
+
+def test_a_rectangular_pattern_expands_into_a_grid():
+    spec = _plate_spec(hole_patterns=[{
+        "kind": "rectangular", "rows": 2, "columns": 3, "hole_diameter_mm": 5,
+        "spacing_x_mm": 20, "spacing_y_mm": 15, "start_x_mm": -20, "start_y_mm": -7.5,
+    }])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    holes = [f for f in candidate.features if f.kind == "hole"]
+    assert len(holes) == 6
+    assert all(h.params["diameter_mm"] == 5 for h in holes)
+    # 2 rows x 3 columns → 2 distinct y's, 3 distinct x's.
+    assert len({round(h.params["center_y_mm"], 3) for h in holes}) == 2
+    assert len({round(h.params["center_x_mm"], 3) for h in holes}) == 3
+
+
+def test_an_incomplete_linear_pattern_refuses_the_whole_candidate():
+    # Missing direction_deg — the whole prismatic candidate must refuse,
+    # exactly like an incomplete bolt_circle already does (no partial guess).
+    spec = _plate_spec(hole_patterns=[{
+        "kind": "linear", "count": 4, "hole_diameter_mm": 6,
+        "spacing_mm": 20, "start_x_mm": -30, "start_y_mm": 0,
+    }])
+    assert feature_tree_from_spec(spec) is None
+
+
 def test_a_slot_is_built_as_a_true_capsule():
     spec = _plate_spec(slots=[{
         "center_x_mm": 0, "center_y_mm": 0, "length_mm": 40, "width_mm": 12,

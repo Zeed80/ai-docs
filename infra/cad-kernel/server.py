@@ -41,6 +41,11 @@ class Feature(BaseModel):
         # a cylindrical surface and a keyway is milled into that surface from
         # the side. Both are on every real shaft drawing.
         "groove", "keyway",
+        # Ф2.5: rib — a thin reinforcing wall, fused exactly like a boss
+        # (same primitives), kept as its own kind so a downstream DFM/
+        # technology-process reader can tell "structural rib" from
+        # "bolt boss" without re-deriving it from shape heuristics.
+        "rib",
     ]
     source_entity_ids: list[str] = Field(default_factory=list, max_length=500)
     params: dict[str, Any] = Field(default_factory=dict)
@@ -1040,8 +1045,15 @@ def _build_one_body(
     })
 
     for feature_index, feature in body_features:
-        if feature.kind not in ("boss", "pocket"):
+        # Ф2.5: a rib is a thin reinforcing wall — fused onto the base
+        # exactly like a boss (same primitives, no new geometry vocabulary,
+        # per the plan's own "через уже существующие примитивы Part"), kept
+        # as its own kind purely so a downstream DFM/technology-process
+        # reader can tell "structural rib" from "bolt boss" without
+        # re-deriving it from shape heuristics.
+        if feature.kind not in ("boss", "pocket", "rib"):
             continue
+        adds_material = feature.kind in ("boss", "rib")
         profile = feature.params.get("profile")
         x = _coordinate(feature.params, "center_x_mm")
         y = _coordinate(feature.params, "center_y_mm")
@@ -1055,8 +1067,15 @@ def _build_one_body(
         )
         if feature.kind == "pocket" and operation_depth > material_depth + 1e-6:
             raise HTTPException(422, "Pocket depth exceeds base depth")
-        z = top_z if feature.kind == "boss" else top_z - operation_depth
-        solid_height = operation_depth if feature.kind == "boss" else operation_depth + 1.0
+        z = top_z if adds_material else top_z - operation_depth
+        solid_height = operation_depth if adds_material else operation_depth + 1.0
+        draft_deg = feature.params.get("draft_deg")
+        if draft_deg is not None:
+            if (
+                isinstance(draft_deg, bool) or not isinstance(draft_deg, (int, float))
+                or not 0 < float(draft_deg) < 45
+            ):
+                raise HTTPException(422, "draft_deg must be a finite number in (0, 45)")
         if profile == "circle":
             diameter = _number(feature.params, "diameter_mm", maximum=min(width, height) * 2)
             radius = diameter / 2
@@ -1065,7 +1084,30 @@ def _build_one_body(
                 axis_centred=footprint_axis_centred, outer_radius=outer_radius,
                 width=width, height=height,
             )
-            tool = Part.makeCylinder(radius, solid_height, App.Vector(x, y, z))
+            if draft_deg is None:
+                tool = Part.makeCylinder(radius, solid_height, App.Vector(x, y, z))
+            else:
+                # A mold-release taper: a boss narrows toward its tip (the
+                # wide base is at z, the local-frame bottom); a pocket's
+                # cutting tool narrows toward the true bottom of the hole
+                # (radius is read at the entrance face, the local top) —
+                # both are "wider at the open/base end, narrower going
+                # into/away from the material", the standard draft
+                # convention, built as a single cone rather than a
+                # cylinder + OCC's own (fussier) DraftAngle API.
+                tan_draft = math.tan(math.radians(float(draft_deg)))
+                if adds_material:
+                    base_radius, tip_radius = radius, radius - solid_height * tan_draft
+                else:
+                    base_radius = radius - operation_depth * tan_draft
+                    tip_radius = radius + (solid_height - operation_depth) * tan_draft
+                if min(base_radius, tip_radius) <= 0.1:
+                    raise HTTPException(
+                        422,
+                        f"draft_deg {draft_deg:g}° over this depth closes the "
+                        f"{feature.kind} off",
+                    )
+                tool = Part.makeCone(base_radius, tip_radius, solid_height, App.Vector(x, y, z))
         elif profile == "rectangle":
             profile_width = _number(feature.params, "width_mm", maximum=width)
             profile_height = _number(feature.params, "height_mm", maximum=height)
@@ -1100,13 +1142,13 @@ def _build_one_body(
         else:
             raise HTTPException(422, f"Unsupported {feature.kind} profile")
         previous = shape
-        shape = shape.fuse(tool) if feature.kind == "boss" else shape.cut(tool)
+        shape = shape.fuse(tool) if adds_material else shape.cut(tool)
         operation_audit.append({
             "feature_index": feature_index,
             "kind": feature.kind,
             **_operation_localization(
                 previous, shape,
-                mode="add" if feature.kind == "boss" else "cut",
+                mode="add" if adds_material else "cut",
                 expected_tool=tool,
             ),
         })

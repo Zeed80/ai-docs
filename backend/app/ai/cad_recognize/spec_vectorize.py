@@ -307,16 +307,65 @@ class SpecHole(BaseModel):
 
 
 class SpecHolePattern(BaseModel):
-    """Equally spaced through holes on a pitch circle."""
+    """A repeated hole family on a prismatic profile — a bolt circle
+    (equally spaced on a pitch circle, the original and still most common
+    case), a straight row (Ф2.5: ``linear``), or a rectangular grid
+    (Ф2.5: ``rectangular``) — three shapes real plate/flange drawings
+    actually carry, not an invented general framework beyond them.
+    """
 
     id: str | None = None  # see SpecChamfer.id
-    kind: Literal["bolt_circle"] = "bolt_circle"
-    count: int = Field(ge=2, le=128)
-    bolt_circle_diameter_mm: float = Field(gt=0)
+    kind: Literal["bolt_circle", "linear", "rectangular"] = "bolt_circle"
     hole_diameter_mm: float = Field(gt=0)
-    start_angle_deg: float = 0.0
     tolerance: str | None = None
     evidence: list[SpecEvidence] = Field(default_factory=list)
+
+    # bolt_circle
+    count: int | None = Field(default=None, ge=2, le=128)
+    bolt_circle_diameter_mm: float | None = Field(default=None, gt=0)
+    start_angle_deg: float | None = None
+
+    # linear: `count` holes on a straight line, `spacing_mm` apart, from
+    # (start_x_mm, start_y_mm) along direction_deg (0 = +X, 90 = +Y).
+    spacing_mm: float | None = Field(default=None, gt=0)
+    direction_deg: float | None = None
+    start_x_mm: float | None = None
+    start_y_mm: float | None = None
+
+    # rectangular: rows x columns holes on a grid from (start_x_mm,
+    # start_y_mm), spacing_x_mm apart along +X, spacing_y_mm apart along +Y.
+    rows: int | None = Field(default=None, ge=1, le=64)
+    columns: int | None = Field(default=None, ge=1, le=64)
+    spacing_x_mm: float | None = Field(default=None, gt=0)
+    spacing_y_mm: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _kind_has_its_own_geometry(self) -> SpecHolePattern:
+        if self.kind == "bolt_circle":
+            if self.count is None or self.bolt_circle_diameter_mm is None:
+                raise ValueError("bolt_circle pattern requires count and bolt_circle_diameter_mm")
+            if self.start_angle_deg is None:
+                self.start_angle_deg = 0.0
+        elif self.kind == "linear":
+            if (
+                self.count is None or self.spacing_mm is None or self.direction_deg is None
+                or self.start_x_mm is None or self.start_y_mm is None
+            ):
+                raise ValueError(
+                    "linear pattern requires count, spacing_mm, direction_deg, "
+                    "start_x_mm and start_y_mm"
+                )
+        elif self.kind == "rectangular":
+            if (
+                self.rows is None or self.columns is None
+                or self.spacing_x_mm is None or self.spacing_y_mm is None
+                or self.start_x_mm is None or self.start_y_mm is None
+            ):
+                raise ValueError(
+                    "rectangular pattern requires rows, columns, spacing_x_mm, "
+                    "spacing_y_mm, start_x_mm and start_y_mm"
+                )
+        return self
 
 
 class SpecSlot(BaseModel):
@@ -1357,17 +1406,53 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
                 ]
             patterns = profile.get("hole_patterns")
             if isinstance(patterns, list):
+                def _finite_int(value: Any, low: int, high: int) -> bool:
+                    return (
+                        isinstance(value, int) and not isinstance(value, bool)
+                        and low <= value <= high
+                    )
+
                 valid_patterns = []
                 for index, item in enumerate(patterns):
-                    valid = (
-                        isinstance(item, dict)
-                        and isinstance(item.get("count"), int)
-                        and not isinstance(item.get("count"), bool)
-                        and 2 <= item["count"] <= 128
-                        and positive_number(item.get("hole_diameter_mm"))
-                        and positive_number(item.get("bolt_circle_diameter_mm"))
-                        and item.get("kind", "bolt_circle") == "bolt_circle"
+                    has_diameter = isinstance(item, dict) and positive_number(
+                        item.get("hole_diameter_mm")
                     )
+                    if not has_diameter:
+                        valid = False
+                    else:
+                        kind = item.get("kind", "bolt_circle")
+                        # Ф2.5: each pattern kind proves its OWN geometry —
+                        # a linear/rectangular pattern is never held to the
+                        # bolt-circle-only check this used to be.
+                        if kind == "bolt_circle":
+                            valid = (
+                                _finite_int(item.get("count"), 2, 128)
+                                and positive_number(item.get("bolt_circle_diameter_mm"))
+                            )
+                        elif kind == "linear":
+                            valid = (
+                                _finite_int(item.get("count"), 2, 128)
+                                and positive_number(item.get("spacing_mm"))
+                                and isinstance(item.get("direction_deg"), (int, float))
+                                and not isinstance(item.get("direction_deg"), bool)
+                                and isinstance(item.get("start_x_mm"), (int, float))
+                                and not isinstance(item.get("start_x_mm"), bool)
+                                and isinstance(item.get("start_y_mm"), (int, float))
+                                and not isinstance(item.get("start_y_mm"), bool)
+                            )
+                        elif kind == "rectangular":
+                            valid = (
+                                _finite_int(item.get("rows"), 1, 64)
+                                and _finite_int(item.get("columns"), 1, 64)
+                                and positive_number(item.get("spacing_x_mm"))
+                                and positive_number(item.get("spacing_y_mm"))
+                                and isinstance(item.get("start_x_mm"), (int, float))
+                                and not isinstance(item.get("start_x_mm"), bool)
+                                and isinstance(item.get("start_y_mm"), (int, float))
+                                and not isinstance(item.get("start_y_mm"), bool)
+                            )
+                        else:
+                            valid = False
                     if valid:
                         valid_patterns.append(item)
                     else:
@@ -2687,27 +2772,78 @@ def _prismatic_profiles(spec: dict) -> list[dict]:
 
 
 def _expanded_profile_holes(profile: dict) -> list[dict] | None:
-    """Expand exact pitch-circle declarations without model-generated coordinates."""
+    """Expand exact pattern declarations (Ф2.5: bolt circle, linear, or
+    rectangular grid) without model-generated coordinates — every hole
+    centre below is arithmetic from the pattern's own stated numbers, never
+    a guess."""
     holes = [dict(hole) for hole in profile.get("holes") or [] if isinstance(hole, dict)]
     if len(holes) != len(profile.get("holes") or []):
         return None
     for pattern in profile.get("hole_patterns") or []:
-        if not isinstance(pattern, dict) or pattern.get("kind", "bolt_circle") != "bolt_circle":
+        if not isinstance(pattern, dict):
             return None
-        count = pattern.get("count")
-        pcd = _num(pattern.get("bolt_circle_diameter_mm"))
+        kind = pattern.get("kind", "bolt_circle")
         diameter = _num(pattern.get("hole_diameter_mm"))
-        start = _num(pattern.get("start_angle_deg"))
-        if not isinstance(count, int) or count < 2 or not pcd or not diameter or start is None:
+        if not diameter:
             return None
-        for index in range(count):
-            angle = math.radians(start + index * 360.0 / count)
-            holes.append({
-                "center_x_mm": pcd * math.cos(angle) / 2.0,
-                "center_y_mm": pcd * math.sin(angle) / 2.0,
-                "diameter_mm": diameter,
-                "tolerance": pattern.get("tolerance"),
-            })
+        tolerance = pattern.get("tolerance")
+        if kind == "bolt_circle":
+            count = pattern.get("count")
+            pcd = _num(pattern.get("bolt_circle_diameter_mm"))
+            start = _num(pattern.get("start_angle_deg"))
+            if not isinstance(count, int) or count < 2 or not pcd or start is None:
+                return None
+            for index in range(count):
+                angle = math.radians(start + index * 360.0 / count)
+                holes.append({
+                    "center_x_mm": pcd * math.cos(angle) / 2.0,
+                    "center_y_mm": pcd * math.sin(angle) / 2.0,
+                    "diameter_mm": diameter,
+                    "tolerance": tolerance,
+                })
+        elif kind == "linear":
+            count = pattern.get("count")
+            spacing = _num(pattern.get("spacing_mm"))
+            direction = _num(pattern.get("direction_deg"))
+            x0 = _num(pattern.get("start_x_mm"))
+            y0 = _num(pattern.get("start_y_mm"))
+            if (
+                not isinstance(count, int) or count < 2 or not spacing
+                or direction is None or x0 is None or y0 is None
+            ):
+                return None
+            angle = math.radians(direction)
+            dx, dy = math.cos(angle) * spacing, math.sin(angle) * spacing
+            for index in range(count):
+                holes.append({
+                    "center_x_mm": x0 + dx * index,
+                    "center_y_mm": y0 + dy * index,
+                    "diameter_mm": diameter,
+                    "tolerance": tolerance,
+                })
+        elif kind == "rectangular":
+            rows = pattern.get("rows")
+            columns = pattern.get("columns")
+            sx = _num(pattern.get("spacing_x_mm"))
+            sy = _num(pattern.get("spacing_y_mm"))
+            x0 = _num(pattern.get("start_x_mm"))
+            y0 = _num(pattern.get("start_y_mm"))
+            if (
+                not isinstance(rows, int) or not isinstance(columns, int)
+                or rows < 1 or columns < 1 or not sx or not sy
+                or x0 is None or y0 is None
+            ):
+                return None
+            for row in range(rows):
+                for column in range(columns):
+                    holes.append({
+                        "center_x_mm": x0 + sx * column,
+                        "center_y_mm": y0 + sy * row,
+                        "diameter_mm": diameter,
+                        "tolerance": tolerance,
+                    })
+        else:
+            return None
     return holes
 
 
@@ -3019,6 +3155,11 @@ def draft_prismatic_body(
                 **common,
             ))
         for pattern in profile.get("hole_patterns") or []:
+            # Ф2.5: only a bolt_circle pattern has a PCD to dimension — a
+            # linear/rectangular pattern's holes are already individually
+            # dimensioned above (they were expanded into profile_holes).
+            if pattern.get("kind", "bolt_circle") != "bolt_circle":
+                continue
             pcd = float(pattern["bolt_circle_diameter_mm"])
             pcd_radius = pcd * px_per_mm / 2.0
             entities.append(DimensionEntity(

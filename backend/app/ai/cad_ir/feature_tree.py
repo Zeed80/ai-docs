@@ -61,6 +61,8 @@ class Feature3D(BaseModel):
         # it from the side. Neither is expressible as a pocket, and both are on
         # every real shaft drawing.
         "groove", "keyway",
+        # Ф2.5: rib — a thin reinforcing wall, fused exactly like a boss.
+        "rib",
     ]
     source_entity_ids: list[str] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)

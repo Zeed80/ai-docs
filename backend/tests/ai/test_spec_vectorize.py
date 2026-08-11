@@ -10,9 +10,12 @@ from pydantic import ValidationError
 from app.ai.cad_recognize.spec_vectorize import (
     SHEET_FRAME_EVIDENCE,
     EngineeringDrawingSpec,
+    SpecHolePattern,
     SpecPrismaticProfile,
     SpecSketchSegment,
+    _coerce_spec_containers,
     _dsl_to_ir,
+    _expanded_profile_holes,
     _num,
     _parse_spec_json,
     _spec_images,
@@ -1379,3 +1382,82 @@ def test_valid_sketch_profile_round_trips():
     dumped = profile.model_dump(mode="json")
     assert dumped["sketch"][1]["kind"] == "arc"
     assert dumped["sketch"][1]["center"] == [40.0, 20.0]
+
+
+# --- Ф2.5: SpecHolePattern generalized kinds (bolt_circle/linear/rectangular)
+
+
+def test_bolt_circle_pattern_still_requires_its_own_fields():
+    with pytest.raises(ValidationError, match="bolt_circle pattern requires"):
+        SpecHolePattern(kind="bolt_circle", hole_diameter_mm=6)
+    SpecHolePattern(kind="bolt_circle", hole_diameter_mm=6, count=6, bolt_circle_diameter_mm=100)
+
+
+def test_linear_pattern_requires_its_own_fields():
+    with pytest.raises(ValidationError, match="linear pattern requires"):
+        SpecHolePattern(kind="linear", hole_diameter_mm=6, count=4)
+    SpecHolePattern(
+        kind="linear", hole_diameter_mm=6, count=4,
+        spacing_mm=20, direction_deg=0, start_x_mm=-30, start_y_mm=0,
+    )
+
+
+def test_rectangular_pattern_requires_its_own_fields():
+    with pytest.raises(ValidationError, match="rectangular pattern requires"):
+        SpecHolePattern(kind="rectangular", hole_diameter_mm=6, rows=2, columns=3)
+    SpecHolePattern(
+        kind="rectangular", hole_diameter_mm=6, rows=2, columns=3,
+        spacing_x_mm=20, spacing_y_mm=15, start_x_mm=-20, start_y_mm=-7.5,
+    )
+
+
+def test_expanded_profile_holes_covers_all_three_pattern_kinds():
+    profile = {
+        "shape": "rectangle", "width_mm": 200, "height_mm": 200, "thickness_mm": 10,
+        "holes": [],
+        "hole_patterns": [
+            {"kind": "bolt_circle", "count": 4, "bolt_circle_diameter_mm": 40,
+             "hole_diameter_mm": 5, "start_angle_deg": 0},
+            {"kind": "linear", "count": 3, "hole_diameter_mm": 4,
+             "spacing_mm": 10, "direction_deg": 90, "start_x_mm": 0, "start_y_mm": 0},
+            {"kind": "rectangular", "rows": 2, "columns": 2, "hole_diameter_mm": 3,
+             "spacing_x_mm": 5, "spacing_y_mm": 5, "start_x_mm": -50, "start_y_mm": -50},
+        ],
+    }
+    holes = _expanded_profile_holes(profile)
+    assert holes is not None
+    assert len(holes) == 4 + 3 + 4
+
+
+def test_expanded_profile_holes_refuses_unknown_pattern_kind():
+    profile = {
+        "shape": "rectangle", "width_mm": 100, "height_mm": 100, "thickness_mm": 10,
+        "holes": [], "hole_patterns": [{"kind": "spiral", "hole_diameter_mm": 5}],
+    }
+    assert _expanded_profile_holes(profile) is None
+
+
+def test_coerce_spec_containers_prunes_incomplete_linear_pattern_but_keeps_valid_one():
+    raw = {
+        "main_view": {"profile": {
+            "shape": "rectangle", "width_mm": 100, "height_mm": 100, "thickness_mm": 10,
+            "hole_patterns": [
+                {"kind": "linear", "hole_diameter_mm": 5, "count": 3, "spacing_mm": 10,
+                 "direction_deg": 0, "start_x_mm": 0, "start_y_mm": 0},
+                # missing spacing/direction/start:
+                {"kind": "linear", "hole_diameter_mm": 5, "count": 3},
+            ],
+        }},
+    }
+    repaired = _coerce_spec_containers(raw)
+    kept = repaired["main_view"]["profile"]["hole_patterns"]
+    assert len(kept) == 1
+    assert kept[0]["kind"] == "linear"
+
+
+def test_feature3d_accepts_rib_kind_kept_in_lockstep_with_the_kernel():
+    from app.ai.cad_ir.feature_tree import Feature3D
+
+    # Ф2.5 — infra/cad-kernel/server.py Feature.kind gained "rib".
+    feature = Feature3D(kind="rib", params={"profile": "rectangle", "width_mm": 40, "height_mm": 4})
+    assert feature.body_index == 0
