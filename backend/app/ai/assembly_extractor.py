@@ -87,8 +87,11 @@ async def extract_assembly_bom(
     if bom_items:
         result.confidence = sum(i.confidence for i in bom_items) / len(bom_items)
 
-    # Stage 3: balloon detection on full drawing
-    result.balloons = _detect_balloons(image_bytes)
+    # Stage 3: balloon detection on full drawing, excluding the BOM table
+    # region itself — table borders/digits are a reliable source of false
+    # "balloon" circles once found, since a balloon is never drawn inside
+    # the spec table.
+    result.balloons = _detect_balloons(image_bytes, exclude_bbox=table_bbox)
 
     # Link balloon coordinates to BOM items by item_no
     _link_balloons_to_items(result)
@@ -141,15 +144,28 @@ def _detect_bom_table(image_bytes: bytes) -> tuple[bytes | None, tuple[int, int,
             if aspect > 4 and bw > roi_w * 0.4 and area > 500:
                 table_candidates.append((bx, by, bw, bh))
 
-        if not table_candidates:
-            return None, None
-
-        # Merge overlapping / nearby table rows into one table bbox
-        table_candidates.sort(key=lambda r: r[1])  # sort by y
-        merged = _merge_table_rects(table_candidates, gap_tolerance=20)
+        if table_candidates:
+            # Merge overlapping / nearby table rows into one table bbox
+            table_candidates.sort(key=lambda r: r[1])  # sort by y
+            merged = _merge_table_rects(table_candidates, gap_tolerance=20)
+        else:
+            merged = []
 
         if not merged:
-            return None, None
+            # RETR_EXTERNAL only returns the outermost contour: a table drawn
+            # with a full outer border (grid lines all the way round, the
+            # ГОСТ 2.106 convention) collapses into ONE blob spanning every
+            # row+column rather than separate thin per-row contours, so the
+            # aspect>4 heuristic above never fires. Fall back to the largest
+            # wider-than-tall contour in the ROI as the whole table.
+            wide_candidates = [
+                (bx, by, bw, bh)
+                for bx, by, bw, bh in (cv2.boundingRect(cnt) for cnt in contours)
+                if bw > bh and bw > roi_w * 0.3 and bw * bh > (roi_w * roi_h) * 0.02
+            ]
+            if not wide_candidates:
+                return None, None
+            merged = sorted(wide_candidates, key=lambda r: r[2] * r[3], reverse=True)
 
         # Pick the largest merged region
         merged.sort(key=lambda r: r[2] * r[3], reverse=True)
@@ -323,13 +339,20 @@ def _parse_bom_json(text: str) -> list[BOMItem]:
 # ── OpenCV: Balloon detection ─────────────────────────────────────────────────
 
 
-def _detect_balloons(image_bytes: bytes) -> list[BalloonAnnotation]:
+def _detect_balloons(
+    image_bytes: bytes, *, exclude_bbox: tuple[int, int, int, int] | None = None
+) -> list[BalloonAnnotation]:
     """Detect positional balloons (circles with item numbers) in drawing.
 
     Uses cv2.HoughCircles for circle detection, then pytesseract OCR to
     read the number inside each detected circle.
 
     Balloon radius range: 15–50px at 200 DPI (8–25mm actual diameter).
+
+    ``exclude_bbox`` (x, y, w, h), typically the detected BOM table region,
+    drops any circle centered inside it — table borders/digits are a
+    reliable source of false "balloon" circles, and a real balloon is never
+    drawn inside the spec table itself.
     """
     try:
         import cv2
@@ -364,6 +387,10 @@ def _detect_balloons(image_bytes: bytes) -> list[BalloonAnnotation]:
         balloons: list[BalloonAnnotation] = []
 
         for cx, cy, cr in circles:
+            if exclude_bbox is not None:
+                ex, ey, ew, eh = exclude_bbox
+                if ex <= cx <= ex + ew and ey <= cy <= ey + eh:
+                    continue
             item_no = _ocr_circle(img_np, cx, cy, cr)
             if item_no is not None and item_no > 0:
                 balloons.append(BalloonAnnotation(
@@ -408,8 +435,20 @@ def _ocr_circle(img_np: Any, cx: int, cy: int, cr: int) -> int | None:
         if scale > 1:
             crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
-        # Binarize
         gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+
+        # Drop the circle's own ring border before OCR. Tesseract reads the
+        # ring stroke as part of the glyph shape and fails outright (empty
+        # string, even with a digit whitelist) even though the digit itself
+        # is perfectly legible to the eye — live-verified against balloons
+        # sitting on/near a large drawing circle (gear outline), where the
+        # ring is close enough to the digit to be in the same crop.
+        h, w = gray.shape[:2]
+        margin = int(min(h, w) * 0.22)
+        if h - 2 * margin > 4 and w - 2 * margin > 4:
+            gray = gray[margin:h - margin, margin:w - margin]
+
+        # Binarize
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
         pil_crop = Image.fromarray(binary)
