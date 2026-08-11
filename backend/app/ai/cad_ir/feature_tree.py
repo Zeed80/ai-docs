@@ -64,6 +64,17 @@ class Feature3D(BaseModel):
     # D2: per-parameter provenance, keyed by the param name in ``params``
     param_provenance: dict[str, ParamProvenance] = Field(default_factory=dict)
     confidence: float = 0.5
+    # Ф2.1: which independent body this feature belongs to, when a sheet
+    # reads more than one (SpecView.body_index: [main_view, *parts]). Default
+    # 0 keeps every existing single-body tree unchanged — the kernel treats
+    # "all features share body_index 0" identically to today's single-shape
+    # build. A base feature (extrude/revolve/loft) with a body_index the
+    # kernel has not seen among the OTHER bases is a second, independent
+    # solid; every non-base feature with that body_index is scoped to it.
+    # Bodies are never positioned relative to one another beyond a
+    # non-overlapping layout offset — no read spec states their true mutual
+    # placement, so none is guessed.
+    body_index: int = 0
 
 
 class FeatureTreeCandidate(BaseModel):

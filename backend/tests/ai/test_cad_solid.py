@@ -306,6 +306,80 @@ def test_solid_part_declares_the_unread_cavity():
     assert any("разрез" in item for item in candidate.missing_data)
 
 
+def _two_body_spec() -> dict:
+    """A sheet reading two independent rotation bodies (Ф2.1) — parts[]
+    takes over from main_view once it has qualifying (>=2 outer sections)
+    entries, per _rotation_parts' own contract."""
+    return {
+        "part": "Вал и втулка",
+        "parts": [
+            {"outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {"diameter_mm": 50, "length_mm": 60},
+            ]},
+            {"outer": [
+                {"diameter_mm": 10, "length_mm": 20},
+                {"diameter_mm": 16, "length_mm": 25},
+            ]},
+        ],
+    }
+
+
+def test_multi_body_spec_builds_one_revolve_feature_per_body():
+    candidate = feature_tree_from_spec(_two_body_spec())
+    assert candidate is not None
+    revolves = [f for f in candidate.features if f.kind == "revolve"]
+    assert len(revolves) == 2
+    # _rotation_parts numbers parts starting at 1 (0 is reserved for
+    # main_view, which isn't used once parts[] has qualifying bodies).
+    assert {f.body_index for f in revolves} == {1, 2}
+
+
+def test_multi_body_spec_scopes_every_feature_to_its_own_body():
+    candidate = feature_tree_from_spec(_two_body_spec())
+    assert candidate is not None
+    for feature in candidate.features:
+        assert feature.body_index in (1, 2)
+
+
+def test_multi_body_spec_warns_positions_are_unread_not_guessed():
+    candidate = feature_tree_from_spec(_two_body_spec())
+    assert candidate is not None
+    assert any(
+        "2" in item and "тел" in item and "не прочитано" in item
+        for item in candidate.missing_data
+    )
+
+
+def test_single_qualifying_part_keeps_body_index_zero_by_default():
+    # A lone part still goes through _rotation_parts' offset+1 numbering —
+    # confirms the default Feature3D.body_index=0 path is for main_view-only
+    # specs, not silently reused for a single explicit part.
+    spec = {"part": "Вал", "parts": [{"outer": [
+        {"diameter_mm": 30, "length_mm": 40},
+        {"diameter_mm": 50, "length_mm": 60},
+    ]}]}
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    assert {f.body_index for f in candidate.features} == {1}
+    assert not any("тел" in item and "не прочитано" in item for item in candidate.missing_data)
+
+
+def test_main_view_only_spec_still_defaults_body_index_to_zero():
+    candidate = feature_tree_from_spec(_shaft_spec())
+    assert candidate is not None
+    assert all(f.body_index == 0 for f in candidate.features)
+
+
+def test_incomplete_second_body_refuses_the_whole_multi_body_candidate():
+    spec = _two_body_spec()
+    # Second body still has 2 sections (qualifies as a rotation body per
+    # _rotation_parts) but one never got a length read — the whole candidate
+    # must be refused, not silently built with the first body only.
+    spec["parts"][1]["outer"][1]["length_mm"] = None
+    assert feature_tree_from_spec(spec) is None
+
+
 def test_unread_bore_blocks_3d_when_the_reader_found_a_section():
     spec = _shaft_spec(views=[{"kind": "section"}])
     candidate = feature_tree_from_spec(spec)

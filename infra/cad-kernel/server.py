@@ -44,6 +44,10 @@ class Feature(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     param_provenance: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(ge=0, le=1)
+    # Ф2.1: independent body this feature belongs to. Default 0 — every
+    # existing single-body candidate is one implicit group and compiles
+    # exactly as before (see _build_shape).
+    body_index: int = Field(default=0, ge=0, le=63)
 
 
 class Candidate(BaseModel):
@@ -641,16 +645,94 @@ def _operation_localization(
 def _build_shape(
     request: CompileRequest,
 ) -> tuple[Part.Shape, list[str], list[dict[str, Any]]]:
+    """Compile every independent body the candidate declares.
+
+    A single-body candidate (every feature's default ``body_index == 0``)
+    compiles exactly as before this function learned about bodies at all —
+    one base, one shape, returned untouched. A sheet that reads more than
+    one body (``body_index`` grouping more than one base feature) gets one
+    independent shape per body, laid out with a non-overlapping offset and
+    combined into one ``Part.Compound`` — never fused, and never positioned
+    by a guess: no read spec states two bodies' true mutual placement, so
+    none is invented here (Ф2.1 of the geometry-coverage roadmap).
+    """
     bases = [
-        feature for feature in request.candidate.features
+        (index, feature) for index, feature in enumerate(request.candidate.features)
         if feature.kind in ("extrude", "revolve", "loft")
     ]
-    if len(bases) != 1:
+    if not bases:
         raise HTTPException(422, "Exactly one base feature (extrude, revolve or loft) is required")
     if request.candidate.missing_data and not request.confirm_assumptions:
         raise HTTPException(409, "Explicit confirmation of feature-tree assumptions is required")
 
-    base = bases[0]
+    body_indices = sorted({feature.body_index for _index, feature in bases})
+    for body_index in body_indices:
+        body_bases = [(i, f) for i, f in bases if f.body_index == body_index]
+        if len(body_bases) != 1:
+            raise HTTPException(
+                422,
+                "Exactly one base feature (extrude, revolve or loft) is required "
+                f"per body (body_index {body_index} has {len(body_bases)})",
+            )
+
+    built: list[tuple[Part.Shape, list[str], list[dict[str, Any]]]] = []
+    for body_index in body_indices:
+        body_features = [
+            (i, f) for i, f in enumerate(request.candidate.features)
+            if f.body_index == body_index
+        ]
+        base_index, base = next(
+            (i, f) for i, f in body_features if f.kind in ("extrude", "revolve", "loft")
+        )
+        built.append(_build_one_body(request, body_features, base_index, base))
+
+    if len(built) == 1:
+        return built[0]
+
+    # More than one independent body: place each so their bounding boxes do
+    # not overlap (a plain layout offset, not a read position — flagged as
+    # such below) and combine as a Compound, matching compile_assembly's own
+    # documented reason for Part.Compound over the Part.makeCompound wrapper
+    # on FreeCAD 1.1 headless.
+    shapes: list[Part.Shape] = []
+    warnings: list[str] = []
+    operation_audit: list[dict[str, Any]] = []
+    offset_y = 0.0
+    margin_mm = 20.0
+    for shape, body_warnings, body_audit in built:
+        placed = shape.copy()
+        placed.translate(App.Vector(0.0, offset_y, 0.0))
+        offset_y += placed.BoundBox.YLength + margin_mm
+        shapes.append(placed)
+        warnings.extend(body_warnings)
+        operation_audit.extend(body_audit)
+    warnings.append(
+        f"Лист описывает {len(built)} независимых тел; их взаимное расположение "
+        "на чертеже не прочитано — построены раздельно, без предположения о позиции"
+    )
+    compound = Part.Compound(shapes)
+    if compound.isNull() or not compound.isValid():
+        raise HTTPException(422, "OpenCascade produced an invalid multi-body compound")
+    return compound, warnings, operation_audit
+
+
+def _build_one_body(
+    request: CompileRequest,
+    body_features: list[tuple[int, Feature]],
+    base_index: int,
+    base: Feature,
+) -> tuple[Part.Shape, list[str], list[dict[str, Any]]]:
+    """Build ONE independent body's shape from its own features.
+
+    ``body_features`` is every feature (base plus its own cuts/holes/edges)
+    sharing ``base.body_index`` — already filtered by the caller — paired
+    with its ORIGINAL index in the whole candidate's feature list, so
+    ``operation_audit``/feature-result reporting stays addressed by the
+    global feature index a multi-body candidate's caller already knows,
+    exactly as it was before bodies existed at all. ``request`` is threaded
+    through only for ``request.confirm_assumptions`` (an unknown-depth hole
+    or cross-hole reads it) — never re-reads ``request.candidate.features``.
+    """
     warnings: list[str] = []
     operation_audit: list[dict[str, Any]] = []
     # An extrude base is a box anchored at the origin, so cut/add features are
@@ -697,7 +779,6 @@ def _build_shape(
                 ) from exc
             if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
                 raise HTTPException(422, "OpenCascade produced invalid rounded extrude base")
-    base_index = request.candidate.features.index(base)
     operation_audit.append({
         "feature_index": base_index,
         "kind": base.kind,
@@ -707,7 +788,7 @@ def _build_shape(
         "changed_bounds_mm": _shape_bounds(shape),
     })
 
-    for feature_index, feature in enumerate(request.candidate.features):
+    for feature_index, feature in body_features:
         if feature.kind not in ("boss", "pocket"):
             continue
         profile = feature.params.get("profile")
@@ -756,7 +837,7 @@ def _build_shape(
             ),
         })
 
-    for feature_index, feature in enumerate(request.candidate.features):
+    for feature_index, feature in body_features:
         if feature.kind not in ("groove", "keyway"):
             continue
         tool = (
@@ -775,7 +856,7 @@ def _build_shape(
 
     hole_features = [
         (feature_index, feature)
-        for feature_index, feature in enumerate(request.candidate.features)
+        for feature_index, feature in body_features
         if feature.kind == "hole"
     ]
     # Boolean cuts are set operations, so independent holes have no semantic
@@ -954,7 +1035,7 @@ def _build_shape(
     # exists once the part is fully cut, and asking for one before the hole is
     # drilled means the mouth of that hole can never be chamfered. It also fails
     # loudly rather than silently landing on some other edge.
-    for feature_index, feature in enumerate(request.candidate.features):
+    for feature_index, feature in body_features:
         if feature.kind not in ("fillet", "chamfer"):
             continue
         # An edge the selector cannot find is the same class of problem as one
@@ -1025,19 +1106,19 @@ def _build_shape(
         })
 
     # D3: shell hollows the finished solid (after all add/cut operations).
-    shells = [f for f in request.candidate.features if f.kind == "shell"]
+    shells = [(i, f) for i, f in body_features if f.kind == "shell"]
     if len(shells) > 1:
         raise HTTPException(422, "At most one shell feature is supported")
-    for feature in shells:
+    for feature_index, feature in shells:
         previous = shape
         shape = _apply_shell(shape, feature)
         operation_audit.append({
-            "feature_index": request.candidate.features.index(feature),
+            "feature_index": feature_index,
             "kind": feature.kind,
             **_operation_localization(previous, shape, mode="cut"),
         })
 
-    for feature_index, feature in enumerate(request.candidate.features):
+    for feature_index, feature in body_features:
         if feature.kind == "thread":
             operation_audit.append({
                 "feature_index": feature_index,
@@ -2072,7 +2153,10 @@ def compile_candidate(request: CompileRequest) -> Response:
 
             shape.exportStep(str(step_path))
             step_bytes = _canonicalize_step_file(step_path, "Mechanical")
-            reopen_report = _reopen_step_report(step_path, 1)
+            # Ф2.1: a multi-body candidate compiles to a Compound of N
+            # independent solids (never fused) — expect exactly that many on
+            # reopen, matching compile_assembly's own len(positioned).
+            reopen_report = _reopen_step_report(step_path, len(shape.Solids))
             if not reopen_report.get("valid"):
                 raise HTTPException(
                     500,

@@ -366,16 +366,13 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
     )
 
 
-def _rotation_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
-    """Build a revolve feature tree from a rotation-body spec.
-
-    Returns None when the spec has no complete rotation body — the caller falls
-    back to the 2D-only result rather than to a guessed solid.
+def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]] | None:
+    """revolve + threads + cuts for ONE rotation body, every feature tagged
+    with this body's ``body_index`` (Ф2.1). Returns None when the body is
+    incomplete or contradictory — the caller refuses the whole candidate
+    rather than guess around a missing/broken body.
     """
-    parts = _rotation_parts(spec)
-    if not parts:
-        return None
-    body = parts[0]
+    body_index = int(body.get("body_index") or 0)
     outer = body.get("outer") or []
     if not _sections_are_complete(outer):
         return None
@@ -391,6 +388,7 @@ def _rotation_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         )
     }
     missing: list[str] = []
+    bore_offset = 0.0
     if bore:
         bore_points = _profile_points(bore)
         outer_max_r = max(point["r"] for point in params["profile_points"])
@@ -422,20 +420,16 @@ def _rotation_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
             "разрез не прочитан: деталь построена сплошной, полость не учтена"
         )
 
-    if len(parts) > 1:
-        missing.append(
-            f"на листе прочитано тел: {len(parts)}; в 3D построено только главное"
-        )
-
-    label = str(spec.get("part") or "Тело вращения") + " — revolve по прочитанному профилю"
     features = [
         Feature3D(
             kind="revolve",
             params=params,
             param_provenance=provenance,
             confidence=0.9,
+            body_index=body_index,
         )
     ]
+
     def append_threads(
         sections: list[dict], *, start_offset: float, internal: bool
     ) -> None:
@@ -474,12 +468,49 @@ def _rotation_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
                             ),
                         },
                         confidence=0.85,
+                        body_index=body_index,
                     ))
             axial_start += float(section.get("l") or 0.0)
 
     append_threads(outer, start_offset=0.0, internal=False)
     append_threads(bore, start_offset=bore_offset if bore else 0.0, internal=True)
-    features.extend(_cut_features(body, outer, missing))
+    for cut in _cut_features(body, outer, missing):
+        cut.body_index = body_index
+        features.append(cut)
+    return features, missing
+
+
+def _rotation_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
+    """Build a revolve feature tree from a rotation-body spec.
+
+    Every body the sheet reads (``parts[]``, or ``main_view`` alone when
+    there is no ``parts[]``) is compiled into its own independent
+    Feature3D subtree, tagged with its ``body_index`` — the kernel builds
+    each as its own solid rather than only the first (Ф2.1). Returns None
+    when any body is incomplete — the caller falls back to the 2D-only
+    result rather than build some bodies and silently drop others.
+    """
+    parts = _rotation_parts(spec)
+    if not parts:
+        return None
+
+    features: list[Feature3D] = []
+    missing: list[str] = []
+    for body in parts:
+        built = _one_rotation_body_features(body)
+        if built is None:
+            return None
+        body_features, body_missing = built
+        features.extend(body_features)
+        missing.extend(body_missing)
+
+    if len(parts) > 1:
+        missing.append(
+            f"на листе прочитано тел: {len(parts)}; их взаимное расположение "
+            "не прочитано, построены раздельно"
+        )
+
+    label = str(spec.get("part") or "Тело вращения") + " — revolve по прочитанному профилю"
     return FeatureTreeCandidate(
         features=features,
         score=0.9,
