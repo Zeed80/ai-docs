@@ -570,41 +570,44 @@ def _sketch_point(raw: Any, label: str) -> tuple[float, float]:
     return float(x), float(y)
 
 
-def _sketch_extrude_base(base: Feature, depth: float) -> Part.Shape:
-    """D2.2: a general prismatic profile — a closed chain of lines/arcs from
-    the implicit (0, 0) start vertex — extruded ``depth`` along +Z.
+def _sketch_wire(segments: Any, start: tuple[float, float], label: str) -> Part.Wire:
+    """D2.2/D2.3: a closed chain of lines/arcs from ``start``, as a Wire.
 
-    Every vertex the wire touches is exactly what ``sketch_profile`` states;
+    Every vertex the wire touches is exactly what the segment list states;
     the ONLY value computed here is an arc's own midpoint, needed for
-    FreeCAD's 3-point ``Part.Arc`` constructor — never a position the reader
-    did not give (start/end/centre/direction fully determine it).
+    FreeCAD's 3-point ``Part.Arc`` constructor — never a position the caller
+    did not give (start/end/centre/direction fully determine it). Shared by
+    a sketch-profile BASE (``start`` is always (0, 0) — the implicit origin
+    every hole on that profile is already relative to) and a sketch-profile
+    boss/pocket TOOL (``start`` is the tool's own local reference point,
+    ``center_x_mm``/``center_y_mm`` translate the whole tool afterward,
+    exactly like the circle/rectangle tool cases already do).
     """
-    segments = base.params.get("sketch_profile")
     if not isinstance(segments, list) or not (1 <= len(segments) <= 200):
-        raise HTTPException(422, "sketch_profile must be a list of 1..200 segments")
+        raise HTTPException(422, f"{label} must be a list of 1..200 segments")
     edges: list[Part.Shape] = []
-    x0, y0 = 0.0, 0.0
+    x0, y0 = start
     for index, raw in enumerate(segments):
         if not isinstance(raw, dict):
-            raise HTTPException(422, f"sketch_profile[{index}] must be an object")
+            raise HTTPException(422, f"{label}[{index}] must be an object")
         kind = raw.get("kind")
-        x1, y1 = _sketch_point(raw.get("to"), f"sketch_profile[{index}].to")
+        x1, y1 = _sketch_point(raw.get("to"), f"{label}[{index}].to")
         p0 = App.Vector(x0, y0, 0.0)
         p1 = App.Vector(x1, y1, 0.0)
         if kind == "line":
             if math.hypot(x1 - x0, y1 - y0) <= 1e-9:
-                raise HTTPException(422, f"sketch_profile[{index}] line has zero length")
+                raise HTTPException(422, f"{label}[{index}] line has zero length")
             edges.append(Part.LineSegment(p0, p1).toShape())
         elif kind == "arc":
-            cx, cy = _sketch_point(raw.get("center"), f"sketch_profile[{index}].center")
+            cx, cy = _sketch_point(raw.get("center"), f"{label}[{index}].center")
             clockwise = raw.get("clockwise")
             if not isinstance(clockwise, bool):
-                raise HTTPException(422, f"sketch_profile[{index}].clockwise must be a boolean")
+                raise HTTPException(422, f"{label}[{index}].clockwise must be a boolean")
             r0 = math.hypot(x0 - cx, y0 - cy)
             r1 = math.hypot(x1 - cx, y1 - cy)
             if r0 <= 1e-6 or abs(r0 - r1) > max(1e-3, 1e-3 * r0):
                 raise HTTPException(
-                    422, f"sketch_profile[{index}] arc start/end are not equidistant from its centre"
+                    422, f"{label}[{index}] arc start/end are not equidistant from its centre"
                 )
             start_angle = math.atan2(y0 - cy, x0 - cx)
             end_angle = math.atan2(y1 - cy, x1 - cx)
@@ -620,27 +623,58 @@ def _sketch_extrude_base(base: Feature, depth: float) -> Part.Shape:
             try:
                 edges.append(Part.Arc(p0, mid, p1).toShape())
             except Exception as exc:
-                raise HTTPException(422, f"sketch_profile[{index}] arc is degenerate: {exc}") from exc
+                raise HTTPException(422, f"{label}[{index}] arc is degenerate: {exc}") from exc
         else:
-            raise HTTPException(422, f"sketch_profile[{index}].kind must be 'line' or 'arc'")
+            raise HTTPException(422, f"{label}[{index}].kind must be 'line' or 'arc'")
         x0, y0 = x1, y1
-    if math.hypot(x0, y0) > 1e-2:
-        raise HTTPException(422, "sketch_profile does not close back onto its (0, 0) start vertex")
+    if math.hypot(x0 - start[0], y0 - start[1]) > 1e-2:
+        raise HTTPException(422, f"{label} does not close back onto its start vertex")
     try:
         wire = Part.Wire(edges)
     except Exception as exc:
-        raise HTTPException(422, f"OpenCascade rejected the sketch wire: {exc}") from exc
+        raise HTTPException(422, f"OpenCascade rejected the {label} wire: {exc}") from exc
     if wire.isNull() or not wire.isValid() or not wire.isClosed():
-        raise HTTPException(422, "sketch_profile is not a valid closed loop")
+        raise HTTPException(422, f"{label} is not a valid closed loop")
+    return wire
+
+
+def _sketch_face(wire: Part.Wire, label: str) -> Part.Face:
     try:
         face = Part.Face(wire)
     except Exception as exc:
-        raise HTTPException(422, f"OpenCascade rejected the sketch face: {exc}") from exc
+        raise HTTPException(422, f"OpenCascade rejected the {label} face: {exc}") from exc
     if face.isNull() or not face.isValid():
-        raise HTTPException(422, "sketch_profile face is not valid")
+        raise HTTPException(422, f"{label} face is not valid")
+    return face
+
+
+def _sketch_extrude_base(base: Feature, depth: float) -> Part.Shape:
+    """D2.2: a general prismatic profile extruded ``depth`` along +Z, from
+    the implicit (0, 0) start vertex — the same centre-relative frame every
+    hole/slot on this profile is already given in."""
+    wire = _sketch_wire(base.params.get("sketch_profile"), (0.0, 0.0), "sketch_profile")
+    face = _sketch_face(wire, "sketch_profile")
     shape = face.extrude(App.Vector(0.0, 0.0, depth))
     if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
         raise HTTPException(422, "OpenCascade produced an invalid sketch extrude base")
+    return shape
+
+
+def _sketch_tool(feature: Feature, x: float, y: float, z: float, height: float) -> Part.Shape:
+    """D2.3: a boss/pocket cut with an arbitrary (not circle/rectangle)
+    footprint — any rotated slot, any non-circular pocket. The wire is built
+    in the tool's OWN local frame (start (0, 0) is just some point ON its
+    boundary, chosen by whoever built ``sketch_profile`` — for a rotated
+    capsule slot, cad_solid.py picks one straight-side corner) and then
+    translated to (x, y, z), exactly like the circle/rectangle tool cases
+    already translate their own local-origin shape via ``App.Vector(x, y, z)``.
+    """
+    wire = _sketch_wire(feature.params.get("sketch_profile"), (0.0, 0.0), "sketch_profile")
+    face = _sketch_face(wire, "sketch_profile")
+    shape = face.extrude(App.Vector(0.0, 0.0, height))
+    shape.translate(App.Vector(x, y, z))
+    if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
+        raise HTTPException(422, "OpenCascade produced an invalid sketch tool")
     return shape
 
 
@@ -932,6 +966,29 @@ def _build_one_body(
             if x0 < -1e-6 or y0 < -1e-6 or x0 + profile_width > width + 1e-6 or y0 + profile_height > height + 1e-6:
                 raise HTTPException(422, f"{feature.kind} lies outside the base footprint")
             tool = Part.makeBox(profile_width, profile_height, solid_height, App.Vector(x0, y0, z))
+        elif profile == "sketch":
+            # Ф2.3: any footprint a circle/rectangle cannot express — a
+            # rotated slot chief among them. Built first (its own local
+            # frame, then translated to x, y, z — same as the cylinder/box
+            # cases above), footprint checked on the RESULT, since an
+            # arbitrary polygon has no single (x, y, radius) to pre-check.
+            tool = _sketch_tool(feature, x, y, z, solid_height)
+            bounds = tool.BoundBox
+            if footprint_axis_centred:
+                within = all(
+                    math.hypot(px, py) <= outer_radius + 1e-6
+                    for px, py in (
+                        (bounds.XMin, bounds.YMin), (bounds.XMin, bounds.YMax),
+                        (bounds.XMax, bounds.YMin), (bounds.XMax, bounds.YMax),
+                    )
+                )
+            else:
+                within = (
+                    bounds.XMin >= -1e-6 and bounds.YMin >= -1e-6
+                    and bounds.XMax <= width + 1e-6 and bounds.YMax <= height + 1e-6
+                )
+            if not within:
+                raise HTTPException(422, f"{feature.kind} lies outside the base footprint")
         else:
             raise HTTPException(422, f"Unsupported {feature.kind} profile")
         previous = shape

@@ -792,15 +792,55 @@ def test_a_slot_is_built_as_a_true_capsule():
     assert {round(e.params["center_x_mm"], 3) for e in ends} == {46.0, 74.0}
 
 
-def test_a_rotated_slot_is_declared_instead_of_cut_the_wrong_way():
+def test_a_rotated_slot_is_built_as_one_sketch_profile_pocket():
     spec = _plate_spec(slots=[{
         "center_x_mm": 0, "center_y_mm": 0, "length_mm": 40, "width_mm": 12,
         "rotation_deg": 30,
     }])
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
-    assert not [f for f in candidate.features if f.kind == "pocket"]
-    assert any("повёрнут" in item for item in candidate.missing_data)
+    pockets = [f for f in candidate.features if f.kind == "pocket"]
+    assert len(pockets) == 1
+    pocket = pockets[0]
+    assert pocket.params["profile"] == "sketch"
+    assert not [f for f in candidate.features if f.kind == "hole"]
+    assert not any("повёрнут" in item and "не построен" in item for item in candidate.missing_data)
+    # The sketch chain must close exactly (0 error) — rotation is applied to
+    # every vertex, not to a kernel-side parameter that does not exist.
+    sketch = pocket.params["sketch_profile"]
+    x = y = 0.0
+    for segment in sketch:
+        x, y = segment["to"]
+    assert (x, y) == (0.0, 0.0)
+
+
+def test_a_round_slot_rotation_is_a_no_op_but_still_builds():
+    # length_mm == width_mm (straight == 0) is legitimately a round slot —
+    # rotating a circle changes nothing geometrically, but must not refuse.
+    spec = _plate_spec(slots=[{
+        "center_x_mm": 5, "center_y_mm": -5, "length_mm": 12, "width_mm": 12,
+        "rotation_deg": 45,
+    }])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    pocket = next(f for f in candidate.features if f.kind == "pocket")
+    assert pocket.params["profile"] == "sketch"
+    assert all(segment["kind"] == "arc" for segment in pocket.params["sketch_profile"])
+
+
+@pytest.mark.parametrize("rotation_deg", [0.0, 15.0, 60.0, 90.0, 200.0])
+def test_a_rotated_slots_centre_offset_keeps_a_constant_radius(rotation_deg):
+    # cad_solid.py's own centre (cx, cy) plus the sketch's local-origin
+    # OFFSET must land the tool's local (0, 0) — one straight-side corner —
+    # at a point exactly as far from the slot's true centre as before any
+    # rotation was applied: rotation preserves distance from its own pivot,
+    # so this holds for every angle without hand-deriving each one's trig.
+    from app.ai.cad_solid import _rotated_capsule_sketch
+
+    straight, radius = 28.0, 6.0
+    offset_x, offset_y, _sketch = _rotated_capsule_sketch(straight, radius, rotation_deg)
+    unrotated_corner_distance = math.hypot(straight / 2.0, radius)
+    assert math.hypot(offset_x, offset_y) == pytest.approx(unrotated_corner_distance)
 
 
 def test_plate_verification_checks_all_three_read_extents():

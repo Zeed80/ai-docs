@@ -235,6 +235,56 @@ def _sketch_closure_error(sketch: list[dict]) -> float | None:
     return math.hypot(x, y)
 
 
+def _rotated_capsule_sketch(
+    straight: float, radius: float, rotation_deg: float,
+) -> tuple[float, float, list[dict]]:
+    """Ф2.3: a capsule (stadium) slot's line/arc chain, rotated about its
+    own centre — the kernel's ``sketch``-profile boss/pocket tool
+    (``_sketch_tool``) never gets a rotation parameter itself, it only
+    translates a local-frame wire, so the rotation is applied HERE, in the
+    numbers, not asked of the kernel.
+
+    Returns ``(offset_x, offset_y, segments)``: ``offset`` is added to the
+    slot's own read centre to get the tool's kernel-side translation (its
+    local (0, 0) is one corner of the capsule, not the interior centre a
+    wire's start vertex cannot legally be); ``segments`` is the chain from
+    that same corner. ``straight <= 0`` degenerates to a plain circle (two
+    semicircle arcs, no straight sides) — a round slot is a legitimate
+    input (``SpecSlot`` only requires ``length_mm >= width_mm``).
+    """
+    theta = math.radians(rotation_deg)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+
+    def rotate(px: float, py: float) -> tuple[float, float]:
+        return px * cos_t - py * sin_t, px * sin_t + py * cos_t
+
+    if straight <= 1e-6:
+        bottom = rotate(0.0, -radius)
+        top = rotate(0.0, radius)
+        center = rotate(0.0, 0.0)  # rotation about the origin fixes it there
+        rel = lambda point: [point[0] - bottom[0], point[1] - bottom[1]]  # noqa: E731
+        segments = [
+            {"kind": "arc", "to": rel(top), "center": rel(center), "clockwise": False},
+            {"kind": "arc", "to": rel(bottom), "center": rel(center), "clockwise": False},
+        ]
+        return bottom[0], bottom[1], segments
+
+    a = rotate(-straight / 2.0, -radius)
+    b = rotate(straight / 2.0, -radius)
+    c = rotate(straight / 2.0, radius)
+    d = rotate(-straight / 2.0, radius)
+    arc1_center = rotate(straight / 2.0, 0.0)
+    arc2_center = rotate(-straight / 2.0, 0.0)
+    rel = lambda point: [point[0] - a[0], point[1] - a[1]]  # noqa: E731
+    segments = [
+        {"kind": "line", "to": rel(b)},
+        {"kind": "arc", "to": rel(c), "center": rel(arc1_center), "clockwise": False},
+        {"kind": "line", "to": rel(d)},
+        {"kind": "arc", "to": rel(a), "center": rel(arc2_center), "clockwise": False},
+    ]
+    return a[0], a[1], segments
+
+
 def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
     """A plate or flange: the read outline given its read thickness.
 
@@ -382,15 +432,35 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         rotation_deg = _num(slot.get("rotation_deg")) or 0.0
         if not length or not width_mm or x is None or y is None:
             return None
-        if abs(rotation_deg) > 1e-6:
-            # A rotated pocket is not expressible in the kernel's axis-aligned
-            # feature frame; saying so beats cutting it in the wrong direction.
-            missing.append(
-                f"паз повёрнут на {rotation_deg:g}° — в 3D не построен"
-            )
-            continue
         cx, cy = to_base(x, y)
         straight = max(length - width_mm, 0.0)
+        if abs(rotation_deg) > 1e-6:
+            # Ф2.3: a rotated capsule is one sketch-profile pocket (a
+            # closed line/arc loop rotated about the slot's own centre),
+            # not the axis-aligned pocket+2holes assembly below — that
+            # assembly has no rotation parameter to give it.
+            offset_x, offset_y, sketch = _rotated_capsule_sketch(
+                straight, width_mm / 2.0, rotation_deg
+            )
+            features.append(Feature3D(
+                kind="pocket",
+                params={
+                    "profile": "sketch", "sketch_profile": sketch,
+                    "depth_mm": thickness,
+                    "center_x_mm": cx + offset_x, "center_y_mm": cy + offset_y,
+                },
+                param_provenance={
+                    "sketch_profile": ParamProvenance(
+                        origin="stated",
+                        detail=(
+                            f"паз {length:g}×{width_mm:g} повёрнут на "
+                            f"{rotation_deg:g}° по прочитанному углу"
+                        ),
+                    )
+                },
+                confidence=0.8,
+            ))
+            continue
         if straight > 0:
             features.append(Feature3D(
                 kind="pocket",
