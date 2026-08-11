@@ -585,6 +585,133 @@ async def _analyze_drawing_async(
         raise
 
 
+# ── Assembly BOM Extraction Task ──────────────────────────────────────────────
+
+
+@celery_app.task(
+    bind=True,
+    name="drawing_analysis.extract_assembly_bom",
+    max_retries=2,
+    soft_time_limit=300,   # 5 min — table detection + VLM parse + balloon OCR
+    time_limit=360,
+)
+def extract_assembly_bom_task(
+    self,
+    drawing_id: str,
+    allow_cloud: bool = False,
+) -> dict:
+    """Extract BOM (спецификация) from an assembly drawing.
+
+    Standalone from analyze_drawing: OpenCV table detection + VLM parsing +
+    balloon OCR (assembly_extractor.extract_assembly_bom), persisted as
+    DrawingAssemblyBOM rows. Re-runnable — replaces prior rows for the drawing.
+    """
+    return run_async(_extract_assembly_bom_async(drawing_id, allow_cloud))
+
+
+async def _extract_assembly_bom_async(drawing_id: str, allow_cloud: bool = False) -> dict:
+    from sqlalchemy import delete
+
+    from app.ai.assembly_extractor import extract_assembly_bom
+    from app.db.models import Drawing, DrawingAssemblyBOM
+    from app.db.session import _get_session_factory
+
+    router = None
+    try:
+        from app.ai.router import AIRouter
+        router = AIRouter()
+    except Exception as _router_exc:
+        logger.warning("assembly_bom_router_unavailable", error=str(_router_exc))
+
+    drawing_uuid = uuid.UUID(drawing_id)
+
+    async with _get_session_factory()() as db:
+        drawing = await db.get(Drawing, drawing_uuid)
+        if not drawing:
+            logger.error("extract_assembly_bom_not_found", drawing_id=drawing_id)
+            return {"error": "Drawing not found"}
+
+    try:
+        file_bytes = await _load_drawing_file(drawing)
+        image_bytes = await _render_drawing_sheet_png(file_bytes, (drawing.format or "").lower())
+        if image_bytes is None:
+            logger.warning(
+                "assembly_bom_no_raster", drawing_id=drawing_id, fmt=drawing.format
+            )
+            return {"error": "Не удалось получить растровое изображение чертежа"}
+
+        result = await extract_assembly_bom(
+            image_bytes,
+            router=router,
+            drawing=drawing,
+            allow_cloud=allow_cloud,
+        )
+
+        async with _get_session_factory()() as db:
+            # Idempotent re-run: replace prior BOM rows for this drawing rather
+            # than appending duplicates.
+            await db.execute(
+                delete(DrawingAssemblyBOM).where(DrawingAssemblyBOM.drawing_id == drawing_uuid)
+            )
+            for item in result.items[:200]:
+                db.add(DrawingAssemblyBOM(
+                    drawing_id=drawing_uuid,
+                    item_no=item.item_no,
+                    designation=item.designation,
+                    quantity=item.quantity,
+                    unit=item.unit,
+                    material=item.material,
+                    drawing_number=item.drawing_number,
+                    note=item.note,
+                    balloon_coords=item.balloon_coords,
+                    confidence=item.confidence,
+                ))
+            await db.commit()
+
+        logger.info(
+            "assembly_bom_task_completed",
+            drawing_id=drawing_id,
+            items=len(result.items),
+            balloons=len(result.balloons),
+        )
+        return {
+            "drawing_id": drawing_id,
+            "items_count": len(result.items),
+            "balloons_count": len(result.balloons),
+            "table_bbox": list(result.table_bbox) if result.table_bbox else None,
+            "confidence": result.confidence,
+        }
+    except Exception as exc:
+        logger.error("extract_assembly_bom_failed", drawing_id=drawing_id, error=str(exc))
+        raise
+
+
+async def _render_drawing_sheet_png(file_bytes: bytes, fmt: str) -> bytes | None:
+    """Render a drawing file to a single full-sheet PNG for BOM/balloon detection.
+
+    Deliberately skips the multi-view segmentation used by analyze_drawing —
+    the ГОСТ BOM table (upper-right) and position balloons are scattered
+    across the WHOLE sheet, not confined to any one segmented view.
+    """
+    if fmt == "dwg":
+        dxf_bytes = await _convert_dwg_to_dxf(file_bytes)
+        if not dxf_bytes:
+            return None
+        svg_content, _, _ = await _parse_dxf(dxf_bytes, "drawing.dxf")
+        return await _svg_to_png_bytes(svg_content) if svg_content else None
+    if fmt == "dxf":
+        svg_content, _, _ = await _parse_dxf(file_bytes, "drawing.dxf")
+        return await _svg_to_png_bytes(svg_content) if svg_content else None
+    if fmt == "svg":
+        svg_content = file_bytes.decode("utf-8", errors="replace")
+        return await _svg_to_png_bytes(svg_content)
+    if fmt == "pdf":
+        return await _pdf_to_png_bytes(file_bytes)
+    if fmt in RASTER_FORMATS:
+        return await _normalize_raster_to_png(file_bytes, fmt)
+    return None
+
+
 # ── Sync helper: create Drawing from Document (called from Celery sync tasks) ─
 
 

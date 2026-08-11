@@ -574,6 +574,38 @@ async def get_assembly_bom(
     ]
 
 
+@router.post(
+    "/{drawing_id}/assembly-bom/extract",
+    response_model=DrawingUploadResponse,
+    summary="Skill: drawing.extract_assembly_bom — Extract BOM from an assembly drawing.",
+)
+async def extract_assembly_bom_endpoint(
+    drawing_id: uuid.UUID,
+    allow_cloud: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+) -> DrawingUploadResponse:
+    drawing = await db.get(Drawing, drawing_id)
+    if not drawing:
+        raise HTTPException(status_code=404, detail="Чертёж не найден")
+
+    task_id = None
+    try:
+        from app.tasks.drawing_analysis import extract_assembly_bom_task
+        task = extract_assembly_bom_task.delay(str(drawing_id), allow_cloud)
+        task_id = task.id
+    except Exception as exc:
+        logger.warning("assembly_bom_extract_enqueue_failed", error=str(exc))
+        raise HTTPException(
+            status_code=502, detail=f"Не удалось поставить задачу в очередь: {exc}"
+        )
+
+    return DrawingUploadResponse(
+        drawing_id=drawing_id,
+        task_id=task_id,
+        message="Извлечение спецификации сборки поставлено в очередь",
+    )
+
+
 @router.get(
     "/{drawing_id}/validation",
     summary="Skill: drawing.validation — Get validation report for drawing extraction quality.",

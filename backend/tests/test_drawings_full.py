@@ -626,6 +626,23 @@ async def test_get_assembly_bom_empty(client: AsyncClient, drawing_in_db):
 
 
 @pytest.mark.asyncio
+async def test_extract_assembly_bom_endpoint_exists(client: AsyncClient, drawing_in_db):
+    """POST /{id}/assembly-bom/extract → 200/202 with a task_id, not 404/500."""
+    resp = await client.post(f"/api/drawings/{drawing_in_db.id}/assembly-bom/extract")
+    assert resp.status_code in (200, 202), resp.text
+    body = resp.json()
+    assert body["drawing_id"] == str(drawing_in_db.id)
+    assert "task_id" in body
+
+
+@pytest.mark.asyncio
+async def test_extract_assembly_bom_not_found(client: AsyncClient):
+    """POST /{id}/assembly-bom/extract on a missing drawing → 404."""
+    resp = await client.post(f"/api/drawings/{uuid.uuid4()}/assembly-bom/extract")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_get_validation_report_not_validated(client: AsyncClient, drawing_in_db):
     """GET /{id}/validation → 200, status='not_validated' before analysis."""
     resp = await client.get(f"/api/drawings/{drawing_in_db.id}/validation")
