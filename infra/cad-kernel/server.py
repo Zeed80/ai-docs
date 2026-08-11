@@ -1797,6 +1797,176 @@ def compile_assembly(request: AssemblyCompileRequest) -> Response:
         return Response(payload.getvalue(), media_type="application/zip")
 
 
+# --- Assembly constraint solving (Ф4.2 Level B) ------------------------------
+#
+# FreeCAD 1.1 ships a native Assembly workbench (AssemblyApp.so, OndselSolver)
+# -- a real geometric constraint solver, not the rank-counting DOF estimate
+# analyze_assembly_dof already does. Confirmed usable headless: import Assembly
+# raises no Gui error once /usr/share/freecad/Ext (FreeCAD's own PySide shim,
+# needed transitively by JointObject.py) and .../Mod/Assembly are on sys.path.
+#
+# Joints are set up "detached" from geometry (Reference*=[obj, ["",""]] +
+# Detach*=True + an explicit Placement*) rather than by referencing a real
+# face/edge -- this project's components are simplified primitive placeholders
+# at the assembly level already (see InterferenceComponent above), and a
+# detached joint coordinate system needs no face-topology matching across
+# components to work correctly.
+
+_ASSEMBLY_MODULE_PATHS = ("/usr/share/freecad/Ext", "/usr/share/freecad/Mod/Assembly")
+
+# Index into JointObject.JointTypes. RackPinion/Screw/Gears/Belt (indices
+# 9-12) need extra mechanism parameters (ratio, pitch) not modeled here --
+# unsupported by construction (not in this Literal), never silently ignored.
+_JOINT_TYPE_INDEX = {
+    "fixed": 0,
+    "revolute": 1,
+    "cylindrical": 2,
+    "slider": 3,
+    "ball": 4,
+    "distance": 5,
+    "parallel": 6,
+    "perpendicular": 7,
+    "angle": 8,
+}
+
+# asm.solve(...)'s own documented return codes.
+_SOLVE_STATUS_REASONS = {
+    0: "solved",
+    -1: "solver_error",
+    -2: "redundant_constraints",
+    -3: "conflicting_constraints",
+    -4: "over_constrained",
+    -5: "malformed_constraints",
+    -6: "no_fixed_parts",
+}
+
+
+def _ensure_assembly_module_importable() -> None:
+    for path in _ASSEMBLY_MODULE_PATHS:
+        if path not in sys.path:
+            sys.path.insert(0, path)
+
+
+class AssemblyJointFrame(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=160)
+    position_mm: list[float] = Field(min_length=3, max_length=3)
+    axis: list[float] = Field(default=[0.0, 0.0, 1.0], min_length=3, max_length=3)
+    angle_deg: float = 0.0
+
+
+class AssemblyJoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal[
+        "fixed", "revolute", "cylindrical", "slider", "ball",
+        "distance", "parallel", "perpendicular", "angle",
+    ]
+    first: AssemblyJointFrame
+    second: AssemblyJointFrame
+
+
+class AssemblySolveComponent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=160)
+    position_mm: list[float] = Field(default=[0.0, 0.0, 0.0], min_length=3, max_length=3)
+    axis: list[float] = Field(default=[0.0, 0.0, 1.0], min_length=3, max_length=3)
+    angle_deg: float = 0.0
+    grounded: bool = False
+
+
+class AssemblySolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    components: list[AssemblySolveComponent] = Field(min_length=1, max_length=50)
+    joints: list[AssemblyJoint] = Field(default_factory=list, max_length=200)
+
+
+def _solve_frame_placement(frame: AssemblyJointFrame | AssemblySolveComponent) -> Any:
+    for value in (*frame.position_mm, *frame.axis, frame.angle_deg):
+        if isinstance(value, bool) or not math.isfinite(float(value)):
+            raise HTTPException(422, f"Component {frame.key!r}: position/axis/angle must be finite numbers")
+    if all(abs(component) < 1e-12 for component in frame.axis):
+        raise HTTPException(422, f"Component {frame.key!r}: axis must be non-zero")
+    return App.Placement(
+        App.Vector(*frame.position_mm),
+        App.Rotation(App.Vector(*frame.axis), frame.angle_deg),
+    )
+
+
+@app.post("/assembly/solve")
+def solve_assembly(request: AssemblySolveRequest) -> dict[str, Any]:
+    """Solve component placements from declared joints via the real solver.
+
+    Components carry an initial-guess placement (position_mm/axis/angle_deg);
+    at least one must be grounded=True or the solver reports no_fixed_parts.
+    Joint frames are independent explicit placements per side (Detach mode),
+    not references to component geometry -- see module note above.
+    """
+    keys = [component.key for component in request.components]
+    if len(set(keys)) != len(keys):
+        raise HTTPException(422, "Component keys must be unique")
+    key_set = set(keys)
+    for joint in request.joints:
+        for side in (joint.first, joint.second):
+            if side.key not in key_set:
+                raise HTTPException(422, f"Joint references unknown component key {side.key!r}")
+
+    _ensure_assembly_module_importable()
+    import JointObject
+    import UtilsAssembly
+
+    doc = App.newDocument("assembly_solve")
+    try:
+        asm = doc.addObject("Assembly::AssemblyObject", "Assembly")
+        objects: dict[str, Any] = {}
+        for index, component in enumerate(request.components):
+            obj = doc.addObject("Part::Feature", f"Component{index}")
+            obj.Shape = Part.makeBox(1, 1, 1)  # geometry is irrelevant in Detach mode
+            obj.Placement = _solve_frame_placement(component)
+            asm.addObject(obj)
+            objects[component.key] = obj
+
+        joint_group = UtilsAssembly.getJointGroup(asm)
+        for component in request.components:
+            if component.grounded:
+                ground = joint_group.newObject("App::FeaturePython", "GroundedJoint")
+                JointObject.GroundedJoint(ground, objects[component.key])
+
+        for index, joint in enumerate(request.joints):
+            joint_obj = joint_group.newObject("App::FeaturePython", f"Joint{index}")
+            JointObject.Joint(joint_obj, _JOINT_TYPE_INDEX[joint.type])
+            joint_obj.Reference1 = [objects[joint.first.key], ["", ""]]
+            joint_obj.Detach1 = True
+            joint_obj.Placement1 = _solve_frame_placement(joint.first)
+            joint_obj.Reference2 = [objects[joint.second.key], ["", ""]]
+            joint_obj.Detach2 = True
+            joint_obj.Placement2 = _solve_frame_placement(joint.second)
+
+        doc.recompute()
+        status_code = asm.solve(False)
+        doc.recompute()
+
+        placements = {}
+        for key, obj in objects.items():
+            placement = obj.Placement
+            placements[key] = {
+                "position_mm": [placement.Base.x, placement.Base.y, placement.Base.z],
+                "axis": [placement.Rotation.Axis.x, placement.Rotation.Axis.y, placement.Rotation.Axis.z],
+                "angle_deg": math.degrees(placement.Rotation.Angle),
+            }
+        return {
+            "solved": status_code == 0,
+            "status_code": status_code,
+            "reason": _SOLVE_STATUS_REASONS.get(status_code, "unknown"),
+            "placements": placements,
+        }
+    finally:
+        App.closeDocument(doc.Name)
+
+
 # --- Orthographic projection (ГОСТ 2.305) -----------------------------------
 #
 # Views are DERIVED from the solid, never drawn independently: once the model
