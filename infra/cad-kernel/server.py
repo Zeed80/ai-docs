@@ -275,6 +275,76 @@ def _edge_descriptors(shape: Part.Shape) -> list[dict[str, Any]]:
     ]
 
 
+def _face_key(face: Part.Face) -> str:
+    """Ф3.1: a content-stable face id — hashed from geometry, never the raw
+    FreeCAD ``Face{n}`` index (which depends on rebuild order and would
+    silently rename a user's earlier selection on the next compile). Same
+    approach as ``_edge_key`` above, extended with the surface type and
+    area — a face additionally needs those to disambiguate two faces that
+    happen to share every vertex a pure edge-vertex hash would see (a thin
+    slot's two side walls, for one).
+    """
+    bounds = face.BoundBox
+    payload = {
+        "surface": face.Surface.__class__.__name__,
+        "area": round(face.Area, 6),
+        "bounds": [round(value, 6) for value in (
+            bounds.XMin, bounds.YMin, bounds.ZMin,
+            bounds.XMax, bounds.YMax, bounds.ZMax,
+        )],
+        "vertices": sorted([
+            [round(vertex.Point.x, 6), round(vertex.Point.y, 6), round(vertex.Point.z, 6)]
+            for vertex in face.Vertexes
+        ]),
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    return f"face-{digest}"
+
+
+def _face_descriptors(shape: Part.Shape) -> list[dict[str, Any]]:
+    return [
+        {
+            "key": _face_key(face),
+            "index": index,
+            "surface": face.Surface.__class__.__name__,
+            "area_mm2": face.Area,
+            "center_of_mass_mm": {
+                "x": face.CenterOfMass.x, "y": face.CenterOfMass.y, "z": face.CenterOfMass.z,
+            },
+        }
+        for index, face in enumerate(shape.Faces, start=1)
+    ]
+
+
+def _topology_mesh(shape: Part.Shape, *, linear_deflection: float = 0.3) -> dict[str, Any]:
+    """Ф3.1: per-face tessellation, each face tagged with its own stable
+    ``_face_key`` — the data an interactive 3D viewer needs to raycast
+    against a NAMED primitive per face (click → face_key → the Feature
+    that produced it) instead of one undifferentiated mesh. Exported as a
+    sidecar JSON rather than glTF: this headless FreeCAD build has no glTF
+    exporter at all (confirmed — Mesh.export raises "Cannot determine the
+    mesh format" for .glb/.gltf, and the GUI-only export path is
+    unavailable in a console app) — hand-rolling a binary glTF writer
+    without OCC's own support would be a larger, riskier undertaking than
+    this plain JSON structure, which a frontend can trivially turn into
+    one THREE.BufferGeometry per face.
+    """
+    faces = []
+    for face in shape.Faces:
+        try:
+            vertices, triangles = face.tessellate(linear_deflection)
+        except Exception:  # noqa: BLE001 — one bad face must not sink the export
+            continue
+        if not vertices or not triangles:
+            continue
+        faces.append({
+            "key": _face_key(face),
+            "vertices": [[v.x, v.y, v.z] for v in vertices],
+            "triangles": [list(t) for t in triangles],
+        })
+    return {"schema": "cad-kernel-topology/1.0", "faces": faces}
+
+
 def _find_edge(shape: Part.Shape, key: str) -> Part.Edge:
     matches = [edge for edge in shape.Edges if _edge_key(edge) == key]
     if len(matches) != 1:
@@ -2486,6 +2556,14 @@ def compile_candidate(request: CompileRequest) -> Response:
                 iges_path = None
             document.saveAs(str(fcstd_path))
             Mesh.export([model], str(stl_path))
+            # Ф3.1: per-face topology mesh, content-stable-keyed — the
+            # sidecar an interactive 3D viewer raycasts against (see
+            # _topology_mesh's own docstring for why not glTF).
+            topology_path = root / "topology.json"
+            topology_path.write_text(
+                json.dumps(_topology_mesh(shape), ensure_ascii=False),
+                encoding="utf-8",
+            )
             bounds = shape.BoundBox
             report_path.write_text(
                 json.dumps(
@@ -2497,6 +2575,7 @@ def compile_candidate(request: CompileRequest) -> Response:
                             "z": bounds.ZLength,
                         },
                         "edges": _edge_descriptors(shape),
+                        "faces": _face_descriptors(shape),
                         "cosmetic_threads": cosmetic_threads,
                         "feature_results": _feature_results(
                             request, warnings, operation_audit
@@ -2514,7 +2593,7 @@ def compile_candidate(request: CompileRequest) -> Response:
             )
 
             payload = io.BytesIO()
-            exports = [step_path, fcstd_path, stl_path, report_path]
+            exports = [step_path, fcstd_path, stl_path, report_path, topology_path]
             if iges_path is not None:
                 exports.append(iges_path)
             with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as archive:
