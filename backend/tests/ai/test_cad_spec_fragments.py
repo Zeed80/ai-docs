@@ -760,6 +760,120 @@ def test_whole_fallback_cannot_restore_unverified_small_features():
     assert "chamfers" not in merged["main_view"]
 
 
+def test_named_feature_doubt_does_not_clear_unrelated_feature_fields():
+    """Live-found bug (shaft_detail.png): a "малые элементы: ..." message
+    naming ONE feature type used to clear ALL of them (chamfers/fillets/
+    grooves/axial_holes/circular_hole_patterns too), silently discarding
+    correctly-read data no unresolved message ever cast doubt on. Only the
+    field(s) an unresolved message actually names should be cleared; an
+    unrecognized message (no known feature keyword) still conservatively
+    clears everything, same as before.
+    """
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragments = {
+        "main_view": {},
+        # Real message text captured from a live read of
+        # example-drawings/shaft_detail.png — only names cross_holes.
+        "unresolved": [
+            "малые элементы: поперечное отверстие Ø10 указано, но не локализовано",
+        ],
+    }
+    whole = {
+        "main_view": {
+            "cross_holes": [{"diameter_mm": 10, "axial_position_mm": 400}],
+            "keyways": [{"axial_start_mm": 305, "length_mm": 90, "width_mm": 12}],
+            "chamfers": [{"size_mm": 2, "location": "left_end"}],
+            "fillets": [{"radius_mm": 3, "location": "step_1"}],
+        },
+        "unresolved": [],
+    }
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert "cross_holes" not in merged["main_view"]  # named -> doubted, cleared
+    assert merged["main_view"]["keyways"] == whole["main_view"]["keyways"]
+    assert merged["main_view"]["chamfers"] == whole["main_view"]["chamfers"]
+    assert merged["main_view"]["fillets"] == whole["main_view"]["fillets"]
+
+
+def test_evidence_blocker_message_is_attributed_to_keyways_not_everything():
+    """The "evidence: {blocker}" construction (spec_fragments.py's keyway
+    evidence-blocker list) reads like a generic complaint but is keyway-
+    specific in origin — it should doubt keyways, not every feature field."""
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragments = {
+        "main_view": {},
+        "unresolved": [
+            "малые элементы: evidence: геометрия не отделена от аннотаций по цвету",
+        ],
+    }
+    whole = {
+        "main_view": {
+            "keyways": [{"axial_start_mm": 305, "length_mm": 90, "width_mm": 12}],
+            "chamfers": [{"size_mm": 2, "location": "left_end"}],
+        },
+        "unresolved": [],
+    }
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert "keyways" not in merged["main_view"]
+    assert merged["main_view"]["chamfers"] == whole["main_view"]["chamfers"]
+
+
+def test_unrecognized_small_feature_message_still_clears_everything():
+    """A "малые элементы: ..." message naming no recognized feature keyword
+    is the one case that still conservatively clears every feature_field —
+    unchanged from before, since we genuinely can't tell which field it's
+    about."""
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragments = {
+        "main_view": {},
+        "unresolved": ["малые элементы: keyway-2: глубина не подтверждена"],
+    }
+    whole = {
+        "main_view": {
+            "keyways": [{"axial_start_mm": 10, "length_mm": 20}],
+            "chamfers": [{"size_mm": 2, "location": "right_end"}],
+        },
+        "unresolved": [],
+    }
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert "keyways" not in merged["main_view"]
+    assert "chamfers" not in merged["main_view"]
+
+
+def test_feature_fields_cast_into_doubt_maps_real_captured_messages():
+    """Regression-pins the keyword mapping against message text actually
+    captured from a live shaft_detail.png read (not just synthetic
+    fixtures) — see memory project_cad_shaft_detail_reader_gaps_2026_08_11."""
+    from app.ai.cad_recognize.spec_fragments import _feature_fields_cast_into_doubt
+
+    feature_fields = (
+        "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
+        "circular_hole_patterns",
+    )
+    assert _feature_fields_cast_into_doubt(
+        "малые элементы: evidence: геометрия не отделена от аннотаций по цвету",
+        feature_fields,
+    ) == ("keyways",)
+    assert _feature_fields_cast_into_doubt(
+        "малые элементы: поперечное отверстие Ø10 указано, но не локализовано",
+        feature_fields,
+    ) == ("cross_holes",)
+    assert _feature_fields_cast_into_doubt(
+        "малые элементы: осевое отверстие M8 не найдено", feature_fields,
+    ) == ("axial_holes",)
+    assert _feature_fields_cast_into_doubt(
+        "малые элементы: неизвестная причина", feature_fields,
+    ) == feature_fields
+
+
 def test_callouts_split_by_the_sheets_own_diameter_mark():
     """A drawing already says which numbers are diameters: it marks them Ø.
 

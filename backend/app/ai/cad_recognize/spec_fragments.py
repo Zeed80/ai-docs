@@ -3939,6 +3939,46 @@ def _mark_observation_only_if_no_geometry(spec: dict[str, Any]) -> dict[str, Any
     return spec
 
 
+_FEATURE_FIELD_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # "evidence: {blocker}" is a construction unique to the keyway evidence-
+    # blocker list (feature_evidence["blockers"], spec_fragments.py ~1336) --
+    # e.g. "малые элементы: evidence: геометрия не отделена от аннотаций по
+    # цвету" reads as a generic complaint but is keyway-specific in origin.
+    ("evidence:", ("keyways",)),
+    ("поперечное отверстие", ("cross_holes",)),
+    ("осевое отверстие", ("axial_holes",)),
+    ("паттерн", ("circular_hole_patterns",)),
+    ("массив отверст", ("circular_hole_patterns",)),
+    ("отверстие", ("cross_holes", "axial_holes", "circular_hole_patterns")),
+    ("паз", ("keyways",)),
+    ("шпон", ("keyways",)),
+    ("фаск", ("chamfers",)),
+    ("скругл", ("fillets",)),
+    ("радиус", ("fillets",)),
+    ("канавк", ("grooves",)),
+)
+
+
+def _feature_fields_cast_into_doubt(
+    message: str, feature_fields: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Which feature_fields a "малые элементы: ..." unresolved message casts
+    doubt on. Named-feature messages ("поперечное отверстие Ø10 указано, но
+    не локализовано") only cast doubt on that feature type; a message naming
+    no recognized feature (e.g. a blanket evidence-quality complaint) casts
+    doubt on all of them — the conservative default when we can't tell which
+    field it's actually about.
+    """
+    lowered = message.lower()
+    for keyword, fields in _FEATURE_FIELD_KEYWORDS:
+        if keyword in lowered:
+            # First match wins (list is ordered specific -> generic) so e.g.
+            # "поперечное отверстие" doesn't also trigger the bare
+            # "отверстие" fallback and pull in axial_holes/patterns too.
+            return fields
+    return feature_fields
+
+
 def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
     """Let whole-sheet fallback fill gaps, never overwrite verified geometry."""
     import copy
@@ -3974,12 +4014,17 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
         "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
         "circular_hole_patterns",
     )
-    feature_rejected = any(
-        item.startswith("малые элементы:") for item in fragment_unresolved
-    )
-    if feature_rejected:
-        for field in feature_fields:
-            merged_body.pop(field, None)
+    # Only clear the specific feature_fields a "малые элементы: ..." message
+    # actually names (e.g. "поперечное отверстие Ø10 указано, но не
+    # локализовано" -> cross_holes only) — clearing every field whenever any
+    # one of them is in doubt was silently discarding correctly-read
+    # keyways/chamfers/etc. that no unresolved message ever cast doubt on.
+    doubted_fields: set[str] = set()
+    for item in fragment_unresolved:
+        if item.startswith("малые элементы:"):
+            doubted_fields.update(_feature_fields_cast_into_doubt(item, feature_fields))
+    for field in doubted_fields:
+        merged_body.pop(field, None)
     for field in feature_fields:
         verified_features = [
             item for item in (fragment_body.get(field) or [])
