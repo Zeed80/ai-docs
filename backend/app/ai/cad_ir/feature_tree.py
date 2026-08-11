@@ -37,9 +37,17 @@ _THROUGH_PATTERN = re.compile(r"сквозн|through", re.IGNORECASE)
 
 class ParamProvenance(BaseModel):
     """D2: where a 3D parameter's value came from — the explicit origin of
-    every 3D dimension, so nothing reads as fact without a traceable source."""
+    every 3D dimension, so nothing reads as fact without a traceable source.
 
-    origin: Literal["measured", "stated", "standard", "guessed", "propagated"]
+    Ф3.3: "human" is a human decision made directly in the 3D editor (an
+    override on a server-derived guess, or a whole feature the human added)
+    — distinct from "guessed" (the SERVER's own unconfirmed guess) and from
+    "stated"/"measured" (read off the sheet): a value a person just typed
+    or picked is neither of those, and showing it as "guessed" after a
+    human explicitly confirmed it would be actively misleading.
+    """
+
+    origin: Literal["measured", "stated", "standard", "guessed", "propagated", "human"]
     detail: str
     # 2D IR entity the value was read/measured from
     source_entity_id: str | None = None

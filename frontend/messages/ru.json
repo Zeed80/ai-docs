@@ -962,6 +962,7 @@
       "prov_standard": "из стандарта",
       "prov_propagated": "параметр",
       "prov_guessed": "догадка",
+      "prov_human": "задано вручную",
       "cad_mass": "Масса: {value} кг",
       "cad_brep_ok": "✓ B-Rep валиден (замкнут)",
       "cad_brep_bad": "⚠ B-Rep невалиден/не замкнут",

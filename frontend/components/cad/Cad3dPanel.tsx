@@ -17,12 +17,16 @@ import {
 
 // D2: colour-coded origin of a 3D dimension — stated/measured/propagated are
 // trustworthy, guessed is a labelled hypothesis needing a side view.
+// Ф3.3: human is a value a person just typed/picked in this editor —
+// distinct from the server's own "guessed", its own colour so a value the
+// user already confirmed never reads as an unconfirmed hypothesis.
 const PROV_STYLE: Record<string, string> = {
   stated: "bg-emerald-500/15 text-emerald-300",
   measured: "bg-emerald-500/15 text-emerald-300",
   standard: "bg-violet-500/15 text-violet-300",
   propagated: "bg-sky-500/15 text-sky-300",
   guessed: "bg-amber-500/15 text-amber-300",
+  human: "bg-fuchsia-500/15 text-fuchsia-300",
 };
 
 function ProvenanceBadge({
@@ -264,13 +268,19 @@ export default function Cad3dPanel({
     const depth =
       featureOverride(selectedCandidate.features.indexOf(base!))?.depth_mm ??
       Number(base?.params.depth_mm ?? 10);
+    // Ф3.3: a clicked face's own centre — the kernel's report already
+    // reports it in the SAME corner-anchored frame center_x_mm/center_y_mm
+    // already use, no conversion needed. Falls back to the plate centre
+    // (the previous, only) default when nothing is selected.
+    const centerX = selectedFace?.center_of_mass_mm.x ?? width / 2;
+    const centerY = selectedFace?.center_of_mass_mm.y ?? height / 2;
     setCadAddedFeatures((current) => [
       ...current,
       {
         kind,
         profile: "circle",
-        center_x_mm: width / 2,
-        center_y_mm: height / 2,
+        center_x_mm: centerX,
+        center_y_mm: centerY,
         depth_mm: Math.max(
           0.1,
           Math.min(depth / 4, kind === "pocket" ? depth - 0.1 : depth),

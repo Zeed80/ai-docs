@@ -2289,6 +2289,15 @@ def _apply_feature_overrides(candidate, overrides: list[FeatureParameterOverride
     """
     if not overrides:
         return candidate
+    from app.ai.cad_ir.feature_tree import ParamProvenance
+
+    def _human(detail: str) -> ParamProvenance:
+        # Ф3.3: a value a human just typed/confirmed is neither the
+        # server's own "guessed" nor a sheet-read "stated"/"measured" — the
+        # UI's ProvenanceBadge must say so, not silently keep (or drop) the
+        # pre-override provenance.
+        return ParamProvenance(origin="human", detail=detail)
+
     updated = candidate.model_copy(deep=True)
     seen: set[int] = set()
     missing = list(updated.missing_data)
@@ -2305,25 +2314,32 @@ def _apply_feature_overrides(candidate, overrides: list[FeatureParameterOverride
             if "through" in fields or "depth_mm" not in fields or override.depth_mm is None:
                 raise HTTPException(422, "Для выдавливания разрешено менять только depth_mm")
             feature.params["depth_mm"] = override.depth_mm
+            feature.param_provenance["depth_mm"] = _human("глубина задана человеком в 3D-редакторе")
             missing = [item for item in missing if "бокового вида" not in item and "глубина выдавливания" not in item]
         elif feature.kind == "hole":
             if "through" not in fields:
                 raise HTTPException(422, "Для отверстия нужно явно выбрать сквозное или глухое")
             feature.params["through"] = override.through
+            feature.param_provenance["through"] = _human("сквозное/глухое подтверждено человеком")
             diameter = float(feature.params.get("diameter_mm") or 0)
             marker = f"глубина отверстия {diameter:g}мм"
             if override.through is True:
                 if "depth_mm" in fields and override.depth_mm is not None:
                     raise HTTPException(422, "У сквозного отверстия нельзя задавать depth_mm")
                 feature.params.pop("depth_mm", None)
+                feature.param_provenance.pop("depth_mm", None)
                 missing = [item for item in missing if marker not in item]
             elif override.through is False:
                 if "depth_mm" not in fields or override.depth_mm is None:
                     raise HTTPException(422, "Для глухого отверстия нужна положительная depth_mm")
                 feature.params["depth_mm"] = override.depth_mm
+                feature.param_provenance["depth_mm"] = _human(
+                    "глубина глухого отверстия задана человеком"
+                )
                 missing = [item for item in missing if marker not in item]
             else:
                 feature.params.pop("depth_mm", None)
+                feature.param_provenance.pop("depth_mm", None)
         else:
             raise HTTPException(422, f"Редактирование операции {feature.kind} пока не поддерживается")
     updated.missing_data = missing
@@ -2334,7 +2350,7 @@ def _apply_feature_overrides(candidate, overrides: list[FeatureParameterOverride
 def _append_human_features(candidate, additions: list[AddedFeatureRequest]):
     if not additions:
         return candidate
-    from app.ai.cad_ir.feature_tree import Feature3D
+    from app.ai.cad_ir.feature_tree import Feature3D, ParamProvenance
 
     updated = candidate.model_copy(deep=True)
     insert_at = next(
@@ -2349,15 +2365,23 @@ def _append_human_features(candidate, additions: list[AddedFeatureRequest]):
             # shell is applied last by the kernel regardless of list order;
             # thread is cosmetic — neither invalidates edge selection.
             raise HTTPException(422, "Операции тела должны предшествовать фаскам и скруглениям")
-    human_features = [
-        Feature3D(
+    human_features = []
+    for item in additions:
+        params = item.model_dump(exclude={"kind"}, exclude_none=True)
+        human_features.append(Feature3D(
             kind=item.kind,
             source_entity_ids=[],
-            params=item.model_dump(exclude={"kind"}, exclude_none=True),
+            params=params,
+            # Ф3.3: a whole feature the human added in the 3D editor — every
+            # one of its parameters is "human", never left unset (an empty
+            # param_provenance would render with no badge at all, reading
+            # as neither confirmed nor questioned).
+            param_provenance={
+                key: ParamProvenance(origin="human", detail="добавлено человеком в 3D-редакторе")
+                for key in params
+            },
             confidence=1.0,
-        )
-        for item in additions
-    ]
+        ))
     updated.features[insert_at:insert_at] = human_features
     updated.label = f"{updated.label}; добавлено операций: {len(human_features)}"
     return updated

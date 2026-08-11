@@ -962,6 +962,7 @@
       "prov_standard": "from standard",
       "prov_propagated": "parameter",
       "prov_guessed": "guess",
+      "prov_human": "set manually",
       "cad_mass": "Mass: {value} kg",
       "cad_brep_ok": "✓ B-Rep valid (closed)",
       "cad_brep_bad": "⚠ B-Rep invalid/open",

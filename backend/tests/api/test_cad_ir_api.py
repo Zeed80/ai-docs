@@ -864,6 +864,54 @@ async def test_feature_tree_compile_uploads_and_serves_optional_topology(
     assert served.json() == topology_payload
 
 
+def test_apply_feature_overrides_tags_changed_params_as_human():
+    # Ф3.3 — a value a human just confirmed in the 3D editor must read as
+    # "human" provenance, never left with the server's own pre-override
+    # tag (or no tag at all) — the ProvenanceBadge must not show a value
+    # the user just typed as an unconfirmed "guess".
+    from app.ai.cad_ir.feature_tree import Feature3D, FeatureTreeCandidate
+    from app.api.image_generation import FeatureParameterOverride, _apply_feature_overrides
+
+    candidate = FeatureTreeCandidate(
+        features=[
+            Feature3D(kind="extrude", params={"width_mm": 100, "height_mm": 100, "depth_mm": 10}),
+            Feature3D(kind="hole", params={"diameter_mm": 10, "center_x_mm": 5, "center_y_mm": 5}),
+        ],
+        score=0.5, label="test",
+    )
+    updated = _apply_feature_overrides(candidate, [
+        FeatureParameterOverride(feature_index=0, depth_mm=22.0),
+        FeatureParameterOverride(feature_index=1, through=False, depth_mm=8.0),
+    ])
+    extrude, hole = updated.features
+    assert extrude.param_provenance["depth_mm"].origin == "human"
+    assert hole.param_provenance["through"].origin == "human"
+    assert hole.param_provenance["depth_mm"].origin == "human"
+    # The ORIGINAL candidate must stay untouched (model_copy(deep=True)).
+    assert "depth_mm" not in candidate.features[0].param_provenance
+
+
+def test_append_human_features_tags_every_param_as_human():
+    from app.ai.cad_ir.feature_tree import Feature3D, FeatureTreeCandidate
+    from app.api.image_generation import AddedFeatureRequest, _append_human_features
+
+    candidate = FeatureTreeCandidate(
+        features=[
+            Feature3D(kind="extrude", params={"width_mm": 100, "height_mm": 100, "depth_mm": 10}),
+        ],
+        score=0.5, label="test",
+    )
+    updated = _append_human_features(candidate, [
+        AddedFeatureRequest(
+            kind="boss", profile="circle", center_x_mm=20, center_y_mm=20,
+            depth_mm=5, diameter_mm=10,
+        ),
+    ])
+    boss = next(f for f in updated.features if f.kind == "boss")
+    assert set(boss.param_provenance) == set(boss.params)
+    assert all(prov.origin == "human" for prov in boss.param_provenance.values())
+
+
 @pytest.mark.asyncio
 async def test_feature_tree_step_unknown_candidate_index_404s(client, fake_storage, db_session):
     gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
