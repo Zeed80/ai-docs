@@ -9,6 +9,7 @@ import pytest
 from app.ai.cad_recognize.spec_fragments import (
     _clean_callout_observations,
     _detect_pmi_frame_regions,
+    _flag_unconfirmed_outer_bore_diameters,
     _observation_only_spec,
     _has_geometry,
     _is_sheet_metadata_line,
@@ -872,6 +873,68 @@ def test_feature_fields_cast_into_doubt_maps_real_captured_messages():
     assert _feature_fields_cast_into_doubt(
         "малые элементы: неизвестная причина", feature_fields,
     ) == feature_fields
+
+
+def test_flags_outer_diameter_the_model_invented():
+    """Live-found on a real shaft drawing: the model's own callout pass
+    correctly read Ø30h6/Ø50h6/Ø30k6 into `dimensions`, but the SAME
+    response wrote Ø50/Ø70/Ø50 into main_view.outer -- inventing a Ø70 that
+    appears nowhere on the sheet. outer/bore steps carry no evidence of
+    their own, so nothing else in this file would have caught it."""
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 50.0, "length_mm": 220.0},
+                {"diameter_mm": 70.0, "length_mm": 400.0},  # not on the sheet
+                {"diameter_mm": 50.0, "length_mm": 220.0},
+            ],
+        },
+        "dimensions": [
+            {"value": "Ø50h6"}, {"value": "Ø30h6"}, {"value": "Ø30k6"},
+            {"value": "220"}, {"value": "840"},
+        ],
+        "annotations": [],
+        "unresolved": [],
+    }
+
+    result = _flag_unconfirmed_outer_bore_diameters(spec)
+
+    assert result["unresolved"] == [
+        "body:0:outer:1:diameter-unconfirmed: Ø70 не подтверждён ни одним "
+        "размером в перечне на листе",
+    ]
+
+
+def test_does_not_flag_diameters_that_do_appear_on_the_sheet():
+    spec = {
+        "main_view": {
+            "outer": [{"diameter_mm": 50.0, "length_mm": 220.0}],
+            "bore": [{"diameter_mm": 10.03, "length_mm": 400.0}],  # 0.3% off -- within tolerance
+        },
+        "dimensions": [{"value": "Ø50h6"}, {"value": "Ø10H7"}],
+        "annotations": [],
+        "unresolved": [],
+    }
+
+    result = _flag_unconfirmed_outer_bore_diameters(spec)
+
+    assert result["unresolved"] == []
+
+
+def test_no_callouts_on_sheet_means_nothing_to_cross_check_against():
+    """No Ø-marked value anywhere in dimensions/annotations -- can't tell an
+    invented diameter from a real one, so nothing is flagged (fail-closed in
+    the other direction: don't invent false positives either)."""
+    spec = {
+        "main_view": {"outer": [{"diameter_mm": 999.0, "length_mm": 1.0}]},
+        "dimensions": [],
+        "annotations": [],
+        "unresolved": [],
+    }
+
+    result = _flag_unconfirmed_outer_bore_diameters(spec)
+
+    assert result["unresolved"] == []
 
 
 def test_callouts_split_by_the_sheets_own_diameter_mark():

@@ -4246,6 +4246,63 @@ async def read_fragments_consensus(
     return merged
 
 
+def _flag_unconfirmed_outer_bore_diameters(spec: dict) -> dict:
+    """Flag (never silently repair or drop) an outer/bore step whose
+    diameter matches none of the sheet's own Ø-marked dimension/annotation
+    callouts.
+
+    Live-found on a real shaft drawing: the model's own callout pass
+    correctly put Ø30h6/Ø50h6/Ø30k6 into `dimensions`, but the SAME response
+    wrote Ø50/Ø70/Ø50 into `main_view.outer` -- inventing a Ø70 that appears
+    nowhere on the sheet. Unlike this file's small features (chamfers,
+    holes, keyways -- see _feature_completeness_issues and friends), outer/
+    bore steps carry no evidence of their own and are not cross-checked
+    against the callout list anywhere else, so a self-contradictory model
+    response like this passes through unnoticed. This is the only guard
+    against that specific class of error; it reports, it does not correct
+    (repairing risks quietly injecting a WRONG substitution of its own).
+    """
+    main_view = spec.get("main_view") or {}
+    known_diameters = _callout_numbers(
+        {
+            "dimensions": spec.get("dimensions") or [],
+            "annotations": spec.get("annotations") or [],
+        },
+        "diameter",
+    )
+    if not known_diameters:
+        return spec  # nothing on the sheet to cross-check against
+    issues: list[str] = []
+    for field in ("outer", "bore"):
+        for index, item in enumerate(main_view.get(field) or []):
+            if not isinstance(item, dict):
+                continue
+            diameter = _num(item.get("diameter_mm"))
+            if diameter is None or _matches_callout(diameter, known_diameters):
+                continue
+            issues.append(
+                f"body:0:{field}:{index}:diameter-unconfirmed: Ø{diameter:g} "
+                "не подтверждён ни одним размером в перечне на листе"
+            )
+    if issues:
+        unresolved = [str(item) for item in (spec.get("unresolved") or []) if str(item)]
+        for issue in issues:
+            if issue not in unresolved:
+                unresolved.append(issue)
+        spec["unresolved"] = unresolved
+    return spec
+
+
+def _finalize_spec(spec: dict, image_bytes: bytes) -> dict:
+    """Shared post-processing chain applied to every read_spec_best_effort exit."""
+    from app.ai.cad_recognize.spec_vectorize import assign_stable_feature_ids
+
+    enriched = _enrich_post_consensus_source_geometry(spec, image_bytes)
+    marked = _mark_observation_only_if_no_geometry(enriched)
+    with_ids = assign_stable_feature_ids(marked)
+    return _flag_unconfirmed_outer_bore_diameters(with_ids)
+
+
 async def read_spec_best_effort(
     image_bytes: bytes, *, passes: int = 3, router: Any | None = None,
     confidential: bool = True,
@@ -4271,10 +4328,7 @@ async def read_spec_best_effort(
     import time
 
     from app.ai.cad_process_log import record_cad_process_event
-    from app.ai.cad_recognize.spec_vectorize import (
-        assign_stable_feature_ids,
-        read_drawing_spec_consensus,
-    )
+    from app.ai.cad_recognize.spec_vectorize import read_drawing_spec_consensus
 
     deadline = time.monotonic() + max(60.0, budget_seconds)
     fragments = await read_fragments_consensus(
@@ -4319,17 +4373,13 @@ async def read_spec_best_effort(
             fragments.setdefault("optional_unresolved", []).append(
                 "полное чтение не запускалось: сохранён лучший consensus в пределах времени"
             )
-        return assign_stable_feature_ids(_mark_observation_only_if_no_geometry(
-            _enrich_post_consensus_source_geometry(fragments, image_bytes)
-        ))
+        return _finalize_spec(fragments, image_bytes)
 
     whole = await read_drawing_spec_consensus(
         image_bytes, passes=passes, router=router, confidential=confidential
     )
     if not whole:
-        return assign_stable_feature_ids(_mark_observation_only_if_no_geometry(
-            _enrich_post_consensus_source_geometry(fragments, image_bytes)
-        ))
+        return _finalize_spec(fragments, image_bytes)
     if fragments:
         whole = _merge_fragment_truth(whole, fragments)
         if not (whole.get("title_block") or {}):
@@ -4350,6 +4400,4 @@ async def read_spec_best_effort(
                 "unresolved": whole.get("unresolved") or [],
             },
         )
-    return assign_stable_feature_ids(_mark_observation_only_if_no_geometry(
-        _enrich_post_consensus_source_geometry(whole, image_bytes)
-    ))
+    return _finalize_spec(whole, image_bytes)
