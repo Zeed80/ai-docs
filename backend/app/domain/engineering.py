@@ -145,6 +145,24 @@ class EngineeringAssemblyComponentOut(EngineeringAssemblyComponentCreate):
     model_config = {"from_attributes": True, "populate_by_name": True}
 
 
+class AssemblyComponentsFromBomRequest(BaseModel):
+    drawing_id: uuid.UUID
+
+
+class AssemblyComponentUnresolved(BaseModel):
+    item_no: int
+    designation: str
+    drawing_number: str | None
+    reason: Literal["missing_drawing_number", "no_match", "ambiguous"]
+
+
+class AssemblyComponentsFromBomResult(BaseModel):
+    assembly_id: uuid.UUID
+    drawing_id: uuid.UUID
+    components: list[EngineeringAssemblyComponentOut]
+    unresolved: list[AssemblyComponentUnresolved]
+
+
 class EngineeringAssemblyMateCreate(BaseModel):
     mate_type: str = Field(min_length=1, max_length=40)
     first_instance_key: str = Field(min_length=1, max_length=160)

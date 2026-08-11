@@ -5,17 +5,20 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import add_timeline_event, log_action
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo, require_permission
-from app.db.models import BOM, CadIrRevision, Drawing, EngineeringAnalysisCase, EngineeringAnalysisRun, EngineeringAssembly, EngineeringAssemblyComponent, EngineeringAssemblyMate, EngineeringChangeRequest, EngineeringMaterial, EngineeringMaterialAssignment, EngineeringProject, EngineeringProjection, EngineeringRevision, EngineeringValidationRun, ManufacturingCheckResult, ManufacturingProcessPlan
+from app.db.models import BOM, CadIrRevision, Drawing, DrawingAssemblyBOM, EngineeringAnalysisCase, EngineeringAnalysisRun, EngineeringAssembly, EngineeringAssemblyComponent, EngineeringAssemblyMate, EngineeringChangeRequest, EngineeringMaterial, EngineeringMaterialAssignment, EngineeringProject, EngineeringProjection, EngineeringRevision, EngineeringValidationRun, ManufacturingCheckResult, ManufacturingProcessPlan
 from app.db.session import get_db
 from app.domain.emg_predicates import PREDICATE
 from app.domain.engineering import (
+    AssemblyComponentsFromBomRequest,
+    AssemblyComponentsFromBomResult,
+    AssemblyComponentUnresolved,
     ChangeRequestCreate,
     ChangeRequestOut,
     ChangeRequestSign,
@@ -354,6 +357,125 @@ async def add_assembly_component(assembly_id: uuid.UUID, body: EngineeringAssemb
     await db.commit()
     await db.refresh(component)
     return component
+
+
+@router.post(
+    "/assemblies/{assembly_id}/components/from-bom",
+    response_model=AssemblyComponentsFromBomResult,
+    summary="Skill: engineering.assembly_components_from_bom — sync components from a BOM.",
+)
+async def sync_assembly_components_from_bom(
+    assembly_id: uuid.UUID,
+    body: AssemblyComponentsFromBomRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AssemblyComponentsFromBomResult:
+    """Фаза 4.2 Уровень A: BOM-строка → EngineeringAssemblyComponent.
+
+    Matches each DrawingAssemblyBOM row's drawing_number against an already
+    digitized Drawing linked to an EngineeringRevision (via the existing
+    /revisions/{id}/projections mechanism — entity_type=drawing sets
+    Drawing.engineering_revision_id). A match sets component_revision_id;
+    no match, or more than one candidate Drawing, leaves it unresolved —
+    never guessed. Re-running upserts by a deterministic instance_key
+    (bom-<item_no>), so it never duplicates rows.
+    """
+    assembly = await db.get(EngineeringAssembly, assembly_id)
+    if not assembly:
+        raise HTTPException(404, "Сборка не найдена")
+    await _editable_revision(db, assembly.engineering_revision_id)
+
+    drawing = await db.get(Drawing, body.drawing_id)
+    if not drawing:
+        raise HTTPException(404, "Чертёж не найден")
+
+    bom_rows = list((await db.execute(
+        select(DrawingAssemblyBOM)
+        .where(DrawingAssemblyBOM.drawing_id == body.drawing_id)
+        .order_by(DrawingAssemblyBOM.item_no)
+    )).scalars())
+    if not bom_rows:
+        raise HTTPException(409, "У чертежа нет извлечённой спецификации (assembly-bom/extract)")
+
+    existing_components = {
+        c.instance_key: c
+        for c in (await db.execute(select(EngineeringAssemblyComponent).where(
+            EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
+        ))).scalars()
+    }
+
+    matched: list[EngineeringAssemblyComponent] = []
+    unresolved: list[AssemblyComponentUnresolved] = []
+
+    for item in bom_rows:
+        instance_key = f"bom-{item.item_no}"
+        normalized = (item.drawing_number or "").strip()
+        component_revision_id: uuid.UUID | None = None
+        bom_meta: dict[str, Any] = {
+            "source": "drawing_bom",
+            "source_drawing_id": str(body.drawing_id),
+            "drawing_number": item.drawing_number,
+            "material": item.material,
+            "note": item.note,
+            "balloon_coords": item.balloon_coords,
+            "confidence": item.confidence,
+        }
+
+        if not normalized:
+            unresolved.append(AssemblyComponentUnresolved(
+                item_no=item.item_no, designation=item.designation,
+                drawing_number=item.drawing_number, reason="missing_drawing_number",
+            ))
+        else:
+            candidates = list((await db.execute(
+                select(Drawing).where(
+                    func.lower(func.trim(Drawing.drawing_number)) == normalized.lower(),
+                    Drawing.engineering_revision_id.is_not(None),
+                )
+            )).scalars())
+            if len(candidates) == 1:
+                component_revision_id = candidates[0].engineering_revision_id
+            elif len(candidates) == 0:
+                unresolved.append(AssemblyComponentUnresolved(
+                    item_no=item.item_no, designation=item.designation,
+                    drawing_number=item.drawing_number, reason="no_match",
+                ))
+            else:
+                bom_meta["ambiguous_drawing_ids"] = [str(c.id) for c in candidates]
+                unresolved.append(AssemblyComponentUnresolved(
+                    item_no=item.item_no, designation=item.designation,
+                    drawing_number=item.drawing_number, reason="ambiguous",
+                ))
+
+        existing = existing_components.get(instance_key)
+        if existing:
+            existing.designation = item.designation
+            existing.quantity = max(1, round(item.quantity))
+            existing.component_revision_id = component_revision_id
+            existing.metadata_ = {**existing.metadata_, "bom": bom_meta}
+            matched.append(existing)
+        else:
+            component = EngineeringAssemblyComponent(
+                engineering_assembly_id=assembly_id,
+                component_revision_id=component_revision_id,
+                instance_key=instance_key,
+                designation=item.designation,
+                quantity=max(1, round(item.quantity)),
+                sort_order=item.item_no,
+                metadata_={"bom": bom_meta},
+            )
+            db.add(component)
+            matched.append(component)
+
+    await db.commit()
+    for component in matched:
+        await db.refresh(component)
+
+    return AssemblyComponentsFromBomResult(
+        assembly_id=assembly_id,
+        drawing_id=body.drawing_id,
+        components=matched,
+        unresolved=unresolved,
+    )
 
 
 @router.post("/assemblies/{assembly_id}/mates", response_model=EngineeringAssemblyMateOut, status_code=status.HTTP_201_CREATED)

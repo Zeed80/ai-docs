@@ -12,6 +12,7 @@ from httpx import AsyncClient
 from app.db.models import (
     CadIrRevision,
     Drawing,
+    DrawingAssemblyBOM,
     DrawingStatus,
     EngineeringAssemblyComponent,
     ImageGeneration,
@@ -119,6 +120,206 @@ async def test_assembly_reports_aabb_collision(client: AsyncClient):
     report = await client.post(f"/api/engineering/assemblies/{assembly['id']}/validate")
     assert report.status_code == 200
     assert report.json()["collisions"] == [["housing", "shaft"]]
+
+
+async def _digitized_child_drawing(
+    client: AsyncClient, db_session, *, drawing_number: str, revision_id: str
+) -> Drawing:
+    """A Drawing already linked to an EngineeringRevision via /projections."""
+    drawing = Drawing(
+        filename=f"{drawing_number}.dxf", format="dxf", status=DrawingStatus.analyzed,
+        drawing_number=drawing_number,
+    )
+    db_session.add(drawing)
+    await db_session.commit()
+    projection = await client.post(f"/api/engineering/revisions/{revision_id}/projections", json={
+        "projection_type": "drawing", "entity_type": "drawing", "entity_id": str(drawing.id),
+    })
+    assert projection.status_code == 201
+    await db_session.refresh(drawing)
+    return drawing
+
+
+async def _assembly_drawing_with_bom(db_session, items: list[dict]) -> Drawing:
+    drawing = Drawing(filename="sb.pdf", format="pdf", status=DrawingStatus.analyzed)
+    db_session.add(drawing)
+    await db_session.flush()
+    for item in items:
+        db_session.add(DrawingAssemblyBOM(drawing_id=drawing.id, **item))
+    await db_session.commit()
+    await db_session.refresh(drawing)
+    return drawing
+
+
+@pytest.mark.asyncio
+async def test_assembly_components_from_bom_matches_digitized_drawing(
+    client: AsyncClient, db_session
+):
+    project = (await client.post("/api/engineering/projects", json={"name": "Редуктор БОМ"})).json()
+    assembly_revision = (await client.post(
+        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+    )).json()
+    assembly = (await client.post(
+        f"/api/engineering/revisions/{assembly_revision['id']}/assemblies", json={"name": "Главная"}
+    )).json()
+
+    child_project = (await client.post("/api/engineering/projects", json={"name": "Вал"})).json()
+    child_revision = (await client.post(
+        f"/api/engineering/projects/{child_project['id']}/revisions", json={"base_revision": None}
+    )).json()
+    child_drawing = await _digitized_child_drawing(
+        client, db_session, drawing_number="ДП-001", revision_id=child_revision["id"]
+    )
+
+    sb_drawing = await _assembly_drawing_with_bom(db_session, [
+        {
+            "item_no": 1, "designation": "Вал", "quantity": 1.0,
+            "drawing_number": "ДП-001", "confidence": 0.9,
+        },
+        {
+            "item_no": 2, "designation": "Подшипник 6205", "quantity": 2.0,
+            "drawing_number": "ДП-999", "confidence": 0.8,
+        },
+    ])
+
+    resp = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/components/from-bom",
+        json={"drawing_id": str(sb_drawing.id)},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["components"]) == 2
+    matched = {c["instance_key"]: c for c in body["components"]}
+    assert matched["bom-1"]["component_revision_id"] == str(child_drawing.engineering_revision_id)
+    assert matched["bom-2"]["component_revision_id"] is None
+    assert len(body["unresolved"]) == 1
+    assert body["unresolved"][0] == {
+        "item_no": 2, "designation": "Подшипник 6205",
+        "drawing_number": "ДП-999", "reason": "no_match",
+    }
+
+
+@pytest.mark.asyncio
+async def test_assembly_components_from_bom_is_idempotent(client: AsyncClient, db_session):
+    project = (await client.post("/api/engineering/projects", json={"name": "Идемпотент"})).json()
+    revision = (await client.post(
+        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+    )).json()
+    assembly = (await client.post(
+        f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+    )).json()
+    sb_drawing = await _assembly_drawing_with_bom(db_session, [
+        {
+            "item_no": 1, "designation": "Гайка", "quantity": 4.0,
+            "drawing_number": None, "confidence": 0.5,
+        },
+    ])
+
+    first = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/components/from-bom",
+        json={"drawing_id": str(sb_drawing.id)},
+    )
+    second = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/components/from-bom",
+        json={"drawing_id": str(sb_drawing.id)},
+    )
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json()["components"][0]["id"] == second.json()["components"][0]["id"]
+    assert second.json()["unresolved"][0]["reason"] == "missing_drawing_number"
+
+    listed = await client.post(f"/api/engineering/assemblies/{assembly['id']}/validate")
+    assert listed.status_code == 200
+    assert len(listed.json()["active_instances"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_assembly_components_from_bom_ambiguous_stays_unresolved(
+    client: AsyncClient, db_session
+):
+    project = (await client.post("/api/engineering/projects", json={"name": "Дубликат"})).json()
+    revision = (await client.post(
+        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+    )).json()
+    assembly = (await client.post(
+        f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+    )).json()
+
+    for label in ("A", "B"):
+        dup_project = (await client.post(
+            "/api/engineering/projects", json={"name": f"Дубль {label}"}
+        )).json()
+        dup_revision = (await client.post(
+            f"/api/engineering/projects/{dup_project['id']}/revisions", json={"base_revision": None}
+        )).json()
+        await _digitized_child_drawing(
+            client, db_session, drawing_number="ДП-777", revision_id=dup_revision["id"]
+        )
+
+    sb_drawing = await _assembly_drawing_with_bom(db_session, [
+        {
+            "item_no": 1, "designation": "Втулка", "quantity": 1.0,
+            "drawing_number": "дп-777", "confidence": 0.7,
+        },
+    ])
+
+    resp = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/components/from-bom",
+        json={"drawing_id": str(sb_drawing.id)},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["components"][0]["component_revision_id"] is None
+    assert body["unresolved"][0]["reason"] == "ambiguous"
+
+
+@pytest.mark.asyncio
+async def test_assembly_components_from_bom_requires_extraction(client: AsyncClient, db_session):
+    project = (await client.post("/api/engineering/projects", json={"name": "Без БОМ"})).json()
+    revision = (await client.post(
+        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+    )).json()
+    assembly = (await client.post(
+        f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+    )).json()
+    empty_drawing = Drawing(filename="empty-sb.pdf", format="pdf", status=DrawingStatus.analyzed)
+    db_session.add(empty_drawing)
+    await db_session.commit()
+
+    resp = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/components/from-bom",
+        json={"drawing_id": str(empty_drawing.id)},
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_assembly_components_from_bom_blocked_on_approved_revision(
+    client: AsyncClient, db_session
+):
+    project = (await client.post("/api/engineering/projects", json={"name": "Утверждено"})).json()
+    revision = (await client.post(
+        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+    )).json()
+    assembly = (await client.post(
+        f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+    )).json()
+    sb_drawing = await _assembly_drawing_with_bom(db_session, [
+        {
+            "item_no": 1, "designation": "Болт", "quantity": 4.0,
+            "drawing_number": None, "confidence": 0.6,
+        },
+    ])
+    approved = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/approve",
+        json={"approved_by": "chief-engineer"},
+    )
+    assert approved.status_code == 200
+
+    resp = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/components/from-bom",
+        json={"drawing_id": str(sb_drawing.id)},
+    )
+    assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
