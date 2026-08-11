@@ -1041,6 +1041,152 @@ async def test_assembly_exact_result_overrides_aabb(client: AsyncClient, monkeyp
     assert sorted(report["exact_checked"]) == ["bar", "cube"]
 
 
+async def _new_assembly(client: AsyncClient, name: str) -> str:
+    project = (await client.post("/api/engineering/projects", json={"name": name})).json()
+    revision = (await client.post(
+        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+    )).json()
+    assembly = (await client.post(
+        f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+    )).json()
+    return assembly["id"]
+
+
+@pytest.mark.asyncio
+async def test_assembly_solve_preview_requires_grounded_component(client: AsyncClient):
+    assembly_id = await _new_assembly(client, "Ф4.2Б без заземления")
+    await client.post(
+        f"/api/engineering/assemblies/{assembly_id}/components",
+        json={"instance_key": "a", "designation": "Деталь A"},
+    )
+    resp = await client.post(f"/api/engineering/assemblies/{assembly_id}/solve")
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_assembly_solve_preview_requires_active_components(client: AsyncClient):
+    assembly_id = await _new_assembly(client, "Ф4.2Б пусто")
+    resp = await client.post(f"/api/engineering/assemblies/{assembly_id}/solve")
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_assembly_solve_preview_skips_unsupported_and_missing_frame_mates(
+    client: AsyncClient, monkeypatch
+):
+    from app.api import engineering as engineering_api
+
+    captured: dict = {}
+
+    async def fake_solve(payload):
+        captured["payload"] = payload
+        return {"solved": True, "status_code": 0, "reason": "solved", "placements": {}}
+
+    monkeypatch.setattr(engineering_api, "_call_kernel_assembly_solve", fake_solve)
+
+    assembly_id = await _new_assembly(client, "Ф4.2Б пропуски")
+    await client.post(
+        f"/api/engineering/assemblies/{assembly_id}/components",
+        json={"instance_key": "base", "designation": "База", "metadata": {"grounded": True}},
+    )
+    await client.post(
+        f"/api/engineering/assemblies/{assembly_id}/components",
+        json={"instance_key": "arm", "designation": "Рычаг"},
+    )
+    # tangent has no kernel joint equivalent -> unsupported_mate_type
+    await client.post(
+        f"/api/engineering/assemblies/{assembly_id}/mates",
+        json={"mate_type": "tangent", "first_instance_key": "base", "second_instance_key": "arm"},
+    )
+    # concentric is supported, but no first_frame/second_frame -> missing_frames
+    await client.post(
+        f"/api/engineering/assemblies/{assembly_id}/mates",
+        json={
+            "mate_type": "concentric",
+            "first_instance_key": "base", "second_instance_key": "arm",
+        },
+    )
+
+    resp = await client.post(f"/api/engineering/assemblies/{assembly_id}/solve")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["skipped_mates"]) == 2
+    reasons = sorted(item["reason"] for item in body["skipped_mates"])
+    assert reasons == ["missing_frames", "unsupported_mate_type"]
+    assert captured["payload"]["joints"] == []  # neither mate reached the kernel
+    assert body["grounded_instances"] == ["base"]
+
+
+@pytest.mark.asyncio
+async def test_assembly_solve_preview_maps_mate_type_and_calls_kernel(
+    client: AsyncClient, monkeypatch
+):
+    from app.api import engineering as engineering_api
+
+    captured: dict = {}
+
+    async def fake_solve(payload):
+        captured["payload"] = payload
+        return {
+            "solved": True, "status_code": 0, "reason": "solved",
+            "placements": {
+                "base": {"position_mm": [0, 0, 0], "axis": [0, 0, 1], "angle_deg": 0},
+                "arm": {"position_mm": [5, 5, 10], "axis": [1, 0, 0], "angle_deg": 0},
+            },
+        }
+
+    monkeypatch.setattr(engineering_api, "_call_kernel_assembly_solve", fake_solve)
+
+    assembly_id = await _new_assembly(client, "Ф4.2Б happy path")
+    await client.post(
+        f"/api/engineering/assemblies/{assembly_id}/components",
+        json={
+            "instance_key": "base", "designation": "База",
+            "metadata": {"grounded": True},
+        },
+    )
+    await client.post(
+        f"/api/engineering/assemblies/{assembly_id}/components",
+        json={
+            "instance_key": "arm", "designation": "Рычаг",
+            "transform": {"translate": [20, 0, 0]},
+        },
+    )
+    await client.post(
+        f"/api/engineering/assemblies/{assembly_id}/mates",
+        json={
+            "mate_type": "concentric",
+            "first_instance_key": "base", "second_instance_key": "arm",
+            "parameters": {
+                "first_frame": {"position_mm": [5, 5, 10], "axis": [1, 0, 0]},
+                "second_frame": {"position_mm": [0, 0, 0], "axis": [1, 0, 0]},
+            },
+        },
+    )
+
+    resp = await client.post(f"/api/engineering/assemblies/{assembly_id}/solve")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["solved"] is True
+    assert body["skipped_mates"] == []
+    assert body["placements"]["arm"]["position_mm"] == [5, 5, 10]
+
+    [joint] = captured["payload"]["joints"]
+    assert joint["type"] == "cylindrical"  # concentric -> cylindrical, not a name match
+    assert joint["first"]["key"] == "base"
+    assert joint["second"]["key"] == "arm"
+
+    [arm_component] = [
+        c for c in captured["payload"]["components"] if c["key"] == "arm"
+    ]
+    assert arm_component["position_mm"] == [20.0, 0.0, 0.0]  # from transform.translate
+    assert arm_component["grounded"] is False
+    [base_component] = [
+        c for c in captured["payload"]["components"] if c["key"] == "base"
+    ]
+    assert base_component["grounded"] is True
+
+
 @pytest.mark.asyncio
 async def test_analysis_runs_are_immutable_snapshots(client: AsyncClient):
     """F2: each run freezes inputs + material card + solver version; editing

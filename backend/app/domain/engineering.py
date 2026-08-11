@@ -163,6 +163,22 @@ class AssemblyComponentsFromBomResult(BaseModel):
     unresolved: list[AssemblyComponentUnresolved]
 
 
+class AssemblySolveSkippedMate(BaseModel):
+    mate_id: uuid.UUID
+    mate_type: str
+    reason: Literal["unsupported_mate_type", "invalid_component_reference", "missing_frames"]
+
+
+class AssemblySolvePreviewResult(BaseModel):
+    assembly_id: uuid.UUID
+    solved: bool
+    status_code: int
+    reason: str
+    placements: dict[str, dict]
+    grounded_instances: list[str]
+    skipped_mates: list[AssemblySolveSkippedMate]
+
+
 class EngineeringAssemblyMateCreate(BaseModel):
     mate_type: str = Field(min_length=1, max_length=40)
     first_instance_key: str = Field(min_length=1, max_length=160)

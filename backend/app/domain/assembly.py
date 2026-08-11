@@ -18,6 +18,26 @@ _MATE_DOF_REMOVAL = {
     "gear": 1,
 }
 
+# This project's own mate vocabulary -> the CAD kernel's Assembly-workbench
+# joint types (POST /assembly/solve). Not 1:1 -- chosen by matching removed-
+# DOF semantics (_MATE_DOF_REMOVAL above), not by name:
+#   coincident (3 DOF removed: locks position, leaves rotation free) -> ball
+#   concentric (4 DOF removed: locks lateral position + tilt, leaves axial
+#     slide + spin) -> cylindrical
+# tangent and gear have no faithful match among the kernel's 9 supported
+# joint types (tangent needs real surface geometry; gear needs a ratio
+# parameter the kernel doesn't model yet) -- deliberately absent, never
+# guessed at a nearest neighbour.
+MATE_TYPE_TO_JOINT_TYPE = {
+    "fixed": "fixed",
+    "coincident": "ball",
+    "concentric": "cylindrical",
+    "distance": "distance",
+    "angle": "angle",
+    "parallel": "parallel",
+    "perpendicular": "perpendicular",
+}
+
 
 class AssemblyDofReport(BaseModel):
     active_instances: list[str] = Field(default_factory=list)

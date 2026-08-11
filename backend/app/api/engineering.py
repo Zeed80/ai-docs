@@ -20,6 +20,8 @@ from app.domain.engineering import (
     AssemblyComponentsFromBomRequest,
     AssemblyComponentsFromBomResult,
     AssemblyComponentUnresolved,
+    AssemblySolvePreviewResult,
+    AssemblySolveSkippedMate,
     ChangeRequestCreate,
     ChangeRequestOut,
     ChangeRequestSign,
@@ -493,6 +495,160 @@ async def add_assembly_mate(assembly_id: uuid.UUID, body: EngineeringAssemblyMat
     await db.commit()
     await db.refresh(mate)
     return mate
+
+
+def _solve_frame(raw: Any) -> dict[str, Any] | None:
+    """Validate a mate.parameters.first_frame/second_frame dict.
+
+    Required shape: {"position_mm": [x,y,z], "axis"?: [x,y,z], "angle_deg"?: n}.
+    Returns None (never raises) for anything malformed -- the caller reports
+    the mate as skipped rather than guess a frame.
+    """
+    if not isinstance(raw, dict):
+        return None
+    position = raw.get("position_mm")
+    if (
+        not isinstance(position, list) or len(position) != 3
+        or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in position)
+    ):
+        return None
+    axis = raw.get("axis", [0.0, 0.0, 1.0])
+    if (
+        not isinstance(axis, list) or len(axis) != 3
+        or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in axis)
+        or all(abs(float(v)) < 1e-12 for v in axis)
+    ):
+        return None
+    angle = raw.get("angle_deg", 0.0)
+    if isinstance(angle, bool) or not isinstance(angle, (int, float)):
+        return None
+    return {
+        "position_mm": [float(v) for v in position],
+        "axis": [float(v) for v in axis],
+        "angle_deg": float(angle),
+    }
+
+
+async def _call_kernel_assembly_solve(payload: dict[str, Any]) -> dict[str, Any]:
+    import httpx
+
+    from app.config import settings
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                f"{settings.cad_kernel_url.rstrip('/')}/assembly/solve", json=payload
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"cad-kernel недоступен: {exc}") from exc
+    if response.status_code != 200:
+        raise HTTPException(422, f"kernel отклонил запрос: {response.text[:300]}")
+    return response.json()
+
+
+@router.post(
+    "/assemblies/{assembly_id}/solve",
+    response_model=AssemblySolvePreviewResult,
+    summary="Skill: engineering.assembly_solve_preview — preview joint-solved placements.",
+)
+async def solve_assembly_preview(
+    assembly_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> AssemblySolvePreviewResult:
+    """Фаза 4.2 Уровень B: read-only preview via the kernel's real solver.
+
+    Writes nothing back to components -- component.transform already has an
+    established, narrower consumer (_exact_interference/POST /interference:
+    translate + rotate_z_deg only), and a joint's solved rotation is
+    generally a full 3D axis/angle the interference path can't represent
+    yet. Applying a solved result to a component is a deliberately separate,
+    not-yet-built follow-up.
+
+    Each mate needs an explicit parameters.first_frame/second_frame (this
+    project has no cross-component face-selection UI yet — see memory
+    project_cad_assembly_solver_spike_2026_08_11); mate_type is mapped to a
+    kernel joint type via the documented, non-1:1 MATE_TYPE_TO_JOINT_TYPE
+    table. A mate with an unsupported type, a dangling component reference,
+    or a missing/malformed frame is excluded and reported in skipped_mates
+    — never guessed. A component is grounded via metadata.grounded (the
+    same convention analyze_assembly_dof already uses).
+    """
+    from app.domain.assembly import MATE_TYPE_TO_JOINT_TYPE
+
+    assembly = await db.get(EngineeringAssembly, assembly_id)
+    if not assembly:
+        raise HTTPException(404, "Сборка не найдена")
+    components = list((await db.execute(select(EngineeringAssemblyComponent).where(
+        EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
+        EngineeringAssemblyComponent.suppressed.is_(False),
+    ))).scalars())
+    if not components:
+        raise HTTPException(409, "Сборка не содержит активных компонентов")
+    mates = list((await db.execute(select(EngineeringAssemblyMate).where(
+        EngineeringAssemblyMate.engineering_assembly_id == assembly_id,
+    ))).scalars())
+
+    key_set = {component.instance_key for component in components}
+    grounded_keys = {
+        component.instance_key for component in components
+        if bool((component.metadata_ or {}).get("grounded"))
+    }
+    if not grounded_keys:
+        raise HTTPException(409, "Нет ни одного заземлённого компонента (metadata.grounded)")
+
+    kernel_components = []
+    for component in components:
+        transform = component.transform or {}
+        translate = transform.get("translate", [0.0, 0.0, 0.0])
+        if not isinstance(translate, list) or len(translate) != 3:
+            translate = [0.0, 0.0, 0.0]
+        kernel_components.append({
+            "key": component.instance_key,
+            "position_mm": [float(value) for value in translate],
+            "axis": [0.0, 0.0, 1.0],
+            "angle_deg": float(transform.get("rotate_z_deg", 0.0) or 0.0),
+            "grounded": component.instance_key in grounded_keys,
+        })
+
+    joints = []
+    skipped: list[AssemblySolveSkippedMate] = []
+    for mate in mates:
+        joint_type = MATE_TYPE_TO_JOINT_TYPE.get(mate.mate_type.lower())
+        if joint_type is None:
+            skipped.append(AssemblySolveSkippedMate(
+                mate_id=mate.id, mate_type=mate.mate_type, reason="unsupported_mate_type",
+            ))
+            continue
+        if mate.first_instance_key not in key_set or mate.second_instance_key not in key_set:
+            skipped.append(AssemblySolveSkippedMate(
+                mate_id=mate.id, mate_type=mate.mate_type, reason="invalid_component_reference",
+            ))
+            continue
+        parameters = mate.parameters or {}
+        first_frame = _solve_frame(parameters.get("first_frame"))
+        second_frame = _solve_frame(parameters.get("second_frame"))
+        if first_frame is None or second_frame is None:
+            skipped.append(AssemblySolveSkippedMate(
+                mate_id=mate.id, mate_type=mate.mate_type, reason="missing_frames",
+            ))
+            continue
+        joints.append({
+            "type": joint_type,
+            "first": {"key": mate.first_instance_key, **first_frame},
+            "second": {"key": mate.second_instance_key, **second_frame},
+        })
+
+    payload = {"components": kernel_components, "joints": joints}
+    result = await _call_kernel_assembly_solve(payload)
+
+    return AssemblySolvePreviewResult(
+        assembly_id=assembly_id,
+        solved=result["solved"],
+        status_code=result["status_code"],
+        reason=result["reason"],
+        placements=result["placements"],
+        grounded_instances=sorted(grounded_keys),
+        skipped_mates=skipped,
+    )
 
 
 def _overlap(a: dict, b: dict) -> bool:
