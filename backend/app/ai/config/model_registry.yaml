@@ -619,6 +619,57 @@ models:
       1040 s, empty. It also leaks raw <think> blocks into the response.
       ollama pull MobiusDevelopment/Bonsai-27B-Q1_0-gguf
 
+  muse_glimmer_30b_ollama:
+    provider: "ollama"
+    provider_model: "muse-glimmer:30b"
+    status: "candidate"
+    modalities: ["text", "vision", "tool_calling"]
+    max_context_tokens: 131072
+    supports_structured_output: true
+    supports_tool_calling: true
+    supports_multi_image: true
+    local_only: true
+    vram_gb_estimate: 18.0
+    thinking_supported: true
+    thinking_enabled: false
+    quality_score: 0.55
+    speed_score: 0.80
+    notes: >
+      Muse Glimmer 30B (Apache 2.0), pulled 2026-08-11. Vendor claims beat
+      Gemma4-31B/Qwen3.6-27B on general agentic benchmarks (MCP-Atlas,
+      SWE-Bench Pro) — irrelevant here, those measure agentic/coding, not
+      exact drawing reading.
+
+      MEASURED 2026-08-11 against cad_spec_read on the same 3 real hard
+      drawings qwen3-vl:30b-a3b was measured on (read_spec_best_effort,
+      num_ctx=8192, temperature=0, thinking off — same call path, model
+      swapped via registry key only, nothing else changed):
+      - shaft_detail.png: WORSE. qwen3-vl hallucinated one wrong outer
+        diameter but got the cross-hole+keyway right. Muse Glimmer emitted
+        invalid (<=0) diameter/length for 2 of 3 outer steps (schema-
+        rejected, main_view.outer ends up empty) and dropped the cross-hole
+        and keyway entirely (missing from dimensions too, not just
+        geometry) — less complete, not just differently wrong.
+      - bearing_housing_section.png: WORSE in a specific, concerning way.
+        qwen3-vl honestly refused (empty profile, itemized unresolved
+        reasons — a pocket and two seal grooves are genuinely on the sheet
+        and it said so). Muse Glimmer produced a confident-looking
+        200x200+Ø120-hole profile with unresolved=[] — silently omitting
+        the pocket (60x40x20) and seal grooves (6x4) clearly drawn. A
+        confidently incomplete answer is worse than an honest refusal for
+        this project's fail-closed culture.
+      - welded_bracket.png: WORSE. qwen3-vl got the base plate right
+        (600x380, 4xØ18) and honestly flagged the ribs/gusset as
+        unresolved. Muse Glimmer produced nothing at all (part class
+        undetermined).
+
+      Faster in 2/3 runs (86-186 s vs qwen3-vl's 147-174 s) but that does
+      not offset the completeness/honesty gap. NOT a candidate to replace
+      qwen3-vl:30b-a3b in cad_spec_read on this evidence — kept registered
+      (candidate, not disabled) for the record and in case a future
+      prompt/settings change narrows the gap.
+      ollama pull muse-glimmer:30b
+
   qwen3_6_27b_ollama:
     provider: "ollama"
     provider_model: "qwen3.6:27b"
