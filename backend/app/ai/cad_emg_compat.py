@@ -968,6 +968,40 @@ def feature_tree_revision_patch(
             ))
             assertion_ids.append(assertion_id)
 
+    # A2: candidate.missing_data (e.g. "0:outer:4: длина ступени Ø29.5 не
+    # указана — построено с предположением...") used to be dropped
+    # entirely on a rebuild — this function had no equivalent of
+    # spec_feature_tree_as_graph's own build.unresolved.<n> persistence, so
+    # feature_tree_from_graph had nothing but opaque "critical assertion
+    # <id>" text to report after the SAME round trip every rebuild goes
+    # through. Superseded by index against whatever was active before, best
+    # effort — the count can legitimately shift between revisions (a
+    # correction can resolve or introduce different notes), which this does
+    # not perfectly reconcile, but a stale note surviving one extra revision
+    # is a display nuisance, not a build-safety gap.
+    old_unresolved_ids = sorted(
+        item.id for item in graph.assertions
+        if item.state == "active"
+        and item.subject_id == "product:legacy-spec"
+        and item.predicate.startswith(BUILD_UNRESOLVED_PREFIX)
+    )
+    for index, item in enumerate(candidate.missing_data):
+        assertion_id = f"assertion:{prefix}:unresolved:{index}"
+        add_assertions.append(Assertion(
+            id=assertion_id,
+            subject_id="product:legacy-spec",
+            predicate=f"{BUILD_UNRESOLVED_PREFIX}{index}",
+            value=UnknownValue(kind="unknown", reason=str(item)),
+            origin="derived",
+            assurance="proposed",
+            confidence=0.5,
+            hypothesis_id=hypothesis_id,
+            supersedes_assertion_id=(
+                old_unresolved_ids[index] if index < len(old_unresolved_ids) else None
+            ),
+        ))
+        assertion_ids.append(assertion_id)
+
     replaced = {
         item.supersedes_assertion_id
         for item in add_assertions

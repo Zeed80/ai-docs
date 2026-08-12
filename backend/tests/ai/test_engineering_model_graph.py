@@ -704,6 +704,44 @@ def test_human_spec_rebuild_is_an_atomic_patch_and_old_operations_are_not_rebuil
     ).features[0].params["depth_mm"] == 14.0
 
 
+def test_rebuild_patch_also_carries_the_missing_data_note_forward():
+    """A2: this is the ACTUAL live path a rebuild goes through — was the
+    real remaining gap after test_missing_data_notes_survive_the_sealed_
+    graph_round_trip above (which only exercised the FIRST build's
+    spec_feature_tree_as_graph, not this rebuild function). Confirmed live:
+    the reported shaft still showed only opaque "critical assertion <id>"
+    entries after a rebuild until this fix."""
+    friendly_note = (
+        "0:outer:4: длина ступени Ø29.5 не указана — построено с "
+        "предположением 29.17 мм (среднее по прочитанным ступеням), "
+        "требует подтверждения в редакторе"
+    )
+    clean = FeatureTreeCandidate(
+        features=[Feature3D(
+            kind="extrude", params={"depth_mm": 10.0},
+            param_provenance={
+                "depth_mm": ParamProvenance(origin="stated", detail="source"),
+            }, confidence=0.8,
+        )],
+        score=0.8,
+        label="clean",
+    )
+    graph = spec_feature_tree_as_graph(
+        {"part": "plate", "depth_mm": 10.0}, clean, graph_id="emg:missing-data-rebuild",
+    )
+    with_guess = clean.model_copy(deep=True)
+    with_guess.missing_data = [friendly_note]
+    patch = feature_tree_revision_patch(
+        graph, {"part": "plate", "depth_mm": 10.0}, with_guess,
+        producer="system", pass_id="rebuild:1", idempotency_key="rebuild:1",
+    )
+    revised = apply_graph_patch(graph, patch)
+
+    assert friendly_note in feature_tree_from_graph(
+        revised, target_id="preview"
+    ).missing_data
+
+
 def test_feature_tree_operation_sequence_is_numeric_beyond_nine_features():
     candidate = FeatureTreeCandidate(
         features=[Feature3D(
