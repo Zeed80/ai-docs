@@ -512,9 +512,21 @@ async def get_task_status(task_id: str) -> dict:
     }
     if result.ready():
         try:
-            response["result"] = result.result
+            raw_result = result.result
         except Exception:
-            response["result"] = None
+            raw_result = None
+        # A FAILURE task's own .result is the raised exception INSTANCE, not
+        # a dict — Pydantic has no serializer for an arbitrary exception
+        # object, and returning it as-is 500s the whole endpoint instead of
+        # reporting the failure. {"error": ...} matches the shape every
+        # cad_trace.py task already returns on its own handled failures, so
+        # frontend pollers reading task.result.error see the same thing
+        # either way.
+        response["result"] = (
+            {"error": str(raw_result)}
+            if isinstance(raw_result, BaseException)
+            else raw_result
+        )
     return response
 
 

@@ -105,6 +105,10 @@ export default function CadEditorShell({
   // FeatureTreePanel disable just that row's confirm button, not the whole
   // tree, while the rebuild is queued.
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
+  // Ф7: same one-shot handoff pattern as exportedSketchProfile — a click on
+  // the 3D model hands its edge_key down to whichever fillet/chamfer form
+  // is currently open.
+  const [pickedEdgeKey, setPickedEdgeKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -477,6 +481,12 @@ export default function CadEditorShell({
                 flaggedOperationIds={guessedOperationIds}
                 selectedOperationId={selectedOperationId}
                 onOperationClick={handleOperationClick}
+                edgePickActive={
+                  addFeatureDraft === "fillet" || addFeatureDraft === "chamfer"
+                }
+                onEdgeSelect={(key) => {
+                  if (key) setPickedEdgeKey(key);
+                }}
               />
               <AssumptionsStrip
                 assumptions={assumptions}
@@ -502,6 +512,8 @@ export default function CadEditorShell({
             onStartSketch={() => setSketchModeActive(true)}
             exportedSketchProfile={exportedSketchProfile}
             onSketchProfileConsumed={() => setExportedSketchProfile(null)}
+            pickedEdgeKey={pickedEdgeKey}
+            onEdgeKeyConsumed={() => setPickedEdgeKey(null)}
             onSaved={() => void load()}
             onRebuildQueued={(taskId) => {
               setRebuildTaskId(taskId);

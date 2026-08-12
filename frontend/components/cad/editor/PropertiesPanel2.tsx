@@ -29,12 +29,11 @@ export interface KernelEdgeDescriptor {
 
 /** Ф2-Ф3 нового CAD-редактора: PropertiesPanel (коррекция, БЕЗ ИЗМЕНЕНИЙ)
  * плюс форма «добавить фичу» для всех 6 видов, что уже принимает
- * AddNativeFeatureRequest на бэкенде. Выбор ребра для fillet/chamfer —
- * пока выпадающий список (те же report.edges, что раньше показывал
- * Cad3dPanel), а не клик по 3D: для честного клик-выбора ребра нужен
- * отдельный edge-topology сайдкар в ядре (аналог существующего
- * face-topology для граней), намеренно отложено отдельной задачей —
- * не выдавать выпадающий список за то, чем он не является. */
+ * AddNativeFeatureRequest на бэкенде. Выбор ребра для fillet/chamfer — и
+ * выпадающий список (те же report.edges, что раньше показывал Cad3dPanel,
+ * запасной путь для мелких/скрытых рёбер), и (Ф7) клик по 3D-модели через
+ * тот же одноразовый handoff, что уже использует эскиз-профиль
+ * (pickedEdgeKey/onEdgeKeyConsumed). */
 export default function PropertiesPanel2({
   generationId,
   operation,
@@ -46,6 +45,8 @@ export default function PropertiesPanel2({
   onStartSketch,
   exportedSketchProfile,
   onSketchProfileConsumed,
+  pickedEdgeKey,
+  onEdgeKeyConsumed,
   onSaved,
   onRebuildQueued,
   onError,
@@ -60,6 +61,8 @@ export default function PropertiesPanel2({
   onStartSketch: () => void;
   exportedSketchProfile: SketchProfileSegment[] | null;
   onSketchProfileConsumed: () => void;
+  pickedEdgeKey?: string | null;
+  onEdgeKeyConsumed?: () => void;
   onSaved: () => void;
   onRebuildQueued: (taskId: string) => void;
   onError: (message: string) => void;
@@ -81,6 +84,8 @@ export default function PropertiesPanel2({
         onStartSketch={onStartSketch}
         exportedSketchProfile={exportedSketchProfile}
         onSketchProfileConsumed={onSketchProfileConsumed}
+        pickedEdgeKey={pickedEdgeKey}
+        onEdgeKeyConsumed={onEdgeKeyConsumed}
         onCancel={() => onAddFeatureDraftChange(null)}
         onAdded={(taskId) => {
           onAddFeatureDraftChange(null);
@@ -118,6 +123,8 @@ function AddFeatureForm({
   onStartSketch,
   exportedSketchProfile,
   onSketchProfileConsumed,
+  pickedEdgeKey,
+  onEdgeKeyConsumed,
   onCancel,
   onAdded,
   onSaved,
@@ -129,6 +136,8 @@ function AddFeatureForm({
   onStartSketch: () => void;
   exportedSketchProfile: SketchProfileSegment[] | null;
   onSketchProfileConsumed: () => void;
+  pickedEdgeKey?: string | null;
+  onEdgeKeyConsumed?: () => void;
   onCancel: () => void;
   onAdded: (taskId: string) => void;
   onSaved: () => void;
@@ -167,6 +176,16 @@ function AddFeatureForm({
     // stable-ish and re-running this on its identity would re-consume.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exportedSketchProfile]);
+
+  // Ф7: same one-shot handoff pattern as the sketch profile above — a
+  // click on the 3D model fills the same edgeKey the dropdown would.
+  useEffect(() => {
+    if (pickedEdgeKey) {
+      setEdgeKey(pickedEdgeKey);
+      onEdgeKeyConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickedEdgeKey]);
 
   const num = (raw: string) => Number(raw.replace(",", "."));
 
@@ -350,7 +369,9 @@ function AddFeatureForm({
           <label className="block space-y-1">
             <span className="text-[11px] text-zinc-400">
               Ребро{" "}
-              {edges.length === 0 && "(нет данных — сначала пересоберите)"}
+              {edges.length === 0
+                ? "(нет данных — сначала пересоберите)"
+                : "— кликните по ребру на модели или выберите в списке"}
             </span>
             <select
               value={edgeKey}

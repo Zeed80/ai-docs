@@ -22,6 +22,11 @@ interface Props {
   // drive the highlight without owning the raycasting itself.
   selectedFaceKey?: string | null;
   onFaceSelect?: (faceKey: string | null) => void;
+  // Ф7: same controlled-selection pattern, for edges (fillet/chamfer's
+  // edge_key) — independent of face selection, both can be wired at once
+  // without conflict (see onClick's own two separate raycasts below).
+  selectedEdgeKey?: string | null;
+  onEdgeSelect?: (edgeKey: string | null) => void;
   // Ф3.1/B3: kernel-measured per-operation B-Rep delta bounds (mm, model's
   // own frame — see lib/emg-tree.ts's operationBoundsFromFeatureResults),
   // keyed by operation id. Purely additive: undefined/empty draws nothing
@@ -51,6 +56,8 @@ export default function CadModelViewer({
   topologyUrl,
   selectedFaceKey,
   onFaceSelect,
+  selectedEdgeKey,
+  onEdgeSelect,
   operationBounds,
   flaggedOperationIds,
   selectedOperationId,
@@ -62,6 +69,8 @@ export default function CadModelViewer({
   // prop that can change without re-loading the model) can reach the live
   // per-face meshes without re-running the whole scene-setup effect.
   const facesRef = useRef<Map<string, THREE.Mesh> | null>(null);
+  // Ф7: same reason, for per-edge lines (fillet/chamfer edge_key).
+  const edgesRef = useRef<Map<string, THREE.Line> | null>(null);
   // Same reason, for the merged-mesh fallback: click hit-testing needs a
   // raycast target even when no topology loaded (operation bounds don't
   // need per-face granularity).
@@ -147,6 +156,7 @@ export default function CadModelViewer({
     if (!host) return;
     setState("loading");
     facesRef.current = null;
+    edgesRef.current = null;
     mergedMeshRef.current = null;
     centerRef.current.set(0, 0, 0);
     hitBoxesRef.current = new Map();
@@ -207,11 +217,28 @@ export default function CadModelViewer({
     const pointer = new THREE.Vector2();
     const onClick = (event: PointerEvent) => {
       const { onOperationClick } = overlayRef.current;
-      if (!onFaceSelect && !onOperationClick) return;
+      if (!onFaceSelect && !onOperationClick && !onEdgeSelect) return;
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
+      // Ф7: a fully independent raycast against edge lines only — never
+      // shares a hit with the face/operation resolution below, so wiring
+      // onEdgeSelect changes nothing about existing face/operation click
+      // behaviour when it isn't passed.
+      if (onEdgeSelect) {
+        const edgeTargets = edgesRef.current
+          ? Array.from(edgesRef.current.values())
+          : [];
+        const edgeHit = edgeTargets.length
+          ? raycaster.intersectObjects(edgeTargets, false)[0]
+          : undefined;
+        onEdgeSelect(
+          edgeHit
+            ? ((edgeHit.object as THREE.Line).userData.edgeKey as string)
+            : null,
+        );
+      }
       const targets: THREE.Object3D[] = facesRef.current
         ? Array.from(facesRef.current.values())
         : mergedMeshRef.current
@@ -293,6 +320,11 @@ export default function CadModelViewer({
           mergedGeometry.boundingSphere?.radius ?? 1,
           0.001,
         );
+        // Ф7: THREE.Raycaster's default Line threshold is ~0 — a click
+        // essentially never lands on a mathematically thin line. Scaled to
+        // the model's own size so a click near an edge registers regardless
+        // of how large or tiny the part is.
+        raycaster.params.Line = { threshold: radius * 0.01 };
         const grid = new THREE.GridHelper(radius * 4, 20, 0x52525b, 0x27272a);
         grid.rotation.x = Math.PI / 2;
         grid.position.z =
@@ -353,6 +385,45 @@ export default function CadModelViewer({
               scene.add(faceMesh);
               faces.set(face.key, faceMesh);
             }
+            // Ф7: per-edge lines — independent of the face swap below (an
+            // edge is drawn regardless of whether the per-face set ends up
+            // used), same visual weight as the cosmetic wireframe they
+            // replace so nothing looks different until a click highlights
+            // one.
+            const edgeLines = new Map<string, THREE.Line>();
+            for (const edgeItem of mesh.edges ?? []) {
+              if (!edgeItem.polyline || edgeItem.polyline.length < 2) continue;
+              const positions = new Float32Array(edgeItem.polyline.length * 3);
+              edgeItem.polyline.forEach(([x, y, z], i) => {
+                positions[i * 3] = x - center.x;
+                positions[i * 3 + 1] = y - center.y;
+                positions[i * 3 + 2] = z - center.z;
+              });
+              const edgeGeometry = new THREE.BufferGeometry();
+              edgeGeometry.setAttribute(
+                "position",
+                new THREE.BufferAttribute(positions, 3),
+              );
+              const edgeLine = new THREE.Line(
+                edgeGeometry,
+                new THREE.LineBasicMaterial({
+                  color: 0x3f3f46,
+                  transparent: true,
+                  opacity: 0.72,
+                }),
+              );
+              edgeLine.userData.edgeKey = edgeItem.key;
+              scene.add(edgeLine);
+              edgeLines.set(edgeItem.key, edgeLine);
+            }
+            if (!disposed && edgeLines.size > 0) {
+              // The cosmetic silhouette (built from the merged STL, no
+              // keys) would otherwise draw every one of these same edges a
+              // second time, indistinguishably — hide it now that the real,
+              // individually-keyed lines are up.
+              edges.visible = false;
+              edgesRef.current = edgeLines;
+            }
             if (disposed || faces.size === 0) return;
             // Swap: hide the merged mesh, show the per-face set — same
             // surface, now individually selectable.
@@ -391,7 +462,8 @@ export default function CadModelViewer({
       scene.traverse((object) => {
         if (
           object instanceof THREE.Mesh ||
-          object instanceof THREE.LineSegments
+          object instanceof THREE.LineSegments ||
+          object instanceof THREE.Line
         ) {
           object.geometry.dispose();
           const materials = Array.isArray(object.material)
@@ -404,7 +476,7 @@ export default function CadModelViewer({
       renderer.domElement.remove();
       boundsGroupRef.current = null;
     };
-  }, [url, topologyUrl, onFaceSelect]);
+  }, [url, topologyUrl, onFaceSelect, onEdgeSelect]);
 
   // Controlled highlight — separate from the load effect so changing the
   // selection never re-fetches or re-builds the scene.
@@ -416,6 +488,18 @@ export default function CadModelViewer({
       material.color.set(key === selectedFaceKey ? SELECTED_COLOR : BASE_COLOR);
     });
   }, [selectedFaceKey]);
+
+  // Ф7: same controlled-highlight treatment for the selected edge.
+  useEffect(() => {
+    const edgeLines = edgesRef.current;
+    if (!edgeLines) return;
+    edgeLines.forEach((line, key) => {
+      const material = line.material as THREE.LineBasicMaterial;
+      const isSelected = key === selectedEdgeKey;
+      material.color.set(isSelected ? SELECTED_COLOR : 0x3f3f46);
+      material.opacity = isSelected ? 1 : 0.72;
+    });
+  }, [selectedEdgeKey]);
 
   // B3: same "controlled, no reload" treatment for the operation-bounds
   // overlay — a tree-row click or a new assumptions list must not re-fetch

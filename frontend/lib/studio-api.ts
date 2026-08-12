@@ -796,9 +796,17 @@ export interface CadTopologyFace {
   triangles: [number, number, number][];
 }
 
+// Ф7: per-edge polyline (same content-stable _edge_key fillet/chamfer's
+// edge_key param already accepts) — schema "1.1", additive over "1.0".
+export interface CadTopologyEdge {
+  key: string;
+  polyline: [number, number, number][];
+}
+
 export interface CadTopologyMesh {
   schema: string;
   faces: CadTopologyFace[];
+  edges?: CadTopologyEdge[];
 }
 
 // ── CAD IR (vectorize / manual drafting) ─────────────────────────────────────

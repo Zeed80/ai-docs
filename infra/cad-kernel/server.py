@@ -347,7 +347,29 @@ def _topology_mesh(shape: Part.Shape, *, linear_deflection: float = 0.3) -> dict
             "vertices": [[v.x, v.y, v.z] for v in vertices],
             "triangles": [list(t) for t in triangles],
         })
-    return {"schema": "cad-kernel-topology/1.0", "faces": faces}
+    # Ф7 нового CAD-редактора (/root/.claude/plans/starry-mapping-hippo.md):
+    # per-edge polyline, same _edge_key already used by fillet/chamfer's
+    # edge_key param (_find_edge above) — the only genuinely new piece is
+    # this discretization; nothing else about the key needs to change since
+    # it is already content-stable (hashed from curve/length/bounds/
+    # vertices, never a rebuild-order index). A straight edge's own two
+    # endpoints (already in _edge_descriptors) would draw fine as a line,
+    # but an arc/circle edge needs real intermediate points to render or
+    # raycast as anything but a chord — discretize() gives both cases the
+    # same treatment uniformly.
+    edges = []
+    for edge in shape.Edges:
+        try:
+            points = edge.discretize(Deflection=linear_deflection)
+        except Exception:  # noqa: BLE001 — one bad edge must not sink the export
+            continue
+        if len(points) < 2:
+            continue
+        edges.append({
+            "key": _edge_key(edge),
+            "polyline": [[p.x, p.y, p.z] for p in points],
+        })
+    return {"schema": "cad-kernel-topology/1.1", "faces": faces, "edges": edges}
 
 
 def _find_edge(shape: Part.Shape, key: str) -> Part.Edge:

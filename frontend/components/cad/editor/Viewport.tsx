@@ -15,6 +15,8 @@ export default function Viewport({
   flaggedOperationIds,
   selectedOperationId,
   onOperationClick,
+  edgePickActive,
+  onEdgeSelect,
 }: {
   hasModel: boolean;
   modelUrl: string;
@@ -23,6 +25,12 @@ export default function Viewport({
   flaggedOperationIds: Set<string>;
   selectedOperationId: string | null;
   onOperationClick: (operationId: string | null) => void;
+  // Ф7: true while the "Добавить фичу" form is open on fillet/chamfer —
+  // shows a hint and activates edge click-selection; the model stays
+  // clickable for operation bounds either way, both raycasts are
+  // independent (see CadModelViewer's own onClick).
+  edgePickActive?: boolean;
+  onEdgeSelect?: (edgeKey: string | null) => void;
 }) {
   return (
     <div className="relative min-h-0 flex-1">
@@ -38,6 +46,11 @@ export default function Viewport({
           </span>
         </div>
       )}
+      {hasModel && edgePickActive && (
+        <div className="pointer-events-none absolute right-2 top-2 z-10 rounded bg-sky-500/15 px-2 py-1 text-[10px] text-sky-200">
+          Кликните по ребру на модели, чтобы выбрать его
+        </div>
+      )}
       {hasModel ? (
         <CadModelViewer
           url={modelUrl}
@@ -48,6 +61,7 @@ export default function Viewport({
           flaggedOperationIds={flaggedOperationIds}
           selectedOperationId={selectedOperationId}
           onOperationClick={onOperationClick}
+          onEdgeSelect={onEdgeSelect}
         />
       ) : (
         <div className="grid h-full place-items-center text-sm text-zinc-600">
