@@ -3,10 +3,10 @@
 import CadModelViewer from "@/components/studio/CadModelViewer";
 import type { OperationBounds } from "@/lib/emg-tree";
 
-/** Фаза 1: тонкая обёртка над CadModelViewer (сам вьювер не изменён —
- * B2/B3 уже дали ему всё, что нужно этому редактору) + легенда рамок.
- * Вынесено из CadEditorShell2 отдельным компонентом, чтобы Тело/Эскиз
- * (Фазы 4+) могли добавлять свои view-контролы рядом, не раздувая шелл. */
+/** Тонкая обёртка над CadModelViewer (сам вьювер не изменён — B2/B3 уже
+ * дали ему всё, что нужно этому редактору) + легенда рамок. Вынесено из
+ * CadEditorShell отдельным компонентом, чтобы Тело/Эскиз могли добавлять
+ * свои view-контролы рядом, не раздувая шелл. */
 export default function Viewport({
   hasModel,
   modelUrl,

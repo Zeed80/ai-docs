@@ -1,6 +1,6 @@
 /** Ф4 нового CAD-редактора: pure geometry helpers shared by the whole-sheet
  * constraint editor (ConstraintsPanel.tsx, operates on a persisted CadIr)
- * and the new scoped sketch canvas (editor2/sketch/SketchCanvas.tsx,
+ * and the scoped sketch canvas (editor/sketch/SketchCanvas.tsx,
  * operates on a small in-memory entity list) — extracted here rather than
  * duplicated, since both work over the exact same IrEntity/constraint
  * shapes and the exact same "which point on this entity can a constraint

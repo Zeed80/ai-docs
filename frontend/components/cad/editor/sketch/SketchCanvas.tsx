@@ -4,8 +4,8 @@ import { useRef, useState } from "react";
 
 import SketchToolbar, {
   type SketchTool,
-} from "@/components/cad/editor2/sketch/SketchToolbar";
-import { useSketchSolver } from "@/components/cad/editor2/sketch/useSketchSolver";
+} from "@/components/cad/editor/sketch/SketchToolbar";
+import { useSketchSolver } from "@/components/cad/editor/sketch/useSketchSolver";
 import {
   exportSketchProfile,
   solveSketch,

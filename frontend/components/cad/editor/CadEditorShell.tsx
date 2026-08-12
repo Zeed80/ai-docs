@@ -3,10 +3,21 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import CadModelViewer from "@/components/studio/CadModelViewer";
 import FeatureTreePanel from "@/components/cad/editor/FeatureTreePanel";
-import PropertiesPanel from "@/components/cad/editor/PropertiesPanel";
 import AssumptionsStrip from "@/components/cad/editor/AssumptionsStrip";
+import Viewport from "@/components/cad/editor/Viewport";
+import PropertiesPanel2, {
+  type AddFeatureDraftKind,
+  type KernelEdgeDescriptor,
+} from "@/components/cad/editor/PropertiesPanel2";
+import Ribbon, {
+  RibbonButton,
+  RibbonDivider,
+  RibbonPlaceholder,
+  type RibbonTabId,
+} from "@/components/cad/editor/Ribbon";
+import SketchCanvas from "@/components/cad/editor/sketch/SketchCanvas";
+import type { SketchProfileSegment } from "@/lib/cad-sketch-api";
 import {
   buildEmgTree,
   operationBoundsFromFeatureResults,
@@ -51,18 +62,17 @@ function StatusBadge({ solid }: { solid?: Solid3dSummary }) {
   );
 }
 
-/** Ф2.6c/B2-B3: a fully-featured CAD editor for one digitization result —
- * a single full-screen surface instead of a small viewport buried in a
- * long page. Owns the graph, the selection and the 3D viewport together so
- * a click in any panel is immediately reflected in the others.
- *
- * Superseded by components/cad/editor2/CadEditorShell2.tsx (see
- * /root/.claude/plans/starry-mapping-hippo.md) — this file stays live at
- * /cad/[id]/editor only until editor2 reaches parity and is promoted in
- * that plan's Фаза 5, then gets deleted. The old Ф10 2D-IR add-feature
- * flow (Cad3dPanel.tsx) it used to sit alongside has already been removed
- * (Фаза 3): editor2's add-feature endpoint is graph-native and covers
- * everything Cad3dPanel did, plus more kinds. */
+/** Full-screen ленточный CAD-редактор (SolidWorks/Fusion/FreeCAD-стиль:
+ * вкладки-группы инструментов, дерево построения слева, вьюпорт по центру,
+ * свойства/добавление фичи/эскиз справа). Заменил прежний Ф2.6c-редактор
+ * (плоский тулбар, без эскиз-редактора и добавления фич) в Фазе 5 плана
+ * /root/.claude/plans/starry-mapping-hippo.md — полная история: Ф0
+ * (каркас) → Ф1 (лента владеет действиями) → Ф2/Ф3 (граф-native
+ * добавление фич: boss/pocket/fillet/chamfer/shell/thread) → Ф4 (настоящий
+ * constraint-based эскиз-редактор) → Ф5 (эта промоушен-замена). Дерево/
+ * коррекция/подсказки переиспользуются как есть: FeatureTreePanel,
+ * PropertiesPanel (обёрнут в PropertiesPanel2 для формы добавления фичи),
+ * AssumptionsStrip, emg-tree.ts. */
 export default function CadEditorShell({
   generationId,
 }: {
@@ -78,6 +88,19 @@ export default function CadEditorShell({
   const [busy, setBusy] = useState(false);
   const [rebuildTaskId, setRebuildTaskId] = useState<string | null>(null);
   const [rebuildStatus, setRebuildStatus] = useState<string | null>(null);
+  const [ribbonTab, setRibbonTab] = useState<RibbonTabId>("inspect");
+  const [addFeatureDraft, setAddFeatureDraft] =
+    useState<AddFeatureDraftKind | null>(null);
+  // Ф4: sketching needs real screen space — active while drawing, it takes
+  // over the centre viewport (in place of the 3D model) instead of being
+  // squeezed into the narrow Свойства sidebar. exportedSketchProfile is the
+  // handoff: PropertiesPanel2's boss/pocket form reads it once sketching
+  // ends, same "lift state to the shell, hand back down" pattern
+  // addFeatureDraft itself already uses.
+  const [sketchModeActive, setSketchModeActive] = useState(false);
+  const [exportedSketchProfile, setExportedSketchProfile] = useState<
+    SketchProfileSegment[] | null
+  >(null);
 
   const load = useCallback(async () => {
     try {
@@ -110,11 +133,13 @@ export default function CadEditorShell({
           if (["SUCCESS", "FAILURE", "REVOKED"].includes(task.status)) {
             window.clearInterval(timer);
             setRebuildTaskId(null);
-            // A Celery task can finish "SUCCESS" while its OWN result
-            // payload says the build failed (cad_trace.py returns
-            // {error, built: false} instead of raising) — checking only
-            // task.status silently reloaded stale data as if nothing had
-            // gone wrong. Surface it instead.
+            // A Celery task can finish with status "SUCCESS" while its OWN
+            // result payload says the build failed (cad_trace.py's tasks
+            // return an {error, built: false} dict instead of raising, so
+            // the pipeline's own failures stay visible in the process log
+            // rather than looking like an infra crash) — checking only
+            // task.status here silently reloaded stale data as if nothing
+            // had gone wrong. Surface it instead.
             const resultError = (task.result as { error?: string } | null)
               ?.error;
             if (task.status === "SUCCESS" && !resultError) {
@@ -163,16 +188,10 @@ export default function CadEditorShell({
 
   const solid = gen?.params?.solid_3d as Solid3dSummary | undefined;
   const assumptions = useMemo(() => solid?.assumptions ?? [], [solid]);
-  // Driven by solid_3d.assumptions (A2's own curated notes), NOT raw
-  // Assertion.origin — see operationsNeedingReview's own docstring for why
-  // the naive per-param check lit up nearly the whole tree amber live.
   const guessedOperationIds = useMemo(
     () => operationsNeedingReview(tree?.operations ?? [], assumptions),
     [tree, assumptions],
   );
-  // B3: solid_3d.verification.feature_results already carries the kernel's
-  // own measured B-Rep-delta bounds per operation — no extra fetch, no new
-  // backend endpoint, just re-reading data already on `gen`.
   const operationBounds = useMemo(
     () =>
       operationBoundsFromFeatureResults(
@@ -181,10 +200,14 @@ export default function CadEditorShell({
       ),
     [solid],
   );
-  // B2: a click on the model resolves (via CadModelViewer's own bounds
-  // containment test) to the operation id whose measured box contains the
-  // hit point. Ambiguous/empty clicks (id === null) leave the current
-  // selection alone rather than guessing.
+  // Ф3: edge_key candidates for the fillet/chamfer form — already exposed
+  // by the kernel report (_edge_descriptors), just not yet typed on
+  // Solid3dSummary; read loosely like verification.feature_results above.
+  const edges = useMemo(() => {
+    const raw = (solid as unknown as { kernel_report?: { edges?: unknown } })
+      ?.kernel_report?.edges;
+    return Array.isArray(raw) ? (raw as KernelEdgeDescriptor[]) : [];
+  }, [solid]);
   const handleOperationClick = useCallback((operationId: string | null) => {
     if (operationId) setSelectedOperationId(operationId);
   }, []);
@@ -268,28 +291,115 @@ export default function CadEditorShell({
             Пересборка… {rebuildStatus}
           </span>
         )}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            disabled={busy || Boolean(rebuildTaskId)}
-            onClick={() => void handleRebuildNow()}
-            className="rounded border border-white/15 px-3 py-1.5 text-xs text-zinc-200 hover:bg-white/5 disabled:opacity-40"
-          >
-            ↻ Пересобрать
-          </button>
-          {!gen.accepted && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void handleAccept()}
-              className="rounded bg-emerald-500/20 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-40"
-            >
-              ✓ Принять
-            </button>
-          )}
-          <ExportMenu generationId={generationId} accepted={gen.accepted} />
-        </div>
       </header>
+
+      <Ribbon active={ribbonTab} onChange={setRibbonTab}>
+        {ribbonTab === "sketch" && (
+          <span className="px-2 text-[11px] text-zinc-500">
+            {sketchModeActive
+              ? "Эскиз открыт в центральной области — рисуйте контур, затем «Использовать этот контур»."
+              : "Чтобы начать эскиз: вкладка Фичи → Бобышка/Карман → профиль «Эскиз»."}
+          </span>
+        )}
+        {ribbonTab === "features" && (
+          <>
+            <RibbonButton
+              icon="⬆"
+              label="Бобышка"
+              onClick={() => setAddFeatureDraft("boss")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
+            <RibbonButton
+              icon="⬇"
+              label="Карман"
+              onClick={() => setAddFeatureDraft("pocket")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
+            <RibbonDivider />
+            <RibbonButton
+              icon="⌒"
+              label="Скругление"
+              onClick={() => setAddFeatureDraft("fillet")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
+            <RibbonButton
+              icon="⟂"
+              label="Фаска"
+              onClick={() => setAddFeatureDraft("chamfer")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
+            <RibbonButton
+              icon="▢"
+              label="Оболочка"
+              onClick={() => setAddFeatureDraft("shell")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
+            <RibbonButton
+              icon="⚙"
+              label="Резьба"
+              onClick={() => setAddFeatureDraft("thread")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
+          </>
+        )}
+        {ribbonTab === "body" && (
+          <>
+            <RibbonPlaceholder
+              icon="∪"
+              label="Объединение"
+              comingIn="будущей фазе"
+            />
+            <RibbonPlaceholder
+              icon="∩"
+              label="Пересечение"
+              comingIn="будущей фазе"
+            />
+            <RibbonPlaceholder
+              icon="▦"
+              label="Массив"
+              comingIn="будущей фазе"
+            />
+          </>
+        )}
+        {ribbonTab === "inspect" && (
+          <>
+            <RibbonButton
+              icon="↻"
+              label="Пересобрать"
+              onClick={() => void handleRebuildNow()}
+              disabled={busy || Boolean(rebuildTaskId)}
+            />
+            {!gen.accepted && (
+              <RibbonButton
+                icon="✓"
+                label="Принять"
+                onClick={() => void handleAccept()}
+                disabled={busy}
+              />
+            )}
+            <RibbonDivider />
+            <ExportMenu generationId={generationId} accepted={gen.accepted} />
+          </>
+        )}
+      </Ribbon>
 
       {error && (
         <div className="border-b border-red-500/30 bg-red-500/10 px-3 py-1.5 text-xs text-red-300">
@@ -317,51 +427,50 @@ export default function CadEditorShell({
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <div className="relative min-h-0 flex-1">
-            {hasModel && guessedOperationIds.size > 0 && (
-              <div className="pointer-events-none absolute left-2 top-2 z-10 flex items-center gap-3 rounded bg-zinc-950/70 px-2 py-1 text-[10px] text-zinc-300">
-                <span className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-sm border border-amber-400 bg-amber-400/40" />
-                  требует проверки
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-sm border border-sky-400 bg-sky-400/40" />
-                  выбрано
-                </span>
-              </div>
-            )}
-            {hasModel ? (
-              <CadModelViewer
-                url={modelUrl}
+          {sketchModeActive ? (
+            <SketchCanvas
+              onCancel={() => setSketchModeActive(false)}
+              onExported={(profile) => {
+                setExportedSketchProfile(profile);
+                setSketchModeActive(false);
+              }}
+              onError={setError}
+            />
+          ) : (
+            <>
+              <Viewport
+                hasModel={hasModel}
+                modelUrl={modelUrl}
                 topologyUrl={topologyUrl}
-                loadingLabel="Загрузка модели…"
-                errorLabel="Не удалось загрузить модель"
                 operationBounds={operationBounds}
                 flaggedOperationIds={guessedOperationIds}
                 selectedOperationId={selectedOperationId}
                 onOperationClick={handleOperationClick}
               />
-            ) : (
-              <div className="grid h-full place-items-center text-sm text-zinc-600">
-                3D-модель ещё не построена
-              </div>
-            )}
-          </div>
-          <AssumptionsStrip
-            assumptions={assumptions}
-            operations={tree?.operations ?? []}
-            onSelectOperation={setSelectedOperationId}
-          />
+              <AssumptionsStrip
+                assumptions={assumptions}
+                operations={tree?.operations ?? []}
+                onSelectOperation={setSelectedOperationId}
+              />
+            </>
+          )}
         </main>
 
         <aside className="w-96 shrink-0 overflow-y-auto border-l border-white/10 bg-zinc-900/60">
           <div className="border-b border-white/10 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
             Свойства
           </div>
-          <PropertiesPanel
+          <PropertiesPanel2
             generationId={generationId}
             operation={selectedOperation}
             features={selectedFeatures}
+            edges={edges}
+            addFeatureDraft={addFeatureDraft}
+            onAddFeatureDraftChange={setAddFeatureDraft}
+            sketchModeActive={sketchModeActive}
+            onStartSketch={() => setSketchModeActive(true)}
+            exportedSketchProfile={exportedSketchProfile}
+            onSketchProfileConsumed={() => setExportedSketchProfile(null)}
             onSaved={() => void load()}
             onRebuildQueued={(taskId) => {
               setRebuildTaskId(taskId);
