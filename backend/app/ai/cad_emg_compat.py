@@ -351,6 +351,20 @@ def feature_tree_from_graph(
             param_provenance=provenance,
             confidence=min((item.confidence for item in values.values()), default=0.0),
         ))
+    # The human-readable notes the reader/builder actually wrote (e.g. A2's
+    # "0:outer:4: длина ступени Ø29.5 не указана — построено с
+    # предположением..."), persisted verbatim as build.unresolved.<n> on
+    # product:legacy-spec — ahead of the raw "critical assertion <id>"
+    # entries below, which name WHICH assertion is unconfirmed but not WHY
+    # in words a person reads.
+    missing = [
+        str(item.value.reason)
+        for item in sorted(graph.assertions, key=lambda item: item.predicate)
+        if item.state == "active"
+        and item.subject_id == "product:legacy-spec"
+        and item.predicate.startswith(BUILD_UNRESOLVED_PREFIX)
+        and item.value.kind == "unknown"
+    ] + missing
     missing.extend(f"critical assertion {item}" for item in plan.critical_assumption_ids)
     return FeatureTreeCandidate(
         features=features,

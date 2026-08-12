@@ -495,6 +495,41 @@ def test_spec_candidate_round_trips_through_sealed_graph_before_kernel():
     assert compile_build_plan(graph, "production").production_export_allowed is False
 
 
+def test_missing_data_notes_survive_the_sealed_graph_round_trip():
+    """A2: a human-readable note (e.g. "0:outer:4: длина ступени ... не
+    указана — построено с предположением...") must not be swallowed by the
+    round trip through the sealed graph and replaced only with opaque
+    "critical assertion <id>" entries — that is exactly the "a pile of
+    values, not something a person can act on" complaint this phase set out
+    to fix in the first place."""
+    friendly_note = (
+        "0:outer:4: длина ступени Ø29.5 не указана — построено с "
+        "предположением 29.17 мм (среднее по прочитанным ступеням), "
+        "требует подтверждения в редакторе"
+    )
+    candidate = FeatureTreeCandidate(
+        features=[Feature3D(
+            kind="revolve",
+            params={"profile_points": [{"r": 10.0, "z": 0.0}, {"r": 10.0, "z": 20.0}]},
+            param_provenance={
+                "profile_points": ParamProvenance(origin="guessed", detail=friendly_note),
+            },
+            confidence=0.9,
+        )],
+        score=0.9,
+        label="shaft candidate",
+        missing_data=[friendly_note],
+    )
+    graph = spec_feature_tree_as_graph(
+        {"part": "test", "main_view": {"type": "shaft"}},
+        candidate,
+        graph_id="emg:missing-data-roundtrip",
+    )
+    projected = feature_tree_from_graph(graph, target_id="preview")
+    assert friendly_note in projected.missing_data
+    assert projected.features[0].param_provenance["profile_points"].origin == "guessed"
+
+
 def test_spec_feature_tree_as_graph_draws_realizes_edge_to_its_source_feature():
     """Ф2.6c: the compiled BuildOperation must point BACK at the descriptive
     Ф1.2 Feature node it was built from — closing the gap where the two
