@@ -6,6 +6,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 
 import type { CadTopologyMesh } from "@/lib/studio-api";
+import type { OperationBounds } from "@/lib/emg-tree";
 
 interface Props {
   url: string;
@@ -21,10 +22,27 @@ interface Props {
   // drive the highlight without owning the raycasting itself.
   selectedFaceKey?: string | null;
   onFaceSelect?: (faceKey: string | null) => void;
+  // Ф3.1/B3: kernel-measured per-operation B-Rep delta bounds (mm, model's
+  // own frame — see lib/emg-tree.ts's operationBoundsFromFeatureResults),
+  // keyed by operation id. Purely additive: undefined/empty draws nothing
+  // and changes no existing behaviour.
+  operationBounds?: Map<string, OperationBounds>;
+  // Operation ids to always outline (e.g. "needs review" from
+  // solid_3d.assumptions) — drawn amber, dimmer than the selection.
+  flaggedOperationIds?: Set<string>;
+  // The tree's current selection — drawn brighter, on top of a flagged
+  // outline if both apply.
+  selectedOperationId?: string | null;
+  // B2: fires when a click's ray hits the model AND the hit point falls
+  // inside exactly one (or, on overlap, the smallest) operation bounding
+  // box — null when the click missed the model or matched no box. Never a
+  // guess: plain axis-aligned containment against measured bounds.
+  onOperationClick?: (operationId: string | null) => void;
 }
 
 const BASE_COLOR = 0xd4d4d8;
 const SELECTED_COLOR = 0x38bdf8;
+const FLAGGED_COLOR = 0xf59e0b;
 
 export default function CadModelViewer({
   url,
@@ -33,6 +51,10 @@ export default function CadModelViewer({
   topologyUrl,
   selectedFaceKey,
   onFaceSelect,
+  operationBounds,
+  flaggedOperationIds,
+  selectedOperationId,
+  onOperationClick,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -40,12 +62,94 @@ export default function CadModelViewer({
   // prop that can change without re-loading the model) can reach the live
   // per-face meshes without re-running the whole scene-setup effect.
   const facesRef = useRef<Map<string, THREE.Mesh> | null>(null);
+  // Same reason, for the merged-mesh fallback: click hit-testing needs a
+  // raycast target even when no topology loaded (operation bounds don't
+  // need per-face granularity).
+  const mergedMeshRef = useRef<THREE.Mesh | null>(null);
+  // The centering translation the load effect applies to everything in the
+  // scene — operation bounds arrive in the model's ORIGINAL (uncentered) mm
+  // frame and must be shifted the same way to land on the visible geometry.
+  const centerRef = useRef(new THREE.Vector3());
+  const boundsGroupRef = useRef<THREE.Group | null>(null);
+  // Every operation's box in SCENE (centered) coordinates, rebuilt whenever
+  // the overlay redraws — click hit-testing reuses these, not just the ones
+  // actually drawn as amber/selected outlines.
+  const hitBoxesRef = useRef<Map<string, THREE.Box3>>(new Map());
+  // Latest-value ref for props the click handler and the imperative overlay
+  // redraw need without re-running (and re-fetching) the whole load effect.
+  const overlayRef = useRef({
+    operationBounds,
+    flaggedOperationIds,
+    selectedOperationId,
+    onOperationClick,
+  });
+  overlayRef.current = {
+    operationBounds,
+    flaggedOperationIds,
+    selectedOperationId,
+    onOperationClick,
+  };
+
+  // Clears and repopulates the outline overlay from overlayRef's current
+  // values — called once the model's center is known (on load) and again
+  // whenever the overlay-relevant props change (the effect below), never
+  // reloading the model itself.
+  const syncBoundsOverlay = () => {
+    const group = boundsGroupRef.current;
+    if (!group) return;
+    while (group.children.length) {
+      const child = group.children[group.children.length - 1];
+      group.remove(child);
+      if (child instanceof THREE.LineSegments) {
+        child.geometry.dispose();
+        const material = child.material as THREE.Material;
+        material.dispose();
+      }
+    }
+    const {
+      operationBounds: bounds,
+      flaggedOperationIds: flagged,
+      selectedOperationId: selected,
+    } = overlayRef.current;
+    const boxes = new Map<string, THREE.Box3>();
+    const center = centerRef.current;
+    bounds?.forEach((box, id) => {
+      const box3 = new THREE.Box3(
+        new THREE.Vector3(
+          box.x_min - center.x,
+          box.y_min - center.y,
+          box.z_min - center.z,
+        ),
+        new THREE.Vector3(
+          box.x_max - center.x,
+          box.y_max - center.y,
+          box.z_max - center.z,
+        ),
+      );
+      boxes.set(id, box3);
+      const isSelected = id === selected;
+      const isFlagged = flagged?.has(id) ?? false;
+      if (!isSelected && !isFlagged) return;
+      const helper = new THREE.Box3Helper(
+        box3,
+        new THREE.Color(isSelected ? SELECTED_COLOR : FLAGGED_COLOR),
+      );
+      const material = helper.material as THREE.LineBasicMaterial;
+      material.transparent = true;
+      material.opacity = isSelected ? 0.95 : 0.55;
+      group.add(helper);
+    });
+    hitBoxesRef.current = boxes;
+  };
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     setState("loading");
     facesRef.current = null;
+    mergedMeshRef.current = null;
+    centerRef.current.set(0, 0, 0);
+    hitBoxesRef.current = new Map();
 
     let frame = 0;
     let disposed = false;
@@ -89,22 +193,54 @@ export default function CadModelViewer({
     observer.observe(host);
     resize();
 
-    // Ф3.2: click → raycast against the per-face meshes (when topology
-    // loaded) → resolve to a stable face_key, never a raw mesh index.
+    // The outline overlay lives for the whole scene lifetime; syncBoundsOverlay
+    // (re)populates it once the center is known and again on prop changes.
+    const boundsGroup = new THREE.Group();
+    scene.add(boundsGroup);
+    boundsGroupRef.current = boundsGroup;
+
+    // Ф3.2/B2: click → raycast against the per-face meshes (when topology
+    // loaded, else the merged mesh) → resolve a stable face_key AND/OR,
+    // via the SAME hit point, whichever operation's measured bounds box
+    // contains it (smallest volume wins on overlap — never a guess).
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const onClick = (event: PointerEvent) => {
-      if (!facesRef.current || !onFaceSelect) return;
+      const { onOperationClick } = overlayRef.current;
+      if (!onFaceSelect && !onOperationClick) return;
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
-      const meshes = Array.from(facesRef.current.values());
-      const hit = raycaster.intersectObjects(meshes, false)[0];
-      const hitKey = hit
-        ? ((hit.object as THREE.Mesh).userData.faceKey as string)
-        : null;
-      onFaceSelect(hitKey);
+      const targets: THREE.Object3D[] = facesRef.current
+        ? Array.from(facesRef.current.values())
+        : mergedMeshRef.current
+          ? [mergedMeshRef.current]
+          : [];
+      const hit = raycaster.intersectObjects(targets, false)[0];
+      if (onFaceSelect) {
+        const hitKey =
+          hit && facesRef.current
+            ? ((hit.object as THREE.Mesh).userData.faceKey as string)
+            : null;
+        onFaceSelect(hitKey);
+      }
+      if (onOperationClick) {
+        let bestId: string | null = null;
+        let bestVolume = Infinity;
+        if (hit) {
+          hitBoxesRef.current.forEach((box3, id) => {
+            if (!box3.containsPoint(hit.point)) return;
+            const size = box3.getSize(new THREE.Vector3());
+            const volume = size.x * size.y * size.z;
+            if (volume < bestVolume) {
+              bestVolume = volume;
+              bestId = id;
+            }
+          });
+        }
+        onOperationClick(bestId);
+      }
     };
     renderer.domElement.addEventListener("click", onClick);
 
@@ -123,6 +259,7 @@ export default function CadModelViewer({
           return;
         }
         const center = bounds.getCenter(new THREE.Vector3());
+        centerRef.current.copy(center);
 
         const edges = new THREE.LineSegments(
           new THREE.EdgesGeometry(geometry, 25),
@@ -149,6 +286,7 @@ export default function CadModelViewer({
         mergedMesh.castShadow = true;
         mergedMesh.receiveShadow = true;
         scene.add(mergedMesh);
+        mergedMeshRef.current = mergedMesh;
 
         mergedGeometry.computeBoundingSphere();
         const radius = Math.max(
@@ -168,6 +306,7 @@ export default function CadModelViewer({
         controls.target.set(0, 0, 0);
         controls.update();
         setState("ready");
+        syncBoundsOverlay();
 
         if (!topologyUrl) return;
         fetch(topologyUrl, { credentials: "include" })
@@ -263,6 +402,7 @@ export default function CadModelViewer({
       });
       renderer.dispose();
       renderer.domElement.remove();
+      boundsGroupRef.current = null;
     };
   }, [url, topologyUrl, onFaceSelect]);
 
@@ -276,6 +416,16 @@ export default function CadModelViewer({
       material.color.set(key === selectedFaceKey ? SELECTED_COLOR : BASE_COLOR);
     });
   }, [selectedFaceKey]);
+
+  // B3: same "controlled, no reload" treatment for the operation-bounds
+  // overlay — a tree-row click or a new assumptions list must not re-fetch
+  // the model.
+  useEffect(() => {
+    // syncBoundsOverlay reads overlayRef.current (kept fresh every render)
+    // rather than these values directly — listed here only to trigger the
+    // redraw at the right time.
+    syncBoundsOverlay();
+  }, [operationBounds, flaggedOperationIds, selectedOperationId]);
 
   return (
     <div

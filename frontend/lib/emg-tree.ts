@@ -236,6 +236,57 @@ export function operationsNeedingReview(
   return ids;
 }
 
+/** Axis-aligned bounds (mm, the model's own coordinate frame — the same
+ * frame the STL/topology.json exports use) of what one build operation
+ * actually changed in the B-Rep. */
+export interface OperationBounds {
+  x_min: number;
+  x_max: number;
+  y_min: number;
+  y_max: number;
+  z_min: number;
+  z_max: number;
+}
+
+/** solid_3d.verification.feature_results (infra/cad-kernel/server.py's
+ * _feature_results/_operation_localization) already measures, for nearly
+ * every operation kind, the exact bounding box of the geometry a boolean
+ * add/cut changed — a before/after B-Rep delta, not a guess. feature_index
+ * there is the position in candidate.features, the SAME index
+ * spec_feature_tree_as_graph uses for `operation:${index}` node ids
+ * (cad_emg_compat.py), so this needs no new backend plumbing: it is a pure
+ * re-projection of data the kernel already ships. Absent for an operation
+ * that changed nothing (a cosmetic thread) or whose delta could not be
+ * localized (kernel_report already flags those in unlocalized_features) —
+ * never invented for those. */
+export function operationBoundsFromFeatureResults(
+  featureResults: unknown,
+): Map<string, OperationBounds> {
+  const bounds = new Map<string, OperationBounds>();
+  if (!Array.isArray(featureResults)) return bounds;
+  const keys = ["x_min", "x_max", "y_min", "y_max", "z_min", "z_max"] as const;
+  for (const item of featureResults) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const index = record.feature_index;
+    const box = record.changed_bounds_mm;
+    if (typeof index !== "number" || !box || typeof box !== "object") continue;
+    const raw = box as Record<string, unknown>;
+    const values = keys.map((key) => Number(raw[key]));
+    if (values.some((value) => !Number.isFinite(value))) continue;
+    const [x_min, x_max, y_min, y_max, z_min, z_max] = values;
+    bounds.set(`operation:${index}`, {
+      x_min,
+      x_max,
+      y_min,
+      y_max,
+      z_min,
+      z_max,
+    });
+  }
+  return bounds;
+}
+
 /** Whether an assertion (by predicate + subject type) is the kind of thing
  * a human can plausibly correct through the mirror into the compatibility
  * spec — mirrors the server-side allowlist in image_generation.py's

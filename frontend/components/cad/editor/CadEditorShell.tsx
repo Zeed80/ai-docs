@@ -7,7 +7,11 @@ import CadModelViewer from "@/components/studio/CadModelViewer";
 import FeatureTreePanel from "@/components/cad/editor/FeatureTreePanel";
 import PropertiesPanel from "@/components/cad/editor/PropertiesPanel";
 import AssumptionsStrip from "@/components/cad/editor/AssumptionsStrip";
-import { buildEmgTree, operationsNeedingReview } from "@/lib/emg-tree";
+import {
+  buildEmgTree,
+  operationBoundsFromFeatureResults,
+  operationsNeedingReview,
+} from "@/lib/emg-tree";
 import {
   engineeringApi,
   type EngineeringModelGraphRevision,
@@ -154,6 +158,24 @@ export default function CadEditorShell({
     () => operationsNeedingReview(tree?.operations ?? [], assumptions),
     [tree, assumptions],
   );
+  // B3: solid_3d.verification.feature_results already carries the kernel's
+  // own measured B-Rep-delta bounds per operation — no extra fetch, no new
+  // backend endpoint, just re-reading data already on `gen`.
+  const operationBounds = useMemo(
+    () =>
+      operationBoundsFromFeatureResults(
+        (solid?.verification as Record<string, unknown> | undefined)
+          ?.feature_results,
+      ),
+    [solid],
+  );
+  // B2: a click on the model resolves (via CadModelViewer's own bounds
+  // containment test) to the operation id whose measured box contains the
+  // hit point. Ambiguous/empty clicks (id === null) leave the current
+  // selection alone rather than guessing.
+  const handleOperationClick = useCallback((operationId: string | null) => {
+    if (operationId) setSelectedOperationId(operationId);
+  }, []);
 
   async function handleRebuildNow() {
     setBusy(true);
@@ -283,13 +305,29 @@ export default function CadEditorShell({
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1">
+          <div className="relative min-h-0 flex-1">
+            {hasModel && guessedOperationIds.size > 0 && (
+              <div className="pointer-events-none absolute left-2 top-2 z-10 flex items-center gap-3 rounded bg-zinc-950/70 px-2 py-1 text-[10px] text-zinc-300">
+                <span className="flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-sm border border-amber-400 bg-amber-400/40" />
+                  требует проверки
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-sm border border-sky-400 bg-sky-400/40" />
+                  выбрано
+                </span>
+              </div>
+            )}
             {hasModel ? (
               <CadModelViewer
                 url={modelUrl}
                 topologyUrl={topologyUrl}
                 loadingLabel="Загрузка модели…"
                 errorLabel="Не удалось загрузить модель"
+                operationBounds={operationBounds}
+                flaggedOperationIds={guessedOperationIds}
+                selectedOperationId={selectedOperationId}
+                onOperationClick={handleOperationClick}
               />
             ) : (
               <div className="grid h-full place-items-center text-sm text-zinc-600">
