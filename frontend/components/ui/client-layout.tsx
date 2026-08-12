@@ -14,8 +14,11 @@ import { useEffect, useState } from "react";
 // tiny embedded 3D viewport squeezed next to a chat panel is the opposite
 // of what a person doing real geometry work needs. Matches
 // /cad/<id>/editor exactly (not /cad or /cad/<id> — those keep the normal
-// chrome; only the dedicated editor route goes full-screen).
-const CHROMELESS_ROUTE = /^\/cad\/[^/]+\/editor(\/|$)/;
+// chrome; only the dedicated editor route goes full-screen). The optional
+// "2" also matches /cad/<id>/editor2 — the new ribbon editor's temporary
+// development route (see /root/.claude/plans/starry-mapping-hippo.md);
+// drop the "2?" once editor2 is promoted to editor/ in that plan's Фаза 5.
+const CHROMELESS_ROUTE = /^\/cad\/[^/]+\/editor2?(\/|$)/;
 
 function isChromeless(pathname: string | null): boolean {
   return !!pathname && CHROMELESS_ROUTE.test(pathname);
