@@ -219,6 +219,16 @@ export default function CadEditorPage() {
         <span className="flex-1" />
         {gen && (
           <Link
+            href={`/cad/${gen.id}/editor`}
+            target="_blank"
+            rel="noopener"
+            className="rounded border border-sky-400/30 bg-sky-500/10 px-2.5 py-1.5 text-xs font-medium text-sky-200 hover:bg-sky-500/20"
+          >
+            ⛶ Открыть в редакторе на весь экран
+          </Link>
+        )}
+        {gen && (
+          <Link
             href={`/studio?id=${gen.id}`}
             className="text-xs text-zinc-500 hover:text-zinc-300"
           >

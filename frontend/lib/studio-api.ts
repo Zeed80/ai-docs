@@ -1319,6 +1319,19 @@ export async function acceptVectorize(id: string): Promise<Generation> {
   return jsonOrThrow<Generation>(res);
 }
 
+/** Recompile the stored/corrected reading without another VLM call — a
+ * plain "rebuild now" for when nothing needs correcting first (e.g. after
+ * the reader itself was re-run) rather than routing through a correction
+ * endpoint. */
+export async function rebuildSolidInput(
+  id: string,
+): Promise<{ rebuild_task_id?: string | null }> {
+  const res = await mutFetch(`${BASE}/${id}/solid-input/rebuild`, {
+    method: "POST",
+  });
+  return jsonOrThrow(res);
+}
+
 export interface CadCertification {
   id?: string;
   revision: number;
