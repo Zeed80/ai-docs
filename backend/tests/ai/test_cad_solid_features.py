@@ -11,7 +11,11 @@ These tests check the translation.
 from __future__ import annotations
 
 from app.ai.cad_recognize.spec_vectorize import taper_end_diameter
-from app.ai.cad_solid import feature_tree_from_spec
+from app.ai.cad_solid import (
+    _fill_provisional_step_lengths,
+    feature_tree_from_spec,
+    solid_build_gate,
+)
 
 _SHAFT = {
     "part": "Шпиндель",
@@ -255,3 +259,75 @@ def test_cross_hole_ring_and_its_counterbore_share_one_source_id():
     holes = _of_kind(candidate, "hole")
     assert len(holes) == 8  # 4 main + 4 counterbore
     assert all(hole.source_feature_ids == ["0:cross_holes:0"] for hole in holes)
+
+
+# A2: a missing step length used to discard the WHOLE candidate (see
+# git blame on _one_rotation_body_features before this) — the single most
+# common way a real, otherwise-fully-read shaft produced no 3D at all.
+
+def test_fill_provisional_step_lengths_averages_the_known_lengths():
+    filled, notes = _fill_provisional_step_lengths([
+        {"id": "0:outer:0", "d": 80.0, "l": 150.0},
+        {"id": "0:outer:1", "d": 102.0, "l": 200.0},
+        {"id": "0:outer:2", "d": 60.0},
+    ])
+    assert [section["l"] for section in filled] == [150.0, 200.0, 175.0]
+    assert len(notes) == 1
+    assert "0:outer:2" in notes[0]
+    assert "175" in notes[0]
+
+
+def test_fill_provisional_step_lengths_refuses_a_missing_diameter():
+    """A diameter is the part's actual fit/size — never guessed."""
+    assert _fill_provisional_step_lengths([
+        {"id": "0:outer:0", "d": 80.0, "l": 150.0},
+        {"id": "0:outer:1", "l": 200.0},
+    ]) is None
+
+
+def test_fill_provisional_step_lengths_refuses_when_nothing_is_known():
+    """No stated length anywhere in the list — nothing honest to anchor a guess to."""
+    assert _fill_provisional_step_lengths([
+        {"id": "0:outer:0", "d": 80.0},
+        {"id": "0:outer:1", "d": 60.0},
+    ]) is None
+
+
+def test_a_missing_step_length_builds_with_a_flagged_guess_not_a_refusal():
+    candidate = feature_tree_from_spec({
+        "part": "Вал",
+        "main_view": {"type": "тело вращения (вал)", "outer": [
+            {"id": "0:outer:0", "diameter_mm": 80.0, "length_mm": 150.0},
+            {"id": "0:outer:1", "diameter_mm": 102.0, "length_mm": 200.0},
+            {"id": "0:outer:2", "diameter_mm": 60.0},
+        ]},
+    })
+    assert candidate is not None
+    revolve = _of_kind(candidate, "revolve")[0]
+    assert revolve.param_provenance["profile_points"].origin == "guessed"
+    assert revolve.params["profile_points"][-1]["z"] == 150.0 + 200.0 + 175.0
+    assert any("0:outer:2" in item for item in candidate.missing_data)
+
+
+def test_missing_step_length_is_a_warning_not_a_blocker():
+    """The whole point: this build must proceed (not be gated out) so a human
+    has something to look at and fix, rather than a text-only refusal."""
+    spec = {
+        "part": "Вал",
+        "main_view": {"type": "тело вращения (вал)", "outer": [
+            {"id": "0:outer:0", "diameter_mm": 80.0, "length_mm": 150.0},
+            {"id": "0:outer:1", "diameter_mm": 60.0},
+        ]},
+    }
+    candidate = feature_tree_from_spec(spec)
+    gate = solid_build_gate(spec, candidate)
+    assert gate["allowed"] is True
+    assert any("0:outer:1" in item for item in gate["warnings"])
+    assert not any("0:outer:1" in item for item in gate["blockers"])
+
+
+def test_a_fully_stated_shaft_never_carries_a_guessed_provenance():
+    """No regression for the common case: nothing to guess, nothing flagged."""
+    candidate = feature_tree_from_spec(_SHAFT)
+    revolve = _of_kind(candidate, "revolve")[0]
+    assert revolve.param_provenance["profile_points"].origin == "stated"

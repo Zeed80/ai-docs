@@ -51,6 +51,51 @@ def _source_feature_ids(*items: Any) -> list[str]:
     ]
 
 
+def _fill_provisional_step_lengths(
+    sections: list[dict],
+) -> tuple[list[dict], list[str]] | None:
+    """A stepped profile with a stated diameter but no length per step used to
+    discard the WHOLE candidate (see git history on this function's callers)
+    — the single most common way a real, otherwise-fully-read shaft produced
+    no 3D at all and no editable draft either, just a text warning list.
+
+    Never guesses a diameter (that is the part's actual fit/size — genuinely
+    unknowable from context). A missing LENGTH is different: it is filled
+    with the average of the other stated lengths IN THE SAME outer/bore list,
+    every filled step is named in the returned notes (never silently), and
+    the caller stamps the whole profile's ``ParamProvenance.origin`` as
+    ``"guessed"`` — the schema's own vocabulary for "the server's own
+    unconfirmed guess" — so ``verify_solid_against_spec`` refuses acceptance
+    until a human has gone through ``feature_tree_from_spec`` again with a
+    corrected (or explicitly re-affirmed) spec.
+
+    Returns ``None`` — never a fabricated shape — when any section lacks a
+    diameter, or when NO section in this list has a stated length to average
+    from (nothing honest to anchor a guess to).
+    """
+    if not sections:
+        return None
+    if any(not section.get("d") for section in sections):
+        return None
+    known = [float(section["l"]) for section in sections if section.get("l")]
+    if not known:
+        return None
+    guessed_length = round(sum(known) / len(known), 2)
+    filled: list[dict] = []
+    notes: list[str] = []
+    for section in sections:
+        if section.get("l"):
+            filled.append(section)
+            continue
+        filled.append({**section, "l": guessed_length})
+        notes.append(
+            f"{section.get('id') or '?'}: длина ступени Ø{section.get('d')} не указана "
+            f"— построено с предположением {guessed_length:g} мм (среднее по прочитанным "
+            "ступеням), требует подтверждения в редакторе"
+        )
+    return filled, notes
+
+
 class SolidVerification:
     """Kernel report vs the numbers the sheet stated. Nothing here trusts the
     builder: the solid is measured after the fact and compared to the source."""
@@ -150,6 +195,17 @@ _PREVIEW_EXCLUDABLE_MARKERS = (
     "малые элементы: указано ",
     "малые элементы: круговой массив",
     "малые элементы: группа отверстий",
+    # A3: a callout the reader FOUND on the sheet but could not place — no
+    # cross_holes[]/axial_holes[]/thread was ever added for it in the first
+    # place, so there is no feature to build wrong, only a base body that
+    # already builds fine without it. Real live wording, not a guess: e.g.
+    # "малые элементы: поперечное отверстие Ø0.6 указано, но не
+    # локализовано" / "малые элементы: резьбы указаны, но не привязаны к
+    # участкам: ...". An evidence/colour-separation note ("малые элементы:
+    # evidence: ...") never contains either stem — doubt about the read
+    # itself stays a hard blocker, unaffected by this addition.
+    "не локализован",
+    "не привязан",
 )
 
 
@@ -521,20 +577,32 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
     """
     body_index = int(body.get("body_index") or 0)
     outer = body.get("outer") or []
-    if not _sections_are_complete(outer):
-        return None
+    if _sections_are_complete(outer):
+        outer_guess_notes: list[str] = []
+    else:
+        outer_filled = _fill_provisional_step_lengths(outer)
+        if outer_filled is None:
+            return None
+        outer, outer_guess_notes = outer_filled
     bore = body.get("bore") or []
+    bore_guess_notes: list[str] = []
     if bore and not _sections_are_complete(bore):
-        return None
+        bore_filled = _fill_provisional_step_lengths(bore)
+        if bore_filled is None:
+            return None
+        bore, bore_guess_notes = bore_filled
 
     params: dict[str, Any] = {"profile_points": _profile_points(outer)}
     provenance = {
         "profile_points": ParamProvenance(
-            origin="stated",
-            detail="диаметры и длины ступеней прочитаны с чертежа (outer[])",
+            origin="guessed" if outer_guess_notes else "stated",
+            detail=(
+                "; ".join(outer_guess_notes) if outer_guess_notes
+                else "диаметры и длины ступеней прочитаны с чертежа (outer[])"
+            ),
         )
     }
-    missing: list[str] = []
+    missing: list[str] = [*outer_guess_notes, *bore_guess_notes]
     bore_offset = 0.0
     if bore:
         bore_points = _profile_points(bore)
@@ -544,8 +612,11 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
             return None
         params["bore_points"] = bore_points
         provenance["bore_points"] = ParamProvenance(
-            origin="stated",
-            detail="внутренний контур прочитан с разреза (bore[])",
+            origin="guessed" if bore_guess_notes else "stated",
+            detail=(
+                "; ".join(bore_guess_notes) if bore_guess_notes
+                else "внутренний контур прочитан с разреза (bore[])"
+            ),
         )
         bore_length = sum(float(section["l"]) for section in bore)
         outer_length = sum(float(section["l"]) for section in outer)
@@ -1212,7 +1283,24 @@ def verify_solid_against_spec(
     if not parts:
         return _verify_prismatic(spec, report)
     outer = parts[0].get("outer") or []
-    stated_length = sum(float(section["l"]) for section in outer if section.get("l"))
+    # A2: when a step's length was provisionally filled in (ParamProvenance.
+    # origin="guessed" — see _fill_provisional_step_lengths), the raw spec's
+    # OWN outer[] still has that section's "l" missing, so summing only the
+    # STATED lengths here would under-count against what was actually built
+    # and this check would fail-closed reject every guessed-length preview
+    # outright. The compiled revolve's own profile_points is the single
+    # source of truth for what length was actually asked of the kernel —
+    # reading the total from there is exact for a normal fully-stated build
+    # too (same arithmetic), and correct for a guessed one.
+    revolve = next(
+        (feature for feature in (candidate.features if candidate else []) if feature.kind == "revolve"),
+        None,
+    )
+    profile_points = (revolve.params.get("profile_points") if revolve else None) or []
+    stated_length = (
+        float(profile_points[-1]["z"]) if profile_points
+        else sum(float(section["l"]) for section in outer if section.get("l"))
+    )
     stated_diameter = max((float(section["d"]) for section in outer), default=0.0)
 
     bounds = report.get("bounds_mm") or {}

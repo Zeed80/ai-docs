@@ -1057,7 +1057,23 @@ async def _build_spec_solid(
         spec, candidate, require_source_evidence=require_source_evidence
     )
     preview_gate = solid_preview_gate(build_gate)
-    preview_mode = not bool(build_gate["allowed"]) and bool(preview_gate["allowed"])
+    # A2: a step whose length could not be read compiles anyway, with a
+    # provisional average length (ParamProvenance.origin="guessed") — real
+    # geometry for the 3D editor to show and let a human fix, instead of the
+    # whole candidate silently discarded. Routed through the SAME
+    # preview_review_required path as the existing excluded-geometry preview
+    # (CadModelViewer draft, accept-vectorize refusal) rather than a third
+    # parallel state — the human must correct or explicitly re-affirm the
+    # guess (feature_spec_path correction + rebuild) before release.
+    has_unconfirmed_guess = any(
+        provenance.origin == "guessed"
+        for feature in candidate.features
+        for provenance in feature.param_provenance.values()
+    )
+    preview_mode = (
+        (not bool(build_gate["allowed"]) and bool(preview_gate["allowed"]))
+        or has_unconfirmed_guess
+    )
     confirm_assumptions = bool(build_gate["warnings"]) or preview_mode
     kernel_input = candidate_compile_payload(
         candidate,

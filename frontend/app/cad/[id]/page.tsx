@@ -117,7 +117,9 @@ function BlockedSolidInput({
     <section className="rounded border border-sky-500/30 bg-sky-950/20 p-3 text-xs">
       <h2 className="text-sm text-sky-200">{t("blocked_solid_input")}</h2>
       {blockers.map((item) => (
-        <p key={item} className="mt-1 text-red-300">✕ {item}</p>
+        <p key={item} className="mt-1 text-red-300">
+          ✕ {item}
+        </p>
       ))}
       <p className="mt-2 break-all font-mono text-[10px] text-zinc-500">
         SHA-256: {String(input.sha256 ?? "—")}
@@ -135,7 +137,9 @@ function BlockedSolidInput({
         ))}
       </div>
       <details className="mt-2">
-        <summary className="cursor-pointer text-zinc-400">{t("kernel_payload_json")}</summary>
+        <summary className="cursor-pointer text-zinc-400">
+          {t("kernel_payload_json")}
+        </summary>
         <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-zinc-500">
           {JSON.stringify(payload, null, 2)}
         </pre>
@@ -152,7 +156,9 @@ export default function CadEditorPage() {
   const id = params?.id;
   const [gen, setGen] = useState<Generation | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"model_graph" | "drawing">("drawing");
+  const [activeView, setActiveView] = useState<"model_graph" | "drawing">(
+    "drawing",
+  );
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -169,9 +175,18 @@ export default function CadEditorPage() {
   }, [load]);
 
   const hasModelGraph = Boolean(gen?.params?.engineering_model_graph);
+  // UX fix: every mechanical digitization has an EMG graph now (Ф1-2.6 is the
+  // production default), so defaulting to "model_graph" here meant EVERY
+  // user landed on a raw assertion table (predicate/origin/assurance rows)
+  // before ever seeing a drawing or a 3D shape — confirmed live: a person
+  // reported "it read something and that's it, a pile of values" for a run
+  // whose solid had not even failed to build. "drawing" (chertyozh/3D) is
+  // the actual answer to "what did we build"; model_graph is the audit view
+  // for when someone specifically wants to see individual assertions/
+  // evidence/patches, reached by clicking the tab, never landed on first.
   useEffect(() => {
-    setActiveView(hasModelGraph ? "model_graph" : "drawing");
-  }, [hasModelGraph, id]);
+    setActiveView("drawing");
+  }, [id]);
 
   // A digitization still in flight: poll until it lands.
   const processing = gen?.status === "queued" || gen?.status === "running";
@@ -237,7 +252,10 @@ export default function CadEditorPage() {
           )}
           {activeView === "model_graph" && hasModelGraph ? (
             <div className="min-h-0 flex-1 overflow-auto">
-              <EngineeringModelGraphPanel generationId={gen.id} onError={setError} />
+              <EngineeringModelGraphPanel
+                generationId={gen.id}
+                onError={setError}
+              />
             </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-2 lg:flex-row">
@@ -255,10 +273,14 @@ export default function CadEditorPage() {
                     spec={gen.params.spec as Record<string, unknown>}
                     note={t("reading_kept_note")}
                   />
-                  {(gen.params?.solid_input as Record<string, unknown> | undefined) && (
+                  {(gen.params?.solid_input as
+                    Record<string, unknown> | undefined) && (
                     <BlockedSolidInput
                       input={gen.params.solid_input as Record<string, unknown>}
-                      solid={gen.params.solid_3d as Record<string, unknown> | undefined}
+                      solid={
+                        gen.params.solid_3d as
+                          Record<string, unknown> | undefined
+                      }
                       t={t}
                     />
                   )}
@@ -285,7 +307,10 @@ export default function CadEditorPage() {
           )}
           {activeView === "model_graph" && hasModelGraph ? (
             <div className="min-h-0 flex-1 overflow-auto">
-              <EngineeringModelGraphPanel generationId={gen.id} onError={setError} />
+              <EngineeringModelGraphPanel
+                generationId={gen.id}
+                onError={setError}
+              />
             </div>
           ) : (
             <div className="min-h-0 flex-1">

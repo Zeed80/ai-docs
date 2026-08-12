@@ -371,13 +371,21 @@ def test_main_view_only_spec_still_defaults_body_index_to_zero():
     assert all(f.body_index == 0 for f in candidate.features)
 
 
-def test_incomplete_second_body_refuses_the_whole_multi_body_candidate():
+def test_incomplete_second_body_builds_with_a_flagged_guess_not_a_refusal():
+    """A2: a missing step length no longer discards the whole candidate — the
+    affected body's revolve compiles with a provisional average length,
+    flagged ParamProvenance.origin="guessed", while the OTHER (complete)
+    body's revolve stays "stated" — the assumption is scoped to the body
+    that actually needs one."""
     spec = _two_body_spec()
-    # Second body still has 2 sections (qualifies as a rotation body per
-    # _rotation_parts) but one never got a length read — the whole candidate
-    # must be refused, not silently built with the first body only.
     spec["parts"][1]["outer"][1]["length_mm"] = None
-    assert feature_tree_from_spec(spec) is None
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    revolves = {f.body_index: f for f in candidate.features if f.kind == "revolve"}
+    assert revolves[1].param_provenance["profile_points"].origin == "stated"
+    assert revolves[2].param_provenance["profile_points"].origin == "guessed"
+    # Only known length (20) in that body's outer[] — averages to itself.
+    assert revolves[2].params["profile_points"][-1]["z"] == 20.0 + 20.0
 
 
 def test_unread_bore_blocks_3d_when_the_reader_found_a_section():
@@ -438,6 +446,44 @@ def test_review_preview_accepts_live_small_feature_blocker_wording():
     assert len(preview["excluded"]) == 3
 
 
+def test_review_preview_accepts_unplaced_callout_wording_from_a_real_run():
+    """A3: exact live wording from a real shaft run (2026-08-12) that used to
+    hard-block the whole part — a callout the reader found but could not
+    place has no cross_holes[]/thread entry to build wrong in the first
+    place, so it is excludable, same as the other "малые элементы" wordings
+    above."""
+    spec = _shaft_spec(unresolved=[
+        "малые элементы: поперечное отверстие Ø0.6 указано, но не локализовано",
+        "малые элементы: резьбы указаны, но не привязаны к участкам: "
+        "M18×1,5: несущий участок не локализован",
+    ])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+
+    preview = solid_preview_gate(solid_build_gate(spec, candidate))
+
+    assert preview["allowed"] is True
+    assert preview["hard_blockers"] == []
+    assert len(preview["excluded"]) == 2
+
+
+def test_review_preview_still_refuses_an_evidence_reliability_note():
+    """Doubt about the READ ITSELF (geometry vs annotations not separable by
+    colour) is not a scoped placement gap — stays a hard blocker."""
+    spec = _shaft_spec(unresolved=[
+        "малые элементы: evidence: геометрия не отделена от аннотаций по цвету",
+    ])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+
+    preview = solid_preview_gate(solid_build_gate(spec, candidate))
+
+    assert preview["allowed"] is False
+    assert preview["hard_blockers"] == [
+        "малые элементы: evidence: геометрия не отделена от аннотаций по цвету",
+    ]
+
+
 def test_review_preview_still_refuses_a_dimension_chain_failure():
     spec = _shaft_spec(unresolved=["размерная цепочка не сходится"])
     candidate = feature_tree_from_spec(spec)
@@ -463,14 +509,22 @@ def test_bore_wider_than_the_body_is_refused_not_repaired():
     assert feature_tree_from_spec(spec) is None
 
 
-def test_incomplete_profile_builds_nothing():
+def test_incomplete_profile_builds_a_flagged_guess_not_nothing():
+    """A2: was test_incomplete_profile_builds_nothing — a stated diameter
+    with no length used to refuse the whole part; it now compiles with a
+    provisional length (here: the one other known length, 40, since there
+    is nothing else to average) and an explicit "guessed" flag."""
     spec = {
         "main_view": {
             "type": "тело вращения (вал)",
             "outer": [{"diameter_mm": 30, "length_mm": 40}, {"diameter_mm": 50}],
         }
     }
-    assert feature_tree_from_spec(spec) is None
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    revolve = next(f for f in candidate.features if f.kind == "revolve")
+    assert revolve.param_provenance["profile_points"].origin == "guessed"
+    assert revolve.params["profile_points"][-1]["z"] == 40.0 + 40.0
 
 
 def test_prismatic_spec_has_no_revolve_solid():

@@ -1074,6 +1074,52 @@ async def test_spec_full_check_compares_source_with_generated_render(
 
 
 @pytest.mark.asyncio
+async def test_accept_vectorize_refuses_a_solid_with_an_unconfirmed_guess(
+    client, fake_storage, monkeypatch, db_session
+):
+    """A4: preview_review_required (a guessed step length, an unlocalized
+    cross-hole/thread — anything solid.verification.feature_complete=False
+    covers) must block accept-vectorize exactly like a failed geometric
+    verification does — release requires a human to have gone through the
+    editor and corrected or explicitly re-affirmed the spec first."""
+    import uuid
+
+    from app.db.models import ImageGeneration
+
+    async def _paired_review(png_bytes, **kwargs):
+        return []
+
+    monkeypatch.setattr("app.ai.cad_validate.run_llm_review_levels", _paired_review)
+    gen_out = (await client.post(
+        "/api/image-gen/blank-sheet", json={"format": "A4"}
+    )).json()
+    gen = await db_session.get(ImageGeneration, uuid.UUID(gen_out["id"]))
+    assert gen is not None and gen.result_path
+    fake_storage["source/spec.png"] = b"source-png"
+    gen.source_image_paths = ["source/spec.png"]
+    gen.params = {
+        **(gen.params or {}),
+        "vectorize_method": "spec",
+        "solid_3d": {
+            "built": True,
+            "build_status": "preview_review_required",
+            "sheet": {"verification": {"ok": True}},
+            # This is what a guessed step length (or an unlocalized
+            # cross-hole/thread) produces — feature_complete=False even
+            # though the geometry itself compiled and topology checks pass.
+            "verification": {"ok": False, "feature_complete": False},
+        },
+    }
+    await db_session.commit()
+    await client.post(f"/api/image-gen/{gen.id}/ir/full-check")
+
+    response = await client.post(f"/api/image-gen/{gen.id}/accept-vectorize")
+
+    assert response.status_code == 409, response.text
+    assert "feature" in response.text.lower() or "верификац" in response.text.lower()
+
+
+@pytest.mark.asyncio
 async def test_spec_full_check_refuses_to_run_without_source(
     client, fake_storage, db_session
 ):
