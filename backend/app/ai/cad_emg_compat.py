@@ -304,6 +304,12 @@ def feature_tree_from_graph(
 ) -> FeatureTreeCandidate:
     """Compile a stable legacy kernel payload from BuildOperation assertions."""
     plan = compile_build_plan(graph, target_id)
+    realized_features: dict[str, list[str]] = {}
+    for edge in graph.edges:
+        if edge.type == "realizes":
+            realized_features.setdefault(edge.source_id, []).append(
+                edge.target_id.removeprefix("feature:")
+            )
     assertions_by_subject: dict[str, list[Assertion]] = {}
     for assertion in graph.assertions:
         if assertion.state == "active":
@@ -340,6 +346,7 @@ def feature_tree_from_graph(
         features.append(Feature3D(
             kind=kind,
             source_entity_ids=[],
+            source_feature_ids=sorted(realized_features.get(operation_id, [])),
             params=params,
             param_provenance=provenance,
             confidence=min((item.confidence for item in values.values()), default=0.0),
@@ -615,6 +622,10 @@ def spec_feature_tree_as_graph(
     nodes.extend(native_nodes)
     edges.extend(native_edges)
     assertions.extend(native_assertions)
+    # Ф2.6c: which of the just-emitted Feature nodes a BuildOperation may
+    # legally point a realizes edge at — never a dangling reference, and
+    # never anything the native builder itself did not already create.
+    known_feature_ids = {item.id for item in native_nodes if item.type == "Feature"}
     title_block = spec_payload.get("title_block")
     material_designation = (
         title_block.get("material") if isinstance(title_block, dict) else None
@@ -663,6 +674,16 @@ def spec_feature_tree_as_graph(
             source_id=operation_id,
             target_id="product:legacy-spec",
         ))
+        for feature_id in dict.fromkeys(feature.source_feature_ids):
+            target_id = f"feature:{feature_id}"
+            if target_id not in known_feature_ids:
+                continue
+            edges.append(GraphEdge(
+                id=f"realizes:{operation_id}:{feature_id}",
+                type="realizes",
+                source_id=operation_id,
+                target_id=target_id,
+            ))
         kind_id = f"assertion:{operation_id}:kind"
         assertions.append(Assertion(
             id=kind_id,
@@ -816,6 +837,12 @@ def feature_tree_revision_patch(
         "propagated": "derived",
     }
     active_operation_ids = compile_build_plan(graph, "preview").operation_node_ids
+    # Ф2.6c: same fail-closed rule as the first build — only realize Feature
+    # nodes that already exist in this graph. A newly-added spec element has
+    # no Feature node yet (this function does not rebuild the native Ф1.2
+    # graph), so it legitimately gets no realizes edge, same as any other
+    # id-tagged reference this codebase refuses to invent.
+    known_feature_ids = {item.id for item in graph.nodes if item.type == "Feature"}
 
     payload = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
     flattened: list[tuple[str, Any]] = []
@@ -865,6 +892,16 @@ def feature_tree_revision_patch(
             id=f"depends:{operation_id}", type="depends_on",
             source_id=operation_id, target_id="product:legacy-spec",
         ))
+        for feature_id in dict.fromkeys(feature.source_feature_ids):
+            target_id = f"feature:{feature_id}"
+            if target_id not in known_feature_ids:
+                continue
+            add_edges.append(GraphEdge(
+                id=f"realizes:{operation_id}:{feature_id}",
+                type="realizes",
+                source_id=operation_id,
+                target_id=target_id,
+            ))
         entries = [
             ("kind", feature.kind),
             ("sequence", index),

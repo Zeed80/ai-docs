@@ -73,6 +73,15 @@ class Feature3D(BaseModel):
         "rib",
     ]
     source_entity_ids: list[str] = Field(default_factory=list)
+    # Ф2.6c: which native EMG Feature node(s) (cad_emg_compat.py, ids from
+    # assign_stable_feature_ids — e.g. "0:chamfers:0") this operation was
+    # compiled from — a DIFFERENT id namespace than source_entity_ids above
+    # (2D CadIR entity ids, Ф10's own ranked-hypothesis mechanism). Kept as
+    # its own field rather than reused so a reader of either never has to
+    # guess which namespace a value is in. Empty when the operation has no
+    # single source item (a base extrude/revolve built from the whole
+    # profile) or the item was never id-tagged.
+    source_feature_ids: list[str] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
     # D2: per-parameter provenance, keyed by the param name in ``params``
     param_provenance: dict[str, ParamProvenance] = Field(default_factory=dict)

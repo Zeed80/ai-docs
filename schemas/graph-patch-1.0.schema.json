@@ -517,7 +517,8 @@
             "connects_to",
             "opens_in",
             "generated_by",
-            "maps_to_topology"
+            "maps_to_topology",
+            "realizes"
           ],
           "title": "Type",
           "type": "string"

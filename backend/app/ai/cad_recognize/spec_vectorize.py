@@ -1787,6 +1787,11 @@ def _sections_from_list(items: Any) -> list[dict]:
                 "thread": it.get("thread"),
                 "tolerance": it.get("tolerance"),
                 "roughness": it.get("roughness"),
+                # Ф2.6c: assign_stable_feature_ids' own id, carried through so
+                # the compiled revolve/thread operation can realize the
+                # section's Feature node — dropped nowhere else in this
+                # compact form on purpose.
+                "id": it.get("id"),
             })
     return sections
 

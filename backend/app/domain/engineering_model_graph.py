@@ -33,6 +33,15 @@ EdgeType = Literal[
     "same_object_across_views", "defines", "depends_on", "constrains",
     "applies_to", "mates_with", "connects_to", "opens_in", "generated_by",
     "maps_to_topology",
+    # Ф2.6c: a compiled BuildOperation -> the descriptive native Feature
+    # node(s) (Ф1.2) it was built from. Deliberately NOT in
+    # critical_assertion_ids' traversal set below — a "proposed"-assurance
+    # Feature assertion must not make an otherwise-clean build provisional
+    # just because a realizes edge now makes it graph-reachable; it IS in
+    # assertion_impact_report's own set, so the impact panel can show which
+    # operations a Feature correction affects. Purely descriptive/UI, never
+    # build-blocking.
+    "realizes",
 ]
 Origin = Literal["observed", "traced", "derived", "standard", "assumed", "human"]
 Assurance = Literal[
@@ -657,6 +666,9 @@ def assertion_impact_report(
     }
     reverse = {
         "part_of", "instance_of", "located_in", "depends_on", "generated_by",
+        # realizes: source=operation, target=feature — correcting the
+        # Feature assertion must show the operation as affected.
+        "realizes",
     }
     for edge in graph.edges:
         if edge.type in symmetric:
@@ -1053,7 +1065,7 @@ DOMAIN_ADAPTERS: dict[str, DomainAdapter] = {
     "mechanical": DomainAdapter(
         profile="mechanical",
         supported_node_types=["DocumentSet", "Document", "Sheet", "View", "SourceRegion", "Product", "Component", "Feature", "Geometry", "Material", "Parameter", "Constraint", "BuildOperation", "Artifact", "TopologyElement"],
-        supported_edge_types=["contains", "part_of", "represented_by", "same_object_across_views", "defines", "depends_on", "constrains", "applies_to", "generated_by", "maps_to_topology"],
+        supported_edge_types=["contains", "part_of", "represented_by", "same_object_across_views", "defines", "depends_on", "constrains", "applies_to", "generated_by", "maps_to_topology", "realizes"],
         critical_impacts=["base_topology", "envelope", "assembly_interface", "fit", "connection_opening", "manufacturing_safety", "mass"],
         hybrid_trace_cases=["decorative_profile", "secondary_fillet", "visual_local_contour"],
         mandatory_assertions=["operation.kind", "material.designation"],

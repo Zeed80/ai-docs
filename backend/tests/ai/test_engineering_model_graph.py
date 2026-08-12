@@ -495,6 +495,127 @@ def test_spec_candidate_round_trips_through_sealed_graph_before_kernel():
     assert compile_build_plan(graph, "production").production_export_allowed is False
 
 
+def test_spec_feature_tree_as_graph_draws_realizes_edge_to_its_source_feature():
+    """Ф2.6c: the compiled BuildOperation must point BACK at the descriptive
+    Ф1.2 Feature node it was built from — closing the gap where the two
+    graphs never referenced each other."""
+    candidate = FeatureTreeCandidate(
+        features=[Feature3D(
+            kind="chamfer",
+            source_feature_ids=["0:chamfers:0"],
+            params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
+            confidence=0.9,
+        )],
+        score=0.9,
+        label="chamfer candidate",
+    )
+    graph = spec_feature_tree_as_graph(
+        {
+            "part": "test",
+            "main_view": {
+                "type": "shaft",
+                "chamfers": [{"id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end"}],
+            },
+        },
+        candidate,
+        graph_id="emg:realizes",
+    )
+    realizes = [edge for edge in graph.edges if edge.type == "realizes"]
+    assert len(realizes) == 1
+    assert realizes[0].source_id == "operation:0"
+    assert realizes[0].target_id == "feature:0:chamfers:0"
+    assert any(node.id == "feature:0:chamfers:0" for node in graph.nodes)
+
+
+def test_realizes_edge_is_never_drawn_to_a_feature_node_that_does_not_exist():
+    """Fail-closed: an id with no matching Feature node (never id-tagged, or
+    a leaf this native builder does not cover) gets no edge — never a
+    dangling reference, which would fail graph integrity validation anyway."""
+    candidate = FeatureTreeCandidate(
+        features=[Feature3D(
+            kind="chamfer",
+            source_feature_ids=["0:chamfers:0"],
+            params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
+            confidence=0.9,
+        )],
+        score=0.9,
+        label="chamfer candidate",
+    )
+    graph = spec_feature_tree_as_graph(
+        # No "id" on the chamfer item — no Feature node exists for it.
+        {"part": "test", "main_view": {"type": "shaft", "chamfers": [
+            {"size_mm": 1.0, "location": "left_end"},
+        ]}},
+        candidate,
+        graph_id="emg:no-realizes",
+    )
+    assert not [edge for edge in graph.edges if edge.type == "realizes"]
+
+
+def test_feature_tree_from_graph_recovers_source_feature_ids_from_realizes_edges():
+    candidate = FeatureTreeCandidate(
+        features=[Feature3D(
+            kind="chamfer",
+            source_feature_ids=["0:chamfers:0"],
+            params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
+            confidence=0.9,
+        )],
+        score=0.9,
+        label="chamfer candidate",
+    )
+    graph = spec_feature_tree_as_graph(
+        {"part": "test", "main_view": {"type": "shaft", "chamfers": [
+            {"id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end"},
+        ]}},
+        candidate,
+        graph_id="emg:realizes-roundtrip",
+    )
+    projected = feature_tree_from_graph(graph, target_id="preview")
+    assert projected.features[0].source_feature_ids == ["0:chamfers:0"]
+
+
+def test_correcting_a_feature_assertion_never_makes_a_clean_build_provisional():
+    """The realizes edge is descriptive/UI only. It must show up in
+    assertion_impact_report (so the human sees which operation a Feature
+    correction affects) WITHOUT making critical_assertion_ids/compile_
+    build_plan treat a "proposed"-assurance Feature assertion as a blocking
+    requirement — that would silently turn every part with a chamfer into a
+    provisional build, which nothing about this change is meant to do."""
+    candidate = FeatureTreeCandidate(
+        features=[Feature3D(
+            kind="chamfer",
+            source_feature_ids=["0:chamfers:0"],
+            params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
+            confidence=0.9,
+        )],
+        score=0.9,
+        label="chamfer candidate",
+    )
+    graph = spec_feature_tree_as_graph(
+        {"part": "test", "main_view": {"type": "shaft", "chamfers": [
+            {"id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end"},
+        ]}},
+        candidate,
+        graph_id="emg:realizes-impact",
+    )
+    feature_kind_assertion = next(
+        item for item in graph.assertions
+        if item.subject_id == "feature:0:chamfers:0" and item.predicate == "feature.kind"
+    )
+    report = assertion_impact_report(graph, feature_kind_assertion.id, "preview")
+    assert report.affected_build_operation_ids == ["operation:0"]
+    # critical_assertion_ids' own traversal set deliberately excludes
+    # "realizes" (see EdgeType's comment) — a "proposed"-assurance Feature
+    # assertion must not become part of the build's unresolved/critical set
+    # just because a realizes edge now makes it graph-reachable from the
+    # operation. (This candidate has other, unrelated reasons to be
+    # provisional — see test_spec_candidate_round_trips_through_sealed_
+    # graph_before_kernel above for the same bare single-feature shape —
+    # so the precise claim here is about THIS assertion, not the whole plan.)
+    plan = compile_build_plan(graph, "production")
+    assert feature_kind_assertion.id not in plan.critical_assumption_ids
+
+
 def test_human_spec_rebuild_is_an_atomic_patch_and_old_operations_are_not_rebuilt():
     original = FeatureTreeCandidate(
         features=[Feature3D(

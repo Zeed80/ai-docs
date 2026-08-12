@@ -32,6 +32,25 @@ from app.ai.cad_recognize.spec_vectorize import (
 )
 
 
+def _source_feature_ids(*items: Any) -> list[str]:
+    """``Feature3D.source_feature_ids`` for one or more spec list items.
+
+    Each id is exactly what ``assign_stable_feature_ids`` assigned the item
+    (``f"{body_index}:{list_name}:{index}"``) — this is what lets
+    ``spec_feature_tree_as_graph`` draw a ``realizes`` edge from the compiled
+    ``BuildOperation`` back to the descriptive ``Feature`` node(s) it came
+    from (Ф2.6c). An item with no id (reader never tagged it, or it is a
+    pattern-synthesized point with nothing of its own to point at) is
+    skipped rather than guessed — the operation simply has no realizes edge,
+    same fail-closed default as every other id-tagged reference in this
+    codebase.
+    """
+    return [
+        str(item["id"]) for item in items
+        if isinstance(item, dict) and item.get("id")
+    ]
+
+
 class SolidVerification:
     """Kernel report vs the numbers the sheet stated. Nothing here trusts the
     builder: the solid is measured after the fact and compared to the source."""
@@ -407,6 +426,7 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         cx, cy = to_base(x, y)
         features.append(Feature3D(
             kind="hole",
+            source_feature_ids=_source_feature_ids(hole),
             params={
                 "diameter_mm": diameter,
                 "center_x_mm": cx,
@@ -444,6 +464,7 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
             )
             features.append(Feature3D(
                 kind="pocket",
+                source_feature_ids=_source_feature_ids(slot),
                 params={
                     "profile": "sketch", "sketch_profile": sketch,
                     "depth_mm": thickness,
@@ -464,6 +485,7 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         if straight > 0:
             features.append(Feature3D(
                 kind="pocket",
+                source_feature_ids=_source_feature_ids(slot),
                 params={
                     "profile": "rectangle", "width_mm": straight, "height_mm": width_mm,
                     "center_x_mm": cx, "center_y_mm": cy, "depth_mm": thickness,
@@ -474,6 +496,7 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         for offset in (-straight / 2.0, straight / 2.0):
             features.append(Feature3D(
                 kind="hole",
+                source_feature_ids=_source_feature_ids(slot),
                 params={
                     "diameter_mm": width_mm,
                     "center_x_mm": cx + offset,
@@ -547,6 +570,7 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
     features = [
         Feature3D(
             kind="revolve",
+            source_feature_ids=_source_feature_ids(*outer, *bore),
             params=params,
             param_provenance=provenance,
             confidence=0.9,
@@ -581,6 +605,7 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
                         thread_params["pitch_mm"] = pitch
                     features.append(Feature3D(
                         kind="thread",
+                        source_feature_ids=_source_feature_ids(section),
                         params=thread_params,
                         param_provenance={
                             "spec": ParamProvenance(
@@ -730,6 +755,7 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             continue
         features.append(Feature3D(
             kind="groove",
+            source_feature_ids=_source_feature_ids(groove),
             params=params,
             param_provenance={
                 "axial_position_mm": ParamProvenance(
@@ -749,6 +775,7 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             continue
         features.append(Feature3D(
             kind="keyway",
+            source_feature_ids=_source_feature_ids(keyway),
             params={
                 "axial_start_mm": start,
                 "length_mm": length,
@@ -795,6 +822,7 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                 params["depth_mm"] = depth
             features.append(Feature3D(
                 kind="hole",
+                source_feature_ids=_source_feature_ids(hole),
                 params=params,
                 param_provenance={
                     "diameter_mm": ParamProvenance(
@@ -808,6 +836,7 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             if counterbore_diameter and counterbore_depth:
                 features.append(Feature3D(
                     kind="hole",
+                    source_feature_ids=_source_feature_ids(hole),
                     params={
                         "axis": "radial",
                         "diameter_mm": counterbore_diameter,
@@ -892,6 +921,7 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             if entry_offset > 0 and entry_recess_diameter is not None:
                 features.append(Feature3D(
                     kind="hole",
+                    source_feature_ids=_source_feature_ids(pattern),
                     params={
                         "axis": "z",
                         "diameter_mm": entry_recess_diameter,
@@ -928,6 +958,7 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                 params["depth_mm"] = drill_depth
             features.append(Feature3D(
                 kind="hole",
+                source_feature_ids=_source_feature_ids(pattern),
                 params=params,
                 param_provenance={
                     "diameter_mm": ParamProvenance(
@@ -967,6 +998,7 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                 thread_params["length_mm"] = thread_depth
             features.append(Feature3D(
                 kind="thread",
+                source_feature_ids=_source_feature_ids(pattern),
                 params=thread_params,
                 param_provenance={
                     "spec": ParamProvenance(
@@ -1058,6 +1090,7 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                 })
             features.append(Feature3D(
                 kind="hole",
+                source_feature_ids=_source_feature_ids(pattern),
                 params=params,
                 param_provenance={
                     "diameter_mm": ParamProvenance(
@@ -1106,6 +1139,7 @@ def _edge_features(
                 params["angle_deg"] = _num(item.get("angle_deg"))
             features.append(Feature3D(
                 kind=kind,
+                source_feature_ids=_source_feature_ids(item),
                 params=params,
                 param_provenance={
                     "size_mm": ParamProvenance(

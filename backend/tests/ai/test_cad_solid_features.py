@@ -196,3 +196,62 @@ def test_a_plain_shaft_still_builds_exactly_as_before():
     candidate = feature_tree_from_spec(_SHAFT)
     assert candidate is not None
     assert [feature.kind for feature in candidate.features] == ["revolve"]
+
+
+# Ф2.6c: source_feature_ids — which native EMG Feature node(s) (Ф1.2, ids
+# from assign_stable_feature_ids) each compiled operation was built from,
+# so spec_feature_tree_as_graph can draw a realizes edge back to it.
+
+def test_a_plain_shaft_has_no_source_feature_ids_when_nothing_is_id_tagged():
+    """The existing fixtures never carry ids — must stay empty, not guessed."""
+    candidate = feature_tree_from_spec(_SHAFT)
+    assert candidate.features[0].source_feature_ids == []
+
+
+def test_base_revolve_source_feature_ids_cover_outer_and_bore_sections():
+    candidate = feature_tree_from_spec({
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"id": "0:outer:0", "diameter_mm": 80.0, "length_mm": 150.0},
+                {"id": "0:outer:1", "diameter_mm": 60.0, "length_mm": 120.0},
+            ],
+            "bore": [{"id": "0:bore:0", "diameter_mm": 30.0, "length_mm": 270.0}],
+        },
+    })
+    revolve = _of_kind(candidate, "revolve")[0]
+    assert revolve.source_feature_ids == ["0:outer:0", "0:outer:1", "0:bore:0"]
+
+
+def test_groove_keyway_and_chamfer_each_carry_their_own_source_id():
+    candidate = _tree(
+        grooves=[{
+            "id": "0:grooves:0", "axial_position_mm": 250.0,
+            "width_mm": 6.0, "depth_mm": 3.0,
+        }],
+        keyways=[{
+            "id": "0:keyways:0", "axial_start_mm": 40.0, "length_mm": 85.0,
+            "width_mm": 12.0, "depth_mm": 5.0,
+        }],
+        chamfers=[{
+            "id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end",
+        }],
+    )
+    assert _of_kind(candidate, "groove")[0].source_feature_ids == ["0:grooves:0"]
+    assert _of_kind(candidate, "keyway")[0].source_feature_ids == ["0:keyways:0"]
+    assert _of_kind(candidate, "chamfer")[0].source_feature_ids == ["0:chamfers:0"]
+
+
+def test_cross_hole_ring_and_its_counterbore_share_one_source_id():
+    """Four expanded holes plus a counterbore are all ONE read cross_holes[]
+    item — every compiled operation must point back to that same id, not a
+    synthetic per-instance one that does not exist as a Feature node."""
+    candidate = _tree(cross_holes=[{
+        "id": "0:cross_holes:0",
+        "diameter_mm": 10.0, "axial_position_mm": 200.0, "count": 4,
+        "through": False, "depth_mm": 8.5,
+        "counterbore_diameter_mm": 24.0, "counterbore_depth_mm": 3.0,
+    }])
+    holes = _of_kind(candidate, "hole")
+    assert len(holes) == 8  # 4 main + 4 counterbore
+    assert all(hole.source_feature_ids == ["0:cross_holes:0"] for hole in holes)

@@ -48,6 +48,11 @@ class Feature(BaseModel):
         "rib",
     ]
     source_entity_ids: list[str] = Field(default_factory=list, max_length=500)
+    # Ф2.6c: native EMG Feature node id(s) this operation realizes — a
+    # different id namespace than source_entity_ids above, accepted but
+    # unused here for the same reason (the backend draws the realizes edge;
+    # the kernel builds geometry from params only).
+    source_feature_ids: list[str] = Field(default_factory=list, max_length=500)
     params: dict[str, Any] = Field(default_factory=dict)
     param_provenance: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(ge=0, le=1)
