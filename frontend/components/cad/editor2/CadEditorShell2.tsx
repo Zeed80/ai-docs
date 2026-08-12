@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import FeatureTreePanel from "@/components/cad/editor/FeatureTreePanel";
-import PropertiesPanel from "@/components/cad/editor/PropertiesPanel";
 import AssumptionsStrip from "@/components/cad/editor/AssumptionsStrip";
 import Viewport from "@/components/cad/editor2/Viewport";
+import PropertiesPanel2, {
+  type AddFeatureDraftKind,
+} from "@/components/cad/editor2/PropertiesPanel2";
 import Ribbon, {
   RibbonButton,
   RibbonDivider,
@@ -82,6 +84,8 @@ export default function CadEditorShell2({
   const [rebuildTaskId, setRebuildTaskId] = useState<string | null>(null);
   const [rebuildStatus, setRebuildStatus] = useState<string | null>(null);
   const [ribbonTab, setRibbonTab] = useState<RibbonTabId>("inspect");
+  const [addFeatureDraft, setAddFeatureDraft] =
+    useState<AddFeatureDraftKind | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -267,9 +271,25 @@ export default function CadEditorShell2({
         )}
         {ribbonTab === "features" && (
           <>
-            <RibbonPlaceholder icon="⬆" label="Бобышка" comingIn="Фазе 2" />
-            <RibbonPlaceholder icon="⬇" label="Карман" comingIn="Фазе 2" />
-            <RibbonPlaceholder icon="◎" label="Отверстие" comingIn="Фазе 2" />
+            <RibbonButton
+              icon="⬆"
+              label="Бобышка"
+              onClick={() => setAddFeatureDraft("boss")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
+            <RibbonButton
+              icon="⬇"
+              label="Карман"
+              onClick={() => setAddFeatureDraft("pocket")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
+            <RibbonDivider />
             <RibbonPlaceholder icon="⌒" label="Скругление" comingIn="Фазе 3" />
             <RibbonPlaceholder icon="⟂" label="Фаска" comingIn="Фазе 3" />
             <RibbonPlaceholder icon="▢" label="Оболочка" comingIn="Фазе 3" />
@@ -363,10 +383,12 @@ export default function CadEditorShell2({
           <div className="border-b border-white/10 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
             Свойства
           </div>
-          <PropertiesPanel
+          <PropertiesPanel2
             generationId={generationId}
             operation={selectedOperation}
             features={selectedFeatures}
+            addFeatureDraft={addFeatureDraft}
+            onAddFeatureDraftChange={setAddFeatureDraft}
             onSaved={() => void load()}
             onRebuildQueued={(taskId) => {
               setRebuildTaskId(taskId);

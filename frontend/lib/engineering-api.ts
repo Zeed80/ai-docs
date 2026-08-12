@@ -82,24 +82,58 @@ export type EngineeringModelGraphRevision = {
   workflow_status?: string;
   graph: {
     nodes: Array<{ id: string; type: string; name?: string | null }>;
-    edges: Array<{ id: string; type: string; source_id: string; target_id: string }>;
+    edges: Array<{
+      id: string;
+      type: string;
+      source_id: string;
+      target_id: string;
+    }>;
     assertions: Array<{
-      id: string; subject_id: string; predicate: string; value: Record<string, unknown>;
-      origin: string; assurance: string; confidence: number; impacts: string[];
-      evidence_ids: string[]; state: string; hypothesis_id?: string | null;
+      id: string;
+      subject_id: string;
+      predicate: string;
+      value: Record<string, unknown>;
+      origin: string;
+      assurance: string;
+      confidence: number;
+      impacts: string[];
+      evidence_ids: string[];
+      state: string;
+      hypothesis_id?: string | null;
       supersedes_assertion_id?: string | null;
     }>;
-    evidence: Array<{ id: string; kind: string; source_region_id?: string | null; payload: Record<string, unknown> }>;
-    hypothesis_sets: Array<{ id: string; option_ids: string[]; selected_option_id?: string | null }>;
-    build_targets: Array<{
-      id: string; kind: string; root_node_ids: string[]; requirement_ids: string[];
-      critical_impacts: string[]; mass_tolerance_percent: number;
+    evidence: Array<{
+      id: string;
+      kind: string;
+      source_region_id?: string | null;
+      payload: Record<string, unknown>;
     }>;
-    verification: { critical_unresolved_assertion_ids: string[]; issue_codes: string[] };
+    hypothesis_sets: Array<{
+      id: string;
+      option_ids: string[];
+      selected_option_id?: string | null;
+    }>;
+    build_targets: Array<{
+      id: string;
+      kind: string;
+      root_node_ids: string[];
+      requirement_ids: string[];
+      critical_impacts: string[];
+      mass_tolerance_percent: number;
+    }>;
+    verification: {
+      critical_unresolved_assertion_ids: string[];
+      issue_codes: string[];
+    };
     reader_manifest: {
-      max_wall_seconds: number; max_model_calls: number; call_timeout_seconds: number;
-      no_progress_pass_limit: number; calls_used: number; elapsed_seconds: number;
-      no_progress_passes: number; ordinary_attempts: Record<string, number>;
+      max_wall_seconds: number;
+      max_model_calls: number;
+      call_timeout_seconds: number;
+      no_progress_pass_limit: number;
+      calls_used: number;
+      elapsed_seconds: number;
+      no_progress_passes: number;
+      ordinary_attempts: Record<string, number>;
       stop_reason?: string | null;
     };
   };
@@ -158,6 +192,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok)
     throw new Error(`${response.status} ${await response.text()}`);
   return response.json() as Promise<T>;
+}
+
+// Mirrors AddedFeatureRequest in image_generation.py — same shape the old
+// Cad3dPanel add-feature form already used, now sent to the graph-native
+// endpoint instead of the 2D-IR candidate-index one.
+export interface AddedNativeFeature {
+  kind: "boss" | "pocket" | "fillet" | "chamfer" | "shell" | "thread";
+  profile?: "circle" | "rectangle" | null;
+  center_x_mm?: number | null;
+  center_y_mm?: number | null;
+  depth_mm?: number | null;
+  diameter_mm?: number | null;
+  width_mm?: number | null;
+  height_mm?: number | null;
+  edge_key?: string | null;
+  size_mm?: number | null;
+  thickness_mm?: number | null;
+  spec?: string | null;
+  pitch_mm?: number | null;
 }
 
 export type EngineeringDomainArtifactBuild = {
@@ -273,7 +326,8 @@ export const engineeringApi = {
   generationAssertionOverlayUrl: (
     generationId: string,
     assertionId: string,
-    mode: "sheet" | "source" | "candidate" | "overlay" | "difference" = "source",
+    mode:
+      "sheet" | "source" | "candidate" | "overlay" | "difference" = "source",
     proposalId?: string,
   ) => {
     const query = new URLSearchParams({ mode });
@@ -292,10 +346,12 @@ export const engineeringApi = {
       rebuild?: boolean;
     },
   ) =>
-    request<EngineeringModelGraphRevision & {
-      compatibility_spec_updated: boolean;
-      rebuild_task_id?: string | null;
-    }>(
+    request<
+      EngineeringModelGraphRevision & {
+        compatibility_spec_updated: boolean;
+        rebuild_task_id?: string | null;
+      }
+    >(
       `/api/image-gen/${generationId}/model-graph/assertions/${encodeURIComponent(assertionId)}/corrections`,
       { method: "POST", body: JSON.stringify(body) },
     ),
@@ -312,21 +368,44 @@ export const engineeringApi = {
       idempotency_key: string;
       rebuild?: boolean;
     },
-  ) => request<EngineeringModelGraphRevision & {
-    compatibility_spec_updated: boolean;
-    corrected_assertion_ids: string[];
-    rebuild_task_id?: string | null;
-  }>(
-    `/api/image-gen/${generationId}/model-graph/corrections`,
-    { method: "POST", body: JSON.stringify(body) },
-  ),
-  verifyGenerationModelGraph: (generationId: string) =>
-    request<{ state: Record<string, unknown>; issues: Array<Record<string, unknown>> }>(
-      `/api/image-gen/${generationId}/model-graph/verify`,
-      { method: "POST" },
+  ) =>
+    request<
+      EngineeringModelGraphRevision & {
+        compatibility_spec_updated: boolean;
+        corrected_assertion_ids: string[];
+        rebuild_task_id?: string | null;
+      }
+    >(`/api/image-gen/${generationId}/model-graph/corrections`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  // Ф2 нового CAD-редактора: appends a new BuildOperation onto the
+  // graph's CURRENT state (not a re-read spec) and always recompiles —
+  // see AddNativeFeatureRequest's own docstring in image_generation.py.
+  addGenerationModelGraphFeature: (
+    generationId: string,
+    body: {
+      feature: AddedNativeFeature;
+      note: string;
+      idempotency_key: string;
+    },
+  ) =>
+    request<{ generation_id: string; rebuild_task_id: string }>(
+      `/api/image-gen/${generationId}/model-graph/features`,
+      { method: "POST", body: JSON.stringify(body) },
     ),
+  verifyGenerationModelGraph: (generationId: string) =>
+    request<{
+      state: Record<string, unknown>;
+      issues: Array<Record<string, unknown>>;
+    }>(`/api/image-gen/${generationId}/model-graph/verify`, { method: "POST" }),
   startGenerationModelReader: (generationId: string, targetId = "preview") =>
-    request<{ task_id: string; graph_id: string; base_revision: number; target_id: string }>(
+    request<{
+      task_id: string;
+      graph_id: string;
+      base_revision: number;
+      target_id: string;
+    }>(
       `/api/image-gen/${generationId}/model-graph/reader-runs?target_id=${encodeURIComponent(targetId)}`,
       { method: "POST" },
     ),
@@ -338,24 +417,37 @@ export const engineeringApi = {
     request<EngineeringTraceProposal[]>(
       `/api/engineering-model-graphs/revisions/${revisionId}/trace-proposals`,
     ),
-  getAssertionImpact: (revisionId: string, assertionId: string, targetId: string) =>
+  getAssertionImpact: (
+    revisionId: string,
+    assertionId: string,
+    targetId: string,
+  ) =>
     request<EngineeringAssertionImpact>(
       `/api/engineering-model-graphs/revisions/${revisionId}/assertions/${encodeURIComponent(assertionId)}/impact?target_id=${encodeURIComponent(targetId)}`,
     ),
   verifyModelGraph: (revisionId: string) =>
-    request<{ state: Record<string, unknown>; issues: Array<Record<string, unknown>> }>(
-      `/api/engineering-model-graphs/revisions/${revisionId}/verify`,
-      { method: "POST" },
-    ),
+    request<{
+      state: Record<string, unknown>;
+      issues: Array<Record<string, unknown>>;
+    }>(`/api/engineering-model-graphs/revisions/${revisionId}/verify`, {
+      method: "POST",
+    }),
   startModelReader: (graphId: string, targetId = "preview") =>
-    request<{ task_id: string; graph_id: string; base_revision: number; target_id: string }>(
+    request<{
+      task_id: string;
+      graph_id: string;
+      base_revision: number;
+      target_id: string;
+    }>(
       `/api/engineering-model-graphs/graphs/${encodeURIComponent(graphId)}/reader-runs?target_id=${encodeURIComponent(targetId)}`,
       { method: "POST" },
     ),
   getTaskStatus: (taskId: string) =>
-    request<{ task_id: string; status: string; result?: Record<string, unknown> | null }>(
-      `/api/tasks/${taskId}`,
-    ),
+    request<{
+      task_id: string;
+      status: string;
+      result?: Record<string, unknown> | null;
+    }>(`/api/tasks/${taskId}`),
   buildAssemblyDrawing: (assemblyId: string) =>
     request<EngineeringDomainArtifactBuild>(
       `/api/engineering/assemblies/${assemblyId}/model-graph/drawing`,
@@ -371,7 +463,11 @@ export const engineeringApi = {
       `/api/engineering/revisions/${revisionId}/system-model-graph/diagram`,
       { method: "POST" },
     ),
-  graphArtifactUrl: (revisionId: string, artifactId: string, kind: "artifact" | "report" = "artifact") =>
+  graphArtifactUrl: (
+    revisionId: string,
+    artifactId: string,
+    kind: "artifact" | "report" = "artifact",
+  ) =>
     apiUrl(
       `/api/engineering-model-graphs/revisions/${revisionId}/artifacts/${encodeURIComponent(artifactId)}?kind=${kind}`,
     ),

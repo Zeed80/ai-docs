@@ -674,6 +674,15 @@ def spec_feature_tree_as_graph(
         "standard": "standard",
         "guessed": "assumed",
         "propagated": "derived",
+        # Ф2 нового CAD-редактора: a feature added whole in the editor
+        # (add_feature_to_graph) stamps ParamProvenance.origin="human" on
+        # every one of its own params — previously unmapped here (nothing
+        # produced this value on THIS path before), so it silently fell
+        # through to the "assumed" default and rendered as a guess despite
+        # being exactly what the engineer typed. "human" is already a valid
+        # graph Assertion.origin (used by correction assertions) — map it
+        # straight through instead of losing it.
+        "human": "human",
     }
     for index, feature in enumerate(candidate.features):
         operation_id = f"operation:{index}"
@@ -849,6 +858,10 @@ def feature_tree_revision_patch(
         "standard": "standard",
         "guessed": "assumed",
         "propagated": "derived",
+        # Same gap as spec_feature_tree_as_graph's own copy of this map —
+        # see its comment. This is the copy add_feature_to_graph's rebuild
+        # actually goes through (feature_tree_revision_patch).
+        "human": "human",
     }
     active_operation_ids = compile_build_plan(graph, "preview").operation_node_ids
     # Ф2.6c: same fail-closed rule as the first build — only realize Feature

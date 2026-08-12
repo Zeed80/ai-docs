@@ -491,6 +491,175 @@ async def _rebuild_from_spec(
 
 @celery_app.task(
     bind=True,
+    name="cad_trace.add_feature_to_graph",
+    max_retries=0,
+    soft_time_limit=600,
+    time_limit=660,
+)
+def add_feature_to_graph(
+    self,
+    generation_id: str,
+    feature_kind: str,
+    feature_params: dict,
+    note: str,
+    idempotency_key: str,
+) -> dict:
+    """Ф2 нового CAD-редактора (/root/.claude/plans/starry-mapping-hippo.md):
+    add one human-authored BuildOperation on top of the graph's CURRENT
+    state and recompile immediately.
+
+    Deliberately NOT built on _rebuild_from_spec: that path always derives
+    its candidate fresh from ``feature_tree_from_spec(spec)`` (see its own
+    call above) — correct for "the drawing was misread, re-derive from the
+    corrected numbers", but wrong here, since a feature added in the editor
+    has no representation in ``spec`` at all and would be silently dropped
+    on the very next spec-triggered rebuild. This task instead starts from
+    ``feature_tree_from_graph`` — the graph's own current truth, corrections
+    already included — appends one Feature3D, and seals+recompiles from
+    that, exactly mirroring the old Cad3dPanel add-feature endpoint's
+    Feature3D construction (_append_human_features in image_generation.py)
+    but through the graph instead of the abandoned 2D-IR candidate index.
+    """
+    return run_async(
+        _add_feature_to_graph(
+            generation_id, feature_kind, feature_params, note, idempotency_key
+        )
+    )
+
+
+async def _add_feature_to_graph(
+    generation_id: str,
+    feature_kind: str,
+    feature_params: dict,
+    note: str,
+    idempotency_key: str,
+) -> dict:
+    import uuid as _uuid
+
+    from app.ai.cad_emg_compat import feature_tree_from_graph
+    from app.ai.cad_ir.feature_tree import Feature3D, ParamProvenance
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.db.session import _get_session_factory
+    from app.services.engineering_model_graph import (
+        latest_graph_revision,
+        load_graph,
+        persist_feature_tree_revision,
+    )
+
+    factory = _get_session_factory()
+    gen_uuid = _uuid.UUID(generation_id)
+    graph_id = f"image-generation:{generation_id}"
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return {"error": "not found"}
+        params = dict(gen.params or {})
+        owner_sub = gen.owner_sub
+        latest_row = await latest_graph_revision(db, graph_id, lock=True)
+    if latest_row is None:
+        return {"error": "EngineeringModelGraph ещё не создан для этой генерации"}
+    graph = load_graph(latest_row)
+    spec = params.get("spec_corrected") or params.get("spec")
+    if not spec:
+        return {"error": "нет сохранённой спецификации"}
+
+    base_candidate = feature_tree_from_graph(graph, target_id="preview")
+    if base_candidate is None:
+        return {"error": "не удалось прочитать текущее дерево построения из графа"}
+
+    new_feature = Feature3D(
+        kind=feature_kind,
+        source_entity_ids=[],
+        params=feature_params,
+        # Ф3.3's own rule (_append_human_features): every param a human adds
+        # is explicitly "human" provenance — never left unset.
+        param_provenance={
+            key: ParamProvenance(
+                origin="human", detail="добавлено человеком в CAD-редакторе"
+            )
+            for key in feature_params
+        },
+        confidence=1.0,
+    )
+    updated_candidate = base_candidate.model_copy(deep=True)
+    # Same single insertion point _append_human_features already uses: right
+    # before the first "hole" (radial/axial holes are a shaft-specific,
+    # position-sensitive class this editor does not add to yet — Ф3+).
+    insert_at = next(
+        (
+            index
+            for index, feature in enumerate(updated_candidate.features)
+            if feature.kind == "hole"
+        ),
+        len(updated_candidate.features),
+    )
+    updated_candidate.features.insert(insert_at, new_feature)
+    updated_candidate.label = f"{updated_candidate.label}; добавлена операция: {feature_kind}"
+
+    async with factory() as db:
+        engineering_graph_row = await persist_feature_tree_revision(
+            db,
+            graph_id=graph_id,
+            spec=spec,
+            candidate=updated_candidate,
+            producer="human",
+            pass_id=f"human-add-feature:{feature_kind}",
+            idempotency_key=idempotency_key,
+            source_sha256=params.get("normalized_source_sha256"),
+            source_uri=params.get("normalized_source_path"),
+        )
+        engineering_graph = load_graph(engineering_graph_row)
+        await db.commit()
+
+    solid_result = await _build_spec_solid(
+        spec,
+        generation_id,
+        owner_sub,
+        sheet_format=str(params.get("sheet_format") or "").upper() or None,
+        landscape=str(params.get("sheet_orientation") or "landscape").lower()
+        != "portrait",
+        require_source_evidence=not bool(params.get("spec_corrected")),
+        source_sha256=params.get("normalized_source_sha256"),
+        source_uri=params.get("normalized_source_path"),
+        engineering_graph_override=engineering_graph,
+    )
+    if not solid_result or not solid_result.get("built"):
+        return {
+            "error": (solid_result or {}).get("error") or "деталь не собралась",
+            "built": False,
+        }
+    result_graph = solid_result.pop("_engineering_model_graph", None)
+    if result_graph is None or result_graph.canonical_sha256 != engineering_graph.canonical_sha256:
+        return {"error": "CAD build returned a different EMG revision", "built": False}
+    solid_result.pop("_sheet_ir", None)
+    solid_result.pop("_dimensions", None)
+
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return {"error": "not found"}
+        gen.params = {
+            **(gen.params or {}),
+            "solid_3d": solid_result,
+            "engineering_model_graph": {
+                "revision_id": str(engineering_graph_row.id),
+                "graph_id": engineering_graph_row.graph_id,
+                "revision": engineering_graph_row.revision,
+                "canonical_sha256": engineering_graph_row.canonical_sha256,
+            },
+        }
+        gen.status = ImageGenStatus.done
+        await db.commit()
+    return {
+        "ok": True,
+        "generation_id": generation_id,
+        "feature_kind": feature_kind,
+        "note": note,
+    }
+
+
+@celery_app.task(
+    bind=True,
     name="cad_trace.run_cad_trace",
     max_retries=2,
     soft_time_limit=600,

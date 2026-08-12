@@ -2425,6 +2425,59 @@ def _append_human_features(candidate, additions: list[AddedFeatureRequest]):
     return updated
 
 
+class AddNativeFeatureRequest(BaseModel):
+    """Ф2 нового CAD-редактора (/root/.claude/plans/starry-mapping-hippo.md):
+    add one human-authored feature on top of the CURRENT EMG graph — the
+    graph-native sibling of AddedFeatureRequest above, which the OLD
+    Cad3dPanel add-feature endpoint (POST .../ir/feature-tree-candidates/
+    {index}/step) applies to a 2D-IR ranked candidate instead. Reuses
+    AddedFeatureRequest's own profile/edge validation unchanged — same
+    shape, different destination."""
+
+    feature: AddedFeatureRequest
+    note: str = Field(min_length=1, max_length=1000)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+
+@router.post("/{generation_id}/model-graph/features")
+async def add_generation_model_graph_feature(
+    generation_id: uuid.UUID,
+    body: AddNativeFeatureRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Ф2 нового CAD-редактора: appends a new BuildOperation onto the
+    graph's own current state (cad_trace.add_feature_to_graph —
+    feature_tree_from_graph + persist_feature_tree_revision +
+    _build_spec_solid, all reused unchanged) and always recompiles. Unlike
+    .../model-graph/corrections, the graph mutation itself happens inside
+    the async task (a brand-new BuildOperation has no existing assertion to
+    patch synchronously), so the immediate response carries only the
+    queued task id — the frontend already polls rebuild_task_id and
+    reloads on success, exactly as it does for a correction rebuild.
+    """
+    gen, row, graph = await _owned_generation_graph(generation_id, db, user)
+    if not any(item.type == "BuildOperation" for item in graph.nodes):
+        raise HTTPException(422, "В графе ещё нет ни одной операции построения")
+
+    from app.tasks.cad_trace import add_feature_to_graph
+
+    task = add_feature_to_graph.apply_async(
+        args=[
+            str(generation_id),
+            body.feature.kind,
+            body.feature.model_dump(exclude={"kind"}, exclude_none=True),
+            body.note,
+            body.idempotency_key,
+        ],
+        queue="celery",
+    )
+    return {
+        "generation_id": str(generation_id),
+        "rebuild_task_id": task.id,
+    }
+
+
 @router.get("/{generation_id}/ir/feature-tree-candidates")
 async def get_feature_tree_candidates(
     generation_id: uuid.UUID,
