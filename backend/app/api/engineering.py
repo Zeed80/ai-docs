@@ -3,9 +3,9 @@
 import pathlib
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -1188,6 +1188,83 @@ async def parse_construction_ifc(
             raise HTTPException(422, f"IfcOpenShell не смог прочитать файл: {exc}") from exc
     return {
         "construction_model": model.model_dump(mode="json") if model else None,
+        "report": report,
+    }
+
+
+@router.post(
+    "/construction/2d/parse",
+    summary=(
+        "Skill: engineering.construction_2d_parse — "
+        "read a 2D floor plan into a ConstructionModel."
+    ),
+)
+async def parse_construction_drawing(
+    file: UploadFile = File(...),
+    site_name: str | None = None,
+    building_name: str | None = None,
+    allow_cloud: bool = False,
+) -> dict:
+    """Ф5.2: VLM reads orthogonal wall/opening/storey semantics — the
+    coordinates, thickness and height actually dimensioned on the sheet;
+    deterministic code (`construction_reader.construction_read_as_model`,
+    which reuses `ConstructionModel`'s OWN axis-aligned containment check)
+    builds the geometry. A non-orthogonal wall or a wall with no readable
+    height is excluded individually and reported — never guessed. Same
+    stateless {construction_model, report} shape as
+    `/construction/ifc/parse`: submit `construction_model` as
+    `payload.construction_model` when creating a revision.
+
+    No real architectural drawing corpus exists in this repository yet — see
+    `construction_reader.py`'s own module docstring for that caveat.
+    """
+    from app.ai.construction_reader import read_construction_drawing
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(422, "Пустой файл чертежа")
+    model, report = await read_construction_drawing(
+        raw, allow_cloud=allow_cloud, site_name=site_name, building_name=building_name
+    )
+    return {
+        "construction_model": model.model_dump(mode="json") if model else None,
+        "report": report,
+    }
+
+
+@router.post(
+    "/system/2d/parse",
+    summary=(
+        "Skill: engineering.system_2d_parse — read a P&ID/MEP/electrical/"
+        "hydraulic diagram into an EngineeringSystemModel."
+    ),
+)
+async def parse_system_drawing(
+    file: UploadFile = File(...),
+    profile: Literal["mep", "electrical", "hydraulic", "pid"] = Query(...),
+    allow_cloud: bool = False,
+) -> dict:
+    """Ф5.3: single-pass VLM read of equipment/ports/connections — this
+    domain carries no geometry, so unlike the mechanical/construction
+    readers there is no separate deterministic geometry step; fail-closed
+    gating instead comes straight from `EngineeringSystemModel`'s own
+    validator (medium/direction compatibility, port cardinality), applied
+    connection-by-connection in `system_reader.system_read_as_model` so one
+    bad connection excludes only itself. Same stateless
+    {system_model, report} shape the existing `/system-model-graph`
+    endpoints already consume via `payload.system_model`.
+
+    No real P&ID/MEP drawing corpus exists in this repository yet — see
+    `system_reader.py`'s own module docstring for that caveat.
+    """
+    from app.ai.system_reader import read_system_diagram
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(422, "Пустой файл схемы")
+    model, report = await read_system_diagram(raw, profile=profile, allow_cloud=allow_cloud)
+    return {
+        "system_model": model.model_dump(mode="json") if model else None,
         "report": report,
     }
 
