@@ -36,7 +36,10 @@ import {
 
 import AssurancePanel from "@/components/cad/AssurancePanel";
 import CadModelTracePanel from "@/components/cad/CadModelTracePanel";
-import type { KernelInput, ModelEvidence } from "@/components/cad/CadModelTracePanel";
+import type {
+  KernelInput,
+  ModelEvidence,
+} from "@/components/cad/CadModelTracePanel";
 import SpecEditorPanel from "@/components/cad/SpecEditorPanel";
 import Cad3dPanel from "@/components/cad/Cad3dPanel";
 import CommandLine, { CommandPrompt } from "@/components/cad/CommandLine";
@@ -167,7 +170,9 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   const [tool, setTool] = useState<Tool>("select");
   const [showSource, setShowSource] = useState(true);
   const [sourceOpacity, setSourceOpacity] = useState(0.45);
-  const [evidenceHighlight, setEvidenceHighlight] = useState<number[] | null>(null);
+  const [evidenceHighlight, setEvidenceHighlight] = useState<number[] | null>(
+    null,
+  );
   const hasNormalizedSource = Boolean(gen.params?.normalized_source_path);
   const [sourceVariant, setSourceVariant] = useState<"original" | "normalized">(
     hasNormalizedSource ? "normalized" : "original",
@@ -1261,8 +1266,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   )?.consensus;
   const solidSummary = gen.params?.solid_3d as Solid3dSummary | undefined;
   const cadReading = gen.params?.cad_reading as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   const solidInput = gen.params?.solid_input as KernelInput | undefined;
   const drawingGraph = gen.params?.drawing_graph as
     | {
@@ -1374,8 +1378,12 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           </summary>
           <div className="mt-2">
             <div className="mb-1 flex items-center justify-between gap-3 text-[10px]">
-              <span>{cadProcess.current_message ?? cadProcess.current_stage ?? "—"}</span>
-              <span>{Math.max(0, Math.min(100, cadProcess.progress_pct ?? 0))}%</span>
+              <span>
+                {cadProcess.current_message ?? cadProcess.current_stage ?? "—"}
+              </span>
+              <span>
+                {Math.max(0, Math.min(100, cadProcess.progress_pct ?? 0))}%
+              </span>
             </div>
             <div className="h-2 overflow-hidden rounded bg-black/40">
               <div
@@ -1401,7 +1409,9 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                 }`}
               >
                 <div className="flex flex-wrap gap-x-2 text-[10px]">
-                  <span className="font-mono">#{event.sequence ?? index + 1}</span>
+                  <span className="font-mono">
+                    #{event.sequence ?? index + 1}
+                  </span>
                   <span className="font-mono text-zinc-300">{event.stage}</span>
                   <span>{event.status}</span>
                   {event.at && (
@@ -1550,8 +1560,17 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
               </span>
             </div>
             <div className="mt-3 overflow-hidden rounded border border-white/10 bg-zinc-950">
+              {/* B1: the spec/EMG pipeline's own preview never had per-face
+                  click affordance — only Ф10's unrelated Cad3dPanel did.
+                  _build_spec_solid already emits the same topology.json
+                  sidecar (Ф3.1/3.2), just never passed here. */}
               <CadModelViewer
                 url={solidPreviewUrl(gen.id)}
+                topologyUrl={
+                  solidSummary.paths?.topology
+                    ? solidPreviewUrl(gen.id, "topology")
+                    : undefined
+                }
                 loadingLabel={t("vector.cad_preview_loading")}
                 errorLabel={t("vector.cad_preview_error")}
               />
@@ -1600,8 +1619,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         generationId={gen.id}
         spec={
           (gen.params?.spec_corrected ?? gen.params?.spec) as
-            | Record<string, unknown>
-            | undefined
+            Record<string, unknown> | undefined
         }
         assumptions={specAssumptions}
         busy={busy}

@@ -53,16 +53,30 @@ export default function AssurancePanel({
   const rasterRan = crosscheck?.raster_check === "checked";
   const solidVerified = Boolean(
     (solid?.verification as { ok?: boolean } | undefined)?.ok &&
-      solid?.build_status === "verified",
+    solid?.build_status === "verified",
   );
   const sheetVerified = Boolean(
     (solid?.sheet?.verification as { ok?: boolean } | undefined)?.ok,
+  );
+  // A2/UX: solid.assumptions carries the 3D build's own human-readable
+  // notes AHEAD of raw "critical assertion <id>" entries (see
+  // cad_emg_compat.feature_tree_from_graph/feature_tree_revision_patch) —
+  // the latter name WHICH assertion is unconfirmed, not something a person
+  // reads, so they are filtered out of this panel rather than shown as if
+  // they were equally actionable.
+  const buildAssumptions = useMemo(
+    () =>
+      (solid?.assumptions ?? []).filter(
+        (item) => !item.startsWith("critical assertion "),
+      ),
+    [solid?.assumptions],
   );
 
   const nothingToShow =
     !crosscheck &&
     !dimensionCheck &&
     !(assumptions ?? []).length &&
+    !buildAssumptions.length &&
     !(followups ?? []).length &&
     !consensus &&
     !solid;
@@ -158,7 +172,8 @@ export default function AssurancePanel({
               typeof solid.source_projection_verification.score === "number"
                 ? `${Math.round(solid.source_projection_verification.score * 100)}%`
                 : "",
-              ...(solid.source_projection_verification.paired_comparison?.issues ?? []),
+              ...(solid.source_projection_verification.paired_comparison
+                ?.issues ?? []),
               ...(solid.source_projection_verification.missing_evidence ?? []),
             ]
               .filter(Boolean)
@@ -230,6 +245,37 @@ export default function AssurancePanel({
               {t("vector.assurance_fix_spec")}
             </button>
           )}
+        </div>
+      )}
+
+      {/* A2/UX: solid_3d.assumptions — the 3D build's OWN provisional
+          values (an averaged step length, an omitted bore) — computed and
+          shown to nobody until now, same failure mode the panel above this
+          one already exists to remove. A real value from a real live run
+          reads like "0:outer:4: длина ступени Ø29.5 не указана —
+          построено с предположением 29.17 мм..." — long, but it IS the
+          actual answer to "what did the system guess and why", not a raw
+          assertion id. */}
+      {(buildAssumptions ?? []).length > 0 && (
+        <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/5 p-2">
+          <p className="font-medium text-amber-300">
+            {t("vector.assurance_build_assumed_title", {
+              count: (buildAssumptions ?? []).length,
+            })}
+          </p>
+          <p className="mt-0.5 text-[11px] text-amber-200/70">
+            {t("vector.assurance_build_assumed_hint")}
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {(buildAssumptions ?? []).map((item, index) => (
+              <li
+                key={`${index}-${item.slice(0, 40)}`}
+                className="text-zinc-300"
+              >
+                {item}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </section>

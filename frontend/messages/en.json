@@ -732,6 +732,8 @@
       "assurance_assumed_title": "Values assumed rather than read: {count}",
       "assurance_assumed_hint": "These could not be read off the sheet. Check them against the original and correct them — the model is parametric, so rebuilding is instant.",
       "assurance_fix_spec": "Correct the specification",
+      "assurance_build_assumed_title": "3D built with assumptions — needs review: {count}",
+      "assurance_build_assumed_hint": "The model was built so you have something to look at and fix, but these values are not what the drawing says. Correct them in the specification editor below (or confirm as-is) — release is blocked until then.",
       "spec_editor_title": "The reading (editable)",
       "spec_editor_progress": "Full-model readiness: {done} of {total}",
       "spec_editor_check_profile": "Outer and inner profiles",
