@@ -607,6 +607,26 @@ def test_verification_rejects_multiple_or_non_manifold_solids():
     assert not verify_solid_against_spec(report, spec).ok
 
 
+def test_verification_survives_a_real_bore_with_no_stated_length():
+    """Regression: this crashed live (TypeError: float(None)) the first time
+    A2's guessed/omitted-bore build reached verify_solid_against_spec — the
+    volume check still read the RAW spec's bore[] (still "l": None) instead
+    of the candidate's own bore_points (correctly empty, bore omitted)."""
+    spec = _shaft_spec(main_view={"bore": [{"diameter_mm": 15.7}]})
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    revolve = candidate.features[0]
+    assert "bore_points" not in revolve.params
+
+    result = verify_solid_against_spec(_report(100.0, 50.0), spec, candidate)
+
+    assert result.checks["stated_length_mm"] == 100.0
+    # No crash is the headline assertion; the bore genuinely isn't modelled,
+    # so the expected volume is the outer profile alone.
+    outer_only_volume = result.checks["profile_volume_upper_mm3"]
+    assert outer_only_volume > 0
+
+
 def test_hollow_spec_rejects_solid_outer_profile_volume():
     spec = _shaft_spec(main_view={
         "bore": [{"diameter_mm": 20, "length_mm": 100}],

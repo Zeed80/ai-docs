@@ -254,6 +254,31 @@ def _profile_points(sections: list[dict]) -> list[dict[str, float]]:
     return points
 
 
+def _profile_volume_from_points(points: list[dict]) -> float:
+    """Same frustum-sum math as :func:`_profile_volume_mm3`, from compiled
+    ``profile_points``/``bore_points`` (two per section: enter, leave)
+    instead of raw spec sections.
+
+    A2: when a step's length was provisionally filled in, the raw spec
+    section's own ``"l"`` is still ``None`` — ``_profile_volume_mm3`` would
+    crash on it (``float(None)``). ``profile_points`` is what was actually
+    built, guessed length included, so reading the volume from there is
+    exact for a normal fully-stated build too (same arithmetic) and correct
+    for a guessed one.
+    """
+    volume = 0.0
+    for index in range(0, len(points) - 1, 2):
+        start, end = points[index], points[index + 1]
+        length = float(end["z"]) - float(start["z"])
+        start_diameter = float(start["r"]) * 2.0
+        end_diameter = float(end["r"]) * 2.0
+        volume += (
+            math.pi * length / 12.0
+            * (start_diameter**2 + start_diameter * end_diameter + end_diameter**2)
+        )
+    return volume
+
+
 def _profile_volume_mm3(sections: list[dict]) -> float:
     """Exact volume of coaxial cylindrical/frustum sections before cuts."""
     import math
@@ -1319,6 +1344,18 @@ def verify_solid_against_spec(
         else sum(float(section["l"]) for section in outer if section.get("l"))
     )
     stated_diameter = max((float(section["d"]) for section in outer), default=0.0)
+    # A2: candidate is the only trustworthy source once it exists — its
+    # bore_points is correctly empty when an unguessable bore was omitted
+    # (a real production case), whereas the raw spec's bore[] still has that
+    # section with "l": None and would crash _profile_volume_mm3. Only fall
+    # back to the raw spec when there is no candidate at all (a test
+    # convenience; the one production caller always passes one).
+    bore_points = (revolve.params.get("bore_points") if revolve else None) or []
+    if candidate is not None:
+        bore_volume = _profile_volume_from_points(bore_points) if bore_points else 0.0
+    else:
+        raw_bore = parts[0].get("bore") or []
+        bore_volume = _profile_volume_mm3(raw_bore) if raw_bore else 0.0
 
     bounds = report.get("bounds_mm") or {}
     built_length = float(bounds.get("z") or 0.0)
@@ -1354,9 +1391,12 @@ def verify_solid_against_spec(
         and report.get("solid_count") == 1
         and float(report.get("volume_mm3") or 0.0) > 0
     )
-    outer_volume = _profile_volume_mm3(outer)
-    bore = parts[0].get("bore") or []
-    expected_base_volume = outer_volume - (_profile_volume_mm3(bore) if bore else 0.0)
+    # Same candidate-first, raw-spec-fallback rule as stated_length above.
+    outer_volume = (
+        _profile_volume_from_points(profile_points) if profile_points
+        else _profile_volume_mm3(outer)
+    )
+    expected_base_volume = outer_volume - bore_volume
     built_volume = float(report.get("volume_mm3") or 0.0)
     # Every post-base rotation feature is subtractive or cosmetic. Therefore a
     # volume ABOVE the read outer-minus-bore profile proves that a cavity/cut
