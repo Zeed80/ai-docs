@@ -326,6 +326,52 @@ def test_missing_step_length_is_a_warning_not_a_blocker():
     assert not any("0:outer:1" in item for item in gate["blockers"])
 
 
+def test_a_bore_with_no_stated_length_anywhere_builds_solid_not_refused():
+    """Real live case (2026-08-12 shaft): a single Ø15.7 bore section with no
+    length has nothing else in its own list to average from — unlike an
+    outer step, a cavity's depth cannot be honestly guessed from nothing.
+    Falls back to the SAME already-existing, already-reviewable outcome as
+    no section view at all: solid, bore not modelled — never refused."""
+    candidate = feature_tree_from_spec({
+        "part": "Вал",
+        "main_view": {"type": "тело вращения (вал)", "outer": [
+            {"id": "0:outer:0", "diameter_mm": 30.0, "length_mm": 40.0},
+            {"id": "0:outer:1", "diameter_mm": 50.0, "length_mm": 60.0},
+        ], "bore": [
+            {"id": "0:bore:0", "diameter_mm": 15.7},
+        ]},
+    })
+    assert candidate is not None
+    revolve = _of_kind(candidate, "revolve")[0]
+    assert "bore_points" not in revolve.params
+    # The OUTER profile itself was fully stated — not tainted by the bore gap.
+    assert revolve.param_provenance["profile_points"].origin == "stated"
+    assert any(
+        "расточка" in item and "не может быть построена" in item
+        for item in candidate.missing_data
+    )
+
+
+def test_a_bore_missing_only_some_lengths_still_averages_normally():
+    """A bore with >=1 known length is the SAME averaging case as outer —
+    only a bore with NOTHING known anywhere falls back to no-bore."""
+    candidate = feature_tree_from_spec({
+        "part": "Вал",
+        "main_view": {"type": "тело вращения (вал)", "outer": [
+            {"id": "0:outer:0", "diameter_mm": 30.0, "length_mm": 40.0},
+            {"id": "0:outer:1", "diameter_mm": 50.0, "length_mm": 60.0},
+        ], "bore": [
+            {"id": "0:bore:0", "diameter_mm": 15.7, "length_mm": 30.0},
+            {"id": "0:bore:1", "diameter_mm": 12.0},
+        ]},
+    })
+    assert candidate is not None
+    revolve = _of_kind(candidate, "revolve")[0]
+    assert "bore_points" in revolve.params
+    assert revolve.param_provenance["bore_points"].origin == "guessed"
+    assert any("0:bore:1" in item for item in candidate.missing_data)
+
+
 def test_a_fully_stated_shaft_never_carries_a_guessed_provenance():
     """No regression for the common case: nothing to guess, nothing flagged."""
     candidate = feature_tree_from_spec(_SHAFT)

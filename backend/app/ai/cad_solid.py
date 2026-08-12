@@ -586,11 +586,26 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
         outer, outer_guess_notes = outer_filled
     bore = body.get("bore") or []
     bore_guess_notes: list[str] = []
+    bore_unusable_note: str | None = None
     if bore and not _sections_are_complete(bore):
         bore_filled = _fill_provisional_step_lengths(bore)
         if bore_filled is None:
-            return None
-        bore, bore_guess_notes = bore_filled
+            # Unlike a step in a multi-section OUTER profile, a bore with NO
+            # known length anywhere in it (a real live case: one Ø15.7
+            # section, no length at all) has nothing honest to interpolate
+            # a depth from — a cavity could plausibly be 5mm or 300mm deep.
+            # Build the solid WITHOUT the bore instead of refusing the whole
+            # part: the SAME already-existing, already-reviewable outcome as
+            # a sheet with no section view at all (see the "else" branch
+            # below) — never a fabricated depth for a hollow.
+            bore_unusable_note = (
+                "расточка прочитана без длины и не может быть построена даже "
+                "предположительно (нет других участков расточки для оценки) "
+                "— деталь построена сплошной, полость не учтена"
+            )
+            bore = []
+        else:
+            bore, bore_guess_notes = bore_filled
 
     params: dict[str, Any] = {"profile_points": _profile_points(outer)}
     provenance = {
@@ -603,6 +618,8 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
         )
     }
     missing: list[str] = [*outer_guess_notes, *bore_guess_notes]
+    if bore_unusable_note:
+        missing.append(bore_unusable_note)
     bore_offset = 0.0
     if bore:
         bore_points = _profile_points(bore)
@@ -633,7 +650,7 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
             missing.append(
                 "расточка длиннее детали — проверьте прочитанные длины"
             )
-    else:
+    elif not bore_unusable_note:
         missing.append(
             "разрез не прочитан: деталь построена сплошной, полость не учтена"
         )
