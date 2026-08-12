@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import CadModelViewer from "@/components/studio/CadModelViewer";
 import FeatureTreePanel from "@/components/cad/editor/FeatureTreePanel";
 import PropertiesPanel from "@/components/cad/editor/PropertiesPanel";
 import AssumptionsStrip from "@/components/cad/editor/AssumptionsStrip";
+import Viewport from "@/components/cad/editor2/Viewport";
 import Ribbon, {
+  RibbonButton,
+  RibbonDivider,
   RibbonPlaceholder,
   type RibbonTabId,
 } from "@/components/cad/editor2/Ribbon";
@@ -55,15 +57,15 @@ function StatusBadge({ solid }: { solid?: Solid3dSummary }) {
   );
 }
 
-/** Фаза 0 нового плана (см. /root/.claude/plans/starry-mapping-hippo.md):
- * каркас ленточного редактора — тот же граф/данные/панели, что и текущий
+/** Фазы 0-1 нового плана (см. /root/.claude/plans/starry-mapping-hippo.md):
+ * ленточный редактор — тот же граф/данные/панели, что и текущий
  * CadEditorShell (импортированы, не скопированы: FeatureTreePanel,
  * PropertiesPanel, AssumptionsStrip, emg-tree.ts), обёрнутые новой
- * `Ribbon`-оболочкой. Пока — точный функциональный паритет: ни одна
- * возможность не добавлена и не убрана, только новая рамка вокруг.
- * Верхняя строка (назад/статус/пересобрать/принять/экспорт) оставлена
- * БЕЗ ИЗМЕНЕНИЙ намеренно — переезд её действий в вкладку "Проверка"
- * ленты запланирован Фазой 1, не раньше (нулевой риск регрессии здесь). */
+ * `Ribbon`-оболочкой, которая теперь и владеет действиями (Ф1: пересобрать/
+ * принять/экспорт переехали в вкладку "Проверка" — верхняя строка осталась
+ * только для навигации/статуса). Всё ещё функциональный паритет: ни одна
+ * возможность не добавлена и не убрана относительно /cad/[id]/editor,
+ * только новая раскладка вокруг тех же данных. */
 export default function CadEditorShell2({
   generationId,
 }: {
@@ -247,27 +249,6 @@ export default function CadEditorShell2({
             Пересборка… {rebuildStatus}
           </span>
         )}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            disabled={busy || Boolean(rebuildTaskId)}
-            onClick={() => void handleRebuildNow()}
-            className="rounded border border-white/15 px-3 py-1.5 text-xs text-zinc-200 hover:bg-white/5 disabled:opacity-40"
-          >
-            ↻ Пересобрать
-          </button>
-          {!gen.accepted && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void handleAccept()}
-              className="rounded bg-emerald-500/20 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-40"
-            >
-              ✓ Принять
-            </button>
-          )}
-          <ExportMenu generationId={generationId} accepted={gen.accepted} />
-        </div>
       </header>
 
       <Ribbon active={ribbonTab} onChange={setRibbonTab}>
@@ -315,10 +296,24 @@ export default function CadEditorShell2({
           </>
         )}
         {ribbonTab === "inspect" && (
-          <span className="px-2 text-[11px] text-zinc-500">
-            Действия пересобрать/принять/экспорт переедут сюда в Фазе 1 — пока
-            доступны в верхней строке справа.
-          </span>
+          <>
+            <RibbonButton
+              icon="↻"
+              label="Пересобрать"
+              onClick={() => void handleRebuildNow()}
+              disabled={busy || Boolean(rebuildTaskId)}
+            />
+            {!gen.accepted && (
+              <RibbonButton
+                icon="✓"
+                label="Принять"
+                onClick={() => void handleAccept()}
+                disabled={busy}
+              />
+            )}
+            <RibbonDivider />
+            <ExportMenu generationId={generationId} accepted={gen.accepted} />
+          </>
         )}
       </Ribbon>
 
@@ -348,36 +343,15 @@ export default function CadEditorShell2({
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <div className="relative min-h-0 flex-1">
-            {hasModel && guessedOperationIds.size > 0 && (
-              <div className="pointer-events-none absolute left-2 top-2 z-10 flex items-center gap-3 rounded bg-zinc-950/70 px-2 py-1 text-[10px] text-zinc-300">
-                <span className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-sm border border-amber-400 bg-amber-400/40" />
-                  требует проверки
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-sm border border-sky-400 bg-sky-400/40" />
-                  выбрано
-                </span>
-              </div>
-            )}
-            {hasModel ? (
-              <CadModelViewer
-                url={modelUrl}
-                topologyUrl={topologyUrl}
-                loadingLabel="Загрузка модели…"
-                errorLabel="Не удалось загрузить модель"
-                operationBounds={operationBounds}
-                flaggedOperationIds={guessedOperationIds}
-                selectedOperationId={selectedOperationId}
-                onOperationClick={handleOperationClick}
-              />
-            ) : (
-              <div className="grid h-full place-items-center text-sm text-zinc-600">
-                3D-модель ещё не построена
-              </div>
-            )}
-          </div>
+          <Viewport
+            hasModel={hasModel}
+            modelUrl={modelUrl}
+            topologyUrl={topologyUrl}
+            operationBounds={operationBounds}
+            flaggedOperationIds={guessedOperationIds}
+            selectedOperationId={selectedOperationId}
+            onOperationClick={handleOperationClick}
+          />
           <AssumptionsStrip
             assumptions={assumptions}
             operations={tree?.operations ?? []}
