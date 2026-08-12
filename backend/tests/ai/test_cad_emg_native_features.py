@@ -10,7 +10,7 @@ cover yet).
 
 from __future__ import annotations
 
-from app.ai.cad_emg_compat import native_feature_graph_additions
+from app.ai.cad_emg_compat import feature_spec_path, native_feature_graph_additions
 
 
 def _node_ids(nodes, node_type=None):
@@ -160,3 +160,24 @@ def test_duplicate_view_id_is_only_emitted_once():
 
     assert list(_node_ids(nodes, "View")) == ["view:front"]
     assert len(_edges_of_type(edges, "contains")) == 2  # root→sheet, sheet→front only
+
+
+def test_feature_spec_path_decodes_main_view_list_item():
+    assert feature_spec_path("0:chamfers:0") == "main_view.chamfers[0]"
+
+
+def test_feature_spec_path_decodes_part_index_offset_by_one():
+    # body_index 1 = parts[0], 2 = parts[1] — main_view is always body_index 0.
+    assert feature_spec_path("1:outer:0") == "parts[0].outer[0]"
+    assert feature_spec_path("2:bore:3") == "parts[1].bore[3]"
+
+
+def test_feature_spec_path_decodes_nested_profile_list():
+    assert feature_spec_path("1:profile.holes:0") == "parts[0].profile.holes[0]"
+
+
+def test_feature_spec_path_returns_none_for_ids_it_did_not_assign():
+    assert feature_spec_path("chamfer-left") is None  # no assign_stable_feature_ids shape
+    assert feature_spec_path("0:chamfers") is None  # missing index segment
+    assert feature_spec_path("x:chamfers:0") is None  # non-numeric body_index
+    assert feature_spec_path("0:chamfers:y") is None  # non-numeric index

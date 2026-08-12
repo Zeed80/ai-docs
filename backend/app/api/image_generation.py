@@ -204,15 +204,44 @@ def _apply_compat_spec_update(
 ) -> bool:
     """Mirror one corrected assertion into the legacy compatibility spec.
 
-    Only ``product:legacy-spec`` assertions have a corresponding leaf there;
-    anything else (a Feature, a Constraint, …) has no compatibility-view
-    counterpart to update, and an ``interval``/``enum_set``/``expression``
-    value has no single scalar to mirror.
+    Two subjects have a corresponding leaf there:
+
+    - ``product:legacy-spec`` assertions — the predicate IS already that
+      leaf's own dotted path.
+    - ``feature:<id>`` assertions whose predicate is ``feature.param.<name>``
+      or ``feature.location`` — the descriptive Ф1.2 Feature graph, mirrored
+      onto the SAME underlying spec leaf via :func:`feature_spec_path`
+      (decoding the id ``assign_stable_feature_ids`` assigned it, not a
+      guess). This is what lets a human correct the native Feature graph
+      directly and have geometry actually follow: the existing rebuild
+      recompiles from this same compatibility spec, unchanged.
+
+    Anything else (a Constraint, a BuildOperation with no source Feature —
+    e.g. one added fresh in the 3D editor, ``feature.kind`` — which names a
+    LIST membership, not a leaf value) has no compatibility-view counterpart
+    to update, and an ``interval``/``enum_set``/``expression`` value has no
+    single scalar to mirror.
     """
-    if previous.subject_id != "product:legacy-spec" or value.kind not in {"exact", "unknown"}:
+    if value.kind not in {"exact", "unknown"}:
         return False
     compatible_value = value.value if value.kind == "exact" else None
-    return _set_compat_spec_value(compatibility, previous.predicate, compatible_value)
+    if previous.subject_id == "product:legacy-spec":
+        return _set_compat_spec_value(compatibility, previous.predicate, compatible_value)
+    if previous.subject_id.startswith("feature:"):
+        from app.ai.cad_emg_compat import feature_spec_path
+        from app.domain.emg_predicates import FEATURE_PARAM_PREFIX, PREDICATE
+
+        if previous.predicate.startswith(FEATURE_PARAM_PREFIX):
+            field = previous.predicate.removeprefix(FEATURE_PARAM_PREFIX)
+        elif previous.predicate == PREDICATE.FEATURE_LOCATION:
+            field = "location"
+        else:
+            return False
+        base_path = feature_spec_path(previous.subject_id.removeprefix("feature:"))
+        if base_path is None:
+            return False
+        return _set_compat_spec_value(compatibility, f"{base_path}.{field}", compatible_value)
+    return False
 
 
 def _build_human_correction_change(
@@ -1085,7 +1114,10 @@ async def correct_generation_model_assertion(
     if body.rebuild and not compatibility_updated:
         raise HTTPException(
             422,
-            "Автопересборка доступна только для assertion, связанного с compatibility spec",
+            "Автопересборка доступна только для assertion со значением, зеркалируемым в "
+            "спецификацию (product:legacy-spec, или feature.param.*/feature.location "
+            "с id от assign_stable_feature_ids) — не для feature.kind и не для правок "
+            "BuildOperation без исходной Feature.",
         )
     source = next((item for item in graph.sources if item.uri), None)
     location = next(
@@ -1213,7 +1245,13 @@ async def correct_generation_model_assertions_batch(
         )
 
     if body.rebuild and not compatibility_updated:
-        raise HTTPException(422, "Автопересборка доступна только для assertions compatibility spec")
+        raise HTTPException(
+            422,
+            "Автопересборка доступна только для assertions со значением, зеркалируемым в "
+            "спецификацию (product:legacy-spec, или feature.param.*/feature.location "
+            "с id от assign_stable_feature_ids) — не для feature.kind и не для правок "
+            "BuildOperation без исходной Feature.",
+        )
     if compatibility_updated:
         params["spec_corrected"] = compatibility
         params["spec_correction_event_id"] = correction_event_id

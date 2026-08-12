@@ -351,6 +351,142 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert denied_download.status_code == 404
 
 
+async def _seed_feature_correction_graph(db_session, monkeypatch):
+    """One Feature node (Ф1.2, descriptive) whose feature.param./feature.kind
+    assertions correspond to a real spec leaf — the fixture the two tests
+    below use to prove a Feature-graph correction reaches the compatibility
+    spec (and, from there, the existing rebuild) while feature.kind does not.
+    """
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.domain.engineering_model_graph import (
+        Assertion,
+        BuildTarget,
+        EngineeringModelGraph,
+        ExactValue,
+        GraphNode,
+        GraphSource,
+    )
+    from app.services.engineering_model_graph import persist_pipeline_graph
+
+    objects: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.upload_file",
+        lambda content, path, _content_type: objects.setdefault(path, content),
+    )
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.download_file",
+        lambda path: objects[path],
+    )
+    monkeypatch.setattr(
+        "app.api.image_generation.download_file",
+        lambda path: objects[path],
+    )
+    generation = ImageGeneration(
+        owner_sub="dev-user",
+        operation="vectorize",
+        status=ImageGenStatus.done,
+        params={"spec": {"main_view": {"chamfers": [
+            {"id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end"},
+        ]}}},
+    )
+    db_session.add(generation)
+    await db_session.flush()
+    graph = EngineeringModelGraph(
+        graph_id=f"image-generation:{generation.id}",
+        profile="mechanical",
+        sources=[GraphSource(id="source:sheet", sha256="a" * 64, media_type="image/png")],
+        nodes=[
+            GraphNode(id="docs", type="DocumentSet"),
+            GraphNode(id="product:legacy-spec", type="Product", name="Bracket"),
+            GraphNode(id="feature:0:chamfers:0", type="Feature", name="chamfer 0:chamfers:0"),
+        ],
+        assertions=[Assertion(
+            id="assertion:chamfer-size",
+            subject_id="feature:0:chamfers:0",
+            predicate="feature.param.size_mm",
+            value=ExactValue(kind="exact", value=1.0),
+            unit="mm", origin="observed", assurance="proposed", confidence=0.6,
+        ), Assertion(
+            id="assertion:chamfer-kind",
+            subject_id="feature:0:chamfers:0",
+            predicate="feature.kind",
+            value=ExactValue(kind="exact", value="chamfer"),
+            origin="observed", assurance="proposed", confidence=0.6,
+        )],
+        build_targets=[BuildTarget(
+            id="preview", kind="preview_brep", root_node_ids=["product:legacy-spec"]
+        )],
+    ).sealed()
+    row = await persist_pipeline_graph(db_session, graph)
+    generation.params = {
+        **generation.params,
+        "engineering_model_graph": {"revision_id": str(row.id)},
+    }
+    await db_session.commit()
+    return generation
+
+
+@pytest.mark.asyncio
+async def test_feature_param_correction_mirrors_into_compat_spec_and_rebuilds(
+    client, db_session, monkeypatch,
+):
+    """Ф2.6b: correcting a Ф1.2 Feature's own feature.param.<name> assertion
+    — not just product:legacy-spec — now reaches the compatibility spec
+    (via feature_spec_path) and can trigger the existing rebuild, closing
+    the gap where the descriptive graph never affected compiled geometry."""
+    from types import SimpleNamespace
+
+    generation = await _seed_feature_correction_graph(db_session, monkeypatch)
+    rebuild_calls: list[tuple[list[str], str]] = []
+    monkeypatch.setattr(
+        "app.tasks.cad_trace.rebuild_from_spec.apply_async",
+        lambda args, queue: (
+            rebuild_calls.append((args, queue)) or SimpleNamespace(id="rebuild-task")
+        ),
+    )
+
+    correction = await client.post(
+        f"/api/image-gen/{generation.id}/model-graph/assertions/"
+        "assertion:chamfer-size/corrections",
+        json={
+            "value": {"kind": "exact", "value": 1.6},
+            "note": "Уточнено по выноске 1.6×45°",
+            "idempotency_key": "human-test-chamfer-size",
+            "rebuild": True,
+        },
+    )
+    assert correction.status_code == 200, correction.text
+    body = correction.json()
+    assert body["compatibility_spec_updated"] is True
+    assert body["rebuild_task_id"] == "rebuild-task"
+    assert len(rebuild_calls) == 1
+    await db_session.refresh(generation)
+    assert (
+        generation.params["spec_corrected"]["main_view"]["chamfers"][0]["size_mm"] == 1.6
+    )
+
+
+@pytest.mark.asyncio
+async def test_feature_kind_correction_cannot_rebuild(client, db_session, monkeypatch):
+    """feature.kind names which LIST an item lives in, not a leaf value — it
+    has no compatibility-spec mirror, so rebuild must fail loudly (422),
+    never silently no-op past the human's stated intent."""
+    generation = await _seed_feature_correction_graph(db_session, monkeypatch)
+
+    correction = await client.post(
+        f"/api/image-gen/{generation.id}/model-graph/assertions/"
+        "assertion:chamfer-kind/corrections",
+        json={
+            "value": {"kind": "exact", "value": "fillet"},
+            "note": "Похоже на скругление, не фаску",
+            "idempotency_key": "human-test-chamfer-kind",
+            "rebuild": True,
+        },
+    )
+    assert correction.status_code == 422
+    assert "feature.kind" in correction.text
+
+
 @pytest.mark.asyncio
 async def test_workflows_seeded_and_listed(client, db_session):
     from app.db.seeds.comfyui_workflows import seed_builtin_workflows

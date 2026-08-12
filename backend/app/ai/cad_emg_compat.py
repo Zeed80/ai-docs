@@ -377,6 +377,42 @@ _FEATURE_LIST_KIND = {
 }
 
 
+def feature_spec_path(feature_id: str) -> str | None:
+    """Decode a stable Feature id back into its legacy-spec dotted JSON path.
+
+    ``assign_stable_feature_ids`` (spec_vectorize.py) is the SOLE producer of
+    this format — ``f"{body_index}:{list_name}:{index}"`` — and never
+    reassigns an id once present. Decoding it here is not a guess about the
+    drawing; it is inverting our own documented encoding, the same way a URL
+    router recovers path parameters. ``body_index`` 0 is ``main_view``, N>0
+    is ``parts[N-1]`` — the exact numbering ``SpecView.body_index`` and
+    ``_rotation_parts`` already use.
+
+    This is what makes a human's correction of a ``Feature`` node's own
+    ``feature.param.<name>``/``feature.location`` assertion able to reach
+    geometry at all: :func:`app.api.image_generation._apply_compat_spec_update`
+    mirrors it onto this SAME path in the compatibility spec, and the
+    existing rebuild (``feature_tree_from_spec`` → EMG graph, unchanged)
+    recompiles from there — never a value copied straight onto a
+    ``BuildOperation``, which would be wrong wherever the kernel param is
+    itself derived (e.g. a bolt-circle diameter becoming ``center_x_mm``/
+    ``center_y_mm`` via trigonometry, not a passthrough).
+
+    Returns ``None`` — never a best-effort guess — for any id that does not
+    conform (hand-set, or from before ``assign_stable_feature_ids`` ran);
+    such a Feature simply stays graph-only, exactly as today.
+    """
+    parts = feature_id.split(":")
+    if len(parts) != 3:
+        return None
+    body_index_str, list_name, index_str = parts
+    if not body_index_str.isdigit() or not index_str.isdigit() or not list_name:
+        return None
+    body_index = int(body_index_str)
+    body_prefix = "main_view" if body_index == 0 else f"parts[{body_index - 1}]"
+    return f"{body_prefix}.{list_name}[{index_str}]"
+
+
 def _emit_native_feature(
     item: Any,
     list_name: str,
