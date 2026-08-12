@@ -8,6 +8,7 @@ import AssumptionsStrip from "@/components/cad/editor/AssumptionsStrip";
 import Viewport from "@/components/cad/editor2/Viewport";
 import PropertiesPanel2, {
   type AddFeatureDraftKind,
+  type KernelEdgeDescriptor,
 } from "@/components/cad/editor2/PropertiesPanel2";
 import Ribbon, {
   RibbonButton,
@@ -118,8 +119,23 @@ export default function CadEditorShell2({
           if (["SUCCESS", "FAILURE", "REVOKED"].includes(task.status)) {
             window.clearInterval(timer);
             setRebuildTaskId(null);
-            if (task.status === "SUCCESS") await load();
-            else setError(`Пересборка завершилась со статусом ${task.status}`);
+            // A Celery task can finish with status "SUCCESS" while its OWN
+            // result payload says the build failed (cad_trace.py's tasks
+            // return an {error, built: false} dict instead of raising, so
+            // the pipeline's own failures stay visible in the process log
+            // rather than looking like an infra crash) — checking only
+            // task.status here silently reloaded stale data as if nothing
+            // had gone wrong. Surface it instead.
+            const resultError = (task.result as { error?: string } | null)
+              ?.error;
+            if (task.status === "SUCCESS" && !resultError) {
+              await load();
+            } else {
+              setError(
+                resultError ??
+                  `Пересборка завершилась со статусом ${task.status}`,
+              );
+            }
           }
         })
         .catch((e) => {
@@ -170,6 +186,14 @@ export default function CadEditorShell2({
       ),
     [solid],
   );
+  // Ф3: edge_key candidates for the fillet/chamfer form — already exposed
+  // by the kernel report (_edge_descriptors), just not yet typed on
+  // Solid3dSummary; read loosely like verification.feature_results above.
+  const edges = useMemo(() => {
+    const raw = (solid as unknown as { kernel_report?: { edges?: unknown } })
+      ?.kernel_report?.edges;
+    return Array.isArray(raw) ? (raw as KernelEdgeDescriptor[]) : [];
+  }, [solid]);
   const handleOperationClick = useCallback((operationId: string | null) => {
     if (operationId) setSelectedOperationId(operationId);
   }, []);
@@ -290,10 +314,42 @@ export default function CadEditorShell2({
               }
             />
             <RibbonDivider />
-            <RibbonPlaceholder icon="⌒" label="Скругление" comingIn="Фазе 3" />
-            <RibbonPlaceholder icon="⟂" label="Фаска" comingIn="Фазе 3" />
-            <RibbonPlaceholder icon="▢" label="Оболочка" comingIn="Фазе 3" />
-            <RibbonPlaceholder icon="⚙" label="Резьба" comingIn="Фазе 3" />
+            <RibbonButton
+              icon="⌒"
+              label="Скругление"
+              onClick={() => setAddFeatureDraft("fillet")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
+            <RibbonButton
+              icon="⟂"
+              label="Фаска"
+              onClick={() => setAddFeatureDraft("chamfer")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
+            <RibbonButton
+              icon="▢"
+              label="Оболочка"
+              onClick={() => setAddFeatureDraft("shell")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
+            <RibbonButton
+              icon="⚙"
+              label="Резьба"
+              onClick={() => setAddFeatureDraft("thread")}
+              disabled={!hasModel}
+              title={
+                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+              }
+            />
           </>
         )}
         {ribbonTab === "body" && (
@@ -387,6 +443,7 @@ export default function CadEditorShell2({
             generationId={generationId}
             operation={selectedOperation}
             features={selectedFeatures}
+            edges={edges}
             addFeatureDraft={addFeatureDraft}
             onAddFeatureDraftChange={setAddFeatureDraft}
             onSaved={() => void load()}

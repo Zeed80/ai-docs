@@ -1313,6 +1313,8 @@ def verify_solid_against_spec(
     report: dict,
     spec: dict,
     candidate: FeatureTreeCandidate | None = None,
+    *,
+    require_envelope_match: bool = True,
 ) -> SolidVerification:
     """Does the built solid measure what the sheet said?
 
@@ -1320,10 +1322,21 @@ def verify_solid_against_spec(
     axis and the largest diameter. Tolerance is 0.5% — the same window the 2D
     dimension check uses, because both answer the same question (did the
     builder honour the numbers it was given?).
+
+    ``require_envelope_match=False`` (Ф3 нового CAD-редактора,
+    add_feature_to_graph) reports length/diameter/volume-above-profile
+    exactly as always, but excludes them from the blocking ``ok`` verdict.
+    Those three checks assume the built solid is EXACTLY the read profile
+    plus its declared cuts — an assumption a human-added feature (a boss on
+    the end face growing the envelope; any additive feature growing volume
+    above the profile) breaks on purpose, not by a reading error. Topology
+    (a real, valid, manifold solid) and feature_complete (every OTHER
+    declared operation still built) remain blocking regardless — this never
+    waves through a broken build, only a legitimately bigger one.
     """
     parts = _rotation_parts(spec)
     if not parts:
-        return _verify_prismatic(spec, report)
+        return _verify_prismatic(spec, report, require_envelope_match=require_envelope_match)
     outer = parts[0].get("outer") or []
     # A2: when a step's length was provisionally filled in (ParamProvenance.
     # origin="guessed" — see _fill_provisional_step_lengths), the raw spec's
@@ -1407,12 +1420,13 @@ def verify_solid_against_spec(
     )
     checks = {
         "ok": bool(
-            length_ok
-            and diameter_ok
+            (length_ok or not require_envelope_match)
+            and (diameter_ok or not require_envelope_match)
             and topology_ok
-            and volume_not_above_profile
+            and (volume_not_above_profile or not require_envelope_match)
             and feature_complete
         ),
+        "envelope_match_required": require_envelope_match,
         "stated_length_mm": round(stated_length, 3),
         "built_length_mm": round(built_length, 3),
         "length_ok": length_ok,
@@ -1439,7 +1453,9 @@ def verify_solid_against_spec(
     return SolidVerification(checks)
 
 
-def _verify_prismatic(spec: dict, report: dict) -> SolidVerification:
+def _verify_prismatic(
+    spec: dict, report: dict, *, require_envelope_match: bool = True
+) -> SolidVerification:
     """A plate is checked on all three read extents, holes included.
 
     The outline and thickness come from the sheet, so the built envelope must
@@ -1478,9 +1494,11 @@ def _verify_prismatic(spec: dict, report: dict) -> SolidVerification:
         and report.get("solid_count") == 1
         and float(report.get("volume_mm3") or 0.0) > 0
     )
+    envelope_ok = all(close(a, b) for a, b in zip(built, stated, strict=True))
     checks = {
-        "ok": all(close(a, b) for a, b in zip(built, stated, strict=True))
-        and topology_ok,
+        "ok": (envelope_ok or not require_envelope_match) and topology_ok,
+        "envelope_ok": envelope_ok,
+        "envelope_match_required": require_envelope_match,
         "stated_envelope_mm": [round(value, 3) for value in stated],
         "built_envelope_mm": [round(value, 3) for value in built],
         "holes_expected": len(holes),

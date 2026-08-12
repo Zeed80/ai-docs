@@ -41,7 +41,6 @@ import type {
   ModelEvidence,
 } from "@/components/cad/CadModelTracePanel";
 import SpecEditorPanel from "@/components/cad/SpecEditorPanel";
-import Cad3dPanel from "@/components/cad/Cad3dPanel";
 import CommandLine, { CommandPrompt } from "@/components/cad/CommandLine";
 import EntityShape from "@/components/cad/EntityShape";
 import ReviewPanel from "@/components/cad/ReviewPanel";
@@ -2547,14 +2546,6 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             {t("vector.accept_blocked_full_check")}
           </div>
         )}
-
-      <Cad3dPanel
-        gen={gen}
-        revision={revision}
-        onChanged={onChanged}
-        onError={setErr}
-        t={t}
-      />
 
       {/* Downloads + accept */}
       <div className="flex flex-wrap items-center gap-2">

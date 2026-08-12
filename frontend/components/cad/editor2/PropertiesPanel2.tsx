@@ -6,22 +6,39 @@ import PropertiesPanel from "@/components/cad/editor/PropertiesPanel";
 import { engineeringApi, type AddedNativeFeature } from "@/lib/engineering-api";
 import type { EmgFeatureNode, EmgOperationNode } from "@/lib/emg-tree";
 
-export type AddFeatureDraftKind = "boss" | "pocket";
+export type AddFeatureDraftKind =
+  "boss" | "pocket" | "fillet" | "chamfer" | "shell" | "thread";
 
 const KIND_LABEL: Record<AddFeatureDraftKind, string> = {
   boss: "Бобышка",
   pocket: "Карман",
+  fillet: "Скругление",
+  chamfer: "Фаска",
+  shell: "Оболочка",
+  thread: "Резьба",
 };
 
-/** Ф2 нового CAD-редактора: PropertiesPanel (коррекция, БЕЗ ИЗМЕНЕНИЙ) плюс
- * новая форма «добавить фичу», которая появляется, когда лента (вкладка
- * Фичи) начинает добавление. Пока — только circle/rectangle boss/pocket;
- * fillet/chamfer/shell/thread (Ф3) используют ТОТ ЖЕ backend-эндпоинт,
- * нужна только своя форма — клик по ребру вместо edge_key текстом. */
+export interface KernelEdgeDescriptor {
+  key: string;
+  index: number;
+  curve: string;
+  length_mm: number;
+  vertices: Array<{ x: number; y: number; z: number }>;
+}
+
+/** Ф2-Ф3 нового CAD-редактора: PropertiesPanel (коррекция, БЕЗ ИЗМЕНЕНИЙ)
+ * плюс форма «добавить фичу» для всех 6 видов, что уже принимает
+ * AddNativeFeatureRequest на бэкенде. Выбор ребра для fillet/chamfer —
+ * пока выпадающий список (те же report.edges, что раньше показывал
+ * Cad3dPanel), а не клик по 3D: для честного клик-выбора ребра нужен
+ * отдельный edge-topology сайдкар в ядре (аналог существующего
+ * face-topology для граней), намеренно отложено отдельной задачей —
+ * не выдавать выпадающий список за то, чем он не является. */
 export default function PropertiesPanel2({
   generationId,
   operation,
   features,
+  edges,
   addFeatureDraft,
   onAddFeatureDraftChange,
   onSaved,
@@ -31,6 +48,7 @@ export default function PropertiesPanel2({
   generationId: string;
   operation: EmgOperationNode | null;
   features: EmgFeatureNode[];
+  edges: KernelEdgeDescriptor[];
   addFeatureDraft: AddFeatureDraftKind | null;
   onAddFeatureDraftChange: (draft: AddFeatureDraftKind | null) => void;
   onSaved: () => void;
@@ -42,6 +60,7 @@ export default function PropertiesPanel2({
       <AddFeatureForm
         generationId={generationId}
         kind={addFeatureDraft}
+        edges={edges}
         onCancel={() => onAddFeatureDraftChange(null)}
         onAdded={(taskId) => {
           onAddFeatureDraftChange(null);
@@ -64,9 +83,18 @@ export default function PropertiesPanel2({
   );
 }
 
+function edgeLabel(edge: KernelEdgeDescriptor): string {
+  const from = edge.vertices[0];
+  const to = edge.vertices[edge.vertices.length - 1];
+  const point = (p?: { x: number; y: number; z: number }) =>
+    p ? `${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}` : "?";
+  return `${edge.curve} #${edge.index} — ${edge.length_mm.toFixed(1)} мм (${point(from)} → ${point(to)})`;
+}
+
 function AddFeatureForm({
   generationId,
   kind,
+  edges,
   onCancel,
   onAdded,
   onSaved,
@@ -74,11 +102,15 @@ function AddFeatureForm({
 }: {
   generationId: string;
   kind: AddFeatureDraftKind;
+  edges: KernelEdgeDescriptor[];
   onCancel: () => void;
   onAdded: (taskId: string) => void;
   onSaved: () => void;
   onError: (message: string) => void;
 }) {
+  const isProfileKind = kind === "boss" || kind === "pocket";
+  const isEdgeKind = kind === "fillet" || kind === "chamfer";
+
   const [profile, setProfile] = useState<"circle" | "rectangle">("circle");
   const [centerX, setCenterX] = useState("0");
   const [centerY, setCenterY] = useState("0");
@@ -86,25 +118,55 @@ function AddFeatureForm({
   const [diameter, setDiameter] = useState("10");
   const [width, setWidth] = useState("10");
   const [height, setHeight] = useState("10");
+  const [edgeKey, setEdgeKey] = useState(edges[0]?.key ?? "");
+  const [sizeMm, setSizeMm] = useState("2");
+  const [thicknessMm, setThicknessMm] = useState("3");
+  const [threadSpec, setThreadSpec] = useState("M10");
+  const [pitchMm, setPitchMm] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const num = (raw: string) => Number(raw.replace(",", "."));
+
+  function buildFeature(): AddedNativeFeature | null {
+    if (isProfileKind) {
+      return {
+        kind,
+        profile,
+        center_x_mm: num(centerX),
+        center_y_mm: num(centerY),
+        depth_mm: num(depth),
+        ...(profile === "circle"
+          ? { diameter_mm: num(diameter) }
+          : { width_mm: num(width), height_mm: num(height) }),
+      };
+    }
+    if (isEdgeKind) {
+      if (!edgeKey) {
+        onError("Выберите ребро.");
+        return null;
+      }
+      return { kind, edge_key: edgeKey, size_mm: num(sizeMm) };
+    }
+    if (kind === "shell") {
+      return { kind, thickness_mm: num(thicknessMm) };
+    }
+    // thread
+    return {
+      kind,
+      diameter_mm: num(diameter),
+      spec: threadSpec.trim(),
+      ...(pitchMm.trim() ? { pitch_mm: num(pitchMm) } : {}),
+    };
+  }
 
   async function submit() {
     if (!note.trim()) {
       onError("Опишите инженерное обоснование добавления фичи.");
       return;
     }
-    const num = (raw: string) => Number(raw.replace(",", "."));
-    const feature: AddedNativeFeature = {
-      kind,
-      profile,
-      center_x_mm: num(centerX),
-      center_y_mm: num(centerY),
-      depth_mm: num(depth),
-      ...(profile === "circle"
-        ? { diameter_mm: num(diameter) }
-        : { width_mm: num(width), height_mm: num(height) }),
-    };
+    const feature = buildFeature();
+    if (!feature) return;
     setBusy(true);
     try {
       const result = await engineeringApi.addGenerationModelGraphFeature(
@@ -139,55 +201,122 @@ function AddFeatureForm({
         </button>
       </div>
 
-      <label className="block space-y-1">
-        <span className="text-[11px] text-zinc-400">Профиль</span>
-        <div className="flex gap-2">
-          {(["circle", "rectangle"] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setProfile(value)}
-              className={`rounded border px-2.5 py-1 text-[11px] ${
-                profile === value
-                  ? "border-sky-400/60 bg-sky-500/15 text-sky-200"
-                  : "border-white/10 text-zinc-400 hover:bg-white/5"
-              }`}
-            >
-              {value === "circle" ? "Круг" : "Прямоугольник"}
-            </button>
-          ))}
-        </div>
-      </label>
+      {isProfileKind && (
+        <>
+          <label className="block space-y-1">
+            <span className="text-[11px] text-zinc-400">Профиль</span>
+            <div className="flex gap-2">
+              {(["circle", "rectangle"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setProfile(value)}
+                  className={`rounded border px-2.5 py-1 text-[11px] ${
+                    profile === value
+                      ? "border-sky-400/60 bg-sky-500/15 text-sky-200"
+                      : "border-white/10 text-zinc-400 hover:bg-white/5"
+                  }`}
+                >
+                  {value === "circle" ? "Круг" : "Прямоугольник"}
+                </button>
+              ))}
+            </div>
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <NumberField
+              label="center_x_mm"
+              value={centerX}
+              onChange={setCenterX}
+            />
+            <NumberField
+              label="center_y_mm"
+              value={centerY}
+              onChange={setCenterY}
+            />
+            <NumberField label="depth_mm" value={depth} onChange={setDepth} />
+            {profile === "circle" ? (
+              <NumberField
+                label="diameter_mm"
+                value={diameter}
+                onChange={setDiameter}
+              />
+            ) : (
+              <>
+                <NumberField
+                  label="width_mm"
+                  value={width}
+                  onChange={setWidth}
+                />
+                <NumberField
+                  label="height_mm"
+                  value={height}
+                  onChange={setHeight}
+                />
+              </>
+            )}
+          </div>
+        </>
+      )}
 
-      <div className="grid grid-cols-2 gap-2">
+      {isEdgeKind && (
+        <>
+          <label className="block space-y-1">
+            <span className="text-[11px] text-zinc-400">
+              Ребро{" "}
+              {edges.length === 0 && "(нет данных — сначала пересоберите)"}
+            </span>
+            <select
+              value={edgeKey}
+              onChange={(event) => setEdgeKey(event.target.value)}
+              className="w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[11px] text-zinc-100 outline-none focus:border-sky-400/60"
+            >
+              {edges.map((edge) => (
+                <option key={edge.key} value={edge.key}>
+                  {edgeLabel(edge)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <NumberField
+            label={
+              kind === "fillet" ? "size_mm (радиус)" : "size_mm (катет фаски)"
+            }
+            value={sizeMm}
+            onChange={setSizeMm}
+          />
+        </>
+      )}
+
+      {kind === "shell" && (
         <NumberField
-          label="center_x_mm"
-          value={centerX}
-          onChange={setCenterX}
+          label="thickness_mm"
+          value={thicknessMm}
+          onChange={setThicknessMm}
         />
-        <NumberField
-          label="center_y_mm"
-          value={centerY}
-          onChange={setCenterY}
-        />
-        <NumberField label="depth_mm" value={depth} onChange={setDepth} />
-        {profile === "circle" ? (
+      )}
+
+      {kind === "thread" && (
+        <div className="grid grid-cols-2 gap-2">
           <NumberField
             label="diameter_mm"
             value={diameter}
             onChange={setDiameter}
           />
-        ) : (
-          <>
-            <NumberField label="width_mm" value={width} onChange={setWidth} />
-            <NumberField
-              label="height_mm"
-              value={height}
-              onChange={setHeight}
+          <label className="block space-y-1">
+            <span className="font-mono text-[10px] text-zinc-500">spec</span>
+            <input
+              value={threadSpec}
+              onChange={(event) => setThreadSpec(event.target.value)}
+              className="w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 font-mono text-[12px] text-zinc-100 outline-none focus:border-sky-400/60"
             />
-          </>
-        )}
-      </div>
+          </label>
+          <NumberField
+            label="pitch_mm (опц.)"
+            value={pitchMm}
+            onChange={setPitchMm}
+          />
+        </div>
+      )}
 
       <label className="block space-y-1">
         <span className="text-[11px] text-zinc-400">

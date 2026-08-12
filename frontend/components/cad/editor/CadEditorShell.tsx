@@ -56,14 +56,13 @@ function StatusBadge({ solid }: { solid?: Solid3dSummary }) {
  * long page. Owns the graph, the selection and the 3D viewport together so
  * a click in any panel is immediately reflected in the others.
  *
- * Deliberately built on the EMG graph (spec/Ф1-2.6 pipeline), not on the
- * older Ф10 2D-IR hypothesis mechanism Cad3dPanel.tsx still serves — see
- * project memory on why the two have not been merged into one component
- * outright: their data models (a sealed graph vs. a ranked candidate list)
- * are different enough that forcing one UI over both would either hide
- * real capability or pretend features neither backend has. This editor is
- * the graph-based one; Cad3dPanel remains reachable from the classic
- * "чертёж" tab for the older flow. */
+ * Superseded by components/cad/editor2/CadEditorShell2.tsx (see
+ * /root/.claude/plans/starry-mapping-hippo.md) — this file stays live at
+ * /cad/[id]/editor only until editor2 reaches parity and is promoted in
+ * that plan's Фаза 5, then gets deleted. The old Ф10 2D-IR add-feature
+ * flow (Cad3dPanel.tsx) it used to sit alongside has already been removed
+ * (Фаза 3): editor2's add-feature endpoint is graph-native and covers
+ * everything Cad3dPanel did, plus more kinds. */
 export default function CadEditorShell({
   generationId,
 }: {
@@ -111,8 +110,21 @@ export default function CadEditorShell({
           if (["SUCCESS", "FAILURE", "REVOKED"].includes(task.status)) {
             window.clearInterval(timer);
             setRebuildTaskId(null);
-            if (task.status === "SUCCESS") await load();
-            else setError(`Пересборка завершилась со статусом ${task.status}`);
+            // A Celery task can finish "SUCCESS" while its OWN result
+            // payload says the build failed (cad_trace.py returns
+            // {error, built: false} instead of raising) — checking only
+            // task.status silently reloaded stale data as if nothing had
+            // gone wrong. Surface it instead.
+            const resultError = (task.result as { error?: string } | null)
+              ?.error;
+            if (task.status === "SUCCESS" && !resultError) {
+              await load();
+            } else {
+              setError(
+                resultError ??
+                  `Пересборка завершилась со статусом ${task.status}`,
+              );
+            }
           }
         })
         .catch((e) => {

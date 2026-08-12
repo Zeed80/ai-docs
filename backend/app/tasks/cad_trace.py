@@ -622,6 +622,12 @@ async def _add_feature_to_graph(
         source_sha256=params.get("normalized_source_sha256"),
         source_uri=params.get("normalized_source_path"),
         engineering_graph_override=engineering_graph,
+        # A human-added feature is EXPECTED to grow the envelope/volume past
+        # the read profile (a boss on the end face; any additive geometry) —
+        # verify_solid_against_spec's length/diameter/volume-above-profile
+        # checks assume the opposite and would reject every legitimate
+        # addition. Topology and feature_complete still gate.
+        require_envelope_match=False,
     )
     if not solid_result or not solid_result.get("built"):
         return {
@@ -1127,6 +1133,7 @@ async def _build_spec_solid(
     source_sha256: str | None = None,
     source_uri: str | None = None,
     engineering_graph_override: Any | None = None,
+    require_envelope_match: bool = True,
 ) -> dict | None:
     """Compile the read spec into a solid, and draw the sheet from that solid.
 
@@ -1373,7 +1380,9 @@ async def _build_spec_solid(
             },
         },
     )
-    verification = verify_solid_against_spec(report, spec, candidate)
+    verification = verify_solid_against_spec(
+        report, spec, candidate, require_envelope_match=require_envelope_match
+    )
     await record_cad_process_event(
         "kernel.verify",
         "completed" if verification.ok else "failed",
@@ -1511,6 +1520,10 @@ async def _build_spec_solid(
             "surface_area_mm2": report.get("surface_area_mm2"),
             "feature_operations": report.get("feature_operations") or [],
             "warnings": report.get("warnings") or [],
+            # Ф3 нового CAD-редактора: edge_key candidates for a
+            # fillet/chamfer form (_edge_descriptors — the SAME keys
+            # _resolve_edge already accepts on the next add-feature call).
+            "edges": report.get("edges") or [],
         },
         "mass_kg": estimate_mass_kg(report.get("volume_mm3"), material),
         "projection": projection,

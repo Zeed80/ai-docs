@@ -2258,12 +2258,6 @@ async def run_full_check(
     }
 
 
-class FeatureParameterOverride(BaseModel):
-    feature_index: int = Field(ge=0, lt=500)
-    depth_mm: float | None = Field(default=None, gt=0, le=100_000)
-    through: bool | None = None
-
-
 class AddedFeatureRequest(BaseModel):
     kind: Literal["boss", "pocket", "fillet", "chamfer", "shell", "thread"]
     profile: Literal["circle", "rectangle"] | None = None
@@ -2313,126 +2307,13 @@ class AddedFeatureRequest(BaseModel):
         return self
 
 
-class CompileFeatureTreeRequest(BaseModel):
-    confirm_assumptions: bool = False
-    feature_overrides: list[FeatureParameterOverride] = Field(default_factory=list, max_length=500)
-    added_features: list[AddedFeatureRequest] = Field(default_factory=list, max_length=100)
-
-
-def _apply_feature_overrides(candidate, overrides: list[FeatureParameterOverride]):
-    """Apply only 3D-specific human decisions to a server-derived tree.
-
-    The 2D footprint, hole diameter and hole position remain immutable here:
-    changing those belongs in CAD IR, where revisioning and validation can see it.
-    """
-    if not overrides:
-        return candidate
-    from app.ai.cad_ir.feature_tree import ParamProvenance
-
-    def _human(detail: str) -> ParamProvenance:
-        # Ф3.3: a value a human just typed/confirmed is neither the
-        # server's own "guessed" nor a sheet-read "stated"/"measured" — the
-        # UI's ProvenanceBadge must say so, not silently keep (or drop) the
-        # pre-override provenance.
-        return ParamProvenance(origin="human", detail=detail)
-
-    updated = candidate.model_copy(deep=True)
-    seen: set[int] = set()
-    missing = list(updated.missing_data)
-    for override in overrides:
-        index = override.feature_index
-        if index in seen:
-            raise HTTPException(422, f"Параметры операции {index} переданы дважды")
-        seen.add(index)
-        if index >= len(updated.features):
-            raise HTTPException(422, f"Операция {index} отсутствует в выбранной гипотезе")
-        feature = updated.features[index]
-        fields = override.model_fields_set
-        if feature.kind == "extrude":
-            if "through" in fields or "depth_mm" not in fields or override.depth_mm is None:
-                raise HTTPException(422, "Для выдавливания разрешено менять только depth_mm")
-            feature.params["depth_mm"] = override.depth_mm
-            feature.param_provenance["depth_mm"] = _human("глубина задана человеком в 3D-редакторе")
-            missing = [item for item in missing if "бокового вида" not in item and "глубина выдавливания" not in item]
-        elif feature.kind == "hole":
-            if "through" not in fields:
-                raise HTTPException(422, "Для отверстия нужно явно выбрать сквозное или глухое")
-            feature.params["through"] = override.through
-            feature.param_provenance["through"] = _human("сквозное/глухое подтверждено человеком")
-            diameter = float(feature.params.get("diameter_mm") or 0)
-            marker = f"глубина отверстия {diameter:g}мм"
-            if override.through is True:
-                if "depth_mm" in fields and override.depth_mm is not None:
-                    raise HTTPException(422, "У сквозного отверстия нельзя задавать depth_mm")
-                feature.params.pop("depth_mm", None)
-                feature.param_provenance.pop("depth_mm", None)
-                missing = [item for item in missing if marker not in item]
-            elif override.through is False:
-                if "depth_mm" not in fields or override.depth_mm is None:
-                    raise HTTPException(422, "Для глухого отверстия нужна положительная depth_mm")
-                feature.params["depth_mm"] = override.depth_mm
-                feature.param_provenance["depth_mm"] = _human(
-                    "глубина глухого отверстия задана человеком"
-                )
-                missing = [item for item in missing if marker not in item]
-            else:
-                feature.params.pop("depth_mm", None)
-                feature.param_provenance.pop("depth_mm", None)
-        else:
-            raise HTTPException(422, f"Редактирование операции {feature.kind} пока не поддерживается")
-    updated.missing_data = missing
-    updated.label = f"{updated.label}; параметры 3D уточнены человеком"
-    return updated
-
-
-def _append_human_features(candidate, additions: list[AddedFeatureRequest]):
-    if not additions:
-        return candidate
-    from app.ai.cad_ir.feature_tree import Feature3D, ParamProvenance
-
-    updated = candidate.model_copy(deep=True)
-    insert_at = next(
-        (index for index, feature in enumerate(updated.features) if feature.kind == "hole"),
-        len(updated.features),
-    )
-    edge_seen = False
-    for item in additions:
-        if item.kind in ("fillet", "chamfer"):
-            edge_seen = True
-        elif edge_seen and item.kind not in ("shell", "thread"):
-            # shell is applied last by the kernel regardless of list order;
-            # thread is cosmetic — neither invalidates edge selection.
-            raise HTTPException(422, "Операции тела должны предшествовать фаскам и скруглениям")
-    human_features = []
-    for item in additions:
-        params = item.model_dump(exclude={"kind"}, exclude_none=True)
-        human_features.append(Feature3D(
-            kind=item.kind,
-            source_entity_ids=[],
-            params=params,
-            # Ф3.3: a whole feature the human added in the 3D editor — every
-            # one of its parameters is "human", never left unset (an empty
-            # param_provenance would render with no badge at all, reading
-            # as neither confirmed nor questioned).
-            param_provenance={
-                key: ParamProvenance(origin="human", detail="добавлено человеком в 3D-редакторе")
-                for key in params
-            },
-            confidence=1.0,
-        ))
-    updated.features[insert_at:insert_at] = human_features
-    updated.label = f"{updated.label}; добавлено операций: {len(human_features)}"
-    return updated
-
-
 class AddNativeFeatureRequest(BaseModel):
-    """Ф2 нового CAD-редактора (/root/.claude/plans/starry-mapping-hippo.md):
-    add one human-authored feature on top of the CURRENT EMG graph — the
-    graph-native sibling of AddedFeatureRequest above, which the OLD
-    Cad3dPanel add-feature endpoint (POST .../ir/feature-tree-candidates/
-    {index}/step) applies to a 2D-IR ranked candidate instead. Reuses
-    AddedFeatureRequest's own profile/edge validation unchanged — same
-    shape, different destination."""
+    """Ф2-Ф3 нового CAD-редактора (/root/.claude/plans/starry-mapping-hippo.md):
+    add one human-authored feature on top of the CURRENT EMG graph. The old
+    2D-IR-candidate add-feature endpoint (Cad3dPanel.tsx's
+    POST .../ir/feature-tree-candidates/{index}/step) has been removed
+    (Фаза 3) — this is now the only add-feature path, reusing
+    AddedFeatureRequest's own profile/edge validation unchanged."""
 
     feature: AddedFeatureRequest
     note: str = Field(min_length=1, max_length=1000)
@@ -2486,8 +2367,10 @@ async def get_feature_tree_candidates(
 ) -> dict:
     """Ф10: ranked 3D feature-tree HYPOTHESES derived from the current 2D
     IR — never a single "the" 3D model (a single orthographic view can't
-    determine depth). Read-only, like get_ir; the human picks a candidate
-    and separately asks for it to be compiled (POST .../step)."""
+    determine depth). Read-only, like get_ir. Kept for what it still shows
+    (what depth guesses a fresh 2D read would produce); the compile-a-
+    candidate mutation path it used to feed (Cad3dPanel.tsx) is gone as of
+    Фаза 3 — see AddNativeFeatureRequest for the current add-feature flow."""
     from app.ai.cad_ir.feature_tree import generate_feature_tree_candidates
 
     gen = await db.get(ImageGeneration, generation_id)
@@ -2496,145 +2379,6 @@ async def get_feature_tree_candidates(
     _revision, ir = await _load_current_ir(db, gen)
     candidates = generate_feature_tree_candidates(ir)
     return {"candidates": [c.model_dump() for c in candidates]}
-
-
-@router.post("/{generation_id}/ir/feature-tree-candidates/{index}/step")
-async def compile_feature_tree_candidate_to_step(
-    generation_id: uuid.UUID,
-    index: int,
-    body: CompileFeatureTreeRequest | None = None,
-    db: AsyncSession = Depends(get_db),
-    user: UserInfo = Depends(get_current_user),
-) -> Response:
-    """Compile a human-picked hypothesis in the isolated FreeCAD kernel.
-
-    STEP, FCStd and STL are generated from the same B-Rep and persisted against
-    the accepted IR revision. Unknown depth/side-view assumptions require an
-    explicit flag; merely accepting the 2D drawing is not consent to invent 3D.
-
-    Requires
-    acceptance first (same gate philosophy as promote-to-drawing — compiling
-    a specific depth guess into a downloadable 3D artifact is a real
-    decision, not implied by 2D acceptance)."""
-    import hashlib
-    import json
-
-    from app.ai.cad_ir.feature_tree import generate_feature_tree_candidates
-    from app.services.cad_kernel import (
-        CadKernelError,
-        CadKernelRejected,
-        CadKernelUnavailable,
-        compile_candidate,
-    )
-
-    gen = await db.get(ImageGeneration, generation_id)
-    if not _owns(gen, user):
-        raise HTTPException(404, "Не найдено")
-    if not gen.accepted:
-        raise HTTPException(409, "Сначала примите чертёж (accept-vectorize).")
-    revision, ir = await _load_current_ir(db, gen)
-    if gen.accepted_revision != revision.revision:
-        raise HTTPException(409, "Текущая ревизия не утверждена.")
-    candidates = generate_feature_tree_candidates(ir)
-    if not (0 <= index < len(candidates)):
-        raise HTTPException(404, f"Кандидат {index} не найден (всего {len(candidates)})")
-    candidate = _apply_feature_overrides(
-        candidates[index],
-        body.feature_overrides if body else [],
-    )
-    candidate = _append_human_features(candidate, body.added_features if body else [])
-    try:
-        # D4: resolve the sheet material to a density so the kernel can report
-        # mass. A material we can't classify simply yields no density (no mass).
-        density_kg_m3: float | None = None
-        material = (((ir.sheet.title_block or {}).get("fields") or {}).get("material"))
-        if isinstance(material, str) and material.strip():
-            from app.ai import techdraw_reference as tdref
-
-            spec = tdref.classify_material(material)
-            if spec is not None:
-                density_kg_m3 = spec.density_kg_m3
-        artifacts = await compile_candidate(
-            candidate,
-            confirm_assumptions=bool(body and body.confirm_assumptions),
-            metadata={
-                "generation_id": str(gen.id),
-                "ir_revision": revision.revision,
-                "candidate_index": index,
-                "approved_by": gen.accepted_by,
-                "density_kg_m3": density_kg_m3,
-            },
-        )
-    except CadKernelRejected as exc:
-        raise HTTPException(409, str(exc)) from exc
-    except CadKernelUnavailable as exc:
-        raise HTTPException(503, str(exc)) from exc
-    except CadKernelError as exc:
-        raise HTTPException(502, str(exc)) from exc
-
-    base = f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_3d_r{revision.revision}"
-    paths = {
-        "step_path": f"{base}.step",
-        "fcstd_path": f"{base}.FCStd",
-        "stl_path": f"{base}.stl",
-        "cad_report_path": f"{base}_report.json",
-    }
-    report_bytes = json.dumps(artifacts.report, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    uploads = [
-        (artifacts.step, paths["step_path"], "model/step"),
-        (artifacts.fcstd, paths["fcstd_path"], "application/vnd.freecad"),
-        (artifacts.stl, paths["stl_path"], "model/stl"),
-        (report_bytes, paths["cad_report_path"], "application/json"),
-    ]
-    if artifacts.iges:
-        paths["iges_path"] = f"{base}.iges"
-        uploads.append((artifacts.iges, paths["iges_path"], "model/iges"))
-    if artifacts.topology:
-        # Ф3.1/3.2: per-face tessellation an interactive viewer raycasts
-        # against, keyed by content-stable face id — kept alongside the
-        # solid, never a required artifact (an older kernel or a cached
-        # rebuild may legitimately not have it).
-        topology_bytes = json.dumps(artifacts.topology, ensure_ascii=False).encode("utf-8")
-        paths["topology_path"] = f"{base}_topology.json"
-        uploads.append((topology_bytes, paths["topology_path"], "application/json"))
-    uploaded: list[str] = []
-    try:
-        for content, path, content_type in uploads:
-            upload_file(content, path, content_type)
-            uploaded.append(path)
-    except Exception:
-        from app.storage import delete_file
-
-        for path in uploaded:
-            try:
-                delete_file(path)
-            except Exception:  # noqa: BLE001
-                pass
-        raise
-
-    revision.artifact_hashes = {
-        **(revision.artifact_hashes or {}),
-        "step": hashlib.sha256(artifacts.step).hexdigest(),
-        "fcstd": hashlib.sha256(artifacts.fcstd).hexdigest(),
-        "stl": hashlib.sha256(artifacts.stl).hexdigest(),
-        **({"iges": hashlib.sha256(artifacts.iges).hexdigest()} if artifacts.iges else {}),
-    }
-    gen.params = {
-        **(gen.params or {}),
-        **paths,
-        "cad_artifact_revision": revision.revision,
-        "cad_candidate_index": index,
-        "cad_feature_overrides": [item.model_dump(exclude_unset=True) for item in (body.feature_overrides if body else [])],
-        "cad_added_features": [item.model_dump(mode="json", exclude_none=True) for item in (body.added_features if body else [])],
-        "cad_feature_tree": candidate.model_dump(mode="json"),
-        "cad_report": artifacts.report,
-    }
-    await db.commit()
-    return Response(
-        content=artifacts.step,
-        media_type="model/step",
-        headers={"X-CAD-Revision": str(revision.revision)},
-    )
 
 
 @router.post("/{generation_id}/promote-to-drawing")
