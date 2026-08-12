@@ -397,6 +397,19 @@ export const engineeringApi = {
       `/api/image-gen/${generationId}/model-graph/features`,
       { method: "POST", body: JSON.stringify(body) },
     ),
+  // Фаза 6 нового CAD-редактора: removes ONE BuildOperation by the exact
+  // id FeatureTreePanel already renders per row (operation_id encodes its
+  // own index — see cad_trace.py's _parse_operation_id). Same async-task
+  // shape as add-feature.
+  removeGenerationModelGraphFeature: (
+    generationId: string,
+    operationId: string,
+    body: { note: string; idempotency_key: string },
+  ) =>
+    request<{ generation_id: string; rebuild_task_id: string }>(
+      `/api/image-gen/${generationId}/model-graph/features/${encodeURIComponent(operationId)}`,
+      { method: "DELETE", body: JSON.stringify(body) },
+    ),
   verifyGenerationModelGraph: (generationId: string) =>
     request<{
       state: Record<string, unknown>;

@@ -101,6 +101,10 @@ export default function CadEditorShell({
   const [exportedSketchProfile, setExportedSketchProfile] = useState<
     SketchProfileSegment[] | null
   >(null);
+  // Ф6: which operation a delete request is currently in flight for — lets
+  // FeatureTreePanel disable just that row's confirm button, not the whole
+  // tree, while the rebuild is queued.
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -240,6 +244,31 @@ export default function CadEditorShell({
       setError(String((e as Error).message ?? e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Ф6: remove one BuildOperation. Same async-task shape as add-feature —
+  // the mutation happens inside the Celery task, so this only queues it and
+  // hands off to the SAME rebuildTaskId polling effect above (including its
+  // own "SUCCESS but built:false" surfacing).
+  async function handleDeleteOperation(operationId: string) {
+    setDeleteBusyId(operationId);
+    setError(null);
+    try {
+      const result = await engineeringApi.removeGenerationModelGraphFeature(
+        generationId,
+        operationId,
+        {
+          note: "Удалено из редактора",
+          idempotency_key: `remove-feature:${crypto.randomUUID()}`,
+        },
+      );
+      setRebuildTaskId(result.rebuild_task_id);
+      setRebuildStatus("QUEUED");
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setDeleteBusyId(null);
     }
   }
 
@@ -418,6 +447,8 @@ export default function CadEditorShell({
               guessedOperationIds={guessedOperationIds}
               selectedId={selectedOperationId}
               onSelect={setSelectedOperationId}
+              onDelete={(id) => void handleDeleteOperation(id)}
+              deleteBusyId={deleteBusyId}
             />
           ) : (
             <p className="p-3 text-xs text-zinc-500">

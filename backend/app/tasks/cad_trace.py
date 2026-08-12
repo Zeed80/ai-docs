@@ -630,10 +630,62 @@ async def _add_feature_to_graph(
         require_envelope_match=False,
     )
     if not solid_result or not solid_result.get("built"):
-        return {
-            "error": (solid_result or {}).get("error") or "деталь не собралась",
-            "built": False,
-        }
+        error_message = (solid_result or {}).get("error") or "деталь не собралась"
+        # Фаза 6 (/root/.claude/plans/starry-mapping-hippo.md): a failed
+        # add-feature attempt must never become the graph's permanent
+        # "latest" revision — before this fix, latest_graph_revision (which
+        # EVERY graph read resolves against, not gen.params) kept loading
+        # this broken revision as the base for every subsequent operation,
+        # requiring a manual docker-exec cleanup script 3+ times this
+        # session. base_candidate is exactly the state before this attempt
+        # (updated_candidate = base_candidate + the one feature that just
+        # failed to build) — re-persisting it as a fresh revision restores
+        # "latest" to last-known-good. The failure itself is still fully
+        # surfaced via `error` below; only the graph's own bookkeeping heals.
+        async with factory() as db:
+            try:
+                rollback_row = await persist_feature_tree_revision(
+                    db,
+                    graph_id=graph_id,
+                    spec=spec,
+                    candidate=base_candidate,
+                    producer="human",
+                    pass_id=f"human-add-feature-rollback:{feature_kind}",
+                    idempotency_key=f"{idempotency_key}:rollback",
+                    source_sha256=params.get("normalized_source_sha256"),
+                    source_uri=params.get("normalized_source_path"),
+                )
+                # The rollback revision's CONTENT is identical to whatever
+                # gen.params.solid_3d was already built from — only the
+                # revision number moved. Point gen.params at it too, or
+                # "latest" (rollback_row) and "current" (gen.params) stay
+                # out of sync exactly like the original bug, just one
+                # level removed: the next add/remove would see the tree's
+                # own operation_id prefix as "stale" against the new
+                # latest and be refused for no real reason.
+                gen_for_rollback = await db.get(ImageGeneration, gen_uuid)
+                if gen_for_rollback is not None:
+                    current_emg = dict(
+                        (gen_for_rollback.params or {}).get("engineering_model_graph")
+                        or {}
+                    )
+                    if current_emg:
+                        gen_for_rollback.params = {
+                            **(gen_for_rollback.params or {}),
+                            "engineering_model_graph": {
+                                **current_emg,
+                                "revision_id": str(rollback_row.id),
+                                "revision": rollback_row.revision,
+                                "canonical_sha256": rollback_row.canonical_sha256,
+                            },
+                        }
+                await db.commit()
+            except Exception:
+                # Best-effort: the original build error is the one that
+                # matters to the caller — a failed rollback (e.g. a genuine
+                # idempotency collision) must not mask it.
+                pass
+        return {"error": error_message, "built": False}
     result_graph = solid_result.pop("_engineering_model_graph", None)
     if result_graph is None or result_graph.canonical_sha256 != engineering_graph.canonical_sha256:
         return {"error": "CAD build returned a different EMG revision", "built": False}
@@ -660,6 +712,223 @@ async def _add_feature_to_graph(
         "ok": True,
         "generation_id": generation_id,
         "feature_kind": feature_kind,
+        "note": note,
+    }
+
+
+def _parse_operation_id(operation_id: str) -> tuple[str, int]:
+    """``operation:{prefix}:{index:04d}`` — the exact format
+    ``feature_tree_revision_patch`` stamps on every BuildOperation node
+    (cad_emg_compat.py, ``prefix = f"r{next_revision}"``). Raises
+    ``ValueError`` on anything else — never guesses an index from a
+    malformed id."""
+    parts = operation_id.split(":")
+    if len(parts) != 3 or parts[0] != "operation":
+        raise ValueError(f"неверный формат id операции: {operation_id!r}")
+    prefix, index_raw = parts[1], parts[2]
+    if not index_raw.isdigit():
+        raise ValueError(f"неверный формат id операции: {operation_id!r}")
+    return prefix, int(index_raw)
+
+
+@celery_app.task(
+    bind=True,
+    name="cad_trace.remove_feature_from_graph",
+    max_retries=0,
+    soft_time_limit=600,
+    time_limit=660,
+)
+def remove_feature_from_graph(
+    self,
+    generation_id: str,
+    operation_id: str,
+    note: str,
+    idempotency_key: str,
+) -> dict:
+    """Фаза 6 нового CAD-редактора: remove ONE BuildOperation from the
+    graph's current state and recompile. Mirrors add_feature_to_graph in
+    shape (feature_tree_from_graph + persist_feature_tree_revision +
+    _build_spec_solid, all reused unchanged) — the removal mechanism
+    itself (a corrected candidate.features list superseding the old
+    operation.kind assertions) already existed in feature_tree_revision_
+    patch; this is the first endpoint to expose it as a single, targeted
+    "remove this one operation" action instead of "resubmit the whole
+    document" (see the plan's own note on this — it's the exact operation
+    every manual cleanup script this session performed by hand).
+    """
+    return run_async(
+        _remove_feature_from_graph(generation_id, operation_id, note, idempotency_key)
+    )
+
+
+async def _remove_feature_from_graph(
+    generation_id: str,
+    operation_id: str,
+    note: str,
+    idempotency_key: str,
+) -> dict:
+    import uuid as _uuid
+
+    from app.ai.cad_emg_compat import feature_tree_from_graph
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.db.session import _get_session_factory
+    from app.services.engineering_model_graph import (
+        latest_graph_revision,
+        load_graph,
+        persist_feature_tree_revision,
+    )
+
+    try:
+        prefix, index = _parse_operation_id(operation_id)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    factory = _get_session_factory()
+    gen_uuid = _uuid.UUID(generation_id)
+    graph_id = f"image-generation:{generation_id}"
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return {"error": "not found"}
+        params = dict(gen.params or {})
+        owner_sub = gen.owner_sub
+        latest_row = await latest_graph_revision(db, graph_id, lock=True)
+    if latest_row is None:
+        return {"error": "EngineeringModelGraph ещё не создан для этой генерации"}
+    graph = load_graph(latest_row)
+    # feature_tree_revision_patch stamps EVERY operation node with a fresh
+    # prefix "r{graph.revision+1}" on every single persist (cad_emg_compat.py)
+    # — so an operation_id's own prefix always equals the revision that
+    # created it, which for the graph we just loaded as "latest" is exactly
+    # f"r{graph.revision}". A mismatch means the graph moved on since the
+    # tree the user is looking at was last loaded (a concurrent edit) —
+    # refuse rather than delete the wrong feature by coincidental index
+    # collision.
+    expected_prefix = f"r{graph.revision}"
+    if prefix != expected_prefix:
+        return {
+            "error": (
+                "Дерево построения устарело (граф изменился с момента открытия) "
+                "— обновите страницу и повторите."
+            )
+        }
+    spec = params.get("spec_corrected") or params.get("spec")
+    if not spec:
+        return {"error": "нет сохранённой спецификации"}
+
+    base_candidate = feature_tree_from_graph(graph, target_id="preview")
+    if base_candidate is None:
+        return {"error": "не удалось прочитать текущее дерево построения из графа"}
+    if not (0 <= index < len(base_candidate.features)):
+        return {"error": f"операция {operation_id} не найдена в текущем дереве"}
+
+    updated_candidate = base_candidate.model_copy(deep=True)
+    removed = updated_candidate.features.pop(index)
+    updated_candidate.label = f"{updated_candidate.label}; удалена операция: {removed.kind}"
+
+    async with factory() as db:
+        engineering_graph_row = await persist_feature_tree_revision(
+            db,
+            graph_id=graph_id,
+            spec=spec,
+            candidate=updated_candidate,
+            producer="human",
+            pass_id=f"human-remove-feature:{removed.kind}",
+            idempotency_key=idempotency_key,
+            source_sha256=params.get("normalized_source_sha256"),
+            source_uri=params.get("normalized_source_path"),
+        )
+        engineering_graph = load_graph(engineering_graph_row)
+        await db.commit()
+
+    solid_result = await _build_spec_solid(
+        spec,
+        generation_id,
+        owner_sub,
+        sheet_format=str(params.get("sheet_format") or "").upper() or None,
+        landscape=str(params.get("sheet_orientation") or "landscape").lower()
+        != "portrait",
+        require_source_evidence=not bool(params.get("spec_corrected")),
+        source_sha256=params.get("normalized_source_sha256"),
+        source_uri=params.get("normalized_source_path"),
+        engineering_graph_override=engineering_graph,
+        # Same reasoning as add_feature_to_graph: removal is a corrective
+        # action, not a fresh read — the envelope/volume-vs-profile checks
+        # don't apply here either way. Topology/feature_complete still gate.
+        require_envelope_match=False,
+    )
+    if not solid_result or not solid_result.get("built"):
+        error_message = (
+            (solid_result or {}).get("error")
+            or "деталь не собралась после удаления операции"
+        )
+        # Same auto-rollback principle as add_feature_to_graph's own failure
+        # branch: a delete that leaves the model unbuildable (e.g. removing
+        # geometry a later fillet's edge_key depended on) must not become
+        # "latest" either — restore the pre-delete state.
+        async with factory() as db:
+            try:
+                rollback_row = await persist_feature_tree_revision(
+                    db,
+                    graph_id=graph_id,
+                    spec=spec,
+                    candidate=base_candidate,
+                    producer="human",
+                    pass_id=f"human-remove-feature-rollback:{removed.kind}",
+                    idempotency_key=f"{idempotency_key}:rollback",
+                    source_sha256=params.get("normalized_source_sha256"),
+                    source_uri=params.get("normalized_source_path"),
+                )
+                # Same reasoning as add_feature_to_graph's own rollback: keep
+                # gen.params's "current" pointer in sync with "latest", or
+                # the next add/remove sees a falsely-stale operation_id
+                # prefix and gets refused for no real reason.
+                gen_for_rollback = await db.get(ImageGeneration, gen_uuid)
+                if gen_for_rollback is not None:
+                    current_emg = dict(
+                        (gen_for_rollback.params or {}).get("engineering_model_graph")
+                        or {}
+                    )
+                    if current_emg:
+                        gen_for_rollback.params = {
+                            **(gen_for_rollback.params or {}),
+                            "engineering_model_graph": {
+                                **current_emg,
+                                "revision_id": str(rollback_row.id),
+                                "revision": rollback_row.revision,
+                                "canonical_sha256": rollback_row.canonical_sha256,
+                            },
+                        }
+                await db.commit()
+            except Exception:
+                pass
+        return {"error": error_message, "built": False}
+    result_graph = solid_result.pop("_engineering_model_graph", None)
+    if result_graph is None or result_graph.canonical_sha256 != engineering_graph.canonical_sha256:
+        return {"error": "CAD build returned a different EMG revision", "built": False}
+    solid_result.pop("_sheet_ir", None)
+    solid_result.pop("_dimensions", None)
+
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return {"error": "not found"}
+        gen.params = {
+            **(gen.params or {}),
+            "solid_3d": solid_result,
+            "engineering_model_graph": {
+                "revision_id": str(engineering_graph_row.id),
+                "graph_id": engineering_graph_row.graph_id,
+                "revision": engineering_graph_row.revision,
+                "canonical_sha256": engineering_graph_row.canonical_sha256,
+            },
+        }
+        gen.status = ImageGenStatus.done
+        await db.commit()
+    return {
+        "ok": True,
+        "generation_id": generation_id,
+        "removed_kind": removed.kind,
         "note": note,
     }
 

@@ -2379,6 +2379,52 @@ async def add_generation_model_graph_feature(
     }
 
 
+class RemoveNativeFeatureRequest(BaseModel):
+    """Фаза 6 нового CAD-редактора (/root/.claude/plans/starry-mapping-hippo.md):
+    remove one BuildOperation from the current EMG graph by its operation
+    id (the exact id FeatureTreePanel already renders per row)."""
+
+    note: str = Field(min_length=1, max_length=1000)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+
+@router.delete("/{generation_id}/model-graph/features/{operation_id}")
+async def remove_generation_model_graph_feature(
+    generation_id: uuid.UUID,
+    operation_id: str,
+    body: RemoveNativeFeatureRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Фаза 6: the removal mechanism (a corrected candidate.features list
+    superseding the old operation.kind assertions) already existed inside
+    feature_tree_revision_patch — this is the first endpoint to expose it
+    as a single targeted "remove this one operation" action, instead of
+    "resubmit the whole document" (previously only reachable by hand via
+    a one-off script). Same async-task shape as add-feature: the mutation
+    happens inside the Celery task, the response only carries the queued
+    task id."""
+    gen, row, graph = await _owned_generation_graph(generation_id, db, user)
+    if not any(item.type == "BuildOperation" for item in graph.nodes):
+        raise HTTPException(422, "В графе ещё нет ни одной операции построения")
+
+    from app.tasks.cad_trace import remove_feature_from_graph
+
+    task = remove_feature_from_graph.apply_async(
+        args=[
+            str(generation_id),
+            operation_id,
+            body.note,
+            body.idempotency_key,
+        ],
+        queue="celery",
+    )
+    return {
+        "generation_id": str(generation_id),
+        "rebuild_task_id": task.id,
+    }
+
+
 @router.get("/{generation_id}/ir/feature-tree-candidates")
 async def get_feature_tree_candidates(
     generation_id: uuid.UUID,

@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import type { EmgOperationNode } from "@/lib/emg-tree";
 import { kindLabel } from "@/lib/emg-tree";
 
@@ -27,6 +29,70 @@ const KIND_ICON: Record<string, string> = {
   slot: "▭",
 };
 
+/** Ф6: inline "delete this operation?" — no modal library in this
+ * codebase, matches the confirm-in-place pattern already used elsewhere
+ * (e.g. ConstraintsPanel.tsx's own inline affordances). Text differs by
+ * whether the operation has a source Feature (read off the drawing) or
+ * not (added directly in the editor, featureIds is empty) — deleting a
+ * READ operation means asserting "the drawing doesn't actually have
+ * this", a stronger claim than removing something a human added by hand. */
+function DeleteButton({
+  op,
+  busy,
+  onConfirm,
+}: {
+  op: EmgOperationNode;
+  busy: boolean;
+  onConfirm: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  if (confirming) {
+    return (
+      <span
+        className="flex shrink-0 items-center gap-1 text-[10px]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <span className="text-zinc-500">Удалить?</span>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setConfirming(false);
+            onConfirm();
+          }}
+          className="rounded bg-red-500/20 px-1.5 py-0.5 text-red-300 hover:bg-red-500/30 disabled:opacity-40"
+        >
+          Да
+        </button>
+        <button
+          type="button"
+          onClick={() => setConfirming(false)}
+          className="rounded px-1.5 py-0.5 text-zinc-400 hover:bg-white/10"
+        >
+          Отмена
+        </button>
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      title={
+        op.featureIds.length > 0
+          ? "Эта операция прочитана с чертежа — удаление означает «на чертеже её не должно быть»"
+          : "Удалить добавленную операцию"
+      }
+      onClick={(event) => {
+        event.stopPropagation();
+        setConfirming(true);
+      }}
+      className="shrink-0 rounded px-1 text-zinc-600 opacity-0 hover:bg-red-500/15 hover:text-red-300 group-hover:opacity-100"
+    >
+      ✕
+    </button>
+  );
+}
+
 /** The build's own operation sequence, one row per BuildOperation — what
  * the part is actually made of, in the order the kernel applies it. A
  * guessed param anywhere in an operation (or one of the Feature nodes it
@@ -37,11 +103,15 @@ export default function FeatureTreePanel({
   guessedOperationIds,
   selectedId,
   onSelect,
+  onDelete,
+  deleteBusyId,
 }: {
   operations: EmgOperationNode[];
   guessedOperationIds: Set<string>;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onDelete?: (id: string) => void;
+  deleteBusyId?: string | null;
 }) {
   if (operations.length === 0) {
     return (
@@ -54,11 +124,22 @@ export default function FeatureTreePanel({
         const active = op.id === selectedId;
         const guessed = guessedOperationIds.has(op.id);
         return (
-          <li key={op.id}>
-            <button
-              type="button"
+          <li key={op.id} className="group relative">
+            {/* A <div role="button">, not a <button> — DeleteButton below
+                renders its own real <button>s, and nesting <button> inside
+                <button> is invalid HTML (the browser would silently close
+                the outer one early, breaking the row's own click target). */}
+            <div
+              role="button"
+              tabIndex={0}
               onClick={() => onSelect(op.id)}
-              className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors ${
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelect(op.id);
+                }
+              }}
+              className={`flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs transition-colors ${
                 active
                   ? "bg-sky-500/15 text-sky-100"
                   : "text-zinc-300 hover:bg-white/5"
@@ -79,7 +160,14 @@ export default function FeatureTreePanel({
                   className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
                 />
               )}
-            </button>
+              {onDelete && (
+                <DeleteButton
+                  op={op}
+                  busy={deleteBusyId === op.id}
+                  onConfirm={() => onDelete(op.id)}
+                />
+              )}
+            </div>
           </li>
         );
       })}
