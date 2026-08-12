@@ -10,89 +10,16 @@ import {
   type IrEntity,
   type IrPatchOp,
 } from "@/lib/studio-api";
+import {
+  availableConstraints,
+  nearestRefs,
+  CONSTRAINT_NEEDS_VALUE,
+  type ConstraintKind as Kind,
+  type PointRef,
+} from "@/lib/sketch-geometry";
 
-type Kind =
-  | "horizontal"
-  | "vertical"
-  | "radius"
-  | "diameter"
-  | "parallel"
-  | "perpendicular"
-  | "angle"
-  | "equal"
-  | "concentric"
-  | "distance"
-  | "coincident";
-
-type PointRef = { entity_id: string; point: "p1" | "p2" | "center" };
-
-const NEEDS_VALUE: Set<Kind> = new Set([
-  "radius",
-  "diameter",
-  "angle",
-  "distance",
-]);
-
-/** Endpoints/centre a constraint can reference on a given entity. */
-function refPoints(e: IrEntity): PointRef[] {
-  if (e.type === "segment")
-    return [
-      { entity_id: e.id, point: "p1" },
-      { entity_id: e.id, point: "p2" },
-    ];
-  if (e.type === "circle" || e.type === "arc")
-    return [{ entity_id: e.id, point: "center" }];
-  return [];
-}
-
-function coord(e: IrEntity, ref: PointRef): { x: number; y: number } | null {
-  if (ref.point === "center" && e.center) return e.center;
-  if (ref.point === "p1" && e.p1) return e.p1;
-  if (ref.point === "p2" && e.p2) return e.p2;
-  return null;
-}
-
-/** The closest pair of reference points between two entities — what a user
- * means by "make these coincident / this far apart" when they pick two lines. */
-function nearestRefs(a: IrEntity, b: IrEntity): [PointRef, PointRef] | null {
-  let best: [PointRef, PointRef] | null = null;
-  let bestD = Infinity;
-  for (const ra of refPoints(a)) {
-    const pa = coord(a, ra);
-    if (!pa) continue;
-    for (const rb of refPoints(b)) {
-      const pb = coord(b, rb);
-      if (!pb) continue;
-      const d = Math.hypot(pa.x - pb.x, pa.y - pb.y);
-      if (d < bestD) {
-        bestD = d;
-        best = [ra, rb];
-      }
-    }
-  }
-  return best;
-}
-
-/** Which constraints the current selection admits (arity + entity types). */
-function available(sel: IrEntity[]): Kind[] {
-  if (sel.length === 1) {
-    const e = sel[0];
-    if (e.type === "segment") return ["horizontal", "vertical"];
-    if (e.type === "circle" || e.type === "arc") return ["radius", "diameter"];
-    return [];
-  }
-  if (sel.length === 2) {
-    const segs = sel.filter((e) => e.type === "segment").length;
-    const circ = sel.filter(
-      (e) => e.type === "circle" || e.type === "arc",
-    ).length;
-    const kinds: Kind[] = ["coincident", "distance"];
-    if (segs === 2) kinds.push("parallel", "perpendicular", "angle", "equal");
-    if (circ === 2) kinds.push("concentric", "equal");
-    return kinds;
-  }
-  return [];
-}
+const NEEDS_VALUE = CONSTRAINT_NEEDS_VALUE;
+const available = availableConstraints;
 
 /** A1: full geometric-constraint editor — pick 1-2 entities, add any solver-
  * backed constraint, then review the live constraint list (satisfied/violated

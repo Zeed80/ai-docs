@@ -2260,13 +2260,19 @@ async def run_full_check(
 
 class AddedFeatureRequest(BaseModel):
     kind: Literal["boss", "pocket", "fillet", "chamfer", "shell", "thread"]
-    profile: Literal["circle", "rectangle"] | None = None
+    profile: Literal["circle", "rectangle", "sketch"] | None = None
     center_x_mm: float | None = Field(default=None, ge=0, le=100_000)
     center_y_mm: float | None = Field(default=None, ge=0, le=100_000)
     depth_mm: float | None = Field(default=None, gt=0, le=100_000)
     diameter_mm: float | None = Field(default=None, gt=0, le=100_000)
     width_mm: float | None = Field(default=None, gt=0, le=100_000)
     height_mm: float | None = Field(default=None, gt=0, le=100_000)
+    # Ф4: a solved sketch's own closed-loop wire (cad_ir.sketch_export's
+    # output) — same format the kernel's _sketch_wire already consumes for
+    # boss/pocket (Ф2.3). Detailed segment-level validity (closure, degenerate
+    # arcs, etc.) is the kernel's own job, same as it already is for
+    # circle/rectangle; this schema only checks presence/shape.
+    sketch_profile: list[dict[str, Any]] | None = Field(default=None, min_length=1, max_length=200)
     edge_key: str | None = Field(default=None, min_length=16, max_length=128)
     size_mm: float | None = Field(default=None, gt=0, le=100_000)
     # D3: shell wall thickness; cosmetic-thread designation per ГОСТ 2.311
@@ -2291,7 +2297,7 @@ class AddedFeatureRequest(BaseModel):
                 raise ValueError("Операция ребра требует edge_key и size_mm")
             if any(value is not None for value in (
                 self.profile, self.center_x_mm, self.center_y_mm, self.depth_mm,
-                self.diameter_mm, self.width_mm, self.height_mm,
+                self.diameter_mm, self.width_mm, self.height_mm, self.sketch_profile,
             )):
                 raise ValueError("Операция ребра не принимает параметры профиля")
             return self
@@ -2302,8 +2308,22 @@ class AddedFeatureRequest(BaseModel):
         if self.profile == "circle":
             if self.diameter_mm is None or self.width_mm is not None or self.height_mm is not None:
                 raise ValueError("Круглый профиль требует только diameter_mm")
-        elif self.width_mm is None or self.height_mm is None or self.diameter_mm is not None:
-            raise ValueError("Прямоугольный профиль требует width_mm и height_mm")
+            if self.sketch_profile is not None:
+                raise ValueError("Круглый профиль не принимает sketch_profile")
+        elif self.profile == "rectangle":
+            if self.width_mm is None or self.height_mm is None or self.diameter_mm is not None:
+                raise ValueError("Прямоугольный профиль требует width_mm и height_mm")
+            if self.sketch_profile is not None:
+                raise ValueError("Прямоугольный профиль не принимает sketch_profile")
+        else:  # sketch
+            if self.sketch_profile is None:
+                raise ValueError("Эскизный профиль требует sketch_profile")
+            if (
+                self.diameter_mm is not None
+                or self.width_mm is not None
+                or self.height_mm is not None
+            ):
+                raise ValueError("Эскизный профиль не принимает diameter_mm/width_mm/height_mm")
         return self
 
 

@@ -967,6 +967,11 @@ export interface IrEnvelope {
   ir: CadIr;
 }
 
+// Ф4 нового CAD-редактора: element aliases, so a scoped sketch session
+// (no whole CadIr document) can still reuse these exact shapes.
+export type IrConstraint = CadIr["constraints"][number];
+export type IrCadParameter = CadIr["parameters"][number];
+
 export interface ParamProvenance {
   origin: "measured" | "stated" | "standard" | "guessed" | "propagated";
   detail: string;

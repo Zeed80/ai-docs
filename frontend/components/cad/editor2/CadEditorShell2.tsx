@@ -16,6 +16,8 @@ import Ribbon, {
   RibbonPlaceholder,
   type RibbonTabId,
 } from "@/components/cad/editor2/Ribbon";
+import SketchCanvas from "@/components/cad/editor2/sketch/SketchCanvas";
+import type { SketchProfileSegment } from "@/lib/cad-sketch-api";
 import {
   buildEmgTree,
   operationBoundsFromFeatureResults,
@@ -87,6 +89,16 @@ export default function CadEditorShell2({
   const [ribbonTab, setRibbonTab] = useState<RibbonTabId>("inspect");
   const [addFeatureDraft, setAddFeatureDraft] =
     useState<AddFeatureDraftKind | null>(null);
+  // Ф4: sketching needs real screen space — active while drawing, it takes
+  // over the centre viewport (in place of the 3D model) instead of being
+  // squeezed into the narrow Свойства sidebar. exportedSketchProfile is the
+  // handoff: PropertiesPanel2's boss/pocket form reads it once sketching
+  // ends, same "lift state to the shell, hand back down" pattern
+  // addFeatureDraft itself already uses.
+  const [sketchModeActive, setSketchModeActive] = useState(false);
+  const [exportedSketchProfile, setExportedSketchProfile] = useState<
+    SketchProfileSegment[] | null
+  >(null);
 
   const load = useCallback(async () => {
     try {
@@ -281,17 +293,11 @@ export default function CadEditorShell2({
 
       <Ribbon active={ribbonTab} onChange={setRibbonTab}>
         {ribbonTab === "sketch" && (
-          <>
-            <RibbonPlaceholder icon="╱" label="Линия" comingIn="Фазе 4" />
-            <RibbonPlaceholder icon="◠" label="Дуга" comingIn="Фазе 4" />
-            <RibbonPlaceholder icon="○" label="Окружность" comingIn="Фазе 4" />
-            <RibbonPlaceholder
-              icon="▭"
-              label="Прямоугольник"
-              comingIn="Фазе 4"
-            />
-            <RibbonPlaceholder icon="⏚" label="Ограничение" comingIn="Фазе 4" />
-          </>
+          <span className="px-2 text-[11px] text-zinc-500">
+            {sketchModeActive
+              ? "Эскиз открыт в центральной области — рисуйте контур, затем «Использовать этот контур»."
+              : "Чтобы начать эскиз: вкладка Фичи → Бобышка/Карман → профиль «Эскиз»."}
+          </span>
         )}
         {ribbonTab === "features" && (
           <>
@@ -419,20 +425,33 @@ export default function CadEditorShell2({
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <Viewport
-            hasModel={hasModel}
-            modelUrl={modelUrl}
-            topologyUrl={topologyUrl}
-            operationBounds={operationBounds}
-            flaggedOperationIds={guessedOperationIds}
-            selectedOperationId={selectedOperationId}
-            onOperationClick={handleOperationClick}
-          />
-          <AssumptionsStrip
-            assumptions={assumptions}
-            operations={tree?.operations ?? []}
-            onSelectOperation={setSelectedOperationId}
-          />
+          {sketchModeActive ? (
+            <SketchCanvas
+              onCancel={() => setSketchModeActive(false)}
+              onExported={(profile) => {
+                setExportedSketchProfile(profile);
+                setSketchModeActive(false);
+              }}
+              onError={setError}
+            />
+          ) : (
+            <>
+              <Viewport
+                hasModel={hasModel}
+                modelUrl={modelUrl}
+                topologyUrl={topologyUrl}
+                operationBounds={operationBounds}
+                flaggedOperationIds={guessedOperationIds}
+                selectedOperationId={selectedOperationId}
+                onOperationClick={handleOperationClick}
+              />
+              <AssumptionsStrip
+                assumptions={assumptions}
+                operations={tree?.operations ?? []}
+                onSelectOperation={setSelectedOperationId}
+              />
+            </>
+          )}
         </main>
 
         <aside className="w-96 shrink-0 overflow-y-auto border-l border-white/10 bg-zinc-900/60">
@@ -446,6 +465,10 @@ export default function CadEditorShell2({
             edges={edges}
             addFeatureDraft={addFeatureDraft}
             onAddFeatureDraftChange={setAddFeatureDraft}
+            sketchModeActive={sketchModeActive}
+            onStartSketch={() => setSketchModeActive(true)}
+            exportedSketchProfile={exportedSketchProfile}
+            onSketchProfileConsumed={() => setExportedSketchProfile(null)}
             onSaved={() => void load()}
             onRebuildQueued={(taskId) => {
               setRebuildTaskId(taskId);

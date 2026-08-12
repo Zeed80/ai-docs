@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import PropertiesPanel from "@/components/cad/editor/PropertiesPanel";
 import { engineeringApi, type AddedNativeFeature } from "@/lib/engineering-api";
 import type { EmgFeatureNode, EmgOperationNode } from "@/lib/emg-tree";
+import type { SketchProfileSegment } from "@/lib/cad-sketch-api";
 
 export type AddFeatureDraftKind =
   "boss" | "pocket" | "fillet" | "chamfer" | "shell" | "thread";
@@ -41,6 +42,10 @@ export default function PropertiesPanel2({
   edges,
   addFeatureDraft,
   onAddFeatureDraftChange,
+  sketchModeActive,
+  onStartSketch,
+  exportedSketchProfile,
+  onSketchProfileConsumed,
   onSaved,
   onRebuildQueued,
   onError,
@@ -51,16 +56,31 @@ export default function PropertiesPanel2({
   edges: KernelEdgeDescriptor[];
   addFeatureDraft: AddFeatureDraftKind | null;
   onAddFeatureDraftChange: (draft: AddFeatureDraftKind | null) => void;
+  sketchModeActive: boolean;
+  onStartSketch: () => void;
+  exportedSketchProfile: SketchProfileSegment[] | null;
+  onSketchProfileConsumed: () => void;
   onSaved: () => void;
   onRebuildQueued: (taskId: string) => void;
   onError: (message: string) => void;
 }) {
   if (addFeatureDraft) {
+    if (sketchModeActive) {
+      return (
+        <p className="p-3 text-[11px] text-zinc-500">
+          Эскиз открыт в центральной области. Нарисуйте контур и нажмите
+          «Использовать этот контур», чтобы вернуться сюда.
+        </p>
+      );
+    }
     return (
       <AddFeatureForm
         generationId={generationId}
         kind={addFeatureDraft}
         edges={edges}
+        onStartSketch={onStartSketch}
+        exportedSketchProfile={exportedSketchProfile}
+        onSketchProfileConsumed={onSketchProfileConsumed}
         onCancel={() => onAddFeatureDraftChange(null)}
         onAdded={(taskId) => {
           onAddFeatureDraftChange(null);
@@ -95,6 +115,9 @@ function AddFeatureForm({
   generationId,
   kind,
   edges,
+  onStartSketch,
+  exportedSketchProfile,
+  onSketchProfileConsumed,
   onCancel,
   onAdded,
   onSaved,
@@ -103,6 +126,9 @@ function AddFeatureForm({
   generationId: string;
   kind: AddFeatureDraftKind;
   edges: KernelEdgeDescriptor[];
+  onStartSketch: () => void;
+  exportedSketchProfile: SketchProfileSegment[] | null;
+  onSketchProfileConsumed: () => void;
   onCancel: () => void;
   onAdded: (taskId: string) => void;
   onSaved: () => void;
@@ -111,7 +137,12 @@ function AddFeatureForm({
   const isProfileKind = kind === "boss" || kind === "pocket";
   const isEdgeKind = kind === "fillet" || kind === "chamfer";
 
-  const [profile, setProfile] = useState<"circle" | "rectangle">("circle");
+  const [profile, setProfile] = useState<"circle" | "rectangle" | "sketch">(
+    "circle",
+  );
+  const [sketchProfile, setSketchProfile] = useState<
+    SketchProfileSegment[] | null
+  >(null);
   const [centerX, setCenterX] = useState("0");
   const [centerY, setCenterY] = useState("0");
   const [depth, setDepth] = useState("5");
@@ -126,10 +157,35 @@ function AddFeatureForm({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => {
+    if (exportedSketchProfile) {
+      setSketchProfile(exportedSketchProfile);
+      setProfile("sketch");
+      onSketchProfileConsumed();
+    }
+    // Only react to a NEW handoff arriving — onSketchProfileConsumed is
+    // stable-ish and re-running this on its identity would re-consume.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exportedSketchProfile]);
+
   const num = (raw: string) => Number(raw.replace(",", "."));
 
   function buildFeature(): AddedNativeFeature | null {
     if (isProfileKind) {
+      if (profile === "sketch") {
+        if (!sketchProfile) {
+          onError("Сначала нарисуйте и используйте контур эскиза.");
+          return null;
+        }
+        return {
+          kind,
+          profile: "sketch",
+          center_x_mm: num(centerX),
+          center_y_mm: num(centerY),
+          depth_mm: num(depth),
+          sketch_profile: sketchProfile,
+        };
+      }
       return {
         kind,
         profile,
@@ -206,7 +262,7 @@ function AddFeatureForm({
           <label className="block space-y-1">
             <span className="text-[11px] text-zinc-400">Профиль</span>
             <div className="flex gap-2">
-              {(["circle", "rectangle"] as const).map((value) => (
+              {(["circle", "rectangle", "sketch"] as const).map((value) => (
                 <button
                   key={value}
                   type="button"
@@ -217,7 +273,11 @@ function AddFeatureForm({
                       : "border-white/10 text-zinc-400 hover:bg-white/5"
                   }`}
                 >
-                  {value === "circle" ? "Круг" : "Прямоугольник"}
+                  {value === "circle"
+                    ? "Круг"
+                    : value === "rectangle"
+                      ? "Прямоугольник"
+                      : "Эскиз"}
                 </button>
               ))}
             </div>
@@ -234,13 +294,14 @@ function AddFeatureForm({
               onChange={setCenterY}
             />
             <NumberField label="depth_mm" value={depth} onChange={setDepth} />
-            {profile === "circle" ? (
+            {profile === "circle" && (
               <NumberField
                 label="diameter_mm"
                 value={diameter}
                 onChange={setDiameter}
               />
-            ) : (
+            )}
+            {profile === "rectangle" && (
               <>
                 <NumberField
                   label="width_mm"
@@ -255,6 +316,32 @@ function AddFeatureForm({
               </>
             )}
           </div>
+          {profile === "sketch" && (
+            <div className="rounded border border-white/10 bg-black/20 p-2">
+              {sketchProfile ? (
+                <p className="flex items-center justify-between text-[11px]">
+                  <span className="text-emerald-300">
+                    ✓ Контур готов: {sketchProfile.length} элемент(ов)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onStartSketch}
+                    className="text-sky-300 hover:text-sky-200"
+                  >
+                    Перерисовать
+                  </button>
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onStartSketch}
+                  className="w-full rounded border border-sky-400/30 bg-sky-500/10 px-2 py-1.5 text-[11px] text-sky-200 hover:bg-sky-500/20"
+                >
+                  ✎ Открыть эскизный редактор
+                </button>
+              )}
+            </div>
+          )}
         </>
       )}
 

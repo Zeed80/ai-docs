@@ -1,5 +1,6 @@
 import { csrfHeaders } from "@/lib/auth";
 import { getApiBaseUrl } from "@/lib/api-base";
+import type { SketchProfileSegment } from "@/lib/cad-sketch-api";
 
 export type EngineeringProject = {
   id: string;
@@ -199,13 +200,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 // endpoint instead of the 2D-IR candidate-index one.
 export interface AddedNativeFeature {
   kind: "boss" | "pocket" | "fillet" | "chamfer" | "shell" | "thread";
-  profile?: "circle" | "rectangle" | null;
+  profile?: "circle" | "rectangle" | "sketch" | null;
   center_x_mm?: number | null;
   center_y_mm?: number | null;
   depth_mm?: number | null;
   diameter_mm?: number | null;
   width_mm?: number | null;
   height_mm?: number | null;
+  // Ф4: a solved sketch's own closed-loop wire.
+  sketch_profile?: SketchProfileSegment[] | null;
   edge_key?: string | null;
   size_mm?: number | null;
   thickness_mm?: number | null;
