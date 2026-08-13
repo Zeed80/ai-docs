@@ -2286,6 +2286,8 @@ async def _build_spec_solid(
                 "volume_mm3": report.get("volume_mm3"),
                 "feature_results": report.get("feature_results") or [],
                 "warnings": report.get("warnings") or [],
+                "edges": report.get("edges") or [],
+                "faces": report.get("faces") or [],
             },
             **(
                 {"_engineering_model_graph": engineering_graph}
@@ -2401,6 +2403,11 @@ async def _build_spec_solid(
             # fillet/chamfer form (_edge_descriptors — the SAME keys
             # _resolve_edge already accepts on the next add-feature call).
             "edges": report.get("edges") or [],
+            # Stable face IDs + measured surface/area metadata back the
+            # editor's topology picker.  The viewer still renders the
+            # topology sidecar; this compact descriptor list is for finding
+            # tiny/hidden faces without requiring a precise mouse hit.
+            "faces": report.get("faces") or [],
             # Exact kernel truth: independent bodies may be cache hits, while
             # single-body/order-sensitive trees always report full rebuild.
             "incremental_build": report.get("incremental_build") or {

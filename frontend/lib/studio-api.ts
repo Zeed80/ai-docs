@@ -809,6 +809,24 @@ export interface CadTopologyMesh {
   edges?: CadTopologyEdge[];
 }
 
+/** Compact measured topology descriptors shipped in kernel_report. Unlike
+ * the tessellated sidecar these are cheap to list, sort and search. */
+export interface KernelEdgeDescriptor {
+  key: string;
+  index: number;
+  curve: string;
+  length_mm: number;
+  vertices: Array<{ x: number; y: number; z: number }>;
+}
+
+export interface KernelFaceDescriptor {
+  key: string;
+  index: number;
+  surface: string;
+  area_mm2: number;
+  center_of_mass_mm: { x: number; y: number; z: number };
+}
+
 // ── CAD IR (vectorize / manual drafting) ─────────────────────────────────────
 
 export type IrLineClass =
@@ -1089,7 +1107,10 @@ export interface Solid3dSummary {
     volume_mm3?: number;
     surface_area_mm2?: number;
     feature_operations?: Record<string, unknown>[];
+    feature_results?: Record<string, unknown>[];
     warnings?: string[];
+    edges?: KernelEdgeDescriptor[];
+    faces?: KernelFaceDescriptor[];
     incremental_build?: {
       schema?: string;
       strategy?: "independent_body_cache" | "full_body_rebuild" | string;

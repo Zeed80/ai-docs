@@ -29,6 +29,12 @@ const KIND_ICON: Record<string, string> = {
   slot: "▭",
 };
 
+export interface OperationTreeIssue {
+  code: string;
+  message: string;
+  source: "kernel" | "model_graph";
+}
+
 /** Ф6: inline "delete this operation?" — no modal library in this
  * codebase, matches the confirm-in-place pattern already used elsewhere
  * (e.g. ConstraintsPanel.tsx's own inline affordances). Text differs by
@@ -129,6 +135,7 @@ export default function FeatureTreePanel({
   onSelect,
   onDelete,
   deleteBusyId,
+  operationIssues = new Map(),
 }: {
   operations: EmgOperationNode[];
   guessedOperationIds: Set<string>;
@@ -136,14 +143,33 @@ export default function FeatureTreePanel({
   onSelect: (id: string) => void;
   onDelete?: (id: string, reason: string) => void;
   deleteBusyId?: string | null;
+  operationIssues?: Map<string, OperationTreeIssue[]>;
 }) {
-  const [filter, setFilter] = useState<"all" | "review" | "without_guess">(
-    "all",
-  );
+  const [filter, setFilter] = useState<
+    "all" | "review" | "issues" | "without_guess"
+  >("all");
+  const [issueCode, setIssueCode] = useState("all");
   const listRef = useRef<HTMLUListElement | null>(null);
+  const issueOperationCount = operations.filter(
+    (operation) => (operationIssues.get(operation.id)?.length ?? 0) > 0,
+  ).length;
+  const issueCodes = Array.from(
+    new Set(
+      Array.from(operationIssues.values()).flatMap((issues) =>
+        issues.map((issue) => issue.code),
+      ),
+    ),
+  ).sort();
   const visibleOperations = operations.filter((operation) => {
     const guessed = guessedOperationIds.has(operation.id);
     if (filter === "review") return guessed;
+    if (filter === "issues") {
+      const issues = operationIssues.get(operation.id) ?? [];
+      return (
+        issues.length > 0 &&
+        (issueCode === "all" || issues.some((issue) => issue.code === issueCode))
+      );
+    }
     if (filter === "without_guess") return !guessed;
     return true;
   });
@@ -162,6 +188,7 @@ export default function FeatureTreePanel({
         {([
           ["all", `Все ${operations.length}`],
           ["review", `Проверить ${guessedOperationIds.size}`],
+          ["issues", `Ошибки ${issueOperationCount}`],
           [
             "without_guess",
             `Без предположений ${operations.length - guessedOperationIds.size}`,
@@ -181,6 +208,21 @@ export default function FeatureTreePanel({
             {label}
           </button>
         ))}
+        {filter === "issues" && issueCodes.length > 1 && (
+          <select
+            aria-label="Код ошибки операции"
+            value={issueCode}
+            onChange={(event) => setIssueCode(event.target.value)}
+            className="min-w-0 rounded border border-red-500/20 bg-zinc-950 px-1.5 py-1 font-mono text-[10px] text-red-200 outline-none focus:border-red-400/60"
+          >
+            <option value="all">Все коды</option>
+            {issueCodes.map((code) => (
+              <option key={code} value={code}>
+                {code}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
       {visibleOperations.length === 0 ? (
         <p className="p-3 text-xs text-zinc-500">
@@ -192,6 +234,7 @@ export default function FeatureTreePanel({
             const index = operations.findIndex((item) => item.id === op.id);
             const active = op.id === selectedId;
             const guessed = guessedOperationIds.has(op.id);
+            const issues = operationIssues.get(op.id) ?? [];
             return (
               <li key={op.id} className="group relative">
                 {/* A <div role="button">, not a <button> — DeleteButton below
@@ -251,6 +294,16 @@ export default function FeatureTreePanel({
                       title="Есть предположенные значения — требует проверки"
                       className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
                     />
+                  )}
+                  {issues.length > 0 && (
+                    <span
+                      title={issues
+                        .map((issue) => `${issue.code}: ${issue.message}`)
+                        .join("\n")}
+                      className="shrink-0 rounded bg-red-500/15 px-1 py-0.5 font-mono text-[9px] text-red-300"
+                    >
+                      {issues.length} пробл.
+                    </span>
                   )}
                   {onDelete && (
                     <DeleteButton

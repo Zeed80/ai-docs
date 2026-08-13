@@ -10,6 +10,7 @@ import {
   type EmgOperationNode,
 } from "@/lib/emg-tree";
 import type { SketchProfileSegment } from "@/lib/cad-sketch-api";
+import type { KernelEdgeDescriptor } from "@/lib/studio-api";
 
 export type AddFeatureDraftKind =
   "boss" | "pocket" | "fillet" | "chamfer" | "shell" | "thread";
@@ -22,14 +23,6 @@ const KIND_LABEL: Record<AddFeatureDraftKind, string> = {
   shell: "Оболочка",
   thread: "Резьба",
 };
-
-export interface KernelEdgeDescriptor {
-  key: string;
-  index: number;
-  curve: string;
-  length_mm: number;
-  vertices: Array<{ x: number; y: number; z: number }>;
-}
 
 /** Ф2-Ф3 нового CAD-редактора: PropertiesPanel (коррекция, БЕЗ ИЗМЕНЕНИЙ)
  * плюс форма «добавить фичу» для всех 6 видов, что уже принимает

@@ -18,6 +18,9 @@ export default function Viewport({
   flaggedOperationIds,
   selectedOperationId,
   onOperationClick,
+  selectedFaceKey,
+  onFaceSelect,
+  selectedEdgeKey,
   edgePickActive,
   onEdgeSelect,
 }: {
@@ -28,6 +31,9 @@ export default function Viewport({
   flaggedOperationIds: Set<string>;
   selectedOperationId: string | null;
   onOperationClick: (operationId: string | null) => void;
+  selectedFaceKey?: string | null;
+  onFaceSelect?: (faceKey: string | null) => void;
+  selectedEdgeKey?: string | null;
   // Ф7: true while the "Добавить фичу" form is open on fillet/chamfer —
   // shows a hint and activates edge click-selection; the model stays
   // clickable for operation bounds either way, both raycasts are
@@ -122,6 +128,9 @@ export default function Viewport({
           flaggedOperationIds={flaggedOperationIds}
           selectedOperationId={selectedOperationId}
           onOperationClick={onOperationClick}
+          selectedFaceKey={selectedFaceKey}
+          onFaceSelect={onFaceSelect}
+          selectedEdgeKey={selectedEdgeKey}
           onEdgeSelect={onEdgeSelect}
           // This wrapper is already a properly-bounded flex-1 pane (see its
           // own className above) — CadModelViewer's DEFAULT fixed preview

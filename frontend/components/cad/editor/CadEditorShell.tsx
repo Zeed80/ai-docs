@@ -22,16 +22,18 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import FeatureTreePanel from "@/components/cad/editor/FeatureTreePanel";
+import FeatureTreePanel, {
+  type OperationTreeIssue,
+} from "@/components/cad/editor/FeatureTreePanel";
 import AssumptionsStrip from "@/components/cad/editor/AssumptionsStrip";
 import CadStatusBar from "@/components/cad/editor/CadStatusBar";
 import ResizablePane from "@/components/cad/editor/ResizablePane";
 import Viewport from "@/components/cad/editor/Viewport";
 import PropertiesPanel2, {
   type AddFeatureDraftKind,
-  type KernelEdgeDescriptor,
 } from "@/components/cad/editor/PropertiesPanel2";
 import OperationProvenancePanel from "@/components/cad/editor/OperationProvenancePanel";
+import TopologyPickerPanel from "@/components/cad/editor/TopologyPickerPanel";
 import Ribbon, {
   RibbonButton,
   RibbonDivider,
@@ -61,6 +63,8 @@ import {
   solidPreviewUrl,
   type CadCertification,
   type Generation,
+  type KernelEdgeDescriptor,
+  type KernelFaceDescriptor,
   type Solid3dSummary,
 } from "@/lib/studio-api";
 
@@ -180,6 +184,8 @@ export default function CadEditorShell({
   // the 3D model hands its edge_key down to whichever fillet/chamfer form
   // is currently open.
   const [pickedEdgeKey, setPickedEdgeKey] = useState<string | null>(null);
+  const [selectedFaceKey, setSelectedFaceKey] = useState<string | null>(null);
+  const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
   // Ф8: true while the "Массив" form is open — operates on selectedOperationId,
   // not a new draft.
   const [patternDraftActive, setPatternDraftActive] = useState(false);
@@ -299,14 +305,57 @@ export default function CadEditorShell({
       ),
     [solid],
   );
-  // Ф3: edge_key candidates for the fillet/chamfer form — already exposed
-  // by the kernel report (_edge_descriptors), just not yet typed on
-  // Solid3dSummary; read loosely like verification.feature_results above.
-  const edges = useMemo(() => {
-    const raw = (solid as unknown as { kernel_report?: { edges?: unknown } })
-      ?.kernel_report?.edges;
-    return Array.isArray(raw) ? (raw as KernelEdgeDescriptor[]) : [];
-  }, [solid]);
+  const edges = useMemo<KernelEdgeDescriptor[]>(
+    () => solid?.kernel_report?.edges ?? [],
+    [solid],
+  );
+  const faces = useMemo<KernelFaceDescriptor[]>(
+    () => solid?.kernel_report?.faces ?? [],
+    [solid],
+  );
+  const operationIssues = useMemo(() => {
+    const issues = new Map<string, OperationTreeIssue[]>();
+    const add = (operationId: string, issue: OperationTreeIssue) => {
+      const current = issues.get(operationId) ?? [];
+      if (!current.some((item) => item.code === issue.code && item.message === issue.message)) {
+        current.push(issue);
+        issues.set(operationId, current);
+      }
+    };
+    const operationByFeature = new Map<string, string>();
+    for (const operation of tree?.operations ?? []) {
+      for (const featureId of operation.featureIds) {
+        operationByFeature.set(featureId, operation.id);
+      }
+    }
+    for (const item of solid?.kernel_report?.feature_results ?? []) {
+      const index = Number(item.feature_index);
+      if (!Number.isInteger(index) || String(item.status) !== "failed") continue;
+      const operationId = `operation:${index}`;
+      if (!tree?.operations.some((operation) => operation.id === operationId)) continue;
+      add(operationId, {
+        code: "KERNEL_FEATURE_FAILED",
+        message: String(item.reason ?? "Kernel operation failed"),
+        source: "kernel",
+      });
+    }
+    const criticalIds = new Set(
+      graphRevision?.graph.verification?.critical_unresolved_assertion_ids ?? [],
+    );
+    for (const assertion of graphRevision?.graph.assertions ?? []) {
+      if (!criticalIds.has(assertion.id) || assertion.state !== "active") continue;
+      const operationId = assertion.subject_id.startsWith("operation:")
+        ? assertion.subject_id
+        : operationByFeature.get(assertion.subject_id);
+      if (!operationId) continue;
+      add(operationId, {
+        code: "CRITICAL_ASSERTION_UNRESOLVED",
+        message: assertion.predicate,
+        source: "model_graph",
+      });
+    }
+    return issues;
+  }, [graphRevision, solid, tree]);
   const handleOperationClick = useCallback((operationId: string | null) => {
     if (operationId) setSelectedOperationId(operationId);
   }, []);
@@ -718,6 +767,7 @@ export default function CadEditorShell({
                   void handleDeleteOperation(id, reason)
                 }
                 deleteBusyId={deleteBusyId}
+                operationIssues={operationIssues}
               />
             ) : (
               <p className="p-3 text-xs text-zinc-500">
@@ -747,11 +797,26 @@ export default function CadEditorShell({
                 flaggedOperationIds={guessedOperationIds}
                 selectedOperationId={selectedOperationId}
                 onOperationClick={handleOperationClick}
+                selectedFaceKey={selectedFaceKey}
+                onFaceSelect={(key) => {
+                  setSelectedFaceKey(key);
+                  if (key) setSelectedEdgeKey(null);
+                }}
+                selectedEdgeKey={selectedEdgeKey}
                 edgePickActive={
                   addFeatureDraft === "fillet" || addFeatureDraft === "chamfer"
                 }
                 onEdgeSelect={(key) => {
-                  if (key) setPickedEdgeKey(key);
+                  if (key) {
+                    setSelectedEdgeKey(key);
+                    setSelectedFaceKey(null);
+                    if (
+                      addFeatureDraft === "fillet" ||
+                      addFeatureDraft === "chamfer"
+                    ) {
+                      setPickedEdgeKey(key);
+                    }
+                  }
                 }}
               />
               <AssumptionsStrip
@@ -788,6 +853,23 @@ export default function CadEditorShell({
                 operation={selectedOperation}
               />
             )}
+            <TopologyPickerPanel
+              faces={faces}
+              edges={edges}
+              selectedFaceKey={selectedFaceKey}
+              selectedEdgeKey={selectedEdgeKey}
+              onSelectFace={setSelectedFaceKey}
+              onSelectEdge={(key) => {
+                setSelectedEdgeKey(key);
+                if (
+                  key &&
+                  (addFeatureDraft === "fillet" ||
+                    addFeatureDraft === "chamfer")
+                ) {
+                  setPickedEdgeKey(key);
+                }
+              }}
+            />
             <PropertiesPanel2
               generationId={generationId}
               operation={selectedOperation}

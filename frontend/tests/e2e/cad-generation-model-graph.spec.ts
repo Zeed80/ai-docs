@@ -199,6 +199,45 @@ async function mockApi(page: Page, modelGraph: typeof editorGraph = graph) {
                             z_max: 5,
                           },
                         },
+                        {
+                          feature_index: 1,
+                          status: "failed",
+                          reason: "hole did not produce a local B-Rep change",
+                        },
+                      ],
+                    },
+                    kernel_report: {
+                      feature_results: [
+                        {
+                          feature_index: 1,
+                          status: "failed",
+                          reason: "hole did not produce a local B-Rep change",
+                        },
+                      ],
+                      faces: [
+                        {
+                          key: "face-small-stable-key",
+                          index: 3,
+                          surface: "Plane",
+                          area_mm2: 0.25,
+                          center_of_mass_mm: { x: 1, y: 2, z: 3 },
+                        },
+                        {
+                          key: "face-large-stable-key",
+                          index: 1,
+                          surface: "Cylinder",
+                          area_mm2: 100,
+                          center_of_mass_mm: { x: 0, y: 0, z: 0 },
+                        },
+                      ],
+                      edges: [
+                        {
+                          key: "edge-small-stable-key",
+                          index: 4,
+                          curve: "Line",
+                          length_mm: 0.5,
+                          vertices: [],
+                        },
                       ],
                     },
                   },
@@ -372,6 +411,20 @@ test("CAD editor filters review operations and navigates the visible tree by key
   await outer.focus();
   await outer.press("ArrowDown");
   await expect(page.getByText("Выбрано: Отверстие")).toBeVisible();
+
+  await page.getByRole("button", { name: "Ошибки 1" }).click();
+  await expect(page.getByRole("button", { name: /Отверстие/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Выдавливание/ })).toHaveCount(0);
+
+  const topology = page.getByTestId("topology-picker");
+  const smallFace = topology.getByRole("button", { name: /F3/ });
+  await expect(smallFace).toBeVisible();
+  await smallFace.click();
+  await expect(smallFace).toHaveAttribute("aria-pressed", "true");
+  await topology.getByRole("button", { name: "Рёбра 1" }).click();
+  const smallEdge = topology.getByRole("button", { name: /E4/ });
+  await smallEdge.click();
+  await expect(smallEdge).toHaveAttribute("aria-pressed", "true");
 });
 
 test("related assertions are submitted as one atomic GraphPatch", async ({ page, context }) => {
