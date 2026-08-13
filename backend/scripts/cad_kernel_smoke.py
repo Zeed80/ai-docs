@@ -154,7 +154,93 @@ def _check_incremental_body_cache() -> None:
     check(
         "independent-body incremental rebuild",
         ok,
-        f"first={initial}, second={incremental}",
+        "first "
+        f"hit={initial.get('cache_hit_body_indices')} rebuilt={initial.get('rebuilt_feature_indices')}; "
+        "second "
+        f"hit={incremental.get('cache_hit_body_indices')} reused={incremental.get('reused_feature_indices')} "
+        f"rebuilt={incremental.get('rebuilt_feature_indices')}",
+    )
+
+
+def _check_operation_checkpoints() -> None:
+    """Reuse only the longest reopened and topology-matched operation prefix."""
+    nonce = f"operation-checkpoint-smoke:{os.getpid()}:{time.time_ns()}"
+    base = _feature("extrude", width_mm=40.0, height_mm=30.0, depth_mm=10.0)
+    base["source_entity_ids"] = [f"{nonce}:base"]
+    boss = _feature(
+        "boss", profile="circle", center_x_mm=20.0, center_y_mm=15.0,
+        diameter_mm=10.0, depth_mm=5.0,
+    )
+    hole = _feature(
+        "hole", center_x_mm=20.0, center_y_mm=15.0,
+        diameter_mm=4.0, through=True,
+    )
+    first_candidate = _candidate(base, boss, hole, label="operation checkpoint smoke")
+    first_status, first_payload = _compile(first_candidate)
+    if first_status != 200 or not isinstance(first_payload, bytes):
+        check("operation-level checkpoint rebuild", False, f"first HTTP {first_status}")
+        return
+    first = _report_from_zip(first_payload)
+
+    second_candidate = deepcopy(first_candidate)
+    second_candidate["features"][2]["params"]["diameter_mm"] = 5.0
+    second_status, second_payload = _compile(second_candidate)
+    if second_status != 200 or not isinstance(second_payload, bytes):
+        check("operation-level checkpoint rebuild", False, f"second HTTP {second_status}")
+        return
+    second = _report_from_zip(second_payload)
+    first_incremental = first.get("incremental_build") or {}
+    second_incremental = second.get("incremental_build") or {}
+    first_body = (first_incremental.get("operation_checkpoints") or [{}])[0]
+    second_body = (second_incremental.get("operation_checkpoints") or [{}])[0]
+    first_boss = next(
+        (item for item in first_body.get("checkpoints") or []
+         if item.get("checkpoint_id") == "profile_operations:0:1"),
+        {},
+    )
+    second_hit = next(
+        (item for item in second_body.get("checkpoints") or []
+         if item.get("source") == "cache_hit"),
+        {},
+    )
+
+    reordered_candidate = deepcopy(second_candidate)
+    reordered_candidate["features"] = [base, reordered_candidate["features"][2], boss]
+    third_status, third_payload = _compile(reordered_candidate)
+    if third_status != 200 or not isinstance(third_payload, bytes):
+        check("operation-level checkpoint rebuild", False, f"reordered HTTP {third_status}")
+        return
+    third = _report_from_zip(third_payload)
+    third_incremental = third.get("incremental_build") or {}
+    third_body = (third_incremental.get("operation_checkpoints") or [{}])[0]
+    ok = (
+        first_incremental.get("reused_feature_indices") == []
+        and first_incremental.get("rebuilt_feature_indices") == [0, 1, 2]
+        and second_incremental.get("reused_feature_indices") == [0, 1]
+        and second_incremental.get("rebuilt_feature_indices") == [2]
+        and second_incremental.get("full_rebuild") is False
+        and second_body.get("checkpoint_hit_id") == "profile_operations:0:1"
+        and first_boss.get("topology_signature") == second_hit.get("topology_signature")
+        and second_hit.get("brep_valid") is True
+        and second_hit.get("manifold") is True
+        # Global feature indices are audit addresses. Reordering invalidates
+        # the old boss/hole prefix even though the stage vocabulary is equal.
+        and third_incremental.get("reused_feature_indices") == [0]
+        and third_incremental.get("rebuilt_feature_indices") == [1, 2]
+        and third_body.get("checkpoint_hit_id") == "base:0:0"
+        and second.get("valid") is True
+        and third.get("valid") is True
+    )
+    check(
+        "operation-level checkpoint rebuild",
+        ok,
+        f"first rebuilt={first_incremental.get('rebuilt_feature_indices')}; "
+        f"second hit={second_body.get('checkpoint_hit_id')} "
+        f"reused={second_incremental.get('reused_feature_indices')} "
+        f"rebuilt={second_incremental.get('rebuilt_feature_indices')}; "
+        f"reorder hit={third_body.get('checkpoint_hit_id')} "
+        f"reused={third_incremental.get('reused_feature_indices')} "
+        f"rebuilt={third_incremental.get('rebuilt_feature_indices')}",
     )
 
 
@@ -316,13 +402,22 @@ def main() -> int:
         ),
     )
     single_incremental = base_report.get("incremental_build") or {}
+    single_body = (single_incremental.get("operation_checkpoints") or [{}])[0]
+    single_checkpoint = (single_body.get("checkpoints") or [{}])[0]
     check(
-        "single-body rebuild stays fail-closed",
-        single_incremental.get("strategy") == "full_body_rebuild"
-        and single_incremental.get("cache_enabled") is False
-        and single_incremental.get("full_rebuild") is True,
-        str(single_incremental),
+        "single-body operation checkpoint contract",
+        single_incremental.get("strategy") == "operation_checkpoints"
+        and single_incremental.get("cache_enabled") is True
+        and single_incremental.get("body_cache_enabled") is False
+        and single_checkpoint.get("brep_valid") is True
+        and single_checkpoint.get("manifold") is True
+        and bool(single_checkpoint.get("topology_signature")),
+        f"strategy={single_incremental.get('strategy')}, "
+        f"hit={single_body.get('checkpoint_hit_id')}, "
+        f"reused={single_incremental.get('reused_feature_indices')}, "
+        f"rebuilt={single_incremental.get('rebuilt_feature_indices')}",
     )
+    _check_operation_checkpoints()
     _check_incremental_body_cache()
 
     # A rounded plate is a different base B-Rep, not a square box whose read R

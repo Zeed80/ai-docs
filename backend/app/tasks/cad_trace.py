@@ -2408,12 +2408,14 @@ async def _build_spec_solid(
             # topology sidecar; this compact descriptor list is for finding
             # tiny/hidden faces without requiring a precise mouse hit.
             "faces": report.get("faces") or [],
-            # Exact kernel truth: independent bodies may be cache hits, while
-            # single-body/order-sensitive trees always report full rebuild.
+            # Exact kernel truth: complete independent bodies and validated
+            # operation-prefix checkpoints may be reused. The report retains
+            # the exact rebuilt/reused indices and checkpoint topology proof.
             "incremental_build": report.get("incremental_build") or {
-                "schema": "cad-kernel-incremental/1.0",
-                "strategy": "full_body_rebuild",
+                "schema": "cad-kernel-incremental/1.1",
+                "strategy": "unavailable_full_rebuild",
                 "cache_enabled": False,
+                "body_cache_enabled": False,
                 "full_rebuild": True,
             },
         },

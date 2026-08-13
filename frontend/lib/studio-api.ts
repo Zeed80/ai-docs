@@ -1118,14 +1118,51 @@ export interface Solid3dSummary {
     faces?: KernelFaceDescriptor[];
     incremental_build?: {
       schema?: string;
-      strategy?: "independent_body_cache" | "full_body_rebuild" | string;
+      strategy?:
+        | "independent_body_and_operation_checkpoints"
+        | "operation_checkpoints"
+        | "unavailable_full_rebuild"
+        | string;
       cache_enabled?: boolean;
+      body_cache_enabled?: boolean;
       body_count?: number;
       cache_hit_body_indices?: number[];
       cache_miss_body_indices?: number[];
       reused_feature_indices?: number[];
       rebuilt_feature_indices?: number[];
       full_rebuild?: boolean;
+      operation_checkpoints?: Array<{
+        body_index: number;
+        schema?: string;
+        strategy?: string;
+        execution_stage_order?: string[];
+        checkpoint_hit_stage?: string | null;
+        checkpoint_hit_id?: string | null;
+        reused_feature_indices?: number[];
+        rebuilt_feature_indices?: number[];
+        checkpoints?: Array<{
+          sequence: number;
+          checkpoint_id: string;
+          stage: string;
+          feature_indices: number[];
+          prefix_sha256: string;
+          topology_signature: string;
+          face_keys?: string[];
+          edge_keys?: string[];
+          added_face_keys?: string[];
+          removed_face_keys?: string[];
+          added_edge_keys?: string[];
+          removed_edge_keys?: string[];
+          solid_count: number;
+          shell_count: number;
+          face_count: number;
+          edge_count: number;
+          volume_mm3: number;
+          brep_valid: boolean;
+          manifold: boolean;
+          source: "rebuilt" | "cache_hit";
+        }>;
+      }>;
     };
     [key: string]: unknown;
   };

@@ -24,10 +24,14 @@ export default function CadStatusBar({
     cache_enabled?: boolean;
     body_count?: number;
     cache_hit_body_indices?: number[];
+    reused_feature_indices?: number[];
+    rebuilt_feature_indices?: number[];
     full_rebuild?: boolean;
   };
 }) {
   const reusedBodies = incrementalBuild?.cache_hit_body_indices?.length ?? 0;
+  const reusedOperations = incrementalBuild?.reused_feature_indices?.length ?? 0;
+  const rebuiltOperations = incrementalBuild?.rebuilt_feature_indices?.length ?? 0;
   return (
     <div className="flex shrink-0 items-center gap-3 border-t border-white/10 bg-zinc-900/80 px-3 py-1 text-[11px] text-zinc-500">
       <span>
@@ -48,18 +52,18 @@ export default function CadStatusBar({
       <span className="flex-1" />
       {hasModel && incrementalBuild && (
         <span
-          className={reusedBodies > 0 ? "text-sky-300" : "text-zinc-500"}
+          className={reusedOperations > 0 ? "text-sky-300" : "text-zinc-500"}
           title={
-            incrementalBuild.cache_enabled
-              ? "Кэш применяется только между независимыми телами; внутри тела порядок boolean-операций пересчитывается целиком"
-              : "Single-body дерево пересобирается целиком из-за order-sensitive boolean-операций"
+            reusedOperations > 0
+              ? "Переиспользован только самый длинный BREP-reopen и topology-validated префикс фактического порядка операций"
+              : "Все операции прошли через OpenCascade без переиспользования checkpoint"
           }
         >
-          {reusedBodies > 0
-            ? `Переиспользовано тел: ${reusedBodies}/${incrementalBuild.body_count ?? "?"}`
-            : incrementalBuild.cache_enabled
-              ? "Все тела пересобраны"
-              : "Полная пересборка тела"}
+          {reusedOperations > 0
+            ? `Переиспользовано операций: ${reusedOperations}; пересобрано: ${rebuiltOperations}`
+            : reusedBodies > 0
+              ? `Переиспользовано тел: ${reusedBodies}/${incrementalBuild.body_count ?? "?"}`
+              : "Все операции пересобраны"}
         </span>
       )}
       {hasModel && incrementalBuild && (

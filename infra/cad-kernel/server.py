@@ -99,9 +99,20 @@ app = FastAPI(title="Engineering CAD Kernel", version="1.0.0")
 # native Shape objects or growing process memory without limit.
 _BODY_CACHE_MAX_ENTRIES = 64
 _body_cache: OrderedDict[
-    str, tuple[str, list[str], list[dict[str, Any]]]
+    str, tuple[str, list[str], list[dict[str, Any]], str]
 ] = OrderedDict()
 _body_cache_lock = threading.RLock()
+
+# Operation checkpoints are detached BREP snapshots after every operation in
+# the deterministic staged execution order. They are separate from the complete
+# body cache above: the latter is an all-or-nothing optimization, while these
+# entries may only resume the longest exact chain prefix. Every cache hit is
+# reopened and matched against its stored topology signature before use.
+_OPERATION_CHECKPOINT_CACHE_MAX_ENTRIES = 256
+_operation_checkpoint_cache: OrderedDict[
+    str, tuple[str, list[str], list[dict[str, Any]], str]
+] = OrderedDict()
+_operation_checkpoint_cache_lock = threading.RLock()
 
 
 def _number(params: dict[str, Any], name: str, *, maximum: float = 100_000) -> float:
@@ -384,6 +395,128 @@ def _topology_mesh(shape: Part.Shape, *, linear_deflection: float = 0.3) -> dict
             "polyline": [[p.x, p.y, p.z] for p in points],
         })
     return {"schema": "cad-kernel-topology/1.1", "faces": faces, "edges": edges}
+
+
+def _topology_signature(shape: Part.Shape) -> str:
+    """Content signature for checkpoint validation, independent of OCC indices."""
+    bounds = shape.BoundBox
+    payload = {
+        "schema": "cad-kernel-topology-signature/1.0",
+        "solids": len(shape.Solids),
+        "shells": len(shape.Shells),
+        "faces": sorted(_face_key(face) for face in shape.Faces),
+        "edges": sorted(_edge_key(edge) for edge in shape.Edges),
+        "volume_mm3": round(float(shape.Volume), 6),
+        "area_mm2": round(float(shape.Area), 6),
+        "bounds_mm": [round(value, 6) for value in (
+            bounds.XMin, bounds.YMin, bounds.ZMin,
+            bounds.XMax, bounds.YMax, bounds.ZMax,
+        )],
+    }
+    return hashlib.sha256(json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+
+
+def _checkpoint_topology(shape: Part.Shape) -> dict[str, Any]:
+    """Minimal exact topology mapping and invariants for one stage boundary."""
+    return {
+        "topology_signature": _topology_signature(shape),
+        "face_keys": sorted(_face_key(face) for face in shape.Faces),
+        "edge_keys": sorted(_edge_key(edge) for edge in shape.Edges),
+        "solid_count": len(shape.Solids),
+        "shell_count": len(shape.Shells),
+        "face_count": len(shape.Faces),
+        "edge_count": len(shape.Edges),
+        "volume_mm3": float(shape.Volume),
+        "brep_valid": bool(not shape.isNull() and shape.isValid()),
+        "manifold": bool(shape.isClosed()),
+    }
+
+
+_EXECUTION_STAGE_ORDER = (
+    "base", "profile_operations", "turned_cuts", "holes",
+    "edge_operations", "shell", "annotations",
+)
+
+
+def _operation_checkpoint_plan(
+    request: CompileRequest,
+    body_features: list[tuple[int, Feature]],
+    base_index: int,
+) -> list[dict[str, Any]]:
+    """Return the exact staged execution chain used by ``_build_one_body``.
+
+    The input list is not itself an execution order: holes are deliberately
+    sorted and edge operations run after every cut. Encoding that truth here
+    prevents a superficially equal array prefix from becoming a cache proof.
+    """
+    by_stage: dict[str, list[tuple[int, Feature]]] = {
+        "base": [(index, feature) for index, feature in body_features if index == base_index],
+        "profile_operations": [
+            (index, feature) for index, feature in body_features
+            if feature.kind in ("boss", "pocket", "rib")
+        ],
+        "turned_cuts": [
+            (index, feature) for index, feature in body_features
+            if feature.kind in ("groove", "keyway")
+        ],
+        "holes": sorted(
+            [
+                (index, feature) for index, feature in body_features
+                if feature.kind == "hole"
+            ],
+            key=lambda item: (
+                0 if item[1].params.get("axis") == "radial" else 1,
+                float(item[1].params.get("diameter_mm") or 0.0),
+                item[0],
+            ),
+        ),
+        "edge_operations": [
+            (index, feature) for index, feature in body_features
+            if feature.kind in ("fillet", "chamfer")
+        ],
+        "shell": [
+            (index, feature) for index, feature in body_features
+            if feature.kind == "shell"
+        ],
+        "annotations": [
+            (index, feature) for index, feature in body_features
+            if feature.kind == "thread"
+        ],
+    }
+    base = next(feature for index, feature in body_features if index == base_index)
+    chain = hashlib.sha256(json.dumps({
+        "schema": "cad-kernel-operation-chain/1.0",
+        "body_index": base.body_index,
+        "confirm_assumptions": request.confirm_assumptions,
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    result: list[dict[str, Any]] = []
+    sequence = 0
+    for stage in _EXECUTION_STAGE_ORDER:
+        for ordinal, (index, feature) in enumerate(by_stage[stage]):
+            # Global indices are intentional: audit addresses must remain true
+            # when another body changes feature cardinality.
+            stage_payload = {
+                "previous_sha256": chain,
+                "stage": stage,
+                "stage_ordinal": ordinal,
+                "feature_index": index,
+                "feature": feature.model_dump(mode="json"),
+            }
+            chain = hashlib.sha256(json.dumps(
+                stage_payload, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")).hexdigest()
+            result.append({
+                "sequence": sequence,
+                "checkpoint_id": f"{stage}:{ordinal}:{index}",
+                "stage": stage,
+                "feature_indices": [index],
+                "prefix_sha256": chain,
+            })
+            sequence += 1
+    return result
 
 
 def _find_edge(shape: Part.Shape, key: str) -> Part.Edge:
@@ -1002,6 +1135,7 @@ def _build_shape(
     cache_misses: list[int] = []
     reused_feature_indices: list[int] = []
     rebuilt_feature_indices: list[int] = []
+    operation_checkpoint_reports: list[dict[str, Any]] = []
     for body_index in body_indices:
         body_features = [
             (i, f) for i, f in enumerate(request.candidate.features)
@@ -1012,9 +1146,19 @@ def _build_shape(
         )
         feature_indices = [index for index, _feature in body_features]
         if not cache_enabled:
-            built.append(_build_one_body(request, body_features, base_index, base))
+            checkpoint_report: dict[str, Any] = {"body_index": body_index}
+            built.append(_build_one_body(
+                request, body_features, base_index, base,
+                checkpoint_report=checkpoint_report,
+            ))
+            operation_checkpoint_reports.append(checkpoint_report)
             cache_misses.append(body_index)
-            rebuilt_feature_indices.extend(feature_indices)
+            reused_feature_indices.extend(
+                checkpoint_report.get("reused_feature_indices") or []
+            )
+            rebuilt_feature_indices.extend(
+                checkpoint_report.get("rebuilt_feature_indices", feature_indices)
+            )
             continue
         body_payload = {
             "body_index": body_index,
@@ -1041,24 +1185,48 @@ def _build_shape(
             try:
                 shape = Part.Shape()
                 shape.importBrepFromString(cached[0])
-                if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
+                if (
+                    shape.isNull()
+                    or not shape.isValid()
+                    or not shape.isClosed()
+                    or shape.Volume <= 0
+                    or _topology_signature(shape) != cached[3]
+                ):
                     raise ValueError("cached BREP is invalid")
                 built.append((shape, list(cached[1]), deepcopy(cached[2])))
                 cache_hits.append(body_index)
                 reused_feature_indices.extend(feature_indices)
+                operation_checkpoint_reports.append({
+                    "body_index": body_index,
+                    "strategy": "complete_body_cache",
+                    "reused_feature_indices": feature_indices,
+                    "rebuilt_feature_indices": [],
+                    "checkpoint_hit_stage": "complete_body",
+                })
                 continue
             except Exception:  # noqa: BLE001 — corrupt cache always rebuilds
                 with _body_cache_lock:
                     _body_cache.pop(cache_key, None)
-        result = _build_one_body(request, body_features, base_index, base)
+        checkpoint_report = {"body_index": body_index}
+        result = _build_one_body(
+            request, body_features, base_index, base,
+            checkpoint_report=checkpoint_report,
+        )
+        operation_checkpoint_reports.append(checkpoint_report)
         built.append(result)
         cache_misses.append(body_index)
-        rebuilt_feature_indices.extend(feature_indices)
+        reused_feature_indices.extend(
+            checkpoint_report.get("reused_feature_indices") or []
+        )
+        rebuilt_feature_indices.extend(
+            checkpoint_report.get("rebuilt_feature_indices", feature_indices)
+        )
         with _body_cache_lock:
             _body_cache[cache_key] = (
                 result[0].exportBrepToString(),
                 list(result[1]),
                 deepcopy(result[2]),
+                _topology_signature(result[0]),
             )
             _body_cache.move_to_end(cache_key)
             while len(_body_cache) > _BODY_CACHE_MAX_ENTRIES:
@@ -1066,17 +1234,20 @@ def _build_shape(
 
     if incremental_report is not None:
         incremental_report.update({
-            "schema": "cad-kernel-incremental/1.0",
+            "schema": "cad-kernel-incremental/1.1",
             "strategy": (
-                "independent_body_cache" if cache_enabled else "full_body_rebuild"
+                "independent_body_and_operation_checkpoints"
+                if cache_enabled else "operation_checkpoints"
             ),
-            "cache_enabled": cache_enabled,
+            "cache_enabled": True,
+            "body_cache_enabled": cache_enabled,
             "body_count": len(body_indices),
             "cache_hit_body_indices": cache_hits,
             "cache_miss_body_indices": cache_misses,
             "reused_feature_indices": sorted(reused_feature_indices),
             "rebuilt_feature_indices": sorted(rebuilt_feature_indices),
-            "full_rebuild": not cache_hits,
+            "full_rebuild": not reused_feature_indices,
+            "operation_checkpoints": operation_checkpoint_reports,
         })
 
     if len(built) == 1:
@@ -1114,6 +1285,8 @@ def _build_one_body(
     body_features: list[tuple[int, Feature]],
     base_index: int,
     base: Feature,
+    *,
+    checkpoint_report: dict[str, Any] | None = None,
 ) -> tuple[Part.Shape, list[str], list[dict[str, Any]]]:
     """Build ONE independent body's shape from its own features.
 
@@ -1229,6 +1402,117 @@ def _build_one_body(
         "changed_bounds_mm": _shape_bounds(shape),
     })
 
+    checkpoint_plan = _operation_checkpoint_plan(
+        request, body_features, base_index
+    )
+    plan_by_operation = {
+        (str(item["stage"]), int(item["feature_indices"][0])): item
+        for item in checkpoint_plan
+    }
+    hit_stage: str | None = None
+    hit_checkpoint_id: str | None = None
+    hit_sequence = -1
+    checkpoint_entries: list[dict[str, Any]] = []
+    reused_indices: list[int] = []
+    previous_checkpoint_face_keys: set[str] = set()
+    previous_checkpoint_edge_keys: set[str] = set()
+
+    # Longest exact prefix wins. A corrupt/unstable BREP is evicted and the
+    # search continues with the preceding checkpoint instead of trusting it.
+    for item in reversed(checkpoint_plan):
+        cache_key = str(item["prefix_sha256"])
+        with _operation_checkpoint_cache_lock:
+            cached_checkpoint = _operation_checkpoint_cache.get(cache_key)
+            if cached_checkpoint is not None:
+                _operation_checkpoint_cache.move_to_end(cache_key)
+        if cached_checkpoint is None:
+            continue
+        try:
+            cached_shape = Part.Shape()
+            cached_shape.importBrepFromString(cached_checkpoint[0])
+            if (
+                cached_shape.isNull()
+                or not cached_shape.isValid()
+                or not cached_shape.isClosed()
+                or cached_shape.Volume <= 0
+                or _topology_signature(cached_shape) != cached_checkpoint[3]
+            ):
+                raise ValueError("operation checkpoint topology mismatch")
+            shape = cached_shape
+            warnings = list(cached_checkpoint[1])
+            operation_audit = deepcopy(cached_checkpoint[2])
+            hit_stage = str(item["stage"])
+            hit_checkpoint_id = str(item["checkpoint_id"])
+            hit_sequence = int(item["sequence"])
+            reused_indices = sorted({
+                index
+                for planned in checkpoint_plan
+                if int(planned["sequence"]) <= hit_sequence
+                for index in planned["feature_indices"]
+            })
+            checkpoint_entries.append({
+                **item,
+                **_checkpoint_topology(shape),
+                "source": "cache_hit",
+            })
+            previous_checkpoint_face_keys = {
+                _face_key(face) for face in shape.Faces
+            }
+            previous_checkpoint_edge_keys = {
+                _edge_key(edge) for edge in shape.Edges
+            }
+            break
+        except Exception:  # noqa: BLE001 — cache corruption must fail closed
+            with _operation_checkpoint_cache_lock:
+                _operation_checkpoint_cache.pop(cache_key, None)
+
+    reused_index_set = set(reused_indices)
+
+    def save_checkpoint(stage: str, feature_index: int) -> None:
+        nonlocal previous_checkpoint_face_keys, previous_checkpoint_edge_keys
+        item = plan_by_operation.get((stage, feature_index))
+        if item is None or feature_index in reused_index_set:
+            return
+        topology = _checkpoint_topology(shape)
+        if (
+            not topology["brep_valid"]
+            or not topology["manifold"]
+            or topology["solid_count"] < 1
+            or topology["volume_mm3"] <= 0
+        ):
+            raise HTTPException(
+                422, f"Operation checkpoint {stage} failed B-Rep invariants"
+            )
+        cache_key = str(item["prefix_sha256"])
+        with _operation_checkpoint_cache_lock:
+            _operation_checkpoint_cache[cache_key] = (
+                shape.exportBrepToString(),
+                list(warnings),
+                deepcopy(operation_audit),
+                str(topology["topology_signature"]),
+            )
+            _operation_checkpoint_cache.move_to_end(cache_key)
+            while (
+                len(_operation_checkpoint_cache)
+                > _OPERATION_CHECKPOINT_CACHE_MAX_ENTRIES
+            ):
+                _operation_checkpoint_cache.popitem(last=False)
+        face_keys = set(topology.pop("face_keys"))
+        edge_keys = set(topology.pop("edge_keys"))
+        checkpoint_entries.append({
+            **item,
+            **topology,
+            "added_face_keys": sorted(face_keys - previous_checkpoint_face_keys),
+            "removed_face_keys": sorted(previous_checkpoint_face_keys - face_keys),
+            "added_edge_keys": sorted(edge_keys - previous_checkpoint_edge_keys),
+            "removed_edge_keys": sorted(previous_checkpoint_edge_keys - edge_keys),
+            "source": "rebuilt",
+        })
+        previous_checkpoint_face_keys = face_keys
+        previous_checkpoint_edge_keys = edge_keys
+
+    save_checkpoint("base", base_index)
+
     for feature_index, feature in body_features:
         # Ф2.5: a rib is a thin reinforcing wall — fused onto the base
         # exactly like a boss (same primitives, no new geometry vocabulary,
@@ -1237,6 +1521,8 @@ def _build_one_body(
         # reader can tell "structural rib" from "bolt boss" without
         # re-deriving it from shape heuristics.
         if feature.kind not in ("boss", "pocket", "rib"):
+            continue
+        if feature_index in reused_index_set:
             continue
         adds_material = feature.kind in ("boss", "rib")
         profile = feature.params.get("profile")
@@ -1337,9 +1623,12 @@ def _build_one_body(
                 expected_tool=tool,
             ),
         })
+        save_checkpoint("profile_operations", feature_index)
 
     for feature_index, feature in body_features:
         if feature.kind not in ("groove", "keyway"):
+            continue
+        if feature_index in reused_index_set:
             continue
         tool = (
             _groove_tool(shape, feature)
@@ -1354,6 +1643,7 @@ def _build_one_body(
             "kind": feature.kind,
             **_operation_localization(previous, shape, mode="cut", expected_tool=tool),
         })
+        save_checkpoint("turned_cuts", feature_index)
 
     hole_features = [
         (feature_index, feature)
@@ -1370,6 +1660,8 @@ def _build_one_body(
         item[0],
     ))
     for feature_index, feature in hole_features:
+        if feature_index in reused_index_set:
+            continue
         diameter = _number(feature.params, "diameter_mm", maximum=min(width, height) * 2)
         x = _coordinate(feature.params, "center_x_mm")
         y = _coordinate(feature.params, "center_y_mm")
@@ -1401,6 +1693,7 @@ def _build_one_body(
             if len(warnings) > warning_count:
                 audit["operation_warning"] = warnings[-1]
             operation_audit.append(audit)
+            save_checkpoint("holes", feature_index)
             continue
         if feature.params.get("axis") == "inclined":
             raw_inclination = feature.params.get("inclination_deg")
@@ -1466,6 +1759,7 @@ def _build_one_body(
                 "kind": feature.kind,
                 **_operation_localization(previous, shape, mode="cut", expected_tool=cutter),
             })
+            save_checkpoint("holes", feature_index)
             continue
         if through is True:
             cutter = Part.makeCylinder(
@@ -1531,6 +1825,7 @@ def _build_one_body(
         if len(warnings) > warning_count:
             audit["operation_warning"] = warnings[-1]
         operation_audit.append(audit)
+        save_checkpoint("holes", feature_index)
 
     # Edge operations come AFTER every cut: a chamfer belongs to the edge that
     # exists once the part is fully cut, and asking for one before the hole is
@@ -1538,6 +1833,8 @@ def _build_one_body(
     # loudly rather than silently landing on some other edge.
     for feature_index, feature in body_features:
         if feature.kind not in ("fillet", "chamfer"):
+            continue
+        if feature_index in reused_index_set:
             continue
         # An edge the selector cannot find is the same class of problem as one
         # OpenCascade refuses to cut, and it gets the same answer: the feature
@@ -1556,6 +1853,7 @@ def _build_one_body(
                 "localization_error": str(exc.detail)[:200],
                 "operation_warning": warnings[-1],
             })
+            save_checkpoint("edge_operations", feature_index)
             continue
         size = _number(feature.params, "size_mm", maximum=max(width, height, depth))
         # A refused edge operation must not cost the part. OpenCascade declines
@@ -1582,6 +1880,7 @@ def _build_one_body(
                 "localization_error": str(exc)[:200],
                 "operation_warning": warnings[-1],
             })
+            save_checkpoint("edge_operations", feature_index)
             continue
         if candidate.isNull() or not candidate.isValid():
             shape = previous
@@ -1595,6 +1894,7 @@ def _build_one_body(
                 "localization_error": "OpenCascade returned invalid geometry",
                 "operation_warning": warnings[-1],
             })
+            save_checkpoint("edge_operations", feature_index)
             continue
         shape = candidate
         operation_audit.append({
@@ -1605,12 +1905,15 @@ def _build_one_body(
                 "localization_kind": "edge_delta",
             },
         })
+        save_checkpoint("edge_operations", feature_index)
 
     # D3: shell hollows the finished solid (after all add/cut operations).
     shells = [(i, f) for i, f in body_features if f.kind == "shell"]
     if len(shells) > 1:
         raise HTTPException(422, "At most one shell feature is supported")
     for feature_index, feature in shells:
+        if feature_index in reused_index_set:
+            continue
         previous = shape
         shape = _apply_shell(shape, feature)
         operation_audit.append({
@@ -1618,9 +1921,12 @@ def _build_one_body(
             "kind": feature.kind,
             **_operation_localization(previous, shape, mode="cut"),
         })
+        save_checkpoint("shell", feature_index)
 
     for feature_index, feature in body_features:
         if feature.kind == "thread":
+            if feature_index in reused_index_set:
+                continue
             operation_audit.append({
                 "feature_index": feature_index,
                 "kind": feature.kind,
@@ -1629,10 +1935,25 @@ def _build_one_body(
                 "changed_volume_mm3": 0.0,
                 "changed_bounds_mm": None,
             })
+            save_checkpoint("annotations", feature_index)
 
     shape = shape.removeSplitter()
     if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
         raise HTTPException(422, "OpenCascade produced an invalid or empty solid")
+    if checkpoint_report is not None:
+        all_indices = sorted(index for index, _feature in body_features)
+        checkpoint_report.update({
+            "schema": "cad-kernel-operation-checkpoints/1.0",
+            "strategy": "longest_exact_operation_prefix",
+            "execution_stage_order": list(_EXECUTION_STAGE_ORDER),
+            "checkpoint_hit_stage": hit_stage,
+            "checkpoint_hit_id": hit_checkpoint_id,
+            "reused_feature_indices": reused_indices,
+            "rebuilt_feature_indices": sorted(
+                index for index in all_indices if index not in set(reused_indices)
+            ),
+            "checkpoints": checkpoint_entries,
+        })
     return shape, warnings, operation_audit
 
 
