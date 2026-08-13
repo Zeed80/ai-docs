@@ -37,6 +37,26 @@ def _mechanical_live_report() -> dict:
     )
 
 
+def _domain_build_report() -> dict:
+    return {
+        "schema_version": "emg-domain-build-report/1.0",
+        "split": "dev",
+        "passed": True,
+        "evidence": [
+            {
+                "id": f"build:{case_id}:model_3d_bim",
+                "case_id": case_id,
+                "stage": "model_3d_bim",
+                "passed": True,
+            }
+            for case_id in (
+                "assembly-fixed-shaft",
+                "construction-wall-opening",
+            )
+        ],
+    }
+
+
 def _manifest() -> dict:
     return json.loads((FIXTURES / "emg_domain_golden.json").read_text())
 
@@ -87,6 +107,7 @@ def test_class_balanced_passes_require_matching_graph_and_artifact_evidence():
             graph_report,
             artifact_report,
             _mechanical_live_report(),
+            _domain_build_report(),
         ],
     )
 
@@ -97,5 +118,10 @@ def test_class_balanced_passes_require_matching_graph_and_artifact_evidence():
     with pytest.raises(ValueError, match="stage evidence did not pass"):
         evaluate_class_balanced_manifest(
             pipeline,
-            evidence_reports=[graph_report, broken, _mechanical_live_report()],
+            evidence_reports=[
+                graph_report,
+                broken,
+                _mechanical_live_report(),
+                _domain_build_report(),
+            ],
         )

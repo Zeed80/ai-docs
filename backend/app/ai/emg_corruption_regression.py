@@ -11,6 +11,7 @@ from app.domain.engineering_model_graph import (
     BuildGenerator,
     EngineeringModelGraph,
     UnknownValue,
+    compile_build_plan,
 )
 from app.services.engineering_model_graph import evaluate_build_admission
 
@@ -64,6 +65,9 @@ def run_emg_admission_corruption(
     )
     construction = build_regression_graph(
         cases_by_id["construction-wall-opening"], fixture_root
+    )
+    system = build_regression_graph(
+        cases_by_id["hydraulic-closed-loop"], fixture_root
     )
 
     scenarios: list[dict[str, Any]] = []
@@ -145,6 +149,33 @@ def run_emg_admission_corruption(
         }),
         expected_codes={"critical_parameter_unknown"},
     )
+    corrupted_system = _replace_assertion(
+        system,
+        "system.connectivity_closed",
+        unknown_reason="corruption injection",
+    )
+    system_plan = compile_build_plan(corrupted_system, "production")
+    connectivity = next(
+        item for item in corrupted_system.assertions
+        if item.state == "active"
+        and item.predicate == "system.connectivity_closed"
+    )
+    system_passed = (
+        not system_plan.production_export_allowed
+        and connectivity.id in system_plan.critical_assumption_ids
+    )
+    scenarios.append({
+        "id": "system-connectivity-unknown",
+        "source_group_id": "fixture:hydraulic-closed-loop",
+        "drawing_class": "hydraulic_system",
+        "passed": system_passed,
+        "generator_allowed": system_plan.production_export_allowed,
+        "expected_blocker_codes": ["critical_connectivity_unknown"],
+        "actual_blocker_codes": (
+            ["critical_connectivity_unknown"] if system_passed else []
+        ),
+        "critical_miss": not system_passed,
+    })
     evaluate(
         scenario_id="construction-material-unknown",
         source_group_id="fixture:construction-wall-opening",

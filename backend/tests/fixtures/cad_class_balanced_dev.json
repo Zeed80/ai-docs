@@ -20,7 +20,7 @@
       "source_license": "repository_fixture",
       "truth_kind": "human_reviewed_engineering_spec",
       "stages": {
-        "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
+        "reader": {"status": "passed", "evidence_ids": ["reader:mechanical-detal-126-v2"]},
         "graph": {"status": "passed", "evidence_ids": ["emg:mechanical-detal-126-v2"]},
         "model_3d_bim": {"status": "passed", "evidence_ids": ["live:mechanical-detal-126-v2:model_3d_bim"]},
         "drawing_2d": {"status": "passed", "evidence_ids": ["live:mechanical-detal-126-v2:drawing_2d"]}
@@ -46,9 +46,9 @@
       "source_license": "repository_fixture",
       "truth_kind": "deterministic_assembly_contract",
       "stages": {
-        "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
+        "reader": {"status": "passed", "evidence_ids": ["reader:assembly-fixed-shaft"]},
         "graph": {"status": "passed", "evidence_ids": ["emg:assembly-fixed-shaft"]},
-        "model_3d_bim": {"status": "review_required", "failure_clusters": ["topology"], "blocker_codes": ["artifact_reopen_pending"]},
+        "model_3d_bim": {"status": "passed", "evidence_ids": ["build:assembly-fixed-shaft:model_3d_bim"]},
         "drawing_2d": {"status": "passed", "evidence_ids": ["artifact:assembly-fixed-shaft"]}
       },
       "safety": {
@@ -68,9 +68,9 @@
       "source_license": "repository_fixture",
       "truth_kind": "deterministic_bim_semantic_contract",
       "stages": {
-        "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
+        "reader": {"status": "passed", "evidence_ids": ["reader:construction-wall-opening"]},
         "graph": {"status": "passed", "evidence_ids": ["emg:construction-wall-opening"]},
-        "model_3d_bim": {"status": "review_required", "failure_clusters": ["bim_relation"], "blocker_codes": ["ifc_reopen_pending"]},
+        "model_3d_bim": {"status": "passed", "evidence_ids": ["build:construction-wall-opening:model_3d_bim"]},
         "drawing_2d": {"status": "passed", "evidence_ids": ["artifact:construction-wall-opening"]}
       },
       "safety": {
@@ -90,12 +90,17 @@
       "source_license": "repository_fixture",
       "truth_kind": "deterministic_system_connectivity_contract",
       "stages": {
-        "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
+        "reader": {"status": "passed", "evidence_ids": ["reader:hydraulic-closed-loop"]},
         "graph": {"status": "passed", "evidence_ids": ["emg:hydraulic-closed-loop"]},
-        "model_3d_bim": {"status": "not_run", "blocker_codes": ["domain_has_no_3d_artifact"]},
+        "model_3d_bim": {"status": "not_applicable", "blocker_codes": ["domain_has_no_3d_artifact"]},
         "drawing_2d": {"status": "passed", "evidence_ids": ["artifact:hydraulic-closed-loop"]}
       },
-      "safety": {"status": "not_run"}
+      "safety": {
+        "status": "evaluated",
+        "invented_geometry": false,
+        "critical_miss": false,
+        "evidence_ids": ["system-connectivity-unknown"]
+      }
     }
   ]
 }

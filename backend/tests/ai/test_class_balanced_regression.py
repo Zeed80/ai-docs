@@ -26,10 +26,10 @@ def test_dev_baseline_is_macro_balanced_and_honestly_not_promotion_ready():
     assert report["promotion_eligible"] is False
     assert report["source_group_count"] == 4
     assert report["macro"]["stages"]["graph"]["pass_rate"] == 1.0
-    assert report["macro"]["stages"]["reader"]["coverage_rate"] == 0.0
+    assert report["macro"]["stages"]["reader"]["coverage_rate"] == 1.0
     assert {
         item["code"] for item in report["promotion_failures"]
-    } >= {"stage_coverage_incomplete", "safety_coverage_incomplete"}
+    } >= {"stage_evidence_not_validated", "safety_evidence_not_validated"}
 
 
 def test_many_variants_in_one_group_do_not_outweigh_rare_class_failure():
@@ -75,6 +75,31 @@ def test_sealed_holdout_rows_are_rejected_by_the_dev_contract():
     payload["cases"][0]["split"] = "holdout"
 
     with pytest.raises(ValidationError, match="split"):
+        evaluate_class_balanced_manifest(payload)
+
+
+def test_not_applicable_stage_is_excluded_from_macro_denominator():
+    payload = _payload()
+    report = evaluate_class_balanced_manifest(payload)
+
+    system_stage = report["by_class"]["hydraulic_system"]["stages"][
+        "model_3d_bim"
+    ]
+    assert system_stage["applicable"] is False
+    assert system_stage["coverage_rate"] is None
+    assert system_stage["pass_rate"] is None
+    assert report["macro"]["stages"]["model_3d_bim"][
+        "applicable_class_count"
+    ] == 3
+
+
+def test_not_applicable_stage_requires_an_explicit_reason():
+    payload = _payload()
+    payload["cases"][3]["stages"]["model_3d_bim"] = {
+        "status": "not_applicable"
+    }
+
+    with pytest.raises(ValidationError, match="reason code"):
         evaluate_class_balanced_manifest(payload)
 
 

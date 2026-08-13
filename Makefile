@@ -5,7 +5,7 @@
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
         test test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression agent-regression agent-test agent-ws-smoke \
-        studio-queue-smoke cad-kernel-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval cad-emg-corruption emg-artifact-regression emg-mechanical-live cad-class-balanced-dev cad-class-balanced-check cad-class-balanced-cycle \
+        studio-queue-smoke cad-kernel-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval cad-emg-corruption emg-artifact-regression emg-mechanical-live emg-domain-builds cad-class-balanced-dev cad-class-balanced-check cad-class-balanced-cycle \
         cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
         turboquant-benchmark turboquant-quality \
         lint lint-fix \
@@ -245,29 +245,38 @@ emg-mechanical-live:
 	docker cp infra-backend-1:/tmp/emg_mechanical_live.json \
 		test-results/emg_mechanical_live.json
 
+emg-domain-builds:
+	mkdir -p test-results
+	docker exec infra-backend-1 python scripts/eval_emg_domain_builds.py \
+		--out /tmp/emg_domain_builds.json
+	docker cp infra-backend-1:/tmp/emg_domain_builds.json \
+		test-results/emg_domain_builds.json
+
 # Dev-only macro baseline. The input schema rejects holdout rows, weights one
 # source group once, and then weights every declared class equally.
 cad-emg-corruption:
 	PYTHONPATH=backend python3 backend/scripts/eval_emg_admission_corruption.py \
 		--out test-results/emg_admission_corruption.json
 
-cad-class-balanced-dev: cad-emg-corruption emg-regression emg-artifact-regression emg-mechanical-live
+cad-class-balanced-dev: cad-emg-corruption emg-regression emg-artifact-regression emg-mechanical-live emg-domain-builds
 	PYTHONPATH=backend python3 backend/scripts/eval_class_balanced_pipeline.py \
 		--manifest backend/tests/fixtures/cad_class_balanced_dev.json \
 		--safety-report test-results/emg_admission_corruption.json \
 		--evidence-report test-results/emg_domain_regression.json \
 		--evidence-report test-results/emg_artifact_regression.json \
 		--evidence-report test-results/emg_mechanical_live.json \
+		--evidence-report test-results/emg_domain_builds.json \
 		--out test-results/cad_class_balanced_dev.json
 
-cad-class-balanced-check: cad-emg-corruption emg-regression emg-artifact-regression emg-mechanical-live
+cad-class-balanced-check: cad-emg-corruption emg-regression emg-artifact-regression emg-mechanical-live emg-domain-builds
 	PYTHONPATH=backend python3 backend/scripts/eval_class_balanced_pipeline.py \
 		--manifest backend/tests/fixtures/cad_class_balanced_dev.json \
-		--baseline tools/cad-dataset/baselines/class_balanced_dev_baseline_20260814_mechanical.json \
+		--baseline tools/cad-dataset/baselines/class_balanced_dev_candidate_20260814.json \
 		--safety-report test-results/emg_admission_corruption.json \
 		--evidence-report test-results/emg_domain_regression.json \
 		--evidence-report test-results/emg_artifact_regression.json \
 		--evidence-report test-results/emg_mechanical_live.json \
+		--evidence-report test-results/emg_domain_builds.json \
 		--out test-results/cad_class_balanced_dev.json
 
 cad-class-balanced-cycle: cad-class-balanced-check

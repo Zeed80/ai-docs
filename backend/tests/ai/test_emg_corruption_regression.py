@@ -13,7 +13,7 @@ def test_all_dev_admission_corruptions_fail_closed():
 
     report = run_emg_admission_corruption(manifest, fixture_root=FIXTURES)
 
-    assert report["scenario_count"] == 5
+    assert report["scenario_count"] == 6
     assert report["passed"] is True
     assert report["critical_misses"] == 0
     assert report["critical_miss_rate"] == 0.0
@@ -41,4 +41,4 @@ def test_class_balanced_safety_claims_are_backed_by_corruption_report():
     ] == 0.0
     assert report["by_class"]["hydraulic_system"][
         "safety_coverage_rate"
-    ] == 0.0
+    ] == 1.0
