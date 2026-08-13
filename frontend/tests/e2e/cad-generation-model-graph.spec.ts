@@ -31,6 +31,8 @@ const editorGraph = {
       { id: "feature:0:outer:4", type: "Feature", name: "Uncertain hole" },
       { id: "topology:face:outer", type: "TopologyElement", name: "Outer face" },
       { id: "artifact:step", type: "Artifact", name: "STEP model" },
+      { id: "view:front", type: "View", name: "Главный вид" },
+      { id: "ifc:wall:42", type: "Component", name: "Стена IFC 42" },
     ],
     edges: [
       { id: "realizes:outer", type: "realizes", source_id: "operation:0", target_id: "feature:outer" },
@@ -252,7 +254,7 @@ async function mockApi(page: Page, modelGraph: typeof editorGraph = graph) {
     if (url.pathname.endsWith("/model-graph/patches")) return route.fulfill({ json: [] });
     if (url.pathname.endsWith("/model-graph/trace-proposals")) return route.fulfill({ json: [] });
     if (url.pathname.includes("/model-graph/assertions/") && url.pathname.endsWith("/impact")) {
-      return route.fulfill({ json: { assertion_id: "assertion:operation:0:kind", target_id: "preview", subject_node_id: "operation:0", critical_for_target: true, classification: "critical_for_target", declared_impacts: ["base_topology"], direct_dependency_node_ids: ["topology:face:outer"], affected_node_ids: ["operation:0", "topology:face:outer", "artifact:step"], affected_build_operation_ids: ["operation:0"], affected_artifact_ids: ["artifact:step"], affected_topology_element_ids: ["topology:face:outer"], evidence_ids: ["evidence:whole-sheet"], superseded_by_assertion_ids: [], dependency_paths: { "topology:face:outer": ["operation:0", "feature:outer", "topology:face:outer"] } } });
+      return route.fulfill({ json: { assertion_id: "assertion:operation:0:kind", target_id: "preview", subject_node_id: "operation:0", critical_for_target: true, classification: "critical_for_target", declared_impacts: ["base_topology"], direct_dependency_node_ids: ["topology:face:outer"], affected_node_ids: ["operation:0", "topology:face:outer", "artifact:step", "view:front", "ifc:wall:42"], affected_build_operation_ids: ["operation:0"], affected_artifact_ids: ["artifact:step"], affected_topology_element_ids: ["topology:face:outer"], affected_view_ids: ["view:front"], affected_bim_object_ids: ["ifc:wall:42"], evidence_ids: ["evidence:whole-sheet"], superseded_by_assertion_ids: [], dependency_paths: { "topology:face:outer": ["operation:0", "feature:outer", "topology:face:outer"], "view:front": ["operation:0", "artifact:step", "view:front"], "ifc:wall:42": ["operation:0", "ifc:wall:42"] } } });
     }
     if (url.pathname.endsWith("/source-overlay")) {
       return route.fulfill({
@@ -384,6 +386,9 @@ test("CAD editor shows selected operation source bbox and topology impact", asyn
   await expect(panel.getByText(/Критично для сборки preview/)).toBeVisible();
   await expect(panel.getByText(/Outer face \(topology:face:outer\)/)).toBeVisible();
   await expect(panel.getByText(/STEP model \(artifact:step\)/)).toBeVisible();
+  await expect(panel.getByText(/Главный вид \(view:front\)/)).toBeVisible();
+  await expect(panel.getByText(/Стена IFC 42 \(ifc:wall:42\)/)).toBeVisible();
+  await expect(panel.getByText(/operation:0 → artifact:step → view:front/)).toBeVisible();
 });
 
 test("CAD editor filters review operations and navigates the visible tree by keyboard", async ({ page, context }) => {

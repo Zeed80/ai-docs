@@ -247,6 +247,8 @@ def test_assertion_impact_reports_target_criticality_and_downstream_rebuilds():
     payload["nodes"].extend([
         {"id": "artifact", "type": "Artifact"},
         {"id": "face", "type": "TopologyElement"},
+        {"id": "view-front", "type": "View", "name": "Front"},
+        {"id": "ifc-wall", "type": "Component", "name": "Wall"},
     ])
     payload["edges"].extend([
         {
@@ -257,7 +259,27 @@ def test_assertion_impact_reports_target_criticality_and_downstream_rebuilds():
             "id": "e-topology", "type": "maps_to_topology",
             "source_id": "artifact", "target_id": "face",
         },
+        {
+            "id": "e-view", "type": "represented_by",
+            "source_id": "artifact", "target_id": "view-front",
+        },
+        {
+            "id": "e-bim", "type": "depends_on",
+            "source_id": "ifc-wall", "target_id": "op",
+        },
     ])
+    payload["assertions"].append({
+        "id": "a-ifc-guid",
+        "subject_id": "ifc-wall",
+        "predicate": "ifc.guid",
+        "value": {"kind": "exact", "value": "2Yx"},
+        "origin": "observed",
+        "assurance": "corroborated",
+        "confidence": 1,
+        "impacts": ["base_topology"],
+        "evidence_ids": [],
+        "state": "active",
+    })
     graph = EngineeringModelGraph.model_validate(payload).sealed()
 
     report = assertion_impact_report(graph, "a-envelope", "production")
@@ -267,6 +289,8 @@ def test_assertion_impact_reports_target_criticality_and_downstream_rebuilds():
     assert report.affected_build_operation_ids == ["op"]
     assert report.affected_artifact_ids == ["artifact"]
     assert report.affected_topology_element_ids == ["face"]
+    assert report.affected_view_ids == ["view-front"]
+    assert report.affected_bim_object_ids == ["ifc-wall"]
     assert report.dependency_paths["face"] == [
         "product", "op", "artifact", "face",
     ]

@@ -67,10 +67,12 @@ function NodeList({
   label,
   ids,
   nodeNames,
+  dependencyPaths,
 }: {
   label: string;
   ids: string[];
   nodeNames: Map<string, string>;
+  dependencyPaths?: Record<string, string[]>;
 }) {
   if (!ids.length) return null;
   return (
@@ -78,9 +80,14 @@ function NodeList({
       <p className="text-zinc-500">{label}</p>
       <div className="mt-1 space-y-1 font-mono text-[10px] text-zinc-300">
         {ids.map((id) => (
-          <p key={id} className="break-all">
-            {nodeNames.get(id) ?? id}
-          </p>
+          <div key={id}>
+            <p className="break-all">{nodeNames.get(id) ?? id}</p>
+            {dependencyPaths?.[id] && (
+              <p className="break-all text-[9px] text-zinc-600">
+                ↳ {dependencyPaths[id].join(" → ")}
+              </p>
+            )}
+          </div>
         ))}
       </div>
     </div>
@@ -315,6 +322,34 @@ export default function OperationProvenancePanel({
                   ids={impact.affected_artifact_ids}
                   nodeNames={nodeNames}
                 />
+                <div className="border-t border-white/5 pt-2">
+                  {(impact.affected_view_ids ?? []).length ? (
+                    <NodeList
+                      label="Связанные виды"
+                      ids={impact.affected_view_ids ?? []}
+                      nodeNames={nodeNames}
+                      dependencyPaths={impact.dependency_paths}
+                    />
+                  ) : (
+                    <p className="text-zinc-500">
+                      Межвидовая связь для этого утверждения не зафиксирована.
+                    </p>
+                  )}
+                </div>
+                <div className="border-t border-white/5 pt-2">
+                  {(impact.affected_bim_object_ids ?? []).length ? (
+                    <NodeList
+                      label="Связанные BIM/IFC объекты"
+                      ids={impact.affected_bim_object_ids ?? []}
+                      nodeNames={nodeNames}
+                      dependencyPaths={impact.dependency_paths}
+                    />
+                  ) : (
+                    <p className="text-zinc-500">
+                      BIM/IFC связь для этого утверждения не зафиксирована.
+                    </p>
+                  )}
+                </div>
                 {!impact.affected_build_operation_ids.length &&
                   !impact.affected_topology_element_ids.length &&
                   !impact.affected_artifact_ids.length && (

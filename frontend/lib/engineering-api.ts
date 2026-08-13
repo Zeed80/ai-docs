@@ -154,6 +154,8 @@ export type EngineeringAssertionImpact = {
   affected_build_operation_ids: string[];
   affected_artifact_ids: string[];
   affected_topology_element_ids: string[];
+  affected_view_ids: string[];
+  affected_bim_object_ids: string[];
   evidence_ids: string[];
   superseded_by_assertion_ids: string[];
   dependency_paths: Record<string, string[]>;

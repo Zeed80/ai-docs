@@ -636,6 +636,8 @@ class AssertionImpactReport(StrictModel):
     affected_build_operation_ids: list[str]
     affected_artifact_ids: list[str]
     affected_topology_element_ids: list[str]
+    affected_view_ids: list[str]
+    affected_bim_object_ids: list[str]
     evidence_ids: list[str]
     superseded_by_assertion_ids: list[str]
     dependency_paths: dict[str, list[str]]
@@ -707,6 +709,22 @@ def assertion_impact_report(
         )
 
     is_critical = assertion_id in critical
+    bim_profiles = {"construction", "mep", "electrical", "hydraulic", "pid", "mixed"}
+    explicit_bim_node_ids = {
+        item.subject_id
+        for item in graph.assertions
+        if item.state == "active"
+        and item.predicate.startswith(("ifc.", "bim.", "spatial."))
+    }
+    affected_bim_object_ids = sorted(
+        node_id
+        for node_id in affected_ids
+        if node_id in explicit_bim_node_ids
+        or (
+            graph.profile in bim_profiles
+            and node_by_id[node_id].type in {"Product", "Component", "System", "Port"}
+        )
+    )
     return AssertionImpactReport(
         assertion_id=assertion_id,
         target_id=target_id,
@@ -721,6 +739,8 @@ def assertion_impact_report(
         affected_build_operation_ids=affected_of_type("BuildOperation"),
         affected_artifact_ids=affected_of_type("Artifact"),
         affected_topology_element_ids=affected_of_type("TopologyElement"),
+        affected_view_ids=affected_of_type("View"),
+        affected_bim_object_ids=affected_bim_object_ids,
         evidence_ids=assertion.evidence_ids,
         superseded_by_assertion_ids=sorted(
             item.id for item in graph.assertions
