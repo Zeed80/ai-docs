@@ -109,6 +109,9 @@ export default function CadEditorShell({
   // the 3D model hands its edge_key down to whichever fillet/chamfer form
   // is currently open.
   const [pickedEdgeKey, setPickedEdgeKey] = useState<string | null>(null);
+  // Ф8: true while the "Массив" form is open — operates on selectedOperationId,
+  // not a new draft.
+  const [patternDraftActive, setPatternDraftActive] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -398,17 +401,25 @@ export default function CadEditorShell({
             <RibbonPlaceholder
               icon="∪"
               label="Объединение"
-              comingIn="будущей фазе"
+              comingIn="отдельном плане (нет прецедента в ядре)"
             />
             <RibbonPlaceholder
               icon="∩"
               label="Пересечение"
-              comingIn="будущей фазе"
+              comingIn="отдельном плане (нет прецедента в ядре)"
             />
-            <RibbonPlaceholder
+            <RibbonButton
               icon="▦"
               label="Массив"
-              comingIn="будущей фазе"
+              onClick={() => setPatternDraftActive(true)}
+              disabled={!hasModel || !selectedOperationId}
+              title={
+                !hasModel
+                  ? "Сначала нужна построенная 3D-модель"
+                  : !selectedOperationId
+                    ? "Сначала выберите операцию в дереве"
+                    : undefined
+              }
             />
           </>
         )}
@@ -514,6 +525,8 @@ export default function CadEditorShell({
             onSketchProfileConsumed={() => setExportedSketchProfile(null)}
             pickedEdgeKey={pickedEdgeKey}
             onEdgeKeyConsumed={() => setPickedEdgeKey(null)}
+            patternDraftActive={patternDraftActive}
+            onPatternDraftChange={setPatternDraftActive}
             onSaved={() => void load()}
             onRebuildQueued={(taskId) => {
               setRebuildTaskId(taskId);

@@ -23,6 +23,7 @@ Celery queue and works when the GPU is busy training LoRA.
 
 from __future__ import annotations
 
+import math
 import re
 import uuid
 from datetime import UTC, datetime
@@ -929,6 +930,257 @@ async def _remove_feature_from_graph(
         "ok": True,
         "generation_id": generation_id,
         "removed_kind": removed.kind,
+        "note": note,
+    }
+
+
+def _pattern_offsets(pattern: dict, base_x: float, base_y: float) -> list[tuple[float, float]]:
+    """Фаза 8: N (x, y) centres for one patterned feature — i=0 is always
+    exactly the original position, matching the convention every real CAD
+    tool uses ("the original IS the first instance", not a separate,
+    un-patterned leftover). Pure arithmetic, no kernel/FreeCAD involved —
+    this is the whole "backend-only pre-expansion" idea: the kernel never
+    learns a pattern exists, only N ordinary features.
+    """
+    kind = pattern.get("kind")
+    count = int(pattern["count"])
+    if kind == "linear":
+        dx, dy = float(pattern["dx_mm"]), float(pattern["dy_mm"])
+        return [(base_x + i * dx, base_y + i * dy) for i in range(count)]
+    if kind == "circular":
+        cx, cy = float(pattern.get("center_x_mm") or 0.0), float(pattern.get("center_y_mm") or 0.0)
+        total = float(pattern.get("total_angle_deg") or 360.0)
+        step = math.radians(total / count)
+        rel_x, rel_y = base_x - cx, base_y - cy
+        offsets = []
+        for i in range(count):
+            angle = i * step
+            cos_a, sin_a = math.cos(angle), math.sin(angle)
+            offsets.append((
+                cx + rel_x * cos_a - rel_y * sin_a,
+                cy + rel_x * sin_a + rel_y * cos_a,
+            ))
+        return offsets
+    raise ValueError(f"неизвестный вид массива: {kind!r}")
+
+
+@celery_app.task(
+    bind=True,
+    name="cad_trace.pattern_feature_in_graph",
+    max_retries=0,
+    soft_time_limit=600,
+    time_limit=660,
+)
+def pattern_feature_in_graph(
+    self,
+    generation_id: str,
+    operation_id: str,
+    pattern: dict,
+    note: str,
+    idempotency_key: str,
+) -> dict:
+    """Фаза 8 нового CAD-редактора: replace ONE existing BuildOperation with
+    N patterned copies (linear or circular), offsetting center_x_mm/
+    center_y_mm. Mirrors remove_feature_from_graph's own shape exactly —
+    same operation_id parsing, same prefix-staleness guard, same auto-
+    rollback-on-failed-build. The only new arithmetic is _pattern_offsets
+    above; everything else (persist/build/rollback) is the established
+    pattern from Ф6/Ф2, reused unchanged."""
+    return run_async(
+        _pattern_feature_in_graph(
+            generation_id, operation_id, pattern, note, idempotency_key
+        )
+    )
+
+
+async def _pattern_feature_in_graph(
+    generation_id: str,
+    operation_id: str,
+    pattern: dict,
+    note: str,
+    idempotency_key: str,
+) -> dict:
+    import uuid as _uuid
+
+    from app.ai.cad_emg_compat import feature_tree_from_graph
+    from app.ai.cad_ir.feature_tree import Feature3D, ParamProvenance
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.db.session import _get_session_factory
+    from app.services.engineering_model_graph import (
+        latest_graph_revision,
+        load_graph,
+        persist_feature_tree_revision,
+    )
+
+    try:
+        prefix, index = _parse_operation_id(operation_id)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    factory = _get_session_factory()
+    gen_uuid = _uuid.UUID(generation_id)
+    graph_id = f"image-generation:{generation_id}"
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return {"error": "not found"}
+        params = dict(gen.params or {})
+        owner_sub = gen.owner_sub
+        latest_row = await latest_graph_revision(db, graph_id, lock=True)
+    if latest_row is None:
+        return {"error": "EngineeringModelGraph ещё не создан для этой генерации"}
+    graph = load_graph(latest_row)
+    expected_prefix = f"r{graph.revision}"
+    if prefix != expected_prefix:
+        return {
+            "error": (
+                "Дерево построения устарело (граф изменился с момента открытия) "
+                "— обновите страницу и повторите."
+            )
+        }
+    spec = params.get("spec_corrected") or params.get("spec")
+    if not spec:
+        return {"error": "нет сохранённой спецификации"}
+
+    base_candidate = feature_tree_from_graph(graph, target_id="preview")
+    if base_candidate is None:
+        return {"error": "не удалось прочитать текущее дерево построения из графа"}
+    if not (0 <= index < len(base_candidate.features)):
+        return {"error": f"операция {operation_id} не найдена в текущем дереве"}
+
+    target = base_candidate.features[index]
+    if "center_x_mm" not in target.params or "center_y_mm" not in target.params:
+        return {
+            "error": (
+                f"операция «{target.kind}» не имеет center_x_mm/center_y_mm "
+                "— массив к ней неприменим"
+            )
+        }
+    try:
+        offsets = _pattern_offsets(
+            pattern,
+            float(target.params["center_x_mm"]),
+            float(target.params["center_y_mm"]),
+        )
+    except (KeyError, ValueError, TypeError) as exc:
+        return {"error": f"некорректные параметры массива: {exc}"}
+
+    patterned = [
+        Feature3D(
+            kind=target.kind,
+            source_entity_ids=[],
+            params={**target.params, "center_x_mm": x, "center_y_mm": y},
+            param_provenance={
+                key: ParamProvenance(
+                    origin="human",
+                    detail=f"массив (Фаза 6/8 CAD-редактора), экземпляр {i + 1}/{len(offsets)}",
+                )
+                for key in target.params
+            },
+            confidence=1.0,
+        )
+        for i, (x, y) in enumerate(offsets)
+    ]
+    updated_candidate = base_candidate.model_copy(deep=True)
+    updated_candidate.features[index:index + 1] = patterned
+    updated_candidate.label = (
+        f"{updated_candidate.label}; массив: {target.kind} × {len(patterned)}"
+    )
+
+    async with factory() as db:
+        engineering_graph_row = await persist_feature_tree_revision(
+            db,
+            graph_id=graph_id,
+            spec=spec,
+            candidate=updated_candidate,
+            producer="human",
+            pass_id=f"human-pattern-feature:{target.kind}",
+            idempotency_key=idempotency_key,
+            source_sha256=params.get("normalized_source_sha256"),
+            source_uri=params.get("normalized_source_path"),
+        )
+        engineering_graph = load_graph(engineering_graph_row)
+        await db.commit()
+
+    solid_result = await _build_spec_solid(
+        spec,
+        generation_id,
+        owner_sub,
+        sheet_format=str(params.get("sheet_format") or "").upper() or None,
+        landscape=str(params.get("sheet_orientation") or "landscape").lower()
+        != "portrait",
+        require_source_evidence=not bool(params.get("spec_corrected")),
+        source_sha256=params.get("normalized_source_sha256"),
+        source_uri=params.get("normalized_source_path"),
+        engineering_graph_override=engineering_graph,
+        # Same reasoning as add/remove-feature: a pattern is a corrective/
+        # additive human action, not a fresh read.
+        require_envelope_match=False,
+    )
+    if not solid_result or not solid_result.get("built"):
+        error_message = (
+            (solid_result or {}).get("error") or "деталь не собралась после создания массива"
+        )
+        async with factory() as db:
+            try:
+                rollback_row = await persist_feature_tree_revision(
+                    db,
+                    graph_id=graph_id,
+                    spec=spec,
+                    candidate=base_candidate,
+                    producer="human",
+                    pass_id=f"human-pattern-feature-rollback:{target.kind}",
+                    idempotency_key=f"{idempotency_key}:rollback",
+                    source_sha256=params.get("normalized_source_sha256"),
+                    source_uri=params.get("normalized_source_path"),
+                )
+                gen_for_rollback = await db.get(ImageGeneration, gen_uuid)
+                if gen_for_rollback is not None:
+                    current_emg = dict(
+                        (gen_for_rollback.params or {}).get("engineering_model_graph")
+                        or {}
+                    )
+                    if current_emg:
+                        gen_for_rollback.params = {
+                            **(gen_for_rollback.params or {}),
+                            "engineering_model_graph": {
+                                **current_emg,
+                                "revision_id": str(rollback_row.id),
+                                "revision": rollback_row.revision,
+                                "canonical_sha256": rollback_row.canonical_sha256,
+                            },
+                        }
+                await db.commit()
+            except Exception:
+                pass
+        return {"error": error_message, "built": False}
+    result_graph = solid_result.pop("_engineering_model_graph", None)
+    if result_graph is None or result_graph.canonical_sha256 != engineering_graph.canonical_sha256:
+        return {"error": "CAD build returned a different EMG revision", "built": False}
+    solid_result.pop("_sheet_ir", None)
+    solid_result.pop("_dimensions", None)
+
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return {"error": "not found"}
+        gen.params = {
+            **(gen.params or {}),
+            "solid_3d": solid_result,
+            "engineering_model_graph": {
+                "revision_id": str(engineering_graph_row.id),
+                "graph_id": engineering_graph_row.graph_id,
+                "revision": engineering_graph_row.revision,
+                "canonical_sha256": engineering_graph_row.canonical_sha256,
+            },
+        }
+        gen.status = ImageGenStatus.done
+        await db.commit()
+    return {
+        "ok": True,
+        "generation_id": generation_id,
+        "pattern_kind": target.kind,
+        "instances": len(patterned),
         "note": note,
     }
 

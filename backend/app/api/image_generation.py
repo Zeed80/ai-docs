@@ -18,7 +18,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 import httpx
@@ -2414,6 +2414,74 @@ async def remove_generation_model_graph_feature(
         args=[
             str(generation_id),
             operation_id,
+            body.note,
+            body.idempotency_key,
+        ],
+        queue="celery",
+    )
+    return {
+        "generation_id": str(generation_id),
+        "rebuild_task_id": task.id,
+    }
+
+
+class LinearPatternSpec(BaseModel):
+    kind: Literal["linear"] = "linear"
+    count: int = Field(ge=2, le=50)
+    dx_mm: float
+    dy_mm: float
+
+
+class CircularPatternSpec(BaseModel):
+    kind: Literal["circular"] = "circular"
+    count: int = Field(ge=2, le=50)
+    center_x_mm: float = 0.0
+    center_y_mm: float = 0.0
+    total_angle_deg: float = Field(default=360.0, gt=0, le=360)
+
+
+PatternSpec = Annotated[
+    LinearPatternSpec | CircularPatternSpec, Field(discriminator="kind")
+]
+
+
+class PatternFeatureRequest(BaseModel):
+    """Фаза 8 нового CAD-редактора (/root/.claude/plans/starry-mapping-hippo.md):
+    replicate an EXISTING BuildOperation (identified the same way delete
+    already does — operation_id encodes its index) N times, offsetting
+    center_x_mm/center_y_mm. Backend-only pre-expansion into N discrete
+    Feature3D copies — the exact idiom cad_solid.py already uses for
+    circular hole patterns, generalized to any feature kind that has both
+    center params. Zero kernel changes: the kernel never sees "a pattern",
+    only N ordinary boss/pocket/hole features."""
+
+    pattern: PatternSpec
+    note: str = Field(min_length=1, max_length=1000)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+
+@router.post("/{generation_id}/model-graph/features/{operation_id}/pattern")
+async def pattern_generation_model_graph_feature(
+    generation_id: uuid.UUID,
+    operation_id: str,
+    body: PatternFeatureRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Фаза 8: same async-task shape as add/remove-feature — the graph
+    mutation (replace ONE operation with N patterned copies) happens
+    inside the Celery task."""
+    gen, row, graph = await _owned_generation_graph(generation_id, db, user)
+    if not any(item.type == "BuildOperation" for item in graph.nodes):
+        raise HTTPException(422, "В графе ещё нет ни одной операции построения")
+
+    from app.tasks.cad_trace import pattern_feature_in_graph
+
+    task = pattern_feature_in_graph.apply_async(
+        args=[
+            str(generation_id),
+            operation_id,
+            body.pattern.model_dump(),
             body.note,
             body.idempotency_key,
         ],

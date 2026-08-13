@@ -410,6 +410,29 @@ export const engineeringApi = {
       `/api/image-gen/${generationId}/model-graph/features/${encodeURIComponent(operationId)}`,
       { method: "DELETE", body: JSON.stringify(body) },
     ),
+  // Фаза 8: replaces ONE existing BuildOperation with N patterned copies
+  // (linear or circular) — same operation_id, same async-task shape.
+  patternGenerationModelGraphFeature: (
+    generationId: string,
+    operationId: string,
+    body: {
+      pattern:
+        | { kind: "linear"; count: number; dx_mm: number; dy_mm: number }
+        | {
+            kind: "circular";
+            count: number;
+            center_x_mm: number;
+            center_y_mm: number;
+            total_angle_deg: number;
+          };
+      note: string;
+      idempotency_key: string;
+    },
+  ) =>
+    request<{ generation_id: string; rebuild_task_id: string }>(
+      `/api/image-gen/${generationId}/model-graph/features/${encodeURIComponent(operationId)}/pattern`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   verifyGenerationModelGraph: (generationId: string) =>
     request<{
       state: Record<string, unknown>;

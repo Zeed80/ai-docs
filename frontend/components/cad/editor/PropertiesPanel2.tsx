@@ -4,7 +4,11 @@ import { useEffect, useState } from "react";
 
 import PropertiesPanel from "@/components/cad/editor/PropertiesPanel";
 import { engineeringApi, type AddedNativeFeature } from "@/lib/engineering-api";
-import type { EmgFeatureNode, EmgOperationNode } from "@/lib/emg-tree";
+import {
+  kindLabel,
+  type EmgFeatureNode,
+  type EmgOperationNode,
+} from "@/lib/emg-tree";
 import type { SketchProfileSegment } from "@/lib/cad-sketch-api";
 
 export type AddFeatureDraftKind =
@@ -47,6 +51,8 @@ export default function PropertiesPanel2({
   onSketchProfileConsumed,
   pickedEdgeKey,
   onEdgeKeyConsumed,
+  patternDraftActive,
+  onPatternDraftChange,
   onSaved,
   onRebuildQueued,
   onError,
@@ -63,10 +69,30 @@ export default function PropertiesPanel2({
   onSketchProfileConsumed: () => void;
   pickedEdgeKey?: string | null;
   onEdgeKeyConsumed?: () => void;
+  // Ф8: true while the "Массив" form is open — takes priority over both
+  // addFeatureDraft and the plain correction view, operates on whichever
+  // operation is currently SELECTED in the tree (not a new draft).
+  patternDraftActive?: boolean;
+  onPatternDraftChange?: (active: boolean) => void;
   onSaved: () => void;
   onRebuildQueued: (taskId: string) => void;
   onError: (message: string) => void;
 }) {
+  if (patternDraftActive) {
+    return (
+      <PatternForm
+        generationId={generationId}
+        operation={operation}
+        onCancel={() => onPatternDraftChange?.(false)}
+        onAdded={(taskId) => {
+          onPatternDraftChange?.(false);
+          onRebuildQueued(taskId);
+        }}
+        onSaved={onSaved}
+        onError={onError}
+      />
+    );
+  }
   if (addFeatureDraft) {
     if (sketchModeActive) {
       return (
@@ -469,5 +495,186 @@ function NumberField({
         className="w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 font-mono text-[12px] text-zinc-100 outline-none focus:border-sky-400/60"
       />
     </label>
+  );
+}
+
+/** Ф8: replicate the currently SELECTED tree operation N times (linear or
+ * circular), reusing cad_solid.py's own "backend pre-expansion into N
+ * ordinary features" idiom — the kernel never learns a pattern exists.
+ * Requires the operation to have center_x_mm/center_y_mm among its params
+ * (boss/pocket/hole); anything else shows a plain explanation instead of a
+ * broken form. */
+function PatternForm({
+  generationId,
+  operation,
+  onCancel,
+  onAdded,
+  onSaved,
+  onError,
+}: {
+  generationId: string;
+  operation: EmgOperationNode | null;
+  onCancel: () => void;
+  onAdded: (taskId: string) => void;
+  onSaved: () => void;
+  onError: (message: string) => void;
+}) {
+  const hasCenterParams =
+    !!operation?.params.some((p) => p.name === "center_x_mm") &&
+    !!operation?.params.some((p) => p.name === "center_y_mm");
+
+  const [kind, setKind] = useState<"linear" | "circular">("linear");
+  const [count, setCount] = useState("3");
+  const [dx, setDx] = useState("10");
+  const [dy, setDy] = useState("0");
+  const [centerX, setCenterX] = useState("0");
+  const [centerY, setCenterY] = useState("0");
+  const [totalAngle, setTotalAngle] = useState("360");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const num = (raw: string) => Number(raw.replace(",", "."));
+
+  async function submit() {
+    if (!operation) return;
+    if (!note.trim()) {
+      onError("Опишите инженерное обоснование массива.");
+      return;
+    }
+    const pattern =
+      kind === "linear"
+        ? {
+            kind: "linear" as const,
+            count: Math.round(num(count)),
+            dx_mm: num(dx),
+            dy_mm: num(dy),
+          }
+        : {
+            kind: "circular" as const,
+            count: Math.round(num(count)),
+            center_x_mm: num(centerX),
+            center_y_mm: num(centerY),
+            total_angle_deg: num(totalAngle),
+          };
+    setBusy(true);
+    try {
+      const result = await engineeringApi.patternGenerationModelGraphFeature(
+        generationId,
+        operation.id,
+        {
+          pattern,
+          note: note.trim(),
+          idempotency_key: `pattern-feature:${crypto.randomUUID()}`,
+        },
+      );
+      onAdded(result.rebuild_task_id);
+      onSaved();
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!operation) {
+    return (
+      <p className="p-3 text-[11px] text-zinc-500">
+        Выберите операцию в дереве слева, чтобы создать по ней массив.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3 p-3 text-xs">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium text-zinc-100">
+          Массив: {kindLabel(operation.kind)}
+        </p>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="text-[11px] text-zinc-500 hover:text-zinc-300"
+        >
+          ✕ Отмена
+        </button>
+      </div>
+
+      {!hasCenterParams ? (
+        <p className="rounded border border-amber-400/30 bg-amber-500/10 p-2 text-[11px] text-amber-200">
+          У операции «{kindLabel(operation.kind)}» нет center_x_mm/ center_y_mm
+          — массив к ней неприменим. Выберите бобышку, карман или отверстие.
+        </p>
+      ) : (
+        <>
+          <label className="block space-y-1">
+            <span className="text-[11px] text-zinc-400">Вид массива</span>
+            <div className="flex gap-2">
+              {(["linear", "circular"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setKind(value)}
+                  className={`rounded border px-2.5 py-1 text-[11px] ${
+                    kind === value
+                      ? "border-sky-400/60 bg-sky-500/15 text-sky-200"
+                      : "border-white/10 text-zinc-400 hover:bg-white/5"
+                  }`}
+                >
+                  {value === "linear" ? "Линейный" : "Круговой"}
+                </button>
+              ))}
+            </div>
+          </label>
+          <NumberField
+            label="count (число экземпляров)"
+            value={count}
+            onChange={setCount}
+          />
+          {kind === "linear" ? (
+            <div className="grid grid-cols-2 gap-2">
+              <NumberField label="dx_mm" value={dx} onChange={setDx} />
+              <NumberField label="dy_mm" value={dy} onChange={setDy} />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <NumberField
+                label="center_x_mm"
+                value={centerX}
+                onChange={setCenterX}
+              />
+              <NumberField
+                label="center_y_mm"
+                value={centerY}
+                onChange={setCenterY}
+              />
+              <NumberField
+                label="total_angle_deg"
+                value={totalAngle}
+                onChange={setTotalAngle}
+              />
+            </div>
+          )}
+          <label className="block space-y-1">
+            <span className="text-[11px] text-zinc-400">
+              Инженерное обоснование
+            </span>
+            <textarea
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="Например: массив крепёжных отверстий по фланцу"
+              className="h-16 w-full rounded border border-white/10 bg-black/30 p-2 text-[11px] text-zinc-100 outline-none focus:border-sky-400/60"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void submit()}
+            className="w-full rounded bg-emerald-500/20 px-3 py-1.5 text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-40"
+          >
+            Создать массив и пересобрать
+          </button>
+        </>
+      )}
+    </div>
   );
 }
