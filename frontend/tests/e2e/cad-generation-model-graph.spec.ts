@@ -391,6 +391,12 @@ test("CAD editor filters review operations and navigates the visible tree by key
   await mockApi(page, editorGraph);
   await page.goto(`/cad/${generationId}/editor`);
 
+  await page.getByRole("button", { name: "Экспорт" }).click();
+  await expect(page.getByRole("link", { name: "Диагностика ZIP" })).toHaveAttribute(
+    "href",
+    `/api/image-gen/${generationId}/diagnostics-package`,
+  );
+
   await expect(
     page.getByRole("button", { name: "Приблизить 3D-модель" }),
   ).toBeVisible();

@@ -812,6 +812,204 @@ async def download_generation_model_graph(
     )
 
 
+@router.get("/{generation_id}/diagnostics-package")
+async def download_generation_diagnostics_package(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> Response:
+    """Owner-scoped, review-safe diagnostic bundle for any CAD outcome.
+
+    Unlike the accepted-only release package, this endpoint deliberately works
+    for blocked and review-required drafts. Every requested artifact is either
+    present with a SHA-256 entry or named in ``missing_artifacts``; a storage
+    failure is never silently presented as a complete evidence bundle.
+    """
+    import zipfile
+
+    from app.db.models import CadIrRevision, GraphPatchRecord
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    # A preceding graph persistence/correction may have committed on this
+    # session and expired the identity-map instance. Load one explicit async
+    # snapshot now; never let attribute access trigger hidden lazy I/O while
+    # serializing the zip.
+    await db.refresh(gen)
+    if gen.operation != "vectorize":
+        raise HTTPException(400, "Диагностический CAD-пакет доступен только для оцифровки.")
+
+    entries: dict[str, bytes] = {}
+    missing: list[dict[str, str]] = []
+
+    def add_json(name: str, value: Any) -> None:
+        entries[name] = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+            default=str,
+        ).encode("utf-8")
+
+    def add_storage(name: str, path: str | None, *, required: bool = False) -> None:
+        if not path:
+            if required:
+                missing.append({"name": name, "reason": "storage_path_not_recorded"})
+            return
+        try:
+            entries[name] = download_file(path)
+        except Exception as exc:  # noqa: BLE001 — recorded in manifest, not hidden
+            missing.append({
+                "name": name,
+                "reason": f"storage_read_failed:{type(exc).__name__}",
+            })
+
+    params = dict(gen.params or {})
+    add_json("generation.json", {
+        "id": str(gen.id),
+        "operation": gen.operation,
+        "status": gen.status.value,
+        "prompt": gen.prompt,
+        "negative_prompt": gen.negative_prompt,
+        "params": params,
+        "workflow_snapshot": gen.workflow_snapshot,
+        "celery_task_id": gen.celery_task_id,
+        "comfyui_prompt_id": gen.comfyui_prompt_id,
+        "error": gen.error,
+        "accepted": gen.accepted,
+        "accepted_revision": gen.accepted_revision,
+        "created_at": gen.created_at,
+        "updated_at": gen.updated_at,
+    })
+
+    source_paths = list(gen.source_image_paths or [])
+    for index, path in enumerate(source_paths):
+        extension = str(path).rsplit(".", 1)[-1].lower()
+        if extension not in _ALLOWED_UPLOAD_EXTS:
+            extension = "bin"
+        add_storage(f"sources/source-{index}.{extension}", path, required=True)
+    add_storage(
+        "sources/normalized.png",
+        params.get("normalized_source_path"),
+    )
+
+    artifact_names = {
+        "dxf": "artifacts/drawing.dxf",
+        "dwg": "artifacts/drawing.dwg",
+        "svg": "artifacts/drawing.svg",
+        "pdf": "artifacts/drawing.pdf",
+        "ir": "artifacts/cad_ir.json",
+    }
+    for kind, name in artifact_names.items():
+        add_storage(
+            name,
+            params.get(f"{kind}_path"),
+            required=kind in {"dxf", "svg", "ir"},
+        )
+    solid = dict(params.get("solid_3d") or {})
+    for kind, filename in {
+        "step": "model.step",
+        "iges": "model.iges",
+        "fcstd": "model.FCStd",
+        "stl": "model.stl",
+        "topology": "topology.json",
+    }.items():
+        add_storage(
+            f"artifacts/{filename}",
+            (solid.get("paths") or {}).get(kind),
+            required=bool(solid.get("built")) and kind in {"step", "stl", "topology"},
+        )
+
+    ir_revision = (
+        await db.execute(
+            select(CadIrRevision)
+            .where(CadIrRevision.generation_id == gen.id)
+            .order_by(CadIrRevision.revision.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if ir_revision is not None:
+        add_storage("cad_ir/current.json", ir_revision.ir_path, required=True)
+        add_json("cad_ir/revision.json", {
+            "revision": ir_revision.revision,
+            "ir_sha256": ir_revision.ir_sha256,
+            "artifact_hashes": ir_revision.artifact_hashes,
+            "created_at": ir_revision.created_at,
+            "approved_by": ir_revision.approved_by,
+            "approved_at": ir_revision.approved_at,
+        })
+    else:
+        missing.append({"name": "cad_ir/current.json", "reason": "revision_not_found"})
+
+    try:
+        _owned_gen, graph_row, graph = await _owned_generation_graph(
+            generation_id, db, user
+        )
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        graph_row = None
+        graph = None
+        missing.append({"name": "model_graph/current.emg.json", "reason": "graph_not_found"})
+    if graph_row is not None and graph is not None:
+        add_json("model_graph/current.emg.json", graph.model_dump(mode="json"))
+        patch_rows = list((await db.execute(
+            select(GraphPatchRecord)
+            .where(GraphPatchRecord.graph_id == graph_row.graph_id)
+            .order_by(GraphPatchRecord.created_at, GraphPatchRecord.id)
+        )).scalars())
+        add_json("model_graph/patches.json", [{
+            "id": str(item.id),
+            "patch_id": item.patch_id,
+            "base_revision": item.base_revision,
+            "base_sha256": item.base_sha256,
+            "result_revision_id": str(item.result_revision_id)
+            if item.result_revision_id else None,
+            "producer": item.producer,
+            "pass_id": item.pass_id,
+            "accepted": item.accepted,
+            "payload": item.payload,
+            "validation_errors": item.validation_errors,
+            "created_at": item.created_at,
+        } for item in patch_rows])
+
+    manifest = {
+        "schema": "cad-diagnostics/1.0",
+        "generation_id": str(gen.id),
+        "status": gen.status.value,
+        "complete": len(missing) == 0,
+        "entries": [
+            {
+                "name": name,
+                "size_bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+            for name, content in sorted(entries.items())
+        ],
+        "missing_artifacts": sorted(missing, key=lambda item: item["name"]),
+    }
+    add_json("manifest.json", manifest)
+
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        for name, content in sorted(entries.items()):
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o600 << 16
+            archive.writestr(info, content)
+    return Response(
+        content=payload.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="cad-diagnostics-{gen.id}.zip"',
+            "Cache-Control": "no-store",
+            "X-CAD-Diagnostics-Complete": str(manifest["complete"]).lower(),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/{generation_id}/model-graph/patches")
 async def list_generation_model_graph_patches(
     generation_id: uuid.UUID,

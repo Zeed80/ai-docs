@@ -779,6 +779,11 @@ export function artifactUrl(id: string, kind: ArtifactKind): string {
   return `${BASE}/${id}/artifact?kind=${encodeURIComponent(kind)}`;
 }
 
+/** Owner-scoped evidence bundle; available for blocked/review drafts too. */
+export function diagnosticsPackageUrl(id: string): string {
+  return `${BASE}/${id}/diagnostics-package`;
+}
+
 /** Incomplete, non-releasable solid produced only for visual review. */
 export function solidPreviewUrl(
   id: string,

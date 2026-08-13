@@ -57,6 +57,7 @@ import {
   approveCadAsDrafter,
   approveCadAsNormcontroller,
   artifactUrl,
+  diagnosticsPackageUrl,
   getCadCertification,
   getGeneration,
   rebuildSolidInput,
@@ -908,16 +909,6 @@ function ExportMenu({
   accepted: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  if (!accepted) {
-    return (
-      <span
-        title="Экспорт доступен после приёмки"
-        className="flex items-center gap-1.5 rounded border border-white/10 px-3 py-1.5 text-xs text-zinc-600"
-      >
-        <Download className="h-3.5 w-3.5" /> Экспорт
-      </span>
-    );
-  }
   return (
     <div className="relative">
       <button
@@ -932,16 +923,29 @@ function ExportMenu({
           className="absolute right-0 z-10 mt-1 w-40 rounded border border-white/10 bg-zinc-900 py-1 shadow-lg"
           onMouseLeave={() => setOpen(false)}
         >
-          {(["dxf", "step", "iges", "stl", "pdf"] as const).map((kind) => (
-            <a
-              key={kind}
-              href={artifactUrl(generationId, kind)}
-              download
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/10"
-            >
-              <ExternalLink className="h-3 w-3" /> {kind.toUpperCase()}
-            </a>
-          ))}
+          <a
+            href={diagnosticsPackageUrl(generationId)}
+            download
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-sky-200 hover:bg-sky-500/10"
+          >
+            <Download className="h-3 w-3" /> Диагностика ZIP
+          </a>
+          {accepted ? (
+            (["dxf", "step", "iges", "stl", "pdf"] as const).map((kind) => (
+              <a
+                key={kind}
+                href={artifactUrl(generationId, kind)}
+                download
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/10"
+              >
+                <ExternalLink className="h-3 w-3" /> {kind.toUpperCase()}
+              </a>
+            ))
+          ) : (
+            <p className="border-t border-white/5 px-3 py-1.5 text-[10px] text-zinc-600">
+              CAD-экспорт доступен после приёмки
+            </p>
+          )}
         </div>
       )}
     </div>

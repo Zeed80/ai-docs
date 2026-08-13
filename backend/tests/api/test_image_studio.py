@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
+import zipfile
 from types import SimpleNamespace
 
 import pytest
@@ -319,6 +321,37 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert downloaded.headers["content-disposition"].endswith('.emg.json"')
     assert downloaded.json()["canonical_sha256"] == row.canonical_sha256
 
+    diagnostics = await client.get(
+        f"/api/image-gen/{generation.id}/diagnostics-package"
+    )
+    assert diagnostics.status_code == 200
+    assert diagnostics.headers["content-type"].startswith("application/zip")
+    assert diagnostics.headers["x-cad-diagnostics-complete"] == "false"
+    with zipfile.ZipFile(io.BytesIO(diagnostics.content)) as archive:
+        names = set(archive.namelist())
+        assert "manifest.json" in names
+        assert "generation.json" in names
+        assert "model_graph/current.emg.json" in names
+        assert "model_graph/patches.json" in names
+        assert "sources/source-0.png" in names
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["schema"] == "cad-diagnostics/1.0"
+        assert manifest["generation_id"] == str(generation.id)
+        assert any(
+            item["name"] == "cad_ir/current.json"
+            and item["reason"] == "revision_not_found"
+            for item in manifest["missing_artifacts"]
+        )
+        for item in manifest["entries"]:
+            content = archive.read(item["name"])
+            assert item["size_bytes"] == len(content)
+            assert item["sha256"] == hashlib.sha256(content).hexdigest()
+    diagnostics_repeat = await client.get(
+        f"/api/image-gen/{generation.id}/diagnostics-package"
+    )
+    assert diagnostics_repeat.status_code == 200
+    assert diagnostics_repeat.content == diagnostics.content
+
     trace_overlay = await client.get(
         f"/api/image-gen/{generation.id}/model-graph/assertions/"
         "assertion:hole-diameter/source-overlay?mode=overlay&proposal_id=trace-test"
@@ -476,6 +509,10 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
         f"/api/image-gen/{other.id}/model-graph/download"
     )
     assert denied_download.status_code == 404
+    denied_diagnostics = await client.get(
+        f"/api/image-gen/{other.id}/diagnostics-package"
+    )
+    assert denied_diagnostics.status_code == 404
 
 
 async def _seed_feature_correction_graph(db_session, monkeypatch):
