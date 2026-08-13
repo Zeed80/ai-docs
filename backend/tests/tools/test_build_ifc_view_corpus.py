@@ -15,18 +15,22 @@ SPEC.loader.exec_module(MODULE)
 
 def test_schema_variants_select_one_canonical_asset():
     rows = [
-        {"source_group_id": "scene", "relative_path": "IFC4/scene.ifc"},
-        {"source_group_id": "scene", "relative_path": "IFC4X3/scene.ifc"},
+        {"source_group_id": "scene", "relative_path": "IFC4/scene.ifc", "split": "holdout"},
+        {"source_group_id": "scene", "relative_path": "IFC4X3/scene.ifc", "split": "holdout"},
     ]
     selected, splits = MODULE._canonical_assets_and_splits(rows)
     assert len(selected) == 1
     assert selected[0]["relative_path"] == "IFC4X3/scene.ifc"
-    assert splits == {"scene": "train"}
+    assert splits == {"scene": "holdout"}
 
 
-def test_group_split_keeps_validation_and_holdout_for_small_corpus():
+def test_group_split_preserves_canonical_source_manifest():
     rows = [
-        {"source_group_id": f"scene-{index}", "relative_path": f"IFC4/{index}.ifc"}
+        {
+            "source_group_id": f"scene-{index}",
+            "relative_path": f"IFC4/{index}.ifc",
+            "split": "train" if index < 10 else "val" if index < 12 else "holdout",
+        }
         for index in range(14)
     ]
     selected, splits = MODULE._canonical_assets_and_splits(rows)

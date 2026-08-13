@@ -1,0 +1,459 @@
+{
+  "schema_version": "cad-final-acceptance/1.0",
+  "candidate_commit": "dbb7a9a7fd4018337f444f71dbe6da48c058d4f7",
+  "candidate_tree": "625e347937f9d3acecac11ed020e9b4954ba0943",
+  "frozen_artifacts": [
+    {
+      "path": "backend/tests/fixtures/cad_class_balanced_dev.json",
+      "sha256": "16c99e9a1a1d782ddbdc78bda5dfeabf2ec649db4f2ca06b2e50b43d5da5af14",
+      "bytes": 4107
+    },
+    {
+      "path": "tools/cad-dataset/baselines/class_balanced_dev_candidate_20260814.json",
+      "sha256": "2029c3e71aebe4e0ae6b30697476e7c38f2abb553dfdb9063d745462d8393788",
+      "bytes": 10750
+    },
+    {
+      "path": "tools/cad-dataset/source_registry.json",
+      "sha256": "0d56a69776f9ff7bac48a03150771b3bed7a629305d3f953cd8700983beb8dce",
+      "bytes": 4818
+    },
+    {
+      "path": "cad-dataset-out/open-sources-v2/assets.jsonl",
+      "sha256": "974a7ddb01873437736e08679344a726419e501cad3379c9ca9deb267e956e10",
+      "bytes": 214236
+    },
+    {
+      "path": "cad-dataset-out/nist-pmi-holdout/manifest.jsonl",
+      "sha256": "dde5d95fea82aa7bfb8f303dd656aca731e4c3cc0e9baf40fa7f7c3e87b5114f",
+      "bytes": 24501
+    },
+    {
+      "path": "cad-dataset-out/universal-ifc-drawings-final/manifest.jsonl",
+      "sha256": "96ac0566e2c46ca9ca9c78980be9e40d4ee8a5dd55b6d7109bcb8d69d1dedb26",
+      "bytes": 327637
+    }
+  ],
+  "leakage_audit": {
+    "ok": true,
+    "selected": {
+      "mechanical": {"rows": 30, "source_groups": 11},
+      "construction": {"rows": 24, "source_groups": 2}
+    },
+    "issues": []
+  },
+  "holdout_policy": "one-shot; no tuning or rerun from sealed results",
+  "promotion_thresholds": {
+    "entity_precision": 0.995,
+    "entity_recall": 0.995,
+    "exact_sheet_rate": 0.99,
+    "false_exact_rate": 0.0
+  },
+  "inputs": {
+    "freeze": {
+      "path": "test-results/cad_final_freeze.json",
+      "sha256": "ff52179a7cbe9a9174f26a793f0a33b8190fb54b800c1687801273225c844c27"
+    },
+    "leakage": {
+      "path": "test-results/cad_final_leakage.json",
+      "sha256": "fd0f9d3fba7f86ca7ffdf285d95563f19b64a670b25edf88c71d1700bc192638"
+    },
+    "mechanical": {
+      "path": "test-results/cad_final_mechanical_holdout.json",
+      "sha256": "15d9e48bb04451cf58c760d2da5270da8ed5b58811ae363aaf4a3b6aad6558e0"
+    },
+    "construction": {
+      "path": "test-results/cad_final_construction_holdout.json",
+      "sha256": "b384d224c01b1432ddf8728df125ccfccc4f04f99cc89be8c97a697230a2cc38"
+    }
+  },
+  "domains": {
+    "mechanical": {
+      "passed": false,
+      "checks": {
+        "entity_precision": false,
+        "entity_recall": false,
+        "exact_sheet_rate": false,
+        "false_exact_rate": false
+      },
+      "summary": {
+        "files": 30,
+        "evaluated_files": 30,
+        "declined_files": 0,
+        "errors": 0,
+        "entity_precision": 0.00921,
+        "entity_recall": 0.000778,
+        "entity_f1": 0.001434,
+        "exact_sheet_rate": 0.0,
+        "false_exact_rate": 1.0,
+        "per_type": {
+          "arc": {
+            "matched": 0,
+            "false_positive": 2321,
+            "false_negative": 0,
+            "precision": 0.0,
+            "recall": 1.0,
+            "f1": 0.0
+          },
+          "circle": {
+            "matched": 0,
+            "false_positive": 990,
+            "false_negative": 0,
+            "precision": 0.0,
+            "recall": 1.0,
+            "f1": 0.0
+          },
+          "hatch": {
+            "matched": 0,
+            "false_positive": 86,
+            "false_negative": 0,
+            "precision": 0.0,
+            "recall": 1.0,
+            "f1": 0.0
+          },
+          "polyline": {
+            "matched": 0,
+            "false_positive": 0,
+            "false_negative": 15233,
+            "precision": 1.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "segment": {
+            "matched": 352,
+            "false_positive": 34005,
+            "false_negative": 434847,
+            "precision": 0.010245,
+            "recall": 0.000809,
+            "f1": 0.001499
+          },
+          "text": {
+            "matched": 0,
+            "false_positive": 466,
+            "false_negative": 2287,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "by_domain": {
+          "mechanical": {
+            "files": 30,
+            "evaluated_files": 30,
+            "declined_files": 0,
+            "errors": 0,
+            "entity_precision": 0.00921,
+            "entity_recall": 0.000778,
+            "entity_f1": 0.001434,
+            "exact_sheet_rate": 0.0,
+            "false_exact_rate": 1.0,
+            "per_type": {
+              "arc": {
+                "matched": 0,
+                "false_positive": 2321,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "circle": {
+                "matched": 0,
+                "false_positive": 990,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "hatch": {
+                "matched": 0,
+                "false_positive": 86,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "polyline": {
+                "matched": 0,
+                "false_positive": 0,
+                "false_negative": 15233,
+                "precision": 1.0,
+                "recall": 0.0,
+                "f1": 0.0
+              },
+              "segment": {
+                "matched": 352,
+                "false_positive": 34005,
+                "false_negative": 434847,
+                "precision": 0.010245,
+                "recall": 0.000809,
+                "f1": 0.001499
+              },
+              "text": {
+                "matched": 0,
+                "false_positive": 466,
+                "false_negative": 2287,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0
+              }
+            }
+          }
+        },
+        "by_class": {
+          "unclassified": {
+            "files": 30,
+            "evaluated_files": 30,
+            "declined_files": 0,
+            "errors": 0,
+            "entity_precision": 0.00921,
+            "entity_recall": 0.000778,
+            "entity_f1": 0.001434,
+            "exact_sheet_rate": 0.0,
+            "false_exact_rate": 1.0,
+            "per_type": {
+              "arc": {
+                "matched": 0,
+                "false_positive": 2321,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "circle": {
+                "matched": 0,
+                "false_positive": 990,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "hatch": {
+                "matched": 0,
+                "false_positive": 86,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "polyline": {
+                "matched": 0,
+                "false_positive": 0,
+                "false_negative": 15233,
+                "precision": 1.0,
+                "recall": 0.0,
+                "f1": 0.0
+              },
+              "segment": {
+                "matched": 352,
+                "false_positive": 34005,
+                "false_negative": 434847,
+                "precision": 0.010245,
+                "recall": 0.000809,
+                "f1": 0.001499
+              },
+              "text": {
+                "matched": 0,
+                "false_positive": 466,
+                "false_negative": 2287,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0
+              }
+            }
+          }
+        }
+      }
+    },
+    "construction": {
+      "passed": false,
+      "checks": {
+        "entity_precision": false,
+        "entity_recall": false,
+        "exact_sheet_rate": false,
+        "false_exact_rate": false
+      },
+      "summary": {
+        "files": 24,
+        "evaluated_files": 24,
+        "declined_files": 0,
+        "errors": 0,
+        "entity_precision": 0.162244,
+        "entity_recall": 0.039752,
+        "entity_f1": 0.063858,
+        "exact_sheet_rate": 0.083333,
+        "false_exact_rate": 0.916667,
+        "per_type": {
+          "arc": {
+            "matched": 0,
+            "false_positive": 34,
+            "false_negative": 0,
+            "precision": 0.0,
+            "recall": 1.0,
+            "f1": 0.0
+          },
+          "circle": {
+            "matched": 0,
+            "false_positive": 2,
+            "false_negative": 0,
+            "precision": 0.0,
+            "recall": 1.0,
+            "f1": 0.0
+          },
+          "hatch": {
+            "matched": 0,
+            "false_positive": 35,
+            "false_negative": 0,
+            "precision": 0.0,
+            "recall": 1.0,
+            "f1": 0.0
+          },
+          "segment": {
+            "matched": 269,
+            "false_positive": 1318,
+            "false_negative": 6498,
+            "precision": 0.169502,
+            "recall": 0.039752,
+            "f1": 0.0644
+          }
+        },
+        "by_domain": {
+          "construction": {
+            "files": 24,
+            "evaluated_files": 24,
+            "declined_files": 0,
+            "errors": 0,
+            "entity_precision": 0.162244,
+            "entity_recall": 0.039752,
+            "entity_f1": 0.063858,
+            "exact_sheet_rate": 0.083333,
+            "false_exact_rate": 0.916667,
+            "per_type": {
+              "arc": {
+                "matched": 0,
+                "false_positive": 34,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "circle": {
+                "matched": 0,
+                "false_positive": 2,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "hatch": {
+                "matched": 0,
+                "false_positive": 35,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "segment": {
+                "matched": 269,
+                "false_positive": 1318,
+                "false_negative": 6498,
+                "precision": 0.169502,
+                "recall": 0.039752,
+                "f1": 0.0644
+              }
+            }
+          }
+        },
+        "by_class": {
+          "building_services": {
+            "files": 15,
+            "evaluated_files": 15,
+            "declined_files": 0,
+            "errors": 0,
+            "entity_precision": 0.106497,
+            "entity_recall": 0.028495,
+            "entity_f1": 0.04496,
+            "exact_sheet_rate": 0.0,
+            "false_exact_rate": 1.0,
+            "per_type": {
+              "arc": {
+                "matched": 0,
+                "false_positive": 28,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "circle": {
+                "matched": 0,
+                "false_positive": 1,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "hatch": {
+                "matched": 0,
+                "false_positive": 35,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "segment": {
+                "matched": 159,
+                "false_positive": 1270,
+                "false_negative": 5421,
+                "precision": 0.111267,
+                "recall": 0.028495,
+                "f1": 0.04537
+              }
+            }
+          },
+          "structural": {
+            "files": 9,
+            "evaluated_files": 9,
+            "declined_files": 0,
+            "errors": 0,
+            "entity_precision": 0.666667,
+            "entity_recall": 0.092671,
+            "entity_f1": 0.162722,
+            "exact_sheet_rate": 0.222222,
+            "false_exact_rate": 0.777778,
+            "per_type": {
+              "arc": {
+                "matched": 0,
+                "false_positive": 6,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "circle": {
+                "matched": 0,
+                "false_positive": 1,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 1.0,
+                "f1": 0.0
+              },
+              "segment": {
+                "matched": 110,
+                "false_positive": 48,
+                "false_negative": 1077,
+                "precision": 0.696203,
+                "recall": 0.092671,
+                "f1": 0.163569
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "promotion_eligible": false,
+  "verdict": "rejected",
+  "failures": [
+    "mechanical_promotion_gate_failed",
+    "construction_promotion_gate_failed"
+  ]
+}

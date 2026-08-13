@@ -50,6 +50,56 @@ from app.domain.engineering_model_graph import apply_graph_patch, compile_build_
 from app.services.engineering_model_graph import verify_graph
 
 KERNEL_URL = os.environ.get("CAD_KERNEL_URL", "http://cad-kernel:8092").rstrip("/")
+ARTIFACT_DIR: Path | None = None
+
+
+def _evidence_bytes(value: Any) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode()
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json", by_alias=True)
+
+    def default(item: Any) -> Any:
+        if hasattr(item, "model_dump"):
+            return item.model_dump(mode="json", by_alias=True)
+        raise TypeError(f"Object of type {type(item).__name__} is not JSON serializable")
+
+    return (
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, default=default)
+        + "\n"
+    ).encode()
+
+
+def _write_evidence_bundle(case_id: str, files: dict[str, Any]) -> dict[str, Any]:
+    """Persist the live evidence chain and a content-addressed manifest."""
+    if ARTIFACT_DIR is None:
+        return {"saved": False, "reason": "artifact_dir_not_requested"}
+    case_dir = ARTIFACT_DIR / case_id
+    case_dir.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for name, value in sorted(files.items()):
+        body = _evidence_bytes(value)
+        (case_dir / name).write_bytes(body)
+        entries.append({
+            "path": name,
+            "bytes": len(body),
+            "sha256": hashlib.sha256(body).hexdigest(),
+        })
+    manifest = {
+        "schema_version": "emg-live-evidence/1.0",
+        "case_id": case_id,
+        "complete": True,
+        "files": entries,
+    }
+    manifest_body = _evidence_bytes(manifest)
+    (case_dir / "manifest.json").write_bytes(manifest_body)
+    return {
+        "saved": True,
+        "manifest_sha256": hashlib.sha256(manifest_body).hexdigest(),
+        "file_count": len(entries),
+    }
 
 
 def _feature(kind: str, **params: object) -> dict[str, Any]:
@@ -230,6 +280,18 @@ def _run_mechanical(case_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
         "all_views_present": set(views) == {"front", "side", "top"},
         "projection_nonempty": primitive_count > 0,
     }
+    evidence_bundle = _write_evidence_bundle(case_id, {
+        "source.json": candidate,
+        "reader-graph.json": {
+            "status": "not_applicable",
+            "reason": "mechanical kernel case starts from a reviewed feature candidate",
+        },
+        "generator-payload.json": compile_payload,
+        "model.step": members["model.step"],
+        "drawing-projection.json": projection,
+        "validation-report.json": report,
+        "audit-trace.json": {"checks": checks, "runtime": KERNEL_URL},
+    })
     return {
         "runtime": "cad-kernel FreeCAD/OpenCascade + TechDraw",
         "evidence_level": "live_kernel_build_and_projection",
@@ -239,6 +301,7 @@ def _run_mechanical(case_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
         "volume_mm3": report.get("volume_mm3"),
         "topology": {key: report.get(key) for key in ("solid_count", "face_count", "edge_count", "vertex_count")},
         "projection_primitive_count": primitive_count,
+        "evidence_bundle": evidence_bundle,
     }
 
 
@@ -338,6 +401,19 @@ def _run_assembly(case_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         "drawing_covers_mates": drawing_report.get("mate_occurrences") == 2 * len(mates),
         "drawing_release_gate_admitted": "assertion:assembly:required-2d" not in drawing_plan.critical_assumption_ids,
     }
+    evidence_bundle = _write_evidence_bundle(case_id, {
+        "source.json": payload,
+        "reader-graph.json": graph,
+        "generator-payload.json": kernel_payload,
+        "model.step": step,
+        "drawing.svg": svg,
+        "validation-report.json": report,
+        "audit-trace.json": {
+            "checks": checks,
+            "drawing_report": drawing_report,
+            "build_plan": drawing_plan,
+        },
+    })
     return {
         "runtime": "cad-kernel FreeCAD/OpenCascade isolated STEP reopen",
         "evidence_level": "live_kernel_build_and_independent_reopen",
@@ -347,6 +423,7 @@ def _run_assembly(case_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         "drawing_artifact_sha256": hashlib.sha256(svg).hexdigest(),
         "component_count": len(payload["components"]),
         "reopen": reopen,
+        "evidence_bundle": evidence_bundle,
     }
 
 
@@ -431,6 +508,19 @@ def _run_construction(case_id: str, model: ConstructionModel) -> dict[str, Any]:
             not in sheets_plan.critical_assumption_ids
         ),
     }
+    evidence_bundle = _write_evidence_bundle(case_id, {
+        "source.json": model,
+        "reader-graph.json": graph,
+        "generator-payload.json": model,
+        "model.ifc": artifact,
+        "drawing.svg": sheets_svg,
+        "validation-report.json": report,
+        "audit-trace.json": {
+            "checks": checks,
+            "sheets_report": sheets_report,
+            "build_plan": sheets_plan,
+        },
+    })
     return {
         "runtime": "production backend IfcOpenShell geometry runtime",
         "evidence_level": "live_ifc_build_geometry_and_reopen",
@@ -442,6 +532,7 @@ def _run_construction(case_id: str, model: ConstructionModel) -> dict[str, Any]:
         "element_count": len(model.elements),
         "product_class_counts": report.get("product_class_counts"),
         "entity_count": report.get("entity_count"),
+        "evidence_bundle": evidence_bundle,
     }
 
 
@@ -531,6 +622,18 @@ def _run_system(case_id: str, model: EngineeringSystemModel) -> dict[str, Any]:
             released, "production"
         ).production_export_allowed,
     }
+    evidence_bundle = _write_evidence_bundle(case_id, {
+        "source.json": model,
+        "reader-graph.json": graph,
+        "generator-payload.json": model,
+        "diagram.svg": svg,
+        "validation-report.json": {
+            "state": state,
+            "issues": issues,
+            "diagram_report": diagram_report,
+        },
+        "audit-trace.json": {"checks": checks, "released_graph": released},
+    })
     return {
         "runtime": "production backend EMG adapter, deterministic SVG builder and verifier",
         "evidence_level": "live_backend_semantic_svg_reopen_and_release_gate",
@@ -542,6 +645,7 @@ def _run_system(case_id: str, model: EngineeringSystemModel) -> dict[str, Any]:
         "port_count": len(model.ports),
         "connection_count": len(model.connections),
         "error_codes": error_codes,
+        "evidence_bundle": evidence_bundle,
     }
 
 
@@ -577,9 +681,12 @@ def run() -> dict[str, Any]:
 
 
 def main() -> int:
+    global ARTIFACT_DIR
     parser = argparse.ArgumentParser()
     parser.add_argument("--out")
+    parser.add_argument("--artifact-dir", type=Path)
     args = parser.parse_args()
+    ARTIFACT_DIR = args.artifact_dir
     report = run()
     rendered = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
     if args.out:

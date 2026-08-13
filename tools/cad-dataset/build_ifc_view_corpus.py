@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import io
 import json
 import pathlib
@@ -42,17 +41,13 @@ def _canonical_assets_and_splits(source_assets: list[dict]) -> tuple[list[dict],
         )[0]
         for group_rows in by_group.values()
     ]
-    ordered_groups = sorted(by_group, key=lambda group: hashlib.sha256(group.encode()).hexdigest())
-    if len(ordered_groups) >= 3:
-        train_end = min(len(ordered_groups) - 2, max(1, round(len(ordered_groups) * 0.70)))
-        val_end = min(len(ordered_groups) - 1, max(train_end + 1, round(len(ordered_groups) * 0.85)))
-    else:
-        train_end, val_end = len(ordered_groups), len(ordered_groups)
-    benchmark_split = {
-        group: "train" if index < train_end else "val" if index < val_end else "holdout"
-        for index, group in enumerate(ordered_groups)
-    }
-    return canonical_assets, benchmark_split
+    source_splits: dict[str, str] = {}
+    for group, rows in by_group.items():
+        splits = {row["split"] for row in rows}
+        if len(splits) != 1:
+            raise ValueError(f"source group crosses canonical splits: {group}: {sorted(splits)}")
+        source_splits[group] = splits.pop()
+    return canonical_assets, source_splits
 
 
 def _degrade(png: bytes, seed: int) -> bytes:
@@ -91,7 +86,7 @@ def build(
         for row in (json.loads(line) for line in assets_path.read_text().splitlines() if line.strip())
         if row.get("asset_format") == "ifc"
     ]
-    canonical_assets, benchmark_split = _canonical_assets_and_splits(source_assets)
+    canonical_assets, source_splits = _canonical_assets_and_splits(source_assets)
     assets = {pathlib.Path(row["output_path"]).stem: row for row in canonical_assets}
     for folder in ("ir", "clean", "control"):
         (out / folder).mkdir(parents=True, exist_ok=True)
@@ -211,7 +206,7 @@ def build(
                     ),
                     "truth_layers": ["vector_drawing_geometry", "ifc_semantics", "ifc_geometry"],
                     "source_group_id": asset["source_group_id"],
-                    "split": benchmark_split[asset["source_group_id"]],
+                    "split": source_splits[asset["source_group_id"]],
                     "source_split": asset["split"],
                     "image": str(image_path.resolve()),
                     "control_images": [str(control_path.resolve())],

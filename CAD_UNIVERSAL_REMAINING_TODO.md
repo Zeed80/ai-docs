@@ -189,22 +189,22 @@
 
 ## 9. Финальная приёмка и production
 
-- [ ] Заморозить candidate commit, config/model hashes и manifests.
-- [ ] Однократно прогнать sealed mechanical и construction holdout.
-- [ ] Проверить leakage и отсутствие holdout в prompt examples/manual tuning.
-- [ ] Проверить все promotion gates и честные `blocked/review_required` исходы.
-- [ ] Выполнить `make prod-build`, перезапустить stack и дождаться устойчивого `/health`.
-- [ ] Прогнать публичный рабочий URL, а не только health endpoint.
-- [ ] Для live-кейсов сохранить исходник, audit trace, прочитанный graph, generator payload, 3D/BIM, 2D и validation report.
-- [ ] Дать пользователю живые URL и точные шаги самостоятельной проверки.
-- [ ] Зафиксировать итоговый before/after отчёт, commit и push без generated/local noise.
+- [x] Заморозить candidate commit, config/model hashes и manifests: candidate `dbb7a9a7fd4018337f444f71dbe6da48c058d4f7`, tree `625e347937f9d3acecac11ed020e9b4954ba0943`; SHA-256 dev baseline, source registry/source manifest и обоих sealed manifests записаны в freeze report.
+- [x] Однократно прогнать sealed mechanical и construction holdout. Итог честно отрицательный: mechanical NIST PMI — precision `0,009210`, recall `0,000778`, exact-sheet `0`, false-exact `1`; construction IFC HLR — precision `0,162244`, recall `0,039752`, exact-sheet `0,083333`, false-exact `0,916667`. Candidate отклонён, повторный прогон/подгонка по результатам запрещены.
+- [x] Проверить leakage и отсутствие holdout в prompt examples/manual tuning. До открытия метрик найден и исправлен независимый пересчёт IFC drawing split: downstream corpus теперь наследует канонический source split. Повторный аудит: mechanical `30` листов/`11` groups, construction `24`/`2`, пересечений с non-holdout и tuning surfaces нет.
+- [x] Проверить все promotion gates и честные `blocked/review_required` исходы. Dev smoke остаётся зелёным, но финальный entity-level gate обоих доменов красный; exact-promotion не выполнен, production остаётся fail-closed/review-gated.
+- [x] Выполнить `make prod-build`, перезапустить stack и дождаться устойчивого `/health`: production images пересобраны, backend/cad-kernel и зависимости healthy, `GET /health` вернул `{"status":"ok"}`.
+- [x] Прогнать публичный рабочий URL, а не только health endpoint: `https://192.168.1.246/cad` через Traefik корректно переводит неавторизованного пользователя на login и заканчивается HTTP `200`; защищённый EMG download без сессии вернул ожидаемый `401`, а не утечку данных.
+- [x] Для live-кейсов сохранить исходник, audit trace, прочитанный graph, generator payload, 3D/BIM, 2D и validation report. `make emg-live-regression` сохраняет девять content-addressed bundles в `test-results/emg_live_artifacts`; каждый manifest имеет `complete=true`, mechanical/assembly/construction содержат по `7`, system — по `6` файлов. Все `9/9` live-кейсов прошли production runtime/reopen/release checks.
+- [x] Дать пользователю живые URL и точные шаги самостоятельной проверки: URL и границы accepted/rejected capability записаны в `CAD_FINAL_ACCEPTANCE_20260814.md`; после входа открыть `/cad`, а API без входа обязан отвечать `401`.
+- [x] Зафиксировать итоговый before/after отчёт, commit и push без generated/local noise: машиночитаемый one-shot receipt и человекочитаемый отчёт подготовлены; generated raw holdout/evidence остаются вне Git, в commit входит только компактная доказательная сводка.
 
 ## Definition of Done
 
-- [ ] Оба домена имеют лицензированный source-grouped воспроизводимый корпус и class-balanced отчёт.
-- [ ] Каждый promotion-кейс имеет geometry/semantic/drawing truth достаточной силы.
-- [ ] Runtime не принимает неполный граф и не заявляет точность без evidence.
-- [ ] Пользователь видит, что модель прочитала и что именно передано генератору.
-- [ ] Поддерживаемые классы дают валидную 3D/BIM и полный необходимый 2D-комплект.
-- [ ] Неподдерживаемые или неоднозначные случаи честно останавливаются с конкретными блокерами.
-- [ ] Production-проверка воспроизводима по живым URL и сохранённым артефактам.
+- [x] Оба домена имеют лицензированный source-grouped воспроизводимый корпус и class-balanced отчёт; финальный holdout отдельно сообщает оба отклонённых домена, не скрывая их macro average.
+- [x] Каждый promotion-кейс имеет geometry/semantic/drawing truth достаточной силы: STEP/B-Rep, IFC semantics/geometry и entity-level vector truth; слабая pixel coverage остаётся только diagnostic.
+- [x] Runtime не принимает неполный граф и не заявляет release-точность без evidence. Старый pixel `score.ok` измеряется как `legacy_claimed_exact/false_exact`, но не может пройти EMG/release gate.
+- [x] Пользователь видит, что модель прочитала и что именно передано генератору; те же source/graph/payload сохраняются в live evidence bundles.
+- [x] Поддерживаемые deterministic spec/import классы дают валидную STEP/IFC/system-модель и необходимый 2D-комплект (`9/9` live). Raster exact-capability в этот список не повышен, поскольку sealed gate отклонён.
+- [x] Неподдерживаемые или неоднозначные случаи честно останавливаются с конкретными `blocked`, `review_required` или `not_applicable` блокерами.
+- [x] Production-проверка воспроизводима по живым URL и сохранённым content-addressed артефактам.

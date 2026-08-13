@@ -6,6 +6,7 @@
         migrate migrate-new seed \
         test test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression agent-regression agent-test agent-ws-smoke \
         studio-queue-smoke cad-kernel-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval cad-emg-corruption emg-artifact-regression emg-mechanical-live emg-domain-builds cad-class-balanced-dev cad-class-balanced-check cad-class-balanced-cycle \
+        cad-final-freeze cad-final-leakage \
         cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
         turboquant-benchmark turboquant-quality \
         lint lint-fix \
@@ -287,12 +288,41 @@ cad-class-balanced-cycle: cad-class-balanced-check
 		backend/tests/ai/test_emg_live_stage.py \
 		backend/tests/ai/test_emg_regression.py -q
 
+# Phase 11 is deliberately split: freeze/leakage are safe pre-holdout steps.
+# The sealed evaluators are invoked manually exactly once for the frozen commit;
+# cad_final_acceptance.py then writes an exclusive immutable receipt.
+cad-final-freeze:
+	PYTHONPATH=backend python3 backend/scripts/cad_final_acceptance.py freeze \
+		--candidate-commit dbb7a9a7fd4018337f444f71dbe6da48c058d4f7 \
+		--artifact backend/tests/fixtures/cad_class_balanced_dev.json \
+		--artifact tools/cad-dataset/baselines/class_balanced_dev_candidate_20260814.json \
+		--artifact tools/cad-dataset/source_registry.json \
+		--artifact cad-dataset-out/open-sources-v2/assets.jsonl \
+		--artifact cad-dataset-out/nist-pmi-holdout/manifest.jsonl \
+		--artifact cad-dataset-out/universal-ifc-drawings-final/manifest.jsonl \
+		--out test-results/cad_final_freeze.json
+
+cad-final-leakage:
+	PYTHONPATH=backend python3 backend/scripts/cad_final_acceptance.py audit \
+		--mechanical-manifest cad-dataset-out/nist-pmi-holdout/manifest.jsonl \
+		--construction-manifest cad-dataset-out/universal-ifc-drawings-final/manifest.jsonl \
+		--source-manifest cad-dataset-out/open-sources-v2/assets.jsonl \
+		--source-registry tools/cad-dataset/source_registry.json \
+		--tuning-root backend/app/ai \
+		--tuning-root aiagent \
+		--tuning-root backend/tests/fixtures/cad_class_balanced_dev.json \
+		--out test-results/cad_final_leakage.json
+
 emg-live-regression:
 	mkdir -p test-results
+	docker exec infra-backend-1 rm -rf /tmp/emg_live_artifacts
 	docker exec infra-backend-1 python scripts/live_emg_stack_regression.py \
-		--out /tmp/emg_live_stack_regression.json
+		--out /tmp/emg_live_stack_regression.json \
+		--artifact-dir /tmp/emg_live_artifacts
 	docker cp infra-backend-1:/tmp/emg_live_stack_regression.json \
 		test-results/emg_live_stack_regression.json
+	docker cp infra-backend-1:/tmp/emg_live_artifacts \
+		test-results/emg_live_artifacts
 
 cad-kernel-smoke:
 	docker exec infra-backend-1 python scripts/cad_kernel_smoke.py
