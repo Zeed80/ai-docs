@@ -171,10 +171,20 @@ export default function PropertiesPanel({
           rebuild,
         },
       );
+      const local = result.dependency_validation;
+      const affectedCount = new Set([
+        ...local.affected_build_operation_ids,
+        ...local.affected_topology_element_ids,
+        ...local.affected_artifact_ids,
+      ]).size;
       setMessage(
-        rebuild && result.rebuild_task_id
-          ? "Сохранено — пересборка поставлена в очередь"
-          : "Сохранено",
+        local.status === "blocked"
+          ? `Сохранено, но dependency-проверка заблокирована: ${local.validation_errors.join(", ")}`
+          : rebuild && result.rebuild_task_id
+            ? `Локально проверено ${affectedCount} зависимых узлов; геометрическая пересборка поставлена в очередь`
+            : local.requires_kernel_rebuild
+              ? `Локально проверено ${affectedCount} зависимых узлов; геометрия требует пересборки`
+              : `Локально проверено ${affectedCount} зависимых узлов; геометрическая пересборка не требуется`,
       );
       if (result.rebuild_task_id) onRebuildQueued(result.rebuild_task_id);
       setNote("");

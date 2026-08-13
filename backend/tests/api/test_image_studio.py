@@ -351,6 +351,16 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert revised["revision"] == 1
     assert revised["compatibility_spec_updated"] is True
     assert revised["rebuild_task_id"] == "rebuild-task"
+    dependency = revised["dependency_validation"]
+    assert dependency["status"] == "passed"
+    assert dependency["scope"] == "dependency_graph"
+    assert dependency["geometry_validated"] is False
+    assert dependency["changed_assertion_ids"] == [replacement_id := next(
+        item["id"] for item in revised["graph"]["assertions"]
+        if item.get("supersedes_assertion_id") == "assertion:hole-diameter"
+    )]
+    assert dependency["requires_kernel_rebuild"] is True
+    assert dependency["validation_errors"] == []
     assert len(rebuild_calls) == 1
     assert rebuild_calls[0][0][0] == str(generation.id)
     assert rebuild_calls[0][0][1].startswith("human-graph:")
@@ -369,6 +379,7 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert replacement["origin"] == "human"
     assert replacement["assurance"] == "human_approved"
     assert replacement["value"] == {"kind": "exact", "value": 15.7}
+    assert replacement["id"] == replacement_id
     raster = next(
         item for item in revised["graph"]["evidence"]
         if item["id"] in replacement["evidence_ids"]
@@ -419,6 +430,9 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert batch_body["corrected_assertion_ids"] == [
         "assertion:length", "assertion:outer-diameter",
     ]
+    assert batch_body["dependency_validation"]["status"] == "passed"
+    assert len(batch_body["dependency_validation"]["changed_assertion_ids"]) == 2
+    assert batch_body["dependency_validation"]["geometry_validated"] is False
     assert batch_body["compatibility_spec_updated"] is True
     assert len([
         item for item in batch_body["graph"]["assertions"]

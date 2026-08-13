@@ -1176,11 +1176,14 @@ async def correct_generation_model_assertion(
             args=[str(generation_id), correction_event_id], queue="celery"
         )
         rebuild_task_id = task.id
-    return _generation_graph_response(
-        gen, revised_row, load_graph(revised_row)
-    ) | {
+    revised_graph = load_graph(revised_row)
+    return _generation_graph_response(gen, revised_row, revised_graph) | {
         "compatibility_spec_updated": compatibility_updated,
         "rebuild_task_id": rebuild_task_id,
+        "dependency_validation": _dependency_validation_report(
+            revised_graph, [replacement.id],
+            kernel_input_changed=compatibility_updated,
+        ),
     }
 
 
@@ -1293,10 +1296,71 @@ async def correct_generation_model_assertions_batch(
         rebuild_task_id = rebuild_from_spec.apply_async(
             args=[str(generation_id), correction_event_id], queue="celery"
         ).id
-    return _generation_graph_response(gen, revised_row, load_graph(revised_row)) | {
+    revised_graph = load_graph(revised_row)
+    return _generation_graph_response(gen, revised_row, revised_graph) | {
         "compatibility_spec_updated": compatibility_updated,
         "corrected_assertion_ids": superseded_ids,
         "rebuild_task_id": rebuild_task_id,
+        "dependency_validation": _dependency_validation_report(
+            revised_graph, [item.id for item in add_assertions],
+            kernel_input_changed=compatibility_updated,
+        ),
+    }
+
+
+def _dependency_validation_report(
+    graph: Any,
+    assertion_ids: list[str],
+    *,
+    kernel_input_changed: bool = False,
+) -> dict:
+    """Validate the deterministic dependency closure of accepted changes.
+
+    This is intentionally not a geometry claim. GraphPatch merge has already
+    checked references and the full graph verifier; this report proves which
+    current nodes are downstream and whether a kernel rebuild is still needed.
+    """
+    from app.domain.engineering_model_graph import assertion_impact_report
+
+    targets = [item.id for item in graph.build_targets]
+    affected_operations: set[str] = set()
+    affected_topology: set[str] = set()
+    affected_artifacts: set[str] = set()
+    critical_assertions: set[str] = set()
+    errors: list[str] = []
+    for assertion_id in assertion_ids:
+        if not targets:
+            errors.append("missing_build_target")
+            break
+        for target_id in targets:
+            try:
+                impact = assertion_impact_report(graph, assertion_id, target_id)
+            except KeyError:
+                errors.append(f"unresolved_dependency:{assertion_id}:{target_id}")
+                continue
+            affected_operations.update(impact.affected_build_operation_ids)
+            affected_topology.update(impact.affected_topology_element_ids)
+            affected_artifacts.update(impact.affected_artifact_ids)
+            if impact.critical_for_target:
+                critical_assertions.add(assertion_id)
+    requires_kernel_rebuild = bool(
+        kernel_input_changed
+        or affected_operations
+        or affected_topology
+        or affected_artifacts
+    )
+    return {
+        "status": "blocked" if errors else "passed",
+        "scope": "dependency_graph",
+        "geometry_validated": False,
+        "changed_assertion_ids": assertion_ids,
+        "target_ids": targets,
+        "critical_assertion_ids": sorted(critical_assertions),
+        "affected_build_operation_ids": sorted(affected_operations),
+        "affected_topology_element_ids": sorted(affected_topology),
+        "affected_artifact_ids": sorted(affected_artifacts),
+        "requires_kernel_rebuild": requires_kernel_rebuild,
+        "validation_errors": errors,
     }
 
 

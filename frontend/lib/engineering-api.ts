@@ -159,6 +159,20 @@ export type EngineeringAssertionImpact = {
   dependency_paths: Record<string, string[]>;
 };
 
+export type EngineeringDependencyValidation = {
+  status: "passed" | "blocked";
+  scope: "dependency_graph";
+  geometry_validated: false;
+  changed_assertion_ids: string[];
+  target_ids: string[];
+  critical_assertion_ids: string[];
+  affected_build_operation_ids: string[];
+  affected_topology_element_ids: string[];
+  affected_artifact_ids: string[];
+  requires_kernel_rebuild: boolean;
+  validation_errors: string[];
+};
+
 export type EngineeringGraphPatch = {
   id: string;
   patch_id: string;
@@ -389,6 +403,7 @@ export const engineeringApi = {
       EngineeringModelGraphRevision & {
         compatibility_spec_updated: boolean;
         rebuild_task_id?: string | null;
+        dependency_validation: EngineeringDependencyValidation;
       }
     >(
       `/api/image-gen/${generationId}/model-graph/assertions/${encodeURIComponent(assertionId)}/corrections`,
@@ -413,6 +428,7 @@ export const engineeringApi = {
         compatibility_spec_updated: boolean;
         corrected_assertion_ids: string[];
         rebuild_task_id?: string | null;
+        dependency_validation: EngineeringDependencyValidation;
       }
     >(`/api/image-gen/${generationId}/model-graph/corrections`, {
       method: "POST",
