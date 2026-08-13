@@ -1084,6 +1084,25 @@ export interface Solid3dSummary {
   mass_kg?: number | null;
   bounds_mm?: Record<string, number>;
   feature_tree?: FeatureTreeCandidate;
+  kernel_report?: {
+    bounds_mm?: Record<string, unknown>;
+    volume_mm3?: number;
+    surface_area_mm2?: number;
+    feature_operations?: Record<string, unknown>[];
+    warnings?: string[];
+    incremental_build?: {
+      schema?: string;
+      strategy?: "independent_body_cache" | "full_body_rebuild" | string;
+      cache_enabled?: boolean;
+      body_count?: number;
+      cache_hit_body_indices?: number[];
+      cache_miss_body_indices?: number[];
+      reused_feature_indices?: number[];
+      rebuilt_feature_indices?: number[];
+      full_rebuild?: boolean;
+    };
+    [key: string]: unknown;
+  };
   sheet?: {
     part_class?: string;
     views?: string[];

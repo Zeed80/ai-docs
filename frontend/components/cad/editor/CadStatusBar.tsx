@@ -14,12 +14,20 @@ export default function CadStatusBar({
   operationCount,
   needsReviewCount,
   hasModel,
+  incrementalBuild,
 }: {
   selectedOperation: EmgOperationNode | null;
   operationCount: number;
   needsReviewCount: number;
   hasModel: boolean;
+  incrementalBuild?: {
+    cache_enabled?: boolean;
+    body_count?: number;
+    cache_hit_body_indices?: number[];
+    full_rebuild?: boolean;
+  };
 }) {
+  const reusedBodies = incrementalBuild?.cache_hit_body_indices?.length ?? 0;
   return (
     <div className="flex shrink-0 items-center gap-3 border-t border-white/10 bg-zinc-900/80 px-3 py-1 text-[11px] text-zinc-500">
       <span>
@@ -38,6 +46,25 @@ export default function CadStatusBar({
         </>
       )}
       <span className="flex-1" />
+      {hasModel && incrementalBuild && (
+        <span
+          className={reusedBodies > 0 ? "text-sky-300" : "text-zinc-500"}
+          title={
+            incrementalBuild.cache_enabled
+              ? "Кэш применяется только между независимыми телами; внутри тела порядок boolean-операций пересчитывается целиком"
+              : "Single-body дерево пересобирается целиком из-за order-sensitive boolean-операций"
+          }
+        >
+          {reusedBodies > 0
+            ? `Переиспользовано тел: ${reusedBodies}/${incrementalBuild.body_count ?? "?"}`
+            : incrementalBuild.cache_enabled
+              ? "Все тела пересобраны"
+              : "Полная пересборка тела"}
+        </span>
+      )}
+      {hasModel && incrementalBuild && (
+        <span className="text-zinc-700">·</span>
+      )}
       <span className={hasModel ? "text-emerald-400" : "text-zinc-600"}>
         {hasModel ? "Модель построена" : "Модель не построена"}
       </span>

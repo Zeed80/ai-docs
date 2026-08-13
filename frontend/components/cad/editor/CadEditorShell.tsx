@@ -766,6 +766,7 @@ export default function CadEditorShell({
             operationCount={tree?.operations.length ?? 0}
             needsReviewCount={guessedOperationIds.size}
             hasModel={hasModel}
+            incrementalBuild={solid?.kernel_report?.incremental_build}
           />
         </main>
 

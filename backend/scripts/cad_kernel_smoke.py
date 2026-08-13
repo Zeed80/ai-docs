@@ -20,8 +20,10 @@ import json
 import math
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
+from copy import deepcopy
 from pathlib import Path
 
 # An absolute script path makes Python expose ``scripts/`` rather than the
@@ -112,6 +114,47 @@ def _localized(report: dict, kind: str) -> bool:
         and item.get("status") == "built"
         and item.get("localization_ok") is True
         for item in report.get("feature_results", [])
+    )
+
+
+def _check_incremental_body_cache() -> None:
+    """Only an unchanged independent body may bypass OCC boolean rebuild."""
+    nonce = f"incremental-smoke:{os.getpid()}:{time.time_ns()}"
+    body0 = _feature("extrude", width_mm=10.0, height_mm=8.0, depth_mm=6.0)
+    body0.update({"body_index": 0, "source_entity_ids": [f"{nonce}:0"]})
+    body1 = _feature("extrude", width_mm=7.0, height_mm=5.0, depth_mm=4.0)
+    body1.update({"body_index": 1, "source_entity_ids": [f"{nonce}:1"]})
+    first_candidate = _candidate(body0, body1, label="incremental cache smoke")
+    first_status, first_payload = _compile(first_candidate)
+    if first_status != 200 or not isinstance(first_payload, bytes):
+        check("independent-body incremental rebuild", False, f"first HTTP {first_status}")
+        return
+    first = _report_from_zip(first_payload)
+
+    second_candidate = deepcopy(first_candidate)
+    second_candidate["features"][1]["params"]["width_mm"] = 9.0
+    second_status, second_payload = _compile(second_candidate)
+    if second_status != 200 or not isinstance(second_payload, bytes):
+        check("independent-body incremental rebuild", False, f"second HTTP {second_status}")
+        return
+    second = _report_from_zip(second_payload)
+    initial = first.get("incremental_build") or {}
+    incremental = second.get("incremental_build") or {}
+    ok = (
+        initial.get("cache_hit_body_indices") == []
+        and initial.get("cache_miss_body_indices") == [0, 1]
+        and incremental.get("cache_hit_body_indices") == [0]
+        and incremental.get("cache_miss_body_indices") == [1]
+        and incremental.get("reused_feature_indices") == [0]
+        and incremental.get("rebuilt_feature_indices") == [1]
+        and incremental.get("full_rebuild") is False
+        and second.get("valid") is True
+        and (second.get("reopen") or {}).get("valid") is True
+    )
+    check(
+        "independent-body incremental rebuild",
+        ok,
+        f"first={initial}, second={incremental}",
     )
 
 
@@ -272,6 +315,15 @@ def main() -> int:
             f"{base_report.get('vertex_count')}"
         ),
     )
+    single_incremental = base_report.get("incremental_build") or {}
+    check(
+        "single-body rebuild stays fail-closed",
+        single_incremental.get("strategy") == "full_body_rebuild"
+        and single_incremental.get("cache_enabled") is False
+        and single_incremental.get("full_rebuild") is True,
+        str(single_incremental),
+    )
+    _check_incremental_body_cache()
 
     # A rounded plate is a different base B-Rep, not a square box whose read R
     # disappeared before OpenCascade. Its volume is the rounded-rectangle area

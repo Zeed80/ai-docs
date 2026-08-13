@@ -2401,6 +2401,14 @@ async def _build_spec_solid(
             # fillet/chamfer form (_edge_descriptors — the SAME keys
             # _resolve_edge already accepts on the next add-feature call).
             "edges": report.get("edges") or [],
+            # Exact kernel truth: independent bodies may be cache hits, while
+            # single-body/order-sensitive trees always report full rebuild.
+            "incremental_build": report.get("incremental_build") or {
+                "schema": "cad-kernel-incremental/1.0",
+                "strategy": "full_body_rebuild",
+                "cache_enabled": False,
+                "full_rebuild": True,
+            },
         },
         "mass_kg": estimate_mass_kg(report.get("volume_mm3"), material),
         "projection": projection,

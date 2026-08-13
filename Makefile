@@ -5,7 +5,7 @@
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
         test test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression agent-regression agent-test agent-ws-smoke \
-        studio-queue-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval \
+        studio-queue-smoke cad-kernel-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval \
         cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
         turboquant-benchmark turboquant-quality \
         lint lint-fix \
@@ -77,6 +77,7 @@ help:
 	@echo "    make cad-pmi-truth      — official NIST PMI semantic truth + fail-closed self-check"
 	@echo "    make agent-test       — AiAgent scenario tests"
 	@echo "    make studio-queue-smoke — read-only concurrent studio queue API smoke"
+	@echo "    make cad-kernel-smoke — live OpenCascade build/projection/incremental-cache checks"
 	@echo "    make lint             — ruff + eslint"
 	@echo "    make lint-fix         — ruff autofix"
 	@echo ""
@@ -239,6 +240,9 @@ emg-live-regression:
 		--out /tmp/emg_live_stack_regression.json
 	docker cp infra-backend-1:/tmp/emg_live_stack_regression.json \
 		test-results/emg_live_stack_regression.json
+
+cad-kernel-smoke:
+	docker exec infra-backend-1 python scripts/cad_kernel_smoke.py
 
 agent-regression:
 	python3 scripts/agent_role_regression_check.py

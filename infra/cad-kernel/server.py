@@ -10,7 +10,10 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import zipfile
+from collections import OrderedDict
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
 
@@ -88,6 +91,17 @@ class CompileRequest(BaseModel):
 
 
 app = FastAPI(title="Engineering CAD Kernel", version="1.0.0")
+
+# Only independent bodies may be reused. Intermediate operations inside one
+# body are deliberately excluded: OCC booleans are order-sensitive and a
+# cached prefix is not a proof that a changed downstream tree is equivalent.
+# BREP text is detached from FreeCAD documents and bounded to avoid retaining
+# native Shape objects or growing process memory without limit.
+_BODY_CACHE_MAX_ENTRIES = 64
+_body_cache: OrderedDict[
+    str, tuple[str, list[str], list[dict[str, Any]]]
+] = OrderedDict()
+_body_cache_lock = threading.RLock()
 
 
 def _number(params: dict[str, Any], name: str, *, maximum: float = 100_000) -> float:
@@ -949,6 +963,8 @@ def _operation_localization(
 
 def _build_shape(
     request: CompileRequest,
+    *,
+    incremental_report: dict[str, Any] | None = None,
 ) -> tuple[Part.Shape, list[str], list[dict[str, Any]]]:
     """Compile every independent body the candidate declares.
 
@@ -981,6 +997,11 @@ def _build_shape(
             )
 
     built: list[tuple[Part.Shape, list[str], list[dict[str, Any]]]] = []
+    cache_enabled = len(body_indices) > 1
+    cache_hits: list[int] = []
+    cache_misses: list[int] = []
+    reused_feature_indices: list[int] = []
+    rebuilt_feature_indices: list[int] = []
     for body_index in body_indices:
         body_features = [
             (i, f) for i, f in enumerate(request.candidate.features)
@@ -989,7 +1010,74 @@ def _build_shape(
         base_index, base = next(
             (i, f) for i, f in body_features if f.kind in ("extrude", "revolve", "loft", "sweep")
         )
-        built.append(_build_one_body(request, body_features, base_index, base))
+        feature_indices = [index for index, _feature in body_features]
+        if not cache_enabled:
+            built.append(_build_one_body(request, body_features, base_index, base))
+            cache_misses.append(body_index)
+            rebuilt_feature_indices.extend(feature_indices)
+            continue
+        body_payload = {
+            "body_index": body_index,
+            # Global indices are part of the audit contract. If an earlier
+            # body changes cardinality, this body is conservatively rebuilt
+            # rather than replaying stale feature_result addresses.
+            "features": [
+                {"feature_index": index, "feature": feature.model_dump(mode="json")}
+                for index, feature in body_features
+            ],
+        }
+        cache_key = hashlib.sha256(json.dumps(
+            body_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        cached = None
+        with _body_cache_lock:
+            cached = _body_cache.get(cache_key)
+            if cached is not None:
+                _body_cache.move_to_end(cache_key)
+        if cached is not None:
+            try:
+                shape = Part.Shape()
+                shape.importBrepFromString(cached[0])
+                if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
+                    raise ValueError("cached BREP is invalid")
+                built.append((shape, list(cached[1]), deepcopy(cached[2])))
+                cache_hits.append(body_index)
+                reused_feature_indices.extend(feature_indices)
+                continue
+            except Exception:  # noqa: BLE001 — corrupt cache always rebuilds
+                with _body_cache_lock:
+                    _body_cache.pop(cache_key, None)
+        result = _build_one_body(request, body_features, base_index, base)
+        built.append(result)
+        cache_misses.append(body_index)
+        rebuilt_feature_indices.extend(feature_indices)
+        with _body_cache_lock:
+            _body_cache[cache_key] = (
+                result[0].exportBrepToString(),
+                list(result[1]),
+                deepcopy(result[2]),
+            )
+            _body_cache.move_to_end(cache_key)
+            while len(_body_cache) > _BODY_CACHE_MAX_ENTRIES:
+                _body_cache.popitem(last=False)
+
+    if incremental_report is not None:
+        incremental_report.update({
+            "schema": "cad-kernel-incremental/1.0",
+            "strategy": (
+                "independent_body_cache" if cache_enabled else "full_body_rebuild"
+            ),
+            "cache_enabled": cache_enabled,
+            "body_count": len(body_indices),
+            "cache_hit_body_indices": cache_hits,
+            "cache_miss_body_indices": cache_misses,
+            "reused_feature_indices": sorted(reused_feature_indices),
+            "rebuilt_feature_indices": sorted(rebuilt_feature_indices),
+            "full_rebuild": not cache_hits,
+        })
 
     if len(built) == 1:
         return built[0]
@@ -2714,7 +2802,10 @@ def _feature_results(
 @app.post("/compile")
 def compile_candidate(request: CompileRequest) -> Response:
     cosmetic_threads = _cosmetic_threads(request)
-    shape, warnings, operation_audit = _build_shape(request)
+    incremental_build: dict[str, Any] = {}
+    shape, warnings, operation_audit = _build_shape(
+        request, incremental_report=incremental_build
+    )
     document = App.newDocument("EngineeringModel")
     try:
         model = document.addObject("Part::Feature", "Model")
@@ -2777,6 +2868,7 @@ def compile_candidate(request: CompileRequest) -> Response:
                         "feature_results": _feature_results(
                             request, warnings, operation_audit
                         ),
+                        "incremental_build": incremental_build,
                         "kernel": "FreeCAD/OpenCascade",
                         "reopen": {
                             **reopen_report,
