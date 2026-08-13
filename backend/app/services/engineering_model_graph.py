@@ -20,6 +20,10 @@ from app.db.models import (
 )
 from app.domain.emg_predicates import PREDICATE
 from app.domain.engineering_model_graph import (
+    BuildAdmissionBlocker,
+    BuildAdmissionQuestion,
+    BuildAdmissionReport,
+    BuildGenerator,
     EngineeringModelGraph,
     GraphPatch,
     PatchMergeError,
@@ -554,6 +558,166 @@ def verify_graph(graph: EngineeringModelGraph) -> tuple[VerificationState, list[
         checked_levels=checked,
     )
     return state, issues
+
+
+_GENERATOR_PROFILES: dict[BuildGenerator, set[str]] = {
+    "mechanical_brep": {"mechanical"},
+    "assembly_step": {"assembly"},
+    "construction_ifc": {"construction"},
+}
+_GENERATOR_TARGET_KINDS: dict[BuildGenerator, set[str]] = {
+    "mechanical_brep": {"preview_brep", "production_step", "provisional_step", "stl"},
+    "assembly_step": {"production_step", "provisional_step"},
+    "construction_ifc": {"preview_ifc", "production_ifc", "provisional_ifc"},
+}
+_PENDING_OUTPUT_PREDICATES: dict[BuildGenerator, set[str]] = {
+    "mechanical_brep": set(),
+    "assembly_step": {
+        PREDICATE.ASSEMBLY_ARTIFACT_REOPEN_VALID,
+        PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE,
+    },
+    "construction_ifc": {
+        PREDICATE.CONSTRUCTION_IFC_REOPEN_VALID,
+        PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE,
+    },
+}
+
+
+def evaluate_build_admission(
+    graph: EngineeringModelGraph,
+    target_id: str,
+    generator: BuildGenerator,
+    *,
+    pending_output_assertion_ids: set[str] | None = None,
+) -> BuildAdmissionReport:
+    """Decide whether a specific generator may consume an immutable graph.
+
+    ``pending_output_assertion_ids`` is intentionally constrained to known
+    generator outputs. Callers cannot label an arbitrary source assertion as
+    pending and bypass the graph contract.
+    """
+    plan = compile_build_plan(graph, target_id)
+    target = next(item for item in graph.build_targets if item.id == target_id)
+    assertions = {item.id: item for item in graph.assertions if item.state == "active"}
+    requested_pending = set(pending_output_assertion_ids or set())
+    invalid_pending = sorted(
+        assertion_id
+        for assertion_id in requested_pending
+        if assertion_id not in assertions
+        or assertions[assertion_id].predicate not in _PENDING_OUTPUT_PREDICATES[generator]
+    )
+    pending = sorted(requested_pending - set(invalid_pending))
+    blockers: list[BuildAdmissionBlocker] = []
+    questions: list[BuildAdmissionQuestion] = []
+
+    if graph.profile not in _GENERATOR_PROFILES[generator]:
+        blockers.append(BuildAdmissionBlocker(
+            code="generator_profile_incompatible",
+            message=(
+                f"Генератор {generator} не принимает профиль {graph.profile}; "
+                "нужен явный доменный review и совместимый граф."
+            ),
+            details={
+                "actual_profile": graph.profile,
+                "allowed_profiles": sorted(_GENERATOR_PROFILES[generator]),
+            },
+        ))
+    if target.kind not in _GENERATOR_TARGET_KINDS[generator]:
+        blockers.append(BuildAdmissionBlocker(
+            code="generator_target_incompatible",
+            message=f"Генератор {generator} не выпускает target kind {target.kind}.",
+            details={
+                "actual_target_kind": target.kind,
+                "allowed_target_kinds": sorted(_GENERATOR_TARGET_KINDS[generator]),
+            },
+        ))
+    if invalid_pending:
+        blockers.append(BuildAdmissionBlocker(
+            code="invalid_pending_output_assertion",
+            message="В pending outputs переданы невыходные или неизвестные assertions.",
+            details={"assertion_ids": invalid_pending},
+        ))
+
+    _state, issues = verify_graph(graph)
+    pending_predicates = {assertions[item_id].predicate for item_id in pending}
+    allowed_missing_2d = bool(pending_predicates & {
+        PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE,
+        PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE,
+    })
+    for issue in issues:
+        if issue.get("severity") != "error":
+            continue
+        assertion_id = issue.get("assertion_id")
+        if assertion_id in pending:
+            continue
+        if issue.get("code") == "required_2d_artifacts_missing" and allowed_missing_2d:
+            continue
+        blockers.append(BuildAdmissionBlocker(
+            code=f"verification_{issue['code']}",
+            message=f"Проверка графа не пройдена: {issue['code']}.",
+            assertion_id=assertion_id,
+            verification_level=issue.get("level"),
+            details={
+                key: value for key, value in issue.items()
+                if key not in {"code", "severity", "level", "assertion_id"}
+            },
+        ))
+
+    for assertion_id in plan.critical_assumption_ids:
+        if assertion_id in pending:
+            continue
+        assertion = assertions[assertion_id]
+        unknown = assertion.value.kind == "unknown"
+        reason = assertion.value.reason if unknown else None
+        code = "critical_parameter_unknown" if unknown else "critical_parameter_unvalidated"
+        action = "Укажите" if unknown else "Подтвердите"
+        blockers.append(BuildAdmissionBlocker(
+            code=code,
+            message=(
+                f"Критическое assertion {assertion_id} не готово для генерации: "
+                f"{assertion.predicate}."
+            ),
+            assertion_id=assertion.id,
+            subject_id=assertion.subject_id,
+            predicate=assertion.predicate,
+            details={
+                "assurance": assertion.assurance,
+                "value_kind": assertion.value.kind,
+                **({"reason": reason} if reason else {}),
+            },
+        ))
+        questions.append(BuildAdmissionQuestion(
+            assertion_id=assertion.id,
+            subject_id=assertion.subject_id,
+            predicate=assertion.predicate,
+            prompt=f"{action} инженерно подтверждённое значение «{assertion.predicate}».",
+            reason=reason,
+        ))
+
+    blockers = sorted(
+        blockers,
+        key=lambda item: (item.code, item.assertion_id or "", item.message),
+    )
+    questions = sorted(questions, key=lambda item: item.assertion_id)
+    warning_codes = sorted({
+        str(item["code"]) for item in issues if item.get("severity") == "warning"
+    })
+    return BuildAdmissionReport(
+        graph_id=graph.graph_id,
+        revision=graph.revision,
+        graph_sha256=graph.canonical_sha256,
+        profile=graph.profile,
+        target_id=target_id,
+        target_kind=target.kind,
+        generator=generator,
+        allowed=not blockers,
+        review_required=bool(blockers or warning_codes or pending),
+        blockers=blockers,
+        questions=questions,
+        verification_issue_codes=sorted({str(item["code"]) for item in issues}),
+        pending_output_assertion_ids=pending,
+        plan=plan,
+    )
 
 
 async def persist_verification_run(

@@ -856,6 +856,51 @@ class BuildPlan(StrictModel):
     artifact_hash: str
 
 
+BuildGenerator = Literal["mechanical_brep", "assembly_step", "construction_ifc"]
+
+
+class BuildAdmissionBlocker(StrictModel):
+    """One deterministic reason why a domain generator must not be called."""
+
+    code: str
+    message: str
+    assertion_id: str | None = None
+    subject_id: str | None = None
+    predicate: str | None = None
+    verification_level: int | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class BuildAdmissionQuestion(StrictModel):
+    """Actionable question that can resolve an assertion-level blocker."""
+
+    assertion_id: str
+    subject_id: str
+    predicate: str
+    prompt: str
+    reason: str | None = None
+
+
+class BuildAdmissionReport(StrictModel):
+    """Fail-closed graph-to-generator boundary contract."""
+
+    schema_version: Literal["emg-build-admission/1.0"] = "emg-build-admission/1.0"
+    graph_id: str
+    revision: int
+    graph_sha256: str
+    profile: Profile
+    target_id: str
+    target_kind: str
+    generator: BuildGenerator
+    allowed: bool
+    review_required: bool
+    blockers: list[BuildAdmissionBlocker]
+    questions: list[BuildAdmissionQuestion]
+    verification_issue_codes: list[str]
+    pending_output_assertion_ids: list[str]
+    plan: BuildPlan
+
+
 def compile_build_plan(graph: EngineeringModelGraph, target_id: str) -> BuildPlan:
     critical = critical_assertion_ids(graph, target_id)
     assertions = {item.id: item for item in graph.assertions}

@@ -24,6 +24,8 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.domain.engineering_model_graph import (
+    BuildAdmissionReport,
+    BuildGenerator,
     EngineeringModelGraph,
     GraphPatch,
     TraceAdmission,
@@ -37,6 +39,7 @@ from app.domain.engineering_model_graph import (
 from app.services.engineering_model_graph import (
     DuplicatePatchError,
     create_initial_graph,
+    evaluate_build_admission,
     latest_graph_revision,
     load_graph,
     merge_and_persist_patch,
@@ -428,6 +431,26 @@ async def get_build_plan(
         raise HTTPException(404, "Ревизия EngineeringModelGraph не найдена")
     try:
         return compile_build_plan(load_graph(row), target_id).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(404, "Build target не найден") from exc
+
+
+@router.get(
+    "/revisions/{revision_id}/build-admission/{target_id}",
+    response_model=BuildAdmissionReport,
+)
+async def get_build_admission(
+    revision_id: uuid.UUID,
+    target_id: str,
+    generator: BuildGenerator = Query(...),
+    db: AsyncSession = Depends(get_db),
+) -> BuildAdmissionReport:
+    """Explain the exact fail-closed boundary before a domain generator call."""
+    row = await db.get(EngineeringGraphRevision, revision_id)
+    if not row:
+        raise HTTPException(404, "Ревизия EngineeringModelGraph не найдена")
+    try:
+        return evaluate_build_admission(load_graph(row), target_id, generator)
     except KeyError as exc:
         raise HTTPException(404, "Build target не найден") from exc
 

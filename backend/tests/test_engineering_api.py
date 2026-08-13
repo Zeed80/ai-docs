@@ -480,6 +480,24 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
     assembly_graph = next(
         item for item in graph_rows if item["graph_id"].startswith("assembly:")
     )
+    admission = await client.get(
+        f"/api/engineering-model-graphs/revisions/{assembly_graph['id']}"
+        "/build-admission/production",
+        params={"generator": "assembly_step"},
+    )
+    assert admission.status_code == 200
+    assert admission.json()["schema_version"] == "emg-build-admission/1.0"
+    assert admission.json()["allowed"] is True
+    incompatible = await client.get(
+        f"/api/engineering-model-graphs/revisions/{assembly_graph['id']}"
+        "/build-admission/production",
+        params={"generator": "construction_ifc"},
+    )
+    assert incompatible.status_code == 200
+    assert incompatible.json()["allowed"] is False
+    assert "generator_profile_incompatible" in {
+        item["code"] for item in incompatible.json()["blockers"]
+    }
     drawing_artifact = next(
         item for item in assembly_graph["graph"]["nodes"]
         if item["id"].startswith("artifact:assembly-drawing:")

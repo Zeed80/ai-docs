@@ -15,7 +15,7 @@ from app.domain.engineering_model_graph import (
     compile_build_plan,
     domain_adapter_for,
 )
-from app.services.engineering_model_graph import verify_graph
+from app.services.engineering_model_graph import evaluate_build_admission, verify_graph
 
 
 def _model(*, material: str | None = "Concrete C30/37") -> ConstructionModel:
@@ -232,3 +232,48 @@ def test_construction_material_gap_blocks_production():
     )
     assert missing.value.kind == "unknown"
     assert missing.id in production.critical_assumption_ids
+
+    pending = {
+        item.id for item in graph.assertions
+        if item.predicate in {
+            "construction.ifc_reopen_valid",
+            "construction.required_sheets_complete",
+        }
+    }
+    admission = evaluate_build_admission(
+        graph,
+        "production",
+        "construction_ifc",
+        pending_output_assertion_ids=pending,
+    )
+    assert admission.allowed is False
+    blocker = next(
+        item for item in admission.blockers
+        if item.assertion_id == missing.id
+    )
+    assert blocker.code == "critical_parameter_unknown"
+    question = next(
+        item for item in admission.questions
+        if item.assertion_id == missing.id
+    )
+    assert question.predicate == "element.material"
+    assert question.reason == "construction material is missing"
+
+
+def test_construction_generator_rejects_wrong_domain():
+    graph = construction_as_graph(
+        graph_id="construction:test",
+        model=_model(),
+        source_revision_id="revision-1",
+        source_approved=True,
+    )
+
+    report = evaluate_build_admission(graph, "production", "assembly_step")
+
+    assert report.allowed is False
+    assert "generator_profile_incompatible" in {
+        item.code for item in report.blockers
+    }
+    assert "generator_target_incompatible" in {
+        item.code for item in report.blockers
+    }

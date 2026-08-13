@@ -127,16 +127,16 @@
 ## 5. Runtime: чтение и строгие графовые контракты
 
 - [-] Добавить domain router с confidence, evidence и исходами `mechanical/construction/mixed/unknown`: пользователь теперь явно выбирает `auto`, тело вращения, произвольную механическую деталь, сборку, строительную конструкцию, архитектурный чертёж, ОВ/ВК, электрику, гидравлику или P&ID; выбор нормализуется backend-контрактом, сохраняется в manifest/audit и задаёт доменный профиль. Автоматический evidence/confidence router для `auto/mixed/unknown` ещё нужен.
-- [ ] Для mixed/unknown запрещать запуск неподходящего генератора без review.
-- [ ] Принимать mechanical input только как полный валидный `EngineeringDrawingGraph`.
-- [ ] Принимать construction input только как полный валидный BIM/drawing graph.
+- [x] Для mixed/unknown запрещать запуск неподходящего генератора без review: единый `emg-build-admission/1.0` принимает только явный совместимый EMG profile/target; `mixed` блокируется на границе генератора, а unknown/auto не может замаскироваться под допустимый `Profile`. Отчёт возвращает точный `generator_profile_incompatible`/`generator_target_incompatible`.
+- [-] Принимать mechanical input только как полный валидный `EngineeringDrawingGraph`: assembly STEP уже проходит общий fail-closed admission; legacy mechanical preview сохраняет собственные evidence/dimension/spec gates и ещё должен быть полностью переведён на общий admission без потери честного review-preview режима.
+- [x] Принимать construction input только как полный валидный BIM/drawing graph: перед реальным IfcOpenShell вызовом проверяются profile/target, все verification errors и critical assertions; незавершёнными разрешено пометить только whitelisted выходы самого IFC/drawing workflow.
 - [ ] Ввести стабильные entity IDs, связи видов, topology targets, provenance bbox/page и alternatives.
-- [ ] Валидировать единицы, масштаб, систему координат, обязательные виды и противоречия размеров.
+- [-] Валидировать единицы, масштаб, систему координат, обязательные виды и противоречия размеров: общий admission теперь fail-closed потребляет результаты 12-level verifier для единиц, coordinate system, required 2D и validated contradictions; отдельная доказательная проверка масштаба ещё не завершена.
 - [x] Документировать каждый этап: durable timeline хранит последовательность, длительность, модель, thinking flag, prompt/answer SHA, raw/parsed outcome, ошибки и монотонный прогресс; полные prompt/answer/thinking загружаются отдельным ownership-protected API, а точный kernel payload имеет canonical SHA.
 - [x] Вернуть для назначений модели явный `thinking=false` и проверить, что провайдер действительно его получает; CAD-вызовы также задают ограниченный `num_ctx` на запрос и детерминированную `temperature=0`.
 - [x] Сохранять валидный промежуточный consensus после каждого прохода и продолжать с ним при исчерпании общего reader deadline; не начинать проход, который по измеренной длительности уже не помещается в бюджет.
 - [x] Не повторять дорогой OCR/model-swap в каждом consensus-проходе и пропускать noisy whole-view PMI fallback, если PMI уже надёжно локализован.
-- [ ] Не запускать 3D/BIM при missing critical parameters; вернуть точный список вопросов/блокеров.
+- [x] Не запускать 3D/BIM при missing critical parameters; вернуть точный список вопросов/блокеров: `evaluate_build_admission` стоит перед assembly STEP и construction IFC kernel calls, различает unknown/unvalidated critical assertions и возвращает assertion ID, subject, predicate, assurance/value kind, reason и конкретный вопрос. Произвольное source assertion нельзя обойти через `pending_output_assertion_ids` — разрешён закрытый whitelist выходных gates каждого генератора.
 - [x] Не запускать механический spec-генератор для явно выбранных сборок, строительных, архитектурных, MEP и схемных типов; для типа «тело вращения» требовать осевой профиль `main_view.outer` и возвращать точный blocker при несовместимом чтении.
 
 ## 6. Генерация 3D/BIM и обязательного 2D

@@ -13,7 +13,7 @@ from app.domain.engineering_model_graph import (
     apply_graph_patch,
     compile_build_plan,
 )
-from app.services.engineering_model_graph import verify_graph
+from app.services.engineering_model_graph import evaluate_build_admission, verify_graph
 
 
 def _assembly_graph(*, shaft_quantity: int = 1):
@@ -149,6 +149,38 @@ def test_assembly_graph_projects_instances_bom_mates_and_release_gate():
     assert production.production_export_allowed is False
     assert "assertion:assembly:artifact-reopen" in production.critical_assumption_ids
     assert "assertion:assembly:required-2d" in production.critical_assumption_ids
+
+
+def test_assembly_generator_admission_allows_only_declared_pending_outputs():
+    graph = _assembly_graph()
+    pending = {
+        item.id for item in graph.assertions
+        if item.predicate in {
+            "assembly.artifact_reopen_valid",
+            "assembly.required_2d_complete",
+        }
+    }
+
+    report = evaluate_build_admission(
+        graph,
+        "production",
+        "assembly_step",
+        pending_output_assertion_ids=pending,
+    )
+
+    assert report.allowed is True
+    assert report.review_required is True
+    assert report.pending_output_assertion_ids == sorted(pending)
+    bypass = evaluate_build_admission(
+        graph,
+        "production",
+        "assembly_step",
+        pending_output_assertion_ids={next(iter(graph.assertions)).id},
+    )
+    assert bypass.allowed is False
+    assert "invalid_pending_output_assertion" in {
+        item.code for item in bypass.blockers
+    }
 
 
 def test_deterministic_assembly_drawing_covers_instances_mates_and_views():

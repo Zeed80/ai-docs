@@ -842,6 +842,7 @@ async def build_assembly_model_graph(
         compile_build_plan,
     )
     from app.services.engineering_model_graph import (
+        evaluate_build_admission,
         latest_graph_revision,
         load_graph,
         merge_and_persist_patch,
@@ -854,7 +855,6 @@ async def build_assembly_model_graph(
     if latest is None:
         raise HTTPException(409, "Assembly EngineeringModelGraph не создан")
     graph = load_graph(latest)
-    plan = compile_build_plan(graph, "production")
     reopen_assertion = next(
         (
             item for item in graph.assertions
@@ -870,13 +870,16 @@ async def build_assembly_model_graph(
         if item.state == "active"
         and item.predicate == PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE
     }
-    blockers = set(plan.critical_assumption_ids) - {
-        reopen_assertion.id, *non_step_blockers,
-    }
-    if blockers:
+    admission = evaluate_build_admission(
+        graph,
+        "production",
+        "assembly_step",
+        pending_output_assertion_ids={reopen_assertion.id, *non_step_blockers},
+    )
+    if not admission.allowed:
         raise HTTPException(
             409,
-            "Assembly STEP заблокирован: " + ", ".join(sorted(blockers)),
+            detail=admission.model_dump(mode="json"),
         )
     assembly = await db.get(EngineeringAssembly, assembly_id)
     components = list((await db.execute(
@@ -1429,6 +1432,7 @@ async def build_construction_model_graph(
         compile_build_plan,
     )
     from app.services.engineering_model_graph import (
+        evaluate_build_admission,
         latest_graph_revision,
         load_graph,
         merge_and_persist_patch,
@@ -1477,6 +1481,23 @@ async def build_construction_model_graph(
                 "critical_assumption_ids": plan.critical_assumption_ids,
                 "idempotent_replay": True,
             }
+
+    pending_output_ids = {
+        item.id for item in graph.assertions
+        if item.state == "active"
+        and item.predicate in {
+            PREDICATE.CONSTRUCTION_IFC_REOPEN_VALID,
+            PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE,
+        }
+    }
+    admission = evaluate_build_admission(
+        graph,
+        "production",
+        "construction_ifc",
+        pending_output_assertion_ids=pending_output_ids,
+    )
+    if not admission.allowed:
+        raise HTTPException(409, detail=admission.model_dump(mode="json"))
 
     try:
         ifc_bytes, report = await to_thread.run_sync(
