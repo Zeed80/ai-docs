@@ -1,22 +1,23 @@
 "use client";
 
-export type SketchTool = "select" | "line" | "rectangle" | "circle";
+export type SketchTool = "select" | "line" | "rectangle" | "circle" | "arc";
 
 const TOOLS: { id: SketchTool; icon: string; label: string }[] = [
   { id: "select", icon: "⛶", label: "Выбор" },
   { id: "line", icon: "╱", label: "Линия" },
   { id: "rectangle", icon: "▭", label: "Прямоугольник" },
   { id: "circle", icon: "○", label: "Окружность" },
+  { id: "arc", icon: "◜", label: "Дуга" },
 ];
 
-/** Ф4: drawing-tool picker for SketchCanvas. Дуга (freehand arc) is
- * deliberately not offered here — constraints.py's solver has no variable
- * extraction for Arc entities (only Segment/Circle), so an arc placed on
- * the canvas could never be moved by the constraint solver, only drawn
- * once and left fixed. sketch_export.py still supports Arc entities in
- * its OUTPUT (a manually-built or future-tool-drawn arc profile still
- * exports correctly) — only the DRAWING tool is deferred, not the export
- * path. */
+/** Ф4/Ф9: drawing-tool picker for SketchCanvas. Дуга (Ф9) — 3 клика:
+ * центр → начало → конец, дающие все 4 значения схемы Arc (center + два
+ * радиус-вектора, из которых считаются radius/start_angle/end_angle) без
+ * лишней арифметики — тот же "якорь → протяжка" паттерн, что уже приняли
+ * rectangle/circle, просто на клик длиннее (у дуги на одну степень свободы
+ * больше, чем у окружности). Раньше дуга была намеренно не предложена
+ * здесь — constraints.py не извлекал переменные для Arc; с Ф9 solve
+ * работает и с ней (center.x/center.y/radius, start/end sweep фиксирован). */
 export default function SketchToolbar({
   active,
   onChange,

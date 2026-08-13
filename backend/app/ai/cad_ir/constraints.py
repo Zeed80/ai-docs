@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from app.ai.cad_ir.schema import CadIR, Circle, GeometricConstraint, Point, Segment
+from app.ai.cad_ir.schema import Arc, CadIR, Circle, GeometricConstraint, Point, Segment
 
 
 @dataclass(frozen=True)
@@ -92,24 +92,26 @@ def evaluate_constraints(ir: CadIR) -> list[ConstraintResult]:
                 residual = abs(cross) if c.kind == "parallel" else abs(dot)
             elif c.kind == "concentric" and len(c.entity_ids) == 2:
                 first, second = _entities(ir, c.entity_ids)
-                if not isinstance(first, Circle) or not isinstance(second, Circle):
-                    raise ValueError("соосность применима только к окружностям")
+                # Ф9: an Arc has a centre exactly like a Circle does (radius
+                # fixed, start/end sweep untouched) — same check, widened.
+                if not isinstance(first, (Circle, Arc)) or not isinstance(second, (Circle, Arc)):
+                    raise ValueError("соосность применима только к окружностям/дугам")
                 residual = math.hypot(first.center.x - second.center.x, first.center.y - second.center.y)
             elif c.kind == "equal" and len(c.entity_ids) == 2:
                 first, second = _entities(ir, c.entity_ids)
                 if isinstance(first, Segment) and isinstance(second, Segment):
                     residual = abs(_length(first) - _length(second))
-                elif isinstance(first, Circle) and isinstance(second, Circle):
+                elif isinstance(first, (Circle, Arc)) and isinstance(second, (Circle, Arc)):
                     residual = abs(first.radius - second.radius)
                 else:
-                    raise ValueError("равенство требует двух отрезков или двух окружностей")
+                    raise ValueError("равенство требует двух отрезков или двух окружностей/дуг")
             elif c.kind == "distance" and len(c.refs) == 2 and target is not None:
                 a, b = (_point(ir, ref.entity_id, ref.point) for ref in c.refs)
                 residual = math.inf if not a or not b else abs(math.hypot(a.x - b.x, a.y - b.y) - target)
             elif c.kind in ("radius", "diameter") and len(c.entity_ids) == 1 and target is not None:
                 circle = ir.entity_by_id(c.entity_ids[0])
-                if not isinstance(circle, Circle):
-                    raise ValueError("радиус/диаметр применим только к окружности")
+                if not isinstance(circle, (Circle, Arc)):
+                    raise ValueError("радиус/диаметр применим только к окружности/дуге")
                 actual = circle.radius if c.kind == "radius" else circle.radius * 2
                 residual = abs(actual - target)
             elif c.kind == "angle" and len(c.entity_ids) == 2 and target is not None:
@@ -157,7 +159,12 @@ def _build_system(ir: CadIR, active: list[GeometricConstraint], *, only: set[str
                 point_name, axis = name.split(".")
                 variables.append((entity.id, name))
                 values.append(getattr(getattr(entity, point_name), axis))
-        elif isinstance(entity, Circle):
+        elif isinstance(entity, (Circle, Arc)):
+            # Ф9: an Arc gets the exact same 3 unknowns as a Circle (centre,
+            # radius) — start_angle/end_angle stay FIXED, not solver
+            # variables (no constraint kind here gives them meaning; keeping
+            # the sweep untouched is the same "never move what nothing asked
+            # to move" rule every other entity here already follows).
             for name in ("center.x", "center.y", "radius"):
                 variables.append((entity.id, name))
                 values.append(entity.radius if name == "radius" else getattr(entity.center, name[-1]))
@@ -177,6 +184,10 @@ def _build_system(ir: CadIR, active: list[GeometricConstraint], *, only: set[str
         return data if all(item is not None for item in data) else None
 
     def circle(vector, entity_id: str):
+        # Despite the name, this reads back whatever entity registered
+        # ("center.x", "center.y", "radius") variables above — Circle and
+        # (Ф9) Arc alike; it's a lookup by variable NAME, never by entity
+        # type, so nothing here needed to change for Arc to work.
         data = [coordinate(vector, entity_id, name) for name in ("center.x", "center.y", "radius")]
         return data if all(item is not None for item in data) else None
 

@@ -54,6 +54,61 @@ function distToSegment(
   return Math.hypot(p.x - proj.x, p.y - proj.y);
 }
 
+// Ф9: degrees, standard atan2 convention (increasing angle from the
+// positive x-axis) — CadIR/SVG here both use the SAME y-down handedness, so
+// this is directly what _arc_endpoints (sketch_export.py) expects back, no
+// flip needed either direction.
+function angleOf(
+  center: { x: number; y: number },
+  point: { x: number; y: number },
+): number {
+  return (Math.atan2(point.y - center.y, point.x - center.x) * 180) / Math.PI;
+}
+
+function pointOnArc(
+  center: { x: number; y: number },
+  radius: number,
+  angleDeg: number,
+): { x: number; y: number } {
+  const rad = (angleDeg * Math.PI) / 180;
+  return {
+    x: center.x + radius * Math.cos(rad),
+    y: center.y + radius * Math.sin(rad),
+  };
+}
+
+function distToArc(
+  p: { x: number; y: number },
+  center: { x: number; y: number },
+  radius: number,
+  startAngle: number,
+  endAngle: number,
+): number {
+  const pointAngle = angleOf(center, p);
+  const sweep = (((endAngle - startAngle) % 360) + 360) % 360;
+  const fromStart = (((pointAngle - startAngle) % 360) + 360) % 360;
+  const onArc = fromStart <= sweep;
+  if (!onArc) return Infinity; // hit-testing an arc's own endpoints is enough; no need to guess past them
+  return Math.abs(Math.hypot(p.x - center.x, p.y - center.y) - radius);
+}
+
+// Ф9: SVG elliptical-arc path from the SAME center/radius/start_angle/
+// end_angle _arc_endpoints (sketch_export.py) reads — always walks the
+// "increasing angle" (sweep-flag 1) direction, matching that module's own
+// documented convention for which way an arc's start->end naturally goes.
+function arcPath(
+  center: { x: number; y: number },
+  radius: number,
+  startAngle: number,
+  endAngle: number,
+): string {
+  const start = pointOnArc(center, radius, startAngle);
+  const end = pointOnArc(center, radius, endAngle);
+  const sweep = (((endAngle - startAngle) % 360) + 360) % 360;
+  const largeArcFlag = sweep > 180 ? 1 : 0;
+  return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
+}
+
 function nearestEntity(
   point: { x: number; y: number },
   entities: IrEntity[],
@@ -68,6 +123,14 @@ function nearestEntity(
       d = Math.abs(
         Math.hypot(point.x - e.center.x, point.y - e.center.y) - e.radius,
       );
+    } else if (
+      e.type === "arc" &&
+      e.center &&
+      e.radius &&
+      e.start_angle !== undefined &&
+      e.end_angle !== undefined
+    ) {
+      d = distToArc(point, e.center, e.radius, e.start_angle, e.end_angle);
     }
     if (d < bestD) {
       bestD = d;
@@ -101,6 +164,13 @@ export default function SketchCanvas({
     current: { x: number; y: number };
   } | null>(null);
   const [pendingFirst, setPendingFirst] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  // Ф9: arc's own 2nd click (start point, fixes the radius) — pendingFirst
+  // already holds the 1st click (centre); a 3rd state slot only for the
+  // one extra click an arc needs beyond circle/rectangle's single one.
+  const [pendingArcStart, setPendingArcStart] = useState<{
     x: number;
     y: number;
   } | null>(null);
@@ -229,6 +299,51 @@ export default function SketchCanvas({
       }
       setPendingFirst(null);
       setTool("select");
+      return;
+    }
+
+    if (tool === "arc") {
+      // 3 clicks: centre -> start (fixes radius) -> end (fixes sweep
+      // direction only, not radius — an arc has one radius, not two).
+      if (!pendingFirst) {
+        setPendingFirst(point);
+        return;
+      }
+      if (!pendingArcStart) {
+        const radius = Math.hypot(
+          point.x - pendingFirst.x,
+          point.y - pendingFirst.y,
+        );
+        if (radius > 0.1) {
+          setPendingArcStart(point);
+        }
+        return;
+      }
+      const center = pendingFirst;
+      const radius = Math.hypot(
+        pendingArcStart.x - center.x,
+        pendingArcStart.y - center.y,
+      );
+      const startAngle = angleOf(center, pendingArcStart);
+      const endAngle = angleOf(center, point);
+      if (radius > 0.1 && Math.abs(endAngle - startAngle) > 0.5) {
+        addEntity({
+          id: newId(),
+          type: "arc",
+          line_class: "contour",
+          width_class: "main",
+          confidence: 1,
+          origin: "human",
+          assurance: "human_approved",
+          center,
+          radius,
+          start_angle: startAngle,
+          end_angle: endAngle,
+        } as IrEntity);
+      }
+      setPendingFirst(null);
+      setPendingArcStart(null);
+      setTool("select");
     }
   }
 
@@ -314,6 +429,7 @@ export default function SketchCanvas({
     setSelected([]);
     setChain(null);
     setPendingFirst(null);
+    setPendingArcStart(null);
   }
 
   const gridLines = [];
@@ -360,6 +476,7 @@ export default function SketchCanvas({
           setTool(next);
           setChain(null);
           setPendingFirst(null);
+          setPendingArcStart(null);
         }}
       />
       <div className="flex min-h-0 flex-1">
@@ -421,6 +538,23 @@ export default function SketchCanvas({
                   />
                 );
               }
+              if (
+                e.type === "arc" &&
+                e.center &&
+                e.radius &&
+                e.start_angle !== undefined &&
+                e.end_angle !== undefined
+              ) {
+                return (
+                  <path
+                    key={e.id}
+                    d={arcPath(e.center, e.radius, e.start_angle, e.end_angle)}
+                    fill="none"
+                    stroke={stroke}
+                    strokeWidth={isSelected ? 1.4 : 1}
+                  />
+                );
+              }
               return null;
             })}
             {chain && (
@@ -439,6 +573,14 @@ export default function SketchCanvas({
                 fill="#38bdf8"
               />
             )}
+            {pendingArcStart && (
+              <circle
+                cx={pendingArcStart.x}
+                cy={pendingArcStart.y}
+                r={1.5}
+                fill="#38bdf8"
+              />
+            )}
           </svg>
           <div className="pointer-events-none absolute left-2 top-2 rounded bg-zinc-950/80 px-2 py-1 text-[10px] text-zinc-400">
             {tool === "line" &&
@@ -453,6 +595,12 @@ export default function SketchCanvas({
               (pendingFirst
                 ? "Кликните точку на окружности (радиус)"
                 : "Кликните центр")}
+            {tool === "arc" &&
+              (pendingArcStart
+                ? "Кликните конец дуги (направление)"
+                : pendingFirst
+                  ? "Кликните начало дуги (радиус)"
+                  : "Кликните центр дуги")}
             {tool === "select" && "Кликните элемент (до 2 для ограничения)"}
           </div>
         </div>

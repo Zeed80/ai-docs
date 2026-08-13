@@ -1,7 +1,7 @@
 """Constraint residuals are part of the deterministic CAD validation gate."""
 
-from app.ai.cad_ir import CadIR, Circle, Segment, SourceInfo
-from app.ai.cad_ir.constraints import analyze_constraints, solve_constraints
+from app.ai.cad_ir import Arc, CadIR, Circle, Segment, SourceInfo
+from app.ai.cad_ir.constraints import analyze_constraints, evaluate_constraints, solve_constraints
 from app.ai.cad_ir.schema import CadParameter, GeometricConstraint, Point, SketchPointRef
 from app.ai.cad_validate import validate_ir
 
@@ -84,3 +84,71 @@ def test_solver_rebuilds_circle_from_named_diameter_parameter():
     result = solve_constraints(ir)
     assert result.converged
     assert abs(circle.radius - 8) < 1e-6
+
+
+# Ф9 — Arc support (previously: an Arc-only constraint set silently got ZERO
+# solver variables, evaluate_constraints rejected radius/diameter/concentric/
+# equal on an Arc with a Russian ValueError, and analyze_constraints's own
+# DOF report INCORRECTLY claimed "well_constrained" for geometry that was
+# actually completely free — unknowns=0 skipped the Jacobian entirely).
+
+
+def test_arc_radius_constraint_is_accepted_and_evaluated():
+    arc = Arc(id="a", center=Point(x=0, y=0), radius=5, start_angle=0, end_angle=90)
+    ir = _ir(arc)
+    ir.constraints = [GeometricConstraint(kind="radius", entity_ids=["a"], value=5)]
+    checks = evaluate_constraints(ir)
+    assert checks[0].ok is True
+
+
+def test_arc_dof_before_fix_would_have_been_falsely_well_constrained():
+    # A bare Arc with a radius constraint has 3 real unknowns (center.x,
+    # center.y, radius) and only 1 equation -- genuinely under-constrained.
+    # Before Ф9, unknowns was always 0 for an Arc (no variables registered
+    # for it at all), which made analyze_constraints report dof=0 ->
+    # "well_constrained" for geometry that could still move freely.
+    arc = Arc(id="a", center=Point(x=0, y=0), radius=5, start_angle=0, end_angle=90)
+    ir = _ir(arc)
+    ir.constraints = [GeometricConstraint(kind="radius", entity_ids=["a"], value=8)]
+    report = analyze_constraints(ir)
+    assert report.unknowns == 3
+    assert report.equations == 1
+    assert report.dof == 2
+    assert report.state == "under_constrained"
+
+
+def test_solver_resizes_arc_radius_and_leaves_centre_and_sweep_untouched():
+    arc = Arc(id="a", center=Point(x=3, y=4), radius=2, start_angle=10, end_angle=170)
+    ir = _ir(arc)
+    ir.parameters = [CadParameter(name="diameter", value=16)]
+    ir.constraints = [GeometricConstraint(kind="diameter", entity_ids=["a"], parameter="diameter")]
+    result = solve_constraints(ir)
+    assert result.converged
+    assert abs(arc.radius - 8) < 1e-6
+    # centre and sweep are not solver variables for an Arc -- must be exactly
+    # what they started as, not just "close".
+    assert arc.center.x == 3
+    assert arc.center.y == 4
+    assert arc.start_angle == 10
+    assert arc.end_angle == 170
+
+
+def test_arc_concentric_with_circle_is_accepted():
+    arc = Arc(id="a", center=Point(x=0, y=0), radius=5, start_angle=0, end_angle=90)
+    circle = Circle(id="c", center=Point(x=1, y=1), radius=3)
+    ir = _ir(arc, circle)
+    ir.constraints = [GeometricConstraint(kind="concentric", entity_ids=["a", "c"])]
+    result = solve_constraints(ir)
+    assert result.converged
+    assert abs(arc.center.x - circle.center.x) < 1e-6
+    assert abs(arc.center.y - circle.center.y) < 1e-6
+
+
+def test_arc_equal_with_circle_is_accepted():
+    arc = Arc(id="a", center=Point(x=0, y=0), radius=5, start_angle=0, end_angle=90)
+    circle = Circle(id="c", center=Point(x=20, y=20), radius=3)
+    ir = _ir(arc, circle)
+    ir.constraints = [GeometricConstraint(kind="equal", entity_ids=["a", "c"])]
+    result = solve_constraints(ir)
+    assert result.converged
+    assert abs(arc.radius - circle.radius) < 1e-6
