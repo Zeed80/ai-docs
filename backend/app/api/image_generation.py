@@ -735,15 +735,17 @@ async def _owned_generation_graph(
     gen = await db.get(ImageGeneration, generation_id)
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
-    row = await latest_graph_revision(
-        db, f"image-generation:{generation_id}", lock=lock
-    )
+    source_graph_id = f"image-generation:{generation_id}"
+    row = await latest_graph_revision(db, f"{source_graph_id}:design", lock=lock)
+    if row is None:
+        row = await latest_graph_revision(db, source_graph_id, lock=lock)
     if row is None:
         raise HTTPException(404, "EngineeringModelGraph для оцифровки ещё не создан")
     return gen, row, load_graph(row)
 
 
 def _generation_graph_response(gen, row, graph) -> dict:
+    is_design_branch = row.graph_id.endswith(":design")
     return {
         "generation_id": str(gen.id),
         "source_generation_status": gen.status.value,
@@ -756,6 +758,10 @@ def _generation_graph_response(gen, row, graph) -> dict:
         "engineering_project_id": None,
         "engineering_revision_id": None,
         "graph_id": row.graph_id,
+        "graph_role": "design" if is_design_branch else "digitization",
+        "source_graph_id": (
+            row.graph_id.removesuffix(":design") if is_design_branch else row.graph_id
+        ),
         "revision": row.revision,
         "parent_revision": row.parent_revision,
         "canonical_sha256": row.canonical_sha256,
@@ -1487,7 +1493,7 @@ async def get_solid_preview(
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     solid = dict((gen.params or {}).get("solid_3d") or {})
-    if not solid.get("built") or solid.get("build_status") != "preview_review_required":
+    if not solid.get("built") or gen.accepted:
         raise HTTPException(409, "Проверочный 3D-черновик для этой генерации отсутствует.")
     path = (solid.get("paths") or {}).get(kind)
     if not path:
@@ -1501,7 +1507,9 @@ async def get_solid_preview(
         media_type=_ARTIFACT_MEDIA_TYPES[kind],
         headers={
             "Cache-Control": "no-store",
-            "X-CAD-Artifact-Status": "preview-review-required",
+            "X-CAD-Artifact-Status": str(
+                solid.get("build_status") or "built-unverified"
+            ),
         },
     )
 
@@ -2261,8 +2269,8 @@ async def run_full_check(
 class AddedFeatureRequest(BaseModel):
     kind: Literal["boss", "pocket", "fillet", "chamfer", "shell", "thread"]
     profile: Literal["circle", "rectangle", "sketch"] | None = None
-    center_x_mm: float | None = Field(default=None, ge=0, le=100_000)
-    center_y_mm: float | None = Field(default=None, ge=0, le=100_000)
+    center_x_mm: float | None = Field(default=None, ge=-100_000, le=100_000)
+    center_y_mm: float | None = Field(default=None, ge=-100_000, le=100_000)
     depth_mm: float | None = Field(default=None, gt=0, le=100_000)
     diameter_mm: float | None = Field(default=None, gt=0, le=100_000)
     width_mm: float | None = Field(default=None, gt=0, le=100_000)
@@ -2370,6 +2378,9 @@ async def add_generation_model_graph_feature(
             body.feature.model_dump(exclude={"kind"}, exclude_none=True),
             body.note,
             body.idempotency_key,
+            user.sub,
+            row.revision,
+            row.canonical_sha256,
         ],
         queue="celery",
     )
@@ -2416,6 +2427,9 @@ async def remove_generation_model_graph_feature(
             operation_id,
             body.note,
             body.idempotency_key,
+            user.sub,
+            row.revision,
+            row.canonical_sha256,
         ],
         queue="celery",
     )
@@ -2484,6 +2498,9 @@ async def pattern_generation_model_graph_feature(
             body.pattern.model_dump(),
             body.note,
             body.idempotency_key,
+            user.sub,
+            row.revision,
+            row.canonical_sha256,
         ],
         queue="celery",
     )

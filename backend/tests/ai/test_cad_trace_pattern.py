@@ -11,7 +11,71 @@ import math
 
 import pytest
 
-from app.tasks.cad_trace import _pattern_offsets
+from app.tasks.cad_trace import (
+    _editor_graph_base,
+    _pattern_offsets,
+    _persist_editor_candidate,
+)
+
+
+@pytest.mark.asyncio
+async def test_editor_graph_base_prefers_design_branch(monkeypatch):
+    source = object()
+    design = object()
+
+    async def latest(_db, graph_id, *, lock=False):
+        assert lock is True
+        return design if graph_id.endswith(":design") else source
+
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.latest_graph_revision", latest
+    )
+    graph_id, row, needs_fork = await _editor_graph_base(
+        object(), "generation-1", lock=True
+    )
+    assert graph_id == "image-generation:generation-1:design"
+    assert row is design
+    assert needs_fork is False
+
+
+@pytest.mark.asyncio
+async def test_first_editor_mutation_forks_then_applies_human_patch(monkeypatch):
+    class Row:
+        def __init__(self, graph_id, revision, sha):
+            self.graph_id = graph_id
+            self.revision = revision
+            self.canonical_sha256 = sha
+
+    source = Row("image-generation:generation-1", 4, "source-sha")
+    fork = Row("image-generation:generation-1:design", 0, "fork-sha")
+    revised = Row("image-generation:generation-1:design", 1, "revised-sha")
+    calls = []
+
+    async def persist(_db, **kwargs):
+        calls.append(kwargs)
+        return fork if len(calls) == 1 else revised
+
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.persist_feature_tree_revision",
+        persist,
+    )
+    result = await _persist_editor_candidate(
+        object(), generation_id="generation-1", spec={"part": "plate"},
+        base_candidate=object(), updated_candidate=object(), base_row=source,
+        pass_id="human-add-feature:boss", idempotency_key="editor-change-1",
+        source_sha256="sheet-sha", source_uri="minio://sheet",
+        decision_note="Добавить опору", actor_sub="engineer-1",
+        fork_design_branch=True,
+    )
+    assert result is revised
+    assert [call["producer"] for call in calls] == ["system", "human"]
+    assert all(
+        call["graph_id"] == "image-generation:generation-1:design"
+        for call in calls
+    )
+    assert calls[1]["expected_base_revision"] == 0
+    assert calls[1]["expected_base_sha256"] == "fork-sha"
+    assert calls[1]["decision_note"] == "Добавить опору"
 
 
 def test_linear_pattern_first_instance_is_exactly_the_original():

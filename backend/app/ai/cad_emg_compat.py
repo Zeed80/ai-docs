@@ -823,6 +823,8 @@ def feature_tree_revision_patch(
     producer: str,
     pass_id: str,
     idempotency_key: str,
+    decision_note: str | None = None,
+    actor_sub: str | None = None,
 ) -> GraphPatch:
     """Represent a corrected legacy spec as an atomic EMG revision.
 
@@ -1043,6 +1045,25 @@ def feature_tree_revision_patch(
         assertion_ids.append(assertion_id)
         replaced.add(old.id)
     superseded = sorted(replaced)
+    decision_evidence: list[Evidence] = []
+    if producer == "human" and decision_note:
+        decision_id = f"evidence:human:{prefix}:{digest[:16]}"
+        decision_evidence.append(Evidence(
+            id=decision_id,
+            kind="human_decision",
+            payload={
+                "actor_sub": actor_sub,
+                "note": decision_note,
+                "pass_id": pass_id,
+            },
+        ))
+        add_assertions = [
+            assertion.model_copy(update={
+                "evidence_ids": [*assertion.evidence_ids, decision_id],
+            })
+            for assertion in add_assertions
+        ]
+
     return GraphPatch(
         patch_id=f"patch:{prefix}:{digest[:16]}",
         base_revision=graph.revision,
@@ -1053,6 +1074,7 @@ def feature_tree_revision_patch(
         add_nodes=add_nodes,
         add_edges=add_edges,
         add_assertions=add_assertions,
+        add_evidence=decision_evidence,
         add_hypothesis_options=[HypothesisOption(
             id=hypothesis_id,
             assertion_ids=assertion_ids,

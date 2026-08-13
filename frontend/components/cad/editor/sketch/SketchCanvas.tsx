@@ -419,7 +419,20 @@ export default function SketchCanvas({
   }
 
   function undoLast() {
-    setEntities((current) => current.slice(0, -1));
+    setEntities((current) => {
+      const removed = current.at(-1);
+      if (removed) {
+        setConstraints((existing) =>
+          existing.filter(
+            (constraint) =>
+              !constraint.entity_ids.includes(removed.id) &&
+              !constraint.refs.some((ref) => ref.entity_id === removed.id),
+          ),
+        );
+        setSelected((existing) => existing.filter((id) => id !== removed.id));
+      }
+      return current.slice(0, -1);
+    });
     setChain(null);
   }
 

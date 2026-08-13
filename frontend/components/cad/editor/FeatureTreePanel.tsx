@@ -43,22 +43,43 @@ function DeleteButton({
 }: {
   op: EmgOperationNode;
   busy: boolean;
-  onConfirm: () => void;
+  onConfirm: (reason: string) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [reason, setReason] = useState("");
   if (confirming) {
     return (
       <span
         className="flex shrink-0 items-center gap-1 text-[10px]"
         onClick={(event) => event.stopPropagation()}
       >
-        <span className="text-zinc-500">Удалить?</span>
+        <input
+          type="text"
+          value={reason}
+          autoFocus
+          aria-label="Причина удаления операции"
+          placeholder="Причина удаления"
+          onChange={(event) => setReason(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setReason("");
+              setConfirming(false);
+            }
+            if (event.key === "Enter" && reason.trim()) {
+              setConfirming(false);
+              onConfirm(reason.trim());
+              setReason("");
+            }
+          }}
+          className="w-32 rounded border border-white/10 bg-zinc-950 px-1.5 py-0.5 text-zinc-200 outline-none focus:border-sky-500/60"
+        />
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || !reason.trim()}
           onClick={() => {
             setConfirming(false);
-            onConfirm();
+            onConfirm(reason.trim());
+            setReason("");
           }}
           className="rounded bg-red-500/20 px-1.5 py-0.5 text-red-300 hover:bg-red-500/30 disabled:opacity-40"
         >
@@ -66,7 +87,10 @@ function DeleteButton({
         </button>
         <button
           type="button"
-          onClick={() => setConfirming(false)}
+          onClick={() => {
+            setReason("");
+            setConfirming(false);
+          }}
           className="rounded px-1.5 py-0.5 text-zinc-400 hover:bg-white/10"
         >
           Отмена
@@ -110,7 +134,7 @@ export default function FeatureTreePanel({
   guessedOperationIds: Set<string>;
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onDelete?: (id: string) => void;
+  onDelete?: (id: string, reason: string) => void;
   deleteBusyId?: string | null;
 }) {
   if (operations.length === 0) {
@@ -164,7 +188,7 @@ export default function FeatureTreePanel({
                 <DeleteButton
                   op={op}
                   busy={deleteBusyId === op.id}
-                  onConfirm={() => onDelete(op.id)}
+                  onConfirm={(reason) => onDelete(op.id, reason)}
                 />
               )}
             </div>

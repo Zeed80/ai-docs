@@ -236,6 +236,146 @@ _TITLE_BLOCK_HEIGHT_RATIO = 0.15
 _TITLE_BLOCK_MIN_INK_FRACTION = 0.01
 
 
+async def _editor_graph_base(
+    db: Any, generation_id: str, *, lock: bool = False
+) -> tuple[str, Any, bool]:
+    """Use the design branch, falling back to the immutable read graph once."""
+    from app.services.engineering_model_graph import latest_graph_revision
+
+    source_graph_id = f"image-generation:{generation_id}"
+    design_graph_id = f"{source_graph_id}:design"
+    design = await latest_graph_revision(db, design_graph_id, lock=lock)
+    if design is not None:
+        return design_graph_id, design, False
+    source = await latest_graph_revision(db, source_graph_id, lock=lock)
+    return design_graph_id, source, True
+
+
+async def _persist_editor_candidate(
+    db: Any,
+    *,
+    generation_id: str,
+    spec: dict[str, Any],
+    base_candidate: Any,
+    updated_candidate: Any,
+    base_row: Any,
+    pass_id: str,
+    idempotency_key: str,
+    source_sha256: str | None,
+    source_uri: str | None,
+    decision_note: str,
+    actor_sub: str | None,
+    fork_design_branch: bool,
+) -> Any:
+    """Fork once, then store the human edit as an audited atomic patch."""
+    from app.services.engineering_model_graph import persist_feature_tree_revision
+
+    design_graph_id = f"image-generation:{generation_id}:design"
+    head = base_row
+    if fork_design_branch:
+        head = await persist_feature_tree_revision(
+            db,
+            graph_id=design_graph_id,
+            spec=spec,
+            candidate=base_candidate,
+            producer="system",
+            pass_id=f"design-fork:{base_row.graph_id}:r{base_row.revision}",
+            idempotency_key=f"design-fork:{generation_id}:{base_row.canonical_sha256}",
+            source_sha256=source_sha256,
+            source_uri=source_uri,
+        )
+    return await persist_feature_tree_revision(
+        db,
+        graph_id=design_graph_id,
+        spec=spec,
+        candidate=updated_candidate,
+        producer="human",
+        pass_id=pass_id,
+        idempotency_key=idempotency_key,
+        source_sha256=source_sha256,
+        source_uri=source_uri,
+        expected_base_revision=head.revision,
+        expected_base_sha256=head.canonical_sha256,
+        decision_note=decision_note,
+        actor_sub=actor_sub,
+    )
+
+
+async def _store_editor_build(
+    *,
+    factory: Any,
+    gen_uuid: Any,
+    graph_row: Any,
+    solid_result: dict[str, Any],
+    spec: dict[str, Any],
+    owner_sub: str | None,
+) -> None:
+    """Publish one graph build as a new, approval-invalidating CAD revision.
+
+    The editor used to replace only ``params.solid_3d``.  CadIR, acceptance
+    and the top-level artifact pointers consequently remained on the previous
+    revision.  Persisting the sheet through ``cad_ir_store`` makes the graph,
+    2D projection and downloadable 3D artifacts advance together.
+    """
+    from app.ai.cad_ir.schema import CadIR
+    from app.ai.cad_validate import validate_ir
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.services import cad_ir_store
+
+    sheet_ir = solid_result.pop("_sheet_ir", None)
+    solid_result.pop("_dimensions", None)
+    if not isinstance(sheet_ir, CadIR):
+        raise ValueError("CAD build did not return a revision-bound drawing")
+    sheet_ir.source.generation_id = str(gen_uuid)
+    _overlay_spec_annotations(sheet_ir, spec)
+    validate_ir(sheet_ir)
+    sheet_ir.digitization_status = "review_required"
+
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            raise LookupError("not found")
+        cad_revision = await cad_ir_store.save_revision(
+            db,
+            gen,
+            sheet_ir,
+            origin="editor",
+            created_by=owner_sub,
+            keep_raster=None,
+        )
+        cad_revision.engineering_graph_revision_id = graph_row.id
+        paths = dict(solid_result.get("paths") or {})
+        params = dict(gen.params or {})
+        for key in (
+            "full_check_revision",
+            "full_check_status",
+            "full_check_source_comparison",
+        ):
+            params.pop(key, None)
+        for kind in ("step", "iges", "stl", "topology"):
+            path = paths.get(kind)
+            if path:
+                params[f"{kind}_path"] = path
+        params.update({
+            "cad_artifact_revision": cad_revision.revision,
+            "cad_edit_context": {
+                "mode": "design",
+                "source_graph_id": f"image-generation:{gen_uuid}",
+                "design_graph_id": graph_row.graph_id,
+            },
+            "solid_3d": solid_result,
+            "engineering_model_graph": {
+                "revision_id": str(graph_row.id),
+                "graph_id": graph_row.graph_id,
+                "revision": graph_row.revision,
+                "canonical_sha256": graph_row.canonical_sha256,
+            },
+        })
+        gen.params = params
+        gen.status = ImageGenStatus.done
+        await db.commit()
+
+
 @celery_app.task(
     bind=True,
     name="cad_trace.rebuild_from_spec",
@@ -504,6 +644,9 @@ def add_feature_to_graph(
     feature_params: dict,
     note: str,
     idempotency_key: str,
+    actor_sub: str | None = None,
+    expected_base_revision: int | None = None,
+    expected_base_sha256: str | None = None,
 ) -> dict:
     """Ф2 нового CAD-редактора (/root/.claude/plans/starry-mapping-hippo.md):
     add one human-authored BuildOperation on top of the graph's CURRENT
@@ -523,7 +666,8 @@ def add_feature_to_graph(
     """
     return run_async(
         _add_feature_to_graph(
-            generation_id, feature_kind, feature_params, note, idempotency_key
+            generation_id, feature_kind, feature_params, note, idempotency_key,
+            actor_sub, expected_base_revision, expected_base_sha256,
         )
     )
 
@@ -534,6 +678,9 @@ async def _add_feature_to_graph(
     feature_params: dict,
     note: str,
     idempotency_key: str,
+    actor_sub: str | None = None,
+    expected_base_revision: int | None = None,
+    expected_base_sha256: str | None = None,
 ) -> dict:
     import uuid as _uuid
 
@@ -541,24 +688,29 @@ async def _add_feature_to_graph(
     from app.ai.cad_ir.feature_tree import Feature3D, ParamProvenance
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.db.session import _get_session_factory
-    from app.services.engineering_model_graph import (
-        latest_graph_revision,
-        load_graph,
-        persist_feature_tree_revision,
-    )
+    from app.services.engineering_model_graph import load_graph, persist_feature_tree_revision
 
     factory = _get_session_factory()
     gen_uuid = _uuid.UUID(generation_id)
-    graph_id = f"image-generation:{generation_id}"
     async with factory() as db:
         gen = await db.get(ImageGeneration, gen_uuid)
         if gen is None:
             return {"error": "not found"}
         params = dict(gen.params or {})
         owner_sub = gen.owner_sub
-        latest_row = await latest_graph_revision(db, graph_id, lock=True)
+        graph_id, latest_row, fork_design_branch = await _editor_graph_base(
+            db, generation_id, lock=True
+        )
     if latest_row is None:
         return {"error": "EngineeringModelGraph ещё не создан для этой генерации"}
+    if (
+        (expected_base_revision is not None and latest_row.revision != expected_base_revision)
+        or (
+            expected_base_sha256 is not None
+            and latest_row.canonical_sha256 != expected_base_sha256
+        )
+    ):
+        return {"error": "stale_graph_revision"}
     graph = load_graph(latest_row)
     spec = params.get("spec_corrected") or params.get("spec")
     if not spec:
@@ -598,16 +750,20 @@ async def _add_feature_to_graph(
     updated_candidate.label = f"{updated_candidate.label}; добавлена операция: {feature_kind}"
 
     async with factory() as db:
-        engineering_graph_row = await persist_feature_tree_revision(
+        engineering_graph_row = await _persist_editor_candidate(
             db,
-            graph_id=graph_id,
+            generation_id=generation_id,
             spec=spec,
-            candidate=updated_candidate,
-            producer="human",
+            base_candidate=base_candidate,
+            updated_candidate=updated_candidate,
+            base_row=latest_row,
             pass_id=f"human-add-feature:{feature_kind}",
             idempotency_key=idempotency_key,
             source_sha256=params.get("normalized_source_sha256"),
             source_uri=params.get("normalized_source_path"),
+            decision_note=note,
+            actor_sub=actor_sub,
+            fork_design_branch=fork_design_branch,
         )
         engineering_graph = load_graph(engineering_graph_row)
         await db.commit()
@@ -690,25 +846,14 @@ async def _add_feature_to_graph(
     result_graph = solid_result.pop("_engineering_model_graph", None)
     if result_graph is None or result_graph.canonical_sha256 != engineering_graph.canonical_sha256:
         return {"error": "CAD build returned a different EMG revision", "built": False}
-    solid_result.pop("_sheet_ir", None)
-    solid_result.pop("_dimensions", None)
-
-    async with factory() as db:
-        gen = await db.get(ImageGeneration, gen_uuid)
-        if gen is None:
-            return {"error": "not found"}
-        gen.params = {
-            **(gen.params or {}),
-            "solid_3d": solid_result,
-            "engineering_model_graph": {
-                "revision_id": str(engineering_graph_row.id),
-                "graph_id": engineering_graph_row.graph_id,
-                "revision": engineering_graph_row.revision,
-                "canonical_sha256": engineering_graph_row.canonical_sha256,
-            },
-        }
-        gen.status = ImageGenStatus.done
-        await db.commit()
+    await _store_editor_build(
+        factory=factory,
+        gen_uuid=gen_uuid,
+        graph_row=engineering_graph_row,
+        solid_result=solid_result,
+        spec=spec,
+        owner_sub=owner_sub,
+    )
     return {
         "ok": True,
         "generation_id": generation_id,
@@ -745,6 +890,9 @@ def remove_feature_from_graph(
     operation_id: str,
     note: str,
     idempotency_key: str,
+    actor_sub: str | None = None,
+    expected_base_revision: int | None = None,
+    expected_base_sha256: str | None = None,
 ) -> dict:
     """Фаза 6 нового CAD-редактора: remove ONE BuildOperation from the
     graph's current state and recompile. Mirrors add_feature_to_graph in
@@ -758,7 +906,10 @@ def remove_feature_from_graph(
     every manual cleanup script this session performed by hand).
     """
     return run_async(
-        _remove_feature_from_graph(generation_id, operation_id, note, idempotency_key)
+        _remove_feature_from_graph(
+            generation_id, operation_id, note, idempotency_key,
+            actor_sub, expected_base_revision, expected_base_sha256,
+        )
     )
 
 
@@ -767,17 +918,16 @@ async def _remove_feature_from_graph(
     operation_id: str,
     note: str,
     idempotency_key: str,
+    actor_sub: str | None = None,
+    expected_base_revision: int | None = None,
+    expected_base_sha256: str | None = None,
 ) -> dict:
     import uuid as _uuid
 
     from app.ai.cad_emg_compat import feature_tree_from_graph
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.db.session import _get_session_factory
-    from app.services.engineering_model_graph import (
-        latest_graph_revision,
-        load_graph,
-        persist_feature_tree_revision,
-    )
+    from app.services.engineering_model_graph import load_graph, persist_feature_tree_revision
 
     try:
         prefix, index = _parse_operation_id(operation_id)
@@ -786,16 +936,25 @@ async def _remove_feature_from_graph(
 
     factory = _get_session_factory()
     gen_uuid = _uuid.UUID(generation_id)
-    graph_id = f"image-generation:{generation_id}"
     async with factory() as db:
         gen = await db.get(ImageGeneration, gen_uuid)
         if gen is None:
             return {"error": "not found"}
         params = dict(gen.params or {})
         owner_sub = gen.owner_sub
-        latest_row = await latest_graph_revision(db, graph_id, lock=True)
+        graph_id, latest_row, fork_design_branch = await _editor_graph_base(
+            db, generation_id, lock=True
+        )
     if latest_row is None:
         return {"error": "EngineeringModelGraph ещё не создан для этой генерации"}
+    if (
+        (expected_base_revision is not None and latest_row.revision != expected_base_revision)
+        or (
+            expected_base_sha256 is not None
+            and latest_row.canonical_sha256 != expected_base_sha256
+        )
+    ):
+        return {"error": "stale_graph_revision"}
     graph = load_graph(latest_row)
     # feature_tree_revision_patch stamps EVERY operation node with a fresh
     # prefix "r{graph.revision+1}" on every single persist (cad_emg_compat.py)
@@ -828,16 +987,20 @@ async def _remove_feature_from_graph(
     updated_candidate.label = f"{updated_candidate.label}; удалена операция: {removed.kind}"
 
     async with factory() as db:
-        engineering_graph_row = await persist_feature_tree_revision(
+        engineering_graph_row = await _persist_editor_candidate(
             db,
-            graph_id=graph_id,
+            generation_id=generation_id,
             spec=spec,
-            candidate=updated_candidate,
-            producer="human",
+            base_candidate=base_candidate,
+            updated_candidate=updated_candidate,
+            base_row=latest_row,
             pass_id=f"human-remove-feature:{removed.kind}",
             idempotency_key=idempotency_key,
             source_sha256=params.get("normalized_source_sha256"),
             source_uri=params.get("normalized_source_path"),
+            decision_note=note,
+            actor_sub=actor_sub,
+            fork_design_branch=fork_design_branch,
         )
         engineering_graph = load_graph(engineering_graph_row)
         await db.commit()
@@ -907,25 +1070,14 @@ async def _remove_feature_from_graph(
     result_graph = solid_result.pop("_engineering_model_graph", None)
     if result_graph is None or result_graph.canonical_sha256 != engineering_graph.canonical_sha256:
         return {"error": "CAD build returned a different EMG revision", "built": False}
-    solid_result.pop("_sheet_ir", None)
-    solid_result.pop("_dimensions", None)
-
-    async with factory() as db:
-        gen = await db.get(ImageGeneration, gen_uuid)
-        if gen is None:
-            return {"error": "not found"}
-        gen.params = {
-            **(gen.params or {}),
-            "solid_3d": solid_result,
-            "engineering_model_graph": {
-                "revision_id": str(engineering_graph_row.id),
-                "graph_id": engineering_graph_row.graph_id,
-                "revision": engineering_graph_row.revision,
-                "canonical_sha256": engineering_graph_row.canonical_sha256,
-            },
-        }
-        gen.status = ImageGenStatus.done
-        await db.commit()
+    await _store_editor_build(
+        factory=factory,
+        gen_uuid=gen_uuid,
+        graph_row=engineering_graph_row,
+        solid_result=solid_result,
+        spec=spec,
+        owner_sub=owner_sub,
+    )
     return {
         "ok": True,
         "generation_id": generation_id,
@@ -978,6 +1130,9 @@ def pattern_feature_in_graph(
     pattern: dict,
     note: str,
     idempotency_key: str,
+    actor_sub: str | None = None,
+    expected_base_revision: int | None = None,
+    expected_base_sha256: str | None = None,
 ) -> dict:
     """Фаза 8 нового CAD-редактора: replace ONE existing BuildOperation with
     N patterned copies (linear or circular), offsetting center_x_mm/
@@ -988,7 +1143,8 @@ def pattern_feature_in_graph(
     pattern from Ф6/Ф2, reused unchanged."""
     return run_async(
         _pattern_feature_in_graph(
-            generation_id, operation_id, pattern, note, idempotency_key
+            generation_id, operation_id, pattern, note, idempotency_key,
+            actor_sub, expected_base_revision, expected_base_sha256,
         )
     )
 
@@ -999,6 +1155,9 @@ async def _pattern_feature_in_graph(
     pattern: dict,
     note: str,
     idempotency_key: str,
+    actor_sub: str | None = None,
+    expected_base_revision: int | None = None,
+    expected_base_sha256: str | None = None,
 ) -> dict:
     import uuid as _uuid
 
@@ -1006,11 +1165,7 @@ async def _pattern_feature_in_graph(
     from app.ai.cad_ir.feature_tree import Feature3D, ParamProvenance
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.db.session import _get_session_factory
-    from app.services.engineering_model_graph import (
-        latest_graph_revision,
-        load_graph,
-        persist_feature_tree_revision,
-    )
+    from app.services.engineering_model_graph import load_graph, persist_feature_tree_revision
 
     try:
         prefix, index = _parse_operation_id(operation_id)
@@ -1019,16 +1174,25 @@ async def _pattern_feature_in_graph(
 
     factory = _get_session_factory()
     gen_uuid = _uuid.UUID(generation_id)
-    graph_id = f"image-generation:{generation_id}"
     async with factory() as db:
         gen = await db.get(ImageGeneration, gen_uuid)
         if gen is None:
             return {"error": "not found"}
         params = dict(gen.params or {})
         owner_sub = gen.owner_sub
-        latest_row = await latest_graph_revision(db, graph_id, lock=True)
+        graph_id, latest_row, fork_design_branch = await _editor_graph_base(
+            db, generation_id, lock=True
+        )
     if latest_row is None:
         return {"error": "EngineeringModelGraph ещё не создан для этой генерации"}
+    if (
+        (expected_base_revision is not None and latest_row.revision != expected_base_revision)
+        or (
+            expected_base_sha256 is not None
+            and latest_row.canonical_sha256 != expected_base_sha256
+        )
+    ):
+        return {"error": "stale_graph_revision"}
     graph = load_graph(latest_row)
     expected_prefix = f"r{graph.revision}"
     if prefix != expected_prefix:
@@ -1068,12 +1232,25 @@ async def _pattern_feature_in_graph(
     patterned = [
         Feature3D(
             kind=target.kind,
-            source_entity_ids=[],
+            source_entity_ids=list(target.source_entity_ids),
             params={**target.params, "center_x_mm": x, "center_y_mm": y},
             param_provenance={
-                key: ParamProvenance(
-                    origin="human",
-                    detail=f"массив (Фаза 6/8 CAD-редактора), экземпляр {i + 1}/{len(offsets)}",
+                key: (
+                    ParamProvenance(
+                        origin="human",
+                        detail=(
+                            f"массив CAD-редактора, экземпляр "
+                            f"{i + 1}/{len(offsets)}"
+                        ),
+                    )
+                    if key in {"center_x_mm", "center_y_mm"}
+                    else target.param_provenance.get(
+                        key,
+                        ParamProvenance(
+                            origin="propagated",
+                            detail="унаследовано от исходной операции массива",
+                        ),
+                    )
                 )
                 for key in target.params
             },
@@ -1088,16 +1265,20 @@ async def _pattern_feature_in_graph(
     )
 
     async with factory() as db:
-        engineering_graph_row = await persist_feature_tree_revision(
+        engineering_graph_row = await _persist_editor_candidate(
             db,
-            graph_id=graph_id,
+            generation_id=generation_id,
             spec=spec,
-            candidate=updated_candidate,
-            producer="human",
+            base_candidate=base_candidate,
+            updated_candidate=updated_candidate,
+            base_row=latest_row,
             pass_id=f"human-pattern-feature:{target.kind}",
             idempotency_key=idempotency_key,
             source_sha256=params.get("normalized_source_sha256"),
             source_uri=params.get("normalized_source_path"),
+            decision_note=note,
+            actor_sub=actor_sub,
+            fork_design_branch=fork_design_branch,
         )
         engineering_graph = load_graph(engineering_graph_row)
         await db.commit()
@@ -1157,25 +1338,14 @@ async def _pattern_feature_in_graph(
     result_graph = solid_result.pop("_engineering_model_graph", None)
     if result_graph is None or result_graph.canonical_sha256 != engineering_graph.canonical_sha256:
         return {"error": "CAD build returned a different EMG revision", "built": False}
-    solid_result.pop("_sheet_ir", None)
-    solid_result.pop("_dimensions", None)
-
-    async with factory() as db:
-        gen = await db.get(ImageGeneration, gen_uuid)
-        if gen is None:
-            return {"error": "not found"}
-        gen.params = {
-            **(gen.params or {}),
-            "solid_3d": solid_result,
-            "engineering_model_graph": {
-                "revision_id": str(engineering_graph_row.id),
-                "graph_id": engineering_graph_row.graph_id,
-                "revision": engineering_graph_row.revision,
-                "canonical_sha256": engineering_graph_row.canonical_sha256,
-            },
-        }
-        gen.status = ImageGenStatus.done
-        await db.commit()
+    await _store_editor_build(
+        factory=factory,
+        gen_uuid=gen_uuid,
+        graph_row=engineering_graph_row,
+        solid_result=solid_result,
+        spec=spec,
+        owner_sub=owner_sub,
+    )
     return {
         "ok": True,
         "generation_id": generation_id,
@@ -1983,7 +2153,14 @@ async def _build_spec_solid(
         "surfaces": surface_specs_from_solid(semantics, properties),
         "blank": blank_from_solid(properties),
     }
-    prefix = f"image-gen/{owner_sub or 'shared'}/{generation_id}_solid"
+    graph_token = (
+        f"r{engineering_graph.revision}-{engineering_graph.canonical_sha256[:16]}"
+        if engineering_graph is not None
+        else "unsealed"
+    )
+    prefix = (
+        f"image-gen/{owner_sub or 'shared'}/{generation_id}_solid_{graph_token}"
+    )
     paths: dict[str, str] = {}
     topology_bytes = None
     if artifacts.topology:

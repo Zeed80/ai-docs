@@ -71,6 +71,8 @@ export type EngineeringModelGraphRevision = {
   engineering_project_id?: string | null;
   engineering_revision_id?: string | null;
   graph_id: string;
+  graph_role?: "digitization" | "design";
+  source_graph_id?: string;
   revision: number;
   parent_revision: number | null;
   canonical_sha256: string;

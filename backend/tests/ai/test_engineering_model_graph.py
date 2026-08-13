@@ -704,6 +704,35 @@ def test_human_spec_rebuild_is_an_atomic_patch_and_old_operations_are_not_rebuil
     ).features[0].params["depth_mm"] == 14.0
 
 
+def test_human_feature_tree_patch_retains_actor_and_engineering_reason():
+    candidate = FeatureTreeCandidate(
+        features=[Feature3D(kind="extrude", params={"depth_mm": 10.0})],
+        score=0.8,
+        label="plate",
+    )
+    graph = spec_feature_tree_as_graph(
+        {"part": "plate"}, candidate, graph_id="emg:audited-edit",
+    )
+    patch = feature_tree_revision_patch(
+        graph,
+        {"part": "plate"},
+        candidate,
+        producer="human",
+        pass_id="human-add-feature:boss",
+        idempotency_key="audited-edit:1",
+        decision_note="Добавлена бобышка по требованию сборки",
+        actor_sub="engineer@example.test",
+    )
+
+    decision = next(item for item in patch.add_evidence if item.kind == "human_decision")
+    assert decision.payload == {
+        "actor_sub": "engineer@example.test",
+        "note": "Добавлена бобышка по требованию сборки",
+        "pass_id": "human-add-feature:boss",
+    }
+    assert all(decision.id in item.evidence_ids for item in patch.add_assertions)
+
+
 def test_rebuild_patch_also_carries_the_missing_data_note_forward():
     """A2: this is the ACTUAL live path a rebuild goes through — was the
     real remaining gap after test_missing_data_notes_survive_the_sealed_

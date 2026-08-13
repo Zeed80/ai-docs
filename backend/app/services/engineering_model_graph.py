@@ -185,6 +185,10 @@ async def persist_feature_tree_revision(
     idempotency_key: str,
     source_sha256: str | None = None,
     source_uri: str | None = None,
+    expected_base_revision: int | None = None,
+    expected_base_sha256: str | None = None,
+    decision_note: str | None = None,
+    actor_sub: str | None = None,
 ) -> EngineeringGraphRevision:
     """Persist an editor/retry feature tree strictly through ``GraphPatch``.
 
@@ -198,6 +202,14 @@ async def persist_feature_tree_revision(
     )
 
     latest = await latest_graph_revision(db, graph_id, lock=True)
+    if latest is not None and (
+        (expected_base_revision is not None and latest.revision != expected_base_revision)
+        or (
+            expected_base_sha256 is not None
+            and latest.canonical_sha256 != expected_base_sha256
+        )
+    ):
+        raise ValueError("stale_graph_revision")
     if latest is None:
         initial = spec_feature_tree_as_graph(
             spec,
@@ -255,6 +267,8 @@ async def persist_feature_tree_revision(
         producer=producer,
         pass_id=pass_id,
         idempotency_key=idempotency_key,
+        decision_note=decision_note,
+        actor_sub=actor_sub,
     )
     row, errors = await merge_and_persist_patch(
         db, patch, expected_graph_id=graph_id,

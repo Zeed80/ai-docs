@@ -48,11 +48,14 @@ import {
   type EngineeringModelGraphRevision,
 } from "@/lib/engineering-api";
 import {
-  acceptVectorize,
+  approveCadAsDrafter,
+  approveCadAsNormcontroller,
   artifactUrl,
+  getCadCertification,
   getGeneration,
   rebuildSolidInput,
   solidPreviewUrl,
+  type CadCertification,
   type Generation,
   type Solid3dSummary,
 } from "@/lib/studio-api";
@@ -176,15 +179,20 @@ export default function CadEditorShell({
   // Ф8: true while the "Массив" form is open — operates on selectedOperationId,
   // not a new draft.
   const [patternDraftActive, setPatternDraftActive] = useState(false);
+  const [certification, setCertification] = useState<CadCertification | null>(
+    null,
+  );
 
   const load = useCallback(async () => {
     try {
-      const [nextGen, nextGraph] = await Promise.all([
+      const [nextGen, nextGraph, nextCertification] = await Promise.all([
         getGeneration(generationId),
         engineeringApi.getGenerationModelGraph(generationId).catch(() => null),
+        getCadCertification(generationId).catch(() => null),
       ]);
       setGen(nextGen);
       setGraphRevision(nextGraph);
+      setCertification(nextCertification);
       setError(null);
     } catch (e) {
       setError(String((e as Error).message ?? e));
@@ -305,11 +313,15 @@ export default function CadEditorShell({
     }
   }
 
-  async function handleAccept() {
+  async function handleCertification() {
     setBusy(true);
     setError(null);
     try {
-      await acceptVectorize(generationId);
+      const next =
+        certification?.status === "drafter_approved"
+          ? await approveCadAsNormcontroller(generationId)
+          : await approveCadAsDrafter(generationId, "mechanical");
+      setCertification(next);
       await load();
     } catch (e) {
       setError(String((e as Error).message ?? e));
@@ -323,7 +335,7 @@ export default function CadEditorShell({
   // hands off to the SAME rebuildTaskId polling effect above (including its
   // own "SUCCESS but built:false" surfacing).
   const handleDeleteOperation = useCallback(
-    async (operationId: string) => {
+    async (operationId: string, reason: string) => {
       setDeleteBusyId(operationId);
       setError(null);
       try {
@@ -331,7 +343,7 @@ export default function CadEditorShell({
           generationId,
           operationId,
           {
-            note: "Удалено из редактора",
+            note: reason,
             idempotency_key: `remove-feature:${crypto.randomUUID()}`,
           },
         );
@@ -366,7 +378,10 @@ export default function CadEditorShell({
           ? selectedOperation.kind
           : "выбранную операцию";
         if (window.confirm(`Удалить операцию «${label}»?`)) {
-          void handleDeleteOperation(selectedOperationId);
+          const reason = window.prompt("Укажите причину удаления операции:");
+          if (reason?.trim()) {
+            void handleDeleteOperation(selectedOperationId, reason.trim());
+          }
         }
         return;
       }
@@ -400,8 +415,7 @@ export default function CadEditorShell({
     );
   }
 
-  const previewKind =
-    solid?.build_status === "preview_review_required" ? "preview" : "artifact";
+  const previewKind = !gen.accepted ? "preview" : "artifact";
   const modelUrl =
     previewKind === "preview"
       ? solidPreviewUrl(generationId, "stl")
@@ -412,8 +426,7 @@ export default function CadEditorShell({
       : gen.accepted
         ? artifactUrl(generationId, "topology")
         : undefined;
-  const hasModel =
-    previewKind === "preview" ? Boolean(solid?.paths?.stl) : gen.accepted;
+  const hasModel = Boolean(solid?.built && solid?.paths?.stl);
 
   return (
     <div
@@ -432,6 +445,18 @@ export default function CadEditorShell({
             (gen.params?.source_filename as string | undefined) ||
             "CAD-редактор"}
         </h1>
+        <span
+          className={`rounded px-2 py-1 text-[11px] font-medium ${
+            graphRevision?.graph_role === "design"
+              ? "bg-violet-500/15 text-violet-300"
+              : "bg-zinc-500/15 text-zinc-300"
+          }`}
+          title="Правки конструкции хранятся отдельно от результата распознавания"
+        >
+          {graphRevision?.graph_role === "design"
+            ? "Ветка конструкции"
+            : "Оцифровка — исходная ветка"}
+        </span>
         <StatusBadge solid={solid} />
         {gen.accepted && (
           <span className="rounded bg-emerald-500/15 px-2 py-1 text-[11px] font-medium text-emerald-300">
@@ -555,9 +580,18 @@ export default function CadEditorShell({
             {!gen.accepted && (
               <RibbonButton
                 icon={<Check className="h-4 w-4" />}
-                label="Принять"
-                onClick={() => void handleAccept()}
+                label={
+                  certification?.status === "drafter_approved"
+                    ? "Нормоконтроль"
+                    : "Подписать"
+                }
+                onClick={() => void handleCertification()}
                 disabled={busy}
+                title={
+                  certification?.status === "drafter_approved"
+                    ? "Финальная подпись нормоконтролёра другим пользователем"
+                    : "Подпись чертёжника для текущей неизменяемой ревизии"
+                }
               />
             )}
             <RibbonDivider />
@@ -590,7 +624,9 @@ export default function CadEditorShell({
                 guessedOperationIds={guessedOperationIds}
                 selectedId={selectedOperationId}
                 onSelect={setSelectedOperationId}
-                onDelete={(id) => void handleDeleteOperation(id)}
+                onDelete={(id, reason) =>
+                  void handleDeleteOperation(id, reason)
+                }
                 deleteBusyId={deleteBusyId}
               />
             ) : (

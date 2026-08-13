@@ -33,7 +33,7 @@ import math
 from collections import defaultdict
 from typing import Any
 
-from app.ai.cad_ir.schema import Arc, Entity, Point, Segment
+from app.ai.cad_ir.schema import Arc, Circle, Entity, Point, Segment
 
 _VERTEX_TOLERANCE_MM = 1e-4
 
@@ -67,6 +67,28 @@ def cad_ir_profile_to_sketch_segments(entities: list[Entity]) -> list[dict[str, 
     if not entities:
         raise ValueError("Эскиз пуст")
 
+    # The kernel wire has no circle opcode, but two exact semicircular arcs
+    # are lossless and form the same closed profile.  A standalone circle is
+    # the only valid simple loop containing a Circle entity; mixing it with
+    # other disconnected contour entities remains a fail-closed error below.
+    if len(entities) == 1 and isinstance(entities[0], Circle):
+        circle = entities[0]
+        radius = circle.radius
+        return [
+            {
+                "kind": "arc",
+                "to": [-2.0 * radius, 0.0],
+                "center": [-radius, 0.0],
+                "clockwise": False,
+            },
+            {
+                "kind": "arc",
+                "to": [0.0, 0.0],
+                "center": [-radius, 0.0],
+                "clockwise": False,
+            },
+        ]
+
     chain: list[tuple[str, Entity, Point, Point]] = []
     for entity in entities:
         if isinstance(entity, Segment):
@@ -76,7 +98,7 @@ def cad_ir_profile_to_sketch_segments(entities: list[Entity]) -> list[dict[str, 
             chain.append(("arc", entity, start, end))
         else:
             raise ValueError(
-                f"Эскиз-профиль может содержать только линии и дуги, не '{entity.type}'"
+                f"Эскиз-профиль может содержать линии, дуги или одну окружность, не '{entity.type}'"
             )
 
     adjacency: dict[tuple[float, float], list[int]] = defaultdict(list)

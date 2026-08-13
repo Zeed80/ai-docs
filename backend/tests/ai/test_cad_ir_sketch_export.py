@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.ai.cad_ir.schema import Arc, Point, Segment
+from app.ai.cad_ir.schema import Arc, Circle, Point, Segment
 from app.ai.cad_ir.sketch_export import cad_ir_profile_to_sketch_segments
 
 
@@ -192,11 +192,32 @@ def test_disjoint_extra_entity_is_rejected():
         cad_ir_profile_to_sketch_segments(entities)
 
 
-def test_unsupported_entity_kind_is_rejected():
-    from app.ai.cad_ir.schema import Circle
+def test_standalone_circle_exports_as_two_exact_semicircular_arcs():
+    profile = cad_ir_profile_to_sketch_segments([
+        Circle(center=Point(x=25, y=-10), radius=5),
+    ])
+    assert profile == [
+        {
+            "kind": "arc",
+            "to": [-10.0, 0.0],
+            "center": [-5, 0.0],
+            "clockwise": False,
+        },
+        {
+            "kind": "arc",
+            "to": [0.0, 0.0],
+            "center": [-5, 0.0],
+            "clockwise": False,
+        },
+    ]
 
-    entities = [Circle(center=Point(x=0, y=0), radius=5)]
-    with pytest.raises(ValueError, match="линии и дуги"):
+
+def test_circle_mixed_with_other_contours_is_rejected():
+    entities = [
+        Circle(center=Point(x=0, y=0), radius=5),
+        _line((0, 0), (10, 0)),
+    ]
+    with pytest.raises(ValueError, match="одну окружность"):
         cad_ir_profile_to_sketch_segments(entities)
 
 

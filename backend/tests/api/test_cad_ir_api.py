@@ -272,8 +272,11 @@ async def test_patch_ir_add_invalid_annotation_flags_validation(client, fake_sto
     assert "ESKD_ANNOTATION_INVALID" in codes
 
 
-async def test_release_manifest_blocks_until_accepted(client, fake_storage, monkeypatch):
-    # C5: manifest is 409 before acceptance, then reproducible after.
+async def test_release_manifest_requires_two_independent_signatures(
+    client, fake_storage, monkeypatch
+):
+    # Legacy one-step acceptance is not a release certificate. The manifest
+    # stays fail-closed until two people sign the same immutable revision.
     async def _no_llm(png_bytes, **kwargs):
         return []
 
@@ -291,27 +294,17 @@ async def test_release_manifest_blocks_until_accepted(client, fake_storage, monk
     blocked = await client.get(f"/api/image-gen/{gen_id}/release-manifest")
     assert blocked.status_code == 409
 
-    # Full-check + accept, then the manifest releases.
+    # Full-check + legacy accept is deliberately insufficient for release.
     await client.post(f"/api/image-gen/{gen_id}/ir/full-check")
     accepted = await client.post(f"/api/image-gen/{gen_id}/accept-vectorize")
     assert accepted.status_code == 200, accepted.text
 
     resp = await client.get(f"/api/image-gen/{gen_id}/release-manifest")
-    assert resp.status_code == 200
-    m = resp.json()
-    assert m["fully_reproducible"] is True
-    assert m["dxf_version"] == "R2010"
-    assert m["approval"]["accepted_by"]
-    assert m["manifest_sha256"]
+    assert resp.status_code == 409
+    assert "двух независимых подписей" in resp.json()["detail"]
 
     pkg = await client.get(f"/api/image-gen/{gen_id}/release-package")
-    assert pkg.status_code == 200
-    assert pkg.headers["content-type"] == "application/zip"
-    import io
-    import zipfile
-    zf = zipfile.ZipFile(io.BytesIO(pkg.content))
-    assert "manifest.json" in zf.namelist()
-    assert "drawing.dxf" in zf.namelist()
+    assert pkg.status_code == 409
 
 
 async def _add_segment(client, gen_id, p1, p2):
