@@ -1558,6 +1558,20 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                 {t("vector.solid_preview_badge")}
               </span>
             </div>
+            {/* This is a READ-ONLY snapshot (no click-select, no add-feature —
+                only the ribbon editor at /cad/[id]/editor has those). Live
+                user feedback: without this button right next to the model, a
+                person lands here first and never finds the actual editor
+                (the header's own link gets lost above the fold of a long
+                review page). */}
+            <Link
+              href={`/cad/${gen.id}/editor`}
+              target="_blank"
+              rel="noopener"
+              className="mt-3 flex items-center justify-center gap-2 rounded bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-500"
+            >
+              ⛶ Открыть в 3D-редакторе (полный экран, с добавлением фич)
+            </Link>
             <div className="mt-3 overflow-hidden rounded border border-white/10 bg-zinc-950">
               {/* B1: the spec/EMG pipeline's own preview never had per-face
                   click affordance — only Ф10's unrelated Cad3dPanel did.

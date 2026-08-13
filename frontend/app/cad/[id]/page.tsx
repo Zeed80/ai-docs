@@ -218,13 +218,20 @@ export default function CadEditorPage() {
         )}
         <span className="flex-1" />
         {gen && (
+          // Live user feedback: a thin outline button here got lost among
+          // the rest of the header and the page's own long review content
+          // below it — a person landed on this page and never found the
+          // actual 3D editor, only the read-only preview further down.
+          // Filled/primary styling + the SAME button repeated next to that
+          // preview (see CadWorkspace.tsx) fixes both the "didn't notice
+          // it's here" and "found the wrong 3D thing first" cases.
           <Link
             href={`/cad/${gen.id}/editor`}
             target="_blank"
             rel="noopener"
-            className="rounded border border-sky-400/30 bg-sky-500/10 px-2.5 py-1.5 text-xs font-medium text-sky-200 hover:bg-sky-500/20"
+            className="rounded bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-500"
           >
-            ⛶ Открыть в редакторе на весь экран
+            ⛶ Открыть в 3D-редакторе
           </Link>
         )}
         {gen && (
