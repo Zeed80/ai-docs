@@ -62,6 +62,13 @@ export default function Viewport({
           selectedOperationId={selectedOperationId}
           onOperationClick={onOperationClick}
           onEdgeSelect={onEdgeSelect}
+          // This wrapper is already a properly-bounded flex-1 pane (see its
+          // own className above) — CadModelViewer's DEFAULT fixed preview
+          // height (built for CadWorkspace.tsx's unbounded review-page
+          // embed) wasted roughly half the viewport as an empty dark gap
+          // here instead of filling it. Live user report: "занято пол
+          // экрана... непонятный интерфейс".
+          heightClassName="h-full"
         />
       ) : (
         <div className="grid h-full place-items-center text-sm text-zinc-600">

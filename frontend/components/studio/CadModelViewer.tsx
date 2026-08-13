@@ -43,6 +43,15 @@ interface Props {
   // box — null when the click missed the model or matched no box. Never a
   // guess: plain axis-aligned containment against measured bounds.
   onOperationClick?: (operationId: string | null) => void;
+  // The host div's own height class — defaults to a fixed preview size
+  // (CadWorkspace.tsx's read-only review embed relies on this; nothing in
+  // its own ancestor chain defines a height for a plain "h-full" to fill).
+  // The ribbon editor's Viewport.tsx passes "h-full" instead: its own
+  // flex-1 ancestor DOES already give this component a real, fillable
+  // height — the fixed size there wasted roughly half the viewport as an
+  // indistinguishable dark gap below a small model (live user report:
+  // "занято пол экрана... непонятный интерфейс").
+  heightClassName?: string;
 }
 
 const BASE_COLOR = 0xd4d4d8;
@@ -62,6 +71,7 @@ export default function CadModelViewer({
   flaggedOperationIds,
   selectedOperationId,
   onOperationClick,
+  heightClassName = "h-[360px] sm:h-[440px]",
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -514,7 +524,7 @@ export default function CadModelViewer({
   return (
     <div
       ref={hostRef}
-      className="relative h-[360px] w-full overflow-hidden bg-zinc-900 sm:h-[440px]"
+      className={`relative w-full overflow-hidden bg-zinc-900 ${heightClassName}`}
     >
       {state !== "ready" && (
         <div
