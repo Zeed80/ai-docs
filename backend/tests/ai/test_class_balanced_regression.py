@@ -15,6 +15,10 @@ def _payload() -> dict:
     return json.loads(FIXTURE.read_text())
 
 
+def _passed() -> dict:
+    return {"status": "passed", "evidence_ids": ["test:stage"]}
+
+
 def test_dev_baseline_is_macro_balanced_and_honestly_not_promotion_ready():
     report = evaluate_class_balanced_manifest(_payload())
 
@@ -36,9 +40,9 @@ def test_many_variants_in_one_group_do_not_outweigh_rare_class_failure():
     ]
     for index, item in enumerate(payload["cases"][:10]):
         item["id"] = f"mechanical-variant-{index}"
-        item["stages"]["reader"] = {"status": "passed"}
-        item["stages"]["model_3d_bim"] = {"status": "passed"}
-        item["stages"]["drawing_2d"] = {"status": "passed"}
+        item["stages"]["reader"] = _passed()
+        item["stages"]["model_3d_bim"] = _passed()
+        item["stages"]["drawing_2d"] = _passed()
         item["safety"] = {
             "status": "evaluated",
             "invented_geometry": False,
@@ -46,9 +50,9 @@ def test_many_variants_in_one_group_do_not_outweigh_rare_class_failure():
             "evidence_ids": ["test:safety"],
         }
     construction = payload["cases"][-1]
-    construction["stages"]["reader"] = {"status": "passed"}
+    construction["stages"]["reader"] = _passed()
     construction["stages"]["model_3d_bim"] = {"status": "failed"}
-    construction["stages"]["drawing_2d"] = {"status": "passed"}
+    construction["stages"]["drawing_2d"] = _passed()
     construction["safety"] = {
         "status": "evaluated",
         "invented_geometry": False,
@@ -78,7 +82,7 @@ def test_invented_geometry_blocks_promotion_even_when_every_stage_passes():
     payload = _payload()
     for item in payload["cases"]:
         item["stages"] = {
-            stage: {"status": "passed"}
+            stage: _passed()
             for stage in ("reader", "graph", "model_3d_bim", "drawing_2d")
         }
         item["safety"] = {
@@ -100,7 +104,7 @@ def test_per_class_regression_is_rejected_even_if_macro_can_be_preserved():
     payload = _payload()
     for item in payload["cases"]:
         item["stages"] = {
-            stage: {"status": "passed"}
+            stage: _passed()
             for stage in ("reader", "graph", "model_3d_bim", "drawing_2d")
         }
         item["safety"] = {

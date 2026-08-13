@@ -5,7 +5,7 @@
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
         test test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression agent-regression agent-test agent-ws-smoke \
-        studio-queue-smoke cad-kernel-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval cad-emg-corruption cad-class-balanced-dev cad-class-balanced-check cad-class-balanced-cycle \
+        studio-queue-smoke cad-kernel-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval cad-emg-corruption emg-artifact-regression cad-class-balanced-dev cad-class-balanced-check cad-class-balanced-cycle \
         cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
         turboquant-benchmark turboquant-quality \
         lint lint-fix \
@@ -234,29 +234,38 @@ emg-regression:
 		--manifest tests/fixtures/emg_domain_golden.json \
 		--out ../test-results/emg_domain_regression.json
 
+emg-artifact-regression:
+	PYTHONPATH=backend python3 backend/scripts/eval_emg_artifacts.py \
+		--out test-results/emg_artifact_regression.json
+
 # Dev-only macro baseline. The input schema rejects holdout rows, weights one
 # source group once, and then weights every declared class equally.
 cad-emg-corruption:
 	PYTHONPATH=backend python3 backend/scripts/eval_emg_admission_corruption.py \
 		--out test-results/emg_admission_corruption.json
 
-cad-class-balanced-dev: cad-emg-corruption
+cad-class-balanced-dev: cad-emg-corruption emg-regression emg-artifact-regression
 	PYTHONPATH=backend python3 backend/scripts/eval_class_balanced_pipeline.py \
 		--manifest backend/tests/fixtures/cad_class_balanced_dev.json \
 		--safety-report test-results/emg_admission_corruption.json \
+		--evidence-report test-results/emg_domain_regression.json \
+		--evidence-report test-results/emg_artifact_regression.json \
 		--out test-results/cad_class_balanced_dev.json
 
-cad-class-balanced-check: cad-emg-corruption
+cad-class-balanced-check: cad-emg-corruption emg-regression emg-artifact-regression
 	PYTHONPATH=backend python3 backend/scripts/eval_class_balanced_pipeline.py \
 		--manifest backend/tests/fixtures/cad_class_balanced_dev.json \
-		--baseline tools/cad-dataset/baselines/class_balanced_dev_baseline_20260813.json \
+		--baseline tools/cad-dataset/baselines/class_balanced_dev_baseline_20260814.json \
 		--safety-report test-results/emg_admission_corruption.json \
+		--evidence-report test-results/emg_domain_regression.json \
+		--evidence-report test-results/emg_artifact_regression.json \
 		--out test-results/cad_class_balanced_dev.json
 
 cad-class-balanced-cycle: cad-class-balanced-check
 	PYTHONPATH=backend python3 -m pytest \
 		backend/tests/ai/test_class_balanced_regression.py \
 		backend/tests/ai/test_emg_corruption_regression.py \
+		backend/tests/ai/test_emg_artifact_regression.py \
 		backend/tests/ai/test_emg_regression.py -q
 
 emg-live-regression:

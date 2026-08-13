@@ -21,7 +21,7 @@
       "truth_kind": "human_reviewed_engineering_spec",
       "stages": {
         "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
-        "graph": {"status": "passed"},
+        "graph": {"status": "passed", "evidence_ids": ["emg:mechanical-detal-126-v2"]},
         "model_3d_bim": {"status": "review_required", "failure_clusters": ["parameter"], "blocker_codes": ["critical_assertions_unapproved"]},
         "drawing_2d": {"status": "not_run", "blocker_codes": ["kernel_artifact_not_built"]}
       },
@@ -47,9 +47,9 @@
       "truth_kind": "deterministic_assembly_contract",
       "stages": {
         "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
-        "graph": {"status": "passed"},
+        "graph": {"status": "passed", "evidence_ids": ["emg:assembly-fixed-shaft"]},
         "model_3d_bim": {"status": "review_required", "failure_clusters": ["topology"], "blocker_codes": ["artifact_reopen_pending"]},
-        "drawing_2d": {"status": "not_run", "blocker_codes": ["required_2d_pending"]}
+        "drawing_2d": {"status": "passed", "evidence_ids": ["artifact:assembly-fixed-shaft"]}
       },
       "safety": {
         "status": "evaluated",
@@ -69,9 +69,9 @@
       "truth_kind": "deterministic_bim_semantic_contract",
       "stages": {
         "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
-        "graph": {"status": "passed"},
+        "graph": {"status": "passed", "evidence_ids": ["emg:construction-wall-opening"]},
         "model_3d_bim": {"status": "review_required", "failure_clusters": ["bim_relation"], "blocker_codes": ["ifc_reopen_pending"]},
-        "drawing_2d": {"status": "not_run", "blocker_codes": ["required_sheets_pending"]}
+        "drawing_2d": {"status": "passed", "evidence_ids": ["artifact:construction-wall-opening"]}
       },
       "safety": {
         "status": "evaluated",
@@ -91,9 +91,9 @@
       "truth_kind": "deterministic_system_connectivity_contract",
       "stages": {
         "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
-        "graph": {"status": "passed"},
+        "graph": {"status": "passed", "evidence_ids": ["emg:hydraulic-closed-loop"]},
         "model_3d_bim": {"status": "not_run", "blocker_codes": ["domain_has_no_3d_artifact"]},
-        "drawing_2d": {"status": "review_required", "failure_clusters": ["connectivity"], "blocker_codes": ["required_diagram_pending"]}
+        "drawing_2d": {"status": "passed", "evidence_ids": ["artifact:hydraulic-closed-loop"]}
       },
       "safety": {"status": "not_run"}
     }

@@ -20,6 +20,7 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--safety-report", type=Path)
+    parser.add_argument("--evidence-report", type=Path, action="append", default=[])
     parser.add_argument("--out", type=Path)
     parser.add_argument("--require-promotion", action="store_true")
     args = parser.parse_args()
@@ -28,8 +29,12 @@ def main() -> int:
     safety_report = (
         json.loads(args.safety_report.read_text()) if args.safety_report else None
     )
+    evidence_reports = [json.loads(path.read_text()) for path in args.evidence_report]
     report = evaluate_class_balanced_manifest(
-        payload, baseline=baseline, safety_report=safety_report
+        payload,
+        baseline=baseline,
+        safety_report=safety_report,
+        evidence_reports=evidence_reports,
     )
     rendered = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
     if args.out:

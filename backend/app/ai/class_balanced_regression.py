@@ -31,6 +31,13 @@ class StageObservation(StrictModel):
     status: StageStatus
     failure_clusters: list[FailureCluster] = Field(default_factory=list)
     blocker_codes: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_pass_evidence(self) -> "StageObservation":
+        if self.status == "passed" and not self.evidence_ids:
+            raise ValueError("passed stage requires evidence_ids")
+        return self
 
 
 class SafetyObservation(StrictModel):
@@ -130,6 +137,11 @@ def _aggregate_group(cases: list[PipelineCase]) -> dict[str, Any]:
                 for status in ("passed", "failed", "blocked", "review_required", "not_run")
                 if any(item.status == status for item in observations)
             },
+            "evidence_ids": sorted({
+                evidence_id
+                for item in observations
+                for evidence_id in item.evidence_ids
+            }),
         }
     safety = [item.safety for item in cases]
     evaluated = [item for item in safety if item.status == "evaluated"]
@@ -239,12 +251,68 @@ def _validate_safety_evidence(
             )
 
 
+def _stage_evidence_index(
+    evidence_reports: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    evidence: dict[str, dict[str, Any]] = {}
+    for report in evidence_reports:
+        schema = report.get("schema_version")
+        if schema == "emg-regression-report/1.0":
+            entries = [
+                {
+                    "id": f"emg:{item['id']}",
+                    "case_id": item["id"],
+                    "stage": "graph",
+                    "passed": item.get("passed") is True,
+                }
+                for item in report.get("cases", [])
+            ]
+        elif schema == "emg-artifact-regression-report/1.0":
+            entries = report.get("cases", [])
+        else:
+            raise ValueError(f"unsupported stage evidence report schema: {schema}")
+        for item in entries:
+            evidence_id = item.get("id")
+            if not evidence_id or evidence_id in evidence:
+                raise ValueError(f"duplicate or missing stage evidence id: {evidence_id}")
+            evidence[evidence_id] = item
+    return evidence
+
+
+def _validate_stage_evidence(
+    manifest: PipelineManifest, evidence_reports: list[dict[str, Any]] | None
+) -> None:
+    if evidence_reports is None:
+        return
+    evidence = _stage_evidence_index(evidence_reports)
+    for case in manifest.cases:
+        for stage, observation in case.stages.items():
+            if observation.status != "passed":
+                continue
+            for evidence_id in observation.evidence_ids:
+                item = evidence.get(evidence_id)
+                if item is None:
+                    raise ValueError(
+                        f"{case.id}: stage evidence not found: {evidence_id}"
+                    )
+                if item.get("case_id") != case.id or item.get("stage") != stage:
+                    raise ValueError(
+                        f"{case.id}: stage evidence target mismatch: {evidence_id}"
+                    )
+                if item.get("passed") is not True:
+                    raise ValueError(
+                        f"{case.id}: stage evidence did not pass: {evidence_id}"
+                    )
+
+
 def evaluate_class_balanced_manifest(
     payload: dict[str, Any], *, baseline: dict[str, Any] | None = None,
     safety_report: dict[str, Any] | None = None,
+    evidence_reports: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     manifest = PipelineManifest.model_validate(payload)
     _validate_safety_evidence(manifest, safety_report)
+    _validate_stage_evidence(manifest, evidence_reports)
     by_group_cases: dict[str, list[PipelineCase]] = defaultdict(list)
     for item in manifest.cases:
         by_group_cases[item.source_group_id].append(item)

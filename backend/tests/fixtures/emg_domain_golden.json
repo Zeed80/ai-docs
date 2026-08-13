@@ -29,6 +29,10 @@
           {"instance_key": "housing", "designation": "Housing", "quantity": 1, "metadata_": {"grounded": true}, "transform": {}},
           {"instance_key": "shaft", "designation": "Shaft", "quantity": 1, "metadata_": {}, "transform": {"x": 12.0}}
         ],
+        "drawing_components": [
+          {"key": "housing", "shape": {"kind": "box", "width_mm": 100, "height_mm": 80, "depth_mm": 40}, "transform": {}},
+          {"key": "shaft", "shape": {"kind": "cylinder", "diameter_mm": 30, "height_mm": 120}, "transform": {"translate": [120, 25, 0]}}
+        ],
         "mates": [
           {"id": "mate-fixed", "mate_type": "fixed", "first_instance_key": "housing", "second_instance_key": "shaft", "parameters": {}}
         ],
