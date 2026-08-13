@@ -31,6 +31,7 @@ import PropertiesPanel2, {
   type AddFeatureDraftKind,
   type KernelEdgeDescriptor,
 } from "@/components/cad/editor/PropertiesPanel2";
+import OperationProvenancePanel from "@/components/cad/editor/OperationProvenancePanel";
 import Ribbon, {
   RibbonButton,
   RibbonDivider,
@@ -779,6 +780,13 @@ export default function CadEditorShell({
             <div className="border-b border-white/10 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
               Свойства
             </div>
+            {graphRevision && (
+              <OperationProvenancePanel
+                generationId={generationId}
+                graph={graphRevision.graph}
+                operation={selectedOperation}
+              />
+            )}
             <PropertiesPanel2
               generationId={generationId}
               operation={selectedOperation}

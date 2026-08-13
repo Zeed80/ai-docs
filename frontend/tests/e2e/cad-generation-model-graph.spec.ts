@@ -6,7 +6,7 @@ let readerCalls = 0;
 let correctionCalls = 0;
 let batchCorrectionCalls = 0;
 
-const graph = {
+const editorGraph = {
   id: "66666666-6666-4666-8666-666666666666",
   generation_id: generationId,
   engineering_project_id: null,
@@ -25,8 +25,15 @@ const graph = {
     nodes: [
       { id: "product:legacy-spec", type: "Product", name: "Проблемный вал" },
       { id: "region:hole", type: "SourceRegion", name: "Hole callout" },
+      { id: "operation:outer", type: "BuildOperation", name: "Outer profile" },
+      { id: "feature:outer", type: "Feature", name: "Outer cylinder" },
+      { id: "topology:face:outer", type: "TopologyElement", name: "Outer face" },
+      { id: "artifact:step", type: "Artifact", name: "STEP model" },
     ],
-    edges: [],
+    edges: [
+      { id: "realizes:outer", type: "realizes", source_id: "operation:outer", target_id: "feature:outer" },
+      { id: "maps:outer", type: "maps_to_topology", source_id: "feature:outer", target_id: "topology:face:outer" },
+    ],
     assertions: [{
       id: "assertion:hole-location",
       subject_id: "product:legacy-spec",
@@ -49,12 +56,62 @@ const graph = {
       impacts: ["envelope"],
       evidence_ids: ["evidence:whole-sheet"],
       state: "active",
+    }, {
+      id: "assertion:operation:outer:kind",
+      subject_id: "operation:outer",
+      predicate: "operation.kind",
+      value: { kind: "exact", value: "extrude" },
+      origin: "derived",
+      assurance: "corroborated",
+      confidence: 0.8,
+      impacts: ["base_topology"],
+      evidence_ids: ["evidence:whole-sheet"],
+      state: "active",
+    }, {
+      id: "assertion:operation:outer:sequence",
+      subject_id: "operation:outer",
+      predicate: "operation.sequence",
+      value: { kind: "exact", value: 0 },
+      origin: "derived",
+      assurance: "constraint_validated",
+      confidence: 1,
+      impacts: ["base_topology"],
+      evidence_ids: [],
+      state: "active",
+    }, {
+      id: "assertion:feature:outer:diameter",
+      subject_id: "feature:outer",
+      predicate: "feature.param.diameter_mm",
+      value: { kind: "exact", value: 15.7 },
+      origin: "observed",
+      assurance: "proposed",
+      confidence: 0.7,
+      impacts: ["base_topology"],
+      evidence_ids: ["evidence:whole-sheet"],
+      state: "active",
     }],
     evidence: [{ id: "evidence:whole-sheet", kind: "raster_region", source_region_id: "region:hole", payload: { bbox_normalized: [0.1, 0.2, 0.4, 0.5], fallback: false } }],
     hypothesis_sets: [],
     build_targets: [{ id: "preview", kind: "preview_brep", root_node_ids: ["product:legacy-spec"], requirement_ids: [], critical_impacts: ["connection_opening"], mass_tolerance_percent: 0 }],
     verification: { critical_unresolved_assertion_ids: ["assertion:hole-location"], issue_codes: ["critical_assertions_unresolved"] },
     reader_manifest: { max_wall_seconds: 900, max_model_calls: 32, call_timeout_seconds: 90, no_progress_pass_limit: 2, calls_used: 3, elapsed_seconds: 428.7, no_progress_passes: 2, ordinary_attempts: { "assertion:hole-location": 3 }, stop_reason: "fixed_point" },
+  },
+};
+
+// Keep the original digitization fixture intentionally small. The editor
+// fixture extends it with a BuildOperation/Feature/topology chain without
+// changing the established Graph Inspector scenarios below.
+const graph = {
+  ...editorGraph,
+  graph: {
+    ...editorGraph.graph,
+    nodes: editorGraph.graph.nodes.filter((item) =>
+      ["product:legacy-spec", "region:hole"].includes(item.id),
+    ),
+    edges: [],
+    assertions: editorGraph.graph.assertions.filter((item) =>
+      ["assertion:hole-location", "assertion:shaft-length"].includes(item.id),
+    ),
   },
 };
 
@@ -85,17 +142,19 @@ async function setAuthCookie(context: BrowserContext) {
   await context.addCookies([{ name: "access_token", value: "e2e-token", domain: "127.0.0.1", path: "/" }]);
 }
 
-async function mockApi(page: Page) {
+async function mockApi(page: Page, modelGraph: typeof editorGraph = graph) {
   await page.route("**/api/**", async (route: Route) => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.pathname === "/api/auth/me") return route.fulfill({ json: { sub: "e2e", email: "e2e@example.local", name: "E2E", roles: ["admin"], groups: [] } });
     if (url.pathname === `/api/image-gen/${generationId}`) return route.fulfill({ json: generation });
-    if (url.pathname === `/api/image-gen/${generationId}/model-graph`) return route.fulfill({ json: graph });
+    if (url.pathname === `/api/image-gen/${generationId}/model-graph`) return route.fulfill({ json: modelGraph });
+    if (url.pathname.endsWith("/model-graph/design-history")) return route.fulfill({ json: { graph_id: modelGraph.graph_id, graph_role: "design", current_revision: 0, revisions: [{ revision: 0, parent_revision: null, canonical_sha256: modelGraph.canonical_sha256, created_at: "2026-08-09T12:01:49Z", actor_id: "e2e", reason: "Initial design" }] } });
+    if (url.pathname.endsWith("/certification")) return route.fulfill({ json: { status: "draft", revision: 0, drafter_approved_at: null, normcontroller_approved_at: null } });
     if (url.pathname.endsWith("/model-graph/patches")) return route.fulfill({ json: [] });
     if (url.pathname.endsWith("/model-graph/trace-proposals")) return route.fulfill({ json: [] });
     if (url.pathname.includes("/model-graph/assertions/") && url.pathname.endsWith("/impact")) {
-      return route.fulfill({ json: { assertion_id: "assertion:hole-location", target_id: "preview", subject_node_id: "product:legacy-spec", critical_for_target: true, classification: "critical_for_target", declared_impacts: ["connection_opening"], direct_dependency_node_ids: [], affected_node_ids: ["product:legacy-spec"], affected_build_operation_ids: [], affected_artifact_ids: [], affected_topology_element_ids: [], evidence_ids: ["evidence:whole-sheet"], superseded_by_assertion_ids: [], dependency_paths: { "product:legacy-spec": ["product:legacy-spec"] } } });
+      return route.fulfill({ json: { assertion_id: "assertion:operation:outer:kind", target_id: "preview", subject_node_id: "operation:outer", critical_for_target: true, classification: "critical_for_target", declared_impacts: ["base_topology"], direct_dependency_node_ids: ["topology:face:outer"], affected_node_ids: ["operation:outer", "topology:face:outer", "artifact:step"], affected_build_operation_ids: ["operation:outer"], affected_artifact_ids: ["artifact:step"], affected_topology_element_ids: ["topology:face:outer"], evidence_ids: ["evidence:whole-sheet"], superseded_by_assertion_ids: [], dependency_paths: { "topology:face:outer": ["operation:outer", "feature:outer", "topology:face:outer"] } } });
     }
     if (url.pathname.endsWith("/source-overlay")) {
       return route.fulfill({
@@ -212,6 +271,21 @@ test("blocked DXF digitization opens canonical EMG before legacy spec", async ({
   await page.getByRole("button", { name: "Чертёж и compatibility-view" }).click();
   await expect(page.getByText("Что удалось прочитать с листа")).toBeVisible();
   await expect(page.getByText("Размеры (1):")).toBeVisible();
+});
+
+test("CAD editor shows selected operation source bbox and topology impact", async ({ page, context }) => {
+  await setAuthCookie(context);
+  await mockApi(page, editorGraph);
+  await page.goto(`/cad/${generationId}/editor`);
+
+  const panel = page.getByTestId("operation-provenance-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("Операция → утверждение → bbox → зависимые узлы")).toBeVisible();
+  await expect(panel.getByAltText("Источник feature.param.diameter_mm")).toBeVisible();
+  await expect(panel.getByText(/лист 1 · bbox 0.100, 0.200, 0.400, 0.500 · точный ROI/)).toBeVisible();
+  await expect(panel.getByText(/Критично для сборки preview/)).toBeVisible();
+  await expect(panel.getByText(/Outer face \(topology:face:outer\)/)).toBeVisible();
+  await expect(panel.getByText(/STEP model \(artifact:step\)/)).toBeVisible();
 });
 
 test("related assertions are submitted as one atomic GraphPatch", async ({ page, context }) => {
