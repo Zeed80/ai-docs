@@ -19,6 +19,7 @@
     "@types/three": "^0.185.1",
     "clsx": "^2.1",
     "konva": "^9.3",
+    "lucide-react": "^1.31.0",
     "next": "^15.3",
     "next-intl": "^4.1",
     "pdfjs-dist": "^4.10.38",

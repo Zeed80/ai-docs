@@ -1,10 +1,29 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ArrowDownCircle,
+  ArrowUpCircle,
+  Check,
+  Download,
+  ExternalLink,
+  Grid3x3,
+  Maximize,
+  Minimize,
+  RotateCw,
+  Settings,
+  Slash,
+  Spline,
+  Square,
+  SquaresIntersect,
+  SquaresUnite,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import FeatureTreePanel from "@/components/cad/editor/FeatureTreePanel";
 import AssumptionsStrip from "@/components/cad/editor/AssumptionsStrip";
+import CadStatusBar from "@/components/cad/editor/CadStatusBar";
+import ResizablePane from "@/components/cad/editor/ResizablePane";
 import Viewport from "@/components/cad/editor/Viewport";
 import PropertiesPanel2, {
   type AddFeatureDraftKind,
@@ -13,6 +32,7 @@ import PropertiesPanel2, {
 import Ribbon, {
   RibbonButton,
   RibbonDivider,
+  RibbonGroup,
   RibbonPlaceholder,
   type RibbonTabId,
 } from "@/components/cad/editor/Ribbon";
@@ -62,6 +82,47 @@ function StatusBadge({ solid }: { solid?: Solid3dSummary }) {
   );
 }
 
+/** Ф10: toggles the browser's own Fullscreen API on the whole shell — the
+ * route is already chromeless (no app sidebar/chat, see client-layout.tsx)
+ * and already opens in its own tab (target="_blank" on the "Открыть в
+ * редакторе" link in /cad/[id]/page.tsx); this is the one further step
+ * available without introducing a real desktop shell (Electron/Tauri —
+ * deliberately not pursued, see the plan's own note): hiding the
+ * browser's OWN chrome (address bar etc) too, closer to "как обычное
+ * приложение". */
+function FullscreenButton({
+  targetRef,
+}: {
+  targetRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (document.fullscreenElement) {
+          void document.exitFullscreen();
+        } else {
+          void targetRef.current?.requestFullscreen();
+        }
+      }}
+      title={isFullscreen ? "Выйти из полноэкранного режима" : "На весь экран"}
+      className="rounded border border-white/15 p-1.5 text-zinc-300 hover:bg-white/5"
+    >
+      {isFullscreen ? (
+        <Minimize className="h-4 w-4" />
+      ) : (
+        <Maximize className="h-4 w-4" />
+      )}
+    </button>
+  );
+}
+
 /** Full-screen ленточный CAD-редактор (SolidWorks/Fusion/FreeCAD-стиль:
  * вкладки-группы инструментов, дерево построения слева, вьюпорт по центру,
  * свойства/добавление фичи/эскиз справа). Заменил прежний Ф2.6c-редактор
@@ -69,15 +130,18 @@ function StatusBadge({ solid }: { solid?: Solid3dSummary }) {
  * /root/.claude/plans/starry-mapping-hippo.md — полная история: Ф0
  * (каркас) → Ф1 (лента владеет действиями) → Ф2/Ф3 (граф-native
  * добавление фич: boss/pocket/fillet/chamfer/shell/thread) → Ф4 (настоящий
- * constraint-based эскиз-редактор) → Ф5 (эта промоушен-замена). Дерево/
- * коррекция/подсказки переиспользуются как есть: FeatureTreePanel,
- * PropertiesPanel (обёрнут в PropertiesPanel2 для формы добавления фичи),
- * AssumptionsStrip, emg-tree.ts. */
+ * constraint-based эскиз-редактор) → Ф5 (эта промоушен-замена) → Ф6-Ф9
+ * (удаление операций, клик-выбор ребра, массивы, дуга) → Ф10 (эта
+ * UX-полировка: иконки, resizable-панели, fullscreen, статус-бар, горячие
+ * клавиши). Дерево/коррекция/подсказки переиспользуются как есть:
+ * FeatureTreePanel, PropertiesPanel (обёрнут в PropertiesPanel2 для формы
+ * добавления фичи), AssumptionsStrip, emg-tree.ts. */
 export default function CadEditorShell({
   generationId,
 }: {
   generationId: string;
 }) {
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const [gen, setGen] = useState<Generation | null>(null);
   const [graphRevision, setGraphRevision] =
     useState<EngineeringModelGraphRevision | null>(null);
@@ -258,26 +322,75 @@ export default function CadEditorShell({
   // the mutation happens inside the Celery task, so this only queues it and
   // hands off to the SAME rebuildTaskId polling effect above (including its
   // own "SUCCESS but built:false" surfacing).
-  async function handleDeleteOperation(operationId: string) {
-    setDeleteBusyId(operationId);
-    setError(null);
-    try {
-      const result = await engineeringApi.removeGenerationModelGraphFeature(
-        generationId,
-        operationId,
-        {
-          note: "Удалено из редактора",
-          idempotency_key: `remove-feature:${crypto.randomUUID()}`,
-        },
-      );
-      setRebuildTaskId(result.rebuild_task_id);
-      setRebuildStatus("QUEUED");
-    } catch (e) {
-      setError(String((e as Error).message ?? e));
-    } finally {
-      setDeleteBusyId(null);
+  const handleDeleteOperation = useCallback(
+    async (operationId: string) => {
+      setDeleteBusyId(operationId);
+      setError(null);
+      try {
+        const result = await engineeringApi.removeGenerationModelGraphFeature(
+          generationId,
+          operationId,
+          {
+            note: "Удалено из редактора",
+            idempotency_key: `remove-feature:${crypto.randomUUID()}`,
+          },
+        );
+        setRebuildTaskId(result.rebuild_task_id);
+        setRebuildStatus("QUEUED");
+      } catch (e) {
+        setError(String((e as Error).message ?? e));
+      } finally {
+        setDeleteBusyId(null);
+      }
+    },
+    [generationId],
+  );
+
+  // Ф10: Delete (with a plain window.confirm — the tree row's own inline
+  // Да/Отмена needs a hover state a keyboard press doesn't have) removes
+  // the SELECTED operation; Escape backs out of whichever draft/mode is
+  // currently open, closest-scoped first (sketch, then add-feature/
+  // pattern drafts) — never closes the whole editor, only the in-progress
+  // action, matching every Отмена button already in these panels.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+      if (typing) return;
+      if (event.key === "Delete" && selectedOperationId && !deleteBusyId) {
+        const label = selectedOperation
+          ? selectedOperation.kind
+          : "выбранную операцию";
+        if (window.confirm(`Удалить операцию «${label}»?`)) {
+          void handleDeleteOperation(selectedOperationId);
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        if (sketchModeActive) {
+          setSketchModeActive(false);
+        } else if (addFeatureDraft) {
+          setAddFeatureDraft(null);
+        } else if (patternDraftActive) {
+          setPatternDraftActive(false);
+        }
+      }
     }
-  }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    selectedOperationId,
+    selectedOperation,
+    deleteBusyId,
+    sketchModeActive,
+    addFeatureDraft,
+    patternDraftActive,
+    handleDeleteOperation,
+  ]);
 
   if (!gen) {
     return (
@@ -303,7 +416,10 @@ export default function CadEditorShell({
     previewKind === "preview" ? Boolean(solid?.paths?.stl) : gen.accepted;
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-100">
+    <div
+      ref={shellRef}
+      className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-100"
+    >
       <header className="flex flex-wrap items-center gap-3 border-b border-white/10 bg-zinc-900 px-3 py-2">
         <Link
           href={`/cad/${generationId}`}
@@ -327,6 +443,7 @@ export default function CadEditorShell({
             Пересборка… {rebuildStatus}
           </span>
         )}
+        <FullscreenButton targetRef={shellRef} />
       </header>
 
       <Ribbon active={ribbonTab} onChange={setRibbonTab}>
@@ -339,77 +456,81 @@ export default function CadEditorShell({
         )}
         {ribbonTab === "features" && (
           <>
-            <RibbonButton
-              icon="⬆"
-              label="Бобышка"
-              onClick={() => setAddFeatureDraft("boss")}
-              disabled={!hasModel}
-              title={
-                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
-              }
-            />
-            <RibbonButton
-              icon="⬇"
-              label="Карман"
-              onClick={() => setAddFeatureDraft("pocket")}
-              disabled={!hasModel}
-              title={
-                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
-              }
-            />
+            <RibbonGroup label="Профиль">
+              <RibbonButton
+                icon={<ArrowUpCircle className="h-4 w-4" />}
+                label="Бобышка"
+                onClick={() => setAddFeatureDraft("boss")}
+                disabled={!hasModel}
+                title={
+                  hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+                }
+              />
+              <RibbonButton
+                icon={<ArrowDownCircle className="h-4 w-4" />}
+                label="Карман"
+                onClick={() => setAddFeatureDraft("pocket")}
+                disabled={!hasModel}
+                title={
+                  hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+                }
+              />
+            </RibbonGroup>
             <RibbonDivider />
-            <RibbonButton
-              icon="⌒"
-              label="Скругление"
-              onClick={() => setAddFeatureDraft("fillet")}
-              disabled={!hasModel}
-              title={
-                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
-              }
-            />
-            <RibbonButton
-              icon="⟂"
-              label="Фаска"
-              onClick={() => setAddFeatureDraft("chamfer")}
-              disabled={!hasModel}
-              title={
-                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
-              }
-            />
-            <RibbonButton
-              icon="▢"
-              label="Оболочка"
-              onClick={() => setAddFeatureDraft("shell")}
-              disabled={!hasModel}
-              title={
-                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
-              }
-            />
-            <RibbonButton
-              icon="⚙"
-              label="Резьба"
-              onClick={() => setAddFeatureDraft("thread")}
-              disabled={!hasModel}
-              title={
-                hasModel ? undefined : "Сначала нужна построенная 3D-модель"
-              }
-            />
+            <RibbonGroup label="Модификация">
+              <RibbonButton
+                icon={<Spline className="h-4 w-4" />}
+                label="Скругление"
+                onClick={() => setAddFeatureDraft("fillet")}
+                disabled={!hasModel}
+                title={
+                  hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+                }
+              />
+              <RibbonButton
+                icon={<Slash className="h-4 w-4" />}
+                label="Фаска"
+                onClick={() => setAddFeatureDraft("chamfer")}
+                disabled={!hasModel}
+                title={
+                  hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+                }
+              />
+              <RibbonButton
+                icon={<Square className="h-4 w-4" />}
+                label="Оболочка"
+                onClick={() => setAddFeatureDraft("shell")}
+                disabled={!hasModel}
+                title={
+                  hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+                }
+              />
+              <RibbonButton
+                icon={<Settings className="h-4 w-4" />}
+                label="Резьба"
+                onClick={() => setAddFeatureDraft("thread")}
+                disabled={!hasModel}
+                title={
+                  hasModel ? undefined : "Сначала нужна построенная 3D-модель"
+                }
+              />
+            </RibbonGroup>
           </>
         )}
         {ribbonTab === "body" && (
-          <>
+          <RibbonGroup label="Тело">
             <RibbonPlaceholder
-              icon="∪"
+              icon={<SquaresUnite className="h-4 w-4" />}
               label="Объединение"
               comingIn="отдельном плане (нет прецедента в ядре)"
             />
             <RibbonPlaceholder
-              icon="∩"
+              icon={<SquaresIntersect className="h-4 w-4" />}
               label="Пересечение"
               comingIn="отдельном плане (нет прецедента в ядре)"
             />
             <RibbonButton
-              icon="▦"
+              icon={<Grid3x3 className="h-4 w-4" />}
               label="Массив"
               onClick={() => setPatternDraftActive(true)}
               disabled={!hasModel || !selectedOperationId}
@@ -421,19 +542,19 @@ export default function CadEditorShell({
                     : undefined
               }
             />
-          </>
+          </RibbonGroup>
         )}
         {ribbonTab === "inspect" && (
-          <>
+          <RibbonGroup label="Сборка">
             <RibbonButton
-              icon="↻"
+              icon={<RotateCw className="h-4 w-4" />}
               label="Пересобрать"
               onClick={() => void handleRebuildNow()}
               disabled={busy || Boolean(rebuildTaskId)}
             />
             {!gen.accepted && (
               <RibbonButton
-                icon="✓"
+                icon={<Check className="h-4 w-4" />}
                 label="Принять"
                 onClick={() => void handleAccept()}
                 disabled={busy}
@@ -441,7 +562,7 @@ export default function CadEditorShell({
             )}
             <RibbonDivider />
             <ExportMenu generationId={generationId} accepted={gen.accepted} />
-          </>
+          </RibbonGroup>
         )}
       </Ribbon>
 
@@ -452,25 +573,33 @@ export default function CadEditorShell({
       )}
 
       <div className="flex min-h-0 flex-1">
-        <aside className="w-64 shrink-0 overflow-y-auto border-r border-white/10 bg-zinc-900/60">
-          <div className="border-b border-white/10 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-            Дерево построения
-          </div>
-          {tree ? (
-            <FeatureTreePanel
-              operations={tree.operations}
-              guessedOperationIds={guessedOperationIds}
-              selectedId={selectedOperationId}
-              onSelect={setSelectedOperationId}
-              onDelete={(id) => void handleDeleteOperation(id)}
-              deleteBusyId={deleteBusyId}
-            />
-          ) : (
-            <p className="p-3 text-xs text-zinc-500">
-              Граф ещё не построен для этой генерации.
-            </p>
-          )}
-        </aside>
+        <ResizablePane
+          storageKey="cad-editor:treeWidth"
+          defaultWidth={256}
+          minWidth={180}
+          maxWidth={420}
+          side="left"
+        >
+          <aside className="h-full overflow-y-auto border-r border-white/10 bg-zinc-900/60">
+            <div className="border-b border-white/10 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+              Дерево построения
+            </div>
+            {tree ? (
+              <FeatureTreePanel
+                operations={tree.operations}
+                guessedOperationIds={guessedOperationIds}
+                selectedId={selectedOperationId}
+                onSelect={setSelectedOperationId}
+                onDelete={(id) => void handleDeleteOperation(id)}
+                deleteBusyId={deleteBusyId}
+              />
+            ) : (
+              <p className="p-3 text-xs text-zinc-500">
+                Граф ещё не построен для этой генерации.
+              </p>
+            )}
+          </aside>
+        </ResizablePane>
 
         <main className="flex min-w-0 flex-1 flex-col">
           {sketchModeActive ? (
@@ -506,35 +635,49 @@ export default function CadEditorShell({
               />
             </>
           )}
+          <CadStatusBar
+            selectedOperation={selectedOperation}
+            operationCount={tree?.operations.length ?? 0}
+            needsReviewCount={guessedOperationIds.size}
+            hasModel={hasModel}
+          />
         </main>
 
-        <aside className="w-96 shrink-0 overflow-y-auto border-l border-white/10 bg-zinc-900/60">
-          <div className="border-b border-white/10 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-            Свойства
-          </div>
-          <PropertiesPanel2
-            generationId={generationId}
-            operation={selectedOperation}
-            features={selectedFeatures}
-            edges={edges}
-            addFeatureDraft={addFeatureDraft}
-            onAddFeatureDraftChange={setAddFeatureDraft}
-            sketchModeActive={sketchModeActive}
-            onStartSketch={() => setSketchModeActive(true)}
-            exportedSketchProfile={exportedSketchProfile}
-            onSketchProfileConsumed={() => setExportedSketchProfile(null)}
-            pickedEdgeKey={pickedEdgeKey}
-            onEdgeKeyConsumed={() => setPickedEdgeKey(null)}
-            patternDraftActive={patternDraftActive}
-            onPatternDraftChange={setPatternDraftActive}
-            onSaved={() => void load()}
-            onRebuildQueued={(taskId) => {
-              setRebuildTaskId(taskId);
-              setRebuildStatus("QUEUED");
-            }}
-            onError={setError}
-          />
-        </aside>
+        <ResizablePane
+          storageKey="cad-editor:propertiesWidth"
+          defaultWidth={384}
+          minWidth={280}
+          maxWidth={560}
+          side="right"
+        >
+          <aside className="h-full overflow-y-auto border-l border-white/10 bg-zinc-900/60">
+            <div className="border-b border-white/10 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+              Свойства
+            </div>
+            <PropertiesPanel2
+              generationId={generationId}
+              operation={selectedOperation}
+              features={selectedFeatures}
+              edges={edges}
+              addFeatureDraft={addFeatureDraft}
+              onAddFeatureDraftChange={setAddFeatureDraft}
+              sketchModeActive={sketchModeActive}
+              onStartSketch={() => setSketchModeActive(true)}
+              exportedSketchProfile={exportedSketchProfile}
+              onSketchProfileConsumed={() => setExportedSketchProfile(null)}
+              pickedEdgeKey={pickedEdgeKey}
+              onEdgeKeyConsumed={() => setPickedEdgeKey(null)}
+              patternDraftActive={patternDraftActive}
+              onPatternDraftChange={setPatternDraftActive}
+              onSaved={() => void load()}
+              onRebuildQueued={(taskId) => {
+                setRebuildTaskId(taskId);
+                setRebuildStatus("QUEUED");
+              }}
+              onError={setError}
+            />
+          </aside>
+        </ResizablePane>
       </div>
     </div>
   );
@@ -552,9 +695,9 @@ function ExportMenu({
     return (
       <span
         title="Экспорт доступен после приёмки"
-        className="rounded border border-white/10 px-3 py-1.5 text-xs text-zinc-600"
+        className="flex items-center gap-1.5 rounded border border-white/10 px-3 py-1.5 text-xs text-zinc-600"
       >
-        ⭳ Экспорт
+        <Download className="h-3.5 w-3.5" /> Экспорт
       </span>
     );
   }
@@ -563,9 +706,9 @@ function ExportMenu({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="rounded border border-white/15 px-3 py-1.5 text-xs text-zinc-200 hover:bg-white/5"
+        className="flex items-center gap-1.5 rounded border border-white/15 px-3 py-1.5 text-xs text-zinc-200 hover:bg-white/5"
       >
-        ⭳ Экспорт ▾
+        <Download className="h-3.5 w-3.5" /> Экспорт ▾
       </button>
       {open && (
         <div
@@ -577,9 +720,9 @@ function ExportMenu({
               key={kind}
               href={artifactUrl(generationId, kind)}
               download
-              className="block px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/10"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/10"
             >
-              {kind.toUpperCase()}
+              <ExternalLink className="h-3 w-3" /> {kind.toUpperCase()}
             </a>
           ))}
         </div>
