@@ -1,6 +1,9 @@
 "use client";
 
+import { useState } from "react";
+
 import CadModelViewer from "@/components/studio/CadModelViewer";
+import type { CadViewCommand } from "@/components/studio/CadModelViewer";
 import type { OperationBounds } from "@/lib/emg-tree";
 
 /** Тонкая обёртка над CadModelViewer (сам вьювер не изменён — B2/B3 уже
@@ -32,6 +35,16 @@ export default function Viewport({
   edgePickActive?: boolean;
   onEdgeSelect?: (edgeKey: string | null) => void;
 }) {
+  const [viewCommand, setViewCommand] = useState<CadViewCommand>({
+    type: "fit_model",
+    nonce: 0,
+  });
+  const runViewCommand = (type: CadViewCommand["type"]) =>
+    setViewCommand((current) => ({ type, nonce: current.nonce + 1 }));
+  const canFitSelection = Boolean(
+    selectedOperationId && operationBounds.has(selectedOperationId),
+  );
+
   return (
     <div className="relative min-h-0 flex-1">
       {hasModel && flaggedOperationIds.size > 0 && (
@@ -49,6 +62,54 @@ export default function Viewport({
       {hasModel && edgePickActive && (
         <div className="pointer-events-none absolute right-2 top-2 z-10 rounded bg-sky-500/15 px-2 py-1 text-[10px] text-sky-200">
           Кликните по ребру на модели, чтобы выбрать его
+        </div>
+      )}
+      {hasModel && (
+        <div
+          className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded border border-white/10 bg-zinc-950/80 p-1 shadow-lg"
+          aria-label="Масштаб 3D-вида"
+        >
+          <button
+            type="button"
+            aria-label="Приблизить 3D-модель"
+            title="Приблизить"
+            onClick={() => runViewCommand("zoom_in")}
+            className="grid h-7 w-7 place-items-center rounded text-sm text-zinc-300 hover:bg-white/10 hover:text-white"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            aria-label="Отдалить 3D-модель"
+            title="Отдалить"
+            onClick={() => runViewCommand("zoom_out")}
+            className="grid h-7 w-7 place-items-center rounded text-sm text-zinc-300 hover:bg-white/10 hover:text-white"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            aria-label="Показать всю 3D-модель"
+            title="Вписать всю модель"
+            onClick={() => runViewCommand("fit_model")}
+            className="h-7 rounded px-2 text-[10px] text-zinc-300 hover:bg-white/10 hover:text-white"
+          >
+            Вся
+          </button>
+          <button
+            type="button"
+            aria-label="Приблизить выбранную операцию"
+            title={
+              canFitSelection
+                ? "Вписать точный kernel bbox выбранной операции"
+                : "Для операции нет измеренного kernel bbox"
+            }
+            disabled={!canFitSelection}
+            onClick={() => runViewCommand("fit_selection")}
+            className="h-7 rounded px-2 text-[10px] text-sky-200 hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:text-zinc-600"
+          >
+            Выбор
+          </button>
         </div>
       )}
       {hasModel ? (
@@ -69,6 +130,7 @@ export default function Viewport({
           // here instead of filling it. Live user report: "занято пол
           // экрана... непонятный интерфейс".
           heightClassName="h-full"
+          viewCommand={viewCommand}
         />
       ) : (
         <div className="grid h-full place-items-center text-sm text-zinc-600">

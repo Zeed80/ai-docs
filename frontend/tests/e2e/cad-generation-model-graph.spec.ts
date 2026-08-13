@@ -25,13 +25,16 @@ const editorGraph = {
     nodes: [
       { id: "product:legacy-spec", type: "Product", name: "Проблемный вал" },
       { id: "region:hole", type: "SourceRegion", name: "Hole callout" },
-      { id: "operation:outer", type: "BuildOperation", name: "Outer profile" },
+      { id: "operation:0", type: "BuildOperation", name: "Outer profile" },
+      { id: "operation:1", type: "BuildOperation", name: "Review hole" },
       { id: "feature:outer", type: "Feature", name: "Outer cylinder" },
+      { id: "feature:0:outer:4", type: "Feature", name: "Uncertain hole" },
       { id: "topology:face:outer", type: "TopologyElement", name: "Outer face" },
       { id: "artifact:step", type: "Artifact", name: "STEP model" },
     ],
     edges: [
-      { id: "realizes:outer", type: "realizes", source_id: "operation:outer", target_id: "feature:outer" },
+      { id: "realizes:outer", type: "realizes", source_id: "operation:0", target_id: "feature:outer" },
+      { id: "realizes:review", type: "realizes", source_id: "operation:1", target_id: "feature:0:outer:4" },
       { id: "maps:outer", type: "maps_to_topology", source_id: "feature:outer", target_id: "topology:face:outer" },
     ],
     assertions: [{
@@ -57,8 +60,8 @@ const editorGraph = {
       evidence_ids: ["evidence:whole-sheet"],
       state: "active",
     }, {
-      id: "assertion:operation:outer:kind",
-      subject_id: "operation:outer",
+      id: "assertion:operation:0:kind",
+      subject_id: "operation:0",
       predicate: "operation.kind",
       value: { kind: "exact", value: "extrude" },
       origin: "derived",
@@ -68,14 +71,36 @@ const editorGraph = {
       evidence_ids: ["evidence:whole-sheet"],
       state: "active",
     }, {
-      id: "assertion:operation:outer:sequence",
-      subject_id: "operation:outer",
+      id: "assertion:operation:0:sequence",
+      subject_id: "operation:0",
       predicate: "operation.sequence",
       value: { kind: "exact", value: 0 },
       origin: "derived",
       assurance: "constraint_validated",
       confidence: 1,
       impacts: ["base_topology"],
+      evidence_ids: [],
+      state: "active",
+    }, {
+      id: "assertion:operation:1:kind",
+      subject_id: "operation:1",
+      predicate: "operation.kind",
+      value: { kind: "exact", value: "hole" },
+      origin: "derived",
+      assurance: "proposed",
+      confidence: 0.6,
+      impacts: ["connection_opening"],
+      evidence_ids: ["evidence:whole-sheet"],
+      state: "active",
+    }, {
+      id: "assertion:operation:1:sequence",
+      subject_id: "operation:1",
+      predicate: "operation.sequence",
+      value: { kind: "exact", value: 1 },
+      origin: "derived",
+      assurance: "constraint_validated",
+      confidence: 1,
+      impacts: ["connection_opening"],
       evidence_ids: [],
       state: "active",
     }, {
@@ -147,14 +172,48 @@ async function mockApi(page: Page, modelGraph: typeof editorGraph = graph) {
     const request = route.request();
     const url = new URL(request.url());
     if (url.pathname === "/api/auth/me") return route.fulfill({ json: { sub: "e2e", email: "e2e@example.local", name: "E2E", roles: ["admin"], groups: [] } });
-    if (url.pathname === `/api/image-gen/${generationId}`) return route.fulfill({ json: generation });
+    if (url.pathname === `/api/image-gen/${generationId}`) {
+      return route.fulfill({
+        json:
+          modelGraph === editorGraph
+            ? {
+                ...generation,
+                params: {
+                  ...generation.params,
+                  solid_3d: {
+                    built: true,
+                    paths: { stl: "model.stl" },
+                    assumptions: [
+                      "0:outer:4: диаметр отверстия требует проверки — временное значение",
+                    ],
+                    verification: {
+                      feature_results: [
+                        {
+                          feature_index: 0,
+                          changed_bounds_mm: {
+                            x_min: 0,
+                            x_max: 20,
+                            y_min: -5,
+                            y_max: 5,
+                            z_min: -5,
+                            z_max: 5,
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              }
+            : generation,
+      });
+    }
     if (url.pathname === `/api/image-gen/${generationId}/model-graph`) return route.fulfill({ json: modelGraph });
     if (url.pathname.endsWith("/model-graph/design-history")) return route.fulfill({ json: { graph_id: modelGraph.graph_id, graph_role: "design", current_revision: 0, revisions: [{ revision: 0, parent_revision: null, canonical_sha256: modelGraph.canonical_sha256, created_at: "2026-08-09T12:01:49Z", actor_id: "e2e", reason: "Initial design" }] } });
     if (url.pathname.endsWith("/certification")) return route.fulfill({ json: { status: "draft", revision: 0, drafter_approved_at: null, normcontroller_approved_at: null } });
     if (url.pathname.endsWith("/model-graph/patches")) return route.fulfill({ json: [] });
     if (url.pathname.endsWith("/model-graph/trace-proposals")) return route.fulfill({ json: [] });
     if (url.pathname.includes("/model-graph/assertions/") && url.pathname.endsWith("/impact")) {
-      return route.fulfill({ json: { assertion_id: "assertion:operation:outer:kind", target_id: "preview", subject_node_id: "operation:outer", critical_for_target: true, classification: "critical_for_target", declared_impacts: ["base_topology"], direct_dependency_node_ids: ["topology:face:outer"], affected_node_ids: ["operation:outer", "topology:face:outer", "artifact:step"], affected_build_operation_ids: ["operation:outer"], affected_artifact_ids: ["artifact:step"], affected_topology_element_ids: ["topology:face:outer"], evidence_ids: ["evidence:whole-sheet"], superseded_by_assertion_ids: [], dependency_paths: { "topology:face:outer": ["operation:outer", "feature:outer", "topology:face:outer"] } } });
+      return route.fulfill({ json: { assertion_id: "assertion:operation:0:kind", target_id: "preview", subject_node_id: "operation:0", critical_for_target: true, classification: "critical_for_target", declared_impacts: ["base_topology"], direct_dependency_node_ids: ["topology:face:outer"], affected_node_ids: ["operation:0", "topology:face:outer", "artifact:step"], affected_build_operation_ids: ["operation:0"], affected_artifact_ids: ["artifact:step"], affected_topology_element_ids: ["topology:face:outer"], evidence_ids: ["evidence:whole-sheet"], superseded_by_assertion_ids: [], dependency_paths: { "topology:face:outer": ["operation:0", "feature:outer", "topology:face:outer"] } } });
     }
     if (url.pathname.endsWith("/source-overlay")) {
       return route.fulfill({
@@ -286,6 +345,33 @@ test("CAD editor shows selected operation source bbox and topology impact", asyn
   await expect(panel.getByText(/Критично для сборки preview/)).toBeVisible();
   await expect(panel.getByText(/Outer face \(topology:face:outer\)/)).toBeVisible();
   await expect(panel.getByText(/STEP model \(artifact:step\)/)).toBeVisible();
+});
+
+test("CAD editor filters review operations and navigates the visible tree by keyboard", async ({ page, context }) => {
+  await setAuthCookie(context);
+  await mockApi(page, editorGraph);
+  await page.goto(`/cad/${generationId}/editor`);
+
+  await expect(
+    page.getByRole("button", { name: "Приблизить 3D-модель" }),
+  ).toBeVisible();
+  const fitSelection = page.getByRole("button", {
+    name: "Приблизить выбранную операцию",
+  });
+  await expect(fitSelection).toBeEnabled();
+  await fitSelection.click();
+
+  const reviewFilter = page.getByRole("button", { name: "Проверить 1" });
+  await expect(reviewFilter).toBeVisible();
+  await reviewFilter.click();
+  await expect(page.getByRole("button", { name: /Отверстие/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Выдавливание/ })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Все 2" }).click();
+  const outer = page.getByRole("button", { name: /Выдавливание/ });
+  await outer.focus();
+  await outer.press("ArrowDown");
+  await expect(page.getByText("Выбрано: Отверстие")).toBeVisible();
 });
 
 test("related assertions are submitted as one atomic GraphPatch", async ({ page, context }) => {

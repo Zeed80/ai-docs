@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { EmgOperationNode } from "@/lib/emg-tree";
 import { kindLabel } from "@/lib/emg-tree";
@@ -137,64 +137,134 @@ export default function FeatureTreePanel({
   onDelete?: (id: string, reason: string) => void;
   deleteBusyId?: string | null;
 }) {
+  const [filter, setFilter] = useState<"all" | "review" | "without_guess">(
+    "all",
+  );
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const visibleOperations = operations.filter((operation) => {
+    const guessed = guessedOperationIds.has(operation.id);
+    if (filter === "review") return guessed;
+    if (filter === "without_guess") return !guessed;
+    return true;
+  });
+
   if (operations.length === 0) {
     return (
       <p className="p-3 text-xs text-zinc-500">Дерево построения пока пусто.</p>
     );
   }
   return (
-    <ul className="divide-y divide-white/5">
-      {operations.map((op, index) => {
-        const active = op.id === selectedId;
-        const guessed = guessedOperationIds.has(op.id);
-        return (
-          <li key={op.id} className="group relative">
-            {/* A <div role="button">, not a <button> — DeleteButton below
-                renders its own real <button>s, and nesting <button> inside
-                <button> is invalid HTML (the browser would silently close
-                the outer one early, breaking the row's own click target). */}
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => onSelect(op.id)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onSelect(op.id);
-                }
-              }}
-              className={`flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs transition-colors ${
-                active
-                  ? "bg-sky-500/15 text-sky-100"
-                  : "text-zinc-300 hover:bg-white/5"
-              }`}
-            >
-              <span className="w-4 shrink-0 text-center text-zinc-500">
-                {index + 1}
-              </span>
-              <span className="w-5 shrink-0 text-center text-sm">
-                {KIND_ICON[op.kind] ?? "•"}
-              </span>
-              <span className="min-w-0 flex-1 truncate">
-                {kindLabel(op.kind)}
-              </span>
-              {guessed && (
-                <span
-                  title="Есть предположенные значения — требует проверки"
-                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
-                />
-              )}
-              {onDelete && (
-                <DeleteButton
-                  op={op}
-                  busy={deleteBusyId === op.id}
-                  onConfirm={(reason) => onDelete(op.id, reason)}
-                />
-              )}
-            </div>
-          </li>
-        );
-      })}
-    </ul>
+    <>
+      <div
+        className="flex flex-wrap gap-1 border-b border-white/10 p-2"
+        aria-label="Фильтр дерева построения"
+      >
+        {([
+          ["all", `Все ${operations.length}`],
+          ["review", `Проверить ${guessedOperationIds.size}`],
+          [
+            "without_guess",
+            `Без предположений ${operations.length - guessedOperationIds.size}`,
+          ],
+        ] as const).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            aria-pressed={filter === value}
+            onClick={() => setFilter(value)}
+            className={`rounded px-2 py-1 text-[10px] transition-colors ${
+              filter === value
+                ? "bg-sky-500/20 text-sky-200"
+                : "bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {visibleOperations.length === 0 ? (
+        <p className="p-3 text-xs text-zinc-500">
+          В этой категории операций нет.
+        </p>
+      ) : (
+        <ul ref={listRef} className="divide-y divide-white/5">
+          {visibleOperations.map((op, visibleIndex) => {
+            const index = operations.findIndex((item) => item.id === op.id);
+            const active = op.id === selectedId;
+            const guessed = guessedOperationIds.has(op.id);
+            return (
+              <li key={op.id} className="group relative">
+                {/* A <div role="button">, not a <button> — DeleteButton below
+                    renders its own real <button>s, and nesting <button> inside
+                    <button> is invalid HTML (the browser would silently close
+                    the outer one early, breaking the row's own click target). */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  data-operation-index={visibleIndex}
+                  onClick={() => onSelect(op.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelect(op.id);
+                      return;
+                    }
+                    const nextIndex =
+                      event.key === "ArrowDown"
+                        ? Math.min(
+                            visibleIndex + 1,
+                            visibleOperations.length - 1,
+                          )
+                        : event.key === "ArrowUp"
+                          ? Math.max(visibleIndex - 1, 0)
+                          : event.key === "Home"
+                            ? 0
+                            : event.key === "End"
+                              ? visibleOperations.length - 1
+                              : null;
+                    if (nextIndex === null) return;
+                    event.preventDefault();
+                    onSelect(visibleOperations[nextIndex].id);
+                    listRef.current
+                      ?.querySelector<HTMLElement>(
+                        `[data-operation-index="${nextIndex}"]`,
+                      )
+                      ?.focus();
+                  }}
+                  className={`flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs transition-colors ${
+                    active
+                      ? "bg-sky-500/15 text-sky-100"
+                      : "text-zinc-300 hover:bg-white/5"
+                  }`}
+                >
+                  <span className="w-4 shrink-0 text-center text-zinc-500">
+                    {index + 1}
+                  </span>
+                  <span className="w-5 shrink-0 text-center text-sm">
+                    {KIND_ICON[op.kind] ?? "•"}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {kindLabel(op.kind)}
+                  </span>
+                  {guessed && (
+                    <span
+                      title="Есть предположенные значения — требует проверки"
+                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
+                    />
+                  )}
+                  {onDelete && (
+                    <DeleteButton
+                      op={op}
+                      busy={deleteBusyId === op.id}
+                      onConfirm={(reason) => onDelete(op.id, reason)}
+                    />
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
   );
 }

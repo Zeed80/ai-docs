@@ -52,6 +52,16 @@ interface Props {
   // indistinguishable dark gap below a small model (live user report:
   // "занято пол экрана... непонятный интерфейс").
   heightClassName?: string;
+  // Imperative camera actions are represented as immutable commands so the
+  // surrounding editor can provide ordinary accessible buttons without
+  // reaching into Three.js objects. `nonce` makes repeated equal actions
+  // observable (two consecutive zoom-ins, for example).
+  viewCommand?: CadViewCommand;
+}
+
+export interface CadViewCommand {
+  type: "fit_model" | "fit_selection" | "zoom_in" | "zoom_out";
+  nonce: number;
 }
 
 const BASE_COLOR = 0xd4d4d8;
@@ -72,6 +82,7 @@ export default function CadModelViewer({
   selectedOperationId,
   onOperationClick,
   heightClassName = "h-[360px] sm:h-[440px]",
+  viewCommand,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -90,6 +101,11 @@ export default function CadModelViewer({
   // frame and must be shifted the same way to land on the visible geometry.
   const centerRef = useRef(new THREE.Vector3());
   const boundsGroupRef = useRef<THREE.Group | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const modelBoxRef = useRef<THREE.Box3 | null>(null);
+  const viewCommandRef = useRef(viewCommand);
+  viewCommandRef.current = viewCommand;
   // Every operation's box in SCENE (centered) coordinates, rebuilt whenever
   // the overlay redraws — click hit-testing reuses these, not just the ones
   // actually drawn as amber/selected outlines.
@@ -107,6 +123,38 @@ export default function CadModelViewer({
     flaggedOperationIds,
     selectedOperationId,
     onOperationClick,
+  };
+
+  const applyViewCommand = (command: CadViewCommand | undefined) => {
+    if (!command) return;
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    if (command.type === "zoom_in" || command.type === "zoom_out") {
+      const factor = command.type === "zoom_in" ? 0.75 : 4 / 3;
+      const offset = camera.position.clone().sub(controls.target);
+      camera.position.copy(controls.target).addScaledVector(offset, factor);
+      controls.update();
+      return;
+    }
+    const selectedId = overlayRef.current.selectedOperationId;
+    const targetBox =
+      command.type === "fit_selection" && selectedId
+        ? hitBoxesRef.current.get(selectedId)
+        : modelBoxRef.current;
+    if (!targetBox || targetBox.isEmpty()) return;
+    const center = targetBox.getCenter(new THREE.Vector3());
+    const size = targetBox.getSize(new THREE.Vector3());
+    const radius = Math.max(size.length() / 2, 0.001);
+    const direction = camera.position.clone().sub(controls.target).normalize();
+    if (direction.lengthSq() === 0) direction.set(1, -1, 0.75).normalize();
+    const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+    const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
+    const limitingFov = Math.max(0.01, Math.min(verticalFov, horizontalFov));
+    const distance = (radius / Math.sin(limitingFov / 2)) * 1.15;
+    controls.target.copy(center);
+    camera.position.copy(center).addScaledVector(direction, distance);
+    controls.update();
   };
 
   // Clears and repopulates the outline overlay from overlayRef's current
@@ -176,6 +224,7 @@ export default function CadModelViewer({
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x18181b);
     const camera = new THREE.PerspectiveCamera(38, 1, 0.01, 100000);
+    cameraRef.current = camera;
     camera.up.set(0, 0, 1);
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -189,6 +238,7 @@ export default function CadModelViewer({
     host.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
+    controlsRef.current = controls;
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.screenSpacePanning = true;
@@ -297,6 +347,10 @@ export default function CadModelViewer({
         }
         const center = bounds.getCenter(new THREE.Vector3());
         centerRef.current.copy(center);
+        modelBoxRef.current = new THREE.Box3(
+          bounds.min.clone().sub(center),
+          bounds.max.clone().sub(center),
+        );
 
         const edges = new THREE.LineSegments(
           new THREE.EdgesGeometry(geometry, 25),
@@ -349,6 +403,9 @@ export default function CadModelViewer({
         controls.update();
         setState("ready");
         syncBoundsOverlay();
+        // A command can arrive while the STL is still loading. Replaying the
+        // latest ref here avoids losing that click to the async load window.
+        applyViewCommand(viewCommandRef.current);
 
         if (!topologyUrl) return;
         fetch(topologyUrl, { credentials: "include" })
@@ -485,8 +542,15 @@ export default function CadModelViewer({
       renderer.dispose();
       renderer.domElement.remove();
       boundsGroupRef.current = null;
+      cameraRef.current = null;
+      controlsRef.current = null;
+      modelBoxRef.current = null;
     };
   }, [url, topologyUrl, onFaceSelect, onEdgeSelect]);
+
+  useEffect(() => {
+    applyViewCommand(viewCommand);
+  }, [viewCommand]);
 
   // Controlled highlight — separate from the load effect so changing the
   // selection never re-fetches or re-builds the scene.
