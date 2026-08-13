@@ -26,6 +26,7 @@ import FeatureTreePanel, {
   type OperationTreeIssue,
 } from "@/components/cad/editor/FeatureTreePanel";
 import AssumptionsStrip from "@/components/cad/editor/AssumptionsStrip";
+import BlockersAlternativesPanel from "@/components/cad/editor/BlockersAlternativesPanel";
 import CadStatusBar from "@/components/cad/editor/CadStatusBar";
 import ResizablePane from "@/components/cad/editor/ResizablePane";
 import Viewport from "@/components/cad/editor/Viewport";
@@ -158,6 +159,9 @@ export default function CadEditorShell({
   const [graphRevision, setGraphRevision] =
     useState<EngineeringModelGraphRevision | null>(null);
   const [selectedOperationId, setSelectedOperationId] = useState<string | null>(
+    null,
+  );
+  const [focusedAssertionId, setFocusedAssertionId] = useState<string | null>(
     null,
   );
   const [error, setError] = useState<string | null>(null);
@@ -358,7 +362,10 @@ export default function CadEditorShell({
     return issues;
   }, [graphRevision, solid, tree]);
   const handleOperationClick = useCallback((operationId: string | null) => {
-    if (operationId) setSelectedOperationId(operationId);
+    if (operationId) {
+      setFocusedAssertionId(null);
+      setSelectedOperationId(operationId);
+    }
   }, []);
 
   async function handleRebuildNow() {
@@ -763,7 +770,10 @@ export default function CadEditorShell({
                 operations={tree.operations}
                 guessedOperationIds={guessedOperationIds}
                 selectedId={selectedOperationId}
-                onSelect={setSelectedOperationId}
+                onSelect={(id) => {
+                  setFocusedAssertionId(null);
+                  setSelectedOperationId(id);
+                }}
                 onDelete={(id, reason) =>
                   void handleDeleteOperation(id, reason)
                 }
@@ -823,8 +833,22 @@ export default function CadEditorShell({
               <AssumptionsStrip
                 assumptions={assumptions}
                 operations={tree?.operations ?? []}
-                onSelectOperation={setSelectedOperationId}
+                onSelectOperation={(id) => {
+                  setFocusedAssertionId(null);
+                  setSelectedOperationId(id);
+                }}
               />
+              {graphRevision && (
+                <BlockersAlternativesPanel
+                  generationId={generationId}
+                  graph={graphRevision.graph}
+                  operations={tree?.operations ?? []}
+                  onNavigate={(assertionId, operationId) => {
+                    setFocusedAssertionId(assertionId);
+                    if (operationId) setSelectedOperationId(operationId);
+                  }}
+                />
+              )}
             </>
           )}
           <CadStatusBar
@@ -852,6 +876,7 @@ export default function CadEditorShell({
                 generationId={generationId}
                 graph={graphRevision.graph}
                 operation={selectedOperation}
+                focusedAssertionId={focusedAssertionId}
               />
             )}
             <TopologyPickerPanel

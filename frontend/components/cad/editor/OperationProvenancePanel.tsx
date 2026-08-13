@@ -101,20 +101,29 @@ export default function OperationProvenancePanel({
   generationId,
   graph,
   operation,
+  focusedAssertionId,
 }: {
   generationId: string;
   graph: Graph;
   operation: EmgOperationNode | null;
+  focusedAssertionId?: string | null;
 }) {
   const assertions = useMemo(() => {
-    if (!operation) return [];
-    const subjects = new Set([operation.id, ...operation.featureIds]);
-    return graph.assertions
+    const subjects = new Set(
+      operation ? [operation.id, ...operation.featureIds] : [],
+    );
+    const scoped = graph.assertions
       .filter(
         (item) => item.state === "active" && subjects.has(item.subject_id),
       )
       .sort((a, b) => a.predicate.localeCompare(b.predicate));
-  }, [graph.assertions, operation]);
+    const focused = graph.assertions.find(
+      (item) => item.state === "active" && item.id === focusedAssertionId,
+    );
+    return focused && !scoped.some((item) => item.id === focused.id)
+      ? [focused, ...scoped]
+      : scoped;
+  }, [focusedAssertionId, graph.assertions, operation]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [impact, setImpact] = useState<EngineeringAssertionImpact | null>(null);
   const [impactError, setImpactError] = useState<string | null>(null);
@@ -122,11 +131,13 @@ export default function OperationProvenancePanel({
 
   useEffect(() => {
     setSelectedId((current) =>
-      current && assertions.some((item) => item.id === current)
-        ? current
-        : (assertions[0]?.id ?? null),
+      focusedAssertionId && assertions.some((item) => item.id === focusedAssertionId)
+        ? focusedAssertionId
+        : current && assertions.some((item) => item.id === current)
+          ? current
+          : (assertions[0]?.id ?? null),
     );
-  }, [assertions]);
+  }, [assertions, focusedAssertionId]);
 
   const assertion =
     assertions.find((item) => item.id === selectedId) ?? assertions[0] ?? null;
@@ -176,7 +187,7 @@ export default function OperationProvenancePanel({
     };
   }, [assertion, generationId, targetId]);
 
-  if (!operation) return null;
+  if (!operation && !focusedAssertionId) return null;
 
   return (
     <section

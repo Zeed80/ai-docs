@@ -50,6 +50,7 @@ const editorGraph = {
       impacts: ["connection_opening"],
       evidence_ids: ["evidence:whole-sheet"],
       state: "active",
+      hypothesis_id: "hypothesis:hole-a",
     }, {
       id: "assertion:shaft-length",
       subject_id: "product:legacy-spec",
@@ -116,9 +117,25 @@ const editorGraph = {
       impacts: ["base_topology"],
       evidence_ids: ["evidence:whole-sheet"],
       state: "active",
+    }, {
+      id: "assertion:hole-location-alternative",
+      subject_id: "product:legacy-spec",
+      predicate: "hole.location_mm",
+      value: { kind: "exact", value: 18.5 },
+      origin: "inferred",
+      assurance: "proposed",
+      confidence: 0.35,
+      impacts: ["connection_opening"],
+      evidence_ids: ["evidence:whole-sheet"],
+      state: "active",
+      hypothesis_id: "hypothesis:hole-b",
     }],
     evidence: [{ id: "evidence:whole-sheet", kind: "raster_region", source_region_id: "region:hole", payload: { bbox_normalized: [0.1, 0.2, 0.4, 0.5], fallback: false } }],
-    hypothesis_sets: [],
+    hypothesis_options: [
+      { id: "hypothesis:hole-a", assertion_ids: ["assertion:hole-location"], hard_constraints_satisfied: false, evidence_coverage: 0.62, cross_view_consistency: 0.4, assumption_count: 1, domain_prior: 0.5, hybrid_trace_score: 0 },
+      { id: "hypothesis:hole-b", assertion_ids: ["assertion:hole-location-alternative"], hard_constraints_satisfied: true, evidence_coverage: 0.51, cross_view_consistency: 0.7, assumption_count: 0, domain_prior: 0.4, hybrid_trace_score: 0 },
+    ],
+    hypothesis_sets: [{ id: "hypothesis-set:hole", option_ids: ["hypothesis:hole-a", "hypothesis:hole-b"], selected_option_id: "hypothesis:hole-a" }],
     build_targets: [{ id: "preview", kind: "preview_brep", root_node_ids: ["product:legacy-spec"], requirement_ids: [], critical_impacts: ["connection_opening"], mass_tolerance_percent: 0 }],
     verification: { critical_unresolved_assertion_ids: ["assertion:hole-location"], issue_codes: ["critical_assertions_unresolved"] },
     reader_manifest: { max_wall_seconds: 900, max_model_calls: 32, call_timeout_seconds: 90, no_progress_pass_limit: 2, calls_used: 3, elapsed_seconds: 428.7, no_progress_passes: 2, ordinary_attempts: { "assertion:hole-location": 3 }, stop_reason: "fixed_point" },
@@ -389,6 +406,14 @@ test("CAD editor shows selected operation source bbox and topology impact", asyn
   await expect(panel.getByText(/Главный вид \(view:front\)/)).toBeVisible();
   await expect(panel.getByText(/Стена IFC 42 \(ifc:wall:42\)/)).toBeVisible();
   await expect(panel.getByText(/operation:0 → artifact:step → view:front/)).toBeVisible();
+
+  const blockers = page.getByTestId("cad-blockers-panel");
+  await expect(blockers.getByText("Блокеры выпуска: 1")).toBeVisible();
+  await expect(blockers.getByText("Альтернативы из hypothesis-set:hole")).toBeVisible();
+  await expect(blockers.getByText(/hypothesis:hole-a/)).toBeVisible();
+  await expect(blockers.getByText(/hypothesis:hole-b/)).toBeVisible();
+  await blockers.getByRole("button", { name: /hole.location_mm/ }).click();
+  await expect(panel.getByText("not localized")).toBeVisible();
 });
 
 test("CAD editor filters review operations and navigates the visible tree by keyboard", async ({ page, context }) => {

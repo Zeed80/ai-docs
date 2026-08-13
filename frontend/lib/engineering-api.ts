@@ -111,6 +111,16 @@ export type EngineeringModelGraphRevision = {
       source_region_id?: string | null;
       payload: Record<string, unknown>;
     }>;
+    hypothesis_options: Array<{
+      id: string;
+      assertion_ids: string[];
+      hard_constraints_satisfied: boolean;
+      evidence_coverage: number;
+      cross_view_consistency: number;
+      assumption_count: number;
+      domain_prior: number;
+      hybrid_trace_score: number;
+    }>;
     hypothesis_sets: Array<{
       id: string;
       option_ids: string[];

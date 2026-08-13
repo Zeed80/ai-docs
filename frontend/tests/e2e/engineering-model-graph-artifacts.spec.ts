@@ -47,6 +47,7 @@ const graph = {
         valid: true,
       },
     }],
+    hypothesis_options: [],
     hypothesis_sets: [],
     build_targets: [{ id: "production", kind: "production_pdf", root_node_ids: ["system:root"], requirement_ids: [], critical_impacts: ["connectivity"], mass_tolerance_percent: 0 }],
     verification: { critical_unresolved_assertion_ids: [], issue_codes: [] },
