@@ -81,7 +81,7 @@
 - [ ] Детерминированно выпустить ортогональные/аксонометрические виды, HLR и необходимые разрезы.
 - [ ] Связать размерные объекты с feature/topology targets.
 - [ ] Добавить контролируемые raster/degradation варианты только после source-group split.
-- [ ] Сформировать class-balanced manifest; не позволять массовому простому классу скрывать провал редкого.
+- [-] Сформировать class-balanced manifest; не позволять массовому простому классу скрывать провал редкого: dev-контракт `cad-class-balanced/1.0` уже группирует варианты по `source_group_id`, затем даёт равный вес классам и schema-level отклоняет любые строки не из `dev`. Первый воспроизводимый срез покрывает по одной группе `rotation_body`, `assembly`, `architectural_bim`, `hydraulic_system`; полный roadmap классов и уровней сложности ещё не собран.
 
 ### 3.3. Mechanical promotion gates
 
@@ -178,14 +178,14 @@
 
 ## 8. Итерационный цикл качества
 
-- [ ] Сформировать минимальное число source groups на каждый класс и уровень сложности.
-- [ ] Снять class-balanced baseline reader → graph → 3D/BIM → 2D.
-- [ ] Кластеризовать ошибки: routing, OCR/symbol, view association, parameter, feature, topology, BIM relation, connectivity, projection, editor.
-- [ ] Исправлять общий класс ошибки; запрещена подгонка по имени файла/fixture.
-- [ ] После изменения прогонять unit + domain dev + corruption tests.
-- [ ] Публиковать before/after по каждому классу и regression delta.
-- [ ] Отклонять изменение, улучшающее среднее ценой invented geometry или деградации критического класса.
-- [ ] Не запускать sealed holdout до promotion-кандидата.
+- [-] Сформировать минимальное число source groups на каждый класс и уровень сложности: воспроизводимый dev-срез содержит четыре класса и четыре независимые source groups; это каркас, а не достаточный корпус для promotion.
+- [-] Снять class-balanced baseline reader → graph → 3D/BIM → 2D: baseline `class_balanced_dev_baseline_20260813.json` фиксирует все четыре стадии без подмены `not_run` успехом. Graph покрыт `4/4`, но reader не запускался, 3D/BIM и 2D неполны, поэтому `promotion_eligible=false`.
+- [x] Кластеризовать ошибки: routing, OCR/symbol, view association, parameter, feature, topology, BIM relation, connectivity, projection, editor. Контракт запрещает неизвестные кластеры и публикует их по source group и классу.
+- [-] Исправлять общий класс ошибки; запрещена подгонка по имени файла/fixture: gate и агрегация универсальны, но репрезентативность ещё ограничена одной dev-группой на класс.
+- [x] После изменения прогонять unit + domain dev + corruption tests: единая команда `make cad-class-balanced-cycle` сначала проверяет пять fail-closed admission-corruptions, затем baseline delta и смежные unit/domain regressions.
+- [x] Публиковать before/after по каждому классу и regression delta: comparator отклоняет снижение coverage/pass rate или ухудшение safety любого отдельного класса, даже если macro не снизился.
+- [x] Отклонять изменение, улучшающее среднее ценой invented geometry или деградации критического класса: invented/critical safety являются отдельными promotion gates; regression failure принудительно снимает eligibility.
+- [x] Не запускать sealed holdout до promotion-кандидата: manifest принимает только literal split `dev`; sealed holdout в этой фазе не открывался и не запускался.
 
 ## 9. Финальная приёмка и production
 

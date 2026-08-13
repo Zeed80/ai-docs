@@ -17,7 +17,9 @@ from app.domain.engineering_model_graph import EngineeringModelGraph, compile_bu
 from app.services.engineering_model_graph import verify_graph
 
 
-def _build_graph(case: dict[str, Any], fixture_root: Path) -> EngineeringModelGraph:
+def build_regression_graph(
+    case: dict[str, Any], fixture_root: Path
+) -> EngineeringModelGraph:
     case_id = str(case["id"])
     kind = case["kind"]
     payload = case["input"]
@@ -63,8 +65,8 @@ def _build_graph(case: dict[str, Any], fixture_root: Path) -> EngineeringModelGr
 def _case_result(
     case: dict[str, Any], fixture_root: Path
 ) -> tuple[dict[str, Any], list[str]]:
-    graph = _build_graph(case, fixture_root)
-    repeated = _build_graph(case, fixture_root)
+    graph = build_regression_graph(case, fixture_root)
+    repeated = build_regression_graph(case, fixture_root)
     preview = compile_build_plan(graph, "preview")
     production = compile_build_plan(graph, "production")
     state, issues = verify_graph(graph)

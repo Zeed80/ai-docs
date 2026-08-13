@@ -1,0 +1,101 @@
+{
+  "schema_version": "cad-class-balanced/1.0",
+  "dataset_id": "emg-golden-dev-20260813",
+  "required_classes": [
+    "rotation_body",
+    "assembly",
+    "architectural_bim",
+    "hydraulic_system"
+  ],
+  "min_source_groups_per_class": 1,
+  "min_stage_pass_rate": 1.0,
+  "cases": [
+    {
+      "id": "mechanical-detal-126-v2",
+      "source_group_id": "fixture:detal-126",
+      "split": "dev",
+      "domain": "mechanical",
+      "drawing_class": "rotation_body",
+      "complexity": "complex",
+      "source_license": "repository_fixture",
+      "truth_kind": "human_reviewed_engineering_spec",
+      "stages": {
+        "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
+        "graph": {"status": "passed"},
+        "model_3d_bim": {"status": "review_required", "failure_clusters": ["parameter"], "blocker_codes": ["critical_assertions_unapproved"]},
+        "drawing_2d": {"status": "not_run", "blocker_codes": ["kernel_artifact_not_built"]}
+      },
+      "safety": {
+        "status": "evaluated",
+        "invented_geometry": false,
+        "critical_miss": false,
+        "evidence_ids": [
+          "mechanical-canonical-hash-tamper",
+          "mechanical-unknown-unit",
+          "mechanical-wrong-domain-generator"
+        ]
+      }
+    },
+    {
+      "id": "assembly-fixed-shaft",
+      "source_group_id": "fixture:assembly-fixed-shaft",
+      "split": "dev",
+      "domain": "assembly",
+      "drawing_class": "assembly",
+      "complexity": "medium",
+      "source_license": "repository_fixture",
+      "truth_kind": "deterministic_assembly_contract",
+      "stages": {
+        "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
+        "graph": {"status": "passed"},
+        "model_3d_bim": {"status": "review_required", "failure_clusters": ["topology"], "blocker_codes": ["artifact_reopen_pending"]},
+        "drawing_2d": {"status": "not_run", "blocker_codes": ["required_2d_pending"]}
+      },
+      "safety": {
+        "status": "evaluated",
+        "invented_geometry": false,
+        "critical_miss": false,
+        "evidence_ids": ["assembly-component-count-unknown"]
+      }
+    },
+    {
+      "id": "construction-wall-opening",
+      "source_group_id": "fixture:construction-wall-opening",
+      "split": "dev",
+      "domain": "construction",
+      "drawing_class": "architectural_bim",
+      "complexity": "medium",
+      "source_license": "repository_fixture",
+      "truth_kind": "deterministic_bim_semantic_contract",
+      "stages": {
+        "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
+        "graph": {"status": "passed"},
+        "model_3d_bim": {"status": "review_required", "failure_clusters": ["bim_relation"], "blocker_codes": ["ifc_reopen_pending"]},
+        "drawing_2d": {"status": "not_run", "blocker_codes": ["required_sheets_pending"]}
+      },
+      "safety": {
+        "status": "evaluated",
+        "invented_geometry": false,
+        "critical_miss": false,
+        "evidence_ids": ["construction-material-unknown"]
+      }
+    },
+    {
+      "id": "hydraulic-closed-loop",
+      "source_group_id": "fixture:hydraulic-closed-loop",
+      "split": "dev",
+      "domain": "system",
+      "drawing_class": "hydraulic_system",
+      "complexity": "medium",
+      "source_license": "repository_fixture",
+      "truth_kind": "deterministic_system_connectivity_contract",
+      "stages": {
+        "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
+        "graph": {"status": "passed"},
+        "model_3d_bim": {"status": "not_run", "blocker_codes": ["domain_has_no_3d_artifact"]},
+        "drawing_2d": {"status": "review_required", "failure_clusters": ["connectivity"], "blocker_codes": ["required_diagram_pending"]}
+      },
+      "safety": {"status": "not_run"}
+    }
+  ]
+}
