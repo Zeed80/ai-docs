@@ -2102,6 +2102,28 @@ async def _build_spec_solid(
     build_gate = solid_build_gate(
         spec, candidate, require_source_evidence=require_source_evidence
     )
+    graph_admission = None
+    if engineering_graph is not None:
+        from app.services.engineering_model_graph import evaluate_build_admission
+
+        graph_admission = evaluate_build_admission(
+            engineering_graph,
+            "preview",
+            "mechanical_brep",
+        )
+        if not graph_admission.allowed:
+            admission_blockers = [
+                f"EMG {item.code}: {item.message}"
+                for item in graph_admission.blockers
+            ]
+            build_gate = {
+                **build_gate,
+                "allowed": False,
+                "blockers": list(dict.fromkeys([
+                    *(str(item) for item in build_gate["blockers"]),
+                    *admission_blockers,
+                ])),
+            }
     preview_gate = solid_preview_gate(build_gate)
     # A2: a step whose length could not be read compiles anyway, with a
     # provisional average length (ParamProvenance.origin="guessed") — real
@@ -2148,6 +2170,10 @@ async def _build_spec_solid(
             "preview_gate": preview_gate,
             "kernel_payload_sha256": kernel_input.get("sha256"),
             "confirm_assumptions": confirm_assumptions,
+            "graph_admission": (
+                graph_admission.model_dump(mode="json")
+                if graph_admission is not None else None
+            ),
         },
     )
     if not build_gate["allowed"] and not preview_mode:
@@ -2164,6 +2190,10 @@ async def _build_spec_solid(
             "blockers": build_gate["blockers"],
             "warnings": build_gate["warnings"],
             "preview_gate": preview_gate,
+            "graph_admission": (
+                graph_admission.model_dump(mode="json")
+                if graph_admission is not None else None
+            ),
             "label": candidate.label,
             "feature_tree": candidate.model_dump(mode="json"),
             "kernel_input": kernel_input,
@@ -2380,6 +2410,10 @@ async def _build_spec_solid(
         "assumptions": candidate.missing_data,
         "build_gate": build_gate,
         "preview_gate": preview_gate,
+        "graph_admission": (
+            graph_admission.model_dump(mode="json")
+            if graph_admission is not None else None
+        ),
         "verification": {
             **verification.as_dict(),
             "feature_complete": not preview_mode,

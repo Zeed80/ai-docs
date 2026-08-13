@@ -897,6 +897,7 @@ class BuildAdmissionReport(StrictModel):
     blockers: list[BuildAdmissionBlocker]
     questions: list[BuildAdmissionQuestion]
     verification_issue_codes: list[str]
+    advisory_verification_issue_codes: list[str]
     pending_output_assertion_ids: list[str]
     plan: BuildPlan
 

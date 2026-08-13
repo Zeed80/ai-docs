@@ -73,6 +73,75 @@ async def test_emg_pipeline_compiles_kernel_candidate_back_from_sealed_graph(mon
     assert graph.graph_id == "image-generation:generation-1"
     assert result["feature_tree"]["features"][0]["params"] == candidate.features[0].params
     assert result["build_status"] == "blocked"
+    assert result["graph_admission"]["allowed"] is True
+    assert result["graph_admission"]["advisory_verification_issue_codes"] == [
+        "domain_mandatory_assertion_missing"
+    ]
+    assert "drawing_scale_not_available" in result["graph_admission"][
+        "verification_issue_codes"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mechanical_kernel_is_not_called_when_graph_hash_is_invalid(monkeypatch):
+    from app.ai.cad_emg_compat import spec_feature_tree_as_graph
+
+    candidate = FeatureTreeCandidate(
+        features=[Feature3D(
+            kind="extrude",
+            params={"depth_mm": 12.0, "width_mm": 40.0, "height_mm": 20.0},
+            param_provenance={
+                "depth_mm": ParamProvenance(origin="stated", detail="dimension"),
+                "width_mm": ParamProvenance(origin="measured", detail="profile"),
+                "height_mm": ParamProvenance(origin="measured", detail="profile"),
+            },
+            confidence=0.9,
+        )],
+        score=0.9,
+        label="tampered graph candidate",
+    )
+    spec = {"part": "test", "main_view": {"type": "plate"}}
+    graph = spec_feature_tree_as_graph(
+        spec,
+        candidate,
+        graph_id="image-generation:tampered",
+        source_sha256="a" * 64,
+    ).model_copy(update={"canonical_sha256": "0" * 64})
+
+    async def record(*_args, **_kwargs):
+        return None
+
+    async def forbidden_compile(*_args, **_kwargs):
+        raise AssertionError("kernel must not be called for a rejected graph")
+
+    monkeypatch.setattr(
+        "app.ai.cad_solid.solid_build_gate",
+        lambda *_args, **_kwargs: {"allowed": True, "blockers": [], "warnings": []},
+    )
+    monkeypatch.setattr(
+        "app.ai.cad_solid.solid_preview_gate",
+        lambda gate: {
+            "allowed": False,
+            "hard_blockers": list(gate["blockers"]),
+            "excluded": [],
+        },
+    )
+    monkeypatch.setattr("app.ai.cad_process_log.record_cad_process_event", record)
+    monkeypatch.setattr("app.services.cad_kernel.compile_candidate", forbidden_compile)
+
+    result = await cad_trace._build_spec_solid(
+        spec,
+        "tampered",
+        "owner",
+        engineering_graph_override=graph,
+    )
+
+    assert result is not None
+    assert result["built"] is False
+    assert result["graph_admission"]["allowed"] is False
+    assert "verification_canonical_hash_mismatch" in {
+        item["code"] for item in result["graph_admission"]["blockers"]
+    }
 
 
 @pytest.mark.asyncio

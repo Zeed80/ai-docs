@@ -479,6 +479,79 @@ def _domain_rule_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
     return issues
 
 
+_GOST_SCALE_LABELS = {
+    "100:1", "50:1", "40:1", "20:1", "10:1", "5:1", "4:1", "2.5:1", "2:1",
+    "1:1", "1:2", "1:2.5", "1:4", "1:5", "1:10", "1:15", "1:20", "1:25",
+    "1:40", "1:50", "1:75", "1:100", "1:200", "1:400", "1:500", "1:1000",
+}
+
+
+def _source_scale_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
+    """Validate declared drawing scale without inventing one from raster size."""
+    issues: list[dict[str, Any]] = []
+    active = [item for item in graph.assertions if item.state == "active"]
+    metric = [
+        item for item in active if item.predicate == PREDICATE.SCALE_MM_PER_PX
+    ]
+    for item in metric:
+        value = item.value.value if item.value.kind == "exact" else None
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or float(value) <= 0
+        ):
+            issues.append({
+                "level": 2,
+                "code": "drawing_metric_scale_invalid",
+                "assertion_id": item.id,
+                "severity": "error",
+            })
+        elif not item.evidence_ids:
+            issues.append({
+                "level": 2,
+                "code": "drawing_scale_evidence_missing",
+                "assertion_id": item.id,
+                "severity": "warning",
+            })
+
+    legacy_scale = next((
+        item for item in active
+        if item.subject_id == "product:legacy-spec"
+        and item.predicate == "title_block.scale"
+    ), None)
+    if legacy_scale is None:
+        if graph.profile == "mechanical" and any(
+            item.id == "product:legacy-spec" for item in graph.nodes
+        ):
+            issues.append({
+                "level": 2,
+                "code": "drawing_scale_not_available",
+                "severity": "warning",
+            })
+        return issues
+    label = (
+        str(legacy_scale.value.value).strip().replace(" ", "").replace(",", ".")
+        if legacy_scale.value.kind == "exact"
+        else ""
+    )
+    if label not in _GOST_SCALE_LABELS:
+        issues.append({
+            "level": 2,
+            "code": "drawing_scale_nonstandard_or_unreadable",
+            "assertion_id": legacy_scale.id,
+            "value": label,
+            "severity": "warning",
+        })
+    elif not legacy_scale.evidence_ids:
+        issues.append({
+            "level": 2,
+            "code": "drawing_scale_evidence_missing",
+            "assertion_id": legacy_scale.id,
+            "severity": "warning",
+        })
+    return issues
+
+
 def verify_graph(graph: EngineeringModelGraph) -> tuple[VerificationState, list[dict[str, Any]]]:
     """Run the twelve verification levels with explicit unavailable evidence."""
     issues: list[dict[str, Any]] = []
@@ -493,6 +566,7 @@ def verify_graph(graph: EngineeringModelGraph) -> tuple[VerificationState, list[
             node.id == item.coordinate_system for node in graph.nodes
         ):
             issues.append({"level": 3, "code": "unknown_coordinate_system", "assertion_id": item.id, "severity": "error"})
+    issues.extend(_source_scale_issues(graph))
     if _has_cycle(graph):
         issues.append({"level": 4, "code": "dependency_cycle", "severity": "error"})
     active_by_key: dict[tuple[str, str], list[Any]] = defaultdict(list)
@@ -644,6 +718,7 @@ def evaluate_build_admission(
         PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE,
         PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE,
     })
+    advisory_issue_codes: set[str] = set()
     for issue in issues:
         if issue.get("severity") != "error":
             continue
@@ -651,6 +726,17 @@ def evaluate_build_admission(
         if assertion_id in pending:
             continue
         if issue.get("code") == "required_2d_artifacts_missing" and allowed_missing_2d:
+            continue
+        if (
+            generator == "mechanical_brep"
+            and target.kind == "preview_brep"
+            and issue.get("code") == "domain_mandatory_assertion_missing"
+            and set(issue.get("values") or []) <= {PREDICATE.MATERIAL_DESIGNATION}
+        ):
+            # Material affects mass/manufacturing release, not preview B-Rep
+            # geometry. Keep it visible and review-gated, but do not suppress
+            # an otherwise evidence-complete geometry preview.
+            advisory_issue_codes.add(str(issue["code"]))
             continue
         blockers.append(BuildAdmissionBlocker(
             code=f"verification_{issue['code']}",
@@ -711,10 +797,11 @@ def evaluate_build_admission(
         target_kind=target.kind,
         generator=generator,
         allowed=not blockers,
-        review_required=bool(blockers or warning_codes or pending),
+        review_required=bool(blockers or warning_codes or advisory_issue_codes or pending),
         blockers=blockers,
         questions=questions,
         verification_issue_codes=sorted({str(item["code"]) for item in issues}),
+        advisory_verification_issue_codes=sorted(advisory_issue_codes),
         pending_output_assertion_ids=pending,
         plan=plan,
     )

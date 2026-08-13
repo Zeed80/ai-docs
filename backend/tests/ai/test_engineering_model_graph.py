@@ -140,6 +140,59 @@ def test_legacy_consensus_provenance_becomes_assertion_level_source_region():
     )
 
 
+def test_legacy_drawing_scale_is_validated_and_requires_local_evidence():
+    without_evidence = legacy_spec_as_low_assurance(
+        {"title_block": {"scale": "1:2"}},
+        graph_id="image-generation:scale-without-evidence",
+        source_sha256="a" * 64,
+    )
+    _state, issues = verify_graph(without_evidence)
+    assert "drawing_scale_evidence_missing" in {
+        item["code"] for item in issues
+    }
+
+    with_evidence = legacy_spec_as_low_assurance(
+        {
+            "title_block": {"scale": "1:2"},
+            "value_provenance": {
+                "title_block/scale": {
+                    "evidence": [{
+                        "source_bbox": [10, 20, 80, 45],
+                        "raw_text": "1:2",
+                        "image_index": 0,
+                        "pass": 1,
+                    }],
+                },
+            },
+        },
+        graph_id="image-generation:scale-with-evidence",
+        source_sha256="a" * 64,
+        source_uri="image-gen/scale.png",
+    )
+    _state, issues = verify_graph(with_evidence)
+    scale_codes = {
+        item["code"] for item in issues if "scale" in item["code"]
+    }
+    assert scale_codes == set()
+
+
+def test_nonstandard_legacy_scale_is_reported_without_guessing():
+    graph = legacy_spec_as_low_assurance(
+        {"title_block": {"scale": "примерно 1:3"}},
+        graph_id="image-generation:bad-scale",
+        source_sha256="a" * 64,
+    )
+
+    _state, issues = verify_graph(graph)
+
+    issue = next(
+        item for item in issues
+        if item["code"] == "drawing_scale_nonstandard_or_unreadable"
+    )
+    assert issue["value"] == "примерно1:3"
+    assert issue["severity"] == "warning"
+
+
 def test_graph_patch_is_atomic_revision_safe_and_model_cannot_approve():
     graph = _graph()
     patch = GraphPatch(
