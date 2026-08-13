@@ -37,7 +37,7 @@ RUN python3 -m venv --system-site-packages /opt/cad-kernel \
         "fastapi==0.115.*" "uvicorn==0.34.*" "pydantic==2.*"
 
 WORKDIR /app
-COPY server.py /app/server.py
+COPY server.py step_canonical.py /app/
 
 RUN python3 -c "import FreeCAD, Part, TechDraw; print(FreeCAD.Version())" \
     && groupadd --gid 10001 cadkernel \

@@ -24,6 +24,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from step_canonical import canonicalize_step_bytes
+
 
 class Feature(BaseModel):
     # Strict boundary is deliberate (sandboxed kernel); the traceability
@@ -2095,22 +2097,13 @@ print(json.dumps({
 
 
 def _canonicalize_step_file(step_path: Path, artifact_name: str) -> bytes:
-    """Remove exporter process metadata without changing the STEP DATA section."""
+    """Remove process metadata and equivalent signed-zero serialization drift."""
     if not step_path.exists() or step_path.stat().st_size == 0:
         raise HTTPException(500, f"{artifact_name} STEP export is empty")
-    step_bytes, replacements = re.subn(
-        rb"(FILE_NAME\([^,]+,)'[^']*'",
-        rb"\1'1970-01-01T00:00:00'",
-        step_path.read_bytes(),
-        count=1,
-    )
-    if replacements != 1:
-        raise HTTPException(500, f"{artifact_name} STEP has no canonical FILE_NAME header")
-    step_bytes = re.sub(
-        rb"Open CASCADE STEP translator 7\.9 [0-9]+",
-        b"Open CASCADE STEP translator 7.9 1",
-        step_bytes,
-    )
+    try:
+        step_bytes = canonicalize_step_bytes(step_path.read_bytes())
+    except ValueError as exc:
+        raise HTTPException(500, f"{artifact_name} {exc}") from exc
     step_path.write_bytes(step_bytes)
     return step_bytes
 

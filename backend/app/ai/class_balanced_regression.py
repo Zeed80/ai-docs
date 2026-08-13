@@ -269,6 +269,8 @@ def _stage_evidence_index(
             ]
         elif schema == "emg-artifact-regression-report/1.0":
             entries = report.get("cases", [])
+        elif schema == "emg-live-stage-report/1.0":
+            entries = report.get("evidence", [])
         else:
             raise ValueError(f"unsupported stage evidence report schema: {schema}")
         for item in entries:

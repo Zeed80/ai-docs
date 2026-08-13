@@ -22,8 +22,8 @@
       "stages": {
         "reader": {"status": "not_run", "blocker_codes": ["structured_fixture_bypasses_reader"]},
         "graph": {"status": "passed", "evidence_ids": ["emg:mechanical-detal-126-v2"]},
-        "model_3d_bim": {"status": "review_required", "failure_clusters": ["parameter"], "blocker_codes": ["critical_assertions_unapproved"]},
-        "drawing_2d": {"status": "not_run", "blocker_codes": ["kernel_artifact_not_built"]}
+        "model_3d_bim": {"status": "passed", "evidence_ids": ["live:mechanical-detal-126-v2:model_3d_bim"]},
+        "drawing_2d": {"status": "passed", "evidence_ids": ["live:mechanical-detal-126-v2:drawing_2d"]}
       },
       "safety": {
         "status": "evaluated",

@@ -6,10 +6,35 @@ import pytest
 
 from app.ai.class_balanced_regression import evaluate_class_balanced_manifest
 from app.ai.emg_artifact_regression import run_emg_artifact_regression
+from app.ai.emg_live_stage import mechanical_live_stage_report
 from app.ai.emg_regression import run_emg_regression
 
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
+
+
+def _mechanical_live_report() -> dict:
+    checks = {
+        key: True for key in (
+            "brep_valid",
+            "manifold",
+            "single_solid",
+            "step_signature",
+            "step_reopen_valid",
+            "step_reopen_sha_matches",
+            "artifact_deterministic",
+            "all_views_present",
+            "projection_nonempty",
+        )
+    }
+    return mechanical_live_stage_report(
+        "mechanical-detal-126-v2",
+        {
+            "checks": checks,
+            "artifact_sha256": "a" * 64,
+            "projection_primitive_count": 534,
+        },
+    )
 
 
 def _manifest() -> dict:
@@ -57,14 +82,20 @@ def test_class_balanced_passes_require_matching_graph_and_artifact_evidence():
     )
 
     report = evaluate_class_balanced_manifest(
-        pipeline, evidence_reports=[graph_report, artifact_report]
+        pipeline,
+        evidence_reports=[
+            graph_report,
+            artifact_report,
+            _mechanical_live_report(),
+        ],
     )
 
     assert report["macro"]["stages"]["graph"]["pass_rate"] == 1.0
-    assert report["macro"]["stages"]["drawing_2d"]["pass_rate"] == 0.75
+    assert report["macro"]["stages"]["drawing_2d"]["pass_rate"] == 1.0
     broken = deepcopy(artifact_report)
     broken["cases"][0]["passed"] = False
     with pytest.raises(ValueError, match="stage evidence did not pass"):
         evaluate_class_balanced_manifest(
-            pipeline, evidence_reports=[graph_report, broken]
+            pipeline,
+            evidence_reports=[graph_report, broken, _mechanical_live_report()],
         )

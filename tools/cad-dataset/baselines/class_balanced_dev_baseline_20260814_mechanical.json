@@ -1,0 +1,458 @@
+{
+  "accepted": true,
+  "by_class": {
+    "architectural_bim": {
+      "critical_miss_rate": 0.0,
+      "failure_clusters": [
+        "bim_relation"
+      ],
+      "invented_geometry_rate": 0.0,
+      "safety_coverage_rate": 1.0,
+      "source_groups": 1,
+      "stages": {
+        "drawing_2d": {
+          "coverage_rate": 1.0,
+          "pass_rate": 1.0
+        },
+        "graph": {
+          "coverage_rate": 1.0,
+          "pass_rate": 1.0
+        },
+        "model_3d_bim": {
+          "coverage_rate": 1.0,
+          "pass_rate": 0.0
+        },
+        "reader": {
+          "coverage_rate": 0.0,
+          "pass_rate": 0.0
+        }
+      }
+    },
+    "assembly": {
+      "critical_miss_rate": 0.0,
+      "failure_clusters": [
+        "topology"
+      ],
+      "invented_geometry_rate": 0.0,
+      "safety_coverage_rate": 1.0,
+      "source_groups": 1,
+      "stages": {
+        "drawing_2d": {
+          "coverage_rate": 1.0,
+          "pass_rate": 1.0
+        },
+        "graph": {
+          "coverage_rate": 1.0,
+          "pass_rate": 1.0
+        },
+        "model_3d_bim": {
+          "coverage_rate": 1.0,
+          "pass_rate": 0.0
+        },
+        "reader": {
+          "coverage_rate": 0.0,
+          "pass_rate": 0.0
+        }
+      }
+    },
+    "hydraulic_system": {
+      "critical_miss_rate": null,
+      "failure_clusters": [],
+      "invented_geometry_rate": null,
+      "safety_coverage_rate": 0.0,
+      "source_groups": 1,
+      "stages": {
+        "drawing_2d": {
+          "coverage_rate": 1.0,
+          "pass_rate": 1.0
+        },
+        "graph": {
+          "coverage_rate": 1.0,
+          "pass_rate": 1.0
+        },
+        "model_3d_bim": {
+          "coverage_rate": 0.0,
+          "pass_rate": 0.0
+        },
+        "reader": {
+          "coverage_rate": 0.0,
+          "pass_rate": 0.0
+        }
+      }
+    },
+    "rotation_body": {
+      "critical_miss_rate": 0.0,
+      "failure_clusters": [],
+      "invented_geometry_rate": 0.0,
+      "safety_coverage_rate": 1.0,
+      "source_groups": 1,
+      "stages": {
+        "drawing_2d": {
+          "coverage_rate": 1.0,
+          "pass_rate": 1.0
+        },
+        "graph": {
+          "coverage_rate": 1.0,
+          "pass_rate": 1.0
+        },
+        "model_3d_bim": {
+          "coverage_rate": 1.0,
+          "pass_rate": 1.0
+        },
+        "reader": {
+          "coverage_rate": 0.0,
+          "pass_rate": 0.0
+        }
+      }
+    }
+  },
+  "by_source_group": {
+    "fixture:assembly-fixed-shaft": {
+      "blocker_codes": [
+        "artifact_reopen_pending",
+        "structured_fixture_bypasses_reader"
+      ],
+      "case_count": 1,
+      "critical_miss_rate": 0.0,
+      "failure_clusters": [
+        "topology"
+      ],
+      "invented_geometry_rate": 0.0,
+      "safety_coverage_rate": 1.0,
+      "safety_evidence_ids": [
+        "assembly-component-count-unknown"
+      ],
+      "stages": {
+        "drawing_2d": {
+          "case_count": 1,
+          "coverage_rate": 1.0,
+          "evidence_ids": [
+            "artifact:assembly-fixed-shaft"
+          ],
+          "pass_rate": 1.0,
+          "status_counts": {
+            "passed": 1
+          }
+        },
+        "graph": {
+          "case_count": 1,
+          "coverage_rate": 1.0,
+          "evidence_ids": [
+            "emg:assembly-fixed-shaft"
+          ],
+          "pass_rate": 1.0,
+          "status_counts": {
+            "passed": 1
+          }
+        },
+        "model_3d_bim": {
+          "case_count": 1,
+          "coverage_rate": 1.0,
+          "evidence_ids": [],
+          "pass_rate": 0.0,
+          "status_counts": {
+            "review_required": 1
+          }
+        },
+        "reader": {
+          "case_count": 1,
+          "coverage_rate": 0.0,
+          "evidence_ids": [],
+          "pass_rate": 0.0,
+          "status_counts": {
+            "not_run": 1
+          }
+        }
+      }
+    },
+    "fixture:construction-wall-opening": {
+      "blocker_codes": [
+        "ifc_reopen_pending",
+        "structured_fixture_bypasses_reader"
+      ],
+      "case_count": 1,
+      "critical_miss_rate": 0.0,
+      "failure_clusters": [
+        "bim_relation"
+      ],
+      "invented_geometry_rate": 0.0,
+      "safety_coverage_rate": 1.0,
+      "safety_evidence_ids": [
+        "construction-material-unknown"
+      ],
+      "stages": {
+        "drawing_2d": {
+          "case_count": 1,
+          "coverage_rate": 1.0,
+          "evidence_ids": [
+            "artifact:construction-wall-opening"
+          ],
+          "pass_rate": 1.0,
+          "status_counts": {
+            "passed": 1
+          }
+        },
+        "graph": {
+          "case_count": 1,
+          "coverage_rate": 1.0,
+          "evidence_ids": [
+            "emg:construction-wall-opening"
+          ],
+          "pass_rate": 1.0,
+          "status_counts": {
+            "passed": 1
+          }
+        },
+        "model_3d_bim": {
+          "case_count": 1,
+          "coverage_rate": 1.0,
+          "evidence_ids": [],
+          "pass_rate": 0.0,
+          "status_counts": {
+            "review_required": 1
+          }
+        },
+        "reader": {
+          "case_count": 1,
+          "coverage_rate": 0.0,
+          "evidence_ids": [],
+          "pass_rate": 0.0,
+          "status_counts": {
+            "not_run": 1
+          }
+        }
+      }
+    },
+    "fixture:detal-126": {
+      "blocker_codes": [
+        "structured_fixture_bypasses_reader"
+      ],
+      "case_count": 1,
+      "critical_miss_rate": 0.0,
+      "failure_clusters": [],
+      "invented_geometry_rate": 0.0,
+      "safety_coverage_rate": 1.0,
+      "safety_evidence_ids": [
+        "mechanical-canonical-hash-tamper",
+        "mechanical-unknown-unit",
+        "mechanical-wrong-domain-generator"
+      ],
+      "stages": {
+        "drawing_2d": {
+          "case_count": 1,
+          "coverage_rate": 1.0,
+          "evidence_ids": [
+            "live:mechanical-detal-126-v2:drawing_2d"
+          ],
+          "pass_rate": 1.0,
+          "status_counts": {
+            "passed": 1
+          }
+        },
+        "graph": {
+          "case_count": 1,
+          "coverage_rate": 1.0,
+          "evidence_ids": [
+            "emg:mechanical-detal-126-v2"
+          ],
+          "pass_rate": 1.0,
+          "status_counts": {
+            "passed": 1
+          }
+        },
+        "model_3d_bim": {
+          "case_count": 1,
+          "coverage_rate": 1.0,
+          "evidence_ids": [
+            "live:mechanical-detal-126-v2:model_3d_bim"
+          ],
+          "pass_rate": 1.0,
+          "status_counts": {
+            "passed": 1
+          }
+        },
+        "reader": {
+          "case_count": 1,
+          "coverage_rate": 0.0,
+          "evidence_ids": [],
+          "pass_rate": 0.0,
+          "status_counts": {
+            "not_run": 1
+          }
+        }
+      }
+    },
+    "fixture:hydraulic-closed-loop": {
+      "blocker_codes": [
+        "domain_has_no_3d_artifact",
+        "structured_fixture_bypasses_reader"
+      ],
+      "case_count": 1,
+      "critical_miss_rate": null,
+      "failure_clusters": [],
+      "invented_geometry_rate": null,
+      "safety_coverage_rate": 0.0,
+      "safety_evidence_ids": [],
+      "stages": {
+        "drawing_2d": {
+          "case_count": 1,
+          "coverage_rate": 1.0,
+          "evidence_ids": [
+            "artifact:hydraulic-closed-loop"
+          ],
+          "pass_rate": 1.0,
+          "status_counts": {
+            "passed": 1
+          }
+        },
+        "graph": {
+          "case_count": 1,
+          "coverage_rate": 1.0,
+          "evidence_ids": [
+            "emg:hydraulic-closed-loop"
+          ],
+          "pass_rate": 1.0,
+          "status_counts": {
+            "passed": 1
+          }
+        },
+        "model_3d_bim": {
+          "case_count": 1,
+          "coverage_rate": 0.0,
+          "evidence_ids": [],
+          "pass_rate": 0.0,
+          "status_counts": {
+            "not_run": 1
+          }
+        },
+        "reader": {
+          "case_count": 1,
+          "coverage_rate": 0.0,
+          "evidence_ids": [],
+          "pass_rate": 0.0,
+          "status_counts": {
+            "not_run": 1
+          }
+        }
+      }
+    }
+  },
+  "case_count": 4,
+  "class_count": 4,
+  "dataset_id": "emg-golden-dev-20260813",
+  "macro": {
+    "stages": {
+      "drawing_2d": {
+        "coverage_rate": 1.0,
+        "pass_rate": 1.0
+      },
+      "graph": {
+        "coverage_rate": 1.0,
+        "pass_rate": 1.0
+      },
+      "model_3d_bim": {
+        "coverage_rate": 0.75,
+        "pass_rate": 0.25
+      },
+      "reader": {
+        "coverage_rate": 0.0,
+        "pass_rate": 0.0
+      }
+    }
+  },
+  "promotion_eligible": false,
+  "promotion_failures": [
+    {
+      "actual": 0.0,
+      "class": "rotation_body",
+      "code": "stage_coverage_incomplete",
+      "stage": "reader"
+    },
+    {
+      "actual": 0.0,
+      "class": "rotation_body",
+      "code": "stage_pass_rate_below_gate",
+      "required": 1.0,
+      "stage": "reader"
+    },
+    {
+      "actual": 0.0,
+      "class": "assembly",
+      "code": "stage_coverage_incomplete",
+      "stage": "reader"
+    },
+    {
+      "actual": 0.0,
+      "class": "assembly",
+      "code": "stage_pass_rate_below_gate",
+      "required": 1.0,
+      "stage": "reader"
+    },
+    {
+      "actual": 0.0,
+      "class": "assembly",
+      "code": "stage_pass_rate_below_gate",
+      "required": 1.0,
+      "stage": "model_3d_bim"
+    },
+    {
+      "actual": 0.0,
+      "class": "architectural_bim",
+      "code": "stage_coverage_incomplete",
+      "stage": "reader"
+    },
+    {
+      "actual": 0.0,
+      "class": "architectural_bim",
+      "code": "stage_pass_rate_below_gate",
+      "required": 1.0,
+      "stage": "reader"
+    },
+    {
+      "actual": 0.0,
+      "class": "architectural_bim",
+      "code": "stage_pass_rate_below_gate",
+      "required": 1.0,
+      "stage": "model_3d_bim"
+    },
+    {
+      "actual": 0.0,
+      "class": "hydraulic_system",
+      "code": "stage_coverage_incomplete",
+      "stage": "reader"
+    },
+    {
+      "actual": 0.0,
+      "class": "hydraulic_system",
+      "code": "stage_pass_rate_below_gate",
+      "required": 1.0,
+      "stage": "reader"
+    },
+    {
+      "actual": 0.0,
+      "class": "hydraulic_system",
+      "code": "stage_coverage_incomplete",
+      "stage": "model_3d_bim"
+    },
+    {
+      "actual": 0.0,
+      "class": "hydraulic_system",
+      "code": "stage_pass_rate_below_gate",
+      "required": 1.0,
+      "stage": "model_3d_bim"
+    },
+    {
+      "actual": 0.0,
+      "class": "hydraulic_system",
+      "code": "safety_coverage_incomplete"
+    }
+  ],
+  "regression": {
+    "regressions": [],
+    "status": "not_checked"
+  },
+  "schema_version": "cad-class-balanced-report/1.0",
+  "source_group_count": 4,
+  "split": "dev",
+  "weighting": "equal_source_group_within_class_then_equal_class_macro"
+}
