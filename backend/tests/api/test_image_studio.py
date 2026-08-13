@@ -31,6 +31,119 @@ INVALID_SHAFT = {
 
 
 @pytest.mark.asyncio
+async def test_design_history_restore_queues_revision_safe_rebuild(
+    client, db_session, monkeypatch,
+):
+    from app.ai.cad_ir.feature_tree import Feature3D, FeatureTreeCandidate
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.services.engineering_model_graph import persist_feature_tree_revision
+
+    objects: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.upload_file",
+        lambda content, path, _content_type: objects.setdefault(path, content),
+    )
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.download_file",
+        lambda path: objects[path],
+    )
+    queued: list[tuple[list, str]] = []
+    monkeypatch.setattr(
+        "app.tasks.cad_trace.restore_design_revision.apply_async",
+        lambda args, queue: (
+            queued.append((args, queue)) or SimpleNamespace(id="restore-task")
+        ),
+    )
+
+    generation = ImageGeneration(
+        owner_sub="dev-user",
+        operation="vectorize",
+        status=ImageGenStatus.done,
+        params={"spec": {"part": "plate"}},
+        source_image_paths=[],
+    )
+    db_session.add(generation)
+    await db_session.flush()
+    graph_id = f"image-generation:{generation.id}:design"
+    base = FeatureTreeCandidate(
+        features=[Feature3D(kind="extrude", params={"depth_mm": 10.0})],
+        score=1.0,
+        label="base plate",
+    )
+    row0 = await persist_feature_tree_revision(
+        db_session,
+        graph_id=graph_id,
+        spec=generation.params["spec"],
+        candidate=base,
+        producer="system",
+        pass_id="design-fork:test",
+        idempotency_key="design-history-base",
+    )
+    revised = base.model_copy(deep=True)
+    revised.features.append(
+        Feature3D(kind="boss", params={
+            "profile": "circle", "diameter_mm": 4.0, "depth_mm": 2.0,
+            "center_x_mm": 0.0, "center_y_mm": 0.0,
+        })
+    )
+    row1 = await persist_feature_tree_revision(
+        db_session,
+        graph_id=graph_id,
+        spec=generation.params["spec"],
+        candidate=revised,
+        producer="human",
+        pass_id="human-add-feature:boss",
+        idempotency_key="design-history-edit",
+        expected_base_revision=row0.revision,
+        expected_base_sha256=row0.canonical_sha256,
+        decision_note="Добавить бобышку",
+        actor_sub="dev-user",
+    )
+    generation.params = {
+        **generation.params,
+        "engineering_model_graph": {
+            "revision_id": str(row1.id),
+            "graph_id": graph_id,
+            "revision": row1.revision,
+            "canonical_sha256": row1.canonical_sha256,
+        },
+    }
+    await db_session.commit()
+
+    history = await client.get(
+        f"/api/image-gen/{generation.id}/model-graph/design-history"
+    )
+    assert history.status_code == 200, history.text
+    assert history.json()["current_revision"] == 1
+    assert [item["revision"] for item in history.json()["revisions"]] == [0, 1]
+
+    restore = await client.post(
+        f"/api/image-gen/{generation.id}/model-graph/design-history/restore",
+        json={
+            "target_revision": 0,
+            "note": "Откатить ошибочно добавленную бобышку",
+            "idempotency_key": "restore-design-history-r0",
+        },
+    )
+    assert restore.status_code == 200, restore.text
+    assert restore.json()["rebuild_task_id"] == "restore-task"
+    assert queued == [([
+        str(generation.id), 0, "Откатить ошибочно добавленную бобышку",
+        "restore-design-history-r0", "dev-user", 1, row1.canonical_sha256,
+    ], "celery")]
+
+    current = await client.post(
+        f"/api/image-gen/{generation.id}/model-graph/design-history/restore",
+        json={
+            "target_revision": 1,
+            "note": "Нельзя восстанавливать текущую",
+            "idempotency_key": "restore-current-design-r1",
+        },
+    )
+    assert current.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     client, db_session, monkeypatch,
 ):

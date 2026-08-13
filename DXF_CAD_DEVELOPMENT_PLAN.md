@@ -317,7 +317,9 @@ D3 (revolve/sweep/loft/shell/threads), D4-хвост (self-intersection, асс�
 8. ✅ D3-ядро (revolve/loft/shell/cosmetic threads в cad-kernel; осталось sweep/draft/3D-pattern + revolve-кандидаты из чертежа). D1/D2/D4 ядро ✅.
 9. ✅ Generation-linked EMG Inspector: blocked/partial оцифровка показывает canonical graph первой вкладкой, legacy spec остаётся compatibility-view; owner-scoped verify/reader/patch/trace/impact API подключены к `/cad/{generationId}`.
 10. ✅ Точные assertion-level `SourceRegion`, source/candidate/difference overlay и production human correction → immutable `GraphPatch` → optional deterministic rebuild без повторного чтения.
-11. **СЛЕДУЮЩЕЕ** — интерактивный выбор bbox непосредственно на исходном листе и batch correction нескольких связанных assertions одной атомарной ревизией; затем E3-E5, F1-F4, G1-G4, H2-H4. B7 (fine-tune векторизатора) — по мере готовности ML-ресурсов.
+11. ✅ Интерактивный выбор bbox непосредственно на исходном листе и batch correction нескольких связанных assertions одной атомарной ревизией.
+12. ✅ Design-ветка отделена от исходной оцифровки; undo/redo восстанавливает историческое дерево как новую immutable EMG/CadIR-ревизию, требует причину, пересобирает 3D и не переносит старые подписи.
+13. **СЛЕДУЮЩЕЕ** — side-by-side связь entity ↔ bbox/page ↔ view/topology и локальная валидация зависимых узлов; затем E3-E5, F1-F4, G1-G4, H2-H4. B7 (fine-tune векторизатора) — по мере готовности ML-ресурсов.
 
 ## Доказательства текущего состояния
 

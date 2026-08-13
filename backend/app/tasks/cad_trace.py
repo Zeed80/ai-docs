@@ -1357,6 +1357,185 @@ async def _pattern_feature_in_graph(
 
 @celery_app.task(
     bind=True,
+    name="cad_trace.restore_design_revision",
+    max_retries=0,
+    soft_time_limit=600,
+    time_limit=660,
+)
+def restore_design_revision(
+    self,
+    generation_id: str,
+    target_revision: int,
+    note: str,
+    idempotency_key: str,
+    actor_sub: str | None = None,
+    expected_base_revision: int | None = None,
+    expected_base_sha256: str | None = None,
+) -> dict:
+    """Restore old design content as a new immutable graph/CadIR revision."""
+    return run_async(_restore_design_revision(
+        generation_id, target_revision, note, idempotency_key, actor_sub,
+        expected_base_revision, expected_base_sha256,
+    ))
+
+
+async def _restore_design_revision(
+    generation_id: str,
+    target_revision: int,
+    note: str,
+    idempotency_key: str,
+    actor_sub: str | None = None,
+    expected_base_revision: int | None = None,
+    expected_base_sha256: str | None = None,
+) -> dict:
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from app.ai.cad_emg_compat import feature_tree_from_graph
+    from app.db.models import EngineeringGraphRevision, ImageGeneration
+    from app.db.session import _get_session_factory
+    from app.services.engineering_model_graph import load_graph
+
+    factory = _get_session_factory()
+    gen_uuid = _uuid.UUID(generation_id)
+    graph_id = f"image-generation:{generation_id}:design"
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return {"error": "not found"}
+        params = dict(gen.params or {})
+        owner_sub = gen.owner_sub
+        _resolved_id, latest_row, needs_fork = await _editor_graph_base(
+            db, generation_id, lock=True
+        )
+        if latest_row is None or needs_fork:
+            return {"error": "Ветка конструкции ещё не создана"}
+        if (
+            (expected_base_revision is not None and latest_row.revision != expected_base_revision)
+            or (
+                expected_base_sha256 is not None
+                and latest_row.canonical_sha256 != expected_base_sha256
+            )
+        ):
+            return {"error": "stale_graph_revision"}
+        target_row = (
+            await db.execute(
+                select(EngineeringGraphRevision).where(
+                    EngineeringGraphRevision.graph_id == graph_id,
+                    EngineeringGraphRevision.revision == target_revision,
+                )
+            )
+        ).scalar_one_or_none()
+        if target_row is None:
+            return {"error": f"Ревизия конструкции r{target_revision} не найдена"}
+        if target_row.id == latest_row.id:
+            return {"error": "Выбранная ревизия уже является текущей"}
+        current_candidate = feature_tree_from_graph(
+            load_graph(latest_row), target_id="preview"
+        )
+        target_candidate = feature_tree_from_graph(
+            load_graph(target_row), target_id="preview"
+        )
+    if current_candidate is None or target_candidate is None:
+        return {"error": "Не удалось восстановить дерево построения из ревизии"}
+    spec = params.get("spec_corrected") or params.get("spec")
+    if not spec:
+        return {"error": "нет сохранённой спецификации"}
+
+    async with factory() as db:
+        restored_row = await _persist_editor_candidate(
+            db,
+            generation_id=generation_id,
+            spec=spec,
+            base_candidate=current_candidate,
+            updated_candidate=target_candidate,
+            base_row=latest_row,
+            pass_id=f"human-restore-design:r{target_revision}",
+            idempotency_key=idempotency_key,
+            source_sha256=params.get("normalized_source_sha256"),
+            source_uri=params.get("normalized_source_path"),
+            decision_note=note,
+            actor_sub=actor_sub,
+            fork_design_branch=False,
+        )
+        restored_graph = load_graph(restored_row)
+        await db.commit()
+
+    solid_result = await _build_spec_solid(
+        spec,
+        generation_id,
+        owner_sub,
+        sheet_format=str(params.get("sheet_format") or "").upper() or None,
+        landscape=str(params.get("sheet_orientation") or "landscape").lower()
+        != "portrait",
+        require_source_evidence=not bool(params.get("spec_corrected")),
+        source_sha256=params.get("normalized_source_sha256"),
+        source_uri=params.get("normalized_source_path"),
+        engineering_graph_override=restored_graph,
+        require_envelope_match=False,
+    )
+    if not solid_result or not solid_result.get("built"):
+        error_message = (
+            (solid_result or {}).get("error")
+            or "Не удалось пересобрать выбранную ревизию конструкции"
+        )
+        async with factory() as db:
+            try:
+                rollback_row = await _persist_editor_candidate(
+                    db,
+                    generation_id=generation_id,
+                    spec=spec,
+                    base_candidate=target_candidate,
+                    updated_candidate=current_candidate,
+                    base_row=restored_row,
+                    pass_id=f"system-restore-rollback:r{target_revision}",
+                    idempotency_key=f"{idempotency_key}:rollback",
+                    source_sha256=params.get("normalized_source_sha256"),
+                    source_uri=params.get("normalized_source_path"),
+                    decision_note=f"Автооткат неуспешного восстановления: {note}",
+                    actor_sub=actor_sub,
+                    fork_design_branch=False,
+                )
+                rollback_gen = await db.get(ImageGeneration, gen_uuid)
+                if rollback_gen is not None:
+                    rollback_params = dict(rollback_gen.params or {})
+                    rollback_params["engineering_model_graph"] = {
+                        "revision_id": str(rollback_row.id),
+                        "graph_id": rollback_row.graph_id,
+                        "revision": rollback_row.revision,
+                        "canonical_sha256": rollback_row.canonical_sha256,
+                    }
+                    rollback_gen.params = rollback_params
+                await db.commit()
+            except Exception:
+                pass
+        return {"error": error_message, "built": False}
+    result_graph = solid_result.pop("_engineering_model_graph", None)
+    if (
+        result_graph is None
+        or result_graph.canonical_sha256 != restored_graph.canonical_sha256
+    ):
+        return {"error": "CAD build returned a different EMG revision", "built": False}
+    await _store_editor_build(
+        factory=factory,
+        gen_uuid=gen_uuid,
+        graph_row=restored_row,
+        solid_result=solid_result,
+        spec=spec,
+        owner_sub=owner_sub,
+    )
+    return {
+        "ok": True,
+        "generation_id": generation_id,
+        "target_revision": target_revision,
+        "restored_as_revision": restored_row.revision,
+        "note": note,
+    }
+
+
+@celery_app.task(
+    bind=True,
     name="cad_trace.run_cad_trace",
     max_retries=2,
     soft_time_limit=600,

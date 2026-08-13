@@ -36,6 +36,7 @@ from app.db.models import (
     CadCertification,
     ComfyWorkflow,
     Document,
+    EngineeringGraphRevision,
     ImageGeneration,
     ImageGenStatus,
     StudioJob,
@@ -2506,6 +2507,91 @@ async def pattern_generation_model_graph_feature(
     )
     return {
         "generation_id": str(generation_id),
+        "rebuild_task_id": task.id,
+    }
+
+
+class RestoreDesignRevisionRequest(BaseModel):
+    target_revision: int = Field(ge=0)
+    note: str = Field(min_length=1, max_length=1000)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+
+@router.get("/{generation_id}/model-graph/design-history")
+async def list_generation_design_history(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Return immutable design heads without exposing another owner's graph."""
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    graph_id = f"image-generation:{generation_id}:design"
+    rows = (
+        await db.execute(
+            select(EngineeringGraphRevision)
+            .where(EngineeringGraphRevision.graph_id == graph_id)
+            .order_by(EngineeringGraphRevision.revision.asc())
+        )
+    ).scalars().all()
+    return {
+        "graph_id": graph_id,
+        "current_revision": rows[-1].revision if rows else None,
+        "revisions": [
+            {
+                "id": str(row.id),
+                "revision": row.revision,
+                "parent_revision": row.parent_revision,
+                "canonical_sha256": row.canonical_sha256,
+                "build_status": row.build_status,
+                "release_status": row.release_status,
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in rows
+        ],
+    }
+
+
+@router.post("/{generation_id}/model-graph/design-history/restore")
+async def restore_generation_design_revision(
+    generation_id: uuid.UUID,
+    body: RestoreDesignRevisionRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Reapply historical design content as a new audited immutable revision."""
+    _gen, row, _graph = await _owned_generation_graph(generation_id, db, user)
+    if not row.graph_id.endswith(":design"):
+        raise HTTPException(409, "Ветка конструкции ещё не создана")
+    if body.target_revision == row.revision:
+        raise HTTPException(409, "Выбранная ревизия уже является текущей")
+    target_exists = await db.scalar(
+        select(EngineeringGraphRevision.id).where(
+            EngineeringGraphRevision.graph_id == row.graph_id,
+            EngineeringGraphRevision.revision == body.target_revision,
+        )
+    )
+    if target_exists is None:
+        raise HTTPException(404, "Ревизия конструкции не найдена")
+
+    from app.tasks.cad_trace import restore_design_revision
+
+    task = restore_design_revision.apply_async(
+        args=[
+            str(generation_id),
+            body.target_revision,
+            body.note,
+            body.idempotency_key,
+            user.sub,
+            row.revision,
+            row.canonical_sha256,
+        ],
+        queue="celery",
+    )
+    return {
+        "generation_id": str(generation_id),
+        "target_revision": body.target_revision,
         "rebuild_task_id": task.id,
     }
 

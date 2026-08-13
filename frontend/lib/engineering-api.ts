@@ -170,6 +170,20 @@ export type EngineeringGraphPatch = {
   created_at: string;
 };
 
+export type EngineeringDesignHistory = {
+  graph_id: string;
+  current_revision: number | null;
+  revisions: Array<{
+    id: string;
+    revision: number;
+    parent_revision: number | null;
+    canonical_sha256: string;
+    build_status: string;
+    release_status: string;
+    created_at: string;
+  }>;
+};
+
 export type EngineeringTraceProposal = {
   id: string;
   proposal_id: string;
@@ -316,6 +330,26 @@ export const engineeringApi = {
     request<EngineeringGraphPatch[]>(
       `/api/image-gen/${generationId}/model-graph/patches`,
     ),
+  getGenerationDesignHistory: (generationId: string) =>
+    request<EngineeringDesignHistory>(
+      `/api/image-gen/${generationId}/model-graph/design-history`,
+    ),
+  restoreGenerationDesignRevision: (
+    generationId: string,
+    body: {
+      target_revision: number;
+      note: string;
+      idempotency_key: string;
+    },
+  ) =>
+    request<{
+      generation_id: string;
+      target_revision: number;
+      rebuild_task_id: string;
+    }>(`/api/image-gen/${generationId}/model-graph/design-history/restore`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   listGenerationTraceProposals: (generationId: string) =>
     request<EngineeringTraceProposal[]>(
       `/api/image-gen/${generationId}/model-graph/trace-proposals`,

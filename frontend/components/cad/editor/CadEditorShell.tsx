@@ -11,10 +11,12 @@ import {
   Maximize,
   Minimize,
   RotateCw,
+  Redo2,
   Settings,
   Slash,
   Spline,
   Square,
+  Undo2,
   SquaresIntersect,
   SquaresUnite,
 } from "lucide-react";
@@ -45,6 +47,7 @@ import {
 } from "@/lib/emg-tree";
 import {
   engineeringApi,
+  type EngineeringDesignHistory,
   type EngineeringModelGraphRevision,
 } from "@/lib/engineering-api";
 import {
@@ -182,17 +185,29 @@ export default function CadEditorShell({
   const [certification, setCertification] = useState<CadCertification | null>(
     null,
   );
+  const [designHistory, setDesignHistory] =
+    useState<EngineeringDesignHistory | null>(null);
+  const [historyCursor, setHistoryCursor] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [nextGen, nextGraph, nextCertification] = await Promise.all([
+      const [nextGen, nextGraph, nextCertification, nextHistory] =
+        await Promise.all([
         getGeneration(generationId),
         engineeringApi.getGenerationModelGraph(generationId).catch(() => null),
         getCadCertification(generationId).catch(() => null),
+        engineeringApi.getGenerationDesignHistory(generationId).catch(() => null),
       ]);
       setGen(nextGen);
       setGraphRevision(nextGraph);
       setCertification(nextCertification);
+      setDesignHistory(nextHistory);
+      setHistoryCursor((current) =>
+        current !== null &&
+        nextHistory?.revisions.some((item) => item.revision === current)
+          ? current
+          : (nextHistory?.current_revision ?? null),
+      );
       setError(null);
     } catch (e) {
       setError(String((e as Error).message ?? e));
@@ -330,6 +345,44 @@ export default function CadEditorShell({
     }
   }
 
+  const restoreHistory = useCallback(
+    async (direction: "undo" | "redo") => {
+      const revisions = designHistory?.revisions ?? [];
+      if (revisions.length < 2 || historyCursor === null) return;
+      const currentIndex = revisions.findIndex(
+        (item) => item.revision === historyCursor,
+      );
+      const targetIndex = currentIndex + (direction === "undo" ? -1 : 1);
+      const target = revisions[targetIndex];
+      if (!target) return;
+      const reason = window.prompt(
+        direction === "undo"
+          ? `Причина отката к ревизии r${target.revision}:`
+          : `Причина возврата к ревизии r${target.revision}:`,
+      );
+      if (!reason?.trim()) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await engineeringApi.restoreGenerationDesignRevision(
+          generationId,
+          {
+            target_revision: target.revision,
+            note: reason.trim(),
+            idempotency_key: `restore-design:${crypto.randomUUID()}`,
+          },
+        );
+        setHistoryCursor(target.revision);
+        setRebuildTaskId(result.rebuild_task_id);
+        setRebuildStatus("QUEUED");
+      } catch (e) {
+        setError(String((e as Error).message ?? e));
+      } finally {
+        setBusy(false);
+      }
+    }, [designHistory, generationId, historyCursor],
+  );
+
   // Ф6: remove one BuildOperation. Same async-task shape as add-feature —
   // the mutation happens inside the Celery task, so this only queues it and
   // hands off to the SAME rebuildTaskId polling effect above (including its
@@ -347,6 +400,7 @@ export default function CadEditorShell({
             idempotency_key: `remove-feature:${crypto.randomUUID()}`,
           },
         );
+        setHistoryCursor(null);
         setRebuildTaskId(result.rebuild_task_id);
         setRebuildStatus("QUEUED");
       } catch (e) {
@@ -373,6 +427,11 @@ export default function CadEditorShell({
           target.tagName === "TEXTAREA" ||
           target.isContentEditable);
       if (typing) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        void restoreHistory(event.shiftKey ? "redo" : "undo");
+        return;
+      }
       if (event.key === "Delete" && selectedOperationId && !deleteBusyId) {
         const label = selectedOperation
           ? selectedOperation.kind
@@ -405,6 +464,7 @@ export default function CadEditorShell({
     addFeatureDraft,
     patternDraftActive,
     handleDeleteOperation,
+    restoreHistory,
   ]);
 
   if (!gen) {
@@ -572,6 +632,35 @@ export default function CadEditorShell({
         {ribbonTab === "inspect" && (
           <RibbonGroup label="Сборка">
             <RibbonButton
+              icon={<Undo2 className="h-4 w-4" />}
+              label="Отменить"
+              onClick={() => void restoreHistory("undo")}
+              disabled={
+                busy ||
+                Boolean(rebuildTaskId) ||
+                historyCursor === null ||
+                !designHistory?.revisions.some(
+                  (item) => item.revision < historyCursor,
+                )
+              }
+              title="Создать новую ревизию с содержимым предыдущей (Ctrl+Z)"
+            />
+            <RibbonButton
+              icon={<Redo2 className="h-4 w-4" />}
+              label="Повторить"
+              onClick={() => void restoreHistory("redo")}
+              disabled={
+                busy ||
+                Boolean(rebuildTaskId) ||
+                historyCursor === null ||
+                !designHistory?.revisions.some(
+                  (item) => item.revision > historyCursor,
+                )
+              }
+              title="Вернуть отменённое состояние (Ctrl+Shift+Z)"
+            />
+            <RibbonDivider />
+            <RibbonButton
               icon={<RotateCw className="h-4 w-4" />}
               label="Пересобрать"
               onClick={() => void handleRebuildNow()}
@@ -707,6 +796,7 @@ export default function CadEditorShell({
               onPatternDraftChange={setPatternDraftActive}
               onSaved={() => void load()}
               onRebuildQueued={(taskId) => {
+                setHistoryCursor(null);
                 setRebuildTaskId(taskId);
                 setRebuildStatus("QUEUED");
               }}
