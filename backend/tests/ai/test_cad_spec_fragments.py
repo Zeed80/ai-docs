@@ -799,6 +799,96 @@ def test_whole_fallback_cannot_restore_unverified_small_features():
     assert "chamfers" not in merged["main_view"]
 
 
+def test_unverified_fragment_outer_wins_when_it_found_more_steps_than_whole():
+    """Live-reproduced 2026-08-14 on example-drawings/shaft_detail.png: all 3
+    fragment consensus passes read 3 outer steps (Ø30/Ø50/Ø30) identically —
+    correct — but none of them carry "evidence" (_ROTATION_PROMPT's own
+    schema has no such field, only outer_sections_from_diameter_evidence's
+    output ever does), so verified_outer was always False for this path and
+    the independently-re-read whole-sheet fallback's WORSE 2-step read
+    (it merged two steps into one) silently won every time. A fragment
+    profile with strictly more steps than whole-sheet found must not be
+    discarded just because it lacks formal evidence."""
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragment_outer = [
+        {"diameter_mm": 30, "length_mm": 220, "note": "h6"},
+        {"diameter_mm": 50, "length_mm": 840, "note": "h6"},
+        {"diameter_mm": 30, "length_mm": 220, "note": "k6"},
+    ]
+    fragments = {"main_view": {"outer": fragment_outer}, "unresolved": []}
+    whole = {
+        "main_view": {"outer": [
+            {"diameter_mm": 50, "length_mm": 220, "note": "ступень Ø50h6"},
+            {"diameter_mm": 30, "length_mm": 840, "note": "ступень Ø30k6, Ø30h6"},
+        ]},
+        "unresolved": [],
+    }
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert merged["main_view"]["outer"] == fragment_outer
+
+
+def test_verified_or_more_complete_outer_still_loses_to_a_richer_whole_read():
+    """The other direction must still hold: an unverified fragment profile
+    with FEWER (or equal) steps than whole-sheet found is not preferred —
+    only "found strictly more" is trusted, not "found something different"."""
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragments = {
+        "main_view": {"outer": [{"diameter_mm": 40, "length_mm": 100}]},
+        "unresolved": [],
+    }
+    whole_outer = [
+        {"diameter_mm": 40, "length_mm": 60},
+        {"diameter_mm": 30, "length_mm": 40},
+    ]
+    whole = {"main_view": {"outer": whole_outer}, "unresolved": []}
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert merged["main_view"]["outer"] == whole_outer
+
+
+def test_unverified_fragment_feature_fills_a_gap_whole_left_empty():
+    """Same reasoning as the outer[] fix, applied to feature_fields:
+    _FEATURES_PROMPT's schema has no evidence field either, so a correctly
+    read keyway/groove/cross_hole with no evidence used to be discarded
+    even when whole-sheet's own field for it was simply empty — the one
+    case where there is nothing to lose by using it."""
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragment_groove = [{"axial_position_mm": 12, "width_mm": 6, "depth_mm": 1}]
+    fragments = {
+        "main_view": {"grooves": fragment_groove},
+        "unresolved": [],
+    }
+    whole = {"main_view": {}, "unresolved": []}
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert merged["main_view"]["grooves"] == fragment_groove
+
+
+def test_unverified_fragment_feature_does_not_overwrite_whole_own_read():
+    """The gap-filling above must not become overwriting: when whole-sheet
+    already found something for that field, an unverified fragment answer
+    must not silently replace it."""
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragments = {
+        "main_view": {"grooves": [{"axial_position_mm": 12, "width_mm": 6, "depth_mm": 1}]},
+        "unresolved": [],
+    }
+    whole_grooves = [{"axial_position_mm": 99, "width_mm": 3, "depth_mm": 2}]
+    whole = {"main_view": {"grooves": whole_grooves}, "unresolved": []}
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert merged["main_view"]["grooves"] == whole_grooves
+
+
 def test_named_feature_doubt_does_not_clear_unrelated_feature_fields():
     """Live-found bug (shaft_detail.png): a "малые элементы: ..." message
     naming ONE feature type used to clear ALL of them (chamfers/fillets/

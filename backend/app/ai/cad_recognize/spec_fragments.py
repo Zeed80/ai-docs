@@ -3993,7 +3993,24 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
         bool(item.get("evidence"))
         for item in fragment_outer
     )
-    if verified_outer:
+    current_outer = [
+        item for item in (merged_body.get("outer") or []) if isinstance(item, dict)
+    ]
+    # "evidence" is populated only when outer[] was built from LOCALIZED
+    # diameter measurements (outer_sections_from_diameter_evidence) — the
+    # ROTATION_PROMPT schema that produces a plain VLM-described profile has
+    # no evidence field at all (see _ROTATION_PROMPT), so verified_outer was
+    # effectively unreachable for that path and this function silently threw
+    # its outer[] away every time whole-sheet fell back, i.e. whenever
+    # fragments had ANY unresolved note — a common case, not a rare one.
+    # Live-reproduced 2026-08-14: fragments read 3 outer steps (Ø30/Ø50/Ø30)
+    # identically across all 3 consensus passes and got discarded in favor
+    # of a whole-sheet re-read that merged two of the three into one. A
+    # fragment profile with strictly more steps than the independent
+    # whole-sheet read found is very unlikely to be a fabrication: losing a
+    # step is the failure mode a second read corrects, not one it invents.
+    prefer_fragment_outer = verified_outer or len(fragment_outer) > len(current_outer)
+    if prefer_fragment_outer:
         merged_body["outer"] = copy.deepcopy(fragment_body["outer"])
     fragment_bore = [
         item for item in (fragment_body.get("bore") or []) if isinstance(item, dict)
@@ -4002,7 +4019,15 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
         bool(item.get("evidence"))
         for item in fragment_bore
     )
-    if verified_bore:
+    current_bore = [
+        item for item in (merged_body.get("bore") or []) if isinstance(item, dict)
+    ]
+    # Same reasoning as outer above, applied to bore: prefer fragments when
+    # it found more (or the whole-sheet fallback found none).
+    prefer_fragment_bore = verified_bore or (
+        bool(fragment_bore) and len(fragment_bore) > len(current_bore)
+    )
+    if prefer_fragment_bore:
         merged_body["bore"] = copy.deepcopy(fragment_body["bore"])
     if (fragment_body.get("profile") or {}).get("shape"):
         merged_body["profile"] = copy.deepcopy(fragment_body["profile"])
@@ -4026,18 +4051,29 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
     for field in doubted_fields:
         merged_body.pop(field, None)
     for field in feature_fields:
+        fragment_field = [
+            item for item in (fragment_body.get(field) or []) if isinstance(item, dict)
+        ]
         verified_features = [
-            item for item in (fragment_body.get(field) or [])
-            if isinstance(item, dict) and item.get("evidence")
+            item for item in fragment_field if item.get("evidence")
         ]
         if verified_features:
             merged_body[field] = copy.deepcopy(verified_features)
+        elif fragment_field and not (merged_body.get(field) or []):
+            # _FEATURES_PROMPT's own schema has no evidence field either (see
+            # its template), so verified_features is just as unreachable here
+            # as verified_outer/verified_bore were above — a correctly-read
+            # keyway/groove/cross_hole was being silently dropped whenever
+            # the whole-sheet fallback's own field for it came back empty,
+            # which is the one case where there is nothing to lose by taking
+            # what fragments found instead of nothing.
+            merged_body[field] = copy.deepcopy(fragment_field)
     bore_rejected = any(item.startswith("расточка:") for item in fragment_unresolved)
     if bore_rejected and not fragment_body.get("bore"):
         merged_body.pop("bore", None)
 
     unresolved = [str(item) for item in (merged.get("unresolved") or []) if str(item)]
-    if verified_outer:
+    if prefer_fragment_outer:
         unresolved = [
             item for item in unresolved
             if not re.match(r"^body:\d+:outer:\d+:length-missing$", item)
@@ -4047,7 +4083,7 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
                 item for item in unresolved
                 if "невозможно вычислить точные длины ступеней" not in item
             ]
-    if verified_bore:
+    if prefer_fragment_bore:
         unresolved = [
             item for item in unresolved
             if not re.match(r"^body:\d+:bore:\d+:length-missing$", item)
