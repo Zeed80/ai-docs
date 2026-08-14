@@ -375,7 +375,7 @@ async def evaluate_model(
     try:
         raw_spec = await read_spec_best_effort(
             image_bytes,
-            passes=3,
+            passes=5,
             router=_PreferredCadReaderRouter(ai_router, model_key),
             confidential=True,
         )

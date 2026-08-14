@@ -1005,7 +1005,7 @@ def _tile_coverage(
 async def read_drawing_spec_consensus(
     image_bytes: bytes,
     *,
-    passes: int = 3,
+    passes: int = 5,
     router: Any | None = None,
     confidential: bool = True,
     known_diameters_mm: list[float] | None = None,

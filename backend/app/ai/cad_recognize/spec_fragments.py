@@ -4392,9 +4392,9 @@ def _finalize_spec(spec: dict, image_bytes: bytes) -> dict:
 
 
 async def read_spec_best_effort(
-    image_bytes: bytes, *, passes: int = 3, router: Any | None = None,
+    image_bytes: bytes, *, passes: int = 5, router: Any | None = None,
     confidential: bool = True,
-    budget_seconds: float = 450.0,
+    budget_seconds: float = 750.0,
 ) -> dict:
     """Fragments first, whole-sheet consensus as the fallback for geometry.
 
