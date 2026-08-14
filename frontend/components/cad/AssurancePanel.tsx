@@ -28,7 +28,6 @@ export default function AssurancePanel({
   followups,
   consensus,
   solid,
-  onCorrectSpec,
   t,
 }: {
   crosscheck?: SpecCrossCheck;
@@ -37,7 +36,6 @@ export default function AssurancePanel({
   followups?: SpecFollowup[];
   consensus?: SpecConsensus;
   solid?: Solid3dSummary;
-  onCorrectSpec?: () => void;
   t: (k: string, v?: Record<string, string | number>) => string;
 }) {
   const errors = useMemo(
@@ -236,15 +234,6 @@ export default function AssurancePanel({
               </li>
             ))}
           </ul>
-          {onCorrectSpec && (
-            <button
-              type="button"
-              onClick={onCorrectSpec}
-              className="mt-2 rounded border border-amber-400/40 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-400/10"
-            >
-              {t("vector.assurance_fix_spec")}
-            </button>
-          )}
         </div>
       )}
 

@@ -43,6 +43,14 @@ type Chamfer = {
   [key: string]: unknown;
 };
 
+type Fillet = {
+  radius_mm?: number | null;
+  location?: "shoulder" | "left_end" | "right_end" | "bore";
+  at_z_mm?: number | null;
+  at_diameter_mm?: number | null;
+  [key: string]: unknown;
+};
+
 type CircularHolePattern = {
   count?: number | null;
   hole_diameter_mm?: number | null;
@@ -105,7 +113,10 @@ export default function SpecEditorPanel({
   spec: Record<string, unknown> | undefined;
   assumptions?: SpecAssumption[];
   busy: boolean;
-  onDone: () => void;
+  // The 3D ribbon editor (CadEditorShell) hands the queued rebuild task id
+  // to its own rebuildTaskId poller instead of reloading the page — the
+  // plain review page still just ignores the argument and reloads.
+  onDone: (result?: { rebuild_task_id?: string | null }) => void;
   onError: (message: string) => void;
   t: (k: string, v?: Record<string, string | number>) => string;
 }) {
@@ -130,6 +141,13 @@ export default function SpecEditorPanel({
     () => ((body.chamfers ?? []) as Chamfer[]).map((item) => ({ ...item })),
     [body.chamfers],
   );
+  // B2: fillets is the same kind of edge feature as chamfers (a shoulder
+  // radius the kernel can't place gets the same "не удалось определить
+  // ребро" note) but had no correction UI at all — mirrors chamfers below.
+  const readFillets = useMemo(
+    () => ((body.fillets ?? []) as Fillet[]).map((item) => ({ ...item })),
+    [body.fillets],
+  );
   const readCircularPatterns = useMemo(
     () =>
       ((body.circular_hole_patterns ?? []) as CircularHolePattern[]).map(
@@ -143,6 +161,7 @@ export default function SpecEditorPanel({
   const [axialHoles, setAxialHoles] =
     useState<AxialHolePattern[]>(readAxialHoles);
   const [chamfers, setChamfers] = useState<Chamfer[]>(readChamfers);
+  const [fillets, setFillets] = useState<Fillet[]>(readFillets);
   const [circularPatterns, setCircularPatterns] =
     useState<CircularHolePattern[]>(readCircularPatterns);
   const [saving, setSaving] = useState(false);
@@ -152,6 +171,7 @@ export default function SpecEditorPanel({
   useEffect(() => setBore(readBore), [readBore]);
   useEffect(() => setAxialHoles(readAxialHoles), [readAxialHoles]);
   useEffect(() => setChamfers(readChamfers), [readChamfers]);
+  useEffect(() => setFillets(readFillets), [readFillets]);
   useEffect(
     () => setCircularPatterns(readCircularPatterns),
     [readCircularPatterns],
@@ -159,7 +179,8 @@ export default function SpecEditorPanel({
 
   const assumedFields = useMemo(() => {
     const marked = new Set<string>();
-    for (const item of assumptions ?? []) marked.add(`${item.path}.${item.field}`);
+    for (const item of assumptions ?? [])
+      marked.add(`${item.path}.${item.field}`);
     return marked;
   }, [assumptions]);
 
@@ -169,6 +190,7 @@ export default function SpecEditorPanel({
       !readBore.length &&
       !readAxialHoles.length &&
       !readChamfers.length &&
+      !readFillets.length &&
       !readCircularPatterns.length)
   ) {
     return null;
@@ -178,11 +200,18 @@ export default function SpecEditorPanel({
   const boreDirty = JSON.stringify(bore) !== JSON.stringify(readBore);
   const axialDirty =
     JSON.stringify(axialHoles) !== JSON.stringify(readAxialHoles);
-  const chamfersDirty = JSON.stringify(chamfers) !== JSON.stringify(readChamfers);
+  const chamfersDirty =
+    JSON.stringify(chamfers) !== JSON.stringify(readChamfers);
+  const filletsDirty = JSON.stringify(fillets) !== JSON.stringify(readFillets);
   const circularDirty =
     JSON.stringify(circularPatterns) !== JSON.stringify(readCircularPatterns);
   const dirty =
-    outerDirty || boreDirty || axialDirty || chamfersDirty || circularDirty;
+    outerDirty ||
+    boreDirty ||
+    axialDirty ||
+    chamfersDirty ||
+    filletsDirty ||
+    circularDirty;
   const expectedChamfers = Math.max(
     expectedChamferCount(spec),
     readChamfers.length,
@@ -214,11 +243,9 @@ export default function SpecEditorPanel({
         Number(item.size_mm) > 0 &&
         Number(item.angle_deg) > 0 &&
         Boolean(item.location) &&
-        (
-          !["shoulder", "bore_mouth"].includes(String(item.location)) ||
+        (!["shoulder", "bore_mouth"].includes(String(item.location)) ||
           (item.at_z_mm !== null && item.at_z_mm !== undefined) ||
-          Number(item.at_diameter_mm) > 0
-        ),
+          Number(item.at_diameter_mm) > 0),
     );
   const circularComplete = circularPatterns.every(
     (item) =>
@@ -231,8 +258,7 @@ export default function SpecEditorPanel({
       typeof item.through === "boolean" &&
       (item.through || Number(item.depth_mm) > 0) &&
       (item.axis_mode !== "inclined" ||
-        (Number(item.inclination_deg) > 0 &&
-          Boolean(item.radial_direction))),
+        (Number(item.inclination_deg) > 0 && Boolean(item.radial_direction))),
   );
   const rebuildReady =
     profilesComplete && axialComplete && chamfersComplete && circularComplete;
@@ -303,6 +329,31 @@ export default function SpecEditorPanel({
     );
   }
 
+  // B1: the reader returning bore: [] used to be a dead end for a human —
+  // this table only ever rendered existing rows (updateSection), with no
+  // way to add the missing bore section or remove a wrongly-read one, even
+  // though the backend (SpecCorrectionRequest.outer/bore) already accepts
+  // a full array replace. Mirrors addChamfer below.
+  function addSection(group: "outer" | "bore") {
+    const setter = group === "outer" ? setOuter : setBore;
+    const current = group === "outer" ? outer : bore;
+    const exemplar = current[current.length - 1];
+    setter([
+      ...current,
+      {
+        diameter_mm: exemplar?.diameter_mm ?? null,
+        length_mm: null,
+        tolerance: null,
+      },
+    ]);
+  }
+
+  function removeSection(group: "outer" | "bore", index: number) {
+    const setter = group === "outer" ? setOuter : setBore;
+    const current = group === "outer" ? outer : bore;
+    setter(current.filter((_, position) => position !== index));
+  }
+
   function addChamfer() {
     const exemplar = chamfers[0] ?? readChamfers[0];
     setChamfers((current) => [
@@ -317,17 +368,45 @@ export default function SpecEditorPanel({
     ]);
   }
 
+  function updateFillet(index: number, field: keyof Fillet, value: unknown) {
+    setFillets((current) =>
+      current.map((item, position) =>
+        position === index ? { ...item, [field]: value } : item,
+      ),
+    );
+  }
+
+  function addFillet() {
+    const exemplar = fillets[0] ?? readFillets[0];
+    setFillets((current) => [
+      ...current,
+      {
+        radius_mm: exemplar?.radius_mm ?? null,
+        location: "shoulder",
+        at_z_mm: null,
+        at_diameter_mm: null,
+      },
+    ]);
+  }
+
+  function removeFillet(index: number) {
+    setFillets((current) =>
+      current.filter((_, position) => position !== index),
+    );
+  }
+
   async function save(rebuild: boolean) {
     const correction: Record<string, unknown> = {};
     if (outerDirty) correction.outer = outer;
     if (boreDirty) correction.bore = bore;
     if (axialDirty) correction.axial_holes = axialHoles;
     if (chamfersDirty) correction.chamfers = chamfers;
+    if (filletsDirty) correction.fillets = fillets;
     if (circularDirty) correction.circular_hole_patterns = circularPatterns;
     setSaving(true);
     try {
-      await correctSpec(generationId, correction, { rebuild });
-      onDone();
+      const result = await correctSpec(generationId, correction, { rebuild });
+      onDone(result);
     } catch (error) {
       onError(String((error as Error).message || error));
     } finally {
@@ -361,8 +440,19 @@ export default function SpecEditorPanel({
               </td>
             );
           })}
-          <td className="py-1 text-[11px] text-zinc-500">
+          <td className="py-1 pr-2 text-[11px] text-zinc-500">
             {String(section.tolerance ?? "")}
+          </td>
+          <td className="py-1">
+            <button
+              type="button"
+              onClick={() => removeSection(group, index)}
+              disabled={busy || saving}
+              className="rounded border border-red-500/30 px-2 text-red-300"
+              title={t("vector.spec_editor_remove_section")}
+            >
+              ×
+            </button>
           </td>
         </tr>
       );
@@ -410,7 +500,9 @@ export default function SpecEditorPanel({
                   total: readiness.length,
                 })}
               </span>
-              <span className={rebuildReady ? "text-emerald-300" : "text-amber-300"}>
+              <span
+                className={rebuildReady ? "text-emerald-300" : "text-amber-300"}
+              >
                 {Math.round((readyCount / readiness.length) * 100)}%
               </span>
             </div>
@@ -430,51 +522,83 @@ export default function SpecEditorPanel({
             </div>
           </div>
 
-          {outer.length > 0 && (
-            <div className="mt-4">
-              <h4 className="mb-1 font-medium text-zinc-200">
-                {t("vector.spec_editor_outer_title")}
-              </h4>
-              <table className="w-full">
-              <thead className="text-[11px] text-zinc-500">
-                <tr>
-                  <th className="w-8 text-left font-normal">#</th>
-                  <th className="text-left font-normal">
-                    {t("vector.spec_editor_diameter")}
-                  </th>
-                  <th className="text-left font-normal">
-                    {t("vector.spec_editor_length")}
-                  </th>
-                  <th className="text-left font-normal">
-                    {t("vector.spec_editor_tolerance")}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows("outer", outer)}
-              </tbody>
-              </table>
-            </div>
-          )}
-
-          {bore.length > 0 && (
-            <div className="mt-4">
-              <h4 className="mb-1 font-medium text-zinc-200">
-                {t("vector.spec_editor_bore_title")}
-              </h4>
+          <div className="mt-4">
+            <h4 className="mb-1 font-medium text-zinc-200">
+              {t("vector.spec_editor_outer_title")}
+            </h4>
+            {outer.length > 0 && (
               <table className="w-full">
                 <thead className="text-[11px] text-zinc-500">
                   <tr>
                     <th className="w-8 text-left font-normal">#</th>
-                    <th className="text-left font-normal">{t("vector.spec_editor_diameter")}</th>
-                    <th className="text-left font-normal">{t("vector.spec_editor_length")}</th>
-                    <th className="text-left font-normal">{t("vector.spec_editor_tolerance")}</th>
+                    <th className="text-left font-normal">
+                      {t("vector.spec_editor_diameter")}
+                    </th>
+                    <th className="text-left font-normal">
+                      {t("vector.spec_editor_length")}
+                    </th>
+                    <th className="text-left font-normal">
+                      {t("vector.spec_editor_tolerance")}
+                    </th>
+                    <th className="w-8" />
+                  </tr>
+                </thead>
+                <tbody>{rows("outer", outer)}</tbody>
+              </table>
+            )}
+            <button
+              type="button"
+              onClick={() => addSection("outer")}
+              disabled={busy || saving}
+              className="mt-2 rounded border border-white/15 px-2 py-1 text-zinc-300 hover:bg-white/5"
+            >
+              + {t("vector.spec_editor_add_outer")}
+            </button>
+          </div>
+
+          {/* B1: unlike outer (always non-empty for a real part), bore == []
+              is exactly the ambiguous "нет отверстия" vs "не прочитано"
+              case (cad_solid.py's solid_build_gate only blocks on this when
+              the reader also happened to flag a section view) — an empty
+              bore list with no way to add a row used to be a dead end for a
+              part that should have been hollow. */}
+          <div className="mt-4">
+            <h4 className="mb-1 font-medium text-zinc-200">
+              {t("vector.spec_editor_bore_title")}
+            </h4>
+            {bore.length > 0 ? (
+              <table className="w-full">
+                <thead className="text-[11px] text-zinc-500">
+                  <tr>
+                    <th className="w-8 text-left font-normal">#</th>
+                    <th className="text-left font-normal">
+                      {t("vector.spec_editor_diameter")}
+                    </th>
+                    <th className="text-left font-normal">
+                      {t("vector.spec_editor_length")}
+                    </th>
+                    <th className="text-left font-normal">
+                      {t("vector.spec_editor_tolerance")}
+                    </th>
+                    <th className="w-8" />
                   </tr>
                 </thead>
                 <tbody>{rows("bore", bore)}</tbody>
               </table>
-            </div>
-          )}
+            ) : (
+              <p className="text-[11px] text-amber-300/80">
+                {t("vector.spec_editor_bore_empty_hint")}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => addSection("bore")}
+              disabled={busy || saving}
+              className="mt-2 rounded border border-white/15 px-2 py-1 text-zinc-300 hover:bg-white/5"
+            >
+              + {t("vector.spec_editor_add_bore")}
+            </button>
+          </div>
 
           {axialHoles.length > 0 && (
             <div className="mt-4 border-t border-white/10 pt-3">
@@ -487,9 +611,7 @@ export default function SpecEditorPanel({
                   className="mt-2 rounded border border-white/10 bg-black/20 p-2"
                 >
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-zinc-400">
-                    <span>
-                      {String(item.thread?.designation ?? "—")}
-                    </span>
+                    <span>{String(item.thread?.designation ?? "—")}</span>
                     <span>
                       {t("vector.spec_editor_count")}: {shown(item.count)}
                     </span>
@@ -502,13 +624,26 @@ export default function SpecEditorPanel({
                     <label className="text-zinc-500">
                       {t("vector.spec_editor_count")}
                       <div className="mt-1">
-                        {numericInput(item.count, (value) => updateAxial(index, "count", value), "w-full")}
+                        {numericInput(
+                          item.count,
+                          (value) => updateAxial(index, "count", value),
+                          "w-full",
+                        )}
                       </div>
                     </label>
                     <label className="text-zinc-500">
                       {t("vector.spec_editor_pcd")}
                       <div className="mt-1">
-                        {numericInput(item.bolt_circle_diameter_mm, (value) => updateAxial(index, "bolt_circle_diameter_mm", value), "w-full")}
+                        {numericInput(
+                          item.bolt_circle_diameter_mm,
+                          (value) =>
+                            updateAxial(
+                              index,
+                              "bolt_circle_diameter_mm",
+                              value,
+                            ),
+                          "w-full",
+                        )}
                       </div>
                     </label>
                     <label className="text-zinc-500">
@@ -525,9 +660,15 @@ export default function SpecEditorPanel({
                         disabled={busy || saving}
                         className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200"
                       >
-                        <option value="">{t("vector.spec_editor_unknown")}</option>
-                        <option value="zmin">{t("vector.spec_editor_zmin")}</option>
-                        <option value="zmax">{t("vector.spec_editor_zmax")}</option>
+                        <option value="">
+                          {t("vector.spec_editor_unknown")}
+                        </option>
+                        <option value="zmin">
+                          {t("vector.spec_editor_zmin")}
+                        </option>
+                        <option value="zmax">
+                          {t("vector.spec_editor_zmax")}
+                        </option>
                       </select>
                     </label>
                     <label className="text-zinc-500">
@@ -535,7 +676,8 @@ export default function SpecEditorPanel({
                       <div className="mt-1">
                         {numericInput(
                           item.entry_offset_mm,
-                          (value) => updateAxial(index, "entry_offset_mm", value),
+                          (value) =>
+                            updateAxial(index, "entry_offset_mm", value),
                           "w-full",
                         )}
                       </div>
@@ -546,7 +688,11 @@ export default function SpecEditorPanel({
                         {numericInput(
                           item.entry_recess_diameter_mm,
                           (value) =>
-                            updateAxial(index, "entry_recess_diameter_mm", value),
+                            updateAxial(
+                              index,
+                              "entry_recess_diameter_mm",
+                              value,
+                            ),
                           "w-full",
                         )}
                       </div>
@@ -573,7 +719,9 @@ export default function SpecEditorPanel({
                         disabled={busy || saving}
                         className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200"
                       >
-                        <option value="">{t("vector.spec_editor_unknown")}</option>
+                        <option value="">
+                          {t("vector.spec_editor_unknown")}
+                        </option>
                         <option value="through">
                           {t("vector.spec_editor_through")}
                         </option>
@@ -630,25 +778,44 @@ export default function SpecEditorPanel({
                 >
                   <div className="text-zinc-300">
                     {shown(item.count)}×⌀{shown(item.hole_diameter_mm)} · PCD ⌀
-                    {shown(item.bolt_circle_diameter_mm)} · {String(item.axis_mode ?? "—")}
+                    {shown(item.bolt_circle_diameter_mm)} ·{" "}
+                    {String(item.axis_mode ?? "—")}
                   </div>
                   <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                     <label className="text-zinc-500">
                       {t("vector.spec_editor_count")}
                       <div className="mt-1">
-                        {numericInput(item.count, (value) => updateCircular(index, "count", value), "w-full")}
+                        {numericInput(
+                          item.count,
+                          (value) => updateCircular(index, "count", value),
+                          "w-full",
+                        )}
                       </div>
                     </label>
                     <label className="text-zinc-500">
                       {t("vector.spec_editor_diameter")}
                       <div className="mt-1">
-                        {numericInput(item.hole_diameter_mm, (value) => updateCircular(index, "hole_diameter_mm", value), "w-full")}
+                        {numericInput(
+                          item.hole_diameter_mm,
+                          (value) =>
+                            updateCircular(index, "hole_diameter_mm", value),
+                          "w-full",
+                        )}
                       </div>
                     </label>
                     <label className="text-zinc-500">
                       {t("vector.spec_editor_pcd")}
                       <div className="mt-1">
-                        {numericInput(item.bolt_circle_diameter_mm, (value) => updateCircular(index, "bolt_circle_diameter_mm", value), "w-full")}
+                        {numericInput(
+                          item.bolt_circle_diameter_mm,
+                          (value) =>
+                            updateCircular(
+                              index,
+                              "bolt_circle_diameter_mm",
+                              value,
+                            ),
+                          "w-full",
+                        )}
                       </div>
                     </label>
                     <label className="text-zinc-500">
@@ -656,14 +823,24 @@ export default function SpecEditorPanel({
                       <select
                         value={item.axis_mode ?? ""}
                         onChange={(event) =>
-                          updateCircular(index, "axis_mode", event.target.value || undefined)
+                          updateCircular(
+                            index,
+                            "axis_mode",
+                            event.target.value || undefined,
+                          )
                         }
                         disabled={busy || saving}
                         className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200"
                       >
-                        <option value="">{t("vector.spec_editor_unknown")}</option>
-                        <option value="axial">{t("vector.spec_editor_axis_axial")}</option>
-                        <option value="inclined">{t("vector.spec_editor_axis_inclined")}</option>
+                        <option value="">
+                          {t("vector.spec_editor_unknown")}
+                        </option>
+                        <option value="axial">
+                          {t("vector.spec_editor_axis_axial")}
+                        </option>
+                        <option value="inclined">
+                          {t("vector.spec_editor_axis_inclined")}
+                        </option>
                       </select>
                     </label>
                     <label className="text-zinc-500">
@@ -680,9 +857,15 @@ export default function SpecEditorPanel({
                         disabled={busy || saving}
                         className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200"
                       >
-                        <option value="">{t("vector.spec_editor_unknown")}</option>
-                        <option value="zmin">{t("vector.spec_editor_zmin")}</option>
-                        <option value="zmax">{t("vector.spec_editor_zmax")}</option>
+                        <option value="">
+                          {t("vector.spec_editor_unknown")}
+                        </option>
+                        <option value="zmin">
+                          {t("vector.spec_editor_zmin")}
+                        </option>
+                        <option value="zmax">
+                          {t("vector.spec_editor_zmax")}
+                        </option>
                       </select>
                     </label>
                     <label className="text-zinc-500">
@@ -690,7 +873,8 @@ export default function SpecEditorPanel({
                       <div className="mt-1">
                         {numericInput(
                           item.start_angle_deg,
-                          (value) => updateCircular(index, "start_angle_deg", value),
+                          (value) =>
+                            updateCircular(index, "start_angle_deg", value),
                           "w-full",
                         )}
                       </div>
@@ -698,20 +882,34 @@ export default function SpecEditorPanel({
                     <label className="text-zinc-500">
                       {t("vector.spec_editor_execution")}
                       <select
-                        value={typeof item.through === "boolean" ? (item.through ? "through" : "blind") : ""}
+                        value={
+                          typeof item.through === "boolean"
+                            ? item.through
+                              ? "through"
+                              : "blind"
+                            : ""
+                        }
                         onChange={(event) =>
                           updateCircular(
                             index,
                             "through",
-                            event.target.value === "" ? null : event.target.value === "through",
+                            event.target.value === ""
+                              ? null
+                              : event.target.value === "through",
                           )
                         }
                         disabled={busy || saving}
                         className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200"
                       >
-                        <option value="">{t("vector.spec_editor_unknown")}</option>
-                        <option value="through">{t("vector.spec_editor_through")}</option>
-                        <option value="blind">{t("vector.spec_editor_blind")}</option>
+                        <option value="">
+                          {t("vector.spec_editor_unknown")}
+                        </option>
+                        <option value="through">
+                          {t("vector.spec_editor_through")}
+                        </option>
+                        <option value="blind">
+                          {t("vector.spec_editor_blind")}
+                        </option>
                       </select>
                     </label>
                     <label className="text-zinc-500">
@@ -729,7 +927,8 @@ export default function SpecEditorPanel({
                       <div className="mt-1">
                         {numericInput(
                           item.inclination_deg,
-                          (value) => updateCircular(index, "inclination_deg", value),
+                          (value) =>
+                            updateCircular(index, "inclination_deg", value),
                           "w-full",
                         )}
                       </div>
@@ -745,10 +944,14 @@ export default function SpecEditorPanel({
                             event.target.value || null,
                           )
                         }
-                        disabled={busy || saving || item.axis_mode !== "inclined"}
+                        disabled={
+                          busy || saving || item.axis_mode !== "inclined"
+                        }
                         className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200 disabled:opacity-40"
                       >
-                        <option value="">{t("vector.spec_editor_unknown")}</option>
+                        <option value="">
+                          {t("vector.spec_editor_unknown")}
+                        </option>
                         <option value="outward">
                           {t("vector.spec_editor_outward")}
                         </option>
@@ -763,7 +966,12 @@ export default function SpecEditorPanel({
                         <div className="mt-1">
                           {numericInput(
                             item.connection_station_mm,
-                            (value) => updateCircular(index, "connection_station_mm", value),
+                            (value) =>
+                              updateCircular(
+                                index,
+                                "connection_station_mm",
+                                value,
+                              ),
                             "w-full",
                           )}
                         </div>
@@ -829,7 +1037,9 @@ export default function SpecEditorPanel({
                       disabled={busy || saving}
                       className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200"
                     >
-                      <option value="">{t("vector.spec_editor_unknown")}</option>
+                      <option value="">
+                        {t("vector.spec_editor_unknown")}
+                      </option>
                       <option value="left_end">
                         {t("vector.spec_editor_left_end")}
                       </option>
@@ -887,6 +1097,95 @@ export default function SpecEditorPanel({
                 className="mt-2 rounded border border-white/15 px-2 py-1 text-zinc-300 hover:bg-white/5"
               >
                 + {t("vector.spec_editor_add_chamfer")}
+              </button>
+            </div>
+          )}
+
+          {(readFillets.length > 0 || fillets.length > 0) && (
+            <div className="mt-4 border-t border-white/10 pt-3">
+              <h4 className="font-medium text-zinc-200">
+                {t("vector.spec_editor_fillets_title")}
+              </h4>
+              {fillets.map((item, index) => (
+                <div
+                  key={index}
+                  className="mt-2 grid grid-cols-1 gap-2 rounded border border-white/10 bg-black/20 p-2 sm:grid-cols-2 lg:grid-cols-3"
+                >
+                  <label className="text-zinc-500">
+                    {t("vector.spec_editor_radius")}
+                    <div className="mt-1">
+                      {numericInput(
+                        item.radius_mm,
+                        (value) => updateFillet(index, "radius_mm", value),
+                        "w-full",
+                      )}
+                    </div>
+                  </label>
+                  <label className="col-span-2 text-zinc-500">
+                    {t("vector.spec_editor_location")}
+                    <select
+                      value={item.location ?? ""}
+                      onChange={(event) =>
+                        updateFillet(index, "location", event.target.value)
+                      }
+                      disabled={busy || saving}
+                      className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200"
+                    >
+                      <option value="">
+                        {t("vector.spec_editor_unknown")}
+                      </option>
+                      <option value="left_end">
+                        {t("vector.spec_editor_left_end")}
+                      </option>
+                      <option value="right_end">
+                        {t("vector.spec_editor_right_end")}
+                      </option>
+                      <option value="shoulder">
+                        {t("vector.spec_editor_shoulder")}
+                      </option>
+                      <option value="bore">
+                        {t("vector.spec_editor_bore_location")}
+                      </option>
+                    </select>
+                  </label>
+                  <label className="text-zinc-500">
+                    {t("vector.spec_editor_at_z")}
+                    <div className="mt-1">
+                      {numericInput(
+                        item.at_z_mm,
+                        (value) => updateFillet(index, "at_z_mm", value),
+                        "w-full",
+                      )}
+                    </div>
+                  </label>
+                  <label className="text-zinc-500">
+                    {t("vector.spec_editor_at_diameter")}
+                    <div className="mt-1 flex gap-1">
+                      {numericInput(
+                        item.at_diameter_mm,
+                        (value) => updateFillet(index, "at_diameter_mm", value),
+                        "w-full",
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeFillet(index)}
+                        disabled={busy || saving}
+                        className="rounded border border-red-500/30 px-2 text-red-300"
+                        title={t("vector.spec_editor_remove_fillet")}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </label>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={addFillet}
+                disabled={busy || saving}
+                className="mt-2 rounded border border-white/15 px-2 py-1 text-zinc-300 hover:bg-white/5"
+              >
+                + {t("vector.spec_editor_add_fillet")}
               </button>
             </div>
           )}

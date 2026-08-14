@@ -1279,7 +1279,11 @@ async def correct_generation_model_assertion(
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
-    from app.domain.engineering_model_graph import AssertionValue, GraphPatch
+    from app.domain.engineering_model_graph import (
+        AssertionValue,
+        GraphPatch,
+        summarize_patch_errors,
+    )
     from app.services.engineering_model_graph import (
         DuplicatePatchError,
         load_graph,
@@ -1357,7 +1361,7 @@ async def correct_generation_model_assertion(
         raise HTTPException(409, str(exc)) from exc
     if revised_row is None:
         await db.commit()
-        raise HTTPException(409, {"validation_errors": errors})
+        raise HTTPException(409, {"validation_errors": summarize_patch_errors(errors)})
     params["engineering_model_graph"] = {
         "revision_id": str(revised_row.id),
         "graph_id": revised_row.graph_id,
@@ -1393,7 +1397,11 @@ async def correct_generation_model_assertions_batch(
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     """Apply several related human corrections as one immutable GraphPatch."""
-    from app.domain.engineering_model_graph import AssertionValue, GraphPatch
+    from app.domain.engineering_model_graph import (
+        AssertionValue,
+        GraphPatch,
+        summarize_patch_errors,
+    )
     from app.services.engineering_model_graph import (
         DuplicatePatchError, load_graph, merge_and_persist_patch,
     )
@@ -1479,7 +1487,7 @@ async def correct_generation_model_assertions_batch(
         raise HTTPException(409, str(exc)) from exc
     if revised_row is None:
         await db.commit()
-        raise HTTPException(409, {"validation_errors": errors})
+        raise HTTPException(409, {"validation_errors": summarize_patch_errors(errors)})
     params["engineering_model_graph"] = {
         "revision_id": str(revised_row.id), "graph_id": revised_row.graph_id,
         "revision": revised_row.revision,
@@ -1956,6 +1964,7 @@ class SpecCorrectionRequest(BaseModel):
     annotations: list[dict[str, Any]] | None = None
     views: list[dict[str, Any]] | None = None
     chamfers: list[dict[str, Any]] | None = None
+    fillets: list[dict[str, Any]] | None = None
     grooves: list[dict[str, Any]] | None = None
     keyways: list[dict[str, Any]] | None = None
     cross_holes: list[dict[str, Any]] | None = None

@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+
 from app.ai.cad_recognize.spec_crosscheck import (
+    check_axial_hatching_against_bore,
     check_spec_against_raster,
     check_spec_arithmetic,
     cross_check_spec,
+    detect_axial_hatching,
 )
+
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def _codes(findings) -> set[str]:
@@ -227,6 +236,127 @@ def test_no_measurement_means_no_verdict_from_the_image():
     spec = {"main_view": {"profile": {"shape": "circle", "diameter_mm": 560}}}
     assert check_outline_against_image(spec, None) == []
     assert check_outline_against_image(spec, 0) == []
+
+
+# ── axial hatching evidence (Phase E, 2026-08-14: "разрез не прочитан") ────
+
+
+def _lines(*segments: tuple[float, float, float, float]):
+    """Shape HoughLinesP itself returns: (N, 1, 4) int32."""
+    return np.array([[list(seg)] for seg in segments], dtype="int32")
+
+
+def test_a_bounded_45_degree_band_is_detected_as_hatching():
+    ink = np.zeros((200, 200), dtype="uint8")
+    # 15 short 45°-ish parallel strokes inside a bounded band — enough to
+    # clear the "real fill, not a stray diagonal line" threshold (12).
+    segments = tuple(
+        (40 + i * 4, 60, 40 + i * 4 + 20, 80) for i in range(15)
+    )
+    with patch("cv2.HoughLinesP", return_value=_lines(*segments)):
+        result = detect_axial_hatching(ink)
+    assert result is not None
+    assert result["segment_count"] == 15
+
+
+def test_a_handful_of_stray_diagonal_lines_is_not_hatching():
+    ink = np.zeros((200, 200), dtype="uint8")
+    segments = tuple((40 + i * 4, 60, 40 + i * 4 + 20, 80) for i in range(3))
+    with patch("cv2.HoughLinesP", return_value=_lines(*segments)):
+        assert detect_axial_hatching(ink) is None
+
+
+def test_lines_that_are_not_roughly_45_degrees_are_not_hatching():
+    """A frame border or a dimension line is axis-aligned, not diagonal —
+    the detector must not mistake it for section fill."""
+    ink = np.zeros((200, 200), dtype="uint8")
+    horizontal = tuple((10, 10 + i * 4, 190, 10 + i * 4) for i in range(15))
+    with patch("cv2.HoughLinesP", return_value=_lines(*horizontal)):
+        assert detect_axial_hatching(ink) is None
+
+
+def test_hatching_spanning_the_whole_sheet_is_treated_as_a_border_artifact():
+    ink = np.zeros((200, 200), dtype="uint8")
+    # Same 45° angle, but the bounding box covers (almost) the whole sheet —
+    # a watermark/border pattern, not a bounded bore hatch.
+    segments = tuple((i * 4, i * 4, i * 4 + 20, i * 4 + 20) for i in range(48))
+    with patch("cv2.HoughLinesP", return_value=_lines(*segments)):
+        assert detect_axial_hatching(ink) is None
+
+
+def test_no_lines_found_at_all_is_not_hatching():
+    ink = np.zeros((200, 200), dtype="uint8")
+    with patch("cv2.HoughLinesP", return_value=None):
+        assert detect_axial_hatching(ink) is None
+
+
+def test_hatching_with_no_stated_bore_is_the_exact_live_bug():
+    """detal_126.png, 2026-08-14: the reader said bore: [] on a part whose
+    section view clearly shows one — cad_solid.py built it solid with no
+    hard blocker because the reader never flagged a section view either.
+    This is the independent, image-grounded signal that catches it."""
+    spec = {"main_view": {
+        "outer": [{"diameter_mm": 40, "length_mm": 100}], "bore": [],
+    }}
+    findings = check_axial_hatching_against_bore(
+        spec, {"segment_count": 43, "bbox_px": [1, 1, 2, 2]},
+    )
+    codes = {f.code for f in findings}
+    assert "axial_hatching_bore_mismatch" in codes
+    assert all(f.severity == "error" for f in findings)
+
+
+def test_a_correctly_stated_bore_with_hatching_raises_nothing():
+    spec = {"main_view": {
+        "outer": [{"diameter_mm": 40, "length_mm": 100}],
+        "bore": [{"diameter_mm": 20, "length_mm": 100}],
+    }}
+    findings = check_axial_hatching_against_bore(
+        spec, {"segment_count": 43, "bbox_px": [1, 1, 2, 2]},
+    )
+    assert findings == []
+
+
+def test_a_stated_bore_with_no_detected_hatching_is_only_a_warning():
+    """The detector's own false-negative rate is unmeasured — this must not
+    read as proof the bore is wrong, only a softer prompt to double-check."""
+    spec = {"main_view": {
+        "outer": [{"diameter_mm": 40, "length_mm": 100}],
+        "bore": [{"diameter_mm": 20, "length_mm": 100}],
+    }}
+    findings = check_axial_hatching_against_bore(spec, None)
+    assert [f.code for f in findings] == ["no_axial_hatching_for_stated_bore"]
+    assert findings[0].severity == "warn"
+
+
+def test_hatching_without_any_outer_profile_is_not_evaluated():
+    """A prismatic/unclassified part has nothing for this check to mean
+    anything about — the check is scoped to bodies of revolution."""
+    findings = check_axial_hatching_against_bore(
+        {"main_view": {}}, {"segment_count": 43, "bbox_px": [1, 1, 2, 2]},
+    )
+    assert findings == []
+
+
+def test_detect_axial_hatching_finds_the_live_spindle_bore():
+    """Real image, not mocked: detal_126.png is a hollow spindle whose
+    section view shows axial hatching — the true positive this whole
+    detector exists for."""
+    from app.tasks.cad_trace import _binarize
+
+    ink, _w, _h = _binarize((ROOT / "test_vector_files" / "detal_126.png").read_bytes())
+    assert detect_axial_hatching(ink) is not None
+
+
+def test_detect_axial_hatching_is_silent_on_a_solid_shaft():
+    """example-drawings/shaft_detail.png is a genuinely solid stepped shaft
+    with no section view and no bore — the true negative."""
+    from app.tasks.cad_trace import _binarize
+
+    ink, _w, _h = _binarize(
+        (ROOT / "example-drawings" / "shaft_detail.png").read_bytes()
+    )
+    assert detect_axial_hatching(ink) is None
 
 
 # ── view correspondence (Фаза 1.1: cross-view feature linkage) ─────────────

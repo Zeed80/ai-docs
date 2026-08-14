@@ -57,6 +57,21 @@ def test_a_correction_touches_only_the_supplied_fields():
     assert merged["dimensions"] == [{"value": "Ø560"}]
 
 
+def test_a_fillet_correction_merges_into_main_view():
+    """B2: fillets is the same shape/kind of field as chamfers (a shoulder
+    edge the kernel can't place gets "не удалось определить ребро" for
+    either) but was missing from _LIST_FIELDS — a human correction to it
+    used to be silently dropped by merge_correction."""
+    merged = merge_correction(_read(), {"fillets": [
+        {"radius_mm": 2.0, "location": "shoulder", "at_diameter_mm": 30.0},
+    ]})
+    assert merged["main_view"]["fillets"] == [
+        {"radius_mm": 2.0, "location": "shoulder", "at_diameter_mm": 30.0},
+    ]
+    # Everything else survives, same guarantee as any other list field.
+    assert merged["main_view"]["profile"]["diameter_mm"] == 560
+
+
 def test_a_correction_can_create_a_missing_branch():
     merged = merge_correction({"part": "Вал"}, {"scale": "1:2"})
     assert merged["title_block"]["scale"] == "1:2"

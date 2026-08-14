@@ -189,6 +189,31 @@ def test_an_unplaceable_chamfer_is_declared_not_invented():
     assert any("не удалось определить ребро" in item for item in candidate.missing_data)
 
 
+def test_unplaceable_edge_note_embeds_its_array_index():
+    """C: the 3D editor's click-to-repair flow parses "chamfer[N]:"/
+    "fillet[N]:" out of this note to know which chamfers[i]/fillets[i] row
+    to patch with the diameter/z a human just clicked — the index has to be
+    in the text, not just "which one of possibly several failed"."""
+    candidate = _tree(chamfers=[
+        {"size_mm": 2.0, "location": "shoulder", "at_diameter_mm": 80.0},
+        {"size_mm": 1.0, "location": "shoulder"},
+    ])
+    assert any(item.startswith("chamfer[1]: не удалось определить ребро")
+               for item in candidate.missing_data)
+
+
+def test_a_fillet_at_the_bore_edge_is_placed_the_same_way_as_bore_mouth():
+    """SpecFillet's location literal spells this "bore", not "bore_mouth"
+    (SpecChamfer's spelling) — same edge, different name; a fillet given an
+    explicit at_z_mm here (as the click-to-repair flow supplies) must not
+    fall through to "unplaceable" just because of the name mismatch."""
+    candidate = _tree(fillets=[
+        {"radius_mm": 1.0, "location": "bore", "at_z_mm": 40.0},
+    ])
+    selector = _of_kind(candidate, "fillet")[0].params["edge_selector"]
+    assert selector == {"curve": "Circle", "at_z_mm": 40.0}
+
+
 def test_a_feature_read_without_its_size_is_declared_too():
     candidate = _tree(grooves=[{"axial_position_mm": 250.0, "width_mm": 6.0}])
     assert not _of_kind(candidate, "groove")

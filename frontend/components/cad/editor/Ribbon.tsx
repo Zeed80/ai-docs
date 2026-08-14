@@ -8,12 +8,13 @@
  * приёмки/экспорта. Ф10: RibbonGroup даёт кластерам кнопок подпись —
  * то же визуальное деление, что у настоящих ленточных интерфейсов. */
 
-export type RibbonTabId = "sketch" | "features" | "body" | "inspect";
+export type RibbonTabId = "sketch" | "features" | "body" | "spec" | "inspect";
 
 const TABS: { id: RibbonTabId; label: string }[] = [
   { id: "sketch", label: "Эскиз" },
   { id: "features", label: "Фичи" },
   { id: "body", label: "Тело" },
+  { id: "spec", label: "Спецификация" },
   { id: "inspect", label: "Проверка" },
 ];
 

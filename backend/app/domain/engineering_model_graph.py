@@ -360,8 +360,61 @@ class PatchMergeError(ValueError):
         super().__init__("; ".join(errors))
 
 
+def summarize_patch_errors(errors: list[str], *, limit: int = 20) -> list[str]:
+    """Shorten a validation-error list for human display.
+
+    Several error codes embed an uncapped, comma-joined id list (e.g.
+    ``confirmed_assertions_require_human:<id>,<id>,...``) — on a real
+    digitized draft that list can run into the hundreds, and nothing
+    upstream ever truncated it: the raw string was embedded verbatim in a
+    ValueError, sent as-is in a 409 response body, and rendered as-is by
+    the CAD editor — live-reproduced on detal_126.png, 2026-08-14. Keep the
+    first `limit` ids per code and replace the rest with a count; codes
+    with no embedded id list (or a short one) pass through unchanged.
+    """
+    summarized: list[str] = []
+    for error in errors:
+        code, sep, rest = error.partition(":")
+        if not sep or not rest:
+            summarized.append(error)
+            continue
+        ids = rest.split(",")
+        if len(ids) <= limit:
+            summarized.append(error)
+            continue
+        kept = ",".join(ids[:limit])
+        summarized.append(
+            f"{code}:{kept} (и ещё {len(ids) - limit} подтверждённых значений)"
+        )
+    return summarized
+
+
 _MODEL_PRODUCERS = {"reader", "tracer", "visual_verifier"}
 _FORBIDDEN_MODEL_ASSURANCE = {"constraint_validated", "human_approved"}
+
+
+def _supersede_preserves_value(patch: "GraphPatch", old_id: str, old_value: "AssertionValue") -> bool:
+    """True when ``old_id`` is being superseded by a same-value replacement.
+
+    Some callers (feature_tree_revision_patch, in particular) deliberately
+    mint a brand-new BuildOperation node identity on every rebuild pass and
+    re-declare every one of its assertions (kind/sequence/params) under
+    that new id — "old operation nodes deliberately remain immutable" is
+    the documented design, so a rebuild always supersedes the previous
+    operation's assertions even when nothing about them actually changed.
+    Combined with a human having confirmed even one BuildOperation value
+    earlier (an ordinary review action, assurance bumped to
+    "human_approved"), the very next plain system rebuild would re-touch
+    that value among hundreds of others and get flatly rejected by the
+    protected-assurance check below — live-reproduced on detal_126.png,
+    2026-08-14. The gate's job is to stop a VALUE from changing without a
+    human; it must not also fire on a same-value supersede that only exists
+    because of how the caller versions node identity.
+    """
+    return any(
+        item.supersedes_assertion_id == old_id and item.value == old_value
+        for item in patch.add_assertions
+    )
 
 
 def apply_graph_patch(
@@ -416,6 +469,11 @@ def apply_graph_patch(
         if item_id in current
         and current[item_id].assurance in _FORBIDDEN_MODEL_ASSURANCE
         and patch.producer != "human"
+        and not (
+            item_id in patch.supersede_assertion_ids
+            and item_id not in patch.retract_assertion_ids
+            and _supersede_preserves_value(patch, item_id, current[item_id].value)
+        )
     ]
     if protected:
         errors.append("confirmed_assertions_require_human:" + ",".join(sorted(protected)))

@@ -532,6 +532,113 @@ def check_outline_against_image(
     return findings
 
 
+def detect_axial_hatching(ink: Any) -> dict[str, Any] | None:
+    """Does the sheet show a bounded band of ~45° parallel hatching?
+
+    check_outline_against_image above names the exact gap this fills: "is
+    the stated hole actually drawn?" was left unanswered there because
+    circle detection cannot see it — that discussion is about a flange
+    (round in plan, bore visible as a concentric circle). A body of
+    revolution drawn in LONGITUDINAL section (a shaft — detal_126.png,
+    2026-08-14's live-reproduced case) shows its bore as ANSI31-style
+    parallel diagonal hatching inside a channel along the axis, not a
+    circle in the main view; nothing in this codebase looked for that
+    signal before, so an empty bore[] from the reader was indistinguishable
+    from a genuinely solid part unless the reader also happened to notice
+    a section VIEW exists (see cad_solid.py's has_section/solid_build_gate).
+
+    Narrow and honest like this module's other measuring tools: this finds
+    a bounded channel of near-45° parallel segments (not running along the
+    whole outline, which would be a frame/border artifact, not hatching)
+    and reports presence/count/extent only — no attempt to derive a bore
+    diameter or depth from it. V1: presence/absence evidence, not
+    reconstruction.
+    """
+    import cv2
+    import numpy as np
+
+    try:
+        height, width = ink.shape[:2]
+        lines = cv2.HoughLinesP(
+            ink, 1, np.pi / 180, threshold=25,
+            minLineLength=max(8, min(height, width) // 40),
+            maxLineGap=4,
+        )
+    except Exception:  # noqa: BLE001 — measurement must never break the run
+        return None
+    if lines is None or len(lines) == 0:
+        return None
+    # ANSI31 hatching is conventionally drawn at 45°; keep both diagonals
+    # since a draftsman may lean either way.
+    hatch_segments = []
+    for line in lines[:, 0]:
+        x1, y1, x2, y2 = (float(v) for v in line)
+        angle = math.degrees(math.atan2(y2 - y1, x2 - x1)) % 180
+        if 30 <= angle <= 60 or 120 <= angle <= 150:
+            hatch_segments.append((x1, y1, x2, y2))
+    # A handful of stray diagonal lines (a chamfer edge, a leader line) is
+    # noise, not hatching — real section fill draws many closely-spaced
+    # parallel strokes. Threshold picked to require a genuine fill pattern,
+    # not tuned against a single sheet (see this module's own docstring on
+    # why a false alarm on a correct sheet is worse than no check).
+    if len(hatch_segments) < 12:
+        return None
+    xs = [v for seg in hatch_segments for v in (seg[0], seg[2])]
+    ys = [v for seg in hatch_segments for v in (seg[1], seg[3])]
+    bbox = (min(xs), min(ys), max(xs), max(ys))
+    # Bounded, not the whole sheet — a real bore hatch is a band inside the
+    # part, not a border/frame artifact spanning the entire drawing.
+    if (bbox[2] - bbox[0]) > 0.9 * width and (bbox[3] - bbox[1]) > 0.9 * height:
+        return None
+    return {
+        "segment_count": len(hatch_segments),
+        "bbox_px": [round(v, 1) for v in bbox],
+    }
+
+
+def check_axial_hatching_against_bore(
+    spec: dict, hatching: dict[str, Any] | None
+) -> list[CrossCheckFinding]:
+    """Cross-check detected section hatching against the read bore[].
+
+    Only meaningful once the reader has committed to a body of revolution
+    with an outer[] profile — a hatching signal means nothing yet for a
+    part the reader hasn't even placed a profile on.
+    """
+    findings: list[CrossCheckFinding] = []
+    body = spec.get("main_view") or {}
+    if not (body.get("outer") or []):
+        return findings
+    bore = body.get("bore") or []
+    if hatching and not bore:
+        findings.append(CrossCheckFinding(
+            code="axial_hatching_bore_mismatch",
+            message=(
+                "на чертеже обнаружена штриховка разреза, похожая на "
+                "полость, но bore[] пусто — деталь будет построена "
+                "сплошной. Проверьте разрез и, если полость есть, "
+                "добавьте секцию bore в редакторе спецификации."
+            ),
+            severity="error",
+            details=hatching,
+        ))
+    elif not hatching and bore:
+        # A weaker signal on purpose: the detector's own false-negative
+        # rate is unmeasured against a broad corpus (see its docstring) —
+        # a real bore not being found here must not read as proof the bore
+        # is wrong.
+        findings.append(CrossCheckFinding(
+            code="no_axial_hatching_for_stated_bore",
+            message=(
+                "bore[] заполнено, но штриховка разреза на изображении не "
+                "обнаружена детектором — это не доказательство ошибки, "
+                "детектор может просто не найти реальную штриховку"
+            ),
+            severity="warn",
+        ))
+    return findings
+
+
 def measure_circle_radii(ink: Any) -> list[float]:
     """Radii of the circles the classical tracer finds on the sheet, in pixels.
 
@@ -565,6 +672,9 @@ def cross_check_spec(spec: dict, ink: Any | None = None) -> dict[str, Any]:
         findings.extend(check_spec_against_raster(spec, measured))
         dominant = measure_dominant_circle_px(ink)
         findings.extend(check_outline_against_image(spec, dominant))
+        findings.extend(
+            check_axial_hatching_against_bore(spec, detect_axial_hatching(ink))
+        )
     stated_circles = len(_spec_circle_diameters(spec))
     raster_state = (
         "not_attempted" if ink is None

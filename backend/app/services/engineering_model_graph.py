@@ -31,6 +31,7 @@ from app.domain.engineering_model_graph import (
     apply_graph_patch,
     compile_build_plan,
     domain_adapter_for,
+    summarize_patch_errors,
 )
 from app.storage import delete_file, download_file, upload_file
 
@@ -278,7 +279,9 @@ async def persist_feature_tree_revision(
         db, patch, expected_graph_id=graph_id,
     )
     if row is None:
-        raise ValueError("graph patch rejected: " + ",".join(errors))
+        raise ValueError(
+            "graph patch rejected: " + "; ".join(summarize_patch_errors(errors))
+        )
     return row
 
 

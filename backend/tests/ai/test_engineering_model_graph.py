@@ -35,6 +35,7 @@ from app.domain.engineering_model_graph import (
     plan_next_reader_pass,
     rank_trace_proposals,
     select_hypothesis,
+    summarize_patch_errors,
 )
 from app.services.engineering_model_graph import verify_graph
 
@@ -277,6 +278,117 @@ def test_confirmed_assertion_can_only_be_superseded_by_human_with_replacement():
         apply_graph_patch(graph, patch)
     merged = apply_graph_patch(graph, patch.model_copy(update={"producer": "human"}))
     assert next(item for item in merged.assertions if item.id == "a-envelope").state == "superseded"
+
+
+def test_same_value_supersede_of_a_confirmed_assertion_does_not_require_human():
+    """A system-producer patch that re-mints an assertion with the exact
+    same value a human already confirmed must not be rejected — only a
+    REAL value change to a protected assertion needs a human. This is what
+    lets feature_tree_revision_patch's per-revision re-minting of
+    BuildOperation assertions (every rebuild replaces the previous
+    operation's assertions wholesale, "old operation nodes deliberately
+    remain immutable") coexist with confirmed_assertions_require_human,
+    instead of the gate firing on every subsequent plain rebuild even when
+    nothing had actually changed."""
+    graph = _graph(critical_assurance="human_approved")
+    same_value = graph.assertions[0].model_copy(update={
+        "id": "a-envelope-2", "supersedes_assertion_id": "a-envelope",
+        "value": ExactValue(kind="exact", value=40.0),  # identical to a-envelope's own value
+    })
+    patch = GraphPatch(
+        patch_id="p", base_revision=0, base_sha256=graph.canonical_sha256,
+        producer="system", pass_id="pass", idempotency_key="k",
+        add_assertions=[same_value], supersede_assertion_ids=["a-envelope"],
+    )
+    merged = apply_graph_patch(graph, patch)  # must not raise
+    assert next(item for item in merged.assertions if item.id == "a-envelope").state == "superseded"
+    assert next(item for item in merged.assertions if item.id == "a-envelope-2").state == "active"
+
+    # A genuinely different value from a system producer is still rejected —
+    # this is the legitimate protection the gate exists for.
+    different_value = graph.assertions[0].model_copy(update={
+        "id": "a-envelope-3", "supersedes_assertion_id": "a-envelope",
+        "value": ExactValue(kind="exact", value=41.0),
+    })
+    changed_patch = patch.model_copy(update={
+        "add_assertions": [different_value], "idempotency_key": "k2",
+    })
+    with pytest.raises(PatchMergeError, match="confirmed_assertions_require_human"):
+        apply_graph_patch(graph, changed_patch)
+
+    # A retraction (no replacement value at all) is always a real change.
+    retract_patch = GraphPatch(
+        patch_id="p-retract", base_revision=0, base_sha256=graph.canonical_sha256,
+        producer="system", pass_id="pass", idempotency_key="k3",
+        retract_assertion_ids=["a-envelope"],
+    )
+    with pytest.raises(PatchMergeError, match="confirmed_assertions_require_human"):
+        apply_graph_patch(graph, retract_patch)
+
+
+def test_summarize_patch_errors_truncates_long_id_lists_but_keeps_short_ones():
+    short = ["stale_base_revision", "confirmed_assertions_require_human:a,b,c"]
+    assert summarize_patch_errors(short) == short
+
+    many_ids = [f"assertion:{index}" for index in range(45)]
+    long_error = "confirmed_assertions_require_human:" + ",".join(many_ids)
+    summarized = summarize_patch_errors([long_error], limit=20)
+    assert len(summarized) == 1
+    assert summarized[0].startswith("confirmed_assertions_require_human:assertion:0,")
+    assert summarized[0].count(",") == 19  # 20 kept ids -> 19 separators
+    assert "и ещё 25 подтверждённых значений" in summarized[0]
+
+
+def test_system_rebuild_after_human_confirms_one_operation_value_does_not_break():
+    """Reproduces the real end-to-end failure live-observed on
+    detal_126.png, 2026-08-14: a human confirms one BuildOperation-level
+    value (assurance -> human_approved, exactly what
+    correct_generation_model_assertion does), and the very next plain
+    system rebuild with an otherwise-unchanged spec must still succeed — it
+    used to hit confirmed_assertions_require_human on every subsequent
+    "Пересобрать" click, because feature_tree_revision_patch re-mints and
+    supersedes every operation assertion on every pass regardless of
+    whether the value changed."""
+    candidate = FeatureTreeCandidate(
+        features=[Feature3D(kind="extrude", params={"depth_mm": 10.0}, confidence=0.8)],
+        score=0.8,
+        label="original",
+    )
+    graph = spec_feature_tree_as_graph(
+        {"part": "plate", "depth_mm": 10.0}, candidate, graph_id="emg:no-op-rebuild",
+    )
+    depth_assertion = next(
+        item for item in graph.assertions
+        if item.subject_id == "operation:0" and item.predicate == "operation.param.depth_mm"
+    )
+    # Simulate a human confirming this value via correct_generation_model_assertion.
+    confirmed = depth_assertion.model_copy(update={
+        "id": "a-human-confirm",
+        "assurance": "human_approved",
+        "origin": "human",
+        "supersedes_assertion_id": depth_assertion.id,
+    })
+    confirm_patch = GraphPatch(
+        patch_id="p-confirm", base_revision=graph.revision, base_sha256=graph.canonical_sha256,
+        producer="human", pass_id="review", idempotency_key="confirm:1",
+        add_assertions=[confirmed], supersede_assertion_ids=[depth_assertion.id],
+    )
+    confirmed_graph = apply_graph_patch(graph, confirm_patch)
+
+    # A plain system rebuild with the SAME candidate/spec must not fail.
+    rebuild_patch = feature_tree_revision_patch(
+        confirmed_graph,
+        {"part": "plate", "depth_mm": 10.0},
+        candidate,
+        producer="system",
+        pass_id="rebuild:1",
+        idempotency_key="rebuild:1",
+    )
+    rebuilt = apply_graph_patch(confirmed_graph, rebuild_patch)  # must not raise
+    # revision is now 2 (0 -> confirm -> 1 -> rebuild -> 2), so the rebuild
+    # mints operation:r2:0000 — the id itself isn't the point of this test,
+    # only that the rebuild succeeded at all.
+    assert compile_build_plan(rebuilt, "preview").operation_node_ids == ["operation:r2:0000"]
 
 
 def test_criticality_is_target_dependency_based_and_release_stays_blocked():

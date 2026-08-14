@@ -1236,15 +1236,20 @@ def _edge_features(
         ("chamfer", body.get("chamfers") or [], "size_mm"),
         ("fillet", body.get("fillets") or [], "radius_mm"),
     ):
-        for item in items:
+        for index, item in enumerate(items):
             size = _num(item.get(size_key))
             if not size:
-                missing.append(f"{kind} без размера — не построен")
+                missing.append(f"{kind}[{index}] без размера — не построен")
                 continue
             selector = _edge_selector(item, outer, starts, total_length)
             if selector is None:
+                # C: the index is embedded so the editor can parse WHICH
+                # chamfers[i]/fillets[i] row to repair — a human clicking the
+                # real edge in the 3D viewport supplies at_z_mm/at_diameter_mm
+                # directly, the same fields this selector reads below.
                 missing.append(
-                    f"{kind}: не удалось определить ребро ({item.get('location')}) — не построен"
+                    f"{kind}[{index}]: не удалось определить ребро "
+                    f"({item.get('location')}) — не построен"
                 )
                 continue
             params = {"size_mm": size, "edge_selector": selector}
@@ -1290,7 +1295,10 @@ def _edge_selector(
             "curve": "Circle", "at_z_mm": total_length,
             "diameter_mm": at_diameter or end_diameter or _num(last.get("d")),
         }
-    if location in ("shoulder", "bore_mouth"):
+    # "bore_mouth" (chamfer) and "bore" (fillet — SpecFillet's own location
+    # literal has no "bore_mouth" spelling) name the same edge; both resolve
+    # the same way once a position is known.
+    if location in ("shoulder", "bore_mouth", "bore"):
         if at_z is not None:
             return {
                 "curve": "Circle", "at_z_mm": at_z,

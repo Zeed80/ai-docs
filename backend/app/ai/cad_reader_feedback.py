@@ -47,6 +47,7 @@ _LIST_FIELDS = (
     # is: a keyway the reader placed 40 mm off is one number away from right,
     # and the correction is worth more as a training pair than as a lost part.
     ("chamfers", ("main_view", "chamfers")),
+    ("fillets", ("main_view", "fillets")),
     ("grooves", ("main_view", "grooves")),
     ("keyways", ("main_view", "keyways")),
     ("cross_holes", ("main_view", "cross_holes")),
