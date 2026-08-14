@@ -1120,3 +1120,22 @@ def test_lowercase_shaft_fit_is_a_diameter_when_ocr_lost_the_symbol():
 
     assert _callout_numbers(callouts, "diameter") == [50.0]
     assert _callout_numbers(callouts, "linear") == [470.0]
+
+
+def test_a_diameter_callout_extracts_the_number_next_to_the_mark_not_the_first_in_the_string():
+    """Live-found on example-drawings/shaft_detail.png, 2026-08-14: a single
+    combined technical-requirements line — "1. HRC 42...48 (шейки Ø30h6,
+    Ø30k6)" — has an unrelated number (a hardness range) BEFORE its actual
+    Ø-marked diameter in the same string. Taking the first number anywhere
+    in a "marked" callout silently returned 42, which then fed a phantom
+    Ø42 outer step through _flag_unconfirmed_outer_bore_diameters as if it
+    were a sheet-confirmed diameter."""
+    from app.ai.cad_recognize.spec_fragments import _callout_numbers
+
+    callouts = {
+        "dimensions": [
+            {"value": "1. НRC 42...48 (шейки Ø30h6, Ø30k6)"},
+        ]
+    }
+
+    assert _callout_numbers(callouts, "diameter") == [30.0]

@@ -63,6 +63,12 @@ _ROTATION_PROMPT = (
     "Проверь это перед ответом.\n"
     "3) Фаски, канавки, шпонпазы и поперечные отверстия в outer НЕ включай.\n"
     "4) Не уверен в длине ступени — поставь null, не выдумывай.\n"
+    "5) bore — ТОЛЬКО расточка/отверстие ВДОЛЬ ВСЕЙ оси вращения: на "
+    "чертеже это две параллельные линии (или штриховка между ними), "
+    "тянущиеся вдоль детали на заметную длину. Один маленький кружок с "
+    "выноской диаметра на ОДНОЙ осевой позиции — это НЕ bore, это "
+    "поперечное отверстие; такие сюда не включай, они не относятся к "
+    "этому вопросу.\n"
     "Только JSON."
 )
 
@@ -90,9 +96,14 @@ _FEATURES_PROMPT = (
     "1) Осевые координаты — от ЛЕВОГО торца детали, в миллиметрах.\n"
     "2) Фаска: «1×45°» на чертеже означает size_mm=1, angle_deg=45. location — "
     "где она: left_end/right_end (торец) или shoulder (уступ между ступенями).\n"
-    "3) Канавка (проточка) — узкий кольцевой вырез; width_mm вдоль оси, "
-    "depth_mm вглубь от поверхности.\n"
-    "4) Шпоночный паз: depth_mm — глубина t1 от поверхности вала.\n"
+    "3) Канавка (проточка) — узкий КОЛЬЦЕВОЙ вырез ВОКРУГ всей окружности "
+    "детали, виден как симметричная выемка с ОБЕИХ сторон контура на "
+    "продольном виде; width_mm вдоль оси, depth_mm вглубь от поверхности.\n"
+    "4) Шпоночный паз — ПРОДОЛЬНЫЙ прямоугольный вырез вдоль оси только с "
+    "ОДНОЙ стороны вала (не кольцевой); depth_mm — глубина t1 от "
+    "поверхности вала. Если в подписи на чертеже упомянуты «паз», "
+    "«шпоночный», «ГОСТ 23360» или «ГОСТ 8790» — это ВСЕГДА keyway, а не "
+    "groove, даже если сам вырез выглядит узким.\n"
     "5) Поперечное отверстие — сверление ПОПЕРЁК оси; count, если их несколько "
     "по окружности.\n"
     "6) Осевые отверстия идут параллельно оси детали и видны на торцевом виде; "
@@ -1237,8 +1248,31 @@ async def _read_cut_features(
             + "\nДля каждого keyway-кандидата прочитай с чертежа недостающую depth_mm. "
             "Не меняй подтверждённые координату, длину и ширину."
         )
+    # Live-found on example-drawings/shaft_detail.png, 2026-08-14: the
+    # callouts question already correctly reads "Паз 12х6 ГОСТ 23360" as
+    # raw text, but this separate question then classified the same slot
+    # as a groove — the GOST reference alone should have settled it. Ground
+    # this question in text the reader has already confirmed rather than
+    # asking it to re-derive the classification from the shape alone.
+    keyway_texts = [
+        str((item or {}).get("value") or "")
+        for item in (callouts or {}).get("dimensions") or []
+        if isinstance(item, dict)
+        and re.search(
+            r"паз|шпон|гост\s*23360|гост\s*8790", str(item.get("value") or ""),
+            re.IGNORECASE,
+        )
+    ]
+    keyway_hint = (
+        (
+            "\nНа чертеже уже прочитаны выноски, явно называющие шпоночный паз: "
+            + "; ".join(keyway_texts)
+            + ". Соответствующий вырез — keyway, а не groove, независимо от формы."
+        )
+        if keyway_texts else ""
+    )
     answer = await _ask(
-        _FEATURES_PROMPT + evidence_prompt,
+        _FEATURES_PROMPT + evidence_prompt + keyway_hint,
         image, num_predict=1500, schema=_FEATURES_SCHEMA,
         router=router, confidential=confidential, audit=audit,
     )
@@ -3134,7 +3168,25 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
             # 6 from ``6 фасок`` previously masqueraded as a recess size.
             continue
         if kind == "diameter":
-            nominal = _re.search(r"\d+(?:[.,]\d+)?", text)
+            # Live-found on a real shaft sheet: a technical-requirements line
+            # combines an unrelated number with the actual diameter callout
+            # in one string -- "1. HRC 42...48 (шейки Ø30h6, Ø30k6)" is ONE
+            # dimensions[] entry, "marked" by the Ø that appears well after
+            # the hardness range. Taking "the first number anywhere in the
+            # text" silently returned 42 (from the hardness range) instead
+            # of 30 (the actual diameter next to Ø) -- which then fed into
+            # this drawing's known-diameter grounding hint as if 42 were a
+            # real, confirmed diameter, and let a phantom Ø42 outer step
+            # pass _flag_unconfirmed_outer_bore_diameters as "confirmed".
+            # Anchor the search to right after the diameter mark itself;
+            # fall back to the old whole-text search only for the
+            # fit_implies_diameter case, where the callout IS just the fit
+            # code with no Ø to anchor on ("50h7" with OCR having dropped
+            # the leading Ø).
+            mark = _DIAMETER_MARK.search(text)
+            nominal = _re.search(
+                r"\d+(?:[.,]\d+)?", text[mark.end():] if mark else text
+            )
             if nominal:
                 value = float(nominal.group().replace(",", "."))
                 if 0 < value <= 100_000:
