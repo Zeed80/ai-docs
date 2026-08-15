@@ -67,7 +67,13 @@ class BuiltinAgentConfig(BaseModel):
     approval_timeout_seconds: int = Field(120, ge=10, le=1800)
     # Orchestrator LLM planning timeout. On qwen3.5:9b under load the previous
     # hardcoded 5s was too tight and silently dropped to the heuristic planner.
-    orchestrator_plan_timeout_seconds: float = Field(8.0, ge=2.0, le=30.0)
+    # Ceiling raised 30→180 2026-08-15: a thinking-capable planning model
+    # (e.g. qwen3.8:27b) genuinely deliberates for 20-80s+ on this call — that
+    # is a deliberate quality/latency trade the operator can opt into per
+    # model, not a bug to hide by silently falling back to the heuristic
+    # planner. The 8s *default* is unchanged; only operators who pick a slow
+    # planning model need to raise this.
+    orchestrator_plan_timeout_seconds: float = Field(8.0, ge=2.0, le=180.0)
     # LLM-first turn router (TurnDecision) instead of the keyword-substring
     # routing cascade. When enabled the orchestrator classifies each turn with
     # one cheap structured-output generation (fast model) and dispatches by
@@ -131,7 +137,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     llm_timeout_seconds: int | None = Field(default=None, ge=10, le=1800)
     backend_timeout_seconds: int | None = Field(default=None, ge=5, le=300)
     approval_timeout_seconds: int | None = Field(default=None, ge=10, le=1800)
-    orchestrator_plan_timeout_seconds: float | None = Field(default=None, ge=2.0, le=30.0)
+    orchestrator_plan_timeout_seconds: float | None = Field(default=None, ge=2.0, le=180.0)
     use_turn_router: bool | None = None
     turn_router_min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     max_worker_steps: int | None = Field(default=None, ge=1, le=60)

@@ -25,9 +25,15 @@ def _inference_options(request: AIRequest, default_temperature: float = 0.2) -> 
         opts["repeat_penalty"] = params["repeat_penalty"]
     if "num_ctx" in params:
         # Per-task context prevents a short CAD JSON question from allocating
-        # the service-wide 32K KV cache. Keep a safe lower bound for images and
-        # an upper bound matching the production service configuration.
-        opts["num_ctx"] = max(4096, min(int(params["num_ctx"]), 32768))
+        # the service-wide KV cache. Keep a safe lower bound for images and an
+        # upper bound matching the production service configuration. Raised
+        # 32768→65536 2026-08-15 for qwen3.8:27b's hybrid attention/SSM
+        # architecture: its KV-cache-equivalent state grows far more gently
+        # with context than a plain dense-attention model of the same size
+        # (measured ~100MB extra VRAM going 8192→32768 on this GPU), so a
+        # bigger context here is comparatively cheap for models built that
+        # way — still capped, not unlimited.
+        opts["num_ctx"] = max(4096, min(int(params["num_ctx"]), 65536))
     return opts
 
 
