@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -25,7 +26,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import FeatureTreePanel, {
   type OperationTreeIssue,
 } from "@/components/cad/editor/FeatureTreePanel";
-import AssumptionsStrip from "@/components/cad/editor/AssumptionsStrip";
+import AssumptionsStrip, {
+  type EdgeRepairTarget,
+} from "@/components/cad/editor/AssumptionsStrip";
 import BlockersAlternativesPanel from "@/components/cad/editor/BlockersAlternativesPanel";
 import CadStatusBar from "@/components/cad/editor/CadStatusBar";
 import ResizablePane from "@/components/cad/editor/ResizablePane";
@@ -43,6 +46,7 @@ import Ribbon, {
   type RibbonTabId,
 } from "@/components/cad/editor/Ribbon";
 import SketchCanvas from "@/components/cad/editor/sketch/SketchCanvas";
+import SpecEditorPanel from "@/components/cad/SpecEditorPanel";
 import type { SketchProfileSegment } from "@/lib/cad-sketch-api";
 import {
   buildEmgTree,
@@ -58,6 +62,7 @@ import {
   approveCadAsDrafter,
   approveCadAsNormcontroller,
   artifactUrl,
+  correctSpec,
   diagnosticsPackageUrl,
   getCadCertification,
   getGeneration,
@@ -68,6 +73,7 @@ import {
   type KernelEdgeDescriptor,
   type KernelFaceDescriptor,
   type Solid3dSummary,
+  type SpecAssumption,
 } from "@/lib/studio-api";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -154,6 +160,10 @@ export default function CadEditorShell({
 }: {
   generationId: string;
 }) {
+  // B: SpecEditorPanel's own strings all live under this namespace already
+  // (CadWorkspace.tsx uses the same one) — the ribbon shell otherwise never
+  // needed next-intl at all (every other string here is a hardcoded literal).
+  const t = useTranslations("studio");
   const shellRef = useRef<HTMLDivElement | null>(null);
   const [gen, setGen] = useState<Generation | null>(null);
   const [graphRevision, setGraphRevision] =
@@ -191,6 +201,22 @@ export default function CadEditorShell({
   const [pickedEdgeKey, setPickedEdgeKey] = useState<string | null>(null);
   const [selectedFaceKey, setSelectedFaceKey] = useState<string | null>(null);
   const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
+  // C: which chamfers[i]/fillets[i] row a click on the model should repair —
+  // set from AssumptionsStrip's "Указать ребро на модели" button on an
+  // unplaceable-edge note (no BuildOperation exists for it to select
+  // instead, see _edge_features/_edge_selector in cad_solid.py).
+  const [edgeRepairTarget, setEdgeRepairTarget] =
+    useState<EdgeRepairTarget | null>(null);
+  // D: one-shot handoff, same shape as pickedEdgeKey — a click on a face
+  // while a boss/pocket draft is open hands its centroid down to that
+  // form's centerX/centerY (KernelFaceDescriptor.center_of_mass_mm is
+  // already computed server-side; face clicking itself was already wired
+  // for inspection, just never fed anything actionable — see Viewport's
+  // own onFaceSelect).
+  const [pickedFaceCenter, setPickedFaceCenter] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
   // Ф8: true while the "Массив" form is open — operates on selectedOperationId,
   // not a new draft.
   const [patternDraftActive, setPatternDraftActive] = useState(false);
@@ -205,11 +231,15 @@ export default function CadEditorShell({
     try {
       const [nextGen, nextGraph, nextCertification, nextHistory] =
         await Promise.all([
-        getGeneration(generationId),
-        engineeringApi.getGenerationModelGraph(generationId).catch(() => null),
-        getCadCertification(generationId).catch(() => null),
-        engineeringApi.getGenerationDesignHistory(generationId).catch(() => null),
-      ]);
+          getGeneration(generationId),
+          engineeringApi
+            .getGenerationModelGraph(generationId)
+            .catch(() => null),
+          getCadCertification(generationId).catch(() => null),
+          engineeringApi
+            .getGenerationDesignHistory(generationId)
+            .catch(() => null),
+        ]);
       setGen(nextGen);
       setGraphRevision(nextGraph);
       setCertification(nextCertification);
@@ -297,6 +327,15 @@ export default function CadEditorShell({
   }, [tree, selectedOperation]);
 
   const solid = gen?.params?.solid_3d as Solid3dSummary | undefined;
+  // B/C: declared here (not next to hasModel below, past the early "if
+  // (!gen) return" guard) because handleRepairEdge — defined further up
+  // than that guard — needs it in its useCallback dependency array, which
+  // is evaluated synchronously on every render; gen?. keeps this safe even
+  // on the render where gen is still null.
+  const specForEditing = (gen?.params?.spec_corrected ?? gen?.params?.spec) as
+    Record<string, unknown> | undefined;
+  const specAssumptions = (gen?.params?.spec_assumptions ??
+    []) as SpecAssumption[];
   const assumptions = useMemo(() => solid?.assumptions ?? [], [solid]);
   const guessedOperationIds = useMemo(
     () => operationsNeedingReview(tree?.operations ?? [], assumptions),
@@ -322,7 +361,11 @@ export default function CadEditorShell({
     const issues = new Map<string, OperationTreeIssue[]>();
     const add = (operationId: string, issue: OperationTreeIssue) => {
       const current = issues.get(operationId) ?? [];
-      if (!current.some((item) => item.code === issue.code && item.message === issue.message)) {
+      if (
+        !current.some(
+          (item) => item.code === issue.code && item.message === issue.message,
+        )
+      ) {
         current.push(issue);
         issues.set(operationId, current);
       }
@@ -335,9 +378,11 @@ export default function CadEditorShell({
     }
     for (const item of solid?.kernel_report?.feature_results ?? []) {
       const index = Number(item.feature_index);
-      if (!Number.isInteger(index) || String(item.status) !== "failed") continue;
+      if (!Number.isInteger(index) || String(item.status) !== "failed")
+        continue;
       const operationId = `operation:${index}`;
-      if (!tree?.operations.some((operation) => operation.id === operationId)) continue;
+      if (!tree?.operations.some((operation) => operation.id === operationId))
+        continue;
       add(operationId, {
         code: "KERNEL_FEATURE_FAILED",
         message: String(item.reason ?? "Kernel operation failed"),
@@ -345,10 +390,12 @@ export default function CadEditorShell({
       });
     }
     const criticalIds = new Set(
-      graphRevision?.graph.verification?.critical_unresolved_assertion_ids ?? [],
+      graphRevision?.graph.verification?.critical_unresolved_assertion_ids ??
+        [],
     );
     for (const assertion of graphRevision?.graph.assertions ?? []) {
-      if (!criticalIds.has(assertion.id) || assertion.state !== "active") continue;
+      if (!criticalIds.has(assertion.id) || assertion.state !== "active")
+        continue;
       const operationId = assertion.subject_id.startsWith("operation:")
         ? assertion.subject_id
         : operationByFeature.get(assertion.subject_id);
@@ -438,7 +485,8 @@ export default function CadEditorShell({
       } finally {
         setBusy(false);
       }
-    }, [designHistory, generationId, historyCursor],
+    },
+    [designHistory, generationId, historyCursor],
   );
 
   // Ф6: remove one BuildOperation. Same async-task shape as add-feature —
@@ -468,6 +516,66 @@ export default function CadEditorShell({
       }
     },
     [generationId],
+  );
+
+  // C: a human clicked the real edge on the model to resolve a chamfer/
+  // fillet the reader named a place for ("shoulder", "bore") but the kernel
+  // couldn't find (_edge_selector returned None, cad_solid.py) — there is no
+  // BuildOperation for it, only the raw spec array the compiler reads
+  // directly, so this patches spec.main_view.chamfers[i]/fillets[i] and
+  // rebuilds, the same call SpecEditorPanel's own edit form makes.
+  const handleRepairEdge = useCallback(
+    async (target: EdgeRepairTarget, edgeKey: string) => {
+      const edge = edges.find((item) => item.key === edgeKey);
+      if (!edge || edge.vertices.length === 0) {
+        setError("Не удалось получить геометрию выбранного ребра");
+        return;
+      }
+      const atZ =
+        edge.vertices.reduce((sum, v) => sum + v.z, 0) / edge.vertices.length;
+      const atDiameter =
+        (edge.vertices.reduce((sum, v) => sum + Math.hypot(v.x, v.y), 0) /
+          edge.vertices.length) *
+        2;
+      const listKey = target.kind === "chamfer" ? "chamfers" : "fillets";
+      const body = (specForEditing?.main_view ?? {}) as Record<string, unknown>;
+      const list = ((body[listKey] ?? []) as Record<string, unknown>[]).map(
+        (item) => ({ ...item }),
+      );
+      if (target.index >= list.length) {
+        setError(
+          `Не найдена запись ${listKey}[${target.index}] в спецификации — возможно, она уже была изменена`,
+        );
+        return;
+      }
+      list[target.index] = {
+        ...list[target.index],
+        at_z_mm: Math.round(atZ * 100) / 100,
+        at_diameter_mm: Math.round(atDiameter * 100) / 100,
+      };
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await correctSpec(
+          generationId,
+          { [listKey]: list },
+          { rebuild: true },
+        );
+        setEdgeRepairTarget(null);
+        setSelectedEdgeKey(null);
+        if (result.rebuild_task_id) {
+          setRebuildTaskId(result.rebuild_task_id);
+          setRebuildStatus("QUEUED");
+        } else {
+          await load();
+        }
+      } catch (e) {
+        setError(String((e as Error).message ?? e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [edges, generationId, load, specForEditing],
   );
 
   // Ф10: Delete (with a plain window.confirm — the tree row's own inline
@@ -505,6 +613,8 @@ export default function CadEditorShell({
       if (event.key === "Escape") {
         if (sketchModeActive) {
           setSketchModeActive(false);
+        } else if (edgeRepairTarget) {
+          setEdgeRepairTarget(null);
         } else if (addFeatureDraft) {
           setAddFeatureDraft(null);
         } else if (patternDraftActive) {
@@ -519,6 +629,7 @@ export default function CadEditorShell({
     selectedOperation,
     deleteBusyId,
     sketchModeActive,
+    edgeRepairTarget,
     addFeatureDraft,
     patternDraftActive,
     handleDeleteOperation,
@@ -687,6 +798,13 @@ export default function CadEditorShell({
             />
           </RibbonGroup>
         )}
+        {ribbonTab === "spec" && (
+          <span className="px-2 text-[11px] text-zinc-500">
+            Наружный/внутренний профиль, фаски, скругления, резьбовые отверстия
+            — правки ниже, в центральной области. То же исправление, что раньше
+            было только на обычной странице чертежа.
+          </span>
+        )}
         {ribbonTab === "inspect" && (
           <RibbonGroup label="Сборка">
             <RibbonButton
@@ -789,7 +907,26 @@ export default function CadEditorShell({
         </ResizablePane>
 
         <main className="flex min-w-0 flex-1 flex-col">
-          {sketchModeActive ? (
+          {ribbonTab === "spec" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <SpecEditorPanel
+                generationId={generationId}
+                spec={specForEditing}
+                assumptions={specAssumptions}
+                busy={busy}
+                onDone={(result) => {
+                  if (result?.rebuild_task_id) {
+                    setRebuildTaskId(result.rebuild_task_id);
+                    setRebuildStatus("QUEUED");
+                  } else {
+                    void load();
+                  }
+                }}
+                onError={setError}
+                t={t}
+              />
+            </div>
+          ) : sketchModeActive ? (
             <SketchCanvas
               onCancel={() => setSketchModeActive(false)}
               onExported={(profile) => {
@@ -812,16 +949,32 @@ export default function CadEditorShell({
                 onFaceSelect={(key) => {
                   setSelectedFaceKey(key);
                   if (key) setSelectedEdgeKey(null);
+                  if (
+                    key &&
+                    (addFeatureDraft === "boss" || addFeatureDraft === "pocket")
+                  ) {
+                    const face = faces.find((item) => item.key === key);
+                    if (face) {
+                      setPickedFaceCenter({
+                        x: face.center_of_mass_mm.x,
+                        y: face.center_of_mass_mm.y,
+                      });
+                    }
+                  }
                 }}
                 selectedEdgeKey={selectedEdgeKey}
                 edgePickActive={
-                  addFeatureDraft === "fillet" || addFeatureDraft === "chamfer"
+                  Boolean(edgeRepairTarget) ||
+                  addFeatureDraft === "fillet" ||
+                  addFeatureDraft === "chamfer"
                 }
                 onEdgeSelect={(key) => {
                   if (key) {
                     setSelectedEdgeKey(key);
                     setSelectedFaceKey(null);
-                    if (
+                    if (edgeRepairTarget) {
+                      void handleRepairEdge(edgeRepairTarget, key);
+                    } else if (
                       addFeatureDraft === "fillet" ||
                       addFeatureDraft === "chamfer"
                     ) {
@@ -837,7 +990,22 @@ export default function CadEditorShell({
                   setFocusedAssertionId(null);
                   setSelectedOperationId(id);
                 }}
+                onRepairEdge={setEdgeRepairTarget}
               />
+              {edgeRepairTarget && (
+                <div className="shrink-0 border-t border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-[11px] text-sky-200">
+                  Кликните ребро на модели, чтобы задать положение{" "}
+                  {edgeRepairTarget.kind === "chamfer" ? "фаски" : "скругления"}{" "}
+                  №{edgeRepairTarget.index + 1}.{" "}
+                  <button
+                    type="button"
+                    onClick={() => setEdgeRepairTarget(null)}
+                    className="underline decoration-dotted hover:text-white"
+                  >
+                    Отмена
+                  </button>
+                </div>
+              )}
               {graphRevision && (
                 <BlockersAlternativesPanel
                   generationId={generationId}
@@ -884,13 +1052,29 @@ export default function CadEditorShell({
               edges={edges}
               selectedFaceKey={selectedFaceKey}
               selectedEdgeKey={selectedEdgeKey}
-              onSelectFace={setSelectedFaceKey}
-              onSelectEdge={(key) => {
-                setSelectedEdgeKey(key);
+              onSelectFace={(key) => {
+                setSelectedFaceKey(key);
                 if (
                   key &&
-                  (addFeatureDraft === "fillet" ||
-                    addFeatureDraft === "chamfer")
+                  (addFeatureDraft === "boss" || addFeatureDraft === "pocket")
+                ) {
+                  const face = faces.find((item) => item.key === key);
+                  if (face) {
+                    setPickedFaceCenter({
+                      x: face.center_of_mass_mm.x,
+                      y: face.center_of_mass_mm.y,
+                    });
+                  }
+                }
+              }}
+              onSelectEdge={(key) => {
+                setSelectedEdgeKey(key);
+                if (!key) return;
+                if (edgeRepairTarget) {
+                  void handleRepairEdge(edgeRepairTarget, key);
+                } else if (
+                  addFeatureDraft === "fillet" ||
+                  addFeatureDraft === "chamfer"
                 ) {
                   setPickedEdgeKey(key);
                 }
@@ -909,6 +1093,8 @@ export default function CadEditorShell({
               onSketchProfileConsumed={() => setExportedSketchProfile(null)}
               pickedEdgeKey={pickedEdgeKey}
               onEdgeKeyConsumed={() => setPickedEdgeKey(null)}
+              pickedFaceCenter={pickedFaceCenter}
+              onFaceCenterConsumed={() => setPickedFaceCenter(null)}
               patternDraftActive={patternDraftActive}
               onPatternDraftChange={setPatternDraftActive}
               onSaved={() => void load()}

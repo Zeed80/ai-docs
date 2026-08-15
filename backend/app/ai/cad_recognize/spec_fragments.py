@@ -63,6 +63,12 @@ _ROTATION_PROMPT = (
     "Проверь это перед ответом.\n"
     "3) Фаски, канавки, шпонпазы и поперечные отверстия в outer НЕ включай.\n"
     "4) Не уверен в длине ступени — поставь null, не выдумывай.\n"
+    "5) bore — ТОЛЬКО расточка/отверстие ВДОЛЬ ВСЕЙ оси вращения: на "
+    "чертеже это две параллельные линии (или штриховка между ними), "
+    "тянущиеся вдоль детали на заметную длину. Один маленький кружок с "
+    "выноской диаметра на ОДНОЙ осевой позиции — это НЕ bore, это "
+    "поперечное отверстие; такие сюда не включай, они не относятся к "
+    "этому вопросу.\n"
     "Только JSON."
 )
 
@@ -90,9 +96,14 @@ _FEATURES_PROMPT = (
     "1) Осевые координаты — от ЛЕВОГО торца детали, в миллиметрах.\n"
     "2) Фаска: «1×45°» на чертеже означает size_mm=1, angle_deg=45. location — "
     "где она: left_end/right_end (торец) или shoulder (уступ между ступенями).\n"
-    "3) Канавка (проточка) — узкий кольцевой вырез; width_mm вдоль оси, "
-    "depth_mm вглубь от поверхности.\n"
-    "4) Шпоночный паз: depth_mm — глубина t1 от поверхности вала.\n"
+    "3) Канавка (проточка) — узкий КОЛЬЦЕВОЙ вырез ВОКРУГ всей окружности "
+    "детали, виден как симметричная выемка с ОБЕИХ сторон контура на "
+    "продольном виде; width_mm вдоль оси, depth_mm вглубь от поверхности.\n"
+    "4) Шпоночный паз — ПРОДОЛЬНЫЙ прямоугольный вырез вдоль оси только с "
+    "ОДНОЙ стороны вала (не кольцевой); depth_mm — глубина t1 от "
+    "поверхности вала. Если в подписи на чертеже упомянуты «паз», "
+    "«шпоночный», «ГОСТ 23360» или «ГОСТ 8790» — это ВСЕГДА keyway, а не "
+    "groove, даже если сам вырез выглядит узким.\n"
     "5) Поперечное отверстие — сверление ПОПЕРЁК оси; count, если их несколько "
     "по окружности.\n"
     "6) Осевые отверстия идут параллельно оси детали и видны на торцевом виде; "
@@ -310,6 +321,29 @@ _CALLOUT_PROMPT = (
     "Не включай в dimensions название листа, номер модели, ревизию, год, "
     "формат или масштаб. Ничего не добавляй от себя. Кириллицу не экранируй. "
     "Только JSON."
+)
+
+# No schema on purpose — unlike _CALLOUT_PROMPT above. Live-verified 2026-08-15:
+# a thinking-capable model given this exact free-form ask (no JSON, reasoning
+# allowed) transcribed a dense hollow-spindle sheet's material, hardness, BOTH
+# thread callouts and every tolerance correctly — the same model's schema-
+# constrained _CALLOUT_PROMPT answer on the identical sheet missed most of the
+# bore-region numbers (constrained decoding under a tight schema demonstrably
+# degrades this model's numeric accuracy; see spec_fragments.py's
+# read_spec_by_fragments for how the answer is merged, not trusted directly).
+# The trade a schema makes — guaranteed shape, in exchange for whatever the
+# model drops trying to hit it under a token budget — is exactly backwards for
+# "list everything you can see": completeness matters more than parseability
+# here, because a lightweight regex (_numbers_from_free_text) does the
+# parsing afterward and the geometry-grounded assembly in diameter_dimensions
+# .py independently verifies every candidate against the vector contour
+# before it is trusted for outer[]/bore[] anyway. Extra noise from a false
+# candidate is harmless; a missing real one is not.
+_FREE_DESCRIBE_PROMPT = (
+    "Опиши деталь на этом чертеже со всеми элементами и размерами: все "
+    "диаметры (наружные и внутренние), длины ступеней, фаски, резьбы, "
+    "допуски, шероховатость, материал, твёрдость. Перечисли по порядку "
+    "слева направо, каждое значение — как написано на чертеже."
 )
 
 
@@ -867,8 +901,15 @@ def _main_view_crop(image):
 async def _ask(
     prompt: str, image, *, router: Any, confidential: bool, num_predict: int,
     schema: dict | None = None, audit: list[dict[str, Any]] | None = None,
+    thinking: bool | None = None, timeout_seconds: float = 75.0,
 ) -> dict:
-    """One bounded question. A failure returns {} and never raises."""
+    """One bounded question. A failure returns {} and never raises.
+
+    ``thinking``/``timeout_seconds`` default to the existing behaviour (task-
+    routing decides thinking, 75s budget) for every current call site. A
+    schema-free "describe freely" question needs both raised — live-verified
+    a genuine reasoning pass on a dense sheet takes 30-110s, well past 75s.
+    """
     import asyncio
     import time
     import hashlib
@@ -877,6 +918,7 @@ async def _ask(
     from app.ai.cad_recognize.spec_vectorize import (
         _coerce_spec_containers,
         _first_vision_model,
+        _model_supports_thinking,
         _parse_spec_json,
     )
     from app.ai.schemas import AIRequest, AITask, ChatMessage
@@ -888,6 +930,12 @@ async def _ask(
         else AITask.DRAWING_ANALYSIS_VLM
     )
     seeing_model, _chain_can_see = _first_vision_model(read_task)
+    # Forcing thinking=True is not a no-op for a model that cannot do it — see
+    # _model_supports_thinking's docstring. Clamp rather than let the router
+    # silently answer with a different, unrequested model.
+    effective_thinking = thinking
+    if thinking and not _model_supports_thinking(seeing_model):
+        effective_thinking = None
     request = AIRequest(
         task=read_task,
         messages=[ChatMessage(role="user", content=prompt)],
@@ -895,6 +943,7 @@ async def _ask(
         confidential=confidential,
         allow_cloud=False,
         preferred_model=seeing_model,
+        thinking=effective_thinking,
         metadata={
             "num_predict": num_predict,
             "json_schema": schema,
@@ -917,7 +966,7 @@ async def _ask(
         },
     )
     try:
-        async with asyncio.timeout(75):
+        async with asyncio.timeout(timeout_seconds):
             response = await router.run(request)
     except Exception as exc:  # noqa: BLE001 — one lost fragment, not the sheet
         logger.warning("cad_fragment_failed", error=str(exc)[:200])
@@ -929,7 +978,7 @@ async def _ask(
                 "model": seeing_model,
                 "duration_ms": round((time.monotonic() - started) * 1000),
                 "error": f"{type(exc).__name__}: {exc}"[:400],
-                "timeout_seconds": 75,
+                "timeout_seconds": timeout_seconds,
             },
         )
         return {}
@@ -1237,8 +1286,31 @@ async def _read_cut_features(
             + "\nДля каждого keyway-кандидата прочитай с чертежа недостающую depth_mm. "
             "Не меняй подтверждённые координату, длину и ширину."
         )
+    # Live-found on example-drawings/shaft_detail.png, 2026-08-14: the
+    # callouts question already correctly reads "Паз 12х6 ГОСТ 23360" as
+    # raw text, but this separate question then classified the same slot
+    # as a groove — the GOST reference alone should have settled it. Ground
+    # this question in text the reader has already confirmed rather than
+    # asking it to re-derive the classification from the shape alone.
+    keyway_texts = [
+        str((item or {}).get("value") or "")
+        for item in (callouts or {}).get("dimensions") or []
+        if isinstance(item, dict)
+        and re.search(
+            r"паз|шпон|гост\s*23360|гост\s*8790", str(item.get("value") or ""),
+            re.IGNORECASE,
+        )
+    ]
+    keyway_hint = (
+        (
+            "\nНа чертеже уже прочитаны выноски, явно называющие шпоночный паз: "
+            + "; ".join(keyway_texts)
+            + ". Соответствующий вырез — keyway, а не groove, независимо от формы."
+        )
+        if keyway_texts else ""
+    )
     answer = await _ask(
-        _FEATURES_PROMPT + evidence_prompt,
+        _FEATURES_PROMPT + evidence_prompt + keyway_hint,
         image, num_predict=1500, schema=_FEATURES_SCHEMA,
         router=router, confidential=confidential, audit=audit,
     )
@@ -3134,7 +3206,25 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
             # 6 from ``6 фасок`` previously masqueraded as a recess size.
             continue
         if kind == "diameter":
-            nominal = _re.search(r"\d+(?:[.,]\d+)?", text)
+            # Live-found on a real shaft sheet: a technical-requirements line
+            # combines an unrelated number with the actual diameter callout
+            # in one string -- "1. HRC 42...48 (шейки Ø30h6, Ø30k6)" is ONE
+            # dimensions[] entry, "marked" by the Ø that appears well after
+            # the hardness range. Taking "the first number anywhere in the
+            # text" silently returned 42 (from the hardness range) instead
+            # of 30 (the actual diameter next to Ø) -- which then fed into
+            # this drawing's known-diameter grounding hint as if 42 were a
+            # real, confirmed diameter, and let a phantom Ø42 outer step
+            # pass _flag_unconfirmed_outer_bore_diameters as "confirmed".
+            # Anchor the search to right after the diameter mark itself;
+            # fall back to the old whole-text search only for the
+            # fit_implies_diameter case, where the callout IS just the fit
+            # code with no Ø to anchor on ("50h7" with OCR having dropped
+            # the leading Ø).
+            mark = _DIAMETER_MARK.search(text)
+            nominal = _re.search(
+                r"\d+(?:[.,]\d+)?", text[mark.end():] if mark else text
+            )
             if nominal:
                 value = float(nominal.group().replace(",", "."))
                 if 0 < value <= 100_000:
@@ -3148,6 +3238,65 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
             if 0 < value <= 100_000:
                 values.append(value)
     return sorted({round(v, 3) for v in values}, reverse=True)
+
+
+# Isolates one Ø/fit-code token per match, unlike a naive whole-line split —
+# a single _FREE_DESCRIBE_PROMPT bullet regularly carries two ("...Ø56,55
+# (малый) и Ø80 js6 ... (большой)"), and _callout_numbers's diameter branch
+# only reads the FIRST number after the mark in an item, so two diameters
+# sharing one dimensions[] entry would silently lose the second.
+_FREE_TEXT_DIAMETER_TOKEN = re.compile(
+    r"[ØøΦφ⌀]\s*\d+(?:[.,]\d+)?(?:\s*[A-Za-z]{1,2}\d{1,2}\b)?"
+)
+_FREE_TEXT_FIT_TOKEN = re.compile(r"\b\d+(?:[.,]\d+)?\s*[A-Za-z]{1,2}[5-9]\b")
+
+
+def _numbers_from_free_text(text: str) -> list[str]:
+    """Turn a free-form "describe everything" answer into synthetic entries
+    ``_callout_numbers`` can consume unchanged (same ``{"value": ...}`` shape
+    as ``_CALLOUT_PROMPT``'s own answer) — this is the assembly step's input
+    pool getting wider, not a second, competing source of truth: every
+    candidate this produces still has to be geometrically confirmed against
+    the vector contour by ``diameter_dimensions.py`` before it can become an
+    outer[]/bore[] value.
+
+    A candidate that is simply WRONG (far from any real diameter) is
+    harmless — the geometric check in ``diameter_dimensions.py`` just never
+    confirms it. A candidate that is a NEAR-DUPLICATE of a real one is not:
+    live-verified 2026-08-15, deriving "M54,5x2" (an internal thread's
+    nominal diameter) into an extra Ø54,5 candidate sitting 0.9% from the
+    sheet's real Ø55 bore step made ``_contour_bore_observations``'s
+    per-pixel "snap to nearest known value" oscillate between the two and
+    fragment what should have been one stable plateau run into nothing —
+    turning a correctly-geometry-confirmable Ø55/25mm bore section into zero
+    bore sections at all, worse than not enriching the pool in the first
+    place. A thread's nominal diameter is close to its shaft/hole's real
+    diameter by definition (that is what "close together" means here), so
+    deriving one from the other is exactly the mechanism most likely to
+    create this kind of collision; the token itself is still kept (useful
+    elsewhere, e.g. thread-carrier matching), just not turned into a second,
+    almost-identical diameter candidate.
+
+    Two passes over the text: isolated Ø-marked tokens (each its own entry —
+    a single _FREE_DESCRIBE_PROMPT bullet regularly carries two, "...Ø56,55
+    (малый) и Ø80 js6 ... (большой)", and _callout_numbers's diameter branch
+    only reads the FIRST number after the mark in an item, so lumping them
+    into one entry would silently lose the second) and bare "50h7"/"44H7"
+    fit codes (a diameter with no Ø, the same repair ``_callout_numbers``
+    already does for OCR that dropped the symbol). Everything else — plain
+    lengths, hole counts, angles, thread designations — travels as its
+    surrounding line so the noise-word filters already in ``_callout_numbers``
+    (HRC, "N отв.", "N фасок", ...) still have text to match against; a lone
+    bare number loses exactly the words those filters key on.
+    """
+    cleaned = _STANDARD_REFERENCE.sub(" ", (text or "").replace("**", ""))
+    entries: list[str] = [m.group() for m in _FREE_TEXT_DIAMETER_TOKEN.finditer(cleaned)]
+    entries += [m.group() for m in _FREE_TEXT_FIT_TOKEN.finditer(cleaned)]
+    for line in re.split(r"[\n;]+", cleaned):
+        line = line.strip(" -•*#>").strip()
+        if line and re.search(r"\d", line):
+            entries.append(line[:200])
+    return entries
 
 
 async def _sections_from_chain(
@@ -3618,6 +3767,36 @@ async def read_spec_by_fragments(
             if str(a.get("text") or "").strip().lower() not in known_notes
         )
 
+    # A free-form "describe everything" pass catches numbers a single
+    # schema-constrained _CALLOUT_PROMPT call misses on a dense sheet — see
+    # _FREE_DESCRIBE_PROMPT's docstring. One call per read_spec_best_effort(),
+    # not per consensus pass: this widens the candidate pool the deterministic
+    # geometry-grounded assembly draws from (diameter_dimensions.py), which
+    # does not need repeated sampling the way a structural fact does.
+    if shared_layers is not None and "free_describe" in shared_layers:
+        free_text_entries = shared_layers["free_describe"]
+    else:
+        describe_audit: list[dict[str, Any]] = []
+        await _ask(
+            _FREE_DESCRIBE_PROMPT, overview, num_predict=8000,
+            audit=describe_audit, thinking=True, timeout_seconds=150.0,
+            router=router, confidential=confidential,
+        )
+        raw_describe_text = (
+            describe_audit[-1]["raw_response"] if describe_audit else ""
+        )
+        free_text_entries = _numbers_from_free_text(raw_describe_text)
+        if shared_layers is not None:
+            shared_layers["free_describe"] = free_text_entries
+    if free_text_entries:
+        known = {str((d or {}).get("value") or "").strip().lower()
+                 for d in (callouts.get("dimensions") or [])}
+        callouts.setdefault("dimensions", []).extend(
+            {"value": entry, "applies_to": None}
+            for entry in free_text_entries
+            if entry.strip().lower() not in known
+        )
+
     callouts, unreadable_annotation_count = _clean_callout_observations(callouts)
 
     # Some VLM passes serialize hardness as a generic dimension even though
@@ -3993,7 +4172,24 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
         bool(item.get("evidence"))
         for item in fragment_outer
     )
-    if verified_outer:
+    current_outer = [
+        item for item in (merged_body.get("outer") or []) if isinstance(item, dict)
+    ]
+    # "evidence" is populated only when outer[] was built from LOCALIZED
+    # diameter measurements (outer_sections_from_diameter_evidence) — the
+    # ROTATION_PROMPT schema that produces a plain VLM-described profile has
+    # no evidence field at all (see _ROTATION_PROMPT), so verified_outer was
+    # effectively unreachable for that path and this function silently threw
+    # its outer[] away every time whole-sheet fell back, i.e. whenever
+    # fragments had ANY unresolved note — a common case, not a rare one.
+    # Live-reproduced 2026-08-14: fragments read 3 outer steps (Ø30/Ø50/Ø30)
+    # identically across all 3 consensus passes and got discarded in favor
+    # of a whole-sheet re-read that merged two of the three into one. A
+    # fragment profile with strictly more steps than the independent
+    # whole-sheet read found is very unlikely to be a fabrication: losing a
+    # step is the failure mode a second read corrects, not one it invents.
+    prefer_fragment_outer = verified_outer or len(fragment_outer) > len(current_outer)
+    if prefer_fragment_outer:
         merged_body["outer"] = copy.deepcopy(fragment_body["outer"])
     fragment_bore = [
         item for item in (fragment_body.get("bore") or []) if isinstance(item, dict)
@@ -4002,7 +4198,15 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
         bool(item.get("evidence"))
         for item in fragment_bore
     )
-    if verified_bore:
+    current_bore = [
+        item for item in (merged_body.get("bore") or []) if isinstance(item, dict)
+    ]
+    # Same reasoning as outer above, applied to bore: prefer fragments when
+    # it found more (or the whole-sheet fallback found none).
+    prefer_fragment_bore = verified_bore or (
+        bool(fragment_bore) and len(fragment_bore) > len(current_bore)
+    )
+    if prefer_fragment_bore:
         merged_body["bore"] = copy.deepcopy(fragment_body["bore"])
     if (fragment_body.get("profile") or {}).get("shape"):
         merged_body["profile"] = copy.deepcopy(fragment_body["profile"])
@@ -4026,18 +4230,29 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
     for field in doubted_fields:
         merged_body.pop(field, None)
     for field in feature_fields:
+        fragment_field = [
+            item for item in (fragment_body.get(field) or []) if isinstance(item, dict)
+        ]
         verified_features = [
-            item for item in (fragment_body.get(field) or [])
-            if isinstance(item, dict) and item.get("evidence")
+            item for item in fragment_field if item.get("evidence")
         ]
         if verified_features:
             merged_body[field] = copy.deepcopy(verified_features)
+        elif fragment_field and not (merged_body.get(field) or []):
+            # _FEATURES_PROMPT's own schema has no evidence field either (see
+            # its template), so verified_features is just as unreachable here
+            # as verified_outer/verified_bore were above — a correctly-read
+            # keyway/groove/cross_hole was being silently dropped whenever
+            # the whole-sheet fallback's own field for it came back empty,
+            # which is the one case where there is nothing to lose by taking
+            # what fragments found instead of nothing.
+            merged_body[field] = copy.deepcopy(fragment_field)
     bore_rejected = any(item.startswith("расточка:") for item in fragment_unresolved)
     if bore_rejected and not fragment_body.get("bore"):
         merged_body.pop("bore", None)
 
     unresolved = [str(item) for item in (merged.get("unresolved") or []) if str(item)]
-    if verified_outer:
+    if prefer_fragment_outer:
         unresolved = [
             item for item in unresolved
             if not re.match(r"^body:\d+:outer:\d+:length-missing$", item)
@@ -4047,7 +4262,7 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
                 item for item in unresolved
                 if "невозможно вычислить точные длины ступеней" not in item
             ]
-    if verified_bore:
+    if prefer_fragment_bore:
         unresolved = [
             item for item in unresolved
             if not re.match(r"^body:\d+:bore:\d+:length-missing$", item)
@@ -4304,9 +4519,9 @@ def _finalize_spec(spec: dict, image_bytes: bytes) -> dict:
 
 
 async def read_spec_best_effort(
-    image_bytes: bytes, *, passes: int = 3, router: Any | None = None,
+    image_bytes: bytes, *, passes: int = 5, router: Any | None = None,
     confidential: bool = True,
-    budget_seconds: float = 450.0,
+    budget_seconds: float = 750.0,
 ) -> dict:
     """Fragments first, whole-sheet consensus as the fallback for geometry.
 

@@ -25,9 +25,15 @@ def _inference_options(request: AIRequest, default_temperature: float = 0.2) -> 
         opts["repeat_penalty"] = params["repeat_penalty"]
     if "num_ctx" in params:
         # Per-task context prevents a short CAD JSON question from allocating
-        # the service-wide 32K KV cache. Keep a safe lower bound for images and
-        # an upper bound matching the production service configuration.
-        opts["num_ctx"] = max(4096, min(int(params["num_ctx"]), 32768))
+        # the service-wide KV cache. Keep a safe lower bound for images and an
+        # upper bound matching the production service configuration. Raised
+        # 32768→65536 2026-08-15 for qwen3.8:27b's hybrid attention/SSM
+        # architecture: its KV-cache-equivalent state grows far more gently
+        # with context than a plain dense-attention model of the same size
+        # (measured ~100MB extra VRAM going 8192→32768 on this GPU), so a
+        # bigger context here is comparatively cheap for models built that
+        # way — still capped, not unlimited.
+        opts["num_ctx"] = max(4096, min(int(params["num_ctx"]), 65536))
     return opts
 
 
@@ -61,6 +67,40 @@ def _pydantic_to_ollama_format(schema_cls: Any) -> dict[str, Any] | None:
         return None
 
 
+def _recovered_text(
+    text: str | None, thinking: str | None, *, model: str, request: AIRequest,
+) -> str | None:
+    """Recover an answer a thinking-capable model wrote into "thinking"
+    instead of the field the caller actually reads.
+
+    Live-reproduced 2026-08-14 on a plain shaft sheet: qwen3-vl:32b given a
+    json_schema format put its ENTIRE valid, schema-conforming answer into
+    "thinking" and left the answer field empty, on every fragment question,
+    with think=false AND chat_template_kwargs.enable_thinking=false both
+    already set — the two documented switches in _thinking_payload do not
+    stop this model from doing it. The result was 100% of a real CAD
+    digitization's reads (part kind, title block, geometry, PMI — every
+    fragment across all three consensus passes) silently discarded as "the
+    model said nothing", while the correct JSON sat unread the whole time.
+    Downstream JSON parsing already tolerates noisy/wrapped text (markdown
+    fences etc.), so handing it the thinking text costs nothing on the
+    passes where thinking is genuinely just reasoning with no embedded
+    answer — parsing simply fails there exactly as it does today.
+    """
+    if (text or "").strip():
+        return text
+    thinking = (thinking or "").strip()
+    if thinking:
+        logger.warning(
+            "ollama_empty_response_recovered_from_thinking",
+            model=model,
+            task=getattr(request.task, "value", str(request.task)),
+            thinking_chars=len(thinking),
+        )
+        return thinking
+    return text
+
+
 def _ollama_keep_alive(model: str) -> str | int:
     """Return keep_alive for a model: -1 for the pinned orchestrator, short
     (ephemeral) otherwise. See app.ai.model_lifecycle for the policy."""
@@ -91,7 +131,11 @@ class OllamaProvider(AIProvider):
             )
             response.raise_for_status()
             body = response.json()
-        text = body.get("message", {}).get("content")
+        message = body.get("message") or {}
+        text = _recovered_text(
+            message.get("content"), message.get("thinking"),
+            model=model, request=request,
+        )
         return AIResponse(
             task=request.task,
             provider=self.kind,
@@ -132,7 +176,11 @@ class OllamaProvider(AIProvider):
             )
             response.raise_for_status()
             body = response.json()
-        text = body.get("message", {}).get("content")
+        message = body.get("message") or {}
+        text = _recovered_text(
+            message.get("content"), message.get("thinking"),
+            model=model, request=request,
+        )
         return AIResponse(
             task=request.task,
             provider=self.kind,
@@ -229,6 +277,21 @@ class OllamaProvider(AIProvider):
             # leaves "response" empty, and reading only "response" then looks
             # exactly like "the model failed". Say which it was.
             thinking = (body.get("thinking") or "").strip()
+            # RECOVER it, don't just diagnose it. Live-reproduced 2026-08-14 on
+            # a plain shaft sheet: qwen3-vl:32b + a json_schema format sends the
+            # model's ENTIRE valid, schema-conforming answer into "thinking" and
+            # leaves "response" empty, on every single fragment question, with
+            # think=false AND chat_template_kwargs.enable_thinking=false both
+            # set — the two documented switches from _thinking_payload do not
+            # stop this model from doing it. The result was 100% of a real CAD
+            # digitization's fragment reads (kind/stamp/callouts/PMI, all three
+            # consensus passes) silently discarded as "the model said nothing",
+            # while the actual correct JSON sat unread in the response body the
+            # whole time. _parse_spec_json downstream already tolerates noisy/
+            # wrapped text (markdown fences etc.), so handing it the thinking
+            # text costs nothing when it doesn't contain usable JSON, either.
+            if thinking:
+                text = thinking
             logger.warning(
                 "ollama_vision_empty_response",
                 model=model,
@@ -239,6 +302,7 @@ class OllamaProvider(AIProvider):
                     "answer_went_to_thinking_field" if thinking
                     else "model_returned_nothing"
                 ),
+                recovered_from_thinking=bool(thinking),
                 eval_count=body.get("eval_count"),
                 prompt_eval_count=body.get("prompt_eval_count"),
             )

@@ -210,6 +210,26 @@ def test_detal_126_reference_has_corrected_independent_source_parameters() -> No
     assert score["parameters_total"] == 77
 
 
+def test_shaft_detail_reference_has_corrected_independent_source_parameters() -> None:
+    """Phase F, 2026-08-14: the second independent rotation-body ground-truth
+    case (GROUND_TRUTH["shaft_v1"] in eval_cad_readers.py) — same
+    self-consistency guard as detal_126's own version above. A smaller
+    number here (5, not 77) is expected and correct: this sheet
+    deliberately does not dimension per-step lengths or the keyway's own
+    width, so score_parameters has fewer fields to hold it to — see the
+    fixture's own _comment for why."""
+    fixture = (
+        pathlib.Path(__file__).parents[1]
+        / "fixtures" / "shaft_detail_reference_spec.json"
+    )
+    reference = json.loads(fixture.read_text(encoding="utf-8"))
+
+    score = score_parameters(reference, reference)
+
+    assert score["parameters_matched"] == 5
+    assert score["parameters_total"] == 5
+
+
 def test_reader_scores_taper_ratio_as_a_semantic_parameter() -> None:
     reference = {
         "main_view": {

@@ -799,6 +799,96 @@ def test_whole_fallback_cannot_restore_unverified_small_features():
     assert "chamfers" not in merged["main_view"]
 
 
+def test_unverified_fragment_outer_wins_when_it_found_more_steps_than_whole():
+    """Live-reproduced 2026-08-14 on example-drawings/shaft_detail.png: all 3
+    fragment consensus passes read 3 outer steps (Ø30/Ø50/Ø30) identically —
+    correct — but none of them carry "evidence" (_ROTATION_PROMPT's own
+    schema has no such field, only outer_sections_from_diameter_evidence's
+    output ever does), so verified_outer was always False for this path and
+    the independently-re-read whole-sheet fallback's WORSE 2-step read
+    (it merged two steps into one) silently won every time. A fragment
+    profile with strictly more steps than whole-sheet found must not be
+    discarded just because it lacks formal evidence."""
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragment_outer = [
+        {"diameter_mm": 30, "length_mm": 220, "note": "h6"},
+        {"diameter_mm": 50, "length_mm": 840, "note": "h6"},
+        {"diameter_mm": 30, "length_mm": 220, "note": "k6"},
+    ]
+    fragments = {"main_view": {"outer": fragment_outer}, "unresolved": []}
+    whole = {
+        "main_view": {"outer": [
+            {"diameter_mm": 50, "length_mm": 220, "note": "ступень Ø50h6"},
+            {"diameter_mm": 30, "length_mm": 840, "note": "ступень Ø30k6, Ø30h6"},
+        ]},
+        "unresolved": [],
+    }
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert merged["main_view"]["outer"] == fragment_outer
+
+
+def test_verified_or_more_complete_outer_still_loses_to_a_richer_whole_read():
+    """The other direction must still hold: an unverified fragment profile
+    with FEWER (or equal) steps than whole-sheet found is not preferred —
+    only "found strictly more" is trusted, not "found something different"."""
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragments = {
+        "main_view": {"outer": [{"diameter_mm": 40, "length_mm": 100}]},
+        "unresolved": [],
+    }
+    whole_outer = [
+        {"diameter_mm": 40, "length_mm": 60},
+        {"diameter_mm": 30, "length_mm": 40},
+    ]
+    whole = {"main_view": {"outer": whole_outer}, "unresolved": []}
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert merged["main_view"]["outer"] == whole_outer
+
+
+def test_unverified_fragment_feature_fills_a_gap_whole_left_empty():
+    """Same reasoning as the outer[] fix, applied to feature_fields:
+    _FEATURES_PROMPT's schema has no evidence field either, so a correctly
+    read keyway/groove/cross_hole with no evidence used to be discarded
+    even when whole-sheet's own field for it was simply empty — the one
+    case where there is nothing to lose by using it."""
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragment_groove = [{"axial_position_mm": 12, "width_mm": 6, "depth_mm": 1}]
+    fragments = {
+        "main_view": {"grooves": fragment_groove},
+        "unresolved": [],
+    }
+    whole = {"main_view": {}, "unresolved": []}
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert merged["main_view"]["grooves"] == fragment_groove
+
+
+def test_unverified_fragment_feature_does_not_overwrite_whole_own_read():
+    """The gap-filling above must not become overwriting: when whole-sheet
+    already found something for that field, an unverified fragment answer
+    must not silently replace it."""
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragments = {
+        "main_view": {"grooves": [{"axial_position_mm": 12, "width_mm": 6, "depth_mm": 1}]},
+        "unresolved": [],
+    }
+    whole_grooves = [{"axial_position_mm": 99, "width_mm": 3, "depth_mm": 2}]
+    whole = {"main_view": {"grooves": whole_grooves}, "unresolved": []}
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert merged["main_view"]["grooves"] == whole_grooves
+
+
 def test_named_feature_doubt_does_not_clear_unrelated_feature_fields():
     """Live-found bug (shaft_detail.png): a "малые элементы: ..." message
     naming ONE feature type used to clear ALL of them (chamfers/fillets/
@@ -1030,3 +1120,118 @@ def test_lowercase_shaft_fit_is_a_diameter_when_ocr_lost_the_symbol():
 
     assert _callout_numbers(callouts, "diameter") == [50.0]
     assert _callout_numbers(callouts, "linear") == [470.0]
+
+
+def test_a_diameter_callout_extracts_the_number_next_to_the_mark_not_the_first_in_the_string():
+    """Live-found on example-drawings/shaft_detail.png, 2026-08-14: a single
+    combined technical-requirements line — "1. HRC 42...48 (шейки Ø30h6,
+    Ø30k6)" — has an unrelated number (a hardness range) BEFORE its actual
+    Ø-marked diameter in the same string. Taking the first number anywhere
+    in a "marked" callout silently returned 42, which then fed a phantom
+    Ø42 outer step through _flag_unconfirmed_outer_bore_diameters as if it
+    were a sheet-confirmed diameter."""
+    from app.ai.cad_recognize.spec_fragments import _callout_numbers
+
+    callouts = {
+        "dimensions": [
+            {"value": "1. НRC 42...48 (шейки Ø30h6, Ø30k6)"},
+        ]
+    }
+
+    assert _callout_numbers(callouts, "diameter") == [30.0]
+
+
+def test_free_text_splits_two_diameters_sharing_one_bullet():
+    """Live-found 2026-08-15: a free-form "describe everything" answer from a
+    thinking-capable model regularly puts two diameters in one bullet —
+    "...коническая поверхность φ56,55 (малый) и φ80 js6 ... (большой)." —
+    unlike _CALLOUT_PROMPT's one-value-per-dimensions[]-entry answer. Naively
+    wrapping the whole bullet as one entry would lose the second diameter,
+    since _callout_numbers's diameter branch only reads the first number
+    after the mark in an item."""
+    from app.ai.cad_recognize.spec_fragments import (
+        _callout_numbers,
+        _numbers_from_free_text,
+    )
+
+    text = (
+        "Коническая поверхность с конусностью 7:24; диаметры конуса "
+        "φ56,55 (малый) и φ80 js6 (+0,0095 / −0,0095) (большой)."
+    )
+    entries = _numbers_from_free_text(text)
+    callouts = {"dimensions": [{"value": entry} for entry in entries]}
+
+    diameters = set(_callout_numbers(callouts, "diameter"))
+    assert {56.55, 80.0} <= diameters
+
+
+def test_free_text_reads_a_bare_fit_code():
+    from app.ai.cad_recognize.spec_fragments import (
+        _callout_numbers,
+        _numbers_from_free_text,
+    )
+
+    text = "Наружный диаметр φ102 h6. Резьба на торце: M75×1,5. Участок 50h7."
+    entries = _numbers_from_free_text(text)
+    callouts = {"dimensions": [{"value": entry} for entry in entries]}
+
+    diameters = set(_callout_numbers(callouts, "diameter"))
+    assert {102.0, 50.0} <= diameters
+
+
+def test_free_text_does_not_derive_a_diameter_from_a_thread_nominal():
+    """Live-verified 2026-08-15 on the spindle sheet: deriving a synthetic
+    Ø54,5 candidate from "M54,5x2" (an INTERNAL thread's nominal diameter)
+    put it 0.9% from the sheet's real Ø55 bore step. Two candidates that
+    close made ``_contour_bore_observations``'s per-pixel "nearest known
+    value" snap oscillate between them, fragmenting one confirmable Ø55/25mm
+    bore plateau into zero bore sections — turning a correctly-readable
+    sheet into an emptied-out one. A thread's nominal is by definition close
+    to its shaft/hole's real diameter, so deriving one from the other is
+    exactly the mechanism most likely to create this collision; the token
+    must survive as text (thread-carrier matching still wants it) without
+    also becoming a second, almost-identical diameter candidate."""
+    from app.ai.cad_recognize.spec_fragments import (
+        _callout_numbers,
+        _numbers_from_free_text,
+    )
+
+    text = "Резьба M54,5×2 на правом торце, глубина 25."
+    entries = _numbers_from_free_text(text)
+    callouts = {"dimensions": [{"value": entry} for entry in entries]}
+
+    assert 54.5 not in set(_callout_numbers(callouts, "diameter"))
+    # The designation itself is not lost — it travels as part of its line.
+    assert any("54,5" in entry or "54.5" in entry for entry in entries)
+
+
+def test_free_text_keeps_noise_words_so_existing_filters_still_apply():
+    """A bare number extracted without its sentence would defeat
+    _callout_numbers's own noise filters (HRC ranges, hole/chamfer counts,
+    angles) — those key on words like "отв."/"фасок"/"HRC" that only exist
+    if the line survives whole, not as an isolated digit."""
+    from app.ai.cad_recognize.spec_fragments import (
+        _callout_numbers,
+        _numbers_from_free_text,
+    )
+
+    text = "Твёрдость HRC 58...62. 6 фасок на торце. 12 отв. φ4 по окружности."
+    entries = _numbers_from_free_text(text)
+    callouts = {"dimensions": [{"value": entry} for entry in entries]}
+
+    lengths = set(_callout_numbers(callouts, "linear"))
+    assert 6.0 not in lengths
+    assert 12.0 not in lengths
+    assert 58.0 not in lengths
+
+
+def test_free_text_drops_gost_reference_numbers():
+    from app.ai.cad_recognize.spec_fragments import _numbers_from_free_text
+
+    text = "Материал: сталь 55, ГОСТ 1050-2013. Общая длина 470 мм."
+    entries = _numbers_from_free_text(text)
+
+    joined = " ".join(entries)
+    assert "1050" not in joined
+    assert "2013" not in joined
+    assert "470" in joined

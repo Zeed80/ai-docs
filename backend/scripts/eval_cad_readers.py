@@ -46,6 +46,25 @@ GROUND_TRUTH: dict[str, dict[str, Any]] = {
         "expect_annotation_contains": "hrc",
         "reference_spec": "tests/fixtures/detal_126_reference_spec_v3.json",
     },
+    # Phase F, 2026-08-14: second independent rotation-body case — before
+    # this, exactly one sheet (spindle_v10) existed, so a reader change
+    # could pass/fail on that one sheet without telling anyone whether it
+    # generalizes at all. This one is deliberately the opposite shape: a
+    # solid shaft (no bore), a cross-hole instead of axial threaded holes,
+    # only three step diameters. See shaft_detail_reference_spec.json's own
+    # _comment for what this sheet does and does not independently dimension.
+    "shaft_v1": {
+        "part_contains": "вал",
+        "material_contains": "сталь 45",
+        "scale": "1:2",
+        "rotation_body": True,
+        "hollow": False,
+        "total_length_mm": 840.0,
+        "max_diameter_mm": 50.0,
+        "expect_dimension_text": "10h7",
+        "expect_annotation_contains": "hrc",
+        "reference_spec": "tests/fixtures/shaft_detail_reference_spec.json",
+    },
 }
 
 
@@ -356,7 +375,7 @@ async def evaluate_model(
     try:
         raw_spec = await read_spec_best_effort(
             image_bytes,
-            passes=3,
+            passes=5,
             router=_PreferredCadReaderRouter(ai_router, model_key),
             confidential=True,
         )

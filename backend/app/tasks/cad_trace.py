@@ -1538,8 +1538,13 @@ async def _restore_design_revision(
     bind=True,
     name="cad_trace.run_cad_trace",
     max_retries=2,
-    soft_time_limit=600,
-    time_limit=660,
+    # The «по описанию» spec path can spend up to 800s reading (5 consensus
+    # passes, asyncio.timeout above) before the rest of the pipeline (solid
+    # build, redraw, crosscheck) even starts — raised from 600/660 alongside
+    # the pass-count bump so a slower, more thorough read doesn't just get
+    # killed mid-flight instead of failing gracefully.
+    soft_time_limit=960,
+    time_limit=1020,
 )
 def run_cad_trace(self, generation_id: str) -> dict:
     import time as _time
@@ -3110,7 +3115,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 "method": vectorize_method,
                 "digitization_type": digitization_type.normalized,
                 "domain_profile": requested_profile,
-                "read_passes": int(params.get("read_passes") or 3),
+                "read_passes": int(params.get("read_passes") or 5),
             },
         )
         description_mode = vectorize_method == "text_spec" and bool(description)
@@ -3419,18 +3424,23 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # Reading once is a bet on a stochastic model; reading a few
                     # times and intersecting turns its inconsistency into an
                     # explicit review item instead of a silent wrong number.
-                    passes = int(params.get("read_passes") or 3)
+                    # Timeout/budget scale with passes (5/3 of the old 3-pass
+                    # numbers) so a higher pass count doesn't just trade
+                    # "wrong answer" for "task killed mid-read" — see
+                    # run_cad_trace's soft_time_limit/time_limit below, raised
+                    # to match.
+                    passes = int(params.get("read_passes") or 5)
                     await _record(
                         "reader",
                         "started",
                         "Начато многоэтапное чтение чертежа",
-                        {"passes": passes, "timeout_seconds": 480},
+                        {"passes": passes, "timeout_seconds": 800},
                     )
-                    async with asyncio.timeout(480):
+                    async with asyncio.timeout(800):
                         spec = await read_spec_best_effort(
                             content,
                             passes=passes,
-                            budget_seconds=450,
+                            budget_seconds=750,
                         )
                     await _record(
                         "reader",

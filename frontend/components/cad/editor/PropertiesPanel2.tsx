@@ -44,6 +44,8 @@ export default function PropertiesPanel2({
   onSketchProfileConsumed,
   pickedEdgeKey,
   onEdgeKeyConsumed,
+  pickedFaceCenter,
+  onFaceCenterConsumed,
   patternDraftActive,
   onPatternDraftChange,
   onSaved,
@@ -62,6 +64,11 @@ export default function PropertiesPanel2({
   onSketchProfileConsumed: () => void;
   pickedEdgeKey?: string | null;
   onEdgeKeyConsumed?: () => void;
+  // D: same one-shot handoff pattern as pickedEdgeKey — a click on a face
+  // while placing a boss/pocket fills its centerX/centerY the way the edge
+  // click fills a fillet/chamfer's edgeKey.
+  pickedFaceCenter?: { x: number; y: number } | null;
+  onFaceCenterConsumed?: () => void;
   // Ф8: true while the "Массив" form is open — takes priority over both
   // addFeatureDraft and the plain correction view, operates on whichever
   // operation is currently SELECTED in the tree (not a new draft).
@@ -105,6 +112,8 @@ export default function PropertiesPanel2({
         onSketchProfileConsumed={onSketchProfileConsumed}
         pickedEdgeKey={pickedEdgeKey}
         onEdgeKeyConsumed={onEdgeKeyConsumed}
+        pickedFaceCenter={pickedFaceCenter}
+        onFaceCenterConsumed={onFaceCenterConsumed}
         onCancel={() => onAddFeatureDraftChange(null)}
         onAdded={(taskId) => {
           onAddFeatureDraftChange(null);
@@ -144,6 +153,8 @@ function AddFeatureForm({
   onSketchProfileConsumed,
   pickedEdgeKey,
   onEdgeKeyConsumed,
+  pickedFaceCenter,
+  onFaceCenterConsumed,
   onCancel,
   onAdded,
   onSaved,
@@ -157,6 +168,8 @@ function AddFeatureForm({
   onSketchProfileConsumed: () => void;
   pickedEdgeKey?: string | null;
   onEdgeKeyConsumed?: () => void;
+  pickedFaceCenter?: { x: number; y: number } | null;
+  onFaceCenterConsumed?: () => void;
   onCancel: () => void;
   onAdded: (taskId: string) => void;
   onSaved: () => void;
@@ -205,6 +218,18 @@ function AddFeatureForm({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickedEdgeKey]);
+
+  // D: same handoff again — a click on a face while placing a boss/pocket
+  // fills the center fields the way the edge click fills edgeKey above.
+  // Values stay editable afterward, same as every other prefilled field.
+  useEffect(() => {
+    if (pickedFaceCenter && isProfileKind) {
+      setCenterX(String(pickedFaceCenter.x));
+      setCenterY(String(pickedFaceCenter.y));
+      onFaceCenterConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickedFaceCenter]);
 
   const num = (raw: string) => Number(raw.replace(",", "."));
 

@@ -67,9 +67,9 @@ export default function CadListPage() {
   );
   // How many times the sheet is read before the answers are intersected. The
   // reader is not merely inaccurate, it is INCONSISTENT, so a single read is a
-  // bet; three reads turn that inconsistency into a stated disagreement. It
+  // bet; five reads turn that inconsistency into a stated disagreement. It
   // costs proportionally more GPU time, which is why the number is the user's.
-  const [readPasses, setReadPasses] = useState(3);
+  const [readPasses, setReadPasses] = useState(5);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const scanRef = useRef<HTMLInputElement | null>(null);
 
@@ -240,6 +240,7 @@ export default function CadListPage() {
               <option value={1}>{t("read_passes_one")}</option>
               <option value={2}>{t("read_passes_two")}</option>
               <option value={3}>{t("read_passes_three")}</option>
+              <option value={5}>{t("read_passes_five")}</option>
             </select>
           )}
           <select

@@ -1543,6 +1543,13 @@ class AgentOrchestrator:
                             or config.worker_model
                             or config.model
                         ),
+                        # A slow, thinking-capable planning model (raised
+                        # orchestrator_plan_timeout_seconds above) is a
+                        # deliberate operator choice; give it room to see the
+                        # full prompt (history + skill registry + hint) rather
+                        # than truncating it to whatever Ollama's own default
+                        # context happens to be.
+                        metadata={"inference_params": {"num_ctx": 65536}},
                     )
                 ),
                 timeout=_plan_timeout,

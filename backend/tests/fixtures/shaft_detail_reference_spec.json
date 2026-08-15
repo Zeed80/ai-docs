@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "Hand-checked reader benchmark truth for example-drawings/shaft_detail.png.",
+    "Phase F, 2026-08-14: the second independent rotation-body ground-truth",
+    "case — before this, eval_cad_readers.py had exactly one (spindle_v10),",
+    "so no reader change could be measured beyond that single sheet.",
+    "This drawing dimensions three step diameters (Ø30h6/Ø50h6/Ø30k6), an",
+    "overall length (840) and a partial length (220), but does NOT",
+    "independently dimension each step's own length or the keyway's",
+    "width/length beyond its labelled depth — those fields are deliberately",
+    "absent here rather than invented; score_parameters simply excludes an",
+    "absent field from its denominator (see _parameter_groups), it does not",
+    "fail on it. This is a genuinely solid shaft (no bore, confirmed by both",
+    "the drawing itself and detect_axial_hatching finding no hatching)."
+  ],
+  "schema_version": 1,
+  "part": "Вал ступенчатый",
+  "main_view": {
+    "name": "Вал ступенчатый",
+    "type": "тело вращения",
+    "outer": [
+      {"diameter_mm": 30.0, "note": "h6"},
+      {"diameter_mm": 50.0, "note": "h6"},
+      {"diameter_mm": 30.0, "note": "k6"}
+    ],
+    "bore": [],
+    "cross_holes": [
+      {"diameter_mm": 10.0, "note": "H7"}
+    ],
+    "keyways": [
+      {"depth_mm": 6.0, "note": "Паз 12х6 ГОСТ 23360"}
+    ]
+  },
+  "views": [
+    {"kind": "front", "body_index": 0}
+  ],
+  "dimensions": [
+    {"value": "840", "applies_to": "габаритная длина"},
+    {"value": "220", "applies_to": "частичная длина"},
+    {"value": "Ø10H7", "applies_to": "поперечное отверстие"},
+    {"value": "Паз 12х6 ГОСТ 23360", "applies_to": "шпоночный паз"}
+  ],
+  "annotations": [
+    {"kind": "hardness", "text": "HRC 42…48 (шейки Ø30h6, Ø30k6)"},
+    {"kind": "roughness", "text": "остальные Ra 6.3"}
+  ],
+  "title_block": {
+    "name": "Вал ступенчатый",
+    "material": "Сталь 45 ГОСТ 1050-2013",
+    "scale": "1:2"
+  },
+  "unresolved": []
+}

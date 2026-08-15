@@ -16,7 +16,15 @@ function valueLabel(assertion: Assertion): string {
   if (assertion.value.kind === "unknown") {
     return String(assertion.value.reason ?? "значение не установлено");
   }
-  if ("value" in assertion.value) return String(assertion.value.value);
+  if ("value" in assertion.value) {
+    const v = assertion.value.value;
+    // String() on an array/object stringifies each element via its own
+    // .toString() — for an array of plain objects (e.g. profile_points)
+    // that produces the literal text "[object Object],[object Object]"
+    // instead of the actual coordinates. The same value renders correctly
+    // a column over in the properties panel, which uses JSON formatting.
+    return typeof v === "object" && v !== null ? JSON.stringify(v) : String(v);
+  }
   return JSON.stringify(assertion.value);
 }
 
@@ -49,7 +57,8 @@ export default function BlockersAlternativesPanel({
     [graph.assertions],
   );
   const optionById = useMemo(
-    () => new Map((graph.hypothesis_options ?? []).map((item) => [item.id, item])),
+    () =>
+      new Map((graph.hypothesis_options ?? []).map((item) => [item.id, item])),
     [graph.hypothesis_options],
   );
 
@@ -75,11 +84,17 @@ export default function BlockersAlternativesPanel({
   const operationFor = (assertion: Assertion): string | null => {
     const direct = operations.find((item) => item.id === assertion.subject_id);
     if (direct) return direct.id;
-    return operations.find((item) => item.featureIds.includes(assertion.subject_id))?.id ?? null;
+    return (
+      operations.find((item) => item.featureIds.includes(assertion.subject_id))
+        ?.id ?? null
+    );
   };
 
   return (
-    <section className="shrink-0 border-t border-red-500/30 bg-red-500/5" data-testid="cad-blockers-panel">
+    <section
+      className="shrink-0 border-t border-red-500/30 bg-red-500/5"
+      data-testid="cad-blockers-panel"
+    >
       <button
         type="button"
         onClick={() => setCollapsed((value) => !value)}
@@ -93,17 +108,26 @@ export default function BlockersAlternativesPanel({
         <div className="max-h-64 space-y-2 overflow-y-auto px-3 pb-2 text-[11px]">
           {blockers.map((assertion) => {
             const hypothesisSet = graph.hypothesis_sets.find((set) =>
-              set.option_ids.some((optionId) =>
-                optionId === assertion.hypothesis_id ||
-                Boolean(optionById.get(optionId)?.assertion_ids.includes(assertion.id)),
+              set.option_ids.some(
+                (optionId) =>
+                  optionId === assertion.hypothesis_id ||
+                  Boolean(
+                    optionById
+                      .get(optionId)
+                      ?.assertion_ids.includes(assertion.id),
+                  ),
               ),
             );
-            const alternatives = hypothesisSet?.option_ids
-              .map((id) => optionById.get(id))
-              .filter((item) => item !== undefined) ?? [];
+            const alternatives =
+              hypothesisSet?.option_ids
+                .map((id) => optionById.get(id))
+                .filter((item) => item !== undefined) ?? [];
             const operationId = operationFor(assertion);
             return (
-              <article key={assertion.id} className="rounded border border-red-500/20 bg-black/20 p-2">
+              <article
+                key={assertion.id}
+                className="rounded border border-red-500/20 bg-black/20 p-2"
+              >
                 <button
                   type="button"
                   onClick={() => void navigate(assertion, operationId)}
@@ -111,7 +135,9 @@ export default function BlockersAlternativesPanel({
                 >
                   <span>
                     <span className="font-medium">{assertion.predicate}</span>
-                    <span className="mt-0.5 block text-red-200/70">{valueLabel(assertion)}</span>
+                    <span className="mt-0.5 block text-red-200/70">
+                      {valueLabel(assertion)}
+                    </span>
                   </span>
                   <ArrowRight className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 </button>
@@ -130,18 +156,43 @@ export default function BlockersAlternativesPanel({
                         const facts = option.assertion_ids
                           .map((id) => assertionsById.get(id))
                           .filter((item): item is Assertion => Boolean(item))
-                          .map((item) => `${item.predicate}: ${valueLabel(item)}`);
+                          .map(
+                            (item) => `${item.predicate}: ${valueLabel(item)}`,
+                          );
                         return (
-                          <div key={option.id} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-300">
+                          <div
+                            key={option.id}
+                            className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-300"
+                          >
                             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                               <span className="font-mono">{option.id}</span>
-                              {hypothesisSet?.selected_option_id === option.id && <span className="text-sky-300">выбрано</span>}
-                              <span>evidence {Math.round(option.evidence_coverage * 100)}%</span>
-                              <span>views {Math.round(option.cross_view_consistency * 100)}%</span>
+                              {hypothesisSet?.selected_option_id ===
+                                option.id && (
+                                <span className="text-sky-300">выбрано</span>
+                              )}
+                              <span>
+                                evidence{" "}
+                                {Math.round(option.evidence_coverage * 100)}%
+                              </span>
+                              <span>
+                                views{" "}
+                                {Math.round(
+                                  option.cross_view_consistency * 100,
+                                )}
+                                %
+                              </span>
                               <span>assumptions {option.assumption_count}</span>
-                              {!option.hard_constraints_satisfied && <span className="text-red-300">constraints failed</span>}
+                              {!option.hard_constraints_satisfied && (
+                                <span className="text-red-300">
+                                  constraints failed
+                                </span>
+                              )}
                             </div>
-                            {facts.length > 0 && <p className="mt-1 break-all text-zinc-500">{facts.join(" · ")}</p>}
+                            {facts.length > 0 && (
+                              <p className="mt-1 break-all text-zinc-500">
+                                {facts.join(" · ")}
+                              </p>
+                            )}
                           </div>
                         );
                       })}
