@@ -56,4 +56,4 @@ def test_ollama_inference_options_bound_context_to_service_limits():
     )
 
     assert _inference_options(tiny)["num_ctx"] == 4096
-    assert _inference_options(huge)["num_ctx"] == 32768
+    assert _inference_options(huge)["num_ctx"] == 65536

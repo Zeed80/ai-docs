@@ -323,6 +323,29 @@ _CALLOUT_PROMPT = (
     "Только JSON."
 )
 
+# No schema on purpose — unlike _CALLOUT_PROMPT above. Live-verified 2026-08-15:
+# a thinking-capable model given this exact free-form ask (no JSON, reasoning
+# allowed) transcribed a dense hollow-spindle sheet's material, hardness, BOTH
+# thread callouts and every tolerance correctly — the same model's schema-
+# constrained _CALLOUT_PROMPT answer on the identical sheet missed most of the
+# bore-region numbers (constrained decoding under a tight schema demonstrably
+# degrades this model's numeric accuracy; see spec_fragments.py's
+# read_spec_by_fragments for how the answer is merged, not trusted directly).
+# The trade a schema makes — guaranteed shape, in exchange for whatever the
+# model drops trying to hit it under a token budget — is exactly backwards for
+# "list everything you can see": completeness matters more than parseability
+# here, because a lightweight regex (_numbers_from_free_text) does the
+# parsing afterward and the geometry-grounded assembly in diameter_dimensions
+# .py independently verifies every candidate against the vector contour
+# before it is trusted for outer[]/bore[] anyway. Extra noise from a false
+# candidate is harmless; a missing real one is not.
+_FREE_DESCRIBE_PROMPT = (
+    "Опиши деталь на этом чертеже со всеми элементами и размерами: все "
+    "диаметры (наружные и внутренние), длины ступеней, фаски, резьбы, "
+    "допуски, шероховатость, материал, твёрдость. Перечисли по порядку "
+    "слева направо, каждое значение — как написано на чертеже."
+)
+
 
 def _encode(image) -> str:
     buffer = io.BytesIO()
@@ -878,8 +901,15 @@ def _main_view_crop(image):
 async def _ask(
     prompt: str, image, *, router: Any, confidential: bool, num_predict: int,
     schema: dict | None = None, audit: list[dict[str, Any]] | None = None,
+    thinking: bool | None = None, timeout_seconds: float = 75.0,
 ) -> dict:
-    """One bounded question. A failure returns {} and never raises."""
+    """One bounded question. A failure returns {} and never raises.
+
+    ``thinking``/``timeout_seconds`` default to the existing behaviour (task-
+    routing decides thinking, 75s budget) for every current call site. A
+    schema-free "describe freely" question needs both raised — live-verified
+    a genuine reasoning pass on a dense sheet takes 30-110s, well past 75s.
+    """
     import asyncio
     import time
     import hashlib
@@ -888,6 +918,7 @@ async def _ask(
     from app.ai.cad_recognize.spec_vectorize import (
         _coerce_spec_containers,
         _first_vision_model,
+        _model_supports_thinking,
         _parse_spec_json,
     )
     from app.ai.schemas import AIRequest, AITask, ChatMessage
@@ -899,6 +930,12 @@ async def _ask(
         else AITask.DRAWING_ANALYSIS_VLM
     )
     seeing_model, _chain_can_see = _first_vision_model(read_task)
+    # Forcing thinking=True is not a no-op for a model that cannot do it — see
+    # _model_supports_thinking's docstring. Clamp rather than let the router
+    # silently answer with a different, unrequested model.
+    effective_thinking = thinking
+    if thinking and not _model_supports_thinking(seeing_model):
+        effective_thinking = None
     request = AIRequest(
         task=read_task,
         messages=[ChatMessage(role="user", content=prompt)],
@@ -906,6 +943,7 @@ async def _ask(
         confidential=confidential,
         allow_cloud=False,
         preferred_model=seeing_model,
+        thinking=effective_thinking,
         metadata={
             "num_predict": num_predict,
             "json_schema": schema,
@@ -928,7 +966,7 @@ async def _ask(
         },
     )
     try:
-        async with asyncio.timeout(75):
+        async with asyncio.timeout(timeout_seconds):
             response = await router.run(request)
     except Exception as exc:  # noqa: BLE001 — one lost fragment, not the sheet
         logger.warning("cad_fragment_failed", error=str(exc)[:200])
@@ -940,7 +978,7 @@ async def _ask(
                 "model": seeing_model,
                 "duration_ms": round((time.monotonic() - started) * 1000),
                 "error": f"{type(exc).__name__}: {exc}"[:400],
-                "timeout_seconds": 75,
+                "timeout_seconds": timeout_seconds,
             },
         )
         return {}
@@ -3202,6 +3240,65 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
     return sorted({round(v, 3) for v in values}, reverse=True)
 
 
+# Isolates one Ø/fit-code token per match, unlike a naive whole-line split —
+# a single _FREE_DESCRIBE_PROMPT bullet regularly carries two ("...Ø56,55
+# (малый) и Ø80 js6 ... (большой)"), and _callout_numbers's diameter branch
+# only reads the FIRST number after the mark in an item, so two diameters
+# sharing one dimensions[] entry would silently lose the second.
+_FREE_TEXT_DIAMETER_TOKEN = re.compile(
+    r"[ØøΦφ⌀]\s*\d+(?:[.,]\d+)?(?:\s*[A-Za-z]{1,2}\d{1,2}\b)?"
+)
+_FREE_TEXT_FIT_TOKEN = re.compile(r"\b\d+(?:[.,]\d+)?\s*[A-Za-z]{1,2}[5-9]\b")
+
+
+def _numbers_from_free_text(text: str) -> list[str]:
+    """Turn a free-form "describe everything" answer into synthetic entries
+    ``_callout_numbers`` can consume unchanged (same ``{"value": ...}`` shape
+    as ``_CALLOUT_PROMPT``'s own answer) — this is the assembly step's input
+    pool getting wider, not a second, competing source of truth: every
+    candidate this produces still has to be geometrically confirmed against
+    the vector contour by ``diameter_dimensions.py`` before it can become an
+    outer[]/bore[] value.
+
+    A candidate that is simply WRONG (far from any real diameter) is
+    harmless — the geometric check in ``diameter_dimensions.py`` just never
+    confirms it. A candidate that is a NEAR-DUPLICATE of a real one is not:
+    live-verified 2026-08-15, deriving "M54,5x2" (an internal thread's
+    nominal diameter) into an extra Ø54,5 candidate sitting 0.9% from the
+    sheet's real Ø55 bore step made ``_contour_bore_observations``'s
+    per-pixel "snap to nearest known value" oscillate between the two and
+    fragment what should have been one stable plateau run into nothing —
+    turning a correctly-geometry-confirmable Ø55/25mm bore section into zero
+    bore sections at all, worse than not enriching the pool in the first
+    place. A thread's nominal diameter is close to its shaft/hole's real
+    diameter by definition (that is what "close together" means here), so
+    deriving one from the other is exactly the mechanism most likely to
+    create this kind of collision; the token itself is still kept (useful
+    elsewhere, e.g. thread-carrier matching), just not turned into a second,
+    almost-identical diameter candidate.
+
+    Two passes over the text: isolated Ø-marked tokens (each its own entry —
+    a single _FREE_DESCRIBE_PROMPT bullet regularly carries two, "...Ø56,55
+    (малый) и Ø80 js6 ... (большой)", and _callout_numbers's diameter branch
+    only reads the FIRST number after the mark in an item, so lumping them
+    into one entry would silently lose the second) and bare "50h7"/"44H7"
+    fit codes (a diameter with no Ø, the same repair ``_callout_numbers``
+    already does for OCR that dropped the symbol). Everything else — plain
+    lengths, hole counts, angles, thread designations — travels as its
+    surrounding line so the noise-word filters already in ``_callout_numbers``
+    (HRC, "N отв.", "N фасок", ...) still have text to match against; a lone
+    bare number loses exactly the words those filters key on.
+    """
+    cleaned = _STANDARD_REFERENCE.sub(" ", (text or "").replace("**", ""))
+    entries: list[str] = [m.group() for m in _FREE_TEXT_DIAMETER_TOKEN.finditer(cleaned)]
+    entries += [m.group() for m in _FREE_TEXT_FIT_TOKEN.finditer(cleaned)]
+    for line in re.split(r"[\n;]+", cleaned):
+        line = line.strip(" -•*#>").strip()
+        if line and re.search(r"\d", line):
+            entries.append(line[:200])
+    return entries
+
+
 async def _sections_from_chain(
     image, callouts: dict, *, router: Any, confidential: bool,
     audit: list[dict[str, Any]] | None = None, source_image=None,
@@ -3668,6 +3765,36 @@ async def read_spec_by_fragments(
         callouts.setdefault("annotations", []).extend(
             a for a in ocr.get("annotations") or []
             if str(a.get("text") or "").strip().lower() not in known_notes
+        )
+
+    # A free-form "describe everything" pass catches numbers a single
+    # schema-constrained _CALLOUT_PROMPT call misses on a dense sheet — see
+    # _FREE_DESCRIBE_PROMPT's docstring. One call per read_spec_best_effort(),
+    # not per consensus pass: this widens the candidate pool the deterministic
+    # geometry-grounded assembly draws from (diameter_dimensions.py), which
+    # does not need repeated sampling the way a structural fact does.
+    if shared_layers is not None and "free_describe" in shared_layers:
+        free_text_entries = shared_layers["free_describe"]
+    else:
+        describe_audit: list[dict[str, Any]] = []
+        await _ask(
+            _FREE_DESCRIBE_PROMPT, overview, num_predict=8000,
+            audit=describe_audit, thinking=True, timeout_seconds=150.0,
+            router=router, confidential=confidential,
+        )
+        raw_describe_text = (
+            describe_audit[-1]["raw_response"] if describe_audit else ""
+        )
+        free_text_entries = _numbers_from_free_text(raw_describe_text)
+        if shared_layers is not None:
+            shared_layers["free_describe"] = free_text_entries
+    if free_text_entries:
+        known = {str((d or {}).get("value") or "").strip().lower()
+                 for d in (callouts.get("dimensions") or [])}
+        callouts.setdefault("dimensions", []).extend(
+            {"value": entry, "applies_to": None}
+            for entry in free_text_entries
+            if entry.strip().lower() not in known
         )
 
     callouts, unreadable_annotation_count = _clean_callout_observations(callouts)

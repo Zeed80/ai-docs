@@ -2185,6 +2185,34 @@ def _first_vision_model(task: Any) -> tuple[str | None, bool]:
     return None, False
 
 
+def _model_supports_thinking(model_key: str | None) -> bool:
+    """Whether this catalog key can be asked to reason (Ollama's ``think``
+    parameter).
+
+    Forcing ``thinking=True`` on a model that cannot do it is not silently
+    ignored — Ollama returns 400 Bad Request for it (live-verified
+    2026-08-15 on qwen3-vl:30b-a3b), which the router then recovers from by
+    falling through to a DIFFERENT model in the chain, silently answering a
+    "please reason about this" question with a model nobody asked to. Unknown
+    models are treated as unable to — the opposite default from
+    ``_first_vision_model`` above, and deliberately so: assuming vision that
+    is not there degrades to an empty, detectable answer; assuming thinking
+    that is not there degrades to an unannounced model swap.
+    """
+    if not model_key:
+        return False
+    from app.ai.model_registry import ModelRegistry
+
+    try:
+        registry = ModelRegistry.from_yaml(
+            "backend/app/ai/config/model_registry.yaml"
+        )
+    except Exception:  # noqa: BLE001 — never block a read on a config error
+        return False
+    capability = registry.models.get(model_key)
+    return bool(capability and capability.thinking_supported)
+
+
 def _read_dimension_index(spec: dict) -> list[tuple[float, str, bool]]:
     """Index the dimensions the reader actually saw: (value, text, is_diameter).
 

@@ -1139,3 +1139,99 @@ def test_a_diameter_callout_extracts_the_number_next_to_the_mark_not_the_first_i
     }
 
     assert _callout_numbers(callouts, "diameter") == [30.0]
+
+
+def test_free_text_splits_two_diameters_sharing_one_bullet():
+    """Live-found 2026-08-15: a free-form "describe everything" answer from a
+    thinking-capable model regularly puts two diameters in one bullet —
+    "...коническая поверхность φ56,55 (малый) и φ80 js6 ... (большой)." —
+    unlike _CALLOUT_PROMPT's one-value-per-dimensions[]-entry answer. Naively
+    wrapping the whole bullet as one entry would lose the second diameter,
+    since _callout_numbers's diameter branch only reads the first number
+    after the mark in an item."""
+    from app.ai.cad_recognize.spec_fragments import (
+        _callout_numbers,
+        _numbers_from_free_text,
+    )
+
+    text = (
+        "Коническая поверхность с конусностью 7:24; диаметры конуса "
+        "φ56,55 (малый) и φ80 js6 (+0,0095 / −0,0095) (большой)."
+    )
+    entries = _numbers_from_free_text(text)
+    callouts = {"dimensions": [{"value": entry} for entry in entries]}
+
+    diameters = set(_callout_numbers(callouts, "diameter"))
+    assert {56.55, 80.0} <= diameters
+
+
+def test_free_text_reads_a_bare_fit_code():
+    from app.ai.cad_recognize.spec_fragments import (
+        _callout_numbers,
+        _numbers_from_free_text,
+    )
+
+    text = "Наружный диаметр φ102 h6. Резьба на торце: M75×1,5. Участок 50h7."
+    entries = _numbers_from_free_text(text)
+    callouts = {"dimensions": [{"value": entry} for entry in entries]}
+
+    diameters = set(_callout_numbers(callouts, "diameter"))
+    assert {102.0, 50.0} <= diameters
+
+
+def test_free_text_does_not_derive_a_diameter_from_a_thread_nominal():
+    """Live-verified 2026-08-15 on the spindle sheet: deriving a synthetic
+    Ø54,5 candidate from "M54,5x2" (an INTERNAL thread's nominal diameter)
+    put it 0.9% from the sheet's real Ø55 bore step. Two candidates that
+    close made ``_contour_bore_observations``'s per-pixel "nearest known
+    value" snap oscillate between them, fragmenting one confirmable Ø55/25mm
+    bore plateau into zero bore sections — turning a correctly-readable
+    sheet into an emptied-out one. A thread's nominal is by definition close
+    to its shaft/hole's real diameter, so deriving one from the other is
+    exactly the mechanism most likely to create this collision; the token
+    must survive as text (thread-carrier matching still wants it) without
+    also becoming a second, almost-identical diameter candidate."""
+    from app.ai.cad_recognize.spec_fragments import (
+        _callout_numbers,
+        _numbers_from_free_text,
+    )
+
+    text = "Резьба M54,5×2 на правом торце, глубина 25."
+    entries = _numbers_from_free_text(text)
+    callouts = {"dimensions": [{"value": entry} for entry in entries]}
+
+    assert 54.5 not in set(_callout_numbers(callouts, "diameter"))
+    # The designation itself is not lost — it travels as part of its line.
+    assert any("54,5" in entry or "54.5" in entry for entry in entries)
+
+
+def test_free_text_keeps_noise_words_so_existing_filters_still_apply():
+    """A bare number extracted without its sentence would defeat
+    _callout_numbers's own noise filters (HRC ranges, hole/chamfer counts,
+    angles) — those key on words like "отв."/"фасок"/"HRC" that only exist
+    if the line survives whole, not as an isolated digit."""
+    from app.ai.cad_recognize.spec_fragments import (
+        _callout_numbers,
+        _numbers_from_free_text,
+    )
+
+    text = "Твёрдость HRC 58...62. 6 фасок на торце. 12 отв. φ4 по окружности."
+    entries = _numbers_from_free_text(text)
+    callouts = {"dimensions": [{"value": entry} for entry in entries]}
+
+    lengths = set(_callout_numbers(callouts, "linear"))
+    assert 6.0 not in lengths
+    assert 12.0 not in lengths
+    assert 58.0 not in lengths
+
+
+def test_free_text_drops_gost_reference_numbers():
+    from app.ai.cad_recognize.spec_fragments import _numbers_from_free_text
+
+    text = "Материал: сталь 55, ГОСТ 1050-2013. Общая длина 470 мм."
+    entries = _numbers_from_free_text(text)
+
+    joined = " ".join(entries)
+    assert "1050" not in joined
+    assert "2013" not in joined
+    assert "470" in joined
