@@ -329,6 +329,74 @@ async def test_incomplete_grouped_chamfer_selection_stays_blocked(monkeypatch):
     assert audit["status"] == "ambiguous_source"
 
 
+@pytest.mark.asyncio
+async def test_grouped_chamfer_declines_a_shoulder_too_thin_for_both_sides(
+    monkeypatch,
+):
+    """Live-found on a real spindle sheet: a 2mm-tall step (Ø102->Ø98, radial
+    step (102-98)/2=2mm) had BOTH its edges selected by the group-callout
+    reader, each asked to carry the same 1.6mm exemplar chamfer — together
+    they need >=3.2mm of material that is not there. OpenCascade rejected
+    the second one outright (StdFail_NotDone) and the whole part failed to
+    build over it. The narrower side must be declined here, before either
+    edge ever reaches the kernel, rather than emitting a feature doomed to
+    fail — the sheet's own no-invented-data rule for anything unconfirmed."""
+
+    async def fake_ask(*_args, **_kwargs):
+        return {"candidate_ids": ["outer-z14-d102", "outer-z14-d98"]}
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    localized = [{"size_mm": 1.6, "angle_deg": 45, "location": "shoulder"}]
+    resolved, audit = await _resolve_grouped_chamfers(
+        object(),
+        {"dimensions": [{"value": "2 фаски 1,6×45°"}]},
+        localized,
+        [
+            {"diameter_mm": 102, "length_mm": 14},
+            {"diameter_mm": 98, "length_mm": 13},
+            {"diameter_mm": 80, "length_mm": 344},
+        ],
+        [],
+        router=object(),
+        confidential=True,
+        audit=[],
+    )
+
+    assert resolved == localized
+    assert audit["status"] == "declined_insufficient_clearance"
+    assert audit["declined_for_fit"] == ["outer-z14-d98"]
+
+
+@pytest.mark.asyncio
+async def test_grouped_chamfer_keeps_both_sides_of_a_tall_enough_shoulder(
+    monkeypatch,
+):
+    async def fake_ask(*_args, **_kwargs):
+        return {"candidate_ids": ["outer-z10-d100", "outer-z10-d80"]}
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    localized = [{"size_mm": 1.6, "angle_deg": 45, "location": "shoulder"}]
+    resolved, audit = await _resolve_grouped_chamfers(
+        object(),
+        {"dimensions": [{"value": "2 фаски 1,6×45°"}]},
+        localized,
+        [
+            {"diameter_mm": 100, "length_mm": 10},
+            {"diameter_mm": 80, "length_mm": 30},
+        ],
+        [],
+        router=object(),
+        confidential=True,
+        audit=[],
+    )
+
+    assert audit["status"] == "resolved"
+    assert [(item["at_z_mm"], item["at_diameter_mm"]) for item in resolved] == [
+        (10.0, 100.0),
+        (10.0, 80.0),
+    ]
+
+
 def test_metric_nominal_is_parsed_from_partial_axial_thread_designation():
     raw = _coerce_spec_containers({
         "main_view": {

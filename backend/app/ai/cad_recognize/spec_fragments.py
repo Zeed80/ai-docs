@@ -2496,8 +2496,50 @@ async def _resolve_grouped_chamfers(
         }
 
     exemplar = localized[0] if localized else {"size_mm": 1.0, "angle_deg": 45.0}
+    exemplar_size = _num(exemplar.get("size_mm")) or 1.0
+
+    # _chamfer_edge_candidates offers BOTH edges of a shoulder independently,
+    # and the VLM here is only confirming which edges show a visible diagonal
+    # — it is never asked whether the (uniform, from a single already-read
+    # exemplar) size actually fits. Live-found on a real spindle: a 2mm-tall
+    # step (Ø102->Ø98) had both its edges selected, and two 1.6mm chamfers
+    # together need >=3.2mm of material that is not there — OpenCascade
+    # rejects the second one outright (StdFail_NotDone), and by then the
+    # whole part is built around a feature that was always going to fail.
+    # This reader's rule for anything it cannot confirm is to decline it, not
+    # invent a smaller size never stated on the sheet — so an edge whose
+    # shoulder cannot fit the exemplar size on both sides loses its narrower
+    # (typically less prominent) side here, before it ever reaches the kernel.
+    by_z: dict[float, list[dict]] = {}
+    for item in valid:
+        if item["profile"] == "outer" and item["location"] == "shoulder":
+            by_z.setdefault(round(item["at_z_mm"], 3), []).append(item)
+    declined_ids: set[str] = set()
+    for group in by_z.values():
+        if len(group) < 2:
+            continue
+        diameters = sorted(float(g["at_diameter_mm"]) for g in group)
+        step_height_mm = (diameters[-1] - diameters[0]) / 2.0
+        if exemplar_size * len(group) > step_height_mm:
+            keep = max(group, key=lambda g: g["at_diameter_mm"])
+            declined_ids.update(g["id"] for g in group if g is not keep)
+    if declined_ids:
+        valid = [item for item in valid if item["id"] not in declined_ids]
+
+    if declined_ids and len(valid) != expected:
+        # Fewer edges fit than the sheet's stated count — say so rather than
+        # silently build a part with fewer chamfers than it calls out.
+        return localized, {
+            "status": "declined_insufficient_clearance",
+            "expected": expected,
+            "candidate_count": len(candidates),
+            "model_selected": selected_ids,
+            "declined_for_fit": sorted(declined_ids),
+            "accepted": [],
+        }
+
     resolved = [{
-        "size_mm": _num(exemplar.get("size_mm")) or 1.0,
+        "size_mm": exemplar_size,
         "angle_deg": _num(exemplar.get("angle_deg")) or 45.0,
         "location": item["location"],
         "at_z_mm": item["at_z_mm"],
@@ -2517,6 +2559,7 @@ async def _resolve_grouped_chamfers(
         "candidate_count": len(candidates),
         "model_selected": selected_ids,
         "accepted": resolved_ids,
+        "declined_for_fit": sorted(declined_ids) if declined_ids else [],
     }
 
 
