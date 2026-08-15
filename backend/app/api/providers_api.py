@@ -451,6 +451,30 @@ def _synth_key(provider: str, provider_model: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in raw).strip("_")
 
 
+async def _ollama_show_capabilities(base_url: str, provider_model: str) -> set[str] | None:
+    """Ollama's own ``/api/show`` reports a ``capabilities`` list (e.g.
+    ``["completion","vision","tools","thinking"]``) straight from the GGUF
+    metadata — ground truth, unlike guessing from the model tag. Name-based
+    hints (``_VISION_HINTS``/``_THINK_HINTS`` below) are a fallback for
+    non-Ollama providers and for Ollama versions predating this field; a tag
+    that doesn't match any hint (a new model family, e.g. "qwen3.8") must not
+    silently lose a capability the runtime actually has. Returns ``None`` (not
+    an empty set) on any failure so callers know to fall back, rather than
+    treating "couldn't ask" as "has nothing".
+    """
+    base = base_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(f"{base}/api/show", json={"model": provider_model})
+            resp.raise_for_status()
+            caps = resp.json().get("capabilities")
+    except Exception:
+        return None
+    if not isinstance(caps, list):
+        return None
+    return {str(c) for c in caps}
+
+
 async def _node_loaded_models(resolved) -> list[tuple[str, float | None]]:
     """Return (provider_model, vram_gb|None) for models loaded on a node."""
     base = resolved.base_url.rstrip("/")
@@ -514,6 +538,65 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
             for pm, vram in loaded:
                 bare = pm.split(":")[0]
                 hit = by_pm.get((kind.value, pm)) or by_pm.get((kind.value, bare))
+                existing = hit[1] if hit else registry.models.get(_synth_key(kind.value, pm))
+                # Ollama reports real capabilities (GGUF metadata) — ground truth
+                # over the name-hint guess in `_infer_modalities`/`_infer_thinking`.
+                # A tag that predates every entry in _VISION_HINTS/_THINK_HINTS (a
+                # new model family, e.g. "qwen3.8") would otherwise silently lose
+                # "vision"/"thinking" and never be picked by _first_vision_model()
+                # for any vision task, no matter how it's assigned in Settings. A
+                # manually-curated/verified entry is never touched here — only a
+                # capability_source=="discovered" entry (itself just a guess, or
+                # not yet registered at all) gets corrected/created.
+                if kind == ProviderKind.OLLAMA and (
+                    existing is None or existing.capability_source == "discovered"
+                ):
+                    mods = _infer_modalities(pm)
+                    thinking = _infer_thinking(pm)
+                    real_caps = await _ollama_show_capabilities(inst.base_url, pm)
+                    if real_caps is not None:
+                        mods = {"text"}
+                        if "tools" in real_caps:
+                            mods.add("tool_calling")
+                        if "vision" in real_caps:
+                            mods.add("vision")
+                        if "embedding" in real_caps:
+                            mods = {"embedding"}
+                        thinking = "thinking" in real_caps
+                    stale = existing is not None and (
+                        existing.modalities != {Modality(m) for m in mods}
+                        or existing.thinking_supported != thinking
+                    )
+                    if existing is None or stale:
+                        key = hit[0] if hit else _synth_key(kind.value, pm)
+                        cap = ModelCapability(
+                            name=key, provider=kind, provider_model=pm,
+                            status=existing.status if existing else ModelStatus.CANDIDATE,
+                            modalities={Modality(m) for m in mods},
+                            supports_tool_calling="tool_calling" in mods,
+                            supports_structured_output=True, local_only=True,
+                            thinking_supported=thinking, capability_source="discovered",
+                            vram_gb_estimate=vram,
+                            # A correction to modalities/thinking_supported must not
+                            # reset a UI-set toggle/pin that lives on this same
+                            # capability row — `_load_thinking_overrides()` reapplies
+                            # its own source of truth on every registry load anyway,
+                            # but the persisted overlay row should stay consistent
+                            # with it rather than silently reverting in between.
+                            thinking_enabled=existing.thinking_enabled if existing else False,
+                            preferred_instance=existing.preferred_instance if existing else None,
+                        )
+                        registry.add_model(key, cap, persist=True)
+                        by_pm[(kind.value, pm)] = (key, cap)
+                        discovered_to_persist.append({
+                            "model_key": key,
+                            "provider": kind.value,
+                            "provider_model": pm,
+                            "capability": cap.model_dump(mode="json", exclude={"name"}),
+                            "source": "local_live_discovery",
+                            "verification_status": "discovered",
+                        })
+                        hit = (key, cap)
                 if hit:
                     key, cap = hit
                     seen_keys.add(key)
@@ -525,7 +608,9 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                         vram_gb_estimate=cap.vram_gb_estimate or vram,
                     )
                 else:
-                    # Discovered model — register into the catalog overlay.
+                    # Discovered model on a non-Ollama provider — register into
+                    # the catalog overlay using the name-heuristic guess only
+                    # (no real-capability endpoint to ask, unlike Ollama above).
                     key = _synth_key(kind.value, pm)
                     mods = _infer_modalities(pm)
                     thinking = _infer_thinking(pm)
