@@ -652,6 +652,9 @@ services:
       - /root/comfy/ComfyUI/models/loras:/comfyui-loras
       # Backups produced from the admin GUI (maintenance API) land here.
       - backups_data:/app/backups
+      # agent_config.json and other backend-local runtime state — see the
+      # backend_data volume comment below for why this must not be omitted.
+      - backend_data:/app/data
       # Signed mobile APK + version.json, served publicly at /download (CI/deploy writes here).
       - releases_data:/releases
       # Docker socket — lets backend restart llama-server / vllm-server when activating a new model
@@ -725,6 +728,7 @@ services:
       # container; the ComfyUI node's loras dir for checkpoint deploys.
       - lora_data:/lora-data
       - /root/comfy/ComfyUI/models/loras:/comfyui-loras
+      - backend_data:/app/data
     extra_hosts:
       - "host-gateway:host-gateway"
     depends_on:
@@ -756,6 +760,7 @@ services:
     volumes:
       - ../aiagent:/aiagent:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - backend_data:/app/data
     extra_hosts:
       - "host-gateway:host-gateway"
     depends_on:
@@ -788,6 +793,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Datasets/uploads/run outputs shared with the trainer container.
       - lora_data:/lora-data
+      - backend_data:/app/data
     extra_hosts:
       - "host-gateway:host-gateway"
     depends_on:
@@ -812,6 +818,7 @@ services:
       SKIP_DB_MIGRATE: "1"
     volumes:
       - ../aiagent:/aiagent:ro
+      - backend_data:/app/data
     depends_on:
       redis:
         condition: service_healthy
@@ -989,6 +996,17 @@ volumes:
   releases_data:
   ntfy_data:
   apk_keystore:
+  # app/data: agent_config.json (Redis-first, file fallback — see
+  # app/ai/agent_config.py) and any other backend-local runtime state under
+  # /app/data. Was baked into the container's writable layer, so a rebuild
+  # silently discarded it and the file-fallback read reverted to defaults —
+  # live-caught 2026-08-15 for orchestrator_plan_timeout_seconds. Mounted on
+  # every service running this same image (backend + all celery lanes), not
+  # just backend: any of them can call get_builtin_agent_config()/
+  # save_builtin_agent_config(), and a stale/default file in ONE container
+  # writing back to the shared Redis key would silently undo a setting saved
+  # from another.
+  backend_data:
 
 networks:
   app:
