@@ -42,7 +42,7 @@ def _agent_headers() -> dict:
     return headers
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
-from app.ai.agent_loop import AgentSession
+from app.ai.agent_loop import AgentSession, _execute_skill, _extract_list_count
 from app.ai.audit import (
     CAPABILITY_GAP_CODES,
     AuditCode,
@@ -901,8 +901,11 @@ class AgentOrchestrator:
             if is_spec_table_request(content):
                 self._turn_grounding = "structured"
                 logger.info("grounding_forced_structured", content=content[:80])
-        if decision.intent in ("flow_status", "count"):
+        if decision.intent == "flow_status":
             if await self._answer_flow_status_directly(content, config, turn_started_at):
+                return
+        elif decision.intent == "count":
+            if await self._answer_count_directly(content, config, turn_started_at):
                 return
 
         # Table edit — deterministic patch of the open spec table. The router
@@ -1005,6 +1008,87 @@ class AgentOrchestrator:
             pass
         chips = route_table.chips_for("flow_status", content)
         await self._outer_send({"type": "done", "action_chips": chips})
+        return True
+
+    async def _answer_count_directly(
+        self,
+        content: str,
+        config: BuiltinAgentConfig,
+        turn_started_at: float,
+    ) -> bool:
+        """Secretary front-agent: answer an unambiguous entity-count question
+        ("Сколько счетов?", "Сколько документов?") from one cheap
+        ``list?limit=1`` call — 0 planner/worker LLM calls.
+
+        Distinct from ``_answer_flow_status_directly``: that one always
+        renders the fixed 5-metric dashboard snapshot (pending approvals,
+        needs_review, anomalies, quarantine, unread mail), which answers a
+        different question than "how many invoices/documents/suppliers are
+        there" — it used to intercept *both* intents and reply with the
+        snapshot regardless of what was actually asked. Returns False for
+        anything ``match_fast_intent`` does not recognise (ambiguous entity,
+        no matching capability) so the normal planner/worker path still
+        handles it with real tool calls.
+        """
+        intent = route_table.match_fast_intent(content)
+        if intent is None:
+            return False
+        skill = self._executor._skill_map.get(intent.capability)
+        if not skill:
+            return False  # capability not exposed / registry mode → defer to LLM
+
+        from app.ai.result_cache import cache_get, cache_set
+        cache_key = f"{intent.capability}:{intent.action}:{intent.search_term or ''}"
+        answer = cache_get(cache_key)
+        if answer is None:
+            result = await _execute_skill(skill, intent.args, config)
+            if isinstance(result, dict) and result.get("error"):
+                return False  # never answer with a wrong count on error — defer to LLM
+            total = _extract_list_count(result)
+            if intent.capability == "warehouse":
+                answer = f"{intent.entity_label[:1].upper()}{intent.entity_label[1:]}: {total}."
+            else:
+                answer = f"Всего {intent.entity_label}: {total}."
+            cache_set(cache_key, answer)
+
+        await self._outer_send({
+            "type": "orchestrator.status",
+            "content": "Секретарь: считаю напрямую из данных.",
+            "plan_source": "direct",
+            "degraded": False,
+        })
+        await self._outer_send({
+            "type": "worker.assigned",
+            "content": "Исполнитель: secretary (прямой ответ, без LLM).",
+            "role": "secretary",
+            "skills": [],
+        })
+        await self._outer_send({"type": "text", "content": answer})
+        try:
+            self._executor.record_external_turn(content, answer)
+        except Exception as exc:
+            log_degraded("orchestrator.count_record_turn", exc)
+
+        duration_ms = int((time.time() - turn_started_at) * 1000)
+        logger.info(
+            "agent_turn_complete",
+            intent="count",
+            plan_source="direct",
+            tools_called=[intent.capability],
+            tool_count=1,
+            audit_passed=True,
+            retries=0,
+            llm_calls=0,
+            aux_llm_calls=0,
+            duration_ms=duration_ms,
+        )
+        try:
+            from app.core.metrics import agent_turn_duration_seconds, agent_turns_total
+            agent_turns_total.labels(outcome="success").inc()
+            agent_turn_duration_seconds.observe(duration_ms / 1000)
+        except Exception:
+            pass
+        await self._outer_send({"type": "done", "action_chips": []})
         return True
 
     async def _try_spec_table_patch_directly(
