@@ -263,7 +263,8 @@ class AIRouter:
 
         import time as _time
 
-        for model_name in [name for name in candidates if name]:
+        filtered_candidates = [name for name in candidates if name]
+        for model_name in filtered_candidates:
             # An unknown/unresolvable candidate (e.g. an agent slot pointing at a
             # model no longer in the catalog) must not abort the whole turn — skip
             # to the next configured candidate. Confidentiality policy errors are
@@ -302,6 +303,29 @@ class AIRouter:
                 response = await self._dispatch(provider, request, model)
                 response = self._validate_structured_output(request, response)
                 response.proposed_tool_calls = self._filter_tool_calls(request, response)
+                # Reranking providers deliberately return scores=[] instead of
+                # raising when a model technically responds but can't produce a
+                # real relevance signal (e.g. a reranker GGUF whose /api/embed
+                # yields an all-zero vector on some Ollama builds — see
+                # OllamaProvider.rerank). Treated as success that response would
+                # short-circuit the whole fallback_chain on the very first
+                # candidate, silently disabling reranking everywhere even though
+                # later candidates in the chain work fine. Fall through instead,
+                # same as any other failed candidate; only give up and return
+                # the empty response once every candidate has been tried.
+                if (
+                    request.task == AITask.RERANKING
+                    and not response.scores
+                    and (request.metadata or {}).get("documents")
+                ):
+                    last_error = None
+                    logger.warning(
+                        "ai_route_reranker_empty_scores",
+                        task=request.task.value,
+                        model=model_name,
+                    )
+                    if model_name != filtered_candidates[-1]:
+                        continue
                 self._record_telemetry(request, model, started, ok=True, response=response)
                 return response
             except Exception as exc:

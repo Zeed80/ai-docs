@@ -17,6 +17,7 @@ class InvoiceLineOut(BaseModel):
     unit: str | None
     unit_price: float | None
     amount: float | None
+    pre_discount_amount: float | None = None
     tax_rate: float | None
     tax_amount: float | None
     weight: float | None = None
@@ -34,6 +35,7 @@ class InvoiceLineUpdate(BaseModel):
     unit: str | None = None
     unit_price: float | None = None
     amount: float | None = None
+    pre_discount_amount: float | None = None
     tax_rate: float | None = None
     tax_amount: float | None = None
 

@@ -129,6 +129,7 @@ Do NOT mix up supplier INN/KPP with buyer INN/KPP.
       "unit": "<ед. изм. or null>",
       "unit_price": <float or null>,
       "amount": <float without НДС, or null>,
+      "pre_discount_amount": <float — the "Сумма без скидки" column value, ONLY when the table has a separate "Скидка" discount column; null when there is no discount column at all (do NOT invent a value)>,
       "tax_rate": <0.2 for НДС 20%, 0.1 for 10%, 0.0 for without НДС, or null>,
       "tax_amount": <float НДС amount or null>,
       "weight": <float кг per line or null>
@@ -161,7 +162,9 @@ Some Russian invoices have a "Скидка" (discount) column. The table may be:
   № | Товар | Кол-во | Цена | Сумма без скидки | Скидка | Ставка НДС | Сумма НДС | Сумма
 In this case:
 - "amount" for each line = the FINAL "Сумма" column (post-discount), NOT "Сумма без скидки"
+- "pre_discount_amount" for each line = the "Сумма без скидки" column value — capture it too, don't just discard it
 - The "Итого" row also has multiple columns — use the final "Сумма" total, NOT the "Сумма без скидки" total
+- No discount column at all → leave "pre_discount_amount" null for every line, do not compute or guess one
 
 === VAT CONVENTIONS ===
 Two Russian invoice formats exist:
@@ -204,6 +207,7 @@ DO NOT confuse "Сч. №" (bank account, 20 digits) with the invoice number.
 === STEP 2: Read the Table ===
 If the table has: № | Товар | Кол-во | Цена | Сумма без скидки | Скидка | Сумма НДС | Сумма
 → "amount" per line = the LAST "Сумма" column (post-discount), NOT "Сумма без скидки"
+→ "pre_discount_amount" per line = the "Сумма без скидки" column value; null if there is no discount column
 
 === STEP 3: Find Totals ===
 - "Итого без НДС" → subtotal
@@ -236,6 +240,7 @@ Return ONLY valid JSON:
       "unit": "<string>",
       "unit_price": 0.0,
       "amount": 0.0,
+      "pre_discount_amount": null,
       "tax_rate": 0.2,
       "tax_amount": 0.0
     }}

@@ -296,22 +296,57 @@ def validate_arithmetic(extracted: dict) -> list[dict]:
     tax_amount = extracted.get("tax_amount")
     total_amount = extracted.get("total_amount")
 
-    # Check each line: quantity × unit_price ≈ amount
+    # Discount-invoice pattern, detected up front: on invoices with a separate
+    # "Скидка" column, qty×price legitimately exceeds the final (post-discount)
+    # "amount" on most/all lines — by design, per the extraction prompt (see
+    # extraction_prompts.py). Without this, every discounted line got flagged
+    # as an arithmetic ERROR even though nothing was extracted wrong, tanking
+    # field confidence and pushing correctly-extracted invoices into
+    # needs_review. Require the pattern to be systematic (>=2 lines short of
+    # qty×price — a single short line is more likely a genuine mistake) AND
+    # the totals to independently reconcile, so a real one-off extraction
+    # error on an otherwise normal invoice still gets flagged as before.
+    discounted_lines = 0
+    for line in lines:
+        qty, price, amount = line.get("quantity"), line.get("unit_price"), line.get("amount")
+        if qty is not None and price is not None and amount is not None:
+            if round(qty * price, 2) - amount > 0.5:
+                discounted_lines += 1
+    _line_sum_precheck = sum(l.get("amount", 0) or 0 for l in lines) if lines else 0.0
+    _totals_reconcile = (
+        subtotal is not None and tax_amount is not None and total_amount is not None
+        and rv.arith_total_ok(subtotal, tax_amount, total_amount)
+    )
+    _lines_match_subtotal = (
+        subtotal is not None and lines
+        and abs(_line_sum_precheck - subtotal) <= max(1.0, 0.01 * abs(subtotal))
+    )
+    discount_pattern = discounted_lines >= 2 and _totals_reconcile and _lines_match_subtotal
+
+    # Check each line: quantity × unit_price ≈ amount — or, when the model
+    # also reported the raw pre-discount source figure, ≈ pre_discount_amount
+    # (still a real check, just against the column that quantity × price is
+    # actually supposed to reconcile with).
     for line in lines:
         qty = line.get("quantity")
         price = line.get("unit_price")
         amount = line.get("amount")
-        if qty is not None and price is not None and amount is not None:
-            expected = round(qty * price, 2)
-            if abs(expected - amount) > 0.5:
-                errors.append({
-                    "field": f"line_{line.get('line_number', '?')}.amount",
-                    "error_type": "arithmetic",
-                    "message": f"Line amount mismatch: {qty} × {price} = {expected}, got {amount}",
-                    "expected": str(expected),
-                    "actual": str(amount),
-                    "severity": "error",
-                })
+        pre_discount = line.get("pre_discount_amount")
+        if qty is None or price is None or amount is None:
+            continue
+        expected = round(qty * price, 2)
+        target = pre_discount if pre_discount is not None else amount
+        if abs(expected - target) > 0.5:
+            if pre_discount is None and discount_pattern:
+                continue  # expected: post-discount amount ≠ qty × price by design
+            errors.append({
+                "field": f"line_{line.get('line_number', '?')}.amount",
+                "error_type": "arithmetic",
+                "message": f"Line amount mismatch: {qty} × {price} = {expected}, got {target}",
+                "expected": str(expected),
+                "actual": str(target),
+                "severity": "error",
+            })
 
     # Check line amounts sum ≈ subtotal (net lines) OR ≈ total (VAT-inclusive
     # lines) — both conventions occur on real Russian invoices.
