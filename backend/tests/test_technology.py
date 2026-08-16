@@ -200,3 +200,57 @@ async def test_reject_learning_rule(client: AsyncClient):
     data = rejected.json()
     assert data["status"] == "rejected"
     assert data["metadata"]["rejected_by"] == "tester"
+
+
+@pytest.mark.asyncio
+async def test_reflect_learning_rule_creates_proposed_then_activates(client: AsyncClient):
+    """Reflection loop: first occurrence is a proposed rule; a repeat of the
+    same (entity_type, field_name) reinforces it and self-promotes to active
+    at activate_after, mirroring recipes.py's draft->active lifecycle."""
+    payload = {
+        "entity_type": "agent_turn",
+        "field_name": "workspace_not_published",
+        "lesson": "Публикуй результат на Рабочий стол сразу с первого хода.",
+        "trigger_keywords": ["счет"],
+        "activate_after": 2,
+    }
+
+    first = await client.post("/api/technology/learning-rules/reflect", json=payload)
+    assert first.status_code == 200
+    data = first.json()
+    assert data["rule_type"] == "behavior"
+    assert data["status"] == "proposed"
+    assert data["occurrences"] == 1
+    rule_id = data["id"]
+
+    second = await client.post("/api/technology/learning-rules/reflect", json={
+        **payload,
+        "trigger_keywords": ["товар"],  # merged with the first call's keywords, not replaced
+    })
+    assert second.status_code == 200
+    data2 = second.json()
+    # Same row reinforced, not a duplicate.
+    assert data2["id"] == rule_id
+    assert data2["occurrences"] == 2
+    assert data2["status"] == "active"
+    assert data2["activated_by"] == "reflection_loop"
+    assert set(data2["metadata"]["trigger_keywords"]) == {"счет", "товар"}
+
+
+@pytest.mark.asyncio
+async def test_reflect_learning_rule_distinct_field_name_is_separate_row(client: AsyncClient):
+    """Different AuditCode (field_name) never merges into another lesson's row."""
+    a = await client.post("/api/technology/learning-rules/reflect", json={
+        "entity_type": "agent_turn",
+        "field_name": "filter_missing",
+        "lesson": "Передавай все фильтры из запроса.",
+    })
+    b = await client.post("/api/technology/learning-rules/reflect", json={
+        "entity_type": "agent_turn",
+        "field_name": "empty_answer",
+        "lesson": "Не возвращай пустой ответ.",
+    })
+    assert a.status_code == 200 and b.status_code == 200
+    assert a.json()["id"] != b.json()["id"]
+    assert a.json()["occurrences"] == 1
+    assert b.json()["occurrences"] == 1
