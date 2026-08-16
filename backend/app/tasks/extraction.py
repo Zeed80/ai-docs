@@ -2012,6 +2012,7 @@ def process_approved_document(self, document_id: str) -> dict:
                     unit=line_data.get("unit"),
                     unit_price=line_data.get("unit_price"),
                     amount=line_data.get("amount"),
+                    pre_discount_amount=line_data.get("pre_discount_amount"),
                     tax_rate=line_data.get("tax_rate"),
                     tax_amount=line_data.get("tax_amount"),
                     weight=line_data.get("weight"),

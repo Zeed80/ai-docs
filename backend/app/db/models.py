@@ -943,6 +943,12 @@ class InvoiceLine(UUIDPrimaryKey, Base):
     unit: Mapped[str | None] = mapped_column(String(50))
     unit_price: Mapped[float | None] = mapped_column(Float)
     amount: Mapped[float | None] = mapped_column(Float)
+    # Pre-discount line total ("Сумма без скидки"), when the source invoice has
+    # a separate "Скидка" column. `amount` always holds the FINAL post-discount
+    # total (what's actually owed); this column preserves the raw gross figure
+    # so the discount itself (amount = pre_discount_amount - amount) isn't
+    # silently lost — null when the invoice has no discount column at all.
+    pre_discount_amount: Mapped[float | None] = mapped_column(Float)
     tax_rate: Mapped[float | None] = mapped_column(Float)
     tax_amount: Mapped[float | None] = mapped_column(Float)
     weight: Mapped[float | None] = mapped_column(Float)

@@ -172,8 +172,14 @@ def _build_excel(invoice: Invoice) -> BytesIO:
     ws["A5"] = "Валюта"
     ws["B5"] = invoice.currency
 
-    # Column headers
+    # Column headers. "Сумма без скидки" is appended at the end (not inserted
+    # next to "Сумма", to avoid renumbering the totals-row columns below) and
+    # only when at least one line actually has a discount, so a plain invoice
+    # without a "Скидка" column doesn't get a clutter column of blanks.
+    has_discount = any(line.pre_discount_amount is not None for line in invoice.lines)
     headers = ["№", "Наименование", "Кол-во", "Ед.изм", "Цена", "Сумма", "НДС %", "НДС сумма"]
+    if has_discount:
+        headers.append("Сумма без скидки")
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=7, column=col, value=h)
         cell.font = header_font
@@ -190,6 +196,8 @@ def _build_excel(invoice: Invoice) -> BytesIO:
         ws.cell(row=row_idx, column=6, value=line.amount)
         ws.cell(row=row_idx, column=7, value=line.tax_rate)
         ws.cell(row=row_idx, column=8, value=line.tax_amount)
+        if has_discount:
+            ws.cell(row=row_idx, column=9, value=line.pre_discount_amount)
 
     # Totals
     last_row = 8 + len(invoice.lines)

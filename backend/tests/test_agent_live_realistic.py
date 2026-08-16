@@ -153,27 +153,39 @@ async def test_memory_is_saved_after_turn():
     """Проверяет fix #1+#2: /api/memory/chat-turn больше не даёт 403.
 
     После хода агента запись появляется в памяти через /api/memory/search.
+
+    Использует scope="session" + session_id — как реально делает
+    MemoryManager.sync_turn/prefetch (agent_loop.py). scope="project" без
+    metadata.trusted/promoted тихо демоутится сервером в "session"
+    (_normalize_chat_turn_scope — намеренная политика: сырые ходы не
+    засоряют project-память), а поиск без scope/session_id смотрит только
+    project/global — раньше тест писал в project, а искал вслепую и не
+    находил ничего, хотя реальный round-trip агента работает.
     """
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
     unique_marker = f"тест_памяти_{int(time.time())}"
+    session_id = f"test-memory-session-{int(time.time())}"
 
     async with _http() as cli:
         # Прямой POST в память с агентским ключом (проверяем что auth работает)
         resp = await cli.post("/api/memory/chat-turn", json={
             "user_text": f"Запомни: {unique_marker}",
             "assistant_text": "Запомнила, маркер сохранён.",
-            "scope": "project",
+            "scope": "session",
+            "session_id": session_id,
         })
         assert resp.status_code == 200, f"chat-turn 403 или другая ошибка: {resp.text}"
         fact_id = resp.json()["id"]
 
-        # Через поиск должны найти сохранённый факт (sql — без reranker, быстро)
+        # Через поиск должны найти сохранённый факт (та же session-область,
+        # что и sync_turn — иначе фильтр по scope его не увидит).
         search = await cli.post("/api/memory/search", json={
             "query": unique_marker,
             "limit": 5,
-            "retrieval_mode": "sql",
+            "scope": "session",
+            "session_id": session_id,
         })
         assert search.status_code == 200, search.text
         hits = search.json().get("hits", [])
