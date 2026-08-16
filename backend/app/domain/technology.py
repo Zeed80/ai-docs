@@ -214,6 +214,19 @@ class LearningSuggestionResponse(BaseModel):
     total: int
 
 
+class LearningRuleReflectRequest(BaseModel):
+    """Reflection loop: a behavioural lesson learned from a self-corrected
+    agent turn (orchestrator._maybe_record_reflection_lesson). Idempotent by
+    (rule_type='behavior', entity_type, field_name) — repeated occurrences
+    reinforce the existing rule rather than creating duplicates."""
+
+    entity_type: str = Field(..., min_length=1, max_length=80)
+    field_name: str = Field(..., min_length=1, max_length=120)
+    lesson: str = Field(..., min_length=1)
+    trigger_keywords: list[str] = Field(default_factory=list)
+    activate_after: int = Field(2, ge=1, le=20)
+
+
 class LearningRuleCreate(BaseModel):
     rule_type: str = "normalization_rule"
     entity_type: str = Field(..., min_length=1, max_length=80)

@@ -45,6 +45,7 @@ from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.agent_loop import AgentSession, _execute_skill, _extract_list_count
 from app.ai.audit import (
     CAPABILITY_GAP_CODES,
+    RETRYABLE,
     AuditCode,
     AuditIssue,
     blocking as _blocking_issues,
@@ -627,6 +628,9 @@ class AgentOrchestrator:
         ):
             await self._reconcile_spec_table(content, config)
         audit = await self._audit_turn(plan, config)
+        # Snapshot before any retry mutates `audit` — the reflection loop
+        # needs to know what was WRONG originally to credit a later fix.
+        _original_audit_issues = list(audit.issues)
         retry_count = 0
         while (
             not audit.passed
@@ -677,6 +681,9 @@ class AgentOrchestrator:
         )
         # Self-learning: a clean multi-step turn becomes a draft recipe.
         self._maybe_record_recipe(content, plan, audit)
+        # Reflection loop: a retry that actually fixed the turn becomes a
+        # behavioural lesson for future similar mistakes.
+        self._maybe_record_reflection_lesson(_original_audit_issues, audit, retry_count, config)
 
         # Structured agent trace log — every turn execution logged with full detail
         duration_ms = int((time.time() - turn_started_at) * 1000)
@@ -1586,6 +1593,61 @@ class AgentOrchestrator:
             asyncio.get_event_loop().create_task(_record())
         except Exception as exc:
             log_degraded("orchestrator.recipe_record", exc)
+
+    def _maybe_record_reflection_lesson(
+        self,
+        original_issues: list[AuditIssue],
+        final_audit: AuditReport,
+        retry_count: int,
+        config: BuiltinAgentConfig,
+    ) -> None:
+        """Reflection loop: a correction that actually fixed the turn becomes
+        a short behavioural lesson, surfaced on future similar turns by
+        agent_loop._inject_learning_rules (system-prompt injection, already
+        battle-tested for nomenclature rules — this just adds a writer for
+        rule_type="behavior" grounded in a *confirmed* self-correction rather
+        than requiring a human to author one by hand).
+
+        Fires only when a retry was needed AND it demonstrably worked — a
+        first-try success has no lesson to teach, and a code that's still
+        present after retries has no confirmed fix to teach either (nothing
+        is recorded for those; a still-failing turn already surfaces via the
+        capability-gap path instead).
+        """
+        if retry_count <= 0 or not final_audit.passed or not original_issues:
+            return
+        still_present = {issue.code for issue in final_audit.issues}
+        fixed_codes = {
+            issue.code for issue in original_issues
+            if issue.code in RETRYABLE and issue.code not in still_present
+        }
+        lessons = [
+            (code, _REFLECTION_LESSONS[code]) for code in fixed_codes
+            if code in _REFLECTION_LESSONS
+        ]
+        if not lessons:
+            return
+
+        async def _reflect() -> None:
+            try:
+                async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+                    for code, lesson in lessons:
+                        await client.post(
+                            f"{config.backend_url.rstrip('/')}/api/technology/learning-rules/reflect",
+                            json={
+                                "entity_type": "agent_turn",
+                                "field_name": code.value,
+                                "lesson": lesson,
+                            },
+                            headers=_agent_headers(),
+                        )
+            except Exception as exc:
+                log_degraded("orchestrator.reflection_record", exc)
+
+        try:
+            asyncio.get_event_loop().create_task(_reflect())
+        except Exception as exc:
+            log_degraded("orchestrator.reflection_record", exc)
 
     async def _plan_turn_with_model(
         self,
@@ -3277,6 +3339,41 @@ def risk_class(plan: OrchestratorPlan) -> str:
         return "gated"
     return "cheap"
 
+
+# Reflection loop (see Orchestrator._maybe_record_reflection_lesson): generic,
+# domain-independent phrasing per retryable AuditCode — deliberately not
+# parameterized by the specific plan/turn, so the lesson generalises to future
+# similar mistakes rather than repeating this one turn's details.
+_REFLECTION_LESSONS: dict[AuditCode, str] = {
+    AuditCode.WORKSPACE_NOT_PUBLISHED: (
+        "Если результат — таблица, список или файл, публикуй его на Рабочий "
+        "стол через workspace.*-инструмент сразу с первого хода, а не только "
+        "текстом в чат."
+    ),
+    AuditCode.CHAT_TABLE_LEAK: (
+        "Не выводи markdown-таблицу прямо в чат — публикуй её на Рабочий "
+        "стол через workspace.*-инструмент, в чат — только краткое резюме."
+    ),
+    AuditCode.FILTER_MISSING: (
+        "Передавай инструменту ВСЕ фильтры, которые упомянул пользователь "
+        "(поставщик, статус, период и т.д.) — не сокращай условия запроса."
+    ),
+    AuditCode.FILTER_MISMATCH: (
+        "Значение фильтра, которое передаётся инструменту, должно точно "
+        "совпадать с тем, что просил пользователь, а не с похожим или "
+        "дефолтным значением."
+    ),
+    AuditCode.EMPTY_ANSWER: (
+        "Не возвращай пустой ответ: если данных нет — скажи об этом прямо; "
+        "если инструмент не сработал — попробуй другой из рекомендованных, "
+        "не молчи."
+    ),
+    AuditCode.INTENT_MISMATCH: (
+        "Перед публикацией сверяй, что артефакт (таблица/файл) реально "
+        "отвечает на ТЕКУЩИЙ запрос — не переиспользуй результат прошлого "
+        "хода по инерции."
+    ),
+}
 
 # Vague references that signal the gated action's target is unclear.
 _VAGUE_REFS = ("ему", "им", "ей", "его", "её", "это", "этот", "этому", "тому",

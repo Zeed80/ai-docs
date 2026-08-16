@@ -62,6 +62,7 @@ from app.domain.technology import (
     LearningRuleCreate,
     LearningRuleListResponse,
     LearningRuleOut,
+    LearningRuleReflectRequest,
     LearningRuleRejectRequest,
     NormEstimateApproveRequest,
     NormEstimateCreate,
@@ -908,6 +909,81 @@ async def create_learning_rule(
         entity_type="technology_learning_rule",
         entity_id=rule.id,
         details={"entity_type": rule.entity_type, "field_name": rule.field_name},
+    )
+    await db.commit()
+    await db.refresh(rule)
+    return rule
+
+
+@router.post("/learning-rules/reflect", response_model=LearningRuleOut)
+async def reflect_learning_rule(
+    payload: LearningRuleReflectRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: tech.learning_rule_reflect — internal, not agent-exposed.
+
+    Reflection loop: the orchestrator calls this after a turn that needed a
+    retry AND the retry actually fixed it (see
+    orchestrator._maybe_record_reflection_lesson) — one call per confirmed
+    fix. Idempotent by (rule_type='behavior', entity_type, field_name): the
+    first occurrence creates a proposed rule; each repeat reinforces it
+    (occurrences++, trigger_keywords merged) and self-promotes to active once
+    `activate_after` confirmations are reached — mirrors the recipe
+    self-learning draft-to-active lifecycle (recipes.py: _ACTIVATE_AFTER), so
+    a single fluke retry can't pollute the system prompt, but a genuinely
+    repeated pattern gets acted on without waiting for a human to click
+    "activate". Active rules are what _inject_learning_rules (agent_loop.py)
+    surfaces to the worker on future similar turns.
+    """
+    existing = (
+        await db.execute(
+            select(TechnologyLearningRule).where(
+                TechnologyLearningRule.rule_type == "behavior",
+                TechnologyLearningRule.entity_type == payload.entity_type,
+                TechnologyLearningRule.field_name == payload.field_name,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if existing:
+        existing.occurrences += 1
+        existing.replacement_value = payload.lesson
+        existing.confidence = min(1.0, existing.occurrences / max(payload.activate_after, 1))
+        meta = dict(existing.metadata_ or {})
+        triggers = set(meta.get("trigger_keywords") or [])
+        triggers.update(payload.trigger_keywords)
+        meta["trigger_keywords"] = sorted(triggers)[:20]
+        existing.metadata_ = meta
+        if existing.status == "proposed" and existing.occurrences >= payload.activate_after:
+            existing.status = "active"
+            existing.activated_by = "reflection_loop"
+            existing.activated_at = datetime.now(UTC)
+        rule = existing
+    else:
+        rule = TechnologyLearningRule(
+            rule_type="behavior",
+            entity_type=payload.entity_type,
+            field_name=payload.field_name,
+            replacement_value=payload.lesson,
+            confidence=min(1.0, 1 / max(payload.activate_after, 1)),
+            occurrences=1,
+            status="proposed",
+            suggested_by="reflection_loop",
+            metadata_={"trigger_keywords": payload.trigger_keywords[:20]},
+        )
+        db.add(rule)
+
+    await db.flush()
+    await log_action(
+        db,
+        action="tech.learning_rule_reflect",
+        entity_type="technology_learning_rule",
+        entity_id=rule.id,
+        details={
+            "field_name": rule.field_name,
+            "occurrences": rule.occurrences,
+            "status": rule.status,
+        },
     )
     await db.commit()
     await db.refresh(rule)
