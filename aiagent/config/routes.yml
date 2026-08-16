@@ -431,6 +431,31 @@ routes:
         canvas_id: "agent:invoice-items-grouped"
     skills: ["table.apply_diff", "invoice.list"]
 
+  # Действие над счетами (approval gate), а не просмотр. Должен идти РАНЬШЕ
+  # invoice_list — иначе "утверди все счета на рассмотрении" совпадает с
+  # его маркером "все счет" и уходит в простой показ таблицы (gate не
+  # достигается: invoice.approve вообще не вызывается).
+  - intent: invoice_approve
+    role: invoice_specialist
+    keywords:
+      - "утверди счет"
+      - "утверди все счет"
+      - "утверди этот счет"
+      - "одобри счет"
+      - "одобри все счет"
+      - "согласуй счет"
+      - "согласуй все счет"
+      - "подтверди счет"
+      - "подтверди все счет"
+      - "отклони счет"
+      - "отклони все счет"
+      - "отклоняй счет"
+      - "отклоняй все счет"
+      - "отказать по счет"
+      - "отклонить счет"
+    workspace_required: false
+    skills: ["invoice.list", "invoice.approve", "invoice.reject"]
+
   - intent: invoice_list
     role: invoice_specialist
     keywords:

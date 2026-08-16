@@ -665,6 +665,24 @@ async def _execute_skill(
 
 # ── Ollama client (streaming) ─────────────────────────────────────────────────
 
+def _merge_system_messages(system_prompt: str, messages: list[dict]) -> list[dict]:
+    """Fold any inline ``system``-role entries into one leading system message.
+
+    ``AgentSession.inject_orchestrator_hint`` (and other mid-turn hints) stash
+    their text as a ``system``-role entry inside the rolling ``self.messages``
+    history, appended *after* prior user/assistant turns. Recent Ollama builds
+    (0.32.x+) strictly validate chat-template role ordering and reject the
+    request with ``system message must be at the beginning`` whenever a system
+    message shows up anywhere but index 0 — which broke virtually every
+    worker-dispatched turn. Mirrors the merge `_convert_messages_to_anthropic`
+    already does for the Anthropic path.
+    """
+    extra_system = [m.get("content", "") for m in messages if m.get("role") == "system" and m.get("content")]
+    rest = [m for m in messages if m.get("role") != "system"]
+    merged_prompt = "\n\n".join([system_prompt, *extra_system]) if extra_system else system_prompt
+    return [{"role": "system", "content": merged_prompt}] + rest
+
+
 async def _call_ollama_streaming(
     messages: list[dict],
     tools: list[dict],
@@ -683,7 +701,7 @@ async def _call_ollama_streaming(
         options["num_predict"] = int(max_tokens)
     payload = {
         "model": model,
-        "messages": [{"role": "system", "content": system_prompt}] + messages,
+        "messages": _merge_system_messages(system_prompt, messages),
         "tools": tools,
         "stream": True,
         "options": options,
@@ -903,7 +921,7 @@ async def _call_openai_streaming(
     payload: dict[str, Any] = {
         "model": model,
         "messages": _normalize_openai_messages(
-            [{"role": "system", "content": system_prompt}] + messages
+            _merge_system_messages(system_prompt, messages)
         ),
         "stream": True,
         "temperature": config.temperature,
