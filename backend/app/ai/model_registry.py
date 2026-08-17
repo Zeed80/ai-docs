@@ -50,12 +50,19 @@ def _save_catalog_overlay(overlay: dict[str, dict[str, Any]]) -> None:
 
 
 def _load_thinking_overrides() -> dict[str, dict[str, Any]]:
-    """Return per-model thinking overrides, normalized to ``{enabled, level}``.
+    """Return per-model thinking overrides, normalized to
+    ``{enabled, level, levels}``.
 
-    Legacy entries are a plain ``bool`` (pre-level format); newer entries are
-    ``{"enabled": bool, "level": str|None}``. Both shapes must keep loading
-    forever — this overlay is rehydrated from Postgres on every startup, so
-    old rows never get a backfill pass.
+    Legacy entries are a plain ``bool`` (pre-level format); mid-generation
+    entries are ``{"enabled": bool, "level": str|None}``; current entries
+    add ``"levels": list[str]|None`` — the live-probed/manually-determined
+    reasoning-effort level LIST (distinct from ``level``, the single
+    default-pick). ``levels`` is the mechanism that lets a probe result
+    apply to a ``model_registry.yaml``-defined model too (unlike the
+    catalog overlay, which YAML always wins over) — see
+    ``ModelCapability.thinking_levels_probed`` / the apply-loop below.
+    All shapes must keep loading forever — this overlay is rehydrated from
+    Postgres on every startup, so old rows never get a backfill pass.
     """
     try:
         from app.utils.redis_client import get_sync_redis
@@ -67,19 +74,40 @@ def _load_thinking_overrides() -> dict[str, dict[str, Any]]:
     normalized: dict[str, dict[str, Any]] = {}
     for key, value in data.items():
         if isinstance(value, bool):
-            normalized[key] = {"enabled": value, "level": None}
+            normalized[key] = {"enabled": value, "level": None, "levels": None}
         elif isinstance(value, dict):
-            normalized[key] = {"enabled": bool(value.get("enabled")), "level": value.get("level")}
+            normalized[key] = {
+                "enabled": value.get("enabled"),
+                "level": value.get("level"),
+                "levels": value.get("levels"),
+            }
     return normalized
 
 
-def set_thinking_override(model_key: str, enabled: bool, level: str | None = None) -> None:
-    """Persist a per-model thinking toggle + optional level (applied on every registry load)."""
+def set_thinking_override(
+    model_key: str,
+    enabled: bool | None = None,
+    level: str | None = None,
+    levels: list[str] | None = None,
+) -> None:
+    """Persist per-model thinking-override fields (applied on every registry
+    load). Any of ``enabled``/``level``/``levels`` may be omitted (``None``)
+    to leave that aspect untouched — e.g. the discovery loop's automatic
+    level probe writes only ``levels``, never touching a human's
+    enabled/level choice for the same model.
+    """
     try:
         from app.utils.redis_client import get_sync_redis
 
         overrides = _load_thinking_overrides()
-        overrides[model_key] = {"enabled": bool(enabled), "level": level}
+        current = overrides.get(model_key, {"enabled": None, "level": None, "levels": None})
+        if enabled is not None:
+            current["enabled"] = bool(enabled)
+        if level is not None:
+            current["level"] = level
+        if levels is not None:
+            current["levels"] = levels
+        overrides[model_key] = current
         get_sync_redis().set(_THINKING_OVERLAY_KEY, json.dumps(overrides, ensure_ascii=False))
     except Exception as exc:
         logger.warning("model_thinking_override_write_failed", error=str(exc))
@@ -144,19 +172,34 @@ class ModelRegistry:
             key: ModelCapability(name=key, **value)
             for key, value in raw_models.items()
         }
-        # Apply per-model thinking toggles from the UI (override YAML defaults).
+        # Apply per-model thinking toggles/levels from the UI or the
+        # discovery loop's live probe (override YAML defaults). This is the
+        # ONLY mechanism that can attach a level determination to a
+        # model_registry.yaml-defined entry — the catalog overlay above
+        # (_load_catalog_overlay) uses setdefault, so it can never touch an
+        # already-YAML-defined key; a curated model's levels can only ever
+        # be updated through this override path.
         for key, override in _load_thinking_overrides().items():
-            if key in models:
-                update: dict[str, Any] = {
-                    "thinking_enabled": override["enabled"],
-                    "thinking_supported": True,
-                }
-                # An explicit level override only takes effect if the model
-                # already declares support for it — the UI never lets an
-                # operator pick a level for a model without thinking_levels,
-                # but be defensive in case of stale/hand-edited Redis data.
-                if override.get("level") and override["level"] in models[key].thinking_levels:
-                    update["thinking_level_default"] = override["level"]
+            if key not in models:
+                continue
+            update: dict[str, Any] = {}
+            if override.get("enabled") is not None:
+                update["thinking_enabled"] = bool(override["enabled"])
+                update["thinking_supported"] = True
+            # levels is not None → a determination (positive or negative)
+            # has been made, live-probed or manually curated; None → never
+            # determined via this path, defer to the catalog/YAML value.
+            effective_levels = (
+                override["levels"] if override.get("levels") is not None else models[key].thinking_levels
+            )
+            if override.get("levels") is not None:
+                update["thinking_levels"] = override["levels"]
+                update["thinking_levels_probed"] = True
+            # An explicit default-level pick only takes effect if the model
+            # actually supports it — be defensive against stale/hand-edited data.
+            if override.get("level") and override["level"] in effective_levels:
+                update["thinking_level_default"] = override["level"]
+            if update:
                 models[key] = models[key].model_copy(update=update)
         # Apply per-model node pins from the UI.
         for key, inst in _load_preferred_instances().items():

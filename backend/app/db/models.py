@@ -3498,6 +3498,15 @@ class ModelRuntimeOverride(UUIDPrimaryKey, TimestampMixin, Base):
     model_key: Mapped[str] = mapped_column(String(240), nullable=False)
     thinking_enabled: Mapped[bool | None] = mapped_column(Boolean)
     thinking_level: Mapped[str | None] = mapped_column(String(10))
+    # Determined reasoning-effort levels for this model (live differential
+    # probe or manual curation) — the sole source of truth for whether a
+    # level has ever been DETERMINED, curated or not: NULL = never
+    # determined via this override path (defer to catalog/derivation);
+    # [] = determined, no support; ["low",...] = determined, supported.
+    # This is what lets a probe result apply to a model_registry.yaml
+    # entry too, unlike model_catalog_runtime_entries (which YAML always
+    # wins over via setdefault).
+    thinking_levels: Mapped[list | None] = mapped_column(JSON)
     preferred_instance: Mapped[str | None] = mapped_column(String(150))
     verification_status: Mapped[str] = mapped_column(String(40), nullable=False, default="discovered")
     notes: Mapped[str | None] = mapped_column(Text)

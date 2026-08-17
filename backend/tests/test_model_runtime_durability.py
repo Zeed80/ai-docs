@@ -63,10 +63,29 @@ async def test_model_thinking_override_roundtrip_survives_flush(db_session, capt
     await db_session.commit()
     await store.hydrate_runtime_cache(db_session)
 
-    # {enabled, level} shape — model_registry._load_thinking_overrides() reads
-    # both this and the legacy plain-bool shape defensively.
+    # {enabled, level, levels} shape — model_registry._load_thinking_overrides()
+    # reads this and both legacy shapes defensively. thinking_levels was not
+    # provided in this write, so it stays unset (None).
     overlay = captured_redis[store.THINKING_OVERLAY_KEY]["qwen3_5_9b_ollama"]
-    assert overlay == {"enabled": True, "level": "high"}
+    assert overlay == {"enabled": True, "level": "high", "levels": None}
+
+
+@pytest.mark.asyncio
+async def test_model_thinking_levels_only_override_survives_flush(db_session, captured_redis):
+    """The discovery loop's automatic level probe writes ONLY thinking_levels
+    (never touching a human's enabled/level choice) — the row must still
+    hydrate even though thinking_enabled stays NULL forever.
+    """
+    await store.persist_model_override(
+        db_session,
+        model_key="qwen3_6_35b_apex_ollama",
+        thinking_levels=[],  # a real negative verdict, not "nothing to write"
+    )
+    await db_session.commit()
+    await store.hydrate_runtime_cache(db_session)
+
+    overlay = captured_redis[store.THINKING_OVERLAY_KEY]["qwen3_6_35b_apex_ollama"]
+    assert overlay == {"enabled": None, "level": None, "levels": []}
 
 
 @pytest.mark.asyncio

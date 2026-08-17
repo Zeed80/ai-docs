@@ -626,6 +626,12 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
     # Discovered models to persist once after the scan (race-safe upsert, single
     # commit) — never write/commit per-iteration inside this GET.
     discovered_to_persist: list[dict] = []
+    # Live-probed thinking-level determinations to persist once after the
+    # scan, via the thinking-override path (the only one that can attach a
+    # level result to a model_registry.yaml-defined entry — see
+    # _ollama_probe_thinking_levels and the unified post-`if hit:` check
+    # below, which covers BOTH curated and newly-discovered models).
+    level_overrides_to_persist: list[dict] = []
 
     # 1) Live local nodes.
     local_kinds = [ProviderKind.OLLAMA, ProviderKind.VLLM, ProviderKind.LLAMACPP,
@@ -661,50 +667,26 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                         if "embedding" in real_caps:
                             mods = {"embedding"}
                         thinking = "thinking" in real_caps
-                    # Re-run the (one-time, cached) level probe exactly once per
-                    # model: trip `stale` when thinking is supported but we've
-                    # never determined level support for it yet — otherwise a
-                    # pre-existing catalog entry from before this capability
-                    # existed would never get probed (thinking_supported/
-                    # modalities alone wouldn't flag it stale).
-                    never_probed_levels = (
-                        thinking and existing is not None and not existing.thinking_levels_probed
-                    )
                     stale = existing is not None and (
                         existing.modalities != {Modality(m) for m in mods}
                         or existing.thinking_supported != thinking
-                        or never_probed_levels
                     )
                     if existing is None or stale:
                         key = hit[0] if hit else _synth_key(kind.value, pm)
                         # Level support: a manually curated non-empty
-                        # thinking_levels always survives a discovery pass. A
-                        # never-curated entry first tries the (conservative)
-                        # name-hint guess (gpt-oss); failing that, if thinking
-                        # is actually on, runs the live deterministic
-                        # differential probe (_ollama_probe_thinking_levels) —
-                        # real per-model evidence instead of a guess, cached
-                        # via thinking_levels_probed so it only ever runs once.
+                        # thinking_levels always survives a discovery pass.
+                        # A never-curated entry tries the (conservative,
+                        # zero-cost) name-hint guess (gpt-oss) here; the live
+                        # differential probe — real per-model evidence,
+                        # verified 2026-08-17 to actually detect it — runs
+                        # once uniformly for ANY thinking-capable Ollama
+                        # model (curated or discovered) in the unified
+                        # `if hit:` check below, not duplicated here.
                         levels = existing.thinking_levels if existing else []
                         levels_probed = bool(existing and existing.thinking_levels_probed)
                         if not levels and not levels_probed:
                             levels = _infer_thinking_levels(pm, kind.value)
-                            if levels:
-                                levels_probed = True
-                            elif thinking:
-                                probe_result = await _ollama_probe_thinking_levels(
-                                    inst.base_url, pm
-                                )
-                                if probe_result is None:
-                                    # Infra hiccup (timeout/cold-load/network) —
-                                    # not a verdict. Leave unprobed so the next
-                                    # poll retries instead of permanently
-                                    # caching a false "unsupported".
-                                    levels = []
-                                    levels_probed = False
-                                else:
-                                    levels = ["low", "medium", "high"] if probe_result else []
-                                    levels_probed = True
+                            levels_probed = bool(levels)
                         cap = ModelCapability(
                             name=key, provider=kind, provider_model=pm,
                             status=existing.status if existing else ModelStatus.CANDIDATE,
@@ -739,6 +721,37 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                 if hit:
                     key, cap = hit
                     seen_keys.add(key)
+                    if (
+                        kind == ProviderKind.OLLAMA
+                        and cap.thinking_supported
+                        and not cap.thinking_levels_probed
+                    ):
+                        # Unified probe point: runs for ANY thinking-capable
+                        # Ollama model that hasn't been determined yet —
+                        # curated (model_registry.yaml) or discovered alike.
+                        # Writes through the thinking-override path (not the
+                        # catalog overlay above), which is the only one that
+                        # can attach a result to a YAML-defined entry (the
+                        # catalog overlay uses setdefault, so YAML always
+                        # wins there and a plain overlay write would be
+                        # silently ignored for an already-YAML-defined key).
+                        probe_result = await _ollama_probe_thinking_levels(
+                            inst.base_url, cap.provider_model
+                        )
+                        if probe_result is not None:
+                            levels = ["low", "medium", "high"] if probe_result else []
+                            from app.ai.model_registry import set_thinking_override
+
+                            set_thinking_override(key, levels=levels)
+                            level_overrides_to_persist.append(
+                                {"model_key": key, "thinking_levels": levels}
+                            )
+                            cap = cap.model_copy(
+                                update={"thinking_levels": levels, "thinking_levels_probed": True}
+                            )
+                            registry.models[key] = cap
+                            by_pm[(kind.value, pm)] = (key, cap)
+                        # else: infra hiccup — leave unprobed, retry next poll.
                     out[key] = LiveModelOut(
                         key=key, provider=kind.value, provider_model=cap.provider_model,
                         status=cap.status.value, modalities=sorted(m.value for m in cap.modalities),
@@ -827,6 +840,19 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
         except Exception as exc:  # noqa: BLE001
             await db.rollback()
             logger.warning("live_models_discovery_persist_failed", error=str(exc))
+
+    # Persist live-probed thinking-level determinations once (covers curated
+    # model_registry.yaml entries too — see the unified probe point above).
+    # Best-effort, same as the catalog persist above.
+    if level_overrides_to_persist:
+        try:
+            for entry in level_overrides_to_persist:
+                await model_runtime_store.persist_model_override(db, **entry)
+            await db.commit()
+            await model_runtime_store.hydrate_runtime_cache(db)
+        except Exception as exc:  # noqa: BLE001
+            await db.rollback()
+            logger.warning("live_models_level_probe_persist_failed", error=str(exc))
 
     return list(out.values())
 

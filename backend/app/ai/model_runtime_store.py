@@ -74,13 +74,19 @@ async def hydrate_runtime_cache(db: AsyncSession) -> None:
     )
 
     catalog = {row.model_key: row.capability for row in catalog_rows}
-    # {enabled, level} shape — model_registry._load_thinking_overrides() reads
-    # both this and the legacy plain-bool shape defensively (old Redis/Postgres
-    # rows never get a backfill).
+    # {enabled, level, levels} shape — model_registry._load_thinking_overrides()
+    # reads this and both legacy shapes defensively (old Redis/Postgres rows
+    # never get a backfill). A row can carry ONLY thinking_levels (the
+    # discovery loop's automatic probe touching a model a human never
+    # toggled) — include it even when thinking_enabled is still NULL.
     thinking = {
-        row.model_key: {"enabled": bool(row.thinking_enabled), "level": row.thinking_level}
+        row.model_key: {
+            "enabled": bool(row.thinking_enabled) if row.thinking_enabled is not None else None,
+            "level": row.thinking_level,
+            "levels": row.thinking_levels,
+        }
         for row in override_rows
-        if row.thinking_enabled is not None
+        if row.thinking_enabled is not None or row.thinking_levels is not None
     }
     preferred = {
         row.model_key: row.preferred_instance
@@ -138,6 +144,7 @@ async def persist_model_override(
     model_key: str,
     thinking_enabled: bool | None = None,
     thinking_level: str | None = None,
+    thinking_levels: list[str] | None = None,
     preferred_instance: str | None = None,
     verification_status: str | None = None,
     notes: str | None = None,
@@ -151,6 +158,13 @@ async def persist_model_override(
     ``thinking_level`` is written whenever ``thinking_enabled`` is provided
     (even as None, to clear a previously-set level when the operator picks a
     model without levels) — it only makes sense alongside a toggle write.
+
+    ``thinking_levels`` (plural — the determined support LIST, distinct from
+    the single default-pick above) is written independently, whenever it is
+    not ``None``, INCLUDING an explicit empty list (a live probe determined
+    "no support" — a real verdict, not "nothing to write"). This lets the
+    discovery loop's automatic probe persist a result for a model without
+    touching its enabled/level toggle at all.
     """
     row = await db.scalar(
         select(ModelRuntimeOverride).where(ModelRuntimeOverride.model_key == model_key)
@@ -161,6 +175,8 @@ async def persist_model_override(
     if thinking_enabled is not None:
         row.thinking_enabled = bool(thinking_enabled)
         row.thinking_level = thinking_level
+    if thinking_levels is not None:
+        row.thinking_levels = thinking_levels
     if preferred_instance is not None:
         row.preferred_instance = preferred_instance or None
     if verification_status is not None:
