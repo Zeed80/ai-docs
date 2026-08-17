@@ -676,6 +676,8 @@ services:
       retries: 5
     networks:
       - app
+      # Reaches cad-code-runner ONLY — see that network's own comment below.
+      - cad_sandbox
 
   # === Skill Runner — isolated executor for agent-generated code ===
   # Generated skills run ONLY here: non-root, read-only fs, tmpfs /tmp,
@@ -703,6 +705,45 @@ services:
       retries: 3
     networks:
       - app
+
+  # === CAD Code Runner — isolated executor for VLM-generated geometry code ===
+  # A CAD-reading pass asks the model to WRITE and actually RUN a Python
+  # script (ezdxf/numpy) that computes a rotation body's outer/bore profile
+  # with self-check asserts — live-verified 2026-08-15 to read a dense sheet
+  # more accurately than the same model filling our JSON schema (constrained
+  # decoding measurably degrades this model's numeric accuracy; writing code
+  # does not). This is NOT the promoted-skills path (capability_builder.py /
+  # skill-runner) — that path reviews code before it ever runs; this code
+  # runs once per digitization, unreviewed, so the container is a separate,
+  # narrower sandbox: import ALLOWLIST (not skill-runner's blocklist —
+  # ezdxf/numpy/math/json/dataclasses/typing/itertools only, see runner.py),
+  # its own tiny internal-only network (no DNS/route to anything but backend
+  # — see the cad_sandbox network below), no volumes, no secrets, non-root,
+  # read-only fs, cpu/mem/pids limits (mem_limit is the memory guard —
+  # runner.py explains why a subprocess-level RLIMIT_AS is not also used:
+  # it breaks numpy/BLAS before a script runs a single line).
+  cad-code-runner:
+    build:
+      context: ./cad-code-runner
+      dockerfile: Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8078/health', timeout=3).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      # cad_sandbox ONLY — not `app`. It must not be able to reach postgres,
+      # redis, minio, ollama or the internet; backend is its sole peer, and
+      # only because backend also joins this network above.
+      - cad_sandbox
 
   # === Celery Worker — IO/CPU lane (parallel) ===
   # Handles non-GPU work: IMAP polling, file storage, DB-only extraction tasks
@@ -1011,3 +1052,12 @@ volumes:
 networks:
   app:
     driver: bridge
+  # internal: true — no default gateway, no DNS resolution to the outside,
+  # no route to the internet. Only backend and cad-code-runner join it (see
+  # both services above); this is the actual network-level guarantee that
+  # generated CAD code cannot reach anything even if the AST import-allowlist
+  # in runner.py were somehow bypassed — cgroup/AST limits are not relied on
+  # alone for this one.
+  cad_sandbox:
+    driver: bridge
+    internal: true

@@ -1235,3 +1235,193 @@ def test_free_text_drops_gost_reference_numbers():
     assert "1050" not in joined
     assert "2013" not in joined
     assert "470" in joined
+
+
+# ── Geometry-code pass: extraction + real-execution merge ──────────────────
+
+
+def test_extract_python_code_takes_the_last_fenced_block():
+    """The prompt allows reasoning before the code (thinking=True, no
+    schema — same as _FREE_DESCRIBE_PROMPT), so prose commonly precedes the
+    fence; a model that revises itself writes its real answer last."""
+    from app.ai.cad_recognize.spec_fragments import _extract_python_code
+
+    text = (
+        "Сначала прикину черновой вариант:\n"
+        "```python\nprint('draft')\n```\n"
+        "Теперь финальный:\n"
+        "```python\nimport json\nprint(json.dumps({'outer': []}))\n```\n"
+    )
+    code = _extract_python_code(text)
+    assert code == "import json\nprint(json.dumps({'outer': []}))"
+
+
+def test_extract_python_code_falls_back_to_whole_text_without_a_fence():
+    from app.ai.cad_recognize.spec_fragments import _extract_python_code
+
+    assert _extract_python_code("  print('x')  ") == "print('x')"
+
+
+def test_extract_python_code_none_on_empty_answer():
+    from app.ai.cad_recognize.spec_fragments import _extract_python_code
+
+    assert _extract_python_code("") is None
+    assert _extract_python_code(None) is None
+
+
+@pytest.mark.asyncio
+async def test_geometry_code_pass_merges_a_successful_result(monkeypatch):
+    import app.ai.cad_recognize.spec_fragments as sf
+
+    async def fake_ask(prompt, image, **kwargs):
+        audit = kwargs.get("audit")
+        if audit is not None:
+            audit.append({"raw_response": "```python\nprint('{}')\n```"})
+        return {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "ok": True,
+                "result": {
+                    "outer": [{"diameter_mm": 80, "length_mm": 100}],
+                    "bore": [{"diameter_mm": 40, "length_mm": 50}],
+                },
+            }
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):  # noqa: A002
+            return FakeResponse()
+
+    monkeypatch.setattr(sf, "_ask", fake_ask)
+    monkeypatch.setattr("httpx.AsyncClient", FakeClient)
+
+    result = await sf._run_geometry_code_pass(
+        object(), router=object(), confidential=True, audit=[],
+    )
+    assert result == {
+        "outer": [{"diameter_mm": 80, "length_mm": 100}],
+        "bore": [{"diameter_mm": 40, "length_mm": 50}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_geometry_code_pass_retries_once_on_execution_error_then_succeeds(
+    monkeypatch,
+):
+    import app.ai.cad_recognize.spec_fragments as sf
+
+    calls = {"n": 0}
+
+    async def fake_ask(prompt, image, **kwargs):
+        calls["n"] += 1
+        audit = kwargs.get("audit")
+        if audit is not None:
+            audit.append({"raw_response": "```python\nprint('{}')\n```"})
+        return {}
+
+    responses = iter([
+        {"ok": False, "error": "AssertionError: lengths do not sum"},
+        {"ok": True, "result": {"outer": [{"diameter_mm": 50, "length_mm": 10}], "bore": []}},
+    ])
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):  # noqa: A002
+            return FakeResponse(next(responses))
+
+    monkeypatch.setattr(sf, "_ask", fake_ask)
+    monkeypatch.setattr("httpx.AsyncClient", FakeClient)
+
+    result = await sf._run_geometry_code_pass(
+        object(), router=object(), confidential=True, audit=[],
+    )
+    assert calls["n"] == 2, "must ask again with the concrete execution error"
+    assert result == {"outer": [{"diameter_mm": 50, "length_mm": 10}], "bore": []}
+
+
+@pytest.mark.asyncio
+async def test_geometry_code_pass_gives_up_after_one_failed_retry(monkeypatch):
+    import app.ai.cad_recognize.spec_fragments as sf
+
+    async def fake_ask(prompt, image, **kwargs):
+        audit = kwargs.get("audit")
+        if audit is not None:
+            audit.append({"raw_response": "```python\nprint('{}')\n```"})
+        return {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": False, "error": "still broken"}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):  # noqa: A002
+            return FakeResponse()
+
+    monkeypatch.setattr(sf, "_ask", fake_ask)
+    monkeypatch.setattr("httpx.AsyncClient", FakeClient)
+
+    result = await sf._run_geometry_code_pass(
+        object(), router=object(), confidential=True, audit=[],
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_geometry_code_pass_none_when_no_code_extracted(monkeypatch):
+    import app.ai.cad_recognize.spec_fragments as sf
+
+    async def fake_ask(prompt, image, **kwargs):
+        audit = kwargs.get("audit")
+        if audit is not None:
+            audit.append({"raw_response": ""})
+        return {}
+
+    monkeypatch.setattr(sf, "_ask", fake_ask)
+
+    result = await sf._run_geometry_code_pass(
+        object(), router=object(), confidential=True, audit=[],
+    )
+    assert result is None
