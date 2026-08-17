@@ -58,11 +58,15 @@ async def test_model_thinking_override_roundtrip_survives_flush(db_session, capt
         db_session,
         model_key="qwen3_5_9b_ollama",
         thinking_enabled=True,
+        thinking_level="high",
     )
     await db_session.commit()
     await store.hydrate_runtime_cache(db_session)
 
-    assert captured_redis[store.THINKING_OVERLAY_KEY]["qwen3_5_9b_ollama"] is True
+    # {enabled, level} shape — model_registry._load_thinking_overrides() reads
+    # both this and the legacy plain-bool shape defensively.
+    overlay = captured_redis[store.THINKING_OVERLAY_KEY]["qwen3_5_9b_ollama"]
+    assert overlay == {"enabled": True, "level": "high"}
 
 
 @pytest.mark.asyncio

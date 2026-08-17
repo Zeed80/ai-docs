@@ -20,6 +20,8 @@ from app.ai.capability_manifest import load_capability_manifest
 from app.ai.degradation import log_degraded
 from app.ai.gateway_config import gateway_config
 from app.ai.streaming_scrubber import StreamingContextScrubber
+from app.ai.thinking_params import REASONING_EFFORT_PROVIDERS as _REASONING_EFFORT_PROVIDERS
+from app.ai.thinking_params import thinking_request_params as _thinking_request_params
 from app.config import settings as _settings
 
 logger = structlog.get_logger()
@@ -242,17 +244,19 @@ def _is_builder_turn(messages: list[dict]) -> bool:
 def _turn_model_overrides(
     config: BuiltinAgentConfig,
     messages: list[dict],
-) -> tuple[str | None, str | None, bool | None]:
+) -> tuple[str | None, str | None, bool | None, str | None]:
     if _is_builder_turn(messages):
         return (
             config.builder_model or config.worker_model,
             config.builder_provider or config.worker_provider,
             config.builder_disable_thinking,
+            config.builder_thinking_level,
         )
     return (
         config.worker_model,
         config.worker_provider,
         config.worker_disable_thinking,
+        config.worker_thinking_level,
     )
 
 
@@ -275,6 +279,50 @@ def _model_thinking_default(model_name: str | None) -> bool | None:
     return None
 
 
+def _model_thinking_levels(model_name: str | None) -> list[str]:
+    """Effective thinking_levels for a model (by key or provider_model), or [].
+
+    Explicit catalog curation wins; otherwise auto-derived for providers
+    where the level parameter is a guaranteed wire feature (Anthropic,
+    reasoning_effort family, OpenRouter) — see effective_thinking_levels.
+    """
+    if not model_name:
+        return []
+    try:
+        from app.ai.router import ai_router
+
+        for cap in ai_router.registry.models.values():
+            if cap.name == model_name or cap.provider_model == model_name:
+                return _thinking_request_levels(cap)
+    except Exception:
+        return []
+    return []
+
+
+def _thinking_request_levels(cap) -> list[str]:
+    from app.ai.thinking_params import effective_thinking_levels
+
+    return effective_thinking_levels(cap.thinking_supported, cap.provider.value, cap.thinking_levels)
+
+
+def _model_thinking_level_default(model_name: str | None) -> str | None:
+    """Catalog default reasoning-effort level for a model, or None."""
+    if not model_name:
+        return None
+    try:
+        from app.ai.router import ai_router
+
+        for cap in ai_router.registry.models.values():
+            if cap.name == model_name or cap.provider_model == model_name:
+                levels = _thinking_request_levels(cap)
+                if not levels:
+                    return None
+                return cap.thinking_level_default or "medium"
+    except Exception:
+        return None
+    return None
+
+
 def _thinking_disabled(
     config: BuiltinAgentConfig,
     override: bool | None = None,
@@ -291,6 +339,37 @@ def _thinking_disabled(
     if model_default is not None:
         return not model_default  # thinking_enabled=True → not disabled
     return config.disable_thinking
+
+
+def _thinking_level(
+    config: BuiltinAgentConfig,
+    *,
+    disabled: bool,
+    level_override: str | None = None,
+    model_name: str | None = None,
+) -> str | None:
+    """Resolve the effective reasoning-effort level for this call.
+
+    Priority: explicit per-role override → the model's catalog default level
+    → the global fallback. Returns None whenever thinking is off for this
+    call, or the model doesn't declare any levels at all — a level is
+    meaningless in either case.
+    """
+    if disabled:
+        return None
+    levels = _model_thinking_levels(model_name)
+    if not levels:
+        return None
+    level = level_override
+    if level is None:
+        level = _model_thinking_level_default(model_name)
+    if level is None:
+        level = config.thinking_level
+    if level is None:
+        level = "medium"
+    if level not in levels:
+        level = levels[0]
+    return level
 
 
 # ── Registry loading ──────────────────────────────────────────────────────────
@@ -691,6 +770,7 @@ async def _call_ollama_streaming(
     on_token: Callable[[str], Awaitable[None]],
     model_override: str | None = None,
     disable_thinking: bool | None = None,
+    thinking_level: str | None = None,
     max_tokens: int | None = None,
 ) -> dict:
     """Stream Ollama response; calls on_token for each text chunk."""
@@ -706,8 +786,18 @@ async def _call_ollama_streaming(
         "stream": True,
         "options": options,
     }
-    if _thinking_disabled(config, disable_thinking, model_name=model):
+    disabled = _thinking_disabled(config, disable_thinking, model_name=model)
+    if disabled:
         payload["think"] = False
+    else:
+        # A level is only sent when the model's catalog entry declares
+        # thinking_levels — otherwise think is left unset (prior behaviour:
+        # rely on the model/server default rather than force True).
+        level = _thinking_level(
+            config, disabled=False, level_override=thinking_level, model_name=model
+        )
+        if level:
+            payload["think"] = level
 
     full_content = ""
     final_message: dict = {}
@@ -818,15 +908,16 @@ def _openai_compatible_provider_config(
     raise ValueError(f"Unsupported openai-compatible provider: {provider}")
 
 
-# How each provider family disables chain-of-thought (from their API docs).
-#   reasoning_effort:"none" — Ollama (local+cloud), OpenAI o-series, Groq, xAI,
-#                             DashScope (OpenAI-compat surface).
-#   reasoning:{enabled:false} — OpenRouter extension.
-#   chat_template_kwargs — llama.cpp (Qwen3 template).
+# How each provider family controls chain-of-thought (from their API docs).
+#   reasoning_effort:"none"|"low"|"medium"|"high" — Ollama (local+cloud),
+#                             OpenAI o-series, Groq, xAI, DashScope/Qwen,
+#                             Cerebras (OpenAI-compat surface).
+#   reasoning:{enabled,effort} — OpenRouter extension.
+#   chat_template_kwargs — llama.cpp/vLLM (Qwen3 template, binary only).
 # Providers without a documented knob get nothing (avoid 400 on strict endpoints).
-_REASONING_EFFORT_PROVIDERS = frozenset({
-    "ollama_cloud", "openai", "groq", "xai", "dashscope", "qwen", "cerebras",
-})
+# _REASONING_EFFORT_PROVIDERS is imported at module top from
+# app.ai.thinking_params — the single source of truth shared with
+# providers/openai_compatible.py.
 
 
 def _provider_instance_extra(provider: str) -> dict[str, Any]:
@@ -841,21 +932,22 @@ def _provider_instance_extra(provider: str) -> dict[str, Any]:
 
 
 def _reasoning_disable_params(provider: str) -> dict[str, Any]:
-    # Ollama and llama.cpp both serve Qwen3-family templates over the
-    # OpenAI-compatible endpoint; the CoT switch is the template kwarg
-    # ``enable_thinking`` (Ollama also accepts ``think``). Without this the
-    # tool-call path left thinking ON even when the role had it disabled, so the
-    # model wrapped its tool args in <think>… and mangled the JSON.
-    if provider == "ollama":
-        # Ollama is lenient and ignores unknown fields, so send both knobs.
-        return {"chat_template_kwargs": {"enable_thinking": False}, "think": False}
-    if provider in ("llamacpp", "vllm"):
-        return {"chat_template_kwargs": {"enable_thinking": False}}
-    if provider == "openrouter":
-        return {"reasoning": {"enabled": False}}
-    if provider in _REASONING_EFFORT_PROVIDERS:
-        return {"reasoning_effort": "none"}
-    return {}
+    """Hard-off CoT params for a provider family. Kept as a thin, stable
+    wrapper (existing tests call it directly) delegating to the shared
+    ``thinking_request_params`` in app.ai.thinking_params.
+    """
+    return _thinking_request_params(provider, False, None)
+
+
+def _reasoning_params(provider: str, thinking: bool, level: str | None) -> dict[str, Any]:
+    """CoT params for a provider family, on/off + optional reasoning-effort
+    level. Ollama and llama.cpp both serve Qwen3-family templates over the
+    OpenAI-compatible endpoint; the CoT switch is the template kwarg
+    ``enable_thinking`` (Ollama also accepts ``think``). Without this the
+    tool-call path left thinking ON even when the role had it disabled, so the
+    model wrapped its tool args in <think>… and mangled the JSON.
+    """
+    return _thinking_request_params(provider, thinking, level)
 
 
 def _normalize_openai_messages(messages: list[dict]) -> list[dict]:
@@ -898,6 +990,7 @@ async def _call_openai_streaming(
     provider: str,
     model_override: str | None = None,
     disable_thinking: bool | None = None,
+    thinking_level: str | None = None,
     on_thinking: Callable[[str], Awaitable[None]] | None = None,
     max_tokens: int | None = None,
 ) -> dict:
@@ -930,11 +1023,18 @@ async def _call_openai_streaming(
         payload["max_tokens"] = int(max_tokens)
     if tools:
         payload["tools"] = tools
-    if _thinking_disabled(config, disable_thinking, model_name=model):
-        # The knob to suppress reasoning is provider-specific (per their docs).
-        # Sending the wrong one to a strict endpoint returns 400, so dispatch by
-        # provider family and stay silent for providers without a known knob.
-        payload.update(_reasoning_disable_params(provider))
+    _disabled = _thinking_disabled(config, disable_thinking, model_name=model)
+    # The knob to control reasoning is provider-specific (per their docs).
+    # Sending the wrong one to a strict endpoint returns 400, so dispatch by
+    # provider family and stay silent for providers without a known knob.
+    if _disabled:
+        payload.update(_reasoning_params(provider, False, None))
+    else:
+        _level = _thinking_level(
+            config, disabled=False, level_override=thinking_level, model_name=model
+        )
+        if _level:
+            payload.update(_reasoning_params(provider, True, _level))
 
     # Per-provider extra headers / body params configured in the UI
     # (provider_instances.extra = {headers:{...}, body:{...}}).
@@ -1275,6 +1375,7 @@ async def _call_provider_streaming(
     model_override: str | None = None,
     provider_override: str | None = None,
     disable_thinking_override: bool | None = None,
+    thinking_level_override: str | None = None,
     on_thinking: Callable[[str], Awaitable[None]] | None = None,
     max_tokens: int | None = None,
 ) -> dict:
@@ -1306,6 +1407,7 @@ async def _call_provider_streaming(
                         on_token,
                         model_override=model_override,
                         disable_thinking=disable_thinking_override,
+                        thinking_level=thinking_level_override,
                         max_tokens=max_tokens,
                     )
                 elif p in _OPENAI_COMPATIBLE_PROVIDERS:
@@ -1318,6 +1420,7 @@ async def _call_provider_streaming(
                         provider=p,
                         model_override=model_override,
                         disable_thinking=disable_thinking_override,
+                        thinking_level=thinking_level_override,
                         on_thinking=on_thinking,
                         max_tokens=max_tokens,
                     )
@@ -1336,6 +1439,7 @@ async def _call_provider_streaming(
                         on_token,
                         model_override=model_override,
                         disable_thinking=disable_thinking_override,
+                        thinking_level=thinking_level_override,
                         max_tokens=max_tokens,
                     )
             except transient_errors as exc:
@@ -1449,6 +1553,7 @@ class AgentSession:
             model_override=model,
             provider_override=config.worker_provider,
             disable_thinking_override=config.worker_disable_thinking,
+            thinking_level_override=config.worker_thinking_level,
         )
         for chunk in accumulated:
             yield chunk
@@ -1967,7 +2072,7 @@ class AgentSession:
                         except Exception:
                             pass
 
-                model_override, provider_override, disable_thinking = _turn_model_overrides(
+                model_override, provider_override, disable_thinking, thinking_level = _turn_model_overrides(
                     self._config,
                     self.messages,
                 )
@@ -1984,6 +2089,7 @@ class AgentSession:
                     model_override=model_override,
                     provider_override=provider_override,
                     disable_thinking_override=disable_thinking,
+                    thinking_level_override=thinking_level,
                     on_thinking=_on_thinking,
                     max_tokens=self._response_budget,
                 )

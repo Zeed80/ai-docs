@@ -49,13 +49,15 @@ def _thinking_payload(request: AIRequest) -> dict[str, Any]:
     also inspect ``enable_thinking``.  Sending both is intentional: the live
     Apex vision model ignored the first switch alone and put its complete JSON
     in the thinking field, leaving an empty answer.
+
+    When ``request.thinking_level`` is set (only true for models whose catalog
+    entry declares ``thinking_levels`` — AIRouter clamps it to None otherwise),
+    ``think`` carries the qualitative level string instead of a bare bool.
     """
+    from app.ai.thinking_params import thinking_request_params
 
     enabled = _think_flag(request)
-    payload: dict[str, Any] = {"think": enabled}
-    if not enabled:
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
-    return payload
+    return thinking_request_params("ollama", enabled, request.thinking_level if enabled else None)
 
 
 def _pydantic_to_ollama_format(schema_cls: Any) -> dict[str, Any] | None:

@@ -20,7 +20,7 @@ to it.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from pydantic import BaseModel, Field
@@ -83,6 +83,10 @@ class TaskRouting(BaseModel):
     # model's catalog default; True/False force reasoning on/off for THIS task
     # only, so one model can run with reasoning in one slot and without in another.
     thinking: bool | None = None
+    # Per-assignment reasoning-effort override (tri-state), same defer-if-None
+    # semantics as ``thinking``. Only meaningful when ``thinking`` resolves to
+    # True and the model declares ``thinking_levels``.
+    thinking_level: Literal["low", "medium", "high"] | None = None
 
     @property
     def primary(self) -> str | None:

@@ -74,8 +74,11 @@ async def hydrate_runtime_cache(db: AsyncSession) -> None:
     )
 
     catalog = {row.model_key: row.capability for row in catalog_rows}
+    # {enabled, level} shape — model_registry._load_thinking_overrides() reads
+    # both this and the legacy plain-bool shape defensively (old Redis/Postgres
+    # rows never get a backfill).
     thinking = {
-        row.model_key: bool(row.thinking_enabled)
+        row.model_key: {"enabled": bool(row.thinking_enabled), "level": row.thinking_level}
         for row in override_rows
         if row.thinking_enabled is not None
     }
@@ -134,6 +137,7 @@ async def persist_model_override(
     *,
     model_key: str,
     thinking_enabled: bool | None = None,
+    thinking_level: str | None = None,
     preferred_instance: str | None = None,
     verification_status: str | None = None,
     notes: str | None = None,
@@ -143,6 +147,10 @@ async def persist_model_override(
     Because partial updates must not clobber sibling columns, read-modify-write
     the row (still safe: single writer per model in practice; the UNIQUE key
     protects against duplicate inserts). Caller commits, then hydrates.
+
+    ``thinking_level`` is written whenever ``thinking_enabled`` is provided
+    (even as None, to clear a previously-set level when the operator picks a
+    model without levels) — it only makes sense alongside a toggle write.
     """
     row = await db.scalar(
         select(ModelRuntimeOverride).where(ModelRuntimeOverride.model_key == model_key)
@@ -152,6 +160,7 @@ async def persist_model_override(
         db.add(row)
     if thinking_enabled is not None:
         row.thinking_enabled = bool(thinking_enabled)
+        row.thinking_level = thinking_level
     if preferred_instance is not None:
         row.preferred_instance = preferred_instance or None
     if verification_status is not None:

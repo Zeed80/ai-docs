@@ -174,8 +174,19 @@ class AnthropicProvider(AIProvider):
             "max_tokens": _MAX_TOKENS,
         }
         # Extended thinking: enabled when the caller/catalog asks for CoT.
+        # The level maps to a token budget (a UX convenience — Anthropic's API
+        # itself only understands the raw number). No level resolved (e.g. no
+        # catalog entry marks the model as level-capable yet) keeps the
+        # original flat 2048 default for backward compatibility.
         if request.thinking:
-            budget = 2048
+            from app.ai.thinking_params import (
+                ANTHROPIC_DEFAULT_THINKING_BUDGET,
+                ANTHROPIC_THINKING_BUDGET_TOKENS,
+            )
+
+            budget = ANTHROPIC_THINKING_BUDGET_TOKENS.get(
+                request.thinking_level, ANTHROPIC_DEFAULT_THINKING_BUDGET
+            )
             payload["max_tokens"] = max(_MAX_TOKENS, budget + 1024)
             payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
         if system_text:

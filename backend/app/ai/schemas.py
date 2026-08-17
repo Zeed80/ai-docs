@@ -121,6 +121,11 @@ class AIRequest(BaseModel):
     # Per-call thinking/CoT override. None → use the model's catalog default
     # (``ModelCapability.thinking_enabled``). True/False force it on/off.
     thinking: bool | None = None
+    # Per-call reasoning-effort override. Only meaningful when ``thinking``
+    # resolves to True *and* the model declares support
+    # (``ModelCapability.thinking_levels``); ignored otherwise. None → inherit
+    # the per-task/catalog default.
+    thinking_level: Literal["low", "medium", "high"] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -206,6 +211,15 @@ class ModelCapability(BaseModel):
     #                         workloads CoT usually hurts, so it defaults off.
     thinking_supported: bool = False
     thinking_enabled: bool = False
+    # Reasoning-effort levels this model actually accepts (e.g. gpt-oss'
+    # low/medium/high via reasoning_effort, Claude extended thinking via a
+    # budget_tokens table). Empty = on/off only, no granularity — this is the
+    # default for every model until manually verified (see model_registry.yaml
+    # "Verified ... against ..." convention used for thinking_supported).
+    thinking_levels: list[Literal["low", "medium", "high"]] = Field(default_factory=list)
+    # Catalog default level when thinking is on and thinking_levels is
+    # non-empty. None falls back to "medium" at resolution time.
+    thinking_level_default: Literal["low", "medium", "high"] | None = None
     # Optional pin to a specific provider node (provider_instances.name). When set,
     # calls for this model always route to that node; otherwise the router picks
     # any healthy node of the model's provider kind that hosts the model.

@@ -101,11 +101,11 @@ def test_turn_model_overrides_route_builder_tasks_to_large_model():
     assert agent_loop._turn_model_overrides(
         config,
         [{"role": "user", "content": "Создай новый skill для таблицы"}],
-    ) == ("qwen3.6:35b", "ollama", False)
+    ) == ("qwen3.6:35b", "ollama", False, None)
     assert agent_loop._turn_model_overrides(
         config,
         [{"role": "user", "content": "Покажи товары по счетам"}],
-    ) == ("qwen3.5:9b", "ollama", True)
+    ) == ("qwen3.5:9b", "ollama", True, None)
 
 
 @pytest.mark.asyncio

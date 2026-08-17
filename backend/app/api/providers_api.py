@@ -32,6 +32,7 @@ from app.ai import model_runtime_store
 from app.ai.model_registry import ModelRegistry
 from app.ai.schemas import AITask, ModelCapability, ModelStatus, ProviderKind
 from app.ai.secret_box import decrypt, encrypt, mask
+from app.ai.thinking_params import effective_thinking_levels
 from app.auth.jwt import get_current_user, require_role
 from app.auth.models import UserInfo, UserRole
 from app.db.models import ProviderInstance
@@ -367,6 +368,8 @@ class CatalogModelOut(BaseModel):
     local_only: bool
     thinking_supported: bool
     thinking_enabled: bool
+    thinking_levels: list[str] = []
+    thinking_level_default: str | None = None
     preferred_instance: str | None
     quality_score: float
     speed_score: float
@@ -395,6 +398,10 @@ async def list_models(
                 local_only=cap.local_only,
                 thinking_supported=cap.thinking_supported,
                 thinking_enabled=cap.thinking_enabled,
+                thinking_levels=effective_thinking_levels(
+                    cap.thinking_supported, cap.provider.value, cap.thinking_levels
+                ),
+                thinking_level_default=cap.thinking_level_default,
                 preferred_instance=cap.preferred_instance,
                 quality_score=cap.quality_score,
                 speed_score=cap.speed_score,
@@ -413,6 +420,7 @@ class LiveModelOut(BaseModel):
     local_only: bool
     thinking_supported: bool
     thinking_enabled: bool
+    thinking_levels: list[str] = []
     loaded: bool              # actually present on a node right now
     node: str | None          # which node hosts it (local multi-node)
     vram_gb_estimate: float | None
@@ -444,6 +452,29 @@ def _infer_modalities(name: str) -> set[str]:
 def _infer_thinking(name: str) -> bool:
     n = name.lower()
     return any(h in n for h in _THINK_HINTS)
+
+
+def _infer_thinking_levels(name: str, provider_kind: str) -> list[str]:
+    """Best-effort guess at which reasoning-effort levels a discovered model
+    accepts — conservative on purpose. Unlike ``_infer_thinking`` (a plain
+    on/off guess later corrected by Ollama's real ``/api/show`` capabilities
+    when available), no provider API reports qualitative-level support
+    anywhere — Ollama's ``capabilities`` list only ever contains the flat
+    string ``"thinking"``, never a level. So this stays a name-hint guess
+    forever, and every family except the one documented as 3-level (gpt-oss)
+    defaults to ``[]`` (on/off only) until a human verifies it and curates
+    ``thinking_levels`` directly in model_registry.yaml — the same
+    "Verified ... against ..." convention already used for
+    ``thinking_supported``.
+    """
+    n = name.lower()
+    from app.ai.thinking_params import REASONING_EFFORT_PROVIDERS
+
+    if "gpt-oss" in n and (
+        provider_kind in REASONING_EFFORT_PROVIDERS or provider_kind in ("ollama", "ollama_cloud")
+    ):
+        return ["low", "medium", "high"]
+    return []
 
 
 def _synth_key(provider: str, provider_model: str) -> str:
@@ -569,6 +600,16 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                     )
                     if existing is None or stale:
                         key = hit[0] if hit else _synth_key(kind.value, pm)
+                        # Levels are never reported by any provider capability
+                        # endpoint (see _infer_thinking_levels) — a manually
+                        # curated non-empty thinking_levels always survives a
+                        # discovery pass; only a never-curated entry falls
+                        # back to the (conservative) name-hint guess.
+                        levels = (
+                            existing.thinking_levels
+                            if existing and existing.thinking_levels
+                            else _infer_thinking_levels(pm, kind.value)
+                        )
                         cap = ModelCapability(
                             name=key, provider=kind, provider_model=pm,
                             status=existing.status if existing else ModelStatus.CANDIDATE,
@@ -584,6 +625,8 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                             # but the persisted overlay row should stay consistent
                             # with it rather than silently reverting in between.
                             thinking_enabled=existing.thinking_enabled if existing else False,
+                            thinking_levels=levels,
+                            thinking_level_default=existing.thinking_level_default if existing else None,
                             preferred_instance=existing.preferred_instance if existing else None,
                         )
                         registry.add_model(key, cap, persist=True)
@@ -604,7 +647,11 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                         key=key, provider=kind.value, provider_model=cap.provider_model,
                         status=cap.status.value, modalities=sorted(m.value for m in cap.modalities),
                         local_only=cap.local_only, thinking_supported=cap.thinking_supported,
-                        thinking_enabled=cap.thinking_enabled, loaded=True, node=inst.name,
+                        thinking_enabled=cap.thinking_enabled,
+                        thinking_levels=effective_thinking_levels(
+                            cap.thinking_supported, kind.value, cap.thinking_levels
+                        ),
+                        loaded=True, node=inst.name,
                         vram_gb_estimate=cap.vram_gb_estimate or vram,
                     )
                 else:
@@ -623,6 +670,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                             supports_structured_output=True, local_only=True,
                             thinking_supported=thinking, capability_source="discovered",
                             vram_gb_estimate=vram,
+                            thinking_levels=_infer_thinking_levels(pm, kind.value),
                         )
                         registry.add_model(key, cap, persist=True)
                         discovered_to_persist.append({
@@ -639,7 +687,11 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                         key=key, provider=kind.value, provider_model=pm,
                         status="loaded", modalities=sorted(mods), local_only=True,
                         thinking_supported=th.thinking_supported,
-                        thinking_enabled=th.thinking_enabled, loaded=True, node=inst.name,
+                        thinking_enabled=th.thinking_enabled,
+                        thinking_levels=effective_thinking_levels(
+                            th.thinking_supported, kind.value, th.thinking_levels
+                        ),
+                        loaded=True, node=inst.name,
                         vram_gb_estimate=vram,
                     )
 
@@ -660,7 +712,11 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
             key=key, provider=cap.provider.value, provider_model=cap.provider_model,
             status=cap.status.value, modalities=sorted(m.value for m in cap.modalities),
             local_only=cap.local_only, thinking_supported=cap.thinking_supported,
-            thinking_enabled=cap.thinking_enabled, loaded=False, node=None,
+            thinking_enabled=cap.thinking_enabled,
+            thinking_levels=effective_thinking_levels(
+                cap.thinking_supported, cap.provider.value, cap.thinking_levels
+            ),
+            loaded=False, node=None,
             vram_gb_estimate=cap.vram_gb_estimate,
         )
 
@@ -681,6 +737,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
 
 class ThinkingUpdate(BaseModel):
     enabled: bool
+    level: str | None = None  # reasoning-effort level; only valid for the model's thinking_levels
 
 
 @router.patch("/models/{model_key}/thinking", dependencies=_admin)
@@ -695,11 +752,22 @@ async def set_model_thinking(
     registry = _registry()
     if model_key not in registry.models:
         raise HTTPException(404, f"Unknown model: {model_key}")
-    set_thinking_override(model_key, payload.enabled)
+    cap = registry.models[model_key]
+    allowed_levels = effective_thinking_levels(
+        cap.thinking_supported, cap.provider.value, cap.thinking_levels
+    )
+    if payload.level is not None and payload.level not in allowed_levels:
+        raise HTTPException(
+            400,
+            f"Model '{model_key}' does not support thinking level '{payload.level}' "
+            f"(supported: {allowed_levels or 'none — on/off only'})",
+        )
+    set_thinking_override(model_key, payload.enabled, level=payload.level)
     await model_runtime_store.persist_model_override(
         db,
         model_key=model_key,
         thinking_enabled=payload.enabled,
+        thinking_level=payload.level,
     )
     await db.commit()
     await model_runtime_store.hydrate_runtime_cache(db)
@@ -760,6 +828,10 @@ class SlotOut(BaseModel):
     thinking_source: str = "unsupported"  # slot | model | unsupported
     thinking_disable_supported: bool = True
     thinking_warning: str | None = None
+    # Reasoning-effort level for the selected model, if it declares any.
+    thinking_levels: list[str] = []          # levels the SELECTED model supports (empty = none)
+    thinking_level_override: str | None = None  # this slot's explicit level override
+    thinking_level_effective: str | None = None  # resolved level actually in effect
 
 
 # local_only=True → конфиденциальные задачи (содержимое документов), облако
@@ -832,6 +904,12 @@ _SLOT_THINKING_AGENT_FIELDS: dict[str, list[str]] = {
     "agent_orchestrator": ["orchestrator_disable_thinking", "worker_disable_thinking"],
     "agent_fast": ["fast_disable_thinking"],
     "agent_large": ["builder_disable_thinking"],
+}
+# Same slot→field(s) shape as above, for the reasoning-effort level tri-state.
+_SLOT_THINKING_LEVEL_AGENT_FIELDS: dict[str, list[str]] = {
+    "agent_orchestrator": ["orchestrator_thinking_level", "worker_thinking_level"],
+    "agent_fast": ["fast_thinking_level"],
+    "agent_large": ["builder_thinking_level"],
 }
 
 _THINKING_DISABLE_SUPPORTED_PROVIDERS = {
@@ -1000,6 +1078,25 @@ def _slot_thinking_override(slot: str) -> bool | None:
     return None
 
 
+def _slot_thinking_level_override(slot: str) -> str | None:
+    """Current per-assignment reasoning-effort level override, or None."""
+    if not _slot_supports_thinking(slot):
+        return None
+    if slot in _SLOT_THINKING_LEVEL_AGENT_FIELDS:
+        from app.ai.agent_config import get_builtin_agent_config
+        cfg = get_builtin_agent_config()
+        field = _SLOT_THINKING_LEVEL_AGENT_FIELDS[slot][0]
+        return getattr(cfg, field, None)
+    if slot in _SLOT_THINKING_TASKS:
+        from app.ai.schemas import AITask
+        from app.ai.task_routing import get_routing_for
+        try:
+            return get_routing_for(AITask(_SLOT_THINKING_TASKS[slot][0])).thinking_level
+        except (ValueError, KeyError):
+            return None
+    return None
+
+
 def _slot_thinking_state(slot: str, registry, model_key: str | None) -> dict[str, Any]:
     """Effective reasoning state for the selected model in a slot."""
     slot_supported = _slot_supports_thinking(slot)
@@ -1028,6 +1125,23 @@ def _slot_thinking_state(slot: str, registry, model_key: str | None) -> dict[str
             "У этого провайдера нет известного API-параметра для выключения reasoning; "
             "сервер может проигнорировать override."
         )
+
+    # Reasoning-effort level — only meaningful when the selected model
+    # declares thinking_levels and the slot ends up with thinking ON.
+    model_levels = (
+        effective_thinking_levels(cap.thinking_supported, cap.provider.value, cap.thinking_levels)
+        if cap
+        else []
+    )
+    level_override = _slot_thinking_level_override(slot) if model_levels else None
+    level_effective = None
+    if effective and model_levels:
+        level_effective = level_override
+        if level_effective is None:
+            level_effective = cap.thinking_level_default or "medium"
+        if level_effective not in model_levels:
+            level_effective = model_levels[0]
+
     return {
         "thinking_capable": slot_supported and model_supported,
         "thinking_enabled": override,
@@ -1039,6 +1153,9 @@ def _slot_thinking_state(slot: str, registry, model_key: str | None) -> dict[str
         "thinking_source": source,
         "thinking_disable_supported": disable_supported,
         "thinking_warning": warning,
+        "thinking_levels": model_levels,
+        "thinking_level_override": level_override,
+        "thinking_level_effective": level_effective,
     }
 
 
@@ -1706,11 +1823,13 @@ async def set_slot_allow_cloud(slot: str, payload: SlotCloudWrite) -> dict:
 
 class SlotThinkingWrite(BaseModel):
     enabled: bool | None  # None → model default; True/False → force on/off for this slot
+    level: str | None = None  # reasoning-effort level; only valid for the selected model's thinking_levels
 
 
 class SlotSmokeIn(BaseModel):
     model: str | None = None
     thinking: bool | None = None
+    thinking_level: str | None = None
     dry_run: bool = True
 
 
@@ -1728,10 +1847,10 @@ class SlotSmokeOut(BaseModel):
     error: str | None = None
 
 
-def _apply_slot_thinking(slot: str, enabled: bool | None) -> None:
-    """Set per-assignment reasoning for a slot (task_routing + agent_config).
-
-    The same model can thus reason in one slot and not in another. Idempotent.
+def _apply_slot_thinking(slot: str, enabled: bool | None, level: str | None = None) -> None:
+    """Set per-assignment reasoning (+ optional level) for a slot
+    (task_routing + agent_config). The same model can thus reason in one
+    slot and not in another. Idempotent.
     """
     # Task-routing slots: write thinking into each underlying task.
     if slot in _SLOT_THINKING_TASKS:
@@ -1742,13 +1861,17 @@ def _apply_slot_thinking(slot: str, enabled: bool | None) -> None:
                 task = AITask(tval)
             except ValueError:
                 continue
-            routing = get_routing_for(task).model_copy(update={"thinking": enabled})
+            routing = get_routing_for(task).model_copy(
+                update={"thinking": enabled, "thinking_level": level}
+            )
             save_task_routing(task, routing)
     # Agent-config slots: write the tri-state *_disable_thinking field(s).
     if slot in _SLOT_THINKING_AGENT_FIELDS:
         from app.ai.agent_config import BuiltinAgentConfigUpdate, update_builtin_agent_config
         disable = None if enabled is None else (not enabled)
         patch = {field: disable for field in _SLOT_THINKING_AGENT_FIELDS[slot]}
+        if slot in _SLOT_THINKING_LEVEL_AGENT_FIELDS:
+            patch.update({field: level for field in _SLOT_THINKING_LEVEL_AGENT_FIELDS[slot]})
         update_builtin_agent_config(BuiltinAgentConfigUpdate(**patch))
 
 
@@ -1761,11 +1884,11 @@ async def set_slot_thinking(
     """Per-assignment reasoning toggle (None=model default, True/False=force)."""
     if not _slot_supports_thinking(slot):
         raise HTTPException(400, f"Слот '{slot}' не поддерживает переключение рассуждения")
-    _apply_slot_thinking(slot, payload.enabled)
+    _apply_slot_thinking(slot, payload.enabled, payload.level)
     await _persist_slot_durable(db, slot)
     await db.commit()
     await model_runtime_store.hydrate_runtime_cache(db)
-    return {"ok": True, "slot": slot, "thinking_enabled": payload.enabled}
+    return {"ok": True, "slot": slot, "thinking_enabled": payload.enabled, "thinking_level": payload.level}
 
 
 def _slot_smoke_task(slot: str) -> AITask:
@@ -1842,6 +1965,11 @@ async def smoke_slot_assignment(
         if payload.thinking is not None
         else thinking_state["thinking_effective"]
     )
+    thinking_level_requested = (
+        payload.thinking_level
+        if payload.thinking_level is not None
+        else thinking_state["thinking_level_effective"]
+    )
     thinking_payload_supported = bool(thinking_state["thinking_disable_supported"])
     if thinking_state["thinking_warning"]:
         warnings.append(
@@ -1878,6 +2006,7 @@ async def smoke_slot_assignment(
         allow_cloud=not cap.local_only,
         preferred_model=model_key,
         thinking=thinking_requested,
+        thinking_level=thinking_level_requested,
         metadata={"documents": ["ok", "other"]} if task == AITask.RERANKING else {},
     )
     started = _time.perf_counter()
