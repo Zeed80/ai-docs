@@ -346,6 +346,43 @@ _FREE_DESCRIBE_PROMPT = (
     "слева направо, каждое значение — как написано на чертеже."
 )
 
+# User-reported 2026-08-15: the same model, asked in a plain chat to "write
+# code that builds this part", wrote and ran a Python/ezdxf script and got the
+# geometry right — independently confirming what _FREE_DESCRIBE_PROMPT above
+# already found: this model is measurably worse at filling OUR JSON schema
+# than at a task closer to its own training distribution. Writing code adds
+# something free text does not — a script can `assert` its own consistency
+# (do the step lengths actually sum to the stated overall length?) before it
+# is ever trusted, the same discipline _sections_from_chain below already
+# enforces in Python, just run by the model itself first. The code is REALLY
+# executed (see cad_code_runner_url / infra/cad-code-runner) in a narrow,
+# import-allowlisted, network-isolated sandbox — not "mentally" evaluated —
+# so a script that would raise or fail its own assert is caught before its
+# numbers ever reach the candidate pool below.
+_GEOMETRY_CODE_PROMPT = (
+    "Напиши и мысленно исполни Python-скрипт, который вычисляет профиль "
+    "этой детали (тело вращения) по чертежу.\n"
+    "Разрешены только модули: ezdxf, numpy, math, json, dataclasses, "
+    "typing, itertools — любой другой import будет отклонён.\n"
+    "Скрипт должен:\n"
+    "1. Задать список ступеней наружного контура слева направо: "
+    "diameter_mm, length_mm (и, если есть, taper/thread/tolerance/note).\n"
+    "2. Так же — список ступеней внутренней расточки, если на разрезе она "
+    "есть; если расточки нет — bore: [].\n"
+    "3. Проверить себя перед выводом: sum(длины ступеней контура) должна "
+    "совпадать с общей длиной детали (assert с понятным сообщением); "
+    "диаметры расточки должны быть меньше наружного диаметра в той же "
+    "точке. Если самопроверка не проходит — это должно упасть с AssertionError, "
+    "а не тихо продолжиться.\n"
+    "4. Опционально построить эскиз через ezdxf (Modelspace, LWPOLYLINE "
+    "профиля) и сохранить его — это твой способ визуально проверить себя, "
+    "не обязательный результат.\n"
+    "5. Последней строкой напечатать ровно один JSON-объект: "
+    'print(json.dumps({"outer": [...], "bore": [...]})) — outer/bore это '
+    "массивы объектов с полями diameter_mm и length_mm (числа, не строки).\n"
+    "Никаких объяснений после кода — только сам код одним блоком."
+)
+
 
 def _encode(image) -> str:
     buffer = io.BytesIO()
@@ -3342,6 +3379,102 @@ def _numbers_from_free_text(text: str) -> list[str]:
     return entries
 
 
+_CODE_FENCE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL)
+
+
+def _extract_python_code(text: str) -> str | None:
+    """Pull the script out of a free-form, reasoning-allowed answer.
+
+    Unlike ``capability_builder.py``'s ``_extract_code`` — whose prompt
+    demands "ONLY code, no explanation" so the response basically IS the
+    fence — this prompt allows the model to think first, so prose commonly
+    comes before the code. The LAST fenced block is taken: a model that
+    second-guesses itself writes its final answer last. Falls back to the
+    whole trimmed response only when no fence is found at all.
+    """
+    if not text:
+        return None
+    matches = _CODE_FENCE.findall(text)
+    if matches:
+        return matches[-1].strip()
+    stripped = text.strip()
+    return stripped or None
+
+
+async def _run_geometry_code_pass(
+    image, *, router: Any, confidential: bool, audit: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Ask for, extract, and actually RUN a geometry-computing script.
+
+    Returns the script's own ``{"outer": [...], "bore": [...]}`` (or None on
+    any failure — one lost pass, not the sheet, same rule every other
+    fallible source here follows) so the caller can both (a) fold its
+    diameter/length values into the shared candidate pool alongside
+    _numbers_from_free_text's, and (b) offer the whole thing as one more
+    ``reads`` entry to consensus_spec. Never raises.
+    """
+    import httpx
+
+    from app.config import settings
+
+    describe_audit: list[dict[str, Any]] = []
+    await _ask(
+        _GEOMETRY_CODE_PROMPT, image, num_predict=8000,
+        audit=describe_audit, thinking=True, timeout_seconds=150.0,
+        router=router, confidential=confidential,
+    )
+    raw_text = describe_audit[-1]["raw_response"] if describe_audit else ""
+    code = _extract_python_code(raw_text)
+    if not code:
+        return None
+
+    url = f"{settings.cad_code_runner_url.rstrip('/')}/execute"
+
+    async def _run(script: str) -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=40.0) as client:
+                resp = await client.post(url, json={"code": script, "timeout_s": 30})
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:  # noqa: BLE001 — sandbox unreachable is not a code bug
+            return {"ok": False, "error": f"cad-code-runner unreachable: {exc}"}
+
+    outcome = await _run(code)
+    if not outcome.get("ok"):
+        # One concrete-error-driven retry: show the model the REAL exception
+        # from REAL execution (not a generic critique — self_refine.py's
+        # refine_code() critiques a different contract, execute()/SKILL_META
+        # for promoted skills, which does not apply to a plain computed-and-
+        # printed script) and ask it to fix exactly that.
+        fix_prompt = (
+            "Твой предыдущий скрипт упал при реальном выполнении:\n"
+            f"{str(outcome.get('error'))[:800]}\n\n"
+            "Вот тот скрипт:\n```python\n" + code + "\n```\n"
+            "Исправь ТОЛЬКО эту ошибку и выведи полностью исправленный "
+            "скрипт тем же контрактом (последняя строка — "
+            'print(json.dumps({"outer": [...], "bore": [...]})).'
+        )
+        await _ask(
+            fix_prompt, image, num_predict=8000,
+            audit=describe_audit, thinking=True, timeout_seconds=150.0,
+            router=router, confidential=confidential,
+        )
+        retry_text = describe_audit[-1]["raw_response"] if describe_audit else ""
+        retry_code = _extract_python_code(retry_text)
+        outcome = await _run(retry_code) if retry_code else outcome
+
+    if audit is not None:
+        audit.append({
+            "question": "geometry code pass",
+            "ok": bool(outcome.get("ok")),
+            "error": outcome.get("error"),
+        })
+    if not outcome.get("ok"):
+        return None
+    result = outcome.get("result")
+    return result if isinstance(result, dict) else None
+
+
 async def _sections_from_chain(
     image, callouts: dict, *, router: Any, confidential: bool,
     audit: list[dict[str, Any]] | None = None, source_image=None,
@@ -3837,6 +3970,44 @@ async def read_spec_by_fragments(
         callouts.setdefault("dimensions", []).extend(
             {"value": entry, "applies_to": None}
             for entry in free_text_entries
+            if entry.strip().lower() not in known
+        )
+
+    # A geometry-computing script the model writes AND actually runs (see
+    # _GEOMETRY_CODE_PROMPT's docstring) — same "one call per
+    # read_spec_best_effort, widen the candidate pool" treatment as the free
+    # description above, not a second source of truth: every diameter/length
+    # it computes still has to be geometry-confirmed by diameter_dimensions
+    # .py before becoming an outer[]/bore[] value.
+    if shared_layers is not None and "geometry_code" in shared_layers:
+        geometry_code_result = shared_layers["geometry_code"]
+    else:
+        geometry_code_result = await _run_geometry_code_pass(
+            overview, router=router, confidential=confidential, audit=fragment_answers,
+        )
+        if shared_layers is not None:
+            shared_layers["geometry_code"] = geometry_code_result
+    if geometry_code_result:
+        code_entries: list[str] = []
+        for section in (geometry_code_result.get("outer") or []):
+            diameter = _num((section or {}).get("diameter_mm"))
+            if diameter is not None:
+                code_entries.append(f"Ø{diameter:g}")
+            length = _num((section or {}).get("length_mm"))
+            if length is not None:
+                code_entries.append(f"{length:g}")
+        for section in (geometry_code_result.get("bore") or []):
+            diameter = _num((section or {}).get("diameter_mm"))
+            if diameter is not None:
+                code_entries.append(f"Ø{diameter:g}")
+            length = _num((section or {}).get("length_mm"))
+            if length is not None:
+                code_entries.append(f"{length:g}")
+        known = {str((d or {}).get("value") or "").strip().lower()
+                 for d in (callouts.get("dimensions") or [])}
+        callouts.setdefault("dimensions", []).extend(
+            {"value": entry, "applies_to": None}
+            for entry in code_entries
             if entry.strip().lower() not in known
         )
 

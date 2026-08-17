@@ -104,6 +104,12 @@ class Settings(BaseSettings):
     # Generated code never runs inside the backend process.
     skill_runner_url: str = "http://skill-runner:8077"
 
+    # Isolated executor for VLM-generated CAD-reading code (ezdxf/numpy
+    # geometry scripts, infra/cad-code-runner) — a separate, narrower sandbox
+    # from skill-runner: import allowlist, its own internal-only network, no
+    # promoted-skills review gate (this code runs once per digitization).
+    cad_code_runner_url: str = "http://cad-code-runner:8078"
+
     # Auth (Authentik SSO)
     auth_enabled: bool = False          # set True in production
     authentik_url: str = "http://authentik-server:9000"   # internal Docker URL for JWKS/token
