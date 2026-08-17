@@ -290,6 +290,21 @@ class AIRouter:
                 eff_thinking = model.thinking_enabled if model.thinking_supported else False
             if request.thinking is not eff_thinking:
                 request = request.model_copy(update={"thinking": eff_thinking})
+            # Resolve effective reasoning-effort level: per-call → per-assignment
+            # (task_routing.thinking_level) → model catalog default. Only
+            # meaningful when thinking is ON and the model declares levels;
+            # a hard "thinking off" always wins regardless of level.
+            eff_level: str | None = None
+            if eff_thinking and model.thinking_levels:
+                eff_level = request.thinking_level
+                if eff_level is None:
+                    eff_level = routing.thinking_level
+                if eff_level is None:
+                    eff_level = model.thinking_level_default or "medium"
+                if eff_level not in model.thinking_levels:
+                    eff_level = model.thinking_levels[0]  # clamp: defensive against stale overrides
+            if request.thinking_level != eff_level:
+                request = request.model_copy(update={"thinking_level": eff_level})
             # Container-bound servers (vLLM/llama.cpp) are started on demand and
             # auto-stopped when idle; bring the target up before dispatching.
             try:

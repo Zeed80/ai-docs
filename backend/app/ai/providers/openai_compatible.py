@@ -17,6 +17,22 @@ from app.ai.schemas import (
 )
 
 
+def _thinking_params(request: AIRequest, provider_kind: str) -> dict[str, Any]:
+    """Reasoning/CoT HTTP params for this request, or {} if undecided.
+
+    ``request.thinking`` is ``None`` only when a caller bypasses AIRouter's
+    resolution (AIRouter.run always resolves it to a concrete bool before
+    dispatching). Stay silent in that case rather than force an explicit
+    "off" onto a request nobody made a decision about — this is the gap fix
+    for the AIRouter path: previously thinking was never read here at all.
+    """
+    if request.thinking is None:
+        return {}
+    from app.ai.thinking_params import thinking_request_params
+
+    return thinking_request_params(provider_kind, request.thinking, request.thinking_level)
+
+
 def _inference_params(request: AIRequest, default_temperature: float = 0.2) -> dict[str, Any]:
     """Extract inference parameters from request metadata."""
     params = (request.metadata or {}).get("inference_params") or {}
@@ -69,6 +85,7 @@ class OpenAICompatibleProvider(AIProvider):
             "model": model,
             "messages": self._messages(request),
             **_inference_params(request, default_temperature=0.2),
+            **_thinking_params(request, self.config.kind.value),
         }
         if request.tools:
             payload["tools"] = [
@@ -139,6 +156,7 @@ class OpenAICompatibleProvider(AIProvider):
             "model": model,
             "messages": [{"role": "user", "content": content}],
             **_inference_params(request, default_temperature=0.0),
+            **_thinking_params(request, self.config.kind.value),
         }
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -30,12 +31,18 @@ class BuiltinAgentConfig(BaseModel):
     # default) this resolves to OFF, matching prior behaviour, while a model the
     # operator marks as a thinker (UI checkbox) will reason. Builder forces ON.
     orchestrator_disable_thinking: bool | None = None
+    # Per-role reasoning-effort override (tri-state), same defer-if-None
+    # semantics as the *_disable_thinking fields above. Only meaningful when
+    # the role's thinking resolves ON and the model declares thinking_levels.
+    orchestrator_thinking_level: Literal["low", "medium", "high"] | None = None
     worker_model: str | None = None
     worker_provider: str | None = None
     worker_disable_thinking: bool | None = None
+    worker_thinking_level: Literal["low", "medium", "high"] | None = None
     auditor_model: str | None = None
     auditor_provider: str | None = None
     auditor_disable_thinking: bool | None = None
+    auditor_thinking_level: Literal["low", "medium", "high"] | None = None
     # Allow the semantic auditor to use a cloud model (e.g. claude_*_anthropic
     # from the registry). Default False — quality checks stay local; the AI
     # router still hard-blocks any confidential content from cloud routes.
@@ -44,9 +51,11 @@ class BuiltinAgentConfig(BaseModel):
     builder_model: str | None = None
     builder_provider: str | None = None
     builder_disable_thinking: bool = False
+    builder_thinking_level: Literal["low", "medium", "high"] | None = None
     fast_model: str | None = None
     fast_provider: str | None = None
     fast_disable_thinking: bool | None = None
+    fast_thinking_level: Literal["low", "medium", "high"] | None = None
     # LLM provider: ollama, vllm, lmstudio, openai-compatible or supported cloud provider.
     provider: str = "ollama"
     # Ordered fallback chain tried when primary provider fails
@@ -54,6 +63,9 @@ class BuiltinAgentConfig(BaseModel):
     # Inject Anthropic prompt-cache headers (only effective with provider="anthropic")
     prompt_cache_enabled: bool = False
     disable_thinking: bool = True
+    # Global reasoning-effort fallback when no per-role override/catalog
+    # default applies. None → "medium" at resolution time.
+    thinking_level: Literal["low", "medium", "high"] | None = None
     ollama_url: str = "http://localhost:11434"
     llamacpp_url: str = "http://localhost:11436"
     vllm_url: str = "http://localhost:8001/v1"
@@ -109,23 +121,29 @@ class BuiltinAgentConfigUpdate(BaseModel):
     orchestrator_model: str | None = None
     orchestrator_provider: str | None = None
     orchestrator_disable_thinking: bool | None = None
+    orchestrator_thinking_level: Literal["low", "medium", "high"] | None = None
     worker_model: str | None = None
     worker_provider: str | None = None
     worker_disable_thinking: bool | None = None
+    worker_thinking_level: Literal["low", "medium", "high"] | None = None
     auditor_model: str | None = None
     auditor_provider: str | None = None
     auditor_disable_thinking: bool | None = None
+    auditor_thinking_level: Literal["low", "medium", "high"] | None = None
     auditor_allow_cloud: bool | None = None
     builder_model: str | None = None
     builder_provider: str | None = None
     builder_disable_thinking: bool | None = None
+    builder_thinking_level: Literal["low", "medium", "high"] | None = None
     fast_model: str | None = None
     fast_provider: str | None = None
     fast_disable_thinking: bool | None = None
+    fast_thinking_level: Literal["low", "medium", "high"] | None = None
     provider: str | None = None
     fallback_providers: list[str] | None = None
     prompt_cache_enabled: bool | None = None
     disable_thinking: bool | None = None
+    thinking_level: Literal["low", "medium", "high"] | None = None
     ollama_url: str | None = None
     llamacpp_url: str | None = None
     vllm_url: str | None = None

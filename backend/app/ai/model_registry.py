@@ -49,23 +49,37 @@ def _save_catalog_overlay(overlay: dict[str, dict[str, Any]]) -> None:
         logger.warning("model_catalog_overlay_write_failed", error=str(exc))
 
 
-def _load_thinking_overrides() -> dict[str, bool]:
+def _load_thinking_overrides() -> dict[str, dict[str, Any]]:
+    """Return per-model thinking overrides, normalized to ``{enabled, level}``.
+
+    Legacy entries are a plain ``bool`` (pre-level format); newer entries are
+    ``{"enabled": bool, "level": str|None}``. Both shapes must keep loading
+    forever — this overlay is rehydrated from Postgres on every startup, so
+    old rows never get a backfill pass.
+    """
     try:
         from app.utils.redis_client import get_sync_redis
 
         raw = get_sync_redis().get(_THINKING_OVERLAY_KEY)
-        return json.loads(raw) if raw else {}
+        data = json.loads(raw) if raw else {}
     except Exception:
         return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for key, value in data.items():
+        if isinstance(value, bool):
+            normalized[key] = {"enabled": value, "level": None}
+        elif isinstance(value, dict):
+            normalized[key] = {"enabled": bool(value.get("enabled")), "level": value.get("level")}
+    return normalized
 
 
-def set_thinking_override(model_key: str, enabled: bool) -> None:
-    """Persist a per-model thinking toggle (applied on every registry load)."""
+def set_thinking_override(model_key: str, enabled: bool, level: str | None = None) -> None:
+    """Persist a per-model thinking toggle + optional level (applied on every registry load)."""
     try:
         from app.utils.redis_client import get_sync_redis
 
         overrides = _load_thinking_overrides()
-        overrides[model_key] = bool(enabled)
+        overrides[model_key] = {"enabled": bool(enabled), "level": level}
         get_sync_redis().set(_THINKING_OVERLAY_KEY, json.dumps(overrides, ensure_ascii=False))
     except Exception as exc:
         logger.warning("model_thinking_override_write_failed", error=str(exc))
@@ -131,11 +145,19 @@ class ModelRegistry:
             for key, value in raw_models.items()
         }
         # Apply per-model thinking toggles from the UI (override YAML defaults).
-        for key, enabled in _load_thinking_overrides().items():
+        for key, override in _load_thinking_overrides().items():
             if key in models:
-                models[key] = models[key].model_copy(
-                    update={"thinking_enabled": bool(enabled), "thinking_supported": True}
-                )
+                update: dict[str, Any] = {
+                    "thinking_enabled": override["enabled"],
+                    "thinking_supported": True,
+                }
+                # An explicit level override only takes effect if the model
+                # already declares support for it — the UI never lets an
+                # operator pick a level for a model without thinking_levels,
+                # but be defensive in case of stale/hand-edited Redis data.
+                if override.get("level") and override["level"] in models[key].thinking_levels:
+                    update["thinking_level_default"] = override["level"]
+                models[key] = models[key].model_copy(update=update)
         # Apply per-model node pins from the UI.
         for key, inst in _load_preferred_instances().items():
             if key in models:

@@ -794,6 +794,11 @@ class AgentOrchestrator:
         # explicitly so it's independent of the orchestrator slot's setting.
         fast_thinking = _thinking_from_disable(config.fast_disable_thinking)
         big_thinking = _thinking_from_disable(config.orchestrator_disable_thinking)
+        # Reasoning-effort level, same tier pairing as the bool override above.
+        # Only takes effect when thinking resolves ON and the model declares
+        # thinking_levels (AIRouter.run clamps/ignores it otherwise).
+        fast_level = config.fast_thinking_level
+        big_level = config.orchestrator_thinking_level
 
         # Tier 1 — cheap fast model.
         decision, source = await turn_router.route_turn(
@@ -802,6 +807,7 @@ class AgentOrchestrator:
             timeout=timeout,
             has_open_spec_table=has_open_spec,
             thinking=fast_thinking if fast else big_thinking,
+            thinking_level=fast_level if fast else big_level,
         )
         # Tier 2 — escalate to the orchestrator model on failure/low confidence.
         if (decision is None or decision.confidence < min_conf) and big and big != (fast or big):
@@ -811,6 +817,7 @@ class AgentOrchestrator:
                 timeout=timeout,
                 has_open_spec_table=has_open_spec,
                 thinking=big_thinking,
+                thinking_level=big_level,
             )
             if esc is not None:
                 decision, source = esc, f"escalated_{esc_source}"

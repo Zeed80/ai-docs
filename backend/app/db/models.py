@@ -3497,6 +3497,7 @@ class ModelRuntimeOverride(UUIDPrimaryKey, TimestampMixin, Base):
 
     model_key: Mapped[str] = mapped_column(String(240), nullable=False)
     thinking_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    thinking_level: Mapped[str | None] = mapped_column(String(10))
     preferred_instance: Mapped[str | None] = mapped_column(String(150))
     verification_status: Mapped[str] = mapped_column(String(40), nullable=False, default="discovered")
     notes: Mapped[str | None] = mapped_column(Text)

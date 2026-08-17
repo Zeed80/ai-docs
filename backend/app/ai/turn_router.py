@@ -346,6 +346,7 @@ async def route_turn(
     has_open_spec_table: bool = False,
     history_summary: str = "",
     thinking: bool | None = None,
+    thinking_level: str | None = None,
 ) -> tuple[TurnDecision | None, str]:
     """Run one structured-output routing generation.
 
@@ -379,6 +380,7 @@ async def route_turn(
                     allow_cloud=False,  # router runs locally — confidential-safe
                     preferred_model=preferred_model,
                     thinking=thinking,  # per-assignment override (agent_fast slot)
+                    thinking_level=thinking_level,
                 )
             ),
             timeout=timeout,

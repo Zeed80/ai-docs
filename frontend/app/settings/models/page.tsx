@@ -66,6 +66,14 @@ const THINKING_DISABLE_SUPPORTED_PROVIDERS = [
   "qwen",
   "cerebras",
 ];
+// Russian labels for the canonical reasoning-effort levels. Keyed loosely
+// (Record<string,...>) since level lists come from the backend catalog, not
+// a frontend enum.
+const THINKING_LEVEL_LABEL: Record<string, string> = {
+  low: "низкая",
+  medium: "средняя",
+  high: "высокая",
+};
 
 interface ProviderStatus {
   running: boolean;
@@ -2548,6 +2556,9 @@ interface SlotItem {
   thinking_source?: "slot" | "model" | "unsupported";
   thinking_disable_supported?: boolean;
   thinking_warning?: string | null;
+  thinking_levels?: string[]; // reasoning-effort levels the SELECTED model supports (empty = none)
+  thinking_level_override?: string | null; // this slot's explicit level override
+  thinking_level_effective?: string | null; // resolved level actually in effect
 }
 interface AssignmentIssue {
   slot: string;
@@ -2565,6 +2576,8 @@ interface AssignmentDiffItem {
 interface ProvModel extends CatalogEntry {
   thinking_supported: boolean;
   thinking_enabled: boolean;
+  thinking_levels?: string[]; // reasoning-effort levels this model accepts (empty = on/off only)
+  thinking_level_default?: string | null;
   loaded?: boolean;
   node?: string | null;
 }
@@ -2764,7 +2777,11 @@ function AssignmentTab() {
     }
   };
 
-  const toggleThinking = async (key: string, enabled: boolean) => {
+  const toggleThinking = async (
+    key: string,
+    enabled: boolean,
+    level?: string | null,
+  ) => {
     try {
       await fetch(
         `${API}/api/providers/models/${encodeURIComponent(key)}/thinking`,
@@ -2775,7 +2792,7 @@ function AssignmentTab() {
             ...(await csrfHeaders()),
           },
           credentials: "include",
-          body: JSON.stringify({ enabled }),
+          body: JSON.stringify({ enabled, level: level ?? null }),
         },
       );
       flash(enabled ? "Рассуждение включено" : "Рассуждение выключено");
@@ -2785,8 +2802,19 @@ function AssignmentTab() {
     }
   };
 
+  // Reasoning-effort level for a model's default toggle (low/medium/high) —
+  // only rendered when the model declares thinking_levels. Reuses the same
+  // PATCH endpoint as toggleThinking, keeping enabled=true implicit.
+  const setModelThinkingLevel = async (key: string, level: string) => {
+    await toggleThinking(key, true, level);
+  };
+
   // Per-assignment reasoning (tri-state): null = model default, true/false force.
-  const setSlotThinking = async (slot: string, enabled: boolean | null) => {
+  const setSlotThinking = async (
+    slot: string,
+    enabled: boolean | null,
+    level?: string | null,
+  ) => {
     try {
       await fetch(`${API}/api/providers/slots/${slot}/thinking`, {
         method: "PATCH",
@@ -2795,7 +2823,7 @@ function AssignmentTab() {
           ...(await csrfHeaders()),
         },
         credentials: "include",
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled, level: level ?? null }),
       });
       flash(
         enabled === null
@@ -3043,6 +3071,13 @@ function AssignmentTab() {
                   !disableSupported
                     ? "API этого провайдера может игнорировать выключение reasoning"
                     : s.thinking_warning;
+                // Reasoning-effort level (low/medium/high) — only relevant
+                // when reasoning is actually ON for the currently selected
+                // model and that model declares levels at all.
+                const selectedThinkingLevels = draftChosen
+                  ? (draftChosen.thinking_levels ?? [])
+                  : (s.thinking_levels ?? []);
+                const thinkingLevelOverride = s.thinking_level_override ?? null;
                 return (
                   <div
                     key={s.slot}
@@ -3105,6 +3140,36 @@ function AssignmentTab() {
                               reasoning недоступен
                             </span>
                           )}
+                          {selectedThinkingCapable &&
+                            effectiveThinking !== false &&
+                            selectedThinkingLevels.length > 0 && (
+                              <label
+                                className="flex items-center gap-1.5 whitespace-nowrap"
+                                title="Сила размышления (reasoning effort) для этого назначения"
+                              >
+                                сила
+                                <select
+                                  className="rounded border border-slate-600 bg-slate-900 px-1 py-0.5 text-xs text-slate-200"
+                                  value={thinkingLevelOverride ?? "default"}
+                                  onChange={(e) =>
+                                    setSlotThinking(
+                                      s.slot,
+                                      thinkingOverride,
+                                      e.target.value === "default"
+                                        ? null
+                                        : e.target.value,
+                                    )
+                                  }
+                                >
+                                  <option value="default">по умолчанию</option>
+                                  {selectedThinkingLevels.map((lvl) => (
+                                    <option key={lvl} value={lvl}>
+                                      {THINKING_LEVEL_LABEL[lvl] ?? lvl}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            )}
                           <span className="text-slate-500 whitespace-nowrap">
                             эффективно:{" "}
                             {thinkingText(effectiveThinking, thinkingSource)}
@@ -3215,16 +3280,35 @@ function AssignmentTab() {
                     </td>
                     <td className="py-1.5 px-2 whitespace-nowrap">
                       {m.thinking_supported ? (
-                        <label className="inline-flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={m.thinking_enabled}
-                            onChange={(e) =>
-                              toggleThinking(m.key, e.target.checked)
-                            }
-                          />
-                          По умолчанию модели
-                        </label>
+                        <div className="flex items-center gap-2">
+                          <label className="inline-flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={m.thinking_enabled}
+                              onChange={(e) =>
+                                toggleThinking(m.key, e.target.checked)
+                              }
+                            />
+                            По умолчанию модели
+                          </label>
+                          {m.thinking_enabled &&
+                            (m.thinking_levels?.length ?? 0) > 0 && (
+                              <select
+                                className="rounded border border-slate-600 bg-slate-900 px-1 py-0.5 text-xs text-slate-200"
+                                title="Сила размышления (reasoning effort) по умолчанию для этой модели"
+                                value={m.thinking_level_default ?? "medium"}
+                                onChange={(e) =>
+                                  setModelThinkingLevel(m.key, e.target.value)
+                                }
+                              >
+                                {m.thinking_levels!.map((lvl) => (
+                                  <option key={lvl} value={lvl}>
+                                    {THINKING_LEVEL_LABEL[lvl] ?? lvl}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                        </div>
                       ) : (
                         <span className="text-xs text-slate-600">без CoT</span>
                       )}
