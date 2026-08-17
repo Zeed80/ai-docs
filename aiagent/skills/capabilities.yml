@@ -7,6 +7,41 @@ mode: capabilities
 
 capabilities:
 
+  - name: computer_use
+    description: >
+      Брокер управляемой работы с браузером, файлами, shell и снимками страницы.
+      Каждое действие требует короткоживущий grant, привязанный к work_order_id,
+      allowlist хостов/каталогов/команд и лимит действий. Прямого shell, доступа
+      ко всему диску или произвольной сети нет. browser_fetch читает страницу,
+      desktop_snapshot дополнительно сохраняет визуальное свидетельство;
+      desktop_start/click/type/read/close ведут короткую интерактивную браузерную
+      сессию и после каждого действия возвращают screenshot evidence,
+      file_read/file_write работают только внутри разрешённых корней, shell —
+      только argv-команды из allowlist без shell-интерпретации.
+    path: /api/agent/cap/computer_use
+    method: POST
+    gate_actions: [desktop_click, desktop_type, file_write, shell]
+    non_recipeable_actions: [desktop_start, desktop_click, desktop_type, desktop_close, file_write, shell]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "browser_fetch | desktop_snapshot | desktop_start | desktop_click | desktop_type | desktop_read | desktop_close | file_read | file_write | shell"
+        work_order_id:
+          type: string
+          description: "ID поручения, к которому привязан grant"
+        step_id:
+          type: string
+          description: "ID текущего шага для аудита"
+        target:
+          type: string
+          description: "URL, абсолютный путь или команда argv"
+        arguments:
+          type: object
+          description: "Параметры действия: content/cwd/timeout/max_chars/wait_ms"
+      required: [action, work_order_id, target]
+
   - name: documents
     description: >
       Работа с документами: загрузить файл, найти по фильтрам или запросу,

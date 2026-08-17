@@ -16,11 +16,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import random
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from patchright.async_api import async_playwright
 from pydantic import BaseModel, Field
+from urllib.parse import urlparse
 
 try:
     import trafilatura
@@ -89,11 +91,15 @@ class _Browser:
 
 
 _engine = _Browser()
+_sessions: dict[str, dict] = {}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
+    for session in list(_sessions.values()):
+        await session["context"].close()
+    _sessions.clear()
     await _engine.close()
 
 
@@ -119,6 +125,41 @@ class FetchResponse(BaseModel):
     # Base64 PNGs of scanned-PDF pages, for the backend to OCR.
     page_images_b64: list[str] = []
     diagnostics: list[str] = []
+
+
+class DesktopStartRequest(BaseModel):
+    url: str = Field(..., min_length=4, max_length=2048)
+    allowed_hosts: list[str] = Field(min_length=1, max_length=50)
+
+
+class DesktopActionRequest(BaseModel):
+    session_id: str
+    action: str = Field(pattern="^(click|type|read|screenshot|close)$")
+    selector: str | None = Field(default=None, max_length=2000)
+    text: str | None = Field(default=None, max_length=200000)
+    wait_ms: int = Field(0, ge=0, le=15000)
+
+
+def _session_host_allowed(url: str, hosts: list[str]) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").casefold()
+    return parsed.scheme in {"http", "https"} and any(
+        host == allowed.casefold() or host.endswith("." + allowed.casefold())
+        for allowed in hosts
+    )
+
+
+async def _new_browser_context():
+    browser = await _engine.ensure()
+    return await browser.new_context(
+        user_agent=_USER_AGENT,
+        viewport=_VIEWPORT,
+        locale=_LOCALE,
+        timezone_id=_TIMEZONE,
+        extra_http_headers=_EXTRA_HEADERS,
+        java_script_enabled=True,
+        ignore_https_errors=True,
+    )
 
 
 def _extract_pdf_text(data: bytes, max_chars: int) -> tuple[str, str | None]:
@@ -194,6 +235,76 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@app.post("/desktop/start")
+async def desktop_start(req: DesktopStartRequest) -> dict:
+    if not _session_host_allowed(req.url, req.allowed_hosts):
+        return {"ok": False, "error": "host_not_allowed"}
+    context = await _new_browser_context()
+    page = await context.new_page()
+    try:
+        response = await page.goto(req.url, wait_until="domcontentloaded", timeout=30000)
+    except Exception:
+        response = None
+    if not _session_host_allowed(page.url, req.allowed_hosts):
+        await context.close()
+        return {"ok": False, "error": "navigation_left_allowlist"}
+    session_id = str(uuid.uuid4())
+    _sessions[session_id] = {
+        "context": context,
+        "page": page,
+        "allowed_hosts": list(req.allowed_hosts),
+        "lock": asyncio.Lock(),
+    }
+    shot = await page.screenshot(type="png", animations="disabled", caret="hide")
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "url": page.url,
+        "status": response.status if response else None,
+        "title": await page.title(),
+        "screenshot_b64": base64.b64encode(shot).decode("ascii"),
+    }
+
+
+@app.post("/desktop/action")
+async def desktop_action(req: DesktopActionRequest) -> dict:
+    session = _sessions.get(req.session_id)
+    if session is None:
+        return {"ok": False, "error": "session_not_found"}
+    async with session["lock"]:
+        page = session["page"]
+        if req.action == "close":
+            await session["context"].close()
+            _sessions.pop(req.session_id, None)
+            return {"ok": True, "closed": True}
+        if req.action in {"click", "type"} and not req.selector:
+            return {"ok": False, "error": "selector_required"}
+        try:
+            if req.action == "click":
+                await page.locator(req.selector).click(timeout=15000)
+            elif req.action == "type":
+                await page.locator(req.selector).fill(req.text or "", timeout=15000)
+            if req.wait_ms:
+                await page.wait_for_timeout(req.wait_ms)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"action_failed:{str(exc)[:300]}"}
+        if not _session_host_allowed(page.url, session["allowed_hosts"]):
+            await session["context"].close()
+            _sessions.pop(req.session_id, None)
+            return {"ok": False, "error": "navigation_left_allowlist"}
+        text = ""
+        if req.action == "read":
+            text = await page.locator("body").inner_text(timeout=15000)
+        shot = await page.screenshot(type="png", animations="disabled", caret="hide")
+        return {
+            "ok": True,
+            "url": page.url,
+            "title": await page.title(),
+            "text": text[:200000],
+            "screenshot_b64": base64.b64encode(shot).decode("ascii"),
+        }
+
+
 async def _fetch_pdf(context, req, headers, diagnostics, nav_response=None):
     """Download PDF bytes (browser cookies + human headers) and extract text."""
     status = None
@@ -242,16 +353,7 @@ async def _fetch_pdf(context, req, headers, diagnostics, nav_response=None):
 @app.post("/fetch", response_model=FetchResponse)
 async def fetch(req: FetchRequest) -> FetchResponse:
     diagnostics: list[str] = []
-    browser = await _engine.ensure()
-    context = await browser.new_context(
-        user_agent=_USER_AGENT,
-        viewport=_VIEWPORT,
-        locale=_LOCALE,
-        timezone_id=_TIMEZONE,
-        extra_http_headers=_EXTRA_HEADERS,
-        java_script_enabled=True,
-        ignore_https_errors=True,
-    )
+    context = await _new_browser_context()
     page = await context.new_page()
     status: int | None = None
     final_url: str | None = None

@@ -49,6 +49,7 @@ from app.api import (
     collections,
     comments as comments_api,
     compare,
+    computer_use,
     dashboard,
     documents,
     draft_email,
@@ -78,6 +79,7 @@ from app.api import (
     cases,
     warehouse,
     web_search,
+    work_orders,
     workspace,
     workspace_export,
     spec_tables,
@@ -364,6 +366,18 @@ def create_app() -> FastAPI:
         agent_control_plane.router,
         prefix="/api/agent",
         tags=["agent-control-plane"],
+        dependencies=_auth,
+    )
+    app.include_router(
+        work_orders.router,
+        prefix="/api/work-orders",
+        tags=["work-orders"],
+        dependencies=_auth,
+    )
+    app.include_router(
+        computer_use.router,
+        prefix="/api/computer-use",
+        tags=["computer-use"],
         dependencies=_auth,
     )
     app.include_router(ai_settings.router, prefix="/api/ai", tags=["ai"], dependencies=_auth)

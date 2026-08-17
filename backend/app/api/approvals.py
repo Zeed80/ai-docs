@@ -366,6 +366,21 @@ async def decide_approval(
                 "decided_by": user.sub,
             },
         ))
+        if approval.entity_type == "work_order":
+            from app.domain.work_orders import WorkStateError, apply_approval_decision
+
+            try:
+                await apply_approval_decision(
+                    db,
+                    work_order_id=approval.entity_id,
+                    step_id=uuid.UUID(str(context.get("step_id"))),
+                    approval_id=approval.id,
+                    approved=payload.status == ApprovalStatus.approved,
+                    actor=user.sub,
+                    action_digest=str(context.get("action_digest") or "") or None,
+                )
+            except (ValueError, WorkStateError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
     # Notify the requester about the decision
     if approval.requested_by and approval.requested_by != "sveta":
         from app.services.notifications import create_notification

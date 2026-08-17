@@ -65,6 +65,8 @@ isProject: false
 
 ### 2.2. Бэкенд и Инфраструктура
 - **AiAgent Gateway:** WebSocket-шлюз, управление сессиями, контекстом чата, интеграция навыков (Skills/Plugins) через прозрачный Approval workflow.
+- **Durable Work Runtime:** FastAPI/PostgreSQL-модель `WorkOrder → WorkPlan → WorkStep → Attempt`, append-only события, DAG-зависимости, lease/heartbeat/retry, отдельная верификация и evidence-gated completion. Чат и cron являются каналами постановки задач, а не владельцами жизненного цикла.
+- **Autonomous Execution Runtime (реализовано 2026-08-17):** capability-grounded planner/replanner, типизированный dataflow между шагами, write-ahead журнал `WorkToolCall`, автоматический semantic verifier, least-privilege computer-use broker и операторская поверхность `/work-orders`. Неизвестные capabilities/actions и неподтверждённые OS/внешние действия блокируются fail-closed.
 - **Python / FastAPI + Celery:** "Тяжелый" Data Layer. Парсинг почты, извлечение текста (PyMuPDF), конвертация CAD-файлов, генерация/парсинг Excel, детекция аномалий.
 - **Базы данных:** `PostgreSQL` (все документы, AuditLog, сущности), `Qdrant` (векторный гибридный поиск), `MinIO` (хранилище файлов).
 

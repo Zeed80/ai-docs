@@ -23,6 +23,18 @@ logger = structlog.get_logger()
 # Maps capability → action → (method, path_template, path_params)
 # path_params: list of arg keys that get interpolated into the URL
 _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
+    "computer_use": {
+        "browser_fetch": ("POST", "/api/computer-use/execute", []),
+        "desktop_snapshot": ("POST", "/api/computer-use/execute", []),
+        "desktop_start": ("POST", "/api/computer-use/execute", []),
+        "desktop_click": ("POST", "/api/computer-use/execute", []),
+        "desktop_type": ("POST", "/api/computer-use/execute", []),
+        "desktop_read": ("POST", "/api/computer-use/execute", []),
+        "desktop_close": ("POST", "/api/computer-use/execute", []),
+        "file_read": ("POST", "/api/computer-use/execute", []),
+        "file_write": ("POST", "/api/computer-use/execute", []),
+        "shell": ("POST", "/api/computer-use/execute", []),
+    },
     "documents": {
         "list":         ("GET",    "/api/documents",                          []),
         "get":          ("GET",    "/api/documents/{document_id}",            ["document_id"]),
@@ -443,6 +455,7 @@ async def _proxy(
     body: dict,
     base_url: str,
     acting_user: str | None = None,
+    idempotency_key: str | None = None,
 ) -> dict:
     """Interpolate path params, split remaining args into query/body, proxy request."""
     query: dict = {}
@@ -458,6 +471,8 @@ async def _proxy(
 
     url = base_url.rstrip("/") + path
     headers = _service_headers(acting_user)
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
     # Web research/browse read many live pages (+ PDF OCR) and legitimately take
     # minutes — the default 30s would time out and trigger wasteful retries that
     # re-run the whole search. Give these paths a generous budget.
@@ -701,7 +716,13 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
     await _audit_tool_call(capability_name, action, reason, request)
 
     result = await _proxy(
-        method, path_tpl, path_params, body, base_url, acting_user=_acting_user(request)
+        method,
+        path_tpl,
+        path_params,
+        body,
+        base_url,
+        acting_user=_acting_user(request),
+        idempotency_key=request.headers.get("X-Agent-Idempotency-Key"),
     )
     return JSONResponse(content=result)
 

@@ -62,7 +62,9 @@
 - Runtime config: `autonomy_mode=max_autonomy`, `permission_mode`, `safe_auto_apply_enabled`, protected setting proposals.
 - Policy engine: блокирует high-risk tools без approval gate, external skills при `local_only/confidential`, mutating tools в read-only mode.
 - Memory: документная hybrid memory дополняется episodic `chat_turn` и pinned facts; агент пишет успешные диалоги через `/api/memory/chat-turn`.
-- Work registry: `/api/agent/tasks`, `/api/agent/teams`, `/api/agent/cron` фиксируют автономные задачи, команды и proactive workflows.
+- Durable work runtime: `/api/work-orders` хранит `WorkOrder`, ревизии DAG-плана, шаги, попытки, lease/heartbeat, критерии, evidence и append-only events. `/api/agent/tasks` остаётся совместимым фасадом, cron создаёт WorkOrder.
+- Scheduler/verifier: Celery beat подбирает шаги через `SKIP LOCKED`, восстанавливает пропавшие workers, продвигает зависимости и запускает проверку отдельно от executor. Ложный `completed` запрещён на уровне state machine.
+- Capability execution: durable-шаги вызывают единый `/api/agent/cap/{capability}`; approval-required автоматически создаёт точечно подписанное согласование и возобновляется после решения.
 - Plugin registry: `/api/agent/plugins` хранит manifest drafts и enable/disable state; shell execution не входит в первый срез.
 - Capability builder: `/api/agent/capabilities/propose`, `/status`, `/sandbox-apply` позволяют агенту фиксировать недостающие tools/skills, подготовить sandbox validation и передать решение человеку.
 - GUI: настройки агента показывают автономию, режим прав, safe auto-apply, статус control plane, protected config proposals и capability proposals с approve/reject/sandbox действиями.
@@ -1541,6 +1543,18 @@ document-invoices-ai/
 ---
 
 ## Верификация
+
+### Durable autonomous employee runtime — выполнено 2026-08-17
+
+- [x] Автоматический planner строит валидируемый capability DAG; deterministic fallback сохраняет работоспособность при недоступной модели.
+- [x] Точные tool arguments, provenance, digest, risk и idempotency фиксируются до внешнего вызова.
+- [x] Dataflow `${steps.key.output.path}` и bounded replanning не повторяют успешно завершённые операции.
+- [x] Отдельный automatic semantic verifier закрывает acceptance criteria только по evidence и fail-closed.
+- [x] Computer-use broker: временные grants, allowlist hosts/roots/commands, browser snapshot, filesystem и argv-shell без shell-интерпретации.
+- [x] UI `/work-orders`: постановка, статусы, DAG, blockers/result, instruction/replan, run/cancel, event timeline.
+- [x] Unit/API recovery tests, broker grant test и Playwright operator flow.
+- [x] Fresh PostgreSQL `alembic upgrade head` bootstrap устранён от dynamic-baseline collision; incremental production upgrades сохранены.
+- [x] Интерактивный desktop sidecar поддерживает start/click/type/read/screenshot/close, host allowlist и screenshot evidence после каждого действия.
 
 > CAD/3D source of truth, включая `EngineeringModelGraph v1`, GraphPatch, hybrid trace gates, активный mechanical canary и оставшийся rollout других профилей, ведётся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).
 

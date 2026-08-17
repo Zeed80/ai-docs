@@ -153,6 +153,11 @@ celery_app.conf.beat_schedule = {
         "task": "agent.cron_dispatch",
         "schedule": 60.0,
     },
+    # Durable autonomous runtime: reclaim stale leases and dispatch ready steps.
+    "work-order-dispatch": {
+        "task": "work.dispatch_ready",
+        "schedule": 5.0,
+    },
     # Safety net: sweep business-entity graph nodes/edges left orphaned by
     # any path that bypassed the memory_builder hooks — every 30 minutes.
     "memory-reconcile-graph": {
@@ -187,6 +192,7 @@ from app.tasks import saved_query_alerts as _saved_query_alerts  # noqa: F401
 from app.tasks import canonical_cluster as _canonical_cluster  # noqa: F401
 from app.tasks import tp_generation as _tp_generation  # noqa: F401
 from app.tasks import agent_cron as _agent_cron  # noqa: F401
+from app.tasks import work_orders as _work_orders  # noqa: F401
 from app.tasks import graph_memory as _graph_memory  # noqa: F401
 from app.tasks import graph_analytics as _graph_analytics  # noqa: F401
 from app.tasks import image_generation as _image_generation  # noqa: F401

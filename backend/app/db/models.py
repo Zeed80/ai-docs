@@ -1545,6 +1545,301 @@ class AgentCron(UUIDPrimaryKey, TimestampMixin, Base):
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
 
+# ── Durable autonomous work runtime ───────────────────────────────────────────────
+
+
+class WorkOrder(UUIDPrimaryKey, TimestampMixin, Base):
+    """Durable objective owned by the autonomous runtime.
+
+    A work order outlives a chat/WebSocket connection. Completion is allowed
+    only after all required acceptance criteria have verified evidence.
+    """
+
+    __tablename__ = "work_orders"
+    __table_args__ = (
+        Index("ix_work_orders_dispatch", "status", "priority", "created_at"),
+    )
+
+    owner_key: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(50), default="api", nullable=False, index=True)
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(40), default="received", nullable=False, index=True)
+    risk_level: Mapped[str] = mapped_column(String(20), default="low", nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    constraints: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    budgets: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    policy_snapshot: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    plan_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    result_summary: Mapped[str | None] = mapped_column(Text)
+    blocker: Mapped[dict | None] = mapped_column(JSON)
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_owner: Mapped[str | None] = mapped_column(String(200), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="SET NULL"), index=True
+    )
+    legacy_agent_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("agent_tasks.id", ondelete="SET NULL"), unique=True
+    )
+    metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict, nullable=False)
+
+    plans: Mapped[list["WorkPlan"]] = relationship(
+        back_populates="work_order", cascade="all, delete-orphan"
+    )
+    criteria: Mapped[list["WorkAcceptanceCriterion"]] = relationship(
+        back_populates="work_order", cascade="all, delete-orphan"
+    )
+
+
+class WorkPlan(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "work_plans"
+    __table_args__ = (UniqueConstraint("work_order_id", "revision", name="uq_work_plan_revision"),)
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="active", nullable=False, index=True)
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    assumptions: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    verification_plan: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(100), default="planner", nullable=False)
+
+    work_order: Mapped["WorkOrder"] = relationship(back_populates="plans")
+    steps: Mapped[list["WorkStep"]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan"
+    )
+
+
+class WorkStep(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "work_steps"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "step_key", name="uq_work_step_key"),
+        UniqueConstraint("idempotency_key", name="uq_work_step_idempotency_key"),
+        Index("ix_work_steps_dispatch", "state", "next_attempt_at", "created_at"),
+    )
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    plan_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_plans.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    step_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    capability: Mapped[str | None] = mapped_column(String(200))
+    action: Mapped[str | None] = mapped_column(String(200))
+    input_: Mapped[dict] = mapped_column("input", JSON, default=dict, nullable=False)
+    depends_on: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    success_predicate: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    state: Mapped[str] = mapped_column(String(40), default="pending", nullable=False, index=True)
+    risk_level: Mapped[str] = mapped_column(String(20), default="low", nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=600, nullable=False)
+    retry_policy: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(200), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    output: Mapped[dict | None] = mapped_column(JSON)
+    last_error: Mapped[dict | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    plan: Mapped["WorkPlan"] = relationship(back_populates="steps")
+    attempts: Mapped[list["WorkStepAttempt"]] = relationship(
+        back_populates="step", cascade="all, delete-orphan"
+    )
+
+
+class WorkStepAttempt(UUIDPrimaryKey, Base):
+    __tablename__ = "work_step_attempts"
+    __table_args__ = (UniqueConstraint("step_id", "attempt_no", name="uq_work_step_attempt"),)
+
+    step_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_steps.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    worker_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="running", nullable=False, index=True)
+    input_: Mapped[dict] = mapped_column("input", JSON, default=dict, nullable=False)
+    output: Mapped[dict | None] = mapped_column(JSON)
+    checkpoint: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[dict | None] = mapped_column(JSON)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    step: Mapped["WorkStep"] = relationship(back_populates="attempts")
+
+
+class WorkToolCall(UUIDPrimaryKey, TimestampMixin, Base):
+    """Immutable intent plus mutable settlement for one external executor call."""
+
+    __tablename__ = "work_tool_calls"
+    __table_args__ = (
+        UniqueConstraint("attempt_id", "call_no", name="uq_work_tool_call_attempt_no"),
+        UniqueConstraint("idempotency_key", name="uq_work_tool_call_idempotency_key"),
+        Index("ix_work_tool_calls_order_status", "work_order_id", "status"),
+    )
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    step_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_steps.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    attempt_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_step_attempts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    call_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    executor: Mapped[str] = mapped_column(String(40), nullable=False)
+    capability: Mapped[str | None] = mapped_column(String(200))
+    action: Mapped[str | None] = mapped_column(String(200))
+    arguments: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    resolved_from: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(20), default="low", nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="prepared", nullable=False, index=True)
+    action_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    output: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[dict | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ComputerUseGrant(UUIDPrimaryKey, TimestampMixin, Base):
+    """Short-lived least-privilege authority for brokered OS/browser actions."""
+
+    __tablename__ = "computer_use_grants"
+    __table_args__ = (Index("ix_computer_use_grants_active", "work_order_id", "revoked_at", "expires_at"),)
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    granted_to: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    granted_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    actions: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    allowed_roots: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    allowed_hosts: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    allowed_commands: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    max_actions: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
+    used_actions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ComputerUseAction(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "computer_use_actions"
+    __table_args__ = (Index("ix_computer_use_actions_order_created", "work_order_id", "created_at"),)
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    grant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("computer_use_grants.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    step_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("work_steps.id", ondelete="SET NULL"), index=True
+    )
+    action: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    target: Mapped[str] = mapped_column(Text, nullable=False)
+    arguments: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    action_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(30), default="prepared", nullable=False, index=True)
+    result: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[dict | None] = mapped_column(JSON)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WorkAcceptanceCriterion(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "work_acceptance_criteria"
+    __table_args__ = (UniqueConstraint("work_order_id", "criterion_key", name="uq_work_criterion_key"),)
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    criterion_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    predicate: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False, index=True)
+    verdict: Mapped[dict | None] = mapped_column(JSON)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verified_by: Mapped[str | None] = mapped_column(String(200))
+
+    work_order: Mapped["WorkOrder"] = relationship(back_populates="criteria")
+
+
+class WorkArtifact(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "work_artifacts"
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    step_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("work_steps.id", ondelete="SET NULL"), index=True
+    )
+    artifact_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(500), nullable=False)
+    uri: Mapped[str | None] = mapped_column(Text)
+    content_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    content_type: Mapped[str | None] = mapped_column(String(150))
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict, nullable=False)
+
+
+class WorkEvidence(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "work_evidence"
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    criterion_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("work_acceptance_criteria.id", ondelete="CASCADE"), index=True
+    )
+    step_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("work_steps.id", ondelete="SET NULL"), index=True
+    )
+    evidence_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source: Mapped[str] = mapped_column(String(200), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    content_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    verifier_status: Mapped[str] = mapped_column(String(30), default="unverified", nullable=False)
+
+
+class WorkEvent(UUIDPrimaryKey, Base):
+    __tablename__ = "work_events"
+    __table_args__ = (
+        UniqueConstraint("work_order_id", "sequence", name="uq_work_events_order_sequence"),
+        Index("ix_work_events_order_seq", "work_order_id", "sequence"),
+    )
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    actor: Mapped[str] = mapped_column(String(200), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+
 class AgentPlugin(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "agent_plugins"
 

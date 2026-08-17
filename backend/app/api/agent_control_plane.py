@@ -12,12 +12,14 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.agent_config import (
+    BuiltinAgentConfig,
     BuiltinAgentConfigUpdate,
     get_builtin_agent_config,
     update_builtin_agent_config,
@@ -48,6 +50,7 @@ from app.auth.models import UserInfo, UserRole
 from app.db.session import get_db
 
 router = APIRouter()
+logger = structlog.get_logger()
 
 
 def _count_active_skills(config: BuiltinAgentConfig) -> int:
@@ -917,7 +920,7 @@ async def run_agent_task(
     db: AsyncSession = Depends(get_db),
     _user: UserInfo = Depends(require_human_role(UserRole.admin)),
 ) -> AgentTask:
-    """Run an approved autonomous task once through the headless agent executor."""
+    """Run an approved task through the durable WorkOrder runtime."""
     task = await db.get(AgentTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Agent task not found")
@@ -935,21 +938,66 @@ async def run_agent_task(
     await db.commit()
     await db.refresh(task)
 
-    prompt = task.objective
-    if task.description:
-        prompt = f"{task.objective}\n\nКонтекст задачи:\n{task.description}"
-    try:
-        from app.tasks.agent_cron import run_headless_agent_turn
+    from app.db.models import WorkOrder
+    from app.domain.work_orders import create_single_step_plan, create_work_order
 
-        ok, output = await run_headless_agent_turn(prompt)
+    prompt = task.objective + (
+        f"\n\nКонтекст задачи:\n{task.description}" if task.description else ""
+    )
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.legacy_agent_task_id == task.id)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        work_order = await create_work_order(
+            db,
+            owner_key=_user.sub,
+            objective=task.objective,
+            description=task.description,
+            source="legacy_agent_task",
+            legacy_agent_task_id=task.id,
+            metadata={"role": task.role, "team_id": str(task.team_id) if task.team_id else None},
+        )
+        await create_single_step_plan(
+            db,
+            work_order,
+            kind="agent_turn",
+            title="Выполнить совместимое AgentTask-поручение",
+            input_data={"prompt": prompt},
+            timeout_seconds=600,
+        )
+        metadata = dict(task.metadata_ or {})
+        metadata["work_order_id"] = str(work_order.id)
+        task.metadata_ = metadata
+        await db.commit()
+    try:
+        from app.tasks.work_orders import execute_work_order_now
+
+        from app.config import settings
+
+        execution_factory = (
+            async_sessionmaker(bind=db.bind, expire_on_commit=False)
+            if settings.app_env == "test"
+            else None
+        )
+        await execute_work_order_now(work_order.id, session_factory=execution_factory)
     except Exception as exc:
-        ok = False
+        logger.exception("durable_agent_task_execution_failed", task_id=str(task.id))
         output = f"Task execution failed: {exc}"
+    else:
+        await db.refresh(work_order)
+        output = work_order.result_summary or (
+            str((work_order.blocker or {}).get("reason") or work_order.blocker or "")
+        )
+    ok = work_order.status == "completed"
 
     finished_at = datetime.now(timezone.utc)
     metadata = dict(task.metadata_ or {})
     metadata.update({
         "run_status": "completed" if ok else "failed",
+        "work_order_id": str(work_order.id),
+        "work_order_status": work_order.status,
         "run_finished_at": finished_at.isoformat(),
         "run_duration_ms": int((finished_at - started_at).total_seconds() * 1000),
     })

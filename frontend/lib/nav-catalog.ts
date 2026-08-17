@@ -19,7 +19,7 @@ export interface NavGroup {
 }
 
 // Always visible to every authenticated user; not part of the assignable grant.
-export const BASE_SECTION_KEYS = ["feed"];
+export const BASE_SECTION_KEYS = ["feed", "work_orders"];
 
 export const NAV_GROUPS: NavGroup[] = [
   {
@@ -90,6 +90,7 @@ export const NAV_GROUPS: NavGroup[] = [
     key: "system",
     title: "Система",
     items: [
+      { key: "work_orders", href: "/work-orders", icon: "cpu" },
       { key: "quarantine", href: "/quarantine", icon: "shield" },
       { key: "settings", href: "/settings", icon: "settings" },
       { key: "admin", href: "/admin", icon: "admin", adminOnly: true },

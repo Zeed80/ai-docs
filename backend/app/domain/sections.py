@@ -39,8 +39,9 @@ class SectionGroup(BaseModel):
 
 
 # Always available to every authenticated user; not assignable (not shown in the
-# admin checkbox tree). "feed" = the "Сегодня" landing page.
-BASE_SECTION_KEYS: frozenset[str] = frozenset({"feed"})
+# admin checkbox tree). "feed" is the landing page; every authenticated user
+# can also manage only their own durable work orders.
+BASE_SECTION_KEYS: frozenset[str] = frozenset({"feed", "work_orders"})
 
 
 SECTION_CATALOG: list[SectionGroup] = [
@@ -111,6 +112,7 @@ SECTION_CATALOG: list[SectionGroup] = [
         key="system",
         label="Система",
         items=[
+            SectionItem(key="work_orders", label="Поручения", href="/work-orders"),
             SectionItem(key="quarantine", label="Карантин", href="/quarantine"),
             SectionItem(key="settings", label="Настройки", href="/settings"),
             SectionItem(

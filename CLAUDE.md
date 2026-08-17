@@ -92,7 +92,7 @@ make agent-test   # AiAgent scenarios на mock skills
 - **Spec-таблицы**: «таблица = спецификация, данные = SQL». LLM передаёт только TableSpec (источник/колонки/фильтры/сортировка из whitelisted-каталога `backend/app/domain/table_spec.py`), движок отдаёт ПОЛНЫЙ датасет (true total, cap 5000). Spec хранится в workspace-блоке; правки («добавь столбец с НДС перед суммой», «отсортируй…», «покажи только…») — детерминированные патчи через fast-path оркестратора, 0 LLM. API: `/api/workspace/agent/spec-table(+/patch,/catalog)`; capability `workspace`, actions `spec_table*`. Smart-фильтр: стемминг + точные числа + canonical items.
 - **Рецепты (self-learning)**: успешный многошаговый ход → draft `RecipeSkill` (Postgres + Qdrant `recipe_triggers`); активный рецепт с похожим триггером выполняется replay'ем без LLM-планирования (`backend/app/ai/recipes.py`, UI: /settings/recipes). Approval-gated действия в рецепты не попадают.
 - **Кодоген под замком**: сгенерированный Python исполняется ТОЛЬКО в изолированном контейнере `skill-runner` (infra/skill-runner; non-root, read-only, без секретов); активация только через proposal → human decide → promote. Реестр promoted-скиллов: `aiagent/skills/capabilities.generated.yml`.
-- **AgentCron**: beat-задача `agent.cron_dispatch` ежеминутно выполняет due-расписания headless-ходом агента, результат — в `AgentTask`. `AgentTeam` — stored-only (исполнителя нет, осознанно).
+- **AgentCron**: beat-задача `agent.cron_dispatch` создаёт `WorkOrder` и совместимый `AgentTask`; выполнение идёт только через durable runtime. `AgentTeam` пока остаётся registry.
 
 ## Skills и endpoints
 
@@ -112,6 +112,18 @@ make agent-test   # AiAgent scenarios на mock skills
 - `/api/agent/plugins` — manifest-based plugin drafts и enable/disable.
 - `/api/agent/capabilities/*` — предложения новых tools/skills, статус lifecycle и sandbox validation skeleton.
 - `/api/memory/chat-turn`, `/api/memory/pin` — episodic и pinned memory facts.
+
+Durable runtime реализован в `/api/work-orders` и `backend/app/domain/work_orders.py`:
+- `WorkOrder → WorkPlan → WorkStep → WorkStepAttempt` хранит цель, DAG-план, checkpoint, retry и lease независимо от WebSocket/worker.
+- Beat `work.dispatch_ready` подбирает ready/retry шаги через `SKIP LOCKED`, восстанавливает истёкшие lease и отдельно запускает verifier.
+- `agent_turn` обеспечивает совместимость, `capability` выполняет типизированный action через единый gateway; критический ответ `approval_required` атомарно переводит шаг в `waiting_approval`.
+- Approval привязан digest к capability/action/точным аргументам. `completed` невозможен без passed-критериев и evidence; semantic-критерии закрываются независимым verifier endpoint.
+- Старый `/api/agent/tasks/{id}/run` создаёт связанный WorkOrder и больше не имеет отдельного пути исполнения.
+- Автопланировщик `domain/work_planning.py` строит DAG только по живому `capabilities.yml`; ссылки `${steps.<key>.output.<path>}` разрешаются перед запуском и сохраняются вместе с provenance.
+- Каждый фактический вызов сначала фиксируется в `work_tool_calls` с точными аргументами, risk, digest и idempotency key. Исчерпание попыток запускает bounded replanning только незавершённого остатка.
+- Неразрешённые semantic-критерии проверяет отдельный локальный verifier с fail-closed verdict; оператор видит план и журнал на `/work-orders`.
+- `computer_use` работает только через короткоживущие `ComputerUseGrant`: allowlist действий, каталогов, хостов и argv-команд, лимит операций и отдельный audit/evidence для browser/files/shell/snapshot.
+- Для пустой БД `alembic upgrade head` атомарно создаёт актуальную metadata и stamp head, обходя исторический dynamic-baseline defect; существующие БД продолжают обычную последовательность миграций.
 
 Целевой режим автономии — `max_autonomy`: агент может сам готовить и проверять изменения в sandbox, но продакшен-код, внешние действия, права, память/аудит/approval gates и личность агента применяются только через объяснимое подтверждение.
 

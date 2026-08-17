@@ -110,6 +110,7 @@ const NAV_ITEMS: NavItem[] = [
     group: "Навигация",
   },
   { id: "settings", label: "Настройки", href: "/settings", group: "Настройки" },
+  { id: "work-orders", label: "Поручения", href: "/work-orders", group: "Навигация" },
   {
     id: "norm-rules",
     label: "Правила нормализации",

@@ -158,24 +158,72 @@ async def _dispatch() -> int:
             row.run_count += 1
             await db.commit()
 
-        ok, output = await _run_headless_turn(cron.prompt)
-        executed += 1
-
         async with factory() as db:
-            db.add(AgentTask(
+            from app.domain.work_orders import create_single_step_plan, create_work_order
+
+            legacy_task = AgentTask(
                 objective=f"Cron: {(cron.description or cron.prompt)[:200]}",
                 description=cron.prompt,
                 role="secretary",
-                status="completed" if ok else "failed",
-                output=output or None,
+                status="running",
                 metadata_={
                     "agent_cron_id": str(cron.id),
                     "schedule": cron.schedule,
                     "ran_at": now.isoformat(),
                 },
-            ))
+            )
+            db.add(legacy_task)
+            await db.flush()
+            order = await create_work_order(
+                db,
+                owner_key="system:cron",
+                source="cron",
+                objective=cron.prompt,
+                description=cron.description,
+                legacy_agent_task_id=legacy_task.id,
+                metadata={
+                    "agent_cron_id": str(cron.id),
+                    "schedule": cron.schedule,
+                    "ran_at": now.isoformat(),
+                },
+            )
+            await create_single_step_plan(
+                db,
+                order,
+                kind="agent_turn",
+                title=f"Cron: {(cron.description or cron.prompt)[:200]}",
+                input_data={"prompt": cron.prompt, "runner": "cron"},
+                timeout_seconds=int(_TURN_TIMEOUT_S),
+            )
+            work_order_id = order.id
+            legacy_task_id = legacy_task.id
             await db.commit()
-        logger.info("agent_cron_executed id=%s ok=%s", cron.id, ok)
+
+        from app.tasks.work_orders import execute_work_order_now
+
+        ok = await execute_work_order_now(work_order_id)
+        executed += 1
+
+        async with factory() as db:
+            from app.db.models import WorkOrder
+
+            order = await db.get(WorkOrder, work_order_id)
+            legacy_task = await db.get(AgentTask, legacy_task_id)
+            if order is not None and legacy_task is not None:
+                legacy_task.status = "completed" if order.status == "completed" else "failed"
+                legacy_task.output = order.result_summary
+                metadata = dict(legacy_task.metadata_ or {})
+                metadata.update(
+                    {"work_order_id": str(order.id), "work_order_status": order.status}
+                )
+                legacy_task.metadata_ = metadata
+                await db.commit()
+        logger.info(
+            "agent_cron_executed id=%s work_order_id=%s ok=%s",
+            cron.id,
+            work_order_id,
+            ok,
+        )
 
     return executed
 
