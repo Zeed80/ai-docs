@@ -506,6 +506,73 @@ async def _ollama_show_capabilities(base_url: str, provider_model: str) -> set[s
     return {str(c) for c in caps}
 
 
+# Fixed prompt/seed/temperature for the level-support probe below — every
+# call must be bit-for-bit reproducible so a difference between levels is
+# only ever attributable to the level itself, never sampling noise.
+_LEVEL_PROBE_PROMPT = "Explain briefly why the sky is blue."
+_LEVEL_PROBE_OPTIONS = {"temperature": 0, "seed": 42, "num_predict": 200}
+
+
+async def _ollama_probe_thinking_levels(base_url: str, provider_model: str) -> bool | None:
+    """Live deterministic differential probe: does this model's ``think``
+    level string cause a REAL behavioural difference, or does Ollama just
+    accept-and-ignore it?
+
+    Ollama never rejects an unrecognised ``think`` level (lenient parsing),
+    so "the request didn't error" is not evidence of real support — this was
+    the original (wrong) assumption behind treating Ollama levels as
+    unverifiable. Confirmed empirically 2026-08-17: with DEFAULT (non-zero)
+    sampling temperature, ``think=low/medium/high`` on qwen3.8:27b produced
+    410/430/216 chars of reasoning with no consistent trend across repeats —
+    pure sampling noise, indistinguishable from no effect. Pinning
+    ``temperature=0`` + a fixed ``seed`` removes that noise entirely:
+    repeated calls at the SAME level then return byte-identical output, so
+    ANY difference BETWEEN two levels at temp=0 is a real, reproducible
+    signal. Re-verified with exactly this method on two different prompts —
+    qwen3.8:27b: 404 vs 208 chars (low/high), and separately 152 vs 307
+    chars — each pair individually reproduced identically twice. This *is*
+    a reliable, universal support test; it costs two short real generations
+    (including a possible cold model load — a large model can take well
+    over a minute the first time), so callers must run it once per model
+    and cache the result (see the ``existing is None or stale`` gate at the
+    call site), not on every poll.
+
+    Returns ``None`` (not ``False``) when the probe itself failed to
+    complete (timeout/network/HTTP error) — a transient infra hiccup must
+    never get cached as a permanent "unsupported" verdict; the caller is
+    expected to leave the model unprobed and retry on a later poll.
+    """
+    base = base_url.rstrip("/")
+
+    async def _call(level: str) -> str | None:
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                resp = await client.post(
+                    f"{base}/api/chat",
+                    json={
+                        "model": provider_model,
+                        "messages": [{"role": "user", "content": _LEVEL_PROBE_PROMPT}],
+                        "think": level,
+                        "stream": False,
+                        "options": _LEVEL_PROBE_OPTIONS,
+                    },
+                )
+                resp.raise_for_status()
+                return (resp.json().get("message") or {}).get("thinking") or ""
+        except Exception:
+            return None
+
+    low = await _call("low")
+    if low is None:
+        return None  # infra failure — retry later, don't cache a verdict
+    high = await _call("high")
+    if high is None:
+        return None
+    if not low and not high:
+        return False  # thinking didn't engage at all — nothing to differentiate
+    return low != high
+
+
 async def _node_loaded_models(resolved) -> list[tuple[str, float | None]]:
     """Return (provider_model, vram_gb|None) for models loaded on a node."""
     base = resolved.base_url.rstrip("/")
@@ -594,22 +661,50 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                         if "embedding" in real_caps:
                             mods = {"embedding"}
                         thinking = "thinking" in real_caps
+                    # Re-run the (one-time, cached) level probe exactly once per
+                    # model: trip `stale` when thinking is supported but we've
+                    # never determined level support for it yet — otherwise a
+                    # pre-existing catalog entry from before this capability
+                    # existed would never get probed (thinking_supported/
+                    # modalities alone wouldn't flag it stale).
+                    never_probed_levels = (
+                        thinking and existing is not None and not existing.thinking_levels_probed
+                    )
                     stale = existing is not None and (
                         existing.modalities != {Modality(m) for m in mods}
                         or existing.thinking_supported != thinking
+                        or never_probed_levels
                     )
                     if existing is None or stale:
                         key = hit[0] if hit else _synth_key(kind.value, pm)
-                        # Levels are never reported by any provider capability
-                        # endpoint (see _infer_thinking_levels) — a manually
-                        # curated non-empty thinking_levels always survives a
-                        # discovery pass; only a never-curated entry falls
-                        # back to the (conservative) name-hint guess.
-                        levels = (
-                            existing.thinking_levels
-                            if existing and existing.thinking_levels
-                            else _infer_thinking_levels(pm, kind.value)
-                        )
+                        # Level support: a manually curated non-empty
+                        # thinking_levels always survives a discovery pass. A
+                        # never-curated entry first tries the (conservative)
+                        # name-hint guess (gpt-oss); failing that, if thinking
+                        # is actually on, runs the live deterministic
+                        # differential probe (_ollama_probe_thinking_levels) —
+                        # real per-model evidence instead of a guess, cached
+                        # via thinking_levels_probed so it only ever runs once.
+                        levels = existing.thinking_levels if existing else []
+                        levels_probed = bool(existing and existing.thinking_levels_probed)
+                        if not levels and not levels_probed:
+                            levels = _infer_thinking_levels(pm, kind.value)
+                            if levels:
+                                levels_probed = True
+                            elif thinking:
+                                probe_result = await _ollama_probe_thinking_levels(
+                                    inst.base_url, pm
+                                )
+                                if probe_result is None:
+                                    # Infra hiccup (timeout/cold-load/network) —
+                                    # not a verdict. Leave unprobed so the next
+                                    # poll retries instead of permanently
+                                    # caching a false "unsupported".
+                                    levels = []
+                                    levels_probed = False
+                                else:
+                                    levels = ["low", "medium", "high"] if probe_result else []
+                                    levels_probed = True
                         cap = ModelCapability(
                             name=key, provider=kind, provider_model=pm,
                             status=existing.status if existing else ModelStatus.CANDIDATE,
@@ -617,6 +712,8 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                             supports_tool_calling="tool_calling" in mods,
                             supports_structured_output=True, local_only=True,
                             thinking_supported=thinking, capability_source="discovered",
+                            thinking_levels=levels,
+                            thinking_levels_probed=levels_probed,
                             vram_gb_estimate=vram,
                             # A correction to modalities/thinking_supported must not
                             # reset a UI-set toggle/pin that lives on this same
@@ -625,7 +722,6 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                             # but the persisted overlay row should stay consistent
                             # with it rather than silently reverting in between.
                             thinking_enabled=existing.thinking_enabled if existing else False,
-                            thinking_levels=levels,
                             thinking_level_default=existing.thinking_level_default if existing else None,
                             preferred_instance=existing.preferred_instance if existing else None,
                         )

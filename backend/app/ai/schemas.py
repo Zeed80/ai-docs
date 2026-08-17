@@ -220,6 +220,13 @@ class ModelCapability(BaseModel):
     # Catalog default level when thinking is on and thinking_levels is
     # non-empty. None falls back to "medium" at resolution time.
     thinking_level_default: Literal["low", "medium", "high"] | None = None
+    # Has level support already been determined for this (local/discovered)
+    # model — either positively (thinking_levels non-empty) or negatively
+    # (probed and found unsupported)? Distinguishes "never checked yet" from
+    # "checked, no support" so the live differential probe
+    # (providers_api._ollama_probe_thinking_levels) runs at most once per
+    # model instead of on every discovery poll.
+    thinking_levels_probed: bool = False
     # Optional pin to a specific provider node (provider_instances.name). When set,
     # calls for this model always route to that node; otherwise the router picks
     # any healthy node of the model's provider kind that hosts the model.
