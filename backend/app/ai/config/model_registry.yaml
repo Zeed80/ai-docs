@@ -443,6 +443,14 @@ models:
     supports_tool_calling: true
     thinking_supported: true
     thinking_enabled: false
+    # Verified 2026-08-17 via live differential probe (temperature=0, fixed
+    # seed, think=low vs think=high on the same prompt): output was
+    # byte-identical between levels. Ollama accepts the level string without
+    # error but this build's template does not honor it as a real
+    # reasoning-effort control — thinking_levels intentionally stays empty
+    # (on/off only). See app.ai.thinking_params.effective_thinking_levels
+    # for why this is checked live rather than guessed from the name.
+    thinking_levels: []
     local_only: true
     vram_gb_estimate: 17.5
     quality_score: 0.90
@@ -468,6 +476,10 @@ models:
     supports_tool_calling: true
     thinking_supported: true
     thinking_enabled: false
+    # Verified 2026-08-17 via live differential probe (see the identical
+    # note on qwen3_6_35b_apex_ollama above): think=low vs think=high
+    # produced byte-identical output — level not honored, stays [].
+    thinking_levels: []
     local_only: true
     vram_gb_estimate: 15.0
     quality_score: 0.88
@@ -485,6 +497,9 @@ models:
     supports_tool_calling: true
     thinking_supported: true
     thinking_enabled: false
+    # Verified 2026-08-17 via live differential probe (see the identical
+    # note on qwen3_6_35b_apex_ollama above): level not honored, stays [].
+    thinking_levels: []
     local_only: true
     vram_gb_estimate: 5.5
     quality_score: 0.80
