@@ -14,8 +14,43 @@ from app.ai.schemas import AIRequest, AITask, ChatMessage, ProviderConfig, Provi
 from app.ai.thinking_params import (
     ANTHROPIC_DEFAULT_THINKING_BUDGET,
     ANTHROPIC_THINKING_BUDGET_TOKENS,
+    effective_thinking_levels,
     thinking_request_params,
 )
+
+
+# ── effective_thinking_levels: automatic provider-class derivation ─────────
+
+
+@pytest.mark.parametrize(
+    "provider", ["anthropic", "openrouter", "openai", "groq", "xai", "dashscope", "qwen", "cerebras", "ollama_cloud"]
+)
+def test_levels_auto_derived_for_guaranteed_providers(provider):
+    # No curated_levels needed — these providers accept the level as a
+    # documented, provider-level wire feature for ANY thinking-capable model.
+    assert effective_thinking_levels(True, provider, []) == ["low", "medium", "high"]
+
+
+@pytest.mark.parametrize("provider", ["ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible"])
+def test_levels_not_auto_derived_for_local_providers(provider):
+    # Empirically verified 2026-08-17: Ollama accepts a string think level
+    # without erroring but does not honor it for non-gpt-oss templates —
+    # auto-deriving here would silently promise a control that does nothing.
+    assert effective_thinking_levels(True, provider, []) == []
+
+
+def test_curated_levels_always_win_over_derivation():
+    # Explicit catalog curation (manual YAML, or the gpt-oss name-hint) is
+    # never overridden by the provider-class auto-derivation, even when the
+    # curated list differs from the guaranteed low/medium/high default.
+    assert effective_thinking_levels(True, "anthropic", ["low"]) == ["low"]
+    assert effective_thinking_levels(True, "ollama", ["low", "medium", "high"]) == [
+        "low", "medium", "high",
+    ]
+
+
+def test_levels_require_thinking_supported():
+    assert effective_thinking_levels(False, "anthropic", []) == []
 
 
 # ── thinking_request_params: one case per provider branch ──────────────────

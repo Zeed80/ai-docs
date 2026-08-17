@@ -142,12 +142,12 @@ def router_with_stub(monkeypatch):
     return r, stub
 
 
-def _route_to(monkeypatch, model_key):
+def _route_to(monkeypatch, model_key, *, local_only=True, allow_cloud=False):
     from app.ai import task_routing as tr
 
     routing = tr.TaskRouting(
         task=AITask.CLASSIFICATION.value, models=[model_key],
-        profile="balanced", local_only=True, allow_cloud=False,
+        profile="balanced", local_only=local_only, allow_cloud=allow_cloud,
     )
     monkeypatch.setattr(tr, "get_routing_for", lambda t, _r=routing: _r)
 
@@ -245,3 +245,27 @@ async def test_thinking_level_clamped_to_supported(monkeypatch, router_with_stub
         )
     )
     assert stub.last_request.thinking_level == "low"
+
+
+@pytest.mark.asyncio
+async def test_thinking_level_auto_derived_for_anthropic_without_curation(
+    monkeypatch, router_with_stub,
+):
+    """claude_sonnet_anthropic's catalog entry has thinking_levels=[] (never
+    manually curated) — the level must still appear automatically, because
+    Anthropic's budget_tokens knob is a guaranteed wire feature for ANY
+    thinking-capable model on that provider (see
+    thinking_params.effective_thinking_levels). No model_registry.yaml edit
+    should ever be required for this provider class.
+    """
+    r, stub = router_with_stub
+    cap = r.registry.models["claude_sonnet_anthropic"]
+    assert cap.thinking_levels == []  # never curated — this is the whole point
+    _route_to(monkeypatch, "claude_sonnet_anthropic", local_only=False, allow_cloud=True)
+    await r.run(
+        AIRequest(
+            task=AITask.CLASSIFICATION, prompt="hi", confidential=False,
+            allow_cloud=True, thinking=True, thinking_level="high",
+        )
+    )
+    assert stub.last_request.thinking_level == "high"

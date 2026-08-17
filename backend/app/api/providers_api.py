@@ -32,6 +32,7 @@ from app.ai import model_runtime_store
 from app.ai.model_registry import ModelRegistry
 from app.ai.schemas import AITask, ModelCapability, ModelStatus, ProviderKind
 from app.ai.secret_box import decrypt, encrypt, mask
+from app.ai.thinking_params import effective_thinking_levels
 from app.auth.jwt import get_current_user, require_role
 from app.auth.models import UserInfo, UserRole
 from app.db.models import ProviderInstance
@@ -397,7 +398,9 @@ async def list_models(
                 local_only=cap.local_only,
                 thinking_supported=cap.thinking_supported,
                 thinking_enabled=cap.thinking_enabled,
-                thinking_levels=list(cap.thinking_levels),
+                thinking_levels=effective_thinking_levels(
+                    cap.thinking_supported, cap.provider.value, cap.thinking_levels
+                ),
                 thinking_level_default=cap.thinking_level_default,
                 preferred_instance=cap.preferred_instance,
                 quality_score=cap.quality_score,
@@ -644,7 +647,10 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                         key=key, provider=kind.value, provider_model=cap.provider_model,
                         status=cap.status.value, modalities=sorted(m.value for m in cap.modalities),
                         local_only=cap.local_only, thinking_supported=cap.thinking_supported,
-                        thinking_enabled=cap.thinking_enabled, thinking_levels=list(cap.thinking_levels),
+                        thinking_enabled=cap.thinking_enabled,
+                        thinking_levels=effective_thinking_levels(
+                            cap.thinking_supported, kind.value, cap.thinking_levels
+                        ),
                         loaded=True, node=inst.name,
                         vram_gb_estimate=cap.vram_gb_estimate or vram,
                     )
@@ -681,7 +687,10 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                         key=key, provider=kind.value, provider_model=pm,
                         status="loaded", modalities=sorted(mods), local_only=True,
                         thinking_supported=th.thinking_supported,
-                        thinking_enabled=th.thinking_enabled, thinking_levels=list(th.thinking_levels),
+                        thinking_enabled=th.thinking_enabled,
+                        thinking_levels=effective_thinking_levels(
+                            th.thinking_supported, kind.value, th.thinking_levels
+                        ),
                         loaded=True, node=inst.name,
                         vram_gb_estimate=vram,
                     )
@@ -703,7 +712,10 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
             key=key, provider=cap.provider.value, provider_model=cap.provider_model,
             status=cap.status.value, modalities=sorted(m.value for m in cap.modalities),
             local_only=cap.local_only, thinking_supported=cap.thinking_supported,
-            thinking_enabled=cap.thinking_enabled, thinking_levels=list(cap.thinking_levels),
+            thinking_enabled=cap.thinking_enabled,
+            thinking_levels=effective_thinking_levels(
+                cap.thinking_supported, cap.provider.value, cap.thinking_levels
+            ),
             loaded=False, node=None,
             vram_gb_estimate=cap.vram_gb_estimate,
         )
@@ -741,11 +753,14 @@ async def set_model_thinking(
     if model_key not in registry.models:
         raise HTTPException(404, f"Unknown model: {model_key}")
     cap = registry.models[model_key]
-    if payload.level is not None and payload.level not in cap.thinking_levels:
+    allowed_levels = effective_thinking_levels(
+        cap.thinking_supported, cap.provider.value, cap.thinking_levels
+    )
+    if payload.level is not None and payload.level not in allowed_levels:
         raise HTTPException(
             400,
             f"Model '{model_key}' does not support thinking level '{payload.level}' "
-            f"(supported: {cap.thinking_levels or 'none — on/off only'})",
+            f"(supported: {allowed_levels or 'none — on/off only'})",
         )
     set_thinking_override(model_key, payload.enabled, level=payload.level)
     await model_runtime_store.persist_model_override(
@@ -1113,7 +1128,11 @@ def _slot_thinking_state(slot: str, registry, model_key: str | None) -> dict[str
 
     # Reasoning-effort level — only meaningful when the selected model
     # declares thinking_levels and the slot ends up with thinking ON.
-    model_levels = list(cap.thinking_levels) if cap else []
+    model_levels = (
+        effective_thinking_levels(cap.thinking_supported, cap.provider.value, cap.thinking_levels)
+        if cap
+        else []
+    )
     level_override = _slot_thinking_level_override(slot) if model_levels else None
     level_effective = None
     if effective and model_levels:

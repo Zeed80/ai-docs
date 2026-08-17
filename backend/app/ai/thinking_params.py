@@ -48,6 +48,48 @@ ANTHROPIC_THINKING_BUDGET_TOKENS: dict[str, int] = {
 }
 ANTHROPIC_DEFAULT_THINKING_BUDGET = 2048
 
+# Provider kinds where the level parameter is a documented, provider-level
+# wire guarantee — ANY thinking-capable model on these providers safely
+# accepts a level (Anthropic: real numeric budget_tokens; the
+# reasoning_effort family + OpenRouter: an optional/ignorable field per
+# their own API contracts). No per-model curation needed — this class of
+# provider is why the level is safe to auto-offer with zero admin/YAML
+# involvement, unlike Ollama below.
+LEVEL_GUARANTEED_PROVIDER_KINDS = frozenset({"anthropic", "openrouter"}) | REASONING_EFFORT_PROVIDERS
+
+
+def effective_thinking_levels(
+    thinking_supported: bool, provider_kind: str, curated_levels: list[str]
+) -> list[str]:
+    """Levels actually offered for a model in the UI/resolution.
+
+    Explicit catalog curation (``ModelCapability.thinking_levels`` set in
+    YAML or via the auto-discovery name-hint) always wins. Otherwise, for
+    providers in ``LEVEL_GUARANTEED_PROVIDER_KINDS`` the level is derived
+    automatically — no YAML edit, no admin action, works immediately for
+    every existing thinking-capable model on that provider (e.g. Claude
+    Sonnet/Haiku already in the catalog get levels the moment this function
+    is read, without touching model_registry.yaml).
+
+    Local providers (Ollama/llama.cpp/vLLM) are deliberately NOT
+    auto-derived here. Empirically verified 2026-08-17 against a live
+    Ollama instance: qwen3.8:27b accepts a string ``think`` level
+    (HTTP 200, no type error) but does not honor it — three repeated
+    ``think:true`` calls on the same prompt produced 386-419 chars of
+    reasoning, and low/medium/high produced 410/430/216 — no monotonic
+    trend, fully within that same sampling-noise band. Ollama being lenient
+    about accepting the field is not evidence the model's template actually
+    implements graduated reasoning effort; only gpt-oss is documented to.
+    Offering a level selector that silently no-ops would be worse than not
+    offering one, so local models stay level-less unless the (conservative)
+    gpt-oss name-hint or explicit manual curation sets thinking_levels.
+    """
+    if curated_levels:
+        return curated_levels
+    if thinking_supported and provider_kind in LEVEL_GUARANTEED_PROVIDER_KINDS:
+        return ["low", "medium", "high"]
+    return []
+
 
 def thinking_request_params(
     provider: str, thinking: bool, level: ThinkingLevel | None

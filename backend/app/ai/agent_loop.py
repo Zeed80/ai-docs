@@ -280,7 +280,12 @@ def _model_thinking_default(model_name: str | None) -> bool | None:
 
 
 def _model_thinking_levels(model_name: str | None) -> list[str]:
-    """Catalog thinking_levels for a model (by key or provider_model), or []."""
+    """Effective thinking_levels for a model (by key or provider_model), or [].
+
+    Explicit catalog curation wins; otherwise auto-derived for providers
+    where the level parameter is a guaranteed wire feature (Anthropic,
+    reasoning_effort family, OpenRouter) — see effective_thinking_levels.
+    """
     if not model_name:
         return []
     try:
@@ -288,10 +293,16 @@ def _model_thinking_levels(model_name: str | None) -> list[str]:
 
         for cap in ai_router.registry.models.values():
             if cap.name == model_name or cap.provider_model == model_name:
-                return list(cap.thinking_levels)
+                return _thinking_request_levels(cap)
     except Exception:
         return []
     return []
+
+
+def _thinking_request_levels(cap) -> list[str]:
+    from app.ai.thinking_params import effective_thinking_levels
+
+    return effective_thinking_levels(cap.thinking_supported, cap.provider.value, cap.thinking_levels)
 
 
 def _model_thinking_level_default(model_name: str | None) -> str | None:
@@ -303,7 +314,8 @@ def _model_thinking_level_default(model_name: str | None) -> str | None:
 
         for cap in ai_router.registry.models.values():
             if cap.name == model_name or cap.provider_model == model_name:
-                if not cap.thinking_levels:
+                levels = _thinking_request_levels(cap)
+                if not levels:
                     return None
                 return cap.thinking_level_default or "medium"
     except Exception:
