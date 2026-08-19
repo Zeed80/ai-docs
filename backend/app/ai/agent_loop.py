@@ -863,6 +863,18 @@ async def _call_ollama_streaming(
                     final_message["content"] = full_content
                     if accumulated_tool_calls and not final_message.get("tool_calls"):
                         final_message["tool_calls"] = accumulated_tool_calls
+                    # Б15: Ollama's final streaming chunk carries token counts as
+                    # documented top-level fields (sibling to "message", not
+                    # nested in it) — cheap to read, previously dropped
+                    # entirely. Only Ollama is captured in this pass; the
+                    # OpenAI-compatible and Anthropic streaming paths need
+                    # their own (differently-shaped) usage parsing, deferred —
+                    # see AGENT_SYSTEM_REMEDIATION_PLAN.md Б15.
+                    if "prompt_eval_count" in chunk or "eval_count" in chunk:
+                        final_message["_usage"] = {
+                            "input_tokens": int(chunk.get("prompt_eval_count") or 0),
+                            "output_tokens": int(chunk.get("eval_count") or 0),
+                        }
                     break
 
     return final_message
@@ -1543,6 +1555,13 @@ class AgentSession:
         self._config = get_builtin_agent_config()
         self._rebuild_runtime_components(self._config)
         self._mcp_initialised = False
+        # Б15: summed across every LLM call this session makes, from the
+        # "_usage" key _call_ollama_streaming attaches to its returned
+        # message (see _accumulate_usage). Only Ollama calls are counted in
+        # this pass — see the note at "_usage" for why. Public: WorkOrder's
+        # headless runner (agent_cron.run_headless_agent_turn) reads this
+        # after the turn to report tokens_used on the WorkStepAttempt.
+        self.total_tokens: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
         self._registry_mtime: float = _registry_mtime()
         _ACTIVE_SESSIONS.add(self)
 
@@ -1595,6 +1614,19 @@ class AgentSession:
                 )
         except Exception as exc:
             log_degraded("agent_loop.action_log", exc)
+
+    def _accumulate_usage(self, message: dict | None) -> None:
+        """Fold one LLM call's token usage (if any) into self.total_tokens.
+
+        No-op when the provider didn't attach "_usage" (Б15 covers Ollama
+        only in this pass) — total_tokens then stays {0, 0}, an honest
+        "unknown", not a wrong number.
+        """
+        usage = (message or {}).get("_usage")
+        if not isinstance(usage, dict):
+            return
+        self.total_tokens["input_tokens"] += int(usage.get("input_tokens") or 0)
+        self.total_tokens["output_tokens"] += int(usage.get("output_tokens") or 0)
 
     async def _init_mcp(self) -> None:
         """Lazy-init MCP tools on first message (async-safe)."""
@@ -2119,6 +2151,7 @@ class AgentSession:
                     on_thinking=_on_thinking,
                     max_tokens=self._response_budget,
                 )
+                self._accumulate_usage(message)
                 duration_ms = int((time.time() - t_start) * 1000)
                 tool_calls = message.get("tool_calls") or []
                 full_text = "".join(accumulated_text)
@@ -2294,6 +2327,7 @@ class AgentSession:
                 disable_thinking_override=True,
                 max_tokens=self._response_budget,
             )
+            self._accumulate_usage(msg)
         except Exception as e:  # noqa: BLE001
             logger.warning("force_final_answer_failed", error=str(e), session_id=self._session_id)
 

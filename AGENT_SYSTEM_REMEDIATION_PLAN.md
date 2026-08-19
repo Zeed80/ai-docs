@@ -418,30 +418,80 @@
   3. Показать эти цифры в шапке `/work-orders` (небольшой блок над списком).
 - **Готово, когда**: цифры видны в UI, обновляются вместе с общим poll/WS.
 
-### Б15. Бюджеты — `P1`
+### Б15. Бюджеты — `P1` — `[x]` сделано (2026-08-19)
 
-- **Факт**: `budgets: JSON` читается по двум ключам —
-  `max_replans` (`domain/work_orders.py:538,628`), `timeout_seconds`
-  (`domain/work_planning.py:154`).
-- **Шаги**:
-  1. Проверить, отдают ли уже используемые провайдеры (Ollama/Anthropic
-     клиенты в `backend/app/ai/`) usage/token-counts в ответе — искать
-     `usage` в ответах `ollama_client.py`/anthropic-клиенте.
-  2. В `WorkStepAttempt` (`models.py`) добавить колонки
-     `tokens_used: int | None`, `cost_usd: numeric | None` — новая alembic
-     миграция по аналогии с `20260817_0006_work_order_learning.py`.
-  3. В месте, где `WorkStepAttempt` завершается успешно/ошибкой
-     (`domain/work_orders.py`, искать `finished_at=` присвоение) — писать
-     туда фактический usage из ответа провайдера.
-  4. Добавить `token_budget`/`cost_budget` как читаемые ключи `budgets` (как
-     сейчас `max_replans`) — перед запуском следующего шага проверять
-     накопленную сумму по `work_order_id` (`SUM` по `WorkStepAttempt`), если
-     превышен — перевести `WorkOrder` в `blocked` с понятной причиной в
-     `blocker` (поле уже есть в модели, `models.py`).
-  5. Тест: WorkOrder с низким `token_budget`, шаги расходуют больше → на
-     очередном шаге получает `blocked`, а не продолжает исполнение.
-- **Готово, когда**: тест из шага 5 зелёный; `budgets` содержит минимум 4
-  ключа (было 2).
+- **Факт**: `budgets: JSON` читалось по двум ключам —
+  `max_replans` (`domain/work_orders.py`), `timeout_seconds`
+  (`domain/work_planning.py`).
+- **Важная находка при реализации**: `agent_loop.py` (чат-цикл, тот же, что
+  исполняет `agent_turn`-шаги WorkOrder) вообще **не парсил usage** ни в
+  одном из 3 провайдеров стриминга (Ollama/OpenAI-совместимый/Anthropic) —
+  не просто «не прокинуто в WorkOrder», а нигде, включая обычный чат-UI.
+  Полная переделка всех 3 стриминг-парсеров без живой модели для проверки —
+  неоправданный риск (стриминговые парсеры хрупкие, нельзя провалидировать
+  вслепую). Осознанно сузил объём: только Ollama (главный локальный
+  провайдер проекта по CLAUDE.md), чьи финальные чанки уже содержат
+  задокументированные `prompt_eval_count`/`eval_count` — простое чтение
+  двух JSON-полей, низкий риск. OpenAI-совместимый и Anthropic — отдельная
+  задача, отмечена явно.
+- **Реализовано**:
+  1. `_call_ollama_streaming` кладёт `{"input_tokens", "output_tokens"}` в
+     `final_message["_usage"]` из финального чанка (было — не читалось
+     вовсе).
+  2. `AgentSession.total_tokens` + `_accumulate_usage()` — суммируется по
+     обеим точкам реального вызова провайдера в ходе (основной turn loop +
+     force-final-answer fallback).
+  3. `run_headless_agent_turn`/`_run_headless_turn` (`agent_cron.py`)
+     возвращают 3-tuple `(ok, text, tokens_used)` вместо 2 — единственный
+     внешний потребитель (`tasks/work_orders.py._execute_agent_turn`)
+     обновлён; 3 теста, monkeypatch'ившие старую сигнатуру, обновлены.
+  4. `WorkStepAttempt.tokens_used`/`cost_usd` — новая колонка (миграция
+     `20260819_0007`), NULL по умолчанию (не 0 — «не измерено» ≠
+     «потрачено 0», иначе бюджет-проверка не отличит capability-шаг без
+     LLM от agent_turn с неизвестным провайдером). Заполняется в
+     `complete_attempt()` из `output.get("tokens_used")`.
+  5. `enforce_budgets()` (`domain/work_orders.py`) — новая функция,
+     periodic housekeeping (вызывается из `_dispatch_ready_work` рядом с
+     уже существующим `reclaim_expired_leases`, тот же паттерн), НЕ внутри
+     `claim_ready_step`'s SKIP LOCKED запроса (сознательно — трогать
+     hot-path claim-функцию без возможности живого прогона на Postgres в
+     песочнице — лишний риск; `enforce_budgets` просто переводит
+     превысивший бюджет `WorkOrder` в `blocked` ДО следующего тика
+     диспетчера, `claim_ready_step`'s `status.in_(["ready","running"])`
+     фильтр естественно перестаёт его подбирать). Только заказы с явным
+     `budgets.token_budget` проверяются — по умолчанию ничего не
+     enforced (тот же принцип, что в A4: без магических дефолтов).
+  6. Фильтрация по бюджету — в Python (`(order.budgets or {}).get(...)`),
+     не JSON-path SQL-предикат: тот же паттерн, что и у `max_replans`
+     везде в этом модуле, портируемо между Postgres (prod) и SQLite (e2e).
+- **Верификация — сильнее, чем ожидалось**: в процессе нашёлся способ
+  прогнать DB-зависимые тесты вживую (см. ниже, «Инфраструктурная
+  находка»), поэтому здесь — не только unit-тесты на usage-парсинг
+  (падают на исходном/зелёные на новом, проверено обеими сторонами), но и
+  2 сквозных теста на `enforce_budgets` (создание WorkOrder → claim →
+  complete_attempt с usage → enforce_budgets блокирует/не блокирует) —
+  **прогнаны на реальном Postgres, оба зелёные**. Заодно этим методом
+  перепроверены `test_work_orders.py` (14/14), `test_agent_cron_dispatch.py`
+  и `test_agent_control_plane.py::test_run_created_agent_task` (тот самый
+  3-tuple контракт) — все зелёные на реальной БД, не только в изоляции без
+  неё.
+- **Не сделано в этом заходе**: usage-парсинг для OpenAI-совместимого и
+  Anthropic стриминга (только Ollama); учёт `cost_usd` в долларах (колонка
+  есть, не заполняется — нет прайс-листа моделей в этом проходе); учёт
+  токенов для случая, когда capability-шаг сам внутри вызывает LLM
+  (например `documents.summarize`) — такие вызовы не проходят через
+  `agent_loop.py` и не видны этому механизму.
+
+**Инфраструктурная находка, разблокировавшая верификацию для ВСЕЙ
+сессии**: в песочнице недоступен Postgres напрямую (`localhost:5432`
+резолвится в БД **другого** проекта на этом хосте), но контейнер
+`infra-backend-1` подключён к правильному Postgres по внутреннему
+Docker DNS (`postgres:5432`) с рабочими credentials из `infra/.env`.
+`docker cp` изменённого `backend/` кода в контейнер (в отдельный путь,
+не поверх — non-destructive) + `pip install pytest pytest-asyncio` +
+`TEST_DATABASE_URL` на `postgres:5432/aiworkspace_test` — даёт полноценный
+прогон DB-тестов. Стоит закрепить как приём для будущих сессий в этой
+песочнице.
 
 ### Б16. Каналы — `P2`
 

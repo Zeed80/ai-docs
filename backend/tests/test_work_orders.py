@@ -33,6 +33,7 @@ from app.domain.work_orders import (
     create_single_step_plan,
     create_work_order,
     create_work_plan,
+    enforce_budgets,
     promote_ready_dependents,
     reclaim_expired_leases,
     record_verifier_verdict,
@@ -247,6 +248,81 @@ async def test_expired_lease_is_reclaimed_and_retried(db_session):
     assert claimed_step.state == "retry_wait"
     assert claimed_step.lease_owner is None
     assert attempt.status == "abandoned"
+
+
+@pytest.mark.asyncio
+async def test_enforce_budgets_blocks_order_that_overspent_token_budget(db_session):
+    """Б15: a WorkOrder with an explicit token_budget gets blocked once the
+    sum of its attempts' tokens_used exceeds it — not before, and not for
+    orders with no token_budget set at all (default: unenforced, see A4/Б15
+    on why unset stays unset rather than defaulting to some magic number)."""
+    order = await create_work_order(
+        db_session,
+        owner_key="tester",
+        objective="Дорогой ход, который надо остановить по бюджету",
+        budgets={"token_budget": 100},
+    )
+    await create_single_step_plan(
+        db_session,
+        order,
+        kind="agent_turn",
+        title="Execute",
+        input_data={"prompt": order.objective},
+    )
+    claimed = await claim_ready_step(db_session, worker_id="w1", work_order_id=order.id)
+    assert claimed is not None
+    claimed_order, claimed_step, attempt = claimed
+    await complete_attempt(
+        db_session,
+        order=claimed_order,
+        step=claimed_step,
+        attempt=attempt,
+        output={"text": "готово", "tokens_used": {"input_tokens": 80, "output_tokens": 40}},
+        actor="worker",
+    )
+    await db_session.flush()
+    assert attempt.tokens_used == 120  # over the 100 budget, not blocked until enforce_budgets runs
+    assert claimed_order.status == "running"  # complete_attempt alone doesn't check budgets
+
+    blocked = await enforce_budgets(db_session)
+
+    assert blocked == 1
+    assert claimed_order.status == "blocked"
+    assert claimed_order.blocker["code"] == "token_budget_exceeded"
+    assert claimed_order.blocker["tokens_spent"] == 120
+
+
+@pytest.mark.asyncio
+async def test_enforce_budgets_ignores_orders_without_a_token_budget(db_session):
+    order = await create_work_order(
+        db_session,
+        owner_key="tester",
+        objective="Без явного бюджета — не трогаем",
+    )
+    await create_single_step_plan(
+        db_session,
+        order,
+        kind="agent_turn",
+        title="Execute",
+        input_data={"prompt": order.objective},
+    )
+    claimed = await claim_ready_step(db_session, worker_id="w1", work_order_id=order.id)
+    assert claimed is not None
+    claimed_order, claimed_step, attempt = claimed
+    await complete_attempt(
+        db_session,
+        order=claimed_order,
+        step=claimed_step,
+        attempt=attempt,
+        output={"text": "готово", "tokens_used": {"input_tokens": 999999, "output_tokens": 999999}},
+        actor="worker",
+    )
+    await db_session.flush()
+
+    blocked = await enforce_budgets(db_session)
+
+    assert blocked == 0
+    assert claimed_order.status == "running"
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from app.domain.work_orders import (
     append_event,
     claim_ready_step,
     complete_attempt,
+    enforce_budgets,
     fail_attempt,
     promote_ready_dependents,
     reclaim_expired_leases,
@@ -105,10 +106,10 @@ async def _execute_agent_turn(input_data: dict[str, Any], timeout_seconds: int) 
     if not prompt:
         raise ValueError("agent_turn step requires a non-empty prompt")
     runner = _run_headless_turn if input_data.get("runner") == "cron" else run_headless_agent_turn
-    ok, text = await asyncio.wait_for(runner(prompt), timeout=max(1, timeout_seconds))
+    ok, text, tokens_used = await asyncio.wait_for(runner(prompt), timeout=max(1, timeout_seconds))
     if not ok:
         raise RuntimeError(text or "Headless agent turn failed")
-    return {"text": text, "executor": "agent_turn"}
+    return {"text": text, "executor": "agent_turn", "tokens_used": tokens_used}
 
 
 async def _execute_capability(
@@ -605,6 +606,7 @@ async def _dispatch_ready_work(limit: int = 10) -> int:
         plan_work_order_task.apply_async(args=[str(order_id)], queue="scheduler")
     async with factory() as db:
         await reclaim_expired_leases(db)
+        await enforce_budgets(db)
         pending_verification = list(
             (
                 await db.execute(

@@ -485,6 +485,54 @@ async def claim_ready_step(
     return order, step, attempt
 
 
+async def enforce_budgets(db: AsyncSession, *, actor: str = "scheduler") -> int:
+    """Б15: block any ready/running WorkOrder that exceeded its token_budget.
+
+    Runs as a periodic housekeeping pass (mirrors reclaim_expired_leases) —
+    NOT inside claim_ready_step's SKIP LOCKED query — so a work order this
+    blocks simply stops matching claim_ready_step's ``status.in_(["ready",
+    "running"])`` filter on the next dispatch tick, with zero change to that
+    hot claim path. Only WorkOrders with an explicit ``budgets.token_budget``
+    are checked; nothing is enforced by default (see A4/Б15 on defaults).
+    """
+    # Filtered in Python, not a JSON-path SQL predicate on `budgets` — matches
+    # how every other budget field in this module is read (max_replans,
+    # timeout_seconds) and stays portable across the Postgres/SQLite backends
+    # this project runs against, instead of relying on a JSON operator that
+    # behaves differently between them.
+    candidates = list(
+        (
+            await db.execute(
+                select(WorkOrder).where(WorkOrder.status.in_(["ready", "running"]))
+            )
+        ).scalars()
+    )
+    blocked = 0
+    for order in candidates:
+        token_budget = (order.budgets or {}).get("token_budget")
+        if token_budget is None:
+            continue
+        spent = (
+            await db.execute(
+                select(func.coalesce(func.sum(WorkStepAttempt.tokens_used), 0))
+                .join(WorkStep, WorkStep.id == WorkStepAttempt.step_id)
+                .where(WorkStep.work_order_id == order.id)
+            )
+        ).scalar_one()
+        if spent <= int(token_budget):
+            continue
+        order.blocker = {
+            "code": "token_budget_exceeded",
+            "token_budget": int(token_budget),
+            "tokens_spent": int(spent),
+        }
+        await transition_work_order(db, order, "blocked", actor=actor)
+        blocked += 1
+    if blocked:
+        await db.flush()
+    return blocked
+
+
 async def reclaim_expired_leases(db: AsyncSession, *, actor: str = "scheduler") -> int:
     """Recover steps whose worker disappeared without finishing its attempt."""
     now = utcnow()
@@ -556,6 +604,16 @@ async def complete_attempt(
     attempt.output = output
     attempt.finished_at = now
     attempt.heartbeat_at = now
+    # Б15: only agent_turn steps populate this today (tokens_used from
+    # AgentSession.total_tokens, Ollama calls only — see agent_loop.py's
+    # _accumulate_usage). Capability steps have no LLM cost of their own to
+    # attribute here; a capability that internally triggers model usage
+    # (e.g. documents.summarize) is not tracked by this mechanism.
+    tokens_used = output.get("tokens_used") if isinstance(output, dict) else None
+    if isinstance(tokens_used, dict):
+        attempt.tokens_used = (
+            int(tokens_used.get("input_tokens") or 0) + int(tokens_used.get("output_tokens") or 0)
+        )
     step.output = output
     await transition_step(db, step, "succeeded", actor=actor)
     await append_event(

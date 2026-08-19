@@ -1678,6 +1678,14 @@ class WorkStepAttempt(UUIDPrimaryKey, Base):
     )
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Б15: total input+output tokens for this attempt, when known — populated
+    # only for agent_turn steps whose LLM call reported usage (Ollama only in
+    # this pass, see agent_loop.py's _accumulate_usage). NULL, not 0, means
+    # "not measured" — a capability step or a non-Ollama provider call — so a
+    # budget check can tell "spent nothing" apart from "unknown, don't block
+    # on it".
+    tokens_used: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column(Float)
 
     step: Mapped["WorkStep"] = relationship(back_populates="attempts")
 

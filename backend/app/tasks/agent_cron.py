@@ -91,8 +91,13 @@ def _is_due(schedule: str, last_run_at: datetime | None, now: datetime) -> bool:
 # ── Headless agent turn ────────────────────────────────────────────────────────
 
 
-async def run_headless_agent_turn(prompt: str) -> tuple[bool, str]:
-    """Run one agent turn without a WebSocket; returns (ok, final_text)."""
+async def run_headless_agent_turn(prompt: str) -> tuple[bool, str, dict[str, int]]:
+    """Run one agent turn without a WebSocket; returns (ok, final_text, tokens_used).
+
+    tokens_used (Б15) is session.total_tokens after the turn — {0, 0} when
+    nothing was captured (non-Ollama provider, or the turn errored before any
+    call completed), never a guess.
+    """
     from app.ai.agent_loop import AgentSession
 
     chunks: list[str] = []
@@ -117,10 +122,10 @@ async def run_headless_agent_turn(prompt: str) -> tuple[bool, str]:
     ok = bool(text) and not errors
     if errors:
         text = (text + "\n\n[errors] " + "; ".join(errors))[:_MAX_OUTPUT_CHARS]
-    return ok, text
+    return ok, text, session.total_tokens
 
 
-async def _run_headless_turn(prompt: str) -> tuple[bool, str]:
+async def _run_headless_turn(prompt: str) -> tuple[bool, str, dict[str, int]]:
     return await run_headless_agent_turn(prompt)
 
 
