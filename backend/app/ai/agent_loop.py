@@ -659,6 +659,17 @@ async def _execute_skill(
     *,
     approval_granted: bool = False,
 ) -> dict:
+    # MCP-derived skill entries (built-in or external-server tools loaded by
+    # _init_mcp/load_mcp_tools) carry a direct async handler instead of an
+    # HTTP method/path — call it in-process. Without this branch every MCP
+    # tool call KeyErrors on skill["method"] the first time it actually runs
+    # (the tool schema/gate wiring worked; only invocation was missing).
+    if skill.get("_method") in {"mcp", "builtin"} and callable(skill.get("_handler")):
+        try:
+            return await skill["_handler"](args)
+        except Exception as exc:
+            return {"error": str(exc)}
+
     method = skill["method"].upper()
     path = skill["path"]
     base_url = config.backend_url.rstrip("/")
