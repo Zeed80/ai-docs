@@ -399,7 +399,50 @@
 - **Готово, когда**: тест из шага 5 зелёный на одном канале (email); telegram
   — отдельным пунктом позже по тому же образцу, не в этом заходе.
 
-### Б17. MCP-интеграция — `P0`
+### Б17. MCP-интеграция — `P0` — `[x]` сделано (2026-08-19)
+
+- **Итог**: нашлась и починена смежная **пред-существующая** дыра, не
+  связанная с WorkOrder напрямую — `_execute_skill` (`agent_loop.py`)
+  безусловно читал `skill["method"]`/`skill["path"]`, а MCP-хендлеры (и
+  builtin, и из `load_mcp_tools`) имеют форму `{"_method": "mcp"/"builtin",
+  "_handler": callable}` без этих ключей → `KeyError` на первом же реальном
+  вызове MCP-инструмента чатом. Схема тула и gate-обвязка работали, сам
+  вызов — нет, и ни один тест это не проверял. Починено первым шагом
+  (отдельный коммит), т.к. на этом фундаменте строилась вся дальнейшая
+  интеграция.
+- Добавлен `backend/app/ai/mcp_capability.py` — process-level кэш MCP
+  handlers (в отличие от `AgentSession._init_mcp`, который живёт на сессию
+  чата, capability gateway — stateless HTTP endpoint на весь процесс).
+- `mcp` зарегистрирован в `capabilities.yml` как обычная capability,
+  `gate_actions: ["*"]` — новый wildcard-примитив в
+  `_enforce_capability_policy`/`capability_router.py` (раньше `gate_actions`
+  поддерживал только точные имена действий). Добавлен в
+  `_SPECIAL_CAPABILITIES` (как `vault`) — не участвует в статическом
+  `_DISPATCH`, т.к. набор MCP-инструментов динамический.
+  `POST /cap/mcp` — та же `_enforce_capability_policy`/`_audit_tool_call`,
+  что и у штатных capability, диспетчеризация в процессе (не self-HTTP-hop)
+  к закэшированному handler'у. `GET /cap/mcp/tools` — список доступных имён
+  (нужен и планировщику, и оператору, т.к. `capability_action_map()` не
+  может перечислить их статически).
+- Побочный фикс консистентности: `agent_loop.py`'s собственный pre-check
+  approval-gate (до HTTP-вызова) не понимал wildcard `"*"` — не дыра
+  безопасности (HTTP-граница всё равно блокирует), но чат получил бы
+  грубую 423-ошибку вместо approval-запроса; исправлено тем же патчем.
+- **Не сделано в этом заходе** (сознательно, отдельная задача): динамическая
+  инъекция списка реальных MCP tool names/descriptions в промпт planner'а
+  (сейчас `capabilities.yml`-запись `mcp` статична — LLM должен явно
+  дёрнуть `GET /cap/mcp/tools`, узнать что доступно). Whitelist-послабления
+  approval для проверенных MCP-серверов — тоже отдельное решение позже.
+- Тесты: 6 в `test_mcp_execution.py` (branch в `_execute_skill` + сам
+  registry-кэш `mcp_capability.py`, оба направления verified — падают на
+  исходном коде, зелёные на исправленном), 7 в
+  `test_mcp_capability_dispatch.py` (unknown tool → 400, gate-by-default →
+  423 без вызова handler'а, approved → handler вызван, exception → 502,
+  listing, catalog-consistency exemption). DB недоступна в песочнице —
+  прямые вызовы роутер-функций вместо `client`-фикстуры (тот же приём, что
+  и для `_execute_skill`). Полный `tests/ai/` + `test_capability_router.py`
+  + `test_capability_catalog_consistency.py` прогнаны — 0 новых регрессий
+  (тот же baseline предсуществующих падений, что и после A1/A2).
 
 - **Факт**: `mcp_client.py` (475 строк, `stdio`+`HTTP`, auto-reconnect)
   подключён только к `AgentSession` в `agent_loop.py`. В

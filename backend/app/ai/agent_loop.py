@@ -2343,12 +2343,18 @@ class AgentSession:
         from app.ai.policy_engine import check_tool_execution
         current_gates = set((_get_latest_config()).approval_gates)
 
-        # Capabilities mode: check gate_actions declared in capabilities.yml
+        # Capabilities mode: check gate_actions declared in capabilities.yml.
+        # "*" gates every action (used by "mcp", Б17) — mirrors the wildcard
+        # capability_router._enforce_capability_policy applies at the actual
+        # HTTP boundary. That boundary is the real backstop either way (a miss
+        # here just means the LLM sees a raw 423 instead of a proper
+        # approval-request UX), but checking it here too keeps the two in
+        # sync instead of silently relying on the second one to catch it.
         cap_gate_actions = set()
         if skill:
             cap_gate_actions = set(skill.get("gate_actions") or [])
         action_arg = args.get("action", "")
-        if action_arg and action_arg in cap_gate_actions:
+        if action_arg and (action_arg in cap_gate_actions or "*" in cap_gate_actions):
             current_gates.add(original_name)
 
         policy = check_tool_execution(

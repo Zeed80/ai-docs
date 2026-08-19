@@ -383,7 +383,7 @@ def capability_action_map() -> dict[str, list[str]]:
 
 
 # Capabilities handled by dedicated routes outside the generic _DISPATCH table.
-_SPECIAL_CAPABILITIES = {"vault"}
+_SPECIAL_CAPABILITIES = {"vault", "mcp"}
 
 
 def validate_capability_catalog() -> list[str]:
@@ -593,7 +593,11 @@ def _enforce_capability_policy(
     gate_actions = _capability_gate_actions(capability_name)
     approval_gates = set(config.approval_gates)
 
-    if action in gate_actions:
+    # "*" gates every action of the capability — used by "mcp" (Б17): the
+    # trustworthiness of an individual MCP tool is unknown at manifest-authoring
+    # time (tool set depends on which external servers are connected), so every
+    # MCP tool call requires approval by default rather than enumerating names.
+    if action in gate_actions or "*" in gate_actions:
         approval_gates.add(capability_name)
         if not _request_has_internal_approval(request):
             raise HTTPException(
@@ -651,6 +655,75 @@ async def dispatch_vault(request: Request) -> JSONResponse:
     if result is None:
         raise HTTPException(status_code=404, detail="Vault ref expired or not found (TTL 15 min)")
     return JSONResponse(content=result)
+
+
+@router.post("/cap/mcp")
+async def dispatch_mcp(request: Request) -> JSONResponse:
+    """Route a capability call to an MCP tool (built-in or external server).
+
+    Same policy/approval/audit path as every other capability
+    (_enforce_capability_policy, _audit_tool_call) — "mcp" is gate_actions:
+    ["*"] in capabilities.yml (see Б17), so every call requires approval by
+    default; there is no per-tool trust signal available at manifest-authoring
+    time since the tool set depends on which external servers are connected.
+
+    Dispatches in-process to the cached MCP handler (mcp_capability.py)
+    instead of proxying to an internal REST path (unlike the generic
+    _DISPATCH-based capabilities) — MCP tools are reached over a live
+    protocol connection (stdio subprocess / external HTTP server), not a
+    FastAPI route of this backend.
+    """
+    from app.ai.mcp_capability import get_mcp_tool_handler, list_mcp_tool_names
+
+    try:
+        body: dict = await request.json()
+    except Exception:
+        body = {}
+
+    action = body.pop("action", None)
+    if not action:
+        raise HTTPException(
+            status_code=400,
+            detail={"error_code": "missing_action", "message": "'action' field is required"},
+        )
+
+    handler = await get_mcp_tool_handler(action)
+    if handler is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "unknown_action",
+                "message": f"Unknown MCP tool '{action}'.",
+                "available": await list_mcp_tool_names(),
+            },
+        )
+
+    reason = body.pop("reason", None)
+    if reason is not None and not isinstance(reason, str):
+        reason = str(reason)
+    arguments = body.pop("arguments") if isinstance(body.get("arguments"), dict) else body
+
+    _enforce_capability_policy("mcp", action, arguments, request)
+    await _audit_tool_call("mcp", action, reason, request)
+
+    try:
+        result = await handler(arguments)
+    except Exception as exc:
+        logger.warning("mcp_tool_call_failed", tool=action, error=str(exc))
+        return JSONResponse(content={"error": str(exc)}, status_code=502)
+    return JSONResponse(content=result if isinstance(result, dict) else {"result": result})
+
+
+@router.get("/cap/mcp/tools")
+async def list_mcp_tools() -> JSONResponse:
+    """Tool names currently reachable through the mcp capability.
+
+    capability_action_map() can't enumerate these statically like other
+    capabilities' actions (the set depends on which MCP servers are
+    connected) — the planner and operators read this endpoint instead.
+    """
+    from app.ai.mcp_capability import list_mcp_tool_names
+    return JSONResponse(content={"tools": await list_mcp_tool_names()})
 
 
 @router.post("/cap/{capability_name}")

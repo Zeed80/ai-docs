@@ -994,4 +994,30 @@ capabilities:
           type: integer
           description: "Количество записей (максимум 100, по умолчанию 20)"
           default: 20
+
+  - name: mcp
+    description: >
+      Вызов инструмента внешнего MCP-сервера (Model Context Protocol) —
+      те же инструменты, что видит чат-агент (см. ai/mcp_client.py), теперь
+      доступны и durable WorkOrder-планам через тот же capability gateway.
+      action = точное имя MCP-инструмента (не фиксированный enum — набор
+      зависит от подключённых серверов, см. GET /api/agent/cap/mcp/tools).
+      Не подключён ни один внешний сервер по умолчанию — доступны только
+      встроенные MCP-инструменты (drawing_analysis_mcp, tool_search_mcp).
+      Каждый вызов approval-gated безусловно (см. gate_actions: ["*"]):
+      надёжность/безопасность конкретного MCP-сервера заранее неизвестна,
+      послабления для проверенных инструментов — отдельное решение позже.
+    path: /api/agent/cap/mcp
+    method: POST
+    gate_actions: ["*"]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "Точное имя MCP-инструмента (см. /api/agent/cap/mcp/tools)"
+        arguments:
+          type: object
+          description: "Аргументы инструмента — по его собственной JSON-schema"
+      required: [action]
       required: [vault_ref]
