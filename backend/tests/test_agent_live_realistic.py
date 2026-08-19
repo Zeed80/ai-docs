@@ -420,8 +420,10 @@ async def test_scenario_multi_turn_context():
         assert r1.error is None, f"Первый ход упал: {r1.error}"
         assert len(r1.tool_calls) > 0, "Первый ход не вызвал инструментов"
 
-        # Небольшая пауза: сервер снимает turn_in_progress чуть после отправки done
-        await asyncio.sleep(1.5)
+        # Ранее тут была пауза-костыль под race в backend/app/api/agent.py:
+        # current_turn.done() отставал от turn_in_progress (см.
+        # AGENT_LIVE_TEST_FINDINGS.md #9) — сервер отклонял второй ход сразу
+        # после "done" первого. С фиксом гейта пауза не нужна.
 
         # Второй ход — уточнение в рамках той же сессии
         r2 = await ws.send("Покажи подробнее первый из них")

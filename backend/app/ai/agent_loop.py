@@ -159,6 +159,12 @@ _OPERATIONAL_POLICY = """
   agent_control.task_propose вместо молчания или самовольного запуска.
 - Решения approve/reject и запуск proposed-задач/источников/фактов (decide/run)
   принимает человек в GUI. У тебя нет этих действий — ты только предлагаешь.
+- Пустой результат — это ответ, а не повод импровизировать: если названная
+  сущность (поставщик, счёт, статус) не найдена или фильтр не дал строк, так
+  и скажи прямым текстом («Поставщик «Х» не найден» / «Счетов в статусе
+  «на проверке» сейчас нет») и остановись. Не подменяй нерелевантным запросом
+  (например сводкой по всем статусам) и не публикуй на Рабочий стол пустые
+  0-строчные таблицы как будто задача выполнена.
 """.strip()
 
 
@@ -646,6 +652,31 @@ def _load_agent_skills(
     if gateway_config.skills_mode == "capabilities":
         return _load_capabilities()
     return load_registry(expose_filter)
+
+
+_RU_WEEKDAYS = (
+    "понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье",
+)
+_RU_MONTHS_GENITIVE = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+
+
+def _today_context() -> str:
+    """Live 'today is <date>' line for the system prompt — see _effective_system."""
+    from datetime import datetime
+
+    now = datetime.now().astimezone()
+    weekday = _RU_WEEKDAYS[now.weekday()]
+    month = _RU_MONTHS_GENITIVE[now.month - 1]
+    return (
+        f"## Текущая дата и время\n"
+        f"Сегодня {now.day} {month} {now.year} г., {weekday}, "
+        f"{now.strftime('%H:%M')} ({now.strftime('%Z') or 'локальное время сервера'}). "
+        f"ISO: {now.strftime('%Y-%m-%d')}. Все относительные даты («завтра», «через неделю», "
+        f"«в следующий понедельник») считай от этой даты, а не по памяти."
+    )
 
 
 def _load_system_prompt(config: BuiltinAgentConfig | None = None) -> str:
@@ -1817,10 +1848,21 @@ class AgentSession:
         ])
 
     def _effective_system(self) -> str:
-        """Base system prompt plus the per-turn role context (if any)."""
+        """Base system prompt plus live date grounding plus the per-turn role
+        context (if any).
+
+        Found via live testing: nothing anywhere in this codebase told the
+        model what today's date actually is. Relative-date tool arguments
+        ("напомни завтра") are computed from the model's own training-time
+        sense of "now" — confirmed wrong by a full year in a live test — not
+        from the deployment's real clock. Recomputed on every call (not
+        baked in once at session start) so a session spanning midnight still
+        sees the correct day.
+        """
+        system = f"{self._system}\n\n{_today_context()}"
         if self._role_context:
-            return f"{self._system}\n\n## Роль в этой задаче\n{self._role_context}"
-        return self._system
+            return f"{system}\n\n## Роль в этой задаче\n{self._role_context}"
+        return system
 
     async def on_user_message(self, content: str) -> None:
         self._refresh_runtime_config()
