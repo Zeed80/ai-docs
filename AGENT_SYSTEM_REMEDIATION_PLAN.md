@@ -217,29 +217,44 @@
 - **Готово, когда**: `grep -n "8192\|4096" orchestrator.py model_tier.py` —
   числа отсутствуют в этих файлах, только в YAML.
 
-### A5. Актуализировать статус `ai_config` legacy store — `P2`
+### A5. Актуализировать статус `ai_config` legacy store — `P2` — `[x]` сделано (2026-08-19)
 
-- **Факт**: `model_resolver.py:10` — «no longer reads legacy ai_config
-  store», но 15 файлов ссылаются на `ai_config` (`router.py`,
-  `embeddings.py`, `ollama_client.py`, `task_routing.py`,
-  `assignment_groups.py`, `policy_engine.py`, `agent_loop.py`, `main.py`,
-  `extraction.py`, `memory.py`, `providers_api.py`, `capability_router.py`,
-  `ai_settings.py` и ещё 2).
-- **Шаги**:
-  1. `grep -n "ai_config" <файл>` по каждому из 15 файлов — выписать
-     конкретную строку использования (не просто факт наличия).
-  2. Для каждого использования определить категорию: (а) читает из
-     `task_routing` под именем `ai_config` по историческим причинам — просто
-     переименовать переменную/импорт; (б) реально читает отдельную таблицу
-     `ai_config` в БД для чего-то, чего в `task_routing` нет — задокументировать
-     назначение; (в) мёртвый код (не вызывается) — удалить.
-  3. Составить таблицу «файл → категория → действие» — сохранить как
-     подраздел в этом же файле или отдельным issue, прежде чем трогать код.
-  4. Только после таблицы — выполнять миграцию категории (а) файл за файлом,
-     с прогоном локальных тестов каждого модуля.
-  5. Обновить абзац в `CLAUDE.md` про `ai_config` под итоговое состояние.
-- **Готово, когда**: таблица закрыта (каждая строка — «мигрировано» или
-  «оставлено намеренно, см. почему»); `CLAUDE.md` соответствует коду.
+- **Итог аудита — картина оказалась ЗДОРОВЕЕ, чем в исходном плане**:
+  `ai_config` — не дрейфующий мёртвый код и не «два случайных источника
+  правды», а **осознанный, документированный dual-write compat-слой**.
+  `task_routing` (Redis) — источник правды для *task→model* назначений;
+  `ai_config` (`data/ai_config.json` + Redis-зеркало) — отдельный, всё ещё
+  живой store для настроек, которые читают более старые модули напрямую
+  (OCR/embedding/reasoning-provider/agent-model), НЕ через task_routing.
+  `assignment_groups.py._mirror_ai_config()` прямым текстом документирует
+  цель: «older code paths still read model selection from ai_config rather
+  than task_routing. Mirror...» — это не забытый хвост, а поддерживаемый
+  мост. Уже есть `task_routing.migrate_from_ai_config()` — one-time
+  миграция при старте (`main.py`).
+
+  | Файл | Категория | Действие |
+  |---|---|---|
+  | `ai_settings.py` | (б) реализация самого store | не трогать |
+  | `task_routing.py` | (б) миграция + документация моста | не трогать |
+  | `assignment_groups.py` | (б) write-mirror сторона моста | не трогать |
+  | `providers_api.py` | (б) write-mirror сторона моста | не трогать |
+  | `capability_router.py` | (б) API-экшны `ai_config_get/set`, не data-read | не трогать |
+  | `policy_engine.py` | (б) просто имя экшна в строке, не чтение данных | не трогать |
+  | `main.py` | (б) вызов one-time миграции при старте | не трогать |
+  | `extraction.py`, `embeddings.py`, `ollama_client.py`, `agent_loop.py`, `memory.py` | (б) активные read-потребители моста (OCR/embedding/reasoning/agent-model/memory) | не трогать |
+  | `model_resolver.py` | (в)-подобная, но не код — комментарий корректен, ничего не читает | не трогать |
+  | `router.py` | найден 1 устаревший докстринг («from ai_config»), сама реализация уже вызывает `model_resolver.get_ocr_model()` | **исправлен** докстринг |
+  | `model_tier.py` | докстринг описывает данные КАЛЛЕРА (сама функция принимает явные аргументы, не читает `ai_config`) | не трогал — верно как есть |
+
+  Категории (а) «переименовать» и (в) «удалить мёртвый код» из плана —
+  **пустые**: ни одного файла в них не попало. Миграция кода не
+  потребовалась вообще.
+- **CLAUDE.md обновлён**: фраза «`ai_config` — зеркало для legacy-вызовов
+  `model_resolver.py`» была единственной фактической неточностью во всём
+  разделе — `model_resolver.py` `ai_config` не читает вовсе. Заменена на
+  точное описание моста (`task_routing` = источник правды для
+  task→model, `ai_config` = отдельный store для OCR/embedding/
+  reasoning-provider/agent-model, которые read'ят его напрямую).
 
 ### A6. Наблюдаемость решения о маршруте — `P3`
 
