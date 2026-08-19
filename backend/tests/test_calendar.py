@@ -152,3 +152,30 @@ async def test_list_reminders(client: AsyncClient, invoice_with_dates):
     resp = await client.get("/api/calendar/reminders", params={"is_sent": False})
     assert resp.status_code == 200
     assert len(resp.json()) >= 1
+
+
+@pytest.mark.asyncio
+async def test_create_freestanding_reminder(client: AsyncClient):
+    """A reminder not attached to any entity — see AGENT_LIVE_TEST_FINDINGS.md #2."""
+    remind_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    resp = await client.post("/api/calendar/reminders", json={
+        "remind_at": remind_at,
+        "message": "Проверить остатки на складе",
+    })
+    assert resp.status_code == 200
+    reminder = resp.json()
+    assert reminder["entity_type"] is None
+    assert reminder["entity_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_reminder_rejects_nonexistent_entity(client: AsyncClient):
+    """See AGENT_LIVE_TEST_FINDINGS.md #3."""
+    remind_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    resp = await client.post("/api/calendar/reminders", json={
+        "entity_type": "invoice",
+        "entity_id": str(uuid.uuid4()),
+        "remind_at": remind_at,
+        "message": "Напоминание про несуществующий счёт",
+    })
+    assert resp.status_code == 404

@@ -10,7 +10,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.db.models import CalendarEvent, Invoice, Reminder
+from app.db.models import CalendarEvent, Invoice, Reminder, SupplierProfile, Document
 from app.domain.calendar import (
     CalendarEventCreate,
     CalendarEventOut,
@@ -225,13 +225,42 @@ async def upcoming(
 
 # ── calendar.create_reminder ─────────────────────────────────────────────
 
+# entity_type → model for the existence check below. Only types with a
+# well-known model here are validated; an unrecognised entity_type is
+# passed through as-is rather than rejected (the reminder subsystem isn't
+# the place to maintain an exhaustive entity_type registry).
+_REMINDER_ENTITY_MODELS: dict[str, type] = {
+    "invoice": Invoice,
+    "supplier": SupplierProfile,
+    "document": Document,
+}
+
 
 @router.post("/reminders", response_model=ReminderOut)
 async def create_reminder(
     payload: ReminderCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: calendar.create_reminder — Create a reminder."""
+    """Skill: calendar.create_reminder — Create a reminder.
+
+    entity_type/entity_id are optional (see ReminderCreate). When both are
+    given and entity_type is one we recognise, the referenced entity must
+    actually exist — found via live agent test: a fabricated placeholder
+    UUID previously passed silently, producing a reminder permanently
+    unreachable from wherever that entity is expected to be joined against.
+    """
+    if payload.entity_type and payload.entity_id:
+        model = _REMINDER_ENTITY_MODELS.get(payload.entity_type)
+        if model is not None:
+            exists = await db.scalar(
+                select(model.id).where(model.id == payload.entity_id)
+            )
+            if exists is None:
+                raise HTTPException(
+                    404,
+                    f"{payload.entity_type} {payload.entity_id} not found — "
+                    "cannot attach a reminder to a non-existent entity",
+                )
     reminder = Reminder(
         calendar_event_id=payload.calendar_event_id,
         entity_type=payload.entity_type,

@@ -186,7 +186,21 @@ async def chat_ws(ws: WebSocket) -> None:
                                 )
                                 await _audit_db.commit()
                 if raw_content:
-                    if current_turn and not current_turn.done():
+                    # Require BOTH turn_in_progress and a not-yet-done Task.
+                    # current_turn.done() alone lags: the Task only finishes
+                    # once on_user_message() fully RETURNS, which includes
+                    # work after the client-visible "done"/"error" frame is
+                    # sent (memory persistence, audit logging, etc) — found
+                    # via live test, a multi-turn scenario's second message
+                    # was rejected with "previous task still running" even
+                    # though the client had already received "done" for the
+                    # first turn. turn_in_progress alone would be unsafe: if
+                    # on_user_message() raises before ever emitting a final
+                    # "done"/"error" (send() is what flips it False), the
+                    # session would stay locked forever. Requiring both means
+                    # either signal — the frame going out, or the task simply
+                    # finishing (incl. via exception) — is enough to unblock.
+                    if turn_in_progress and current_turn and not current_turn.done():
                         await send({
                             "type": "error",
                             "content": "Предыдущая задача ещё выполняется.",

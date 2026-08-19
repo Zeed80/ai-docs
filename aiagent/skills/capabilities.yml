@@ -816,7 +816,14 @@ capabilities:
           description: "Фильтры и параметры запроса"
         body:
           type: object
-          description: "Данные для create/update/import"
+          description: >
+            Данные для create/update/import — точные поля зависят от action.
+            calendar_create_reminder: {remind_at: ISO datetime (обязательно),
+            message: str (обязательно), entity_type?: "invoice"|"supplier"|"document",
+            entity_id?: UUID}. entity_type/entity_id — необязательная пара:
+            опусти оба для отдельного напоминания, не привязанного ни к чему;
+            если указываешь — entity_id должен быть ID реально существующей
+            записи (иначе запрос будет отклонён), не придумывай UUID.
       required: [action]
 
   - name: agent_control

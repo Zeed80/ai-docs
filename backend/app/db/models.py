@@ -2139,8 +2139,10 @@ class Reminder(UUIDPrimaryKey, TimestampMixin, Base):
     calendar_event_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("calendar_events.id")
     )
-    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    entity_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    # Nullable: a reminder may stand on its own, not attached to any entity.
+    # See ReminderCreate in domain/calendar.py for why.
+    entity_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
     remind_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False)

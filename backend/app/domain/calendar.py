@@ -30,8 +30,13 @@ class CalendarEventOut(BaseModel):
 
 
 class ReminderCreate(BaseModel):
-    entity_type: str
-    entity_id: uuid.UUID
+    # entity_type/entity_id are optional: a reminder can stand on its own
+    # ("напомни мне завтра проверить остатки на складе") without being tied
+    # to any invoice/supplier/document. Found via live agent test: these
+    # were required, so a free-standing reminder request forced the model
+    # to fabricate a placeholder UUID just to satisfy the schema.
+    entity_type: str | None = None
+    entity_id: uuid.UUID | None = None
     remind_at: datetime
     message: str
     calendar_event_id: uuid.UUID | None = None
@@ -40,8 +45,8 @@ class ReminderCreate(BaseModel):
 class ReminderOut(BaseModel):
     id: uuid.UUID
     calendar_event_id: uuid.UUID | None = None
-    entity_type: str
-    entity_id: uuid.UUID
+    entity_type: str | None = None
+    entity_id: uuid.UUID | None = None
     remind_at: datetime
     message: str
     is_sent: bool
