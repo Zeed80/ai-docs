@@ -42,7 +42,7 @@ def _agent_headers() -> dict:
     return headers
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
-from app.ai.agent_loop import AgentSession, _execute_skill, _extract_list_count
+from app.ai.agent_loop import AgentSession, execute_skill, extract_list_count
 from app.ai.audit import (
     CAPABILITY_GAP_CODES,
     RETRYABLE,
@@ -1059,10 +1059,10 @@ class AgentOrchestrator:
         cache_key = f"{intent.capability}:{intent.action}:{intent.search_term or ''}"
         answer = cache_get(cache_key)
         if answer is None:
-            result = await _execute_skill(skill, intent.args, config)
+            result = await execute_skill(skill, intent.args, config)
             if isinstance(result, dict) and result.get("error"):
                 return False  # never answer with a wrong count on error — defer to LLM
-            total = _extract_list_count(result)
+            total = extract_list_count(result)
             if intent.capability == "warehouse":
                 answer = f"{intent.entity_label[:1].upper()}{intent.entity_label[1:]}: {total}."
             else:

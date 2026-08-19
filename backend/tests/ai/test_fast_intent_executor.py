@@ -49,7 +49,7 @@ async def test_fast_intent_counts_invoices_without_llm(monkeypatch):
         executed.append({"name": skill["name"], "args": args})
         return {"total": 152, "items": [{"id": 1}]}
 
-    monkeypatch.setattr(agent_loop, "_execute_skill", fake_execute_skill)
+    monkeypatch.setattr(agent_loop, "execute_skill", fake_execute_skill)
 
     # LLM must never be called on the fast path.
     async def fail_llm(*a, **k):
@@ -76,7 +76,7 @@ async def test_fast_intent_defers_on_skill_error(monkeypatch):
     async def fake_execute_skill(skill, args, config):
         return {"error": "HTTP 500"}
 
-    monkeypatch.setattr(agent_loop, "_execute_skill", fake_execute_skill)
+    monkeypatch.setattr(agent_loop, "execute_skill", fake_execute_skill)
 
     session.messages.append({"role": "user", "content": "сколько счетов"})
     handled = await session._try_fast_intent()

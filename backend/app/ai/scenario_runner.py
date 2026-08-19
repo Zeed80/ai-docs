@@ -138,9 +138,9 @@ def _skill_catalog() -> dict[str, dict]:
     engineering, …) regardless of which skills_mode the chat agent runs in —
     a scenario written against capabilities must not break when the agent is
     flipped to legacy registry mode."""
-    from app.ai.agent_loop import _load_registry, _sanitize_name
+    from app.ai.agent_loop import load_registry, sanitize_name
 
-    _, skill_map = _load_registry(expose_filter=None)  # all skills, no filter
+    _, skill_map = load_registry(expose_filter=None)  # all skills, no filter
     catalog = dict(skill_map)
     try:
         import yaml as _yaml
@@ -151,7 +151,7 @@ def _skill_catalog() -> dict[str, dict]:
         if caps_path.exists():
             data = _yaml.safe_load(caps_path.read_text()) or {}
             for cap in data.get("capabilities", []) or []:
-                name = _sanitize_name(cap.get("name", ""))
+                name = sanitize_name(cap.get("name", ""))
                 if name and name not in catalog:
                     catalog[name] = cap
     except Exception as exc:  # noqa: BLE001 — capability merge is additive
@@ -161,12 +161,12 @@ def _skill_catalog() -> dict[str, dict]:
 
 async def _call_skill(skill_name: str, params: dict) -> dict:
     """Execute a skill by name against the FastAPI backend."""
-    from app.ai.agent_loop import _execute_skill, _sanitize_name
+    from app.ai.agent_loop import execute_skill, sanitize_name
 
-    skill = _skill_catalog().get(_sanitize_name(skill_name))
+    skill = _skill_catalog().get(sanitize_name(skill_name))
     if not skill:
         return {"error": f"Skill not found: {skill_name}"}
-    return await _execute_skill(skill, params)
+    return await execute_skill(skill, params)
 
 
 # ── Step executor ─────────────────────────────────────────────────────────────
@@ -363,7 +363,7 @@ class ScenarioRunner:
         capability action is approval-gated — so a human can see exactly what
         the agent WOULD do, and where it would have to stop and ask, before
         anything runs."""
-        from app.ai.agent_loop import _sanitize_name
+        from app.ai.agent_loop import sanitize_name
 
         scenario = gateway_config.load_scenario(scenario_name)
         if not scenario:
@@ -376,7 +376,7 @@ class ScenarioRunner:
         for idx, step in enumerate(scenario.get("steps", [])):
             step_id = step.get("id", f"step_{idx}")
             skill_name = step.get("skill", "")
-            skill = skill_map.get(_sanitize_name(skill_name)) if skill_name else None
+            skill = skill_map.get(sanitize_name(skill_name)) if skill_name else None
             if skill_name and skill is None:
                 missing.append(skill_name)
             try:

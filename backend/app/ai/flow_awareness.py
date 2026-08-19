@@ -116,8 +116,8 @@ async def get_flow_snapshot(config, *, use_cache: bool = True) -> dict | None:
 
     base = config.backend_url.rstrip("/")
     try:
-        from app.ai.agent_loop import _internal_headers
-        headers = _internal_headers()
+        from app.ai.agent_loop import internal_headers
+        headers = internal_headers()
     except Exception:
         headers = {}
 

@@ -26,8 +26,23 @@ from app.config import settings as _settings
 
 logger = structlog.get_logger()
 
+# Public cross-module contract (A3): everything else in this file is private
+# to agent_loop.py — orchestrator.py, scenario_runner.py and flow_awareness.py
+# import only these names, no other `_`-prefixed symbol. Before adding a new
+# cross-module import, either it belongs here (rename, drop the leading
+# underscore, add it below) or the caller shouldn't be reaching this deep into
+# agent_loop's internals in the first place.
+__all__ = [
+    "AgentSession",
+    "execute_skill",
+    "extract_list_count",
+    "load_registry",
+    "sanitize_name",
+    "internal_headers",
+]
 
-def _internal_headers() -> dict:
+
+def internal_headers() -> dict:
     """Headers for agent → backend service calls (auth + internal marker).
 
     Carries the acting user (app.ai.actor_context) so endpoints can scope
@@ -374,7 +389,7 @@ def _thinking_level(
 
 # ── Registry loading ──────────────────────────────────────────────────────────
 
-def _sanitize_name(name: str) -> str:
+def sanitize_name(name: str) -> str:
     """Replace dots with __ for OpenAI-compatible function names."""
     return name.replace(".", "__")
 
@@ -462,7 +477,7 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
         if "action" in properties and name in action_enum:
             properties["action"]["enum"] = action_enum[name]
 
-        fn_name = _sanitize_name(name)
+        fn_name = sanitize_name(name)
         description = (cap.get("description") or name).strip()
 
         tools.append({
@@ -497,7 +512,7 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
             gen_data = yaml.safe_load(gen_path.read_text()) or {}
             for entry in gen_data.get("generated") or []:
                 gen_name = str(entry.get("name") or "")
-                fn_name = _sanitize_name(gen_name)
+                fn_name = sanitize_name(gen_name)
                 if not gen_name or fn_name in skill_map:
                     continue
                 tools.append({
@@ -533,7 +548,7 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
     return tools, skill_map
 
 
-def _load_registry(
+def load_registry(
     expose_filter: set[str] | None = None,
 ) -> tuple[list[dict], dict[str, dict]]:
     """Load skills from YAML registry (legacy mode — used by scenarios and fallback).
@@ -602,7 +617,7 @@ def _load_registry(
             if param.get("required"):
                 required.append(pname)
 
-        fn_name = _sanitize_name(skill["name"])
+        fn_name = sanitize_name(skill["name"])
         tools.append({
             "type": "function",
             "function": {
@@ -630,7 +645,7 @@ def _load_agent_skills(
     """
     if gateway_config.skills_mode == "capabilities":
         return _load_capabilities()
-    return _load_registry(expose_filter)
+    return load_registry(expose_filter)
 
 
 def _load_system_prompt(config: BuiltinAgentConfig | None = None) -> str:
@@ -652,7 +667,7 @@ def _load_system_prompt(config: BuiltinAgentConfig | None = None) -> str:
 
 # ── HTTP skill executor ───────────────────────────────────────────────────────
 
-async def _execute_skill(
+async def execute_skill(
     skill: dict,
     args: dict,
     config: BuiltinAgentConfig,
@@ -700,7 +715,7 @@ async def _execute_skill(
     last_error: Exception | None = None
     for attempt in range(max_retries):
         try:
-            _hdrs = _internal_headers()
+            _hdrs = internal_headers()
             if approval_granted:
                 _hdrs["X-Agent-Approval"] = "granted"
             async with httpx.AsyncClient(timeout=float(timeout)) as client:
@@ -1576,7 +1591,7 @@ class AgentSession:
                 await client.post(
                     f"{self._config.backend_url.rstrip('/')}/api/agent-actions",
                     json={"session_id": self._session_id, **kwargs},
-                    headers=_internal_headers(),
+                    headers=internal_headers(),
                 )
         except Exception as exc:
             log_degraded("agent_loop.action_log", exc)
@@ -1623,7 +1638,7 @@ class AgentSession:
         from app.ai.memory_manager import MemoryManager
         self._memory_mgr = MemoryManager(
             base_url=self._config.backend_url,
-            headers=_internal_headers(),
+            headers=internal_headers(),
         )
         # Re-init MCP tools with updated server config on next message.
         self._mcp_initialised = False
@@ -1796,7 +1811,7 @@ class AgentSession:
                 await client.post(
                     f"{self._config.backend_url.rstrip('/')}/api/canvas/publish",
                     json={"canvas_id": canvas_id, "block": block, "append": append},
-                    headers=_internal_headers(),
+                    headers=internal_headers(),
                 )
         except Exception as exc:
             log_degraded("agent_loop.canvas_publish", exc)
@@ -2009,11 +2024,11 @@ class AgentSession:
             return True
 
         await self._send({"type": "tool_call", "tool": intent.capability, "args": intent.args})
-        result = await _execute_skill(skill, intent.args, self._config)
+        result = await execute_skill(skill, intent.args, self._config)
         await self._send({"type": "tool_result", "tool": intent.capability, "result": result})
         if isinstance(result, dict) and result.get("error"):
             return False  # never answer with a wrong count on error — let the LLM try
-        total = _extract_list_count(result)
+        total = extract_list_count(result)
         if intent.capability == "warehouse":
             answer = f"{intent.entity_label[:1].upper()}{intent.entity_label[1:]}: {total}."
         else:
@@ -2406,7 +2421,7 @@ class AgentSession:
             approval_granted = True
 
         if skill:
-            result = await _execute_skill(
+            result = await execute_skill(
                 skill,
                 args,
                 self._config,
@@ -2626,7 +2641,7 @@ class AgentSession:
         self._trim_history()
 
 
-def _extract_list_count(payload: Any) -> int:
+def extract_list_count(payload: Any) -> int:
     if isinstance(payload, dict):
         for key in ("total", "count", "items_total", "results_count"):
             value = payload.get(key)
@@ -2775,7 +2790,7 @@ async def _create_db_approval(skill_name: str, args: dict) -> str | None:
                 "requested_by": "sveta",
                 "context": args,
             },
-            headers=_internal_headers(),
+            headers=internal_headers(),
         )
         if resp.status_code == 201:
             return resp.json().get("id")
@@ -2791,5 +2806,5 @@ async def _decide_db_approval(approval_id: str, approved: bool) -> None:
                 "status": "approved" if approved else "rejected",
                 "decided_by": "user",
             },
-            headers=_internal_headers(),
+            headers=internal_headers(),
         )

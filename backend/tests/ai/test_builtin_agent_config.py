@@ -64,7 +64,7 @@ tools:
         SimpleNamespace(registry_path=registry_path),
     )
 
-    tools, skill_map = agent_loop._load_registry(expose_filter={"memory.search"})
+    tools, skill_map = agent_loop.load_registry(expose_filter={"memory.search"})
 
     assert [tool["function"]["name"] for tool in tools] == ["memory__search"]
     assert skill_map["memory__search"]["path"] == "/api/memory/search"
@@ -181,7 +181,7 @@ tools:
         return {"hits": []}
 
     monkeypatch.setattr(agent_loop, "_call_ollama_streaming", fake_call_ollama_streaming)
-    monkeypatch.setattr(agent_loop, "_execute_skill", fake_execute_skill)
+    monkeypatch.setattr(agent_loop, "execute_skill", fake_execute_skill)
 
     async def capture(message: dict):
         sent.append(message)
@@ -268,7 +268,7 @@ tools:
         return {"items": [{"id": "inv-1"}], "total": 1}
 
     monkeypatch.setattr(agent_loop, "_call_provider_streaming", fake_call_provider_streaming)
-    monkeypatch.setattr(agent_loop, "_execute_skill", fake_execute_skill)
+    monkeypatch.setattr(agent_loop, "execute_skill", fake_execute_skill)
 
     async def capture(message: dict):
         sent.append(message)

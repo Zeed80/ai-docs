@@ -1,10 +1,10 @@
-"""_execute_skill's MCP/builtin handler branch, and the mcp capability's
+"""execute_skill's MCP/builtin handler branch, and the mcp capability's
 process-level tool registry (mcp_capability.py).
 
 Regression guard: MCP-derived skill_map entries (``{"_method": "mcp"/
 "builtin", "_handler": callable}``, no "method"/"path" keys — see
 mcp_client.load_mcp_tools) previously hit ``skill["method"]`` unconditionally
-in _execute_skill and KeyError'd on the first real MCP tool call. The tool
+in execute_skill and KeyError'd on the first real MCP tool call. The tool
 schema and gate wiring worked; only invocation was broken, so nothing
 exercised it until now.
 """
@@ -32,7 +32,7 @@ async def test_execute_skill_calls_mcp_handler_directly():
         return {"ok": True, "echo": args}
 
     skill = {"name": "acme__ping", "_method": "mcp", "_handler": handler}
-    result = await agent_loop._execute_skill(skill, {"target": "x"}, _config())
+    result = await agent_loop.execute_skill(skill, {"target": "x"}, _config())
 
     assert calls == [{"target": "x"}]
     assert result == {"ok": True, "echo": {"target": "x"}}
@@ -44,7 +44,7 @@ async def test_execute_skill_calls_builtin_mcp_handler():
         return {"drawing_id": args.get("drawing_id"), "status": "analyzed"}
 
     skill = {"name": "drawing_analysis_mcp", "_method": "builtin", "_handler": handler}
-    result = await agent_loop._execute_skill(skill, {"drawing_id": "d1"}, _config())
+    result = await agent_loop.execute_skill(skill, {"drawing_id": "d1"}, _config())
 
     assert result == {"drawing_id": "d1", "status": "analyzed"}
 
@@ -55,7 +55,7 @@ async def test_execute_skill_mcp_handler_exception_becomes_error_dict():
         raise RuntimeError("upstream MCP server unreachable")
 
     skill = {"name": "acme__ping", "_method": "mcp", "_handler": handler}
-    result = await agent_loop._execute_skill(skill, {}, _config())
+    result = await agent_loop.execute_skill(skill, {}, _config())
 
     assert result == {"error": "upstream MCP server unreachable"}
 
@@ -88,7 +88,7 @@ async def test_execute_skill_still_does_http_for_regular_skills(monkeypatch):
 
     monkeypatch.setattr(agent_loop.httpx, "AsyncClient", FakeClient)
     skill = {"name": "documents", "method": "POST", "path": "/api/agent/cap/documents"}
-    result = await agent_loop._execute_skill(skill, {"action": "list"}, _config())
+    result = await agent_loop.execute_skill(skill, {"action": "list"}, _config())
 
     assert result == {"status": "ok"}
     assert posted[0][0].endswith("/api/agent/cap/documents")

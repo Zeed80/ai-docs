@@ -35,7 +35,7 @@ async def test_max_steps_emits_final_text(monkeypatch):
     async def fake_execute_skill(skill, args, config):  # noqa: A002
         return {"status": "ok"}
 
-    monkeypatch.setattr(agent_loop, "_execute_skill", fake_execute_skill)
+    monkeypatch.setattr(agent_loop, "execute_skill", fake_execute_skill)
 
     # Model behaviour: keep calling a tool while tools are offered (never
     # answering), but when offered NO tools (the forced finalisation call),

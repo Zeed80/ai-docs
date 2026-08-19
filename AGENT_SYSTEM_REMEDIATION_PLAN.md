@@ -116,7 +116,29 @@
      `"gated"`.
 - **Готово, когда**: тест из шага 4 зелёный; статический tuple из кода исчез.
 
-### A3. Разрезать orchestrator.py / agent_loop.py — `P1`
+### A3. Разрезать orchestrator.py / agent_loop.py — `P1` — `[x]` частично сделано (2026-08-19)
+
+- **Итог**: полный контракт-рефакторинг (шаг 6 — dataclass/protocol между
+  секретарём и исполнителем) НЕ сделан — это самостоятельная крупная
+  задача. Сделана более узкая, но полностью завершённая часть: убраны
+  ВСЕ приватные кросс-модульные импорты из `agent_loop.py`, не только
+  2 названных в плане. При grep нашлось 5, не 2: `_execute_skill`,
+  `_extract_list_count` (потреблялись `orchestrator.py`), плюс
+  `_load_registry`, `_sanitize_name` (потреблялись `scenario_runner.py` —
+  третий потребитель, не упомянутый в исходном плане) и
+  `_internal_headers` (потреблялся `flow_awareness.py`). Все 5
+  переименованы (убран `_`-префикс), добавлен явный `__all__` в
+  `agent_loop.py` с комментарием-контрактом «добавляя новый кросс-модульный
+  импорт — либо имя сюда, либо вызывающему не стоит лезть так глубоко».
+  Обновлены все потребители в исходном коде (`orchestrator.py`,
+  `scenario_runner.py`, `flow_awareness.py`, докстринг в
+  `actor_context.py`) и в тестах (6 файлов их monkeypatch'или по старому
+  имени — `test_agent_role_dispatch.py`, `test_builtin_agent_config.py`,
+  `test_mcp_execution.py`, `test_fast_intent_executor.py`,
+  `test_result_cache.py`, `test_agent_max_steps.py`). Полный `tests/ai/` +
+  смежные прогнаны — тот же baseline предсуществующих падений (9), 1477
+  passed (было 1477 и после Б17 — рефакторинг переименования, не должен
+  был менять число тестов, и не поменял).
 
 - **Факт**: `orchestrator.py:45` — `from app.ai.agent_loop import
   AgentSession, _execute_skill, _extract_list_count` — два приватных

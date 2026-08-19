@@ -59,7 +59,7 @@ async def test_fast_intent_cache_hit_skips_skill(monkeypatch):
     async def fail_skill(*a, **k):
         raise AssertionError("skill must not run on cache hit")
 
-    monkeypatch.setattr(agent_loop, "_execute_skill", fail_skill)
+    monkeypatch.setattr(agent_loop, "execute_skill", fail_skill)
 
     session.messages.append({"role": "user", "content": "сколько счетов"})
     handled = await session._try_fast_intent()
