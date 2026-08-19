@@ -8,13 +8,17 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = structlog.get_logger()
 
 from app.db.models import (
     WorkAcceptanceCriterion,
     WorkEvent,
     WorkEvidence,
+    WorkLearning,
     WorkOrder,
     WorkPlan,
     WorkStep,
@@ -56,7 +60,12 @@ WORK_TRANSITIONS: dict[str, frozenset[str]] = {
         }
     ),
     "waiting_approval": frozenset({"ready", "replanning", "blocked", "canceled"}),
-    "waiting_external": frozenset({"ready", "replanning", "blocked", "canceled"}),
+    # Б11: "waiting_external" (previously reserved, unused) now also covers a
+    # parent WorkOrder waiting on child WorkOrders spawned by a decompose
+    # step — promote_waiting_parents routes it through the same "verifying"
+    # -> completed/blocked path verify_nonempty_result already uses for a
+    # normal step, once every child reaches a terminal state.
+    "waiting_external": frozenset({"ready", "replanning", "blocked", "canceled", "verifying"}),
     "verifying": frozenset({"completed", "replanning", "blocked", "failed", "canceled"}),
     "replanning": frozenset({"ready", "blocked", "failed", "canceled"}),
     "blocked": frozenset({"scoping", "planning", "ready", "verifying", "canceled"}),
@@ -143,6 +152,13 @@ async def transition_work_order(
     if target == "completed":
         await assert_completion_allowed(db, work_order.id)
         work_order.completed_at = utcnow()
+        learning_exists = (
+            await db.execute(
+                select(WorkLearning.id).where(WorkLearning.work_order_id == work_order.id)
+            )
+        ).scalar_one_or_none()
+        if learning_exists is None:
+            db.add(WorkLearning(work_order_id=work_order.id, status="pending"))
     elif target == "canceled":
         work_order.canceled_at = utcnow()
     elif target == "running" and work_order.started_at is None:
@@ -477,6 +493,145 @@ async def claim_ready_step(
     return order, step, attempt
 
 
+async def enforce_budgets(db: AsyncSession, *, actor: str = "scheduler") -> int:
+    """Б15: block any ready/running WorkOrder that exceeded its token_budget.
+
+    Runs as a periodic housekeeping pass (mirrors reclaim_expired_leases) —
+    NOT inside claim_ready_step's SKIP LOCKED query — so a work order this
+    blocks simply stops matching claim_ready_step's ``status.in_(["ready",
+    "running"])`` filter on the next dispatch tick, with zero change to that
+    hot claim path. Only WorkOrders with an explicit ``budgets.token_budget``
+    are checked; nothing is enforced by default (see A4/Б15 on defaults).
+    """
+    # Filtered in Python, not a JSON-path SQL predicate on `budgets` — matches
+    # how every other budget field in this module is read (max_replans,
+    # timeout_seconds) and stays portable across the Postgres/SQLite backends
+    # this project runs against, instead of relying on a JSON operator that
+    # behaves differently between them.
+    candidates = list(
+        (
+            await db.execute(
+                select(WorkOrder).where(WorkOrder.status.in_(["ready", "running"]))
+            )
+        ).scalars()
+    )
+    blocked = 0
+    for order in candidates:
+        token_budget = (order.budgets or {}).get("token_budget")
+        if token_budget is None:
+            continue
+        spent = (
+            await db.execute(
+                select(func.coalesce(func.sum(WorkStepAttempt.tokens_used), 0))
+                .join(WorkStep, WorkStep.id == WorkStepAttempt.step_id)
+                .where(WorkStep.work_order_id == order.id)
+            )
+        ).scalar_one()
+        if spent <= int(token_budget):
+            continue
+        order.blocker = {
+            "code": "token_budget_exceeded",
+            "token_budget": int(token_budget),
+            "tokens_spent": int(spent),
+        }
+        await transition_work_order(db, order, "blocked", actor=actor)
+        blocked += 1
+    if blocked:
+        await db.flush()
+    return blocked
+
+
+async def enter_waiting_for_children(
+    db: AsyncSession, *, order: WorkOrder, actor: str = "scheduler"
+) -> None:
+    """Б11: a decompose step just succeeded — the parent isn't done, it's
+    waiting on the children it spawned. See promote_waiting_parents for the
+    other half (what happens once they all finish)."""
+    await transition_work_order(db, order, "waiting_external", actor=actor)
+
+
+async def promote_waiting_parents(db: AsyncSession, *, actor: str = "scheduler") -> int:
+    """Б11: resolve any decompose-parent whose children are all done.
+
+    Periodic housekeeping — same pattern as reclaim_expired_leases/
+    enforce_budgets, called from _dispatch_ready_work. Scoped to orders that
+    actually have children (parent_id points at them): "waiting_external" is
+    a general-purpose reserved status, not decompose-specific, so an order
+    sitting in it for some other future reason with no children is left
+    alone rather than assumed to be a decompose parent.
+
+    Deliberately routes through verify_nonempty_result — the same
+    completed/blocked decision every other WorkOrder goes through — instead
+    of a bespoke completed-or-failed branch here. Two reasons: (1) every
+    order gets a default required "result_present" criterion at creation
+    (create_work_order) that only verify_nonempty_result knows how to mark
+    passed, so skipping it left a decompose-parent permanently unable to
+    reach "completed" (found by the test for this function — the parent's
+    own default criterion was still unresolved); (2) if the objective that
+    produced this decompose plan had explicit acceptance_criteria of its
+    own, they still get evaluated for real instead of being silently assumed
+    satisfied because the children succeeded.
+    """
+    candidates = list(
+        (
+            await db.execute(
+                select(WorkOrder).where(WorkOrder.status == "waiting_external")
+            )
+        ).scalars()
+    )
+    promoted = 0
+    for order in candidates:
+        children = list(
+            (
+                await db.execute(select(WorkOrder).where(WorkOrder.parent_id == order.id))
+            ).scalars()
+        )
+        if not children:
+            continue
+        if any(child.status not in TERMINAL_WORK_STATUSES for child in children):
+            continue  # still waiting on at least one
+        decompose_step = (
+            await db.execute(
+                select(WorkStep).where(
+                    WorkStep.work_order_id == order.id, WorkStep.kind == "decompose"
+                )
+            )
+        ).scalar_one_or_none()
+        if decompose_step is None:
+            continue  # waiting_external for some other, non-decompose reason
+
+        succeeded = [c for c in children if c.status == "completed"]
+        lines = [f"Дочерних поручений: {len(children)}, завершено успешно: {len(succeeded)}."]
+        for child in children:
+            summary = child.result_summary or f"[{child.status}]"
+            lines.append(f"— {child.objective}: {summary}")
+        aggregated_text = "\n".join(lines)
+
+        # verify_nonempty_result's has_result = bool(text) and not errors —
+        # zero successful children must read as "no result", not merely "the
+        # explanation text happens to be non-empty" (it always is, it lists
+        # every child's failure).
+        decompose_step.output = {
+            "text": aggregated_text,
+            **({} if succeeded else {"errors": ["all children failed"]}),
+        }
+        try:
+            await verify_nonempty_result(db, order=order, step=decompose_step, actor=actor)
+        except WorkStateError as exc:
+            # e.g. an explicit acceptance criterion on the parent itself
+            # needs an independent verifier — correctly refuses a false
+            # "completed", stays in waiting_external for a human/next tick
+            # to resolve rather than crashing the rest of this batch.
+            logger.warning(
+                "promote_waiting_parents_blocked", order_id=str(order.id), error=str(exc)
+            )
+            continue
+        promoted += 1
+    if promoted:
+        await db.flush()
+    return promoted
+
+
 async def reclaim_expired_leases(db: AsyncSession, *, actor: str = "scheduler") -> int:
     """Recover steps whose worker disappeared without finishing its attempt."""
     now = utcnow()
@@ -548,6 +703,16 @@ async def complete_attempt(
     attempt.output = output
     attempt.finished_at = now
     attempt.heartbeat_at = now
+    # Б15: only agent_turn steps populate this today (tokens_used from
+    # AgentSession.total_tokens, Ollama calls only — see agent_loop.py's
+    # _accumulate_usage). Capability steps have no LLM cost of their own to
+    # attribute here; a capability that internally triggers model usage
+    # (e.g. documents.summarize) is not tracked by this mechanism.
+    tokens_used = output.get("tokens_used") if isinstance(output, dict) else None
+    if isinstance(tokens_used, dict):
+        attempt.tokens_used = (
+            int(tokens_used.get("input_tokens") or 0) + int(tokens_used.get("output_tokens") or 0)
+        )
     step.output = output
     await transition_step(db, step, "succeeded", actor=actor)
     await append_event(

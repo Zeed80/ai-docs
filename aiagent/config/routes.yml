@@ -638,6 +638,9 @@ skill_to_spec:
   "workspace.spec_table":
     path: "/api/workspace/agent/spec-table"
     default_args: {}
+  "workspace.spec_table_patch":
+    path: "/api/workspace/agent/spec-table/patch"
+    default_args: {}
   "workspace.invoice_pivot":
     path: "/api/workspace/agent/invoices/pivot-table"
     default_args: {group_by: "item"}
@@ -677,6 +680,33 @@ capability_output_types:
   memory: markdown
   email: markdown
   agent_control: markdown
+
+# ── Бюджеты хода (A4) ──────────────────────────────────────────────────────────
+# Раньше — хардкод чисел в orchestrator.py/model_tier.py. "Таблица = спецификация"
+# (тот же принцип, что и выше для routes/skill_to_spec): смена порога — правка
+# YAML, не деплой кода. Читается живьём через route_table (mtime-кэш, без рестарта).
+
+# Per-turn response token budget (orchestrator._response_budget_for).
+# by_output_type проверяется первым (report/table/document/chart нужен простор
+# независимо от tier), затем by_tier по убыванию, затем default.
+response_budgets:
+  by_output_type:
+    table: 8192
+    document: 8192
+    chart: 8192
+  by_tier:
+    large: 8192
+    medium: 4096
+    micro: 1024
+  default: 2048
+
+# Max auxiliary quality LLM calls per turn (model_tier.aux_quality_budget) —
+# planner/executor calls are structural (already tier-gated) and NOT counted
+# here; this bounds the extra checking layers (semantic audit, self-refine),
+# which dominate latency on local models.
+aux_quality_budgets:
+  large: 2
+  default: 1
 
 # ── Action chips (контекстные кнопки после завершения хода) ───────────────────
 

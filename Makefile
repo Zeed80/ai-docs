@@ -18,6 +18,13 @@
 # ──────────────────────────────────────────────────────────────────────────────
 COMPOSE_DEV      := -f infra/docker-compose.yml -f infra/docker-compose.dev.yml
 COMPOSE_PROD     := -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --env-file infra/.env
+# Б19: separate project name so staging's containers/volumes/networks never
+# collide with a prod deployment on the same host; separate env file so it
+# never shares a database, secret, or Traefik cert with prod either (copy
+# infra/.env.example to infra/.env.staging and set at minimum
+# TRAEFIK_DOMAIN/TRAEFIK_ACME_EMAIL/POSTGRES_PASSWORD/APP_SECRET_KEY/
+# CSRF_SECRET to staging-specific values before first use).
+COMPOSE_STAGING  := -f infra/docker-compose.yml -f infra/docker-compose.staging.yml --env-file infra/.env.staging -p infra-staging
 COMPOSE_LLAMACPP := -f infra/docker-compose.yml --profile embedded-llamacpp
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -40,6 +47,12 @@ help:
 	@echo "    make prod-bg          — production stack (bg, detached)"
 	@echo "    make prod-build       — production stack + build (detached)"
 	@echo "    make prod-down        — stop production stack"
+	@echo ""
+	@echo "  STAGING (Б19 — separate project name + infra/.env.staging, restart: on-failure)"
+	@echo "    make staging          — staging stack (fg)"
+	@echo "    make staging-up       — staging stack (bg, detached)"
+	@echo "    make staging-build    — staging stack + build (detached)"
+	@echo "    make staging-down     — stop staging stack"
 	@echo ""
 	@echo "  CLEAN / REBUILD"
 	@echo "    make clean            — stop + remove local images + prune build cache"
@@ -121,6 +134,21 @@ prod-build:
 
 prod-down:
 	docker compose $(COMPOSE_PROD) down
+
+# Б19: same shape as the prod targets above, pointed at the staging overlay
+# (restart: on-failure, not unless-stopped — a broken staging deploy should
+# stop and stay visibly stopped) and a separate project name + env file.
+staging:
+	COMPOSE_PROFILES= docker compose $(COMPOSE_STAGING) up
+
+staging-up:
+	COMPOSE_PROFILES= docker compose $(COMPOSE_STAGING) up -d
+
+staging-build:
+	COMPOSE_PROFILES= docker compose $(COMPOSE_STAGING) up -d --build
+
+staging-down:
+	docker compose $(COMPOSE_STAGING) down
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Clean / Rebuild

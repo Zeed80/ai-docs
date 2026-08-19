@@ -330,6 +330,16 @@ def capability_output_type(capability: str) -> str | None:
     return (_table().get("capability_output_types") or {}).get(capability)
 
 
+def response_budgets() -> dict[str, Any]:
+    """Per-turn response token budget thresholds (A4) — see routes.yml."""
+    return _table().get("response_budgets") or {}
+
+
+def aux_quality_budgets() -> dict[str, Any]:
+    """Max auxiliary quality LLM calls per turn thresholds (A4) — see routes.yml."""
+    return _table().get("aux_quality_budgets") or {}
+
+
 # ── Fast path: deterministic count intents (0 LLM) ─────────────────────────────
 
 

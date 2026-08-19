@@ -10,7 +10,7 @@ contract for each department role:
    exposed capability action (catches fixture drift / removed actions — the
    exact class of bug that silently broke the old eval).
 2. **Dispatch fidelity** — the agent loop routes each scripted tool call to
-   `_execute_skill` with the correct capability + action, in order.
+   `execute_skill` with the correct capability + action, in order.
 3. **Gate correctness** — actions declared as gate_actions in capabilities.yml
    trigger an approval request; non-gated actions do not.
 4. **Turn completion** — the turn emits assistant text and a final ``done``.
@@ -85,14 +85,14 @@ async def test_role_capability_dispatch(role_case, monkeypatch):
     ):
         monkeypatch.setattr(agent_loop.AgentSession, name, _noop, raising=False)
 
-    # Record real dispatches (capability, action) routed through _execute_skill.
+    # Record real dispatches (capability, action) routed through execute_skill.
     dispatched: list[list[str]] = []
 
     async def fake_execute_skill(skill, args, config):  # noqa: A002
         dispatched.append([skill["name"], args.get("action")])
         return {"status": "ok"}
 
-    monkeypatch.setattr(agent_loop, "_execute_skill", fake_execute_skill)
+    monkeypatch.setattr(agent_loop, "execute_skill", fake_execute_skill)
 
     # Record gate triggers (capability, action) and auto-approve.
     triggered_gates: list[list[str]] = []

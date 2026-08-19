@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.api import memory
+from app.auth.models import UserInfo, UserRole
 from app.domain.graph import MemoryQueryRequest
 
 
@@ -14,7 +15,7 @@ async def test_memory_query_returns_compact_evidence_pack(monkeypatch):
     hit_id = uuid.uuid4()
     doc_id = uuid.uuid4()
 
-    async def fake_explain(payload, db):
+    async def fake_explain(payload, db, user):
         return SimpleNamespace(
             query=payload.query,
             hits=[
@@ -43,6 +44,7 @@ async def test_memory_query_returns_compact_evidence_pack(monkeypatch):
             include_graph=False,
         ),
         db=None,
+        user=UserInfo(sub="tester", roles=[UserRole.admin]),
     )
 
     assert result.query == "АКМЕ"

@@ -26,8 +26,23 @@ from app.config import settings as _settings
 
 logger = structlog.get_logger()
 
+# Public cross-module contract (A3): everything else in this file is private
+# to agent_loop.py — orchestrator.py, scenario_runner.py and flow_awareness.py
+# import only these names, no other `_`-prefixed symbol. Before adding a new
+# cross-module import, either it belongs here (rename, drop the leading
+# underscore, add it below) or the caller shouldn't be reaching this deep into
+# agent_loop's internals in the first place.
+__all__ = [
+    "AgentSession",
+    "execute_skill",
+    "extract_list_count",
+    "load_registry",
+    "sanitize_name",
+    "internal_headers",
+]
 
-def _internal_headers() -> dict:
+
+def internal_headers() -> dict:
     """Headers for agent → backend service calls (auth + internal marker).
 
     Carries the acting user (app.ai.actor_context) so endpoints can scope
@@ -374,7 +389,7 @@ def _thinking_level(
 
 # ── Registry loading ──────────────────────────────────────────────────────────
 
-def _sanitize_name(name: str) -> str:
+def sanitize_name(name: str) -> str:
     """Replace dots with __ for OpenAI-compatible function names."""
     return name.replace(".", "__")
 
@@ -462,7 +477,7 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
         if "action" in properties and name in action_enum:
             properties["action"]["enum"] = action_enum[name]
 
-        fn_name = _sanitize_name(name)
+        fn_name = sanitize_name(name)
         description = (cap.get("description") or name).strip()
 
         tools.append({
@@ -497,7 +512,7 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
             gen_data = yaml.safe_load(gen_path.read_text()) or {}
             for entry in gen_data.get("generated") or []:
                 gen_name = str(entry.get("name") or "")
-                fn_name = _sanitize_name(gen_name)
+                fn_name = sanitize_name(gen_name)
                 if not gen_name or fn_name in skill_map:
                     continue
                 tools.append({
@@ -533,7 +548,7 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
     return tools, skill_map
 
 
-def _load_registry(
+def load_registry(
     expose_filter: set[str] | None = None,
 ) -> tuple[list[dict], dict[str, dict]]:
     """Load skills from YAML registry (legacy mode — used by scenarios and fallback).
@@ -602,7 +617,7 @@ def _load_registry(
             if param.get("required"):
                 required.append(pname)
 
-        fn_name = _sanitize_name(skill["name"])
+        fn_name = sanitize_name(skill["name"])
         tools.append({
             "type": "function",
             "function": {
@@ -630,7 +645,7 @@ def _load_agent_skills(
     """
     if gateway_config.skills_mode == "capabilities":
         return _load_capabilities()
-    return _load_registry(expose_filter)
+    return load_registry(expose_filter)
 
 
 def _load_system_prompt(config: BuiltinAgentConfig | None = None) -> str:
@@ -652,13 +667,24 @@ def _load_system_prompt(config: BuiltinAgentConfig | None = None) -> str:
 
 # ── HTTP skill executor ───────────────────────────────────────────────────────
 
-async def _execute_skill(
+async def execute_skill(
     skill: dict,
     args: dict,
     config: BuiltinAgentConfig,
     *,
     approval_granted: bool = False,
 ) -> dict:
+    # MCP-derived skill entries (built-in or external-server tools loaded by
+    # _init_mcp/load_mcp_tools) carry a direct async handler instead of an
+    # HTTP method/path — call it in-process. Without this branch every MCP
+    # tool call KeyErrors on skill["method"] the first time it actually runs
+    # (the tool schema/gate wiring worked; only invocation was missing).
+    if skill.get("_method") in {"mcp", "builtin"} and callable(skill.get("_handler")):
+        try:
+            return await skill["_handler"](args)
+        except Exception as exc:
+            return {"error": str(exc)}
+
     method = skill["method"].upper()
     path = skill["path"]
     base_url = config.backend_url.rstrip("/")
@@ -689,7 +715,7 @@ async def _execute_skill(
     last_error: Exception | None = None
     for attempt in range(max_retries):
         try:
-            _hdrs = _internal_headers()
+            _hdrs = internal_headers()
             if approval_granted:
                 _hdrs["X-Agent-Approval"] = "granted"
             async with httpx.AsyncClient(timeout=float(timeout)) as client:
@@ -837,6 +863,18 @@ async def _call_ollama_streaming(
                     final_message["content"] = full_content
                     if accumulated_tool_calls and not final_message.get("tool_calls"):
                         final_message["tool_calls"] = accumulated_tool_calls
+                    # Б15: Ollama's final streaming chunk carries token counts as
+                    # documented top-level fields (sibling to "message", not
+                    # nested in it) — cheap to read, previously dropped
+                    # entirely. Only Ollama is captured in this pass; the
+                    # OpenAI-compatible and Anthropic streaming paths need
+                    # their own (differently-shaped) usage parsing, deferred —
+                    # see AGENT_SYSTEM_REMEDIATION_PLAN.md Б15.
+                    if "prompt_eval_count" in chunk or "eval_count" in chunk:
+                        final_message["_usage"] = {
+                            "input_tokens": int(chunk.get("prompt_eval_count") or 0),
+                            "output_tokens": int(chunk.get("eval_count") or 0),
+                        }
                     break
 
     return final_message
@@ -1517,6 +1555,13 @@ class AgentSession:
         self._config = get_builtin_agent_config()
         self._rebuild_runtime_components(self._config)
         self._mcp_initialised = False
+        # Б15: summed across every LLM call this session makes, from the
+        # "_usage" key _call_ollama_streaming attaches to its returned
+        # message (see _accumulate_usage). Only Ollama calls are counted in
+        # this pass — see the note at "_usage" for why. Public: WorkOrder's
+        # headless runner (agent_cron.run_headless_agent_turn) reads this
+        # after the turn to report tokens_used on the WorkStepAttempt.
+        self.total_tokens: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
         self._registry_mtime: float = _registry_mtime()
         _ACTIVE_SESSIONS.add(self)
 
@@ -1565,10 +1610,23 @@ class AgentSession:
                 await client.post(
                     f"{self._config.backend_url.rstrip('/')}/api/agent-actions",
                     json={"session_id": self._session_id, **kwargs},
-                    headers=_internal_headers(),
+                    headers=internal_headers(),
                 )
         except Exception as exc:
             log_degraded("agent_loop.action_log", exc)
+
+    def _accumulate_usage(self, message: dict | None) -> None:
+        """Fold one LLM call's token usage (if any) into self.total_tokens.
+
+        No-op when the provider didn't attach "_usage" (Б15 covers Ollama
+        only in this pass) — total_tokens then stays {0, 0}, an honest
+        "unknown", not a wrong number.
+        """
+        usage = (message or {}).get("_usage")
+        if not isinstance(usage, dict):
+            return
+        self.total_tokens["input_tokens"] += int(usage.get("input_tokens") or 0)
+        self.total_tokens["output_tokens"] += int(usage.get("output_tokens") or 0)
 
     async def _init_mcp(self) -> None:
         """Lazy-init MCP tools on first message (async-safe)."""
@@ -1612,7 +1670,7 @@ class AgentSession:
         from app.ai.memory_manager import MemoryManager
         self._memory_mgr = MemoryManager(
             base_url=self._config.backend_url,
-            headers=_internal_headers(),
+            headers=internal_headers(),
         )
         # Re-init MCP tools with updated server config on next message.
         self._mcp_initialised = False
@@ -1785,7 +1843,7 @@ class AgentSession:
                 await client.post(
                     f"{self._config.backend_url.rstrip('/')}/api/canvas/publish",
                     json={"canvas_id": canvas_id, "block": block, "append": append},
-                    headers=_internal_headers(),
+                    headers=internal_headers(),
                 )
         except Exception as exc:
             log_degraded("agent_loop.canvas_publish", exc)
@@ -1998,11 +2056,11 @@ class AgentSession:
             return True
 
         await self._send({"type": "tool_call", "tool": intent.capability, "args": intent.args})
-        result = await _execute_skill(skill, intent.args, self._config)
+        result = await execute_skill(skill, intent.args, self._config)
         await self._send({"type": "tool_result", "tool": intent.capability, "result": result})
         if isinstance(result, dict) and result.get("error"):
             return False  # never answer with a wrong count on error — let the LLM try
-        total = _extract_list_count(result)
+        total = extract_list_count(result)
         if intent.capability == "warehouse":
             answer = f"{intent.entity_label[:1].upper()}{intent.entity_label[1:]}: {total}."
         else:
@@ -2093,6 +2151,7 @@ class AgentSession:
                     on_thinking=_on_thinking,
                     max_tokens=self._response_budget,
                 )
+                self._accumulate_usage(message)
                 duration_ms = int((time.time() - t_start) * 1000)
                 tool_calls = message.get("tool_calls") or []
                 full_text = "".join(accumulated_text)
@@ -2268,6 +2327,7 @@ class AgentSession:
                 disable_thinking_override=True,
                 max_tokens=self._response_budget,
             )
+            self._accumulate_usage(msg)
         except Exception as e:  # noqa: BLE001
             logger.warning("force_final_answer_failed", error=str(e), session_id=self._session_id)
 
@@ -2332,12 +2392,18 @@ class AgentSession:
         from app.ai.policy_engine import check_tool_execution
         current_gates = set((_get_latest_config()).approval_gates)
 
-        # Capabilities mode: check gate_actions declared in capabilities.yml
+        # Capabilities mode: check gate_actions declared in capabilities.yml.
+        # "*" gates every action (used by "mcp", Б17) — mirrors the wildcard
+        # capability_router._enforce_capability_policy applies at the actual
+        # HTTP boundary. That boundary is the real backstop either way (a miss
+        # here just means the LLM sees a raw 423 instead of a proper
+        # approval-request UX), but checking it here too keeps the two in
+        # sync instead of silently relying on the second one to catch it.
         cap_gate_actions = set()
         if skill:
             cap_gate_actions = set(skill.get("gate_actions") or [])
         action_arg = args.get("action", "")
-        if action_arg and action_arg in cap_gate_actions:
+        if action_arg and (action_arg in cap_gate_actions or "*" in cap_gate_actions):
             current_gates.add(original_name)
 
         policy = check_tool_execution(
@@ -2389,7 +2455,7 @@ class AgentSession:
             approval_granted = True
 
         if skill:
-            result = await _execute_skill(
+            result = await execute_skill(
                 skill,
                 args,
                 self._config,
@@ -2609,7 +2675,7 @@ class AgentSession:
         self._trim_history()
 
 
-def _extract_list_count(payload: Any) -> int:
+def extract_list_count(payload: Any) -> int:
     if isinstance(payload, dict):
         for key in ("total", "count", "items_total", "results_count"):
             value = payload.get(key)
@@ -2758,7 +2824,7 @@ async def _create_db_approval(skill_name: str, args: dict) -> str | None:
                 "requested_by": "sveta",
                 "context": args,
             },
-            headers=_internal_headers(),
+            headers=internal_headers(),
         )
         if resp.status_code == 201:
             return resp.json().get("id")
@@ -2774,5 +2840,5 @@ async def _decide_db_approval(approval_id: str, approved: bool) -> None:
                 "status": "approved" if approved else "rejected",
                 "decided_by": "user",
             },
-            headers=_internal_headers(),
+            headers=internal_headers(),
         )

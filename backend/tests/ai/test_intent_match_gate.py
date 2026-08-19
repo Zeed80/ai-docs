@@ -167,6 +167,36 @@ def test_risk_class_gated_for_external_actions():
     assert risk_class(_plan(skills=["anomaly.resolve", "workspace.spec_table"])) == "gated"
 
 
+def test_risk_class_covers_every_gateway_yml_approval_gate():
+    """A2 regression guard: risk_class must recognise every gate in
+    gateway.yml, not a hand-maintained subset. Before A2 this covered only
+    4 of gateway.yml's 15 gates (email.send/invoice.approve/anomaly.resolve/
+    table.apply_diff) — the other 11 (payment.mark_paid, bom.approve,
+    doc.bulk_delete, ...) were silently classified as "cheap"."""
+    from app.ai.gateway_config import gateway_config
+
+    gates = gateway_config.approval_gates
+    assert "payment.mark_paid" in gates, "fixture assumption: gateway.yml must list this gate"
+    for gate in gates:
+        assert risk_class(_plan(skills=[gate])) == "gated", f"{gate} not recognised as gated"
+
+
+def test_risk_class_picks_up_a_new_gate_without_code_changes(monkeypatch):
+    """A2: adding a gate to gateway.yml is enough — no orchestrator.py edit.
+
+    approval_gates is a read-only @property computed from ``_raw`` (so
+    gateway.yml edits take effect without a restart, see GatewayConfig's
+    docstring) — patch the backing dict, not the property itself.
+    """
+    from app.ai import gateway_config as gateway_config_module
+
+    monkeypatch.setitem(
+        gateway_config_module.gateway_config._raw.setdefault("skills", {}),
+        "approval_gates", ["widget.self_destruct"],
+    )
+    assert risk_class(_plan(skills=["widget.self_destruct"])) == "gated"
+
+
 def test_intent_mismatch_is_retryable():
     from app.ai.audit import AuditIssue
     assert AuditCode.INTENT_MISMATCH in RETRYABLE

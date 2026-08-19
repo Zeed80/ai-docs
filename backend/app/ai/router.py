@@ -513,7 +513,9 @@ class AIRouter:
         return [call for call in response.proposed_tool_calls if call.name in allowed]
 
     def _ocr_model_and_provider(self) -> tuple[str, str]:
-        """Return (model, provider) for OCR tasks from ai_config."""
+        """Return (model, provider) for OCR tasks via model_resolver (A5: this
+        already reads task_routing, not ai_config — the docstring said
+        "from ai_config" after the call beneath it had already migrated)."""
         from app.ai.model_resolver import get_ocr_model
         cfg = get_ocr_model()
         return cfg.model, cfg.provider

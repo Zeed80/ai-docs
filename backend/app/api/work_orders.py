@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -24,9 +24,11 @@ from app.db.models import (
     WorkArtifact,
     WorkEvent,
     WorkEvidence,
+    WorkLearning,
     WorkOrder,
     WorkPlan,
     WorkStep,
+    WorkStepAttempt,
     WorkToolCall,
 )
 from app.db.session import get_db
@@ -146,6 +148,24 @@ class WorkOrderOut(BaseModel):
     model_config = {"from_attributes": True, "populate_by_name": True}
 
 
+class WorkLearningOut(BaseModel):
+    id: uuid.UUID
+    work_order_id: uuid.UUID
+    status: str
+    summary: str | None
+    lessons: list
+    provenance: dict
+    memory_fact_id: uuid.UUID | None
+    recipe_skill_id: uuid.UUID | None
+    extraction_attempts: int
+    last_error: dict | None
+    processed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 def _is_admin(user: UserInfo) -> bool:
     return UserRole.admin in user.roles
 
@@ -238,6 +258,79 @@ async def list_orders(
     return list((await db.execute(stmt)).scalars())
 
 
+@router.get("/metrics")
+async def get_work_order_metrics(
+    hours: int = Query(default=24, ge=1, le=24 * 30),
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Б14: minimal operator-facing observability — counts by status and
+    p50/p95 attempt duration by step kind/capability over the window.
+    Deliberately not a full metrics/tracing stack (A6 found the per-turn
+    trace already lives in structured logs) — this is the aggregate view an
+    operator needs on the /work-orders page header, nothing more.
+    """
+    since = datetime.now(UTC) - timedelta(hours=hours)
+    status_query = (
+        select(WorkOrder.status, func.count())
+        .where(WorkOrder.created_at >= since)
+        .group_by(WorkOrder.status)
+    )
+    if not _is_admin(user):
+        status_query = status_query.where(WorkOrder.owner_key == user.sub)
+    status_rows = (await db.execute(status_query)).all()
+
+    duration_scope = (
+        select(
+            WorkStep.kind,
+            WorkStep.capability,
+            WorkStepAttempt.started_at,
+            WorkStepAttempt.finished_at,
+        )
+        .join(WorkStep, WorkStep.id == WorkStepAttempt.step_id)
+        .join(WorkOrder, WorkOrder.id == WorkStep.work_order_id)
+        .where(
+            WorkStepAttempt.status == "succeeded",
+            WorkStepAttempt.finished_at.isnot(None),
+            WorkStepAttempt.finished_at >= since,
+        )
+    )
+    if not _is_admin(user):
+        duration_scope = duration_scope.where(WorkOrder.owner_key == user.sub)
+    duration_rows = (await db.execute(duration_scope)).all()
+
+    # Percentiles computed in Python, not a Postgres-only percentile_cont —
+    # same SQLite/Postgres portability reasoning as enforce_budgets (A4/Б15).
+    by_group: dict[str, list[float]] = {}
+    for kind, capability, started_at, finished_at in duration_rows:
+        if started_at is None:
+            continue
+        key = f"{capability}.{kind}" if capability else kind
+        by_group.setdefault(key, []).append((finished_at - started_at).total_seconds())
+
+    def _percentile(values: list[float], p: float) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        idx = min(len(ordered) - 1, max(0, int(round(p * (len(ordered) - 1)))))
+        return round(ordered[idx], 2)
+
+    durations = {
+        key: {
+            "count": len(values),
+            "p50_seconds": _percentile(values, 0.5),
+            "p95_seconds": _percentile(values, 0.95),
+        }
+        for key, values in by_group.items()
+    }
+
+    return {
+        "window_hours": hours,
+        "status_counts": dict(status_rows),
+        "step_durations": durations,
+    }
+
+
 @router.get("/{work_order_id}", response_model=WorkOrderOut)
 async def get_order(
     work_order_id: uuid.UUID,
@@ -245,6 +338,47 @@ async def get_order(
     user: UserInfo = Depends(get_current_user),
 ) -> WorkOrder:
     return await _get_owned_order(db, work_order_id, user)
+
+
+@router.get("/{work_order_id}/learning", response_model=WorkLearningOut)
+async def get_work_learning(
+    work_order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> WorkLearning:
+    order = await _get_owned_order(db, work_order_id, user)
+    learning = (
+        await db.execute(
+            select(WorkLearning).where(WorkLearning.work_order_id == order.id)
+        )
+    ).scalar_one_or_none()
+    if learning is None:
+        raise HTTPException(status_code=404, detail="Work learning not found")
+    return learning
+
+
+@router.post("/{work_order_id}/learning/reprocess", response_model=WorkLearningOut)
+async def reprocess_work_learning(
+    work_order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> WorkLearning:
+    order = await _get_owned_order(db, work_order_id, user)
+    if order.status != "completed":
+        raise HTTPException(status_code=409, detail="Only completed work can be learned")
+    from app.domain.work_learning import reset_work_learning
+
+    learning = await reset_work_learning(db, order.id)
+    if learning is None:
+        learning = WorkLearning(work_order_id=order.id, status="pending")
+        db.add(learning)
+        await db.flush()
+    await db.commit()
+    await db.refresh(learning)
+    from app.tasks.work_orders import learn_work_order
+
+    learn_work_order.apply_async(args=[str(order.id)], queue="scheduler")
+    return learning
 
 
 @router.get("/{work_order_id}/plan")

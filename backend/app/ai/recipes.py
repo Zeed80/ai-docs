@@ -556,7 +556,7 @@ def _derive_name(intent: str, steps: list[dict]) -> str:
     return f"{base}__{'_'.join(caps[:3]) or 'steps'}"[:200]
 
 
-async def record_candidate(
+async def record_candidate_with_id(
     *,
     user_text: str,
     role: str,
@@ -565,26 +565,26 @@ async def record_candidate(
     step_results: list[Any] | None = None,
     session_id: str | None = None,
     output_channel: str | None = None,
-) -> bool:
-    """Record a successful tool sequence as a draft recipe (or enrich a duplicate).
+) -> tuple[bool, str | None]:
+    """Record a candidate and return whether it was accepted plus its recipe id.
 
     ``steps``: [{"capability": str, "action": str, "args_template": dict}] in
     execution order. ``step_results``: each step's result (same order) — lets
-    data-flow args become {{step.N.path}} references. Returns True when recorded.
+    data-flow args become {{step.N.path}} references.
     """
     if not steps or len(steps) < _MIN_STEPS or len(steps) > _MAX_STEPS:
-        return False
+        return False, None
     gates = _gate_actions_map()
     non_recipeable = _non_recipeable_actions_map()
     for step in steps:
         cap = str(step.get("capability") or "")
         action = str(step.get("action") or "")
         if not cap:
-            return False
+            return False, None
         if action and action in gates.get(cap, set()):
-            return False  # approval-gated actions never enter recipes
+            return False, None  # approval-gated actions never enter recipes
         if action and action in non_recipeable.get(cap, set()):
-            return False  # e.g. non-deterministic diffusion generation
+            return False, None  # e.g. non-deterministic diffusion generation
 
     templated_steps, param_slots = parameterize_steps(steps, user_text, step_results)
 
@@ -594,7 +594,7 @@ async def record_candidate(
     # Length is allowed up to _MAX_STEPS; this is the real safety criterion.
     if not is_reproducible(templated_steps, user_text):
         logger.info("recipe_skipped_nonreproducible", steps=len(templated_steps))
-        return False
+        return False, None
 
     from app.db.models import RecipeSkill
     from app.db.session import _get_session_factory
@@ -622,7 +622,7 @@ async def record_candidate(
                     except Exception as exc:
                         log_degraded("recipes.index_trigger", exc)
                     logger.info("recipe_trigger_added", recipe=str(existing.id))
-                return True
+                return True, str(existing.id)
 
         recipe = RecipeSkill(
             name=_derive_name(intent, templated_steps),
@@ -647,7 +647,30 @@ async def record_candidate(
     except Exception as exc:
         log_degraded("recipes.index_trigger", exc)
     logger.info("recipe_recorded", recipe=recipe_id, steps=len(templated_steps), role=role)
-    return True
+    return True, recipe_id
+
+
+async def record_candidate(
+    *,
+    user_text: str,
+    role: str,
+    intent: str,
+    steps: list[dict],
+    step_results: list[Any] | None = None,
+    session_id: str | None = None,
+    output_channel: str | None = None,
+) -> bool:
+    """Backward-compatible boolean facade for chat-turn recipe learning."""
+    recorded, _recipe_id = await record_candidate_with_id(
+        user_text=user_text,
+        role=role,
+        intent=intent,
+        steps=steps,
+        step_results=step_results,
+        session_id=session_id,
+        output_channel=output_channel,
+    )
+    return recorded
 
 
 # ── Retrieval ──────────────────────────────────────────────────────────────────

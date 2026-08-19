@@ -1,7 +1,7 @@
 """Acting-user context for agent turns.
 
 The agent calls backend endpoints with the internal service key
-(app.ai.agent_loop._internal_headers), which authenticates as ``agent-service``
+(app.ai.agent_loop.internal_headers), which authenticates as ``agent-service``
 — a full-admin service account. That is fine for company-wide data, but it
 means the agent has no notion of *on whose behalf* a turn runs, so any
 per-user scoping downstream (personal mailboxes, private documents) cannot be
@@ -9,7 +9,7 @@ applied.
 
 This module carries the sub of the human who started the turn through the
 async call chain as a ContextVar: the WebSocket handler sets it once per
-connection, every nested task inherits it, and ``_internal_headers()`` turns it
+connection, every nested task inherits it, and ``internal_headers()`` turns it
 into an ``X-Acting-User`` header. Endpoints resolve it via
 ``app.auth.acting.get_effective_user``.
 

@@ -183,8 +183,16 @@ def aux_quality_budget(tier: Tier) -> int:
     layers, which dominate latency on local models: below LARGE only one
     diagnostic call is allowed (semantic audit after a failed mechanical
     audit), at LARGE+ there is room for semantic audit plus one refine pass.
+
+    Thresholds live in routes.yml (aux_quality_budgets, A4) — fallback
+    literals match the pre-A4 hardcoded values.
     """
-    return 2 if tier >= Tier.LARGE else 1
+    from app.ai import route_table
+    budgets = route_table.aux_quality_budgets()
+    default = int(budgets.get("default", 1))
+    if tier >= Tier.LARGE:
+        return int(budgets.get("large", 2))
+    return default
 
 
 # ── Model tier table ───────────────────────────────────────────────────────────

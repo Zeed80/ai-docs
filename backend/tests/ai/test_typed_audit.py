@@ -246,6 +246,49 @@ def test_aux_quality_budget_by_tier():
     assert aux_quality_budget(Tier.EXPERT) == 2
 
 
+def test_aux_quality_budget_reads_routes_yml_not_hardcoded(monkeypatch):
+    """A4 regression guard: changing routes.yml's aux_quality_budgets must
+    change the returned value with zero code edits — this was a hardcoded
+    ``2 if tier >= Tier.LARGE else 1`` in model_tier.py before A4."""
+    from app.ai import route_table
+
+    monkeypatch.setattr(route_table, "aux_quality_budgets", lambda: {"large": 5, "default": 3})
+    assert aux_quality_budget(Tier.NANO) == 3
+    assert aux_quality_budget(Tier.LARGE) == 5
+
+
+def test_response_budget_reads_routes_yml_not_hardcoded(monkeypatch):
+    """A4 regression guard: same for orchestrator._response_budget_for's
+    response_budgets — was hardcoded 8192/4096/1024/2048 before A4."""
+    from app.ai import orchestrator as orchestrator_module
+    from app.ai import route_table
+
+    monkeypatch.setattr(
+        route_table,
+        "response_budgets",
+        lambda: {
+            "by_output_type": {"table": 9999},
+            "by_tier": {"large": 7777, "medium": 5555, "micro": 3333},
+            "default": 1111,
+        },
+    )
+    worker = orchestrator_module.WorkerAssignment(role="data_analyst", task="t")
+    plan = orchestrator_module.OrchestratorPlan(
+        goal="g", intent="test", worker=worker,
+        workspace=orchestrator_module.WorkspaceOutputSpec(output_type="table"),
+    )
+    assert orchestrator_module._response_budget_for(Tier.NANO, plan) == 9999  # output_type wins
+
+    plan_chat = orchestrator_module.OrchestratorPlan(
+        goal="g", intent="test", worker=worker,
+        workspace=orchestrator_module.WorkspaceOutputSpec(output_type="text"),
+    )
+    assert orchestrator_module._response_budget_for(Tier.LARGE, plan_chat) == 7777
+    assert orchestrator_module._response_budget_for(Tier.MEDIUM, plan_chat) == 5555
+    assert orchestrator_module._response_budget_for(Tier.MICRO, plan_chat) == 3333
+    assert orchestrator_module._response_budget_for(Tier.SMALL, plan_chat) == 1111
+
+
 @pytest.mark.asyncio
 async def test_semantic_audit_respects_budget(monkeypatch):
     """When the aux budget is exhausted, no further LLM audit calls are made."""

@@ -42,7 +42,7 @@ def _agent_headers() -> dict:
     return headers
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
-from app.ai.agent_loop import AgentSession, _execute_skill, _extract_list_count
+from app.ai.agent_loop import AgentSession, execute_skill, extract_list_count
 from app.ai.audit import (
     CAPABILITY_GAP_CODES,
     RETRYABLE,
@@ -90,18 +90,28 @@ def _response_budget_for(tier: "Tier", plan: "OrchestratorPlan") -> int:
     """Per-turn response token budget from task complexity and output shape.
 
     Short chat answers stay cheap (fast on local models); reports/tables/documents
-    and complex reasoning get more room. Replaces the old hardcoded 4096.
+    and complex reasoning get more room. Thresholds live in routes.yml
+    (response_budgets, A4) — this function only encodes which Tier/output_type
+    comparison applies, not the numbers themselves; a threshold change is a
+    YAML edit, not a deploy. Fallback literals match the pre-A4 hardcoded
+    values, so a missing/partial config section degrades to old behaviour
+    rather than erroring.
     """
+    budgets = route_table.response_budgets()
+    by_output_type = budgets.get("by_output_type") or {}
+    by_tier = budgets.get("by_tier") or {}
+    default = int(budgets.get("default", 2048))
+
     output_type = plan.workspace.output_type
-    if output_type in ("table", "document", "chart"):
-        return 8192
+    if output_type in by_output_type:
+        return int(by_output_type[output_type])
     if tier >= Tier.LARGE:
-        return 8192
+        return int(by_tier.get("large", 8192))
     if tier >= Tier.MEDIUM:
-        return 4096
+        return int(by_tier.get("medium", 4096))
     if tier <= Tier.MICRO:
-        return 1024
-    return 2048
+        return int(by_tier.get("micro", 1024))
+    return default
 
 
 # role → (mtime, text) — avoids re-reading role-*.md from disk on every turn.
@@ -279,6 +289,10 @@ class AgentOrchestrator:
         self._last_spec_source: str = ""
         # Last successfully-replayed recipe — penalised if the user corrects it.
         self._last_recipe_id: str = ""
+        # Result payload of the last successful _execute_workspace_spec call, for
+        # callers (e.g. table-patch correction learning) that need it without a
+        # second round trip.
+        self._last_direct_tool_result: dict[str, Any] = {}
         self._plan_source: str = "heuristic"
         # Set by _decide_turn: True when the LLM router produced no usable
         # decision (degrade to the heuristic planner this turn).
@@ -1055,10 +1069,10 @@ class AgentOrchestrator:
         cache_key = f"{intent.capability}:{intent.action}:{intent.search_term or ''}"
         answer = cache_get(cache_key)
         if answer is None:
-            result = await _execute_skill(skill, intent.args, config)
+            result = await execute_skill(skill, intent.args, config)
             if isinstance(result, dict) and result.get("error"):
                 return False  # never answer with a wrong count on error — defer to LLM
-            total = _extract_list_count(result)
+            total = extract_list_count(result)
             if intent.capability == "warehouse":
                 answer = f"{intent.entity_label[:1].upper()}{intent.entity_label[1:]}: {total}."
             else:
@@ -1135,47 +1149,41 @@ class AgentOrchestrator:
         if parsed is None:
             return False
 
-        self._workspace_before = _workspace_updated_at_snapshot()
+        # Routed through the same policy gate (check_tool_execution) and HTTP
+        # helper as every other direct tool call — see _execute_workspace_spec.
+        # A fast-path (0 LLM) must never be a second, ungated way to reach a
+        # skill; if workspace.spec_table_patch is ever added to approval_gates
+        # in gateway.yml, this call is blocked exactly like the worker-LLM path.
+        tool_spec = route_table.skill_spec("workspace.spec_table_patch")
+        if not tool_spec:
+            return False
+        args = {
+            "canvas_id": canvas_id,
+            "ops": [op.model_dump(mode="json", exclude_none=True) for op in parsed.ops],
+        }
         await self._outer_send({
             "type": "orchestrator.status",
             "content": "Секретарь: правка таблицы распознана — применяю мгновенно (без LLM).",
             "plan_source": "table_patch",
             "degraded": False,
         })
-        args = {
-            "canvas_id": canvas_id,
-            "ops": [op.model_dump(mode="json", exclude_none=True) for op in parsed.ops],
-        }
-        await self._record_orchestrator_tool_event({
-            "type": "tool_call", "tool": "workspace", "args": args,
-        })
-        try:
-            async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-                resp = await client.post(
-                    f"{config.backend_url.rstrip('/')}/api/workspace/agent/spec-table/patch",
-                    json=args,
-                    headers=_agent_headers(),
-                )
-            result = resp.json() if resp.content else {}
-        except Exception as exc:
-            log_degraded("orchestrator.spec_table_patch", exc)
-            return False
-        if resp.status_code >= 400 or result.get("status") not in ("published",):
-            await self._record_orchestrator_tool_event({
-                "type": "tool_result", "tool": "workspace",
-                "result": {"error": result.get("message") or f"HTTP {resp.status_code}"},
-            })
-            return False  # fall through to normal dispatch
+        ok = await self._execute_workspace_spec(
+            {"tool": "workspace__spec_table_patch", "path": tool_spec["path"], "args": args},
+            config,
+            announce="Секретарь: применяю правку таблицы…",
+        )
+        if not ok:
+            return False  # policy-blocked or HTTP failure — fall through to normal dispatch
 
-        await self._record_orchestrator_tool_event({
-            "type": "tool_result", "tool": "workspace", "result": result,
-        })
+        result = self._last_direct_tool_result
+        if result.get("status") not in ("published",):
+            return False  # backend rejected the patch — let the worker LLM retry it
+
         # Phase 3 — learn this correction against the request that built the table,
         # so a future identical request applies the fix without being corrected.
         if is_correction(content) and self._last_spec_request:
             await record_correction(self._last_spec_request, spec.source, content)
         answer = str(result.get("message") or "Готово.")
-        await self._outer_send({"type": "text", "content": answer})
         try:
             self._executor.record_external_turn(content, answer)
         except Exception as exc:
@@ -1237,6 +1245,37 @@ class AgentOrchestrator:
         if parsed is None:
             return False
 
+        action, path, body, label = parsed
+        # Same policy gate as _execute_workspace_spec — a scratch-sheet edit has
+        # no dedicated route_table skill entry (the target path is built from the
+        # parsed command, not a static manifest lookup), so the check is inlined
+        # here rather than delegated. No gate targets sheet edits today, but the
+        # fast-path must not be structurally exempt if one ever does. Checked
+        # before announcing "applying" — a blocked edit must not claim to run.
+        tool_name = "workspace__sheet_patch"
+        approval_gates: set[str] = set(config.approval_gates or [])
+        args = {"action": action, "sheet_id": sheet_id, **body}
+        policy = check_tool_execution(
+            skill_name=tool_name, args=args, config=config, approval_gates=approval_gates,
+        )
+        if not policy.allowed or tool_name in approval_gates:
+            reason = (
+                "требует подтверждения человеком (approval gate)"
+                if tool_name in approval_gates
+                else policy.reason
+            )
+            await self._outer_send({
+                "type": "orchestrator.direct_tool_blocked",
+                "content": (
+                    f"Оркестратор: инструмент {tool_name!r} заблокирован политикой — {reason}. "
+                    "Требуется явное подтверждение через интерфейс."
+                ),
+                "tool": tool_name,
+                "reason": reason,
+                "risk_level": policy.risk_level,
+            })
+            return False
+
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._outer_send({
             "type": "orchestrator.status",
@@ -1244,11 +1283,10 @@ class AgentOrchestrator:
             "plan_source": "sheet_patch",
             "degraded": False,
         })
-        action, path, body, label = parsed
         await self._record_orchestrator_tool_event({
             "type": "tool_call",
             "tool": "sheets",
-            "args": {"action": action, "sheet_id": sheet_id, **body},
+            "args": args,
         })
         try:
             async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
@@ -1325,16 +1363,30 @@ class AgentOrchestrator:
             async with _get_session_factory()() as _db:
                 corrected = await correct_category_error(_db, spec, content)
             if corrected is not None:
+                # Same policy gate as _execute_workspace_spec (see A1) — this
+                # background auto-correction is still a workspace write and must
+                # not be structurally exempt from a future approval gate.
+                tool_name = "workspace__spec_table"
+                approval_gates: set[str] = set(config.approval_gates or [])
                 args = {"canvas_id": canvas_id, "spec": corrected.model_dump(mode="json")}
-                async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-                    resp = await client.post(
-                        f"{config.backend_url.rstrip('/')}/api/workspace/agent/spec-table",
-                        json=args, headers=_agent_headers())
-                if resp.status_code < 400 and (resp.json() or {}).get("status") == "published":
-                    spec = corrected
-                    await self._outer_send({"type": "text", "content":
-                        "Поправил: искал товар в позициях счетов, а не в названиях поставщиков."})
-                    logger.info("category_error_corrected", canvas=canvas_id, term=str(corrected.filters))
+                policy = check_tool_execution(
+                    skill_name=tool_name, args=args, config=config, approval_gates=approval_gates,
+                )
+                if not policy.allowed or tool_name in approval_gates:
+                    logger.warning(
+                        "orchestrator.category_correction_blocked",
+                        canvas=canvas_id, reason=policy.reason,
+                    )
+                else:
+                    async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+                        resp = await client.post(
+                            f"{config.backend_url.rstrip('/')}/api/workspace/agent/spec-table",
+                            json=args, headers=_agent_headers())
+                    if resp.status_code < 400 and (resp.json() or {}).get("status") == "published":
+                        spec = corrected
+                        await self._outer_send({"type": "text", "content":
+                            "Поправил: искал товар в позициях счетов, а не в названиях поставщиков."})
+                        logger.info("category_error_corrected", canvas=canvas_id, term=str(corrected.filters))
         except Exception as exc:
             log_degraded("orchestrator.category_correction", exc)
 
@@ -1358,6 +1410,17 @@ class AgentOrchestrator:
             "canvas_id": canvas_id,
             "ops": [op.model_dump(mode="json", exclude_none=True) for op in ops],
         }
+        # Same policy gate as _execute_workspace_spec (see A1).
+        tool_name = "workspace__spec_table_patch"
+        approval_gates: set[str] = set(config.approval_gates or [])
+        policy = check_tool_execution(
+            skill_name=tool_name, args=args, config=config, approval_gates=approval_gates,
+        )
+        if not policy.allowed or tool_name in approval_gates:
+            logger.warning(
+                "orchestrator.spec_reconcile_blocked", canvas=canvas_id, reason=policy.reason,
+            )
+            return
         try:
             async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
                 resp = await client.post(
@@ -2623,6 +2686,9 @@ class AgentOrchestrator:
                 "type": "text",
                 "content": message,
             })
+        # Stashed for callers that need the raw result after a successful direct
+        # call (e.g. table-patch correction learning) without a second round trip.
+        self._last_direct_tool_result = result if isinstance(result, dict) else {}
         return True
 
     async def _record_orchestrator_tool_event(self, event: dict[str, Any]) -> None:
@@ -2933,8 +2999,13 @@ def _invalidate_skill_hints_if_changed(registry_path: "Path") -> None:
         r = _redis()
         if r is None:
             return
+        # get_sync_redis() is decode_responses=True — stored_hash is already
+        # str, not bytes. The previous `.decode()` here always raised
+        # AttributeError, silently caught below, so this cache-invalidation
+        # check never actually ran — found while verifying the durable-
+        # runtime remediation plan's test suite against a real Redis.
         stored_hash = r.get("orchestrator:registry_hash")
-        if stored_hash and stored_hash.decode() == current_hash:
+        if stored_hash and stored_hash == current_hash:
             return
         # Hash changed — flush stale skill hint cache
         keys = r.keys("orchestrator:skill:*")
@@ -3328,21 +3399,36 @@ def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str
 
 # ── Risk classification (adaptive-by-risk behaviour) ───────────────────────────
 # Cheap/reversible artifacts (a table on the desktop) can be (re)built freely and
-# self-corrected. Expensive/external actions (approval gates: email.send,
-# invoice.approve, anomaly.resolve, table.apply_diff) must never be shipped on a
-# mismatch — they require explicit human confirmation first.
-_GATED_SKILL_MARKERS = (
-    "email.send", "email__send",
-    "invoice.approve", "invoice__approve",
-    "anomaly.resolve", "anomaly__resolve",
-    "table.apply_diff", "table__apply_diff",
-)
+# self-corrected. Expensive/external actions (approval gates from gateway.yml —
+# email.send, invoice.approve, table.apply_diff, payment.mark_paid, bom.approve,
+# doc.bulk_delete and the rest) must never be shipped on a mismatch — they
+# require explicit human confirmation first.
+
+
+def _gated_skill_markers() -> tuple[str, ...]:
+    """Every approval gate from gateway.yml, dotted and double-underscore form.
+
+    Read live off ``gateway_config`` (A2) instead of a hand-maintained tuple —
+    a hardcoded copy of this list previously covered only 4 of gateway.yml's
+    15 gates (whatever anyone remembered to add), silently under-classifying
+    the rest as "cheap" for self-correction purposes. Deriving it means there
+    is nothing left to keep in sync: a gate added to gateway.yml is picked up
+    on the next call, no restart and no matching edit here required. The
+    double-underscore form matches the ``tool`` name fast-paths build (see
+    A1 / ``_workspace_tool_spec_for_plan``: ``skill.replace(".", "__")``).
+    """
+    from app.ai.gateway_config import gateway_config as _gw_cfg
+    markers: list[str] = []
+    for gate in _gw_cfg.approval_gates:
+        markers.append(gate)
+        markers.append(gate.replace(".", "__"))
+    return tuple(markers)
 
 
 def risk_class(plan: OrchestratorPlan) -> str:
     """'gated' for expensive/external/approval-gated actions, else 'cheap'."""
     skills = " ".join(plan.worker.recommended_skills or []).lower()
-    if any(marker in skills for marker in _GATED_SKILL_MARKERS):
+    if any(marker in skills for marker in _gated_skill_markers()):
         return "gated"
     return "cheap"
 

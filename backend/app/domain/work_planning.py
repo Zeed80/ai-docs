@@ -18,10 +18,20 @@ from app.domain.work_orders import append_event, create_work_plan
 _REF = re.compile(r"^\$\{steps\.([a-zA-Z0-9_-]+)\.output(?:\.([a-zA-Z0-9_.-]+))?\}$")
 
 
+class PlannedChildSpec(BaseModel):
+    """One child WorkOrder a "decompose" step (Б11) spawns."""
+
+    objective: str = Field(min_length=1, max_length=2000)
+    description: str | None = None
+    # Overrides the equal-split share of the parent's token_budget (Б15) for
+    # just this child — see _split_child_budgets in tasks/work_orders.py.
+    budgets: dict[str, Any] | None = None
+
+
 class PlannedStep(BaseModel):
     step_key: str = Field(pattern=r"^[a-zA-Z0-9_-]+$", max_length=120)
     title: str = Field(min_length=1, max_length=500)
-    kind: str = Field(pattern="^(capability|agent_turn)$")
+    kind: str = Field(pattern="^(capability|agent_turn|decompose)$")
     capability: str | None = None
     action: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
@@ -37,6 +47,12 @@ class PlannedStep(BaseModel):
     def executor_is_complete(self) -> "PlannedStep":
         if self.kind == "capability" and (not self.capability or not self.action):
             raise ValueError("capability step requires capability and action")
+        if self.kind == "decompose":
+            children = self.input.get("children")
+            if not isinstance(children, list) or not children:
+                raise ValueError("decompose step requires a non-empty input.children list")
+            for child in children:
+                PlannedChildSpec.model_validate(child)  # raises on malformed entry
         return self
 
 

@@ -209,7 +209,7 @@ async def test_agent_service_account_cannot_decide_task(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_run_created_agent_task(client: AsyncClient, monkeypatch):
     async def fake_run(prompt: str):
-        return True, f"done: {prompt[:30]}"
+        return True, f"done: {prompt[:30]}", {"input_tokens": 0, "output_tokens": 0}
 
     monkeypatch.setattr(
         "app.tasks.agent_cron.run_headless_agent_turn",

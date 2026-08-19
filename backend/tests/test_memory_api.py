@@ -1,7 +1,11 @@
 """Tests for Memory API — search, chat-turn, pin, prune."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from httpx import AsyncClient
+
+from app.db.models import MemoryFact
 
 
 # ── Search ─────────────────────────────────────────────────────────────────────
@@ -130,3 +134,60 @@ async def test_prune_memory_no_scope(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert "deleted" in data or "deleted_count" in data
+
+
+# ── Verified WorkOrder learning ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_learned_memory_is_owner_scoped_and_can_be_superseded(
+    client: AsyncClient, db_session
+):
+    now = datetime.now(UTC)
+    owned = MemoryFact(
+        scope="owner:dev-user",
+        kind="work_order_lesson",
+        title="Проверенный порядок",
+        summary="Сначала проверить входные данные",
+        source="work_order",
+        confidence=1.0,
+        last_verified_at=now,
+        valid_from=now,
+        expires_at=now + timedelta(days=30),
+        status="active",
+        provenance={"work_order_id": "owned"},
+    )
+    foreign = MemoryFact(
+        scope="owner:another-user",
+        kind="work_order_lesson",
+        title="Чужой порядок",
+        summary="Не должен быть виден",
+        source="work_order",
+        confidence=1.0,
+        status="active",
+        provenance={"work_order_id": "foreign"},
+    )
+    db_session.add_all([owned, foreign])
+    await db_session.commit()
+
+    listed = await client.get("/api/memory/learned")
+    assert listed.status_code == 200
+    rows = listed.json()
+    assert [row["id"] for row in rows] == [str(owned.id)]
+
+    replacement = await client.post(
+        f"/api/memory/learned/{owned.id}/supersede",
+        json={
+            "summary": "Сначала проверить входные данные и полномочия",
+            "reason": "Уточнение после проверки",
+            "valid_days": 90,
+        },
+    )
+    assert replacement.status_code == 200
+    replacement_data = replacement.json()
+    assert replacement_data["status"] == "active"
+    assert replacement_data["provenance"]["supersedes"] == str(owned.id)
+
+    await db_session.refresh(owned)
+    assert owned.status == "superseded"
+    assert str(owned.superseded_by_id) == replacement_data["id"]

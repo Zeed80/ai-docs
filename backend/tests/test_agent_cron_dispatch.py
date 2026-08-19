@@ -76,7 +76,7 @@ async def test_dispatch_runs_due_cron_and_records_task(cron_db, monkeypatch):
         await db.commit()
 
     async def fake_turn(prompt: str):
-        return True, f"Готово: {prompt}"
+        return True, f"Готово: {prompt}", {"input_tokens": 0, "output_tokens": 0}
 
     monkeypatch.setattr(agent_cron, "_run_headless_turn", fake_turn)
 
@@ -105,7 +105,7 @@ async def test_dispatch_records_failed_turn(cron_db, monkeypatch):
         await db.commit()
 
     async def failing_turn(prompt: str):
-        return False, "[errors] llm down"
+        return False, "[errors] llm down", {"input_tokens": 0, "output_tokens": 0}
 
     monkeypatch.setattr(agent_cron, "_run_headless_turn", failing_turn)
 

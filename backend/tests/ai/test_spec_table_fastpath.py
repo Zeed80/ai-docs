@@ -231,6 +231,76 @@ async def test_active_sheet_edit_uses_sheet_endpoint(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gated_sheet_edit_never_applies_directly(monkeypatch):
+    """workspace.sheet_patch under an approval gate → fast-path refuses to
+    execute it directly. Regression guard for A1 (sibling of
+    test_gated_patch_never_applies_directly for the spec-table fast-path)."""
+    clear_workspace_blocks()
+    upsert_workspace_block("sheet:11111111-1111-1111-1111-111111111111", {
+        "id": "sheet:11111111-1111-1111-1111-111111111111",
+        "type": "sheet",
+        "title": "Лист",
+        "sheet_id": "11111111-1111-1111-1111-111111111111",
+        "columns": [
+            {"key": "A", "header": "A", "type": "text"},
+            {"key": "B", "header": "B", "type": "text"},
+        ],
+        "rows": [{"A": "x", "B": "y"}],
+        "raw_rows": [{"A": "x", "B": "y"}],
+        "layout": {"merges": []},
+    })
+    config = _legacy_config()
+    config.approval_gates = ["workspace__sheet_patch"]
+    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
+
+    async def _no_llm(request, *a, **k):
+        raise AssertionError("LLM must not be called")
+
+    monkeypatch.setattr(orchestrator_module.ai_router, "run", _no_llm)
+
+    posted: list[tuple[str, dict]] = []
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):  # noqa: A002
+            posted.append((url, json or {}))
+            raise AssertionError("gated skill must never reach the network")
+
+    monkeypatch.setattr(orchestrator_module.httpx, "AsyncClient", FakeClient)
+    sent: list[dict] = []
+
+    async def capture(msg):
+        sent.append(msg)
+
+    session = AgentOrchestrator(capture)
+    executor = FakeExecutor(session._send_from_executor)
+    session._executor = executor
+
+    await session.on_user_message(
+        "объедини A1:B1",
+        workspace_context={
+            "active_tabular_surface": {
+                "id": "sheet:11111111-1111-1111-1111-111111111111",
+                "kind": "sheet",
+                "sheet_id": "11111111-1111-1111-1111-111111111111",
+                "write_policy": "scratch",
+            }
+        },
+    )
+
+    assert posted == []
+    assert any(e.get("type") == "orchestrator.direct_tool_blocked" for e in sent)
+
+
+@pytest.mark.asyncio
 async def test_no_spec_table_falls_through(monkeypatch):
     """Without a spec table the edit goes through normal dispatch."""
     clear_workspace_blocks()
@@ -302,3 +372,56 @@ async def test_failed_patch_falls_through(monkeypatch):
 
     await session.on_user_message("добавь столбец с ндс перед суммой")
     assert executor.user_messages, "failed patch → executor fallback"
+
+
+@pytest.mark.asyncio
+async def test_gated_patch_never_applies_directly(monkeypatch):
+    """workspace.spec_table_patch under an approval gate → fast-path refuses
+    to execute it directly, exactly like a worker-LLM tool call would be
+    blocked by check_tool_execution. Regression guard for A1: a 0-LLM path
+    must never be a second, ungated way to reach a skill."""
+    clear_workspace_blocks()
+    upsert_workspace_block("agent:spec-table", _spec_block())
+    config = _config()
+    # Double-underscore form: matches _workspace_tool_spec_for_plan's
+    # skill.replace(".", "__") and the tool_name the fast-path builds.
+    config.approval_gates = ["workspace__spec_table_patch"]
+    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
+
+    async def _no_llm(request, *a, **k):
+        raise AssertionError("LLM must not be called")
+
+    monkeypatch.setattr(orchestrator_module.ai_router, "run", _no_llm)
+
+    posted: list[tuple[str, dict]] = []
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):  # noqa: A002
+            posted.append((url, json or {}))
+            raise AssertionError("gated skill must never reach the network")
+
+    monkeypatch.setattr(orchestrator_module.httpx, "AsyncClient", FakeClient)
+
+    sent: list[dict] = []
+
+    async def capture(msg):
+        sent.append(msg)
+
+    session = AgentOrchestrator(capture)
+    executor = FakeExecutor(session._send_from_executor)
+    session._executor = executor
+
+    await session.on_user_message("добавь столбец с ндс перед суммой")
+
+    # Blocked before any HTTP call — policy gate, not a network failure.
+    assert posted == []
+    assert any(e.get("type") == "orchestrator.direct_tool_blocked" for e in sent)
