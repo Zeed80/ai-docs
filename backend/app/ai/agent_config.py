@@ -177,12 +177,31 @@ class BuiltinAgentConfigUpdate(BaseModel):
     mcp_servers: list[dict] | None = None
 
 
+_registry_skill_names_cache: list[str] | None = None
+_registry_skill_names_mtime: float = 0.0
+
+
 def _all_registry_skill_names() -> list[str]:
-    """Return all skill names from YAML registry."""
+    """Return all skill names from YAML registry.
+
+    mtime-cached — same pattern as route_table._table(): this reads and
+    re-parses the full skill registry (52 skills' worth of capability specs)
+    on every call otherwise (~250ms measured), and get_builtin_agent_config()
+    (which calls this) is itself called several times per request by some
+    callers (e.g. providers_api.py's /assignment-draft builds each slot's
+    thinking-override state by re-deriving the full agent config per slot —
+    found while investigating a ~4s response time on that endpoint, unrelated
+    to this session's remediation-plan changes). Caching here fixes the root
+    cost regardless of how many times a caller re-invokes it.
+    """
+    global _registry_skill_names_cache, _registry_skill_names_mtime
     try:
         registry_path = gateway_config.registry_path
         if not registry_path.exists():
             return []
+        mtime = registry_path.stat().st_mtime
+        if _registry_skill_names_cache is not None and mtime == _registry_skill_names_mtime:
+            return _registry_skill_names_cache
         data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
         skills = data.get("skills") or data.get("tools") or []
         names = sorted({
@@ -190,6 +209,8 @@ def _all_registry_skill_names() -> list[str]:
             for skill in skills
             if str(skill.get("name", "")).strip()
         })
+        _registry_skill_names_cache = names
+        _registry_skill_names_mtime = mtime
         return names
     except Exception:
         return []
