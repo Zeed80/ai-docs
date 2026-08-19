@@ -107,6 +107,33 @@ async def test_execute_user_example_full_data(db_session, seeded):
 
 
 @pytest.mark.asyncio
+async def test_execute_spec_flags_unresolved_supplier(db_session, seeded):
+    """See AGENT_LIVE_TEST_FINDINGS.md #5: a supplier_name filter matching no
+    real party is flagged distinctly from a filter that's legitimately
+    empty — callers use this to skip publishing a confusing 0-row table."""
+    spec = _user_spec()
+    spec.filters = [ts.FilterSpec(field="supplier_name", op="contains", value="ЦНК")]
+    result = await ts.execute_spec(db_session, spec)
+    assert result.total == 0
+    assert result.unresolved_entity == "ЦНК"
+
+
+@pytest.mark.asyncio
+async def test_execute_spec_no_unresolved_flag_for_real_supplier_zero_rows(db_session, seeded):
+    """A real supplier with a filter that legitimately excludes everything
+    (e.g. an invoice_number nobody has) must NOT be flagged as unresolved —
+    that's a genuine empty result, not an unknown entity."""
+    spec = _user_spec()
+    spec.filters = [
+        ts.FilterSpec(field="supplier_name", op="contains", value="Ромашка"),
+        ts.FilterSpec(field="invoice_number", op="eq", value="НЕТ-ТАКОГО-СЧЁТА"),
+    ]
+    result = await ts.execute_spec(db_session, spec)
+    assert result.total == 0
+    assert result.unresolved_entity is None
+
+
+@pytest.mark.asyncio
 async def test_smart_filter_mills_diameter_5(db_session, seeded):
     """«фрезы диаметра 5» finds the ⌀5 mill invoice, not the 50 mm one."""
     spec = _user_spec()
@@ -137,6 +164,25 @@ async def test_sort_and_structured_filters(db_session, seeded):
     result = await ts.execute_spec(db_session, spec)
     assert [r["invoice_number"] for r in result.rows] == ["INV-001", "INV-003"]
     assert result.total == 2
+
+
+@pytest.mark.asyncio
+async def test_api_spec_table_unresolved_supplier_not_published(client, seeded):
+    """See AGENT_LIVE_TEST_FINDINGS.md #5: publish_spec_table must not create
+    a workspace block for a supplier name that matches nobody."""
+    spec = _user_spec()
+    spec.filters = [ts.FilterSpec(field="supplier_name", op="contains", value="ЦНК")]
+    resp = await client.post("/api/workspace/agent/spec-table", json={
+        "canvas_id": "agent:spec-table-цнк",
+        "spec": spec.model_dump(mode="json"),
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "not_found"
+    assert "ЦНК" in data["message"]
+
+    blocks = (await client.get("/api/workspace/blocks")).json()
+    assert all(b["id"] != "agent:spec-table-цнк" for b in blocks["items"])
 
 
 @pytest.mark.asyncio

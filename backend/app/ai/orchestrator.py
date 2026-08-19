@@ -2015,7 +2015,18 @@ class AgentOrchestrator:
         workspace_verified = False
         if plan.workspace.required:
             workspace_verified = await self._verify_workspace(plan)
-            if not workspace_verified:
+            if not workspace_verified and self._has_not_found_tool_result():
+                # A workspace tool DID run and correctly determined the named
+                # entity doesn't exist (status="not_found" — see
+                # AGENT_LIVE_TEST_FINDINGS.md #5's fix in workspace.py /
+                # spec_tables.py, which deliberately skips publishing in this
+                # case). That's a completed, correct turn, not a missing
+                # capability — without this check the gap-detection path
+                # below fired and proposed building a whole new
+                # "supplier_invoice_summary_publish" tool for a request that
+                # was already fully answered in the chat text.
+                workspace_verified = True
+            elif not workspace_verified:
                 issues.append(AuditIssue(
                     code=AuditCode.WORKSPACE_NOT_PUBLISHED,
                     message="Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.",
@@ -2494,6 +2505,20 @@ class AgentOrchestrator:
         for event in self._trace.workspace_events:
             canvas_id = _event_canvas_id(event)
             if canvas_id and self._workspace_block_changed(str(canvas_id)):
+                return True
+        return False
+
+    def _has_not_found_tool_result(self) -> bool:
+        """Did any tool this turn come back with status="not_found"?
+
+        Used by _audit_turn to distinguish "the agent correctly determined
+        the requested entity doesn't exist" (workspace.invoice_items_table /
+        workspace.spec_table return this instead of publishing — see
+        AGENT_LIVE_TEST_FINDINGS.md #5) from a genuine capability gap.
+        """
+        for item in self._trace.tool_results:
+            result = item.get("result")
+            if isinstance(result, dict) and result.get("status") == "not_found":
                 return True
         return False
 

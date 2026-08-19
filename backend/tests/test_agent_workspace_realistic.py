@@ -180,3 +180,46 @@ async def test_agent_publishes_invoice_items_to_desktop(client: AsyncClient, inv
     text = " ".join(str(r) for r in block["rows"])
     assert "Фреза концевая Ø10" in text
     assert "Графитовый блок" in text
+
+
+@pytest.mark.asyncio
+async def test_agent_items_table_nonexistent_supplier_skips_publish(
+    client: AsyncClient, invoices,
+):
+    """See AGENT_LIVE_TEST_FINDINGS.md #5: a supplier name that matches no
+    real party must not publish an empty/confusing 0-row table."""
+    pub = await client.post("/api/workspace/agent/invoices/items-table", json={
+        "canvas_id": "agent:invoice-items",
+        "supplier_query": "ЦНК",
+    })
+    assert pub.status_code == 200
+    body = pub.json()
+    assert body["status"] == "not_found"
+    assert "ЦНК" in body["message"]
+
+    blocks = (await client.get("/api/workspace/blocks")).json()
+    assert all(b["id"] != "agent:invoice-items" for b in blocks["items"])
+
+
+@pytest.mark.asyncio
+async def test_agent_items_table_real_supplier_zero_lines_still_publishes(
+    client: AsyncClient, invoices, db_session,
+):
+    """A supplier that genuinely exists but has no matching invoice lines
+    is a real, useful empty state — unlike a name that resolves to nobody,
+    it should still publish."""
+    extra_supplier = Party(name='ООО "Пустографт"', inn="7000000000", role=PartyRole.supplier)
+    db_session.add(extra_supplier)
+    await db_session.commit()
+
+    pub = await client.post("/api/workspace/agent/invoices/items-table", json={
+        "canvas_id": "agent:invoice-items",
+        "supplier_query": "Пустографт",
+    })
+    assert pub.status_code == 200
+    body = pub.json()
+    assert body["status"] == "published"
+    assert body["total"] == 0
+
+    blocks = (await client.get("/api/workspace/blocks")).json()
+    assert any(b["id"] == "agent:invoice-items" for b in blocks["items"])

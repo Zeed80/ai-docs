@@ -943,6 +943,13 @@ class TableResult(BaseModel):
     rows: list[dict]
     total: int
     truncated: bool = False
+    # Set when total==0 AND the spec filtered on a named entity (currently:
+    # supplier_name) that doesn't match any real record at all — distinct
+    # from a filter that's simply, legitimately empty (e.g. "просроченные
+    # счета" with none overdue). Callers use this to skip publishing a
+    # confusing empty table and answer with a plain "not found" instead.
+    # See AGENT_LIVE_TEST_FINDINGS.md #5.
+    unresolved_entity: str | None = None
 
 
 def _format_value(value: Any, ftype: str) -> Any:
@@ -1528,11 +1535,33 @@ async def execute_spec(
         }
         for col, fd in zip(columns, field_defs, strict=True)
     ]
+    unresolved_entity: str | None = None
+    if int(total) == 0:
+        supplier_filter_value = next(
+            (
+                str(flt.value).strip()
+                for flt in spec.filters
+                if flt.field == "supplier_name" and flt.value
+            ),
+            None,
+        )
+        if supplier_filter_value:
+            supplier_exists = (
+                await db.execute(
+                    select(func.count()).select_from(Party).where(
+                        Party.name.ilike(f"%{supplier_filter_value}%")
+                    )
+                )
+            ).scalar_one() > 0
+            if not supplier_exists:
+                unresolved_entity = supplier_filter_value
+
     return TableResult(
         columns=out_columns,
         rows=rows,
         total=int(total),
         truncated=int(total) > len(rows),
+        unresolved_entity=unresolved_entity,
     )
 
 

@@ -172,6 +172,16 @@ async def _render_and_publish(
             message=f"Неверная спецификация: {exc}",
         )
 
+    if result.unresolved_entity:
+        # See table_spec.TableResult.unresolved_entity — the filter's supplier
+        # name matched no real party, not just no matching invoices. Publishing
+        # an empty table here reads as "task done" when the agent actually
+        # couldn't find who the user meant. See AGENT_LIVE_TEST_FINDINGS.md #5.
+        return SpecTableResponse(
+            status="not_found", canvas_id=canvas_id, total=0, shown=0,
+            message=f"Поставщик «{result.unresolved_entity}» не найден в базе.",
+        )
+
     title = spec.title or SOURCES[spec.source].title
     block = {
         "id": canvas_id,

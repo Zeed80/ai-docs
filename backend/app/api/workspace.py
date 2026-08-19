@@ -234,6 +234,29 @@ async def publish_invoice_items_table(
     total = (
         await db.execute(count_stmt)
     ).scalar_one()
+    if supplier_filter and total == 0:
+        # 0 rows is ambiguous: either the supplier exists but has no invoice
+        # lines yet (a real, worth-showing empty state), or the name simply
+        # doesn't match any party at all (found via live agent test:
+        # "поставщика ЦНК" — a name never resolved — still published an
+        # empty 0/0 table, which reads as "the agent did the task" when it
+        # actually couldn't find who "ЦНК" even is). Distinguish with one
+        # cheap existence check instead of leaving it to the LLM's
+        # discretion whether to publish — see AGENT_LIVE_TEST_FINDINGS.md #5.
+        supplier_exists = (
+            await db.execute(
+                select(func.count()).select_from(Party).where(Party.name.ilike(pattern))
+            )
+        ).scalar_one() > 0
+        if not supplier_exists:
+            return WorkspaceToolResponse(
+                status="not_found",
+                canvas_id=payload.canvas_id,
+                total=0,
+                shown=0,
+                message=f"Поставщик «{supplier_filter}» не найден в базе.",
+                filters={"supplier_query": supplier_filter},
+            )
     result = await db.execute(rows_stmt)
     rows = [
         _invoice_item_workspace_row(
