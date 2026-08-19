@@ -3384,21 +3384,36 @@ def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str
 
 # ── Risk classification (adaptive-by-risk behaviour) ───────────────────────────
 # Cheap/reversible artifacts (a table on the desktop) can be (re)built freely and
-# self-corrected. Expensive/external actions (approval gates: email.send,
-# invoice.approve, anomaly.resolve, table.apply_diff) must never be shipped on a
-# mismatch — they require explicit human confirmation first.
-_GATED_SKILL_MARKERS = (
-    "email.send", "email__send",
-    "invoice.approve", "invoice__approve",
-    "anomaly.resolve", "anomaly__resolve",
-    "table.apply_diff", "table__apply_diff",
-)
+# self-corrected. Expensive/external actions (approval gates from gateway.yml —
+# email.send, invoice.approve, table.apply_diff, payment.mark_paid, bom.approve,
+# doc.bulk_delete and the rest) must never be shipped on a mismatch — they
+# require explicit human confirmation first.
+
+
+def _gated_skill_markers() -> tuple[str, ...]:
+    """Every approval gate from gateway.yml, dotted and double-underscore form.
+
+    Read live off ``gateway_config`` (A2) instead of a hand-maintained tuple —
+    a hardcoded copy of this list previously covered only 4 of gateway.yml's
+    15 gates (whatever anyone remembered to add), silently under-classifying
+    the rest as "cheap" for self-correction purposes. Deriving it means there
+    is nothing left to keep in sync: a gate added to gateway.yml is picked up
+    on the next call, no restart and no matching edit here required. The
+    double-underscore form matches the ``tool`` name fast-paths build (see
+    A1 / ``_workspace_tool_spec_for_plan``: ``skill.replace(".", "__")``).
+    """
+    from app.ai.gateway_config import gateway_config as _gw_cfg
+    markers: list[str] = []
+    for gate in _gw_cfg.approval_gates:
+        markers.append(gate)
+        markers.append(gate.replace(".", "__"))
+    return tuple(markers)
 
 
 def risk_class(plan: OrchestratorPlan) -> str:
     """'gated' for expensive/external/approval-gated actions, else 'cheap'."""
     skills = " ".join(plan.worker.recommended_skills or []).lower()
-    if any(marker in skills for marker in _GATED_SKILL_MARKERS):
+    if any(marker in skills for marker in _gated_skill_markers()):
         return "gated"
     return "cheap"
 
