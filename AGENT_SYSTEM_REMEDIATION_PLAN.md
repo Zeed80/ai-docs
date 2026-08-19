@@ -800,7 +800,7 @@ Docker DNS (`postgres:5432`) с рабочими credentials из `infra/.env`.
   race-тест — реальная многопоточная гонка за `SKIP LOCKED`-блокировку,
   не имитация.
 
-### Б19. Production rollout — `P3`
+### Б19. Production rollout — `P3` — `[x]` сделано (2026-08-19)
 
 - **Факт**: в `infra/` нет staging/canary compose-профиля.
 - **Шаги**:
@@ -814,6 +814,27 @@ Docker DNS (`postgres:5432`) с рабочими credentials из `infra/.env`.
      эндпоинт, smoke-тест).
 - **Готово, когда**: `docker compose -f infra/docker-compose.staging.yml
   config` проходит без ошибок валидации.
+
+- **Отступление от шага 1**: не просто скопировал prod-overlay с заменой
+  доменов — добавил осознанное отличие: `restart: on-failure` вместо
+  `unless-stopped`. Сломанный staging-деплой должен быть ВИДЕН как
+  остановленный контейнер (`docker compose ps` покажет `Exited`), а не
+  маскироваться бесконечным авто-рестартом, как это правильно для prod
+  (там `unless-stopped` — цель пережить транзиентный сбой, не падать
+  насовсем). Плюс отдельный `--project-name infra-staging` и обязательный
+  собственный `infra/.env.staging` — без этого staging на том же хосте
+  физически делил бы volumes/БД/TLS-сертификат с prod через одинаковые
+  имена docker-ресурсов.
+- `make staging`/`staging-up`/`staging-build`/`staging-down` — тот же
+  паттерн, что `make prod*`, добавлены в `make help`.
+- `docs/staging-rollback.md` — процедура первого запуска, обновления и
+  отката + явное напоминание проверить alembic-миграции при откате (откат
+  git-кода НЕ откатывает схему БД автоматически — забытый частый источник
+  «отката, который всё равно всё сломал»).
+- **Верификация**: `docker compose -f infra/docker-compose.yml -f
+  infra/docker-compose.staging.yml config --quiet` — exit 0 (проверено
+  с фиктивными обязательными env-переменными). `make -n staging-up`/
+  `staging-down` — корректные команды.
 
 ### Б20. Документация — `P3`
 

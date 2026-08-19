@@ -1,0 +1,81 @@
+# Staging overlay (Б19). Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml \
+#     --env-file .env.staging -p infra-staging up -d
+#   (or: make staging-up)
+#
+# Same shape as docker-compose.prod.yml (Traefik TLS via Let's Encrypt, no
+# insecure dashboard) with two deliberate differences:
+#
+#   1. restart: on-failure instead of unless-stopped — a broken staging
+#      deploy should stop and stay visibly stopped (crash-loop is a signal
+#      worth seeing during `docker compose ps`), not retry forever the way
+#      prod does once it's known-good and just needs to survive transient
+#      blips.
+#   2. A distinct env file (.env.staging, gitignored — copy infra/.env.example
+#      and set at minimum TRAEFIK_DOMAIN to a staging subdomain,
+#      COMPOSE_PROJECT_NAME to something other than the prod deployment's, and
+#      independent POSTGRES_PASSWORD/APP_SECRET_KEY/CSRF_SECRET) so staging
+#      never shares a database, secret, or Traefik cert with production —
+#      the base docker-compose.yml's volumes are named from
+#      COMPOSE_PROJECT_NAME, so a distinct project name alone keeps the two
+#      deployments' data on the same host from colliding.
+services:
+  traefik:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.prod.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/prod:/etc/traefik/dynamic:ro
+      - traefik_acme:/etc/traefik/acme
+    environment:
+      TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN:?set TRAEFIK_DOMAIN in .env.staging}
+      TRAEFIK_ACME_EMAIL: ${TRAEFIK_ACME_EMAIL:?set TRAEFIK_ACME_EMAIL in .env.staging}
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: ${TRAEFIK_ACME_EMAIL}
+    restart: on-failure
+
+  backend:
+    restart: on-failure
+
+  technical-vectorizer:
+    restart: on-failure
+
+  cad-kernel:
+    restart: on-failure
+
+  gpu-temp-helper:
+    restart: on-failure
+
+  celery-worker:
+    restart: on-failure
+
+  celery-worker-gpu:
+    restart: on-failure
+
+  celery-worker-lora:
+    restart: on-failure
+
+  celery-beat:
+    restart: on-failure
+
+  frontend:
+    restart: on-failure
+
+  postgres:
+    restart: on-failure
+
+  redis:
+    restart: on-failure
+
+  qdrant:
+    restart: on-failure
+
+  minio:
+    restart: on-failure
+
+  authentik-db:
+    restart: on-failure
+
+  authentik-server:
+    restart: on-failure
+
+  authentik-worker:
+    restart: on-failure
