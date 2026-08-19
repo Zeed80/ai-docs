@@ -2999,8 +2999,13 @@ def _invalidate_skill_hints_if_changed(registry_path: "Path") -> None:
         r = _redis()
         if r is None:
             return
+        # get_sync_redis() is decode_responses=True — stored_hash is already
+        # str, not bytes. The previous `.decode()` here always raised
+        # AttributeError, silently caught below, so this cache-invalidation
+        # check never actually ran — found while verifying the durable-
+        # runtime remediation plan's test suite against a real Redis.
         stored_hash = r.get("orchestrator:registry_hash")
-        if stored_hash and stored_hash.decode() == current_hash:
+        if stored_hash and stored_hash == current_hash:
             return
         # Hash changed — flush stale skill hint cache
         keys = r.keys("orchestrator:skill:*")
