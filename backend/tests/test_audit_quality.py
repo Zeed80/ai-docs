@@ -96,6 +96,45 @@ async def test_no_tool_off_plan_when_recommended_capability_used():
     assert AuditCode.TOOL_OFF_PLAN.value not in audit.issue_codes
 
 
+@pytest.mark.asyncio
+async def test_workspace_required_satisfied_by_not_found_tool_result():
+    """See AGENT_LIVE_TEST_FINDINGS.md #5: workspace.invoice_items_table /
+    workspace.spec_table return status="not_found" instead of publishing
+    when the named supplier doesn't exist. That must count as a completed
+    turn, not a WORKSPACE_NOT_PUBLISHED gap that triggers a capability-gap
+    proposal for a tool the agent already has and used correctly."""
+    orc = _orc_with_trace(
+        text='Поставщик «ЦНК» не найден в базе.',
+        tools=["workspace"],
+        tool_results=[{
+            "tool": "workspace",
+            "result": {"status": "not_found", "canvas_id": "agent:invoice-items"},
+        }],
+    )
+    plan = _decision_to_plan(
+        TurnDecision(intent="analytical_table", output_channel="workspace"),
+        "счета от ЦНК",
+    )
+    audit = await orc._audit_turn(plan, get_builtin_agent_config())
+    assert AuditCode.WORKSPACE_NOT_PUBLISHED.value not in audit.issue_codes
+    assert audit.workspace_verified is True
+
+
+@pytest.mark.asyncio
+async def test_workspace_required_still_flagged_without_not_found_result():
+    """A genuine miss (worker never called the workspace tool at all) must
+    still be flagged — the not_found exception is narrow, not a blanket
+    pass for any unpublished workspace-required turn."""
+    orc = _orc_with_trace(text="Готово", tools=[])
+    plan = _decision_to_plan(
+        TurnDecision(intent="analytical_table", output_channel="workspace"),
+        "счета",
+    )
+    audit = await orc._audit_turn(plan, get_builtin_agent_config())
+    assert AuditCode.WORKSPACE_NOT_PUBLISHED.value in audit.issue_codes
+    assert audit.workspace_verified is False
+
+
 def test_chat_table_detector():
     assert _looks_like_chat_table("| A | B |\n|---|---|\n| 1 | 2 |")
     assert _looks_like_chat_table("col1\tcol2\tcol3\nval1\tval2\tval3")
