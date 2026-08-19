@@ -891,3 +891,37 @@ Docker DNS (`postgres:5432`) с рабочими credentials из `infra/.env`.
 enforcement-слой, через который MCP-tools и должны проходить). Всё
 остальное — независимые самодостаточные задачи, можно раздавать в любом
 порядке.
+
+## Находки вне изначального объёма плана
+
+Не входили ни в один из 17 пунктов — зафиксированы по указанию
+пользователя («если находишь ошибки, добавляй в перечень»), не молча
+пропущены.
+
+1. **[x] Исправлено**: `_invalidate_skill_hints_if_changed`
+   (`orchestrator.py`) вызывал `.decode()` на значении из Redis, хотя
+   `get_sync_redis()` сконфигурирован `decode_responses=True` — значение
+   уже `str`. `.decode()` падал `AttributeError` на КАЖДОМ вызове, тихо
+   гасился окружающим `try/except` и логировался как
+   `agent_component_degraded component=orchestrator.registry_hash_flush`.
+   Это означает: инвалидация кэша skill-hints по хэшу файла реестра не
+   работала никогда с момента появления этого кода — не только в
+   песочнице без Redis, подтверждено и на реальном Redis в
+   `infra-backend-1`. Однострочный фикс, коммит отдельно от плановых
+   пунктов.
+2. **[ ] Не исправлено, задокументировано**: `test_no_spec_table_falls_
+   through` и `test_failed_patch_falls_through`
+   (`test_spec_table_fastpath.py`) продолжают падать даже после фикса
+   находки 1 и даже с реальным Redis/Postgres — `heuristic`-план после
+   ошибки `ai_router.run` (`_plan_turn_with_model`, `orchestrator.py:~1799
+   self._plan_source = "heuristic"; return heuristic_plan`) корректно
+   строится, но по какой-то причине не доходит до
+   `self._executor.on_user_message(content)` — `FakeExecutor.
+   user_messages` остаётся пустым. Не продиагностировано до конца в этой
+   сессии (не входит в объём плана, глубже одного затрагиваемого файла) —
+   похоже на разрыв между heuristic-веткой планирования и точкой
+   диспетчеризации на executor для сценария «нет открытой spec-table».
+   Подтверждено предсуществующим — падает идентично на самом первом
+   коммите этой ветки, до любых правок A1-A7/Б11-Б20. Требует отдельного
+   захода с чтением `_execute_skill`/dispatch-цепочки после heuristic
+   fallback.
