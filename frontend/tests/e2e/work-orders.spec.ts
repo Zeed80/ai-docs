@@ -20,6 +20,10 @@ test("operator creates and inspects a durable work order", async ({
   await page.route("**/api/work-orders**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname.endsWith("/metrics"))
+      return route.fulfill({
+        json: { window_hours: 24, status_counts: {}, step_durations: {} },
+      });
     if (url.pathname.endsWith("/plan"))
       return route.fulfill({
         json: {
@@ -148,6 +152,10 @@ test("operator sees tool-call evidence and approves a gated step inline", async 
   });
   await page.route("**/api/work-orders**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/metrics"))
+      return route.fulfill({
+        json: { window_hours: 24, status_counts: {}, step_durations: {} },
+      });
     if (url.pathname.endsWith("/plan"))
       return route.fulfill({
         json: {

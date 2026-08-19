@@ -69,6 +69,15 @@ type PendingApproval = {
   status: string;
   context: Record<string, unknown> | null;
 };
+// Б14: aggregate operator-facing observability shown in the page header.
+type Metrics = {
+  window_hours: number;
+  status_counts: Record<string, number>;
+  step_durations: Record<
+    string,
+    { count: number; p50_seconds: number; p95_seconds: number }
+  >;
+};
 
 const statusClass: Record<string, string> = {
   completed: "bg-emerald-900/50 text-emerald-300",
@@ -149,10 +158,15 @@ export default function WorkOrdersPage() {
     new Set(),
   );
   const [confirmForceRun, setConfirmForceRun] = useState(false);
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
 
   const loadOrders = useCallback(async () => {
     const response = await api("/api/work-orders?limit=100");
     if (response.ok) setOrders(await response.json());
+  }, []);
+  const loadMetrics = useCallback(async () => {
+    const response = await api("/api/work-orders/metrics");
+    if (response.ok) setMetrics(await response.json());
   }, []);
   const loadDetail = useCallback(async (id: string) => {
     const [
@@ -188,6 +202,11 @@ export default function WorkOrdersPage() {
     const timer = setInterval(loadOrders, 5000);
     return () => clearInterval(timer);
   }, [loadOrders]);
+  useEffect(() => {
+    loadMetrics();
+    const timer = setInterval(loadMetrics, 30000);
+    return () => clearInterval(timer);
+  }, [loadMetrics]);
   useEffect(() => {
     if (!selected) return;
     loadDetail(selected);
@@ -295,6 +314,27 @@ export default function WorkOrdersPage() {
           обновление каждые 5 секунд
         </span>
       </div>
+      {metrics && (
+        <div className="mb-5 flex flex-wrap gap-3 text-xs">
+          <span className="text-slate-500">за {metrics.window_hours}ч:</span>
+          {Object.entries(metrics.status_counts).map(([status, count]) => (
+            <span
+              key={status}
+              className={`px-2 py-0.5 rounded ${statusClass[status] || "bg-slate-700"}`}
+            >
+              {status}: {count}
+            </span>
+          ))}
+          {Object.entries(metrics.step_durations).map(([key, d]) => (
+            <span
+              key={key}
+              className="px-2 py-0.5 rounded bg-slate-800 text-slate-400"
+            >
+              {key} p50 {d.p50_seconds}с / p95 {d.p95_seconds}с ({d.count})
+            </span>
+          ))}
+        </div>
+      )}
       <div className="grid grid-cols-1 xl:grid-cols-[360px_1fr] gap-5">
         <section className="space-y-4">
           <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 space-y-3">
