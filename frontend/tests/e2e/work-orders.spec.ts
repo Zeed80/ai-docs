@@ -9,6 +9,7 @@ test("operator creates and inspects a durable work order", async ({ context, pag
     const url = new URL(request.url());
     if (url.pathname.endsWith("/plan")) return route.fulfill({ json: { steps: [{ id: "s1", step_key: "lookup", title: "Найти документы", kind: "capability", capability: "documents", action: "search", depends_on: [], state: "ready", attempt_count: 0, max_attempts: 3 }] } });
     if (url.pathname.endsWith("/events")) return route.fulfill({ json: [{ sequence: 1, event_type: "work.created", actor: "e2e", payload: {}, created_at: new Date().toISOString() }] });
+    if (url.pathname.endsWith("/learning")) return route.fulfill({ json: { status: "recorded", summary: "Проверенный результат сохранён", lessons: [{ kind: "verified_outcome" }], provenance: { work_order_id: id }, memory_fact_id: "memory-1", recipe_skill_id: null, extraction_attempts: 1 } });
     if (request.method() === "POST" && url.pathname === "/api/work-orders") {
       const payload = request.postDataJSON();
       const row = { id, objective: payload.objective, description: payload.description, status: "planning", priority: 50, risk_level: "low", plan_revision: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
@@ -24,4 +25,6 @@ test("operator creates and inspects a durable work order", async ({ context, pag
   await expect(page.getByRole("heading", { name: "Собрать отчёт по документам" })).toBeVisible();
   await expect(page.getByText("documents.search")).toBeVisible();
   await expect(page.getByText("work.created")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Память исполнения" })).toBeVisible();
+  await expect(page.getByText("Проверенный результат сохранён")).toBeVisible();
 });

@@ -39,6 +39,7 @@ isProject: false
 > Контракт основного метода «По описанию» и последовательность реализации полного координатного графа находятся в [`CAD_DRAWING_GRAPH_PLAN.md`](./CAD_DRAWING_GRAPH_PLAN.md).
 > Последовательный TODO по точности режима «Перечертить по чертежу», 3D-first построению и прозрачности данных находится в [`CAD_REDRAW_ACCURACY_TODO.md`](./CAD_REDRAW_ACCURACY_TODO.md).
 > Оставшийся универсальный roadmap по всем mechanical/construction классам и production-приёмке находится в [`CAD_UNIVERSAL_REMAINING_TODO.md`](./CAD_UNIVERSAL_REMAINING_TODO.md).
+> Полный статус и последовательность развития автономного сотрудника находятся в [`AGENT_SYSTEM_DEVELOPMENT_PLAN.md`](./AGENT_SYSTEM_DEVELOPMENT_PLAN.md).
 
 Данный документ представляет собой финальную архитектуру и техническое задание (ТЗ) на разработку системы. Она построена на слиянии агентского фреймворка **AiAgent**, кастомного Python-бэкенда и глубокого UX-подхода. 
 

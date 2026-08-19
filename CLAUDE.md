@@ -123,6 +123,7 @@ Durable runtime реализован в `/api/work-orders` и `backend/app/domai
 - Каждый фактический вызов сначала фиксируется в `work_tool_calls` с точными аргументами, risk, digest и idempotency key. Исчерпание попыток запускает bounded replanning только незавершённого остатка.
 - Неразрешённые semantic-критерии проверяет отдельный локальный verifier с fail-closed verdict; оператор видит план и журнал на `/work-orders`.
 - `computer_use` работает только через короткоживущие `ComputerUseGrant`: allowlist действий, каталогов, хостов и argv-команд, лимит операций и отдельный audit/evidence для browser/files/shell/snapshot.
+- Завершение атомарно создаёт `WorkLearning`; отдельный recoverable worker материализует owner-scoped `MemoryFact` с provenance по планам/tool calls/criteria/evidence и связывает безопасный draft-рецепт. Freshness, expiry, dispute и supersession не позволяют устаревшему опыту молча попадать в контекст.
 - Для пустой БД `alembic upgrade head` атомарно создаёт актуальную metadata и stamp head, обходя исторический dynamic-baseline defect; существующие БД продолжают обычную последовательность миграций.
 
 Целевой режим автономии — `max_autonomy`: агент может сам готовить и проверять изменения в sandbox, но продакшен-код, внешние действия, права, память/аудит/approval gates и личность агента применяются только через объяснимое подтверждение.

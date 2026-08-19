@@ -15,6 +15,7 @@ from app.db.models import (
     WorkAcceptanceCriterion,
     WorkEvent,
     WorkEvidence,
+    WorkLearning,
     WorkOrder,
     WorkPlan,
     WorkStep,
@@ -143,6 +144,13 @@ async def transition_work_order(
     if target == "completed":
         await assert_completion_allowed(db, work_order.id)
         work_order.completed_at = utcnow()
+        learning_exists = (
+            await db.execute(
+                select(WorkLearning.id).where(WorkLearning.work_order_id == work_order.id)
+            )
+        ).scalar_one_or_none()
+        if learning_exists is None:
+            db.add(WorkLearning(work_order_id=work_order.id, status="pending"))
     elif target == "canceled":
         work_order.canceled_at = utcnow()
     elif target == "running" and work_order.started_at is None:

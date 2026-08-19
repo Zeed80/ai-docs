@@ -1840,6 +1840,38 @@ class WorkEvent(UUIDPrimaryKey, Base):
     )
 
 
+class WorkLearning(UUIDPrimaryKey, TimestampMixin, Base):
+    """Idempotent learning job derived from a verified WorkOrder trace."""
+
+    __tablename__ = "work_learnings"
+    __table_args__ = (
+        Index("ix_work_learnings_process", "status", "created_at"),
+    )
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("work_orders.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(30), default="pending", nullable=False, index=True
+    )  # pending | processing | recorded | failed
+    summary: Mapped[str | None] = mapped_column(Text)
+    lessons: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    memory_fact_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("memory_facts.id", ondelete="SET NULL"), index=True
+    )
+    recipe_skill_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("recipe_skills.id", ondelete="SET NULL"), index=True
+    )
+    extraction_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error: Mapped[dict | None] = mapped_column(JSON)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class AgentPlugin(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "agent_plugins"
 
@@ -1932,6 +1964,15 @@ class MemoryFact(UUIDPrimaryKey, TimestampMixin, Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.7, nullable=False)
     pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(
+        String(30), default="active", nullable=False, index=True
+    )  # active | stale | disputed | superseded
+    superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("memory_facts.id", ondelete="SET NULL"), index=True
+    )
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
 

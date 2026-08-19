@@ -4,6 +4,7 @@
 > Исполнимый roadmap `чертёж → EngineeringDrawingGraph → CadIR/DXF` находится в [`CAD_DRAWING_GRAPH_PLAN.md`](./CAD_DRAWING_GRAPH_PLAN.md).
 > Актуальный TODO исправления точности `чертёж → чтение → 3D → виды → DXF` находится в [`CAD_REDRAW_ACCURACY_TODO.md`](./CAD_REDRAW_ACCURACY_TODO.md).
 > Последовательный TO DO оставшихся mechanical/construction работ находится в [`CAD_UNIVERSAL_REMAINING_TODO.md`](./CAD_UNIVERSAL_REMAINING_TODO.md).
+> Единый roadmap автономной агентской системы с фактическими отметками находится в [`AGENT_SYSTEM_DEVELOPMENT_PLAN.md`](./AGENT_SYSTEM_DEVELOPMENT_PLAN.md).
 
 ## Контекст
 
@@ -63,6 +64,7 @@
 - Policy engine: блокирует high-risk tools без approval gate, external skills при `local_only/confidential`, mutating tools в read-only mode.
 - Memory: документная hybrid memory дополняется episodic `chat_turn` и pinned facts; агент пишет успешные диалоги через `/api/memory/chat-turn`.
 - Durable work runtime: `/api/work-orders` хранит `WorkOrder`, ревизии DAG-плана, шаги, попытки, lease/heartbeat, критерии, evidence и append-only events. `/api/agent/tasks` остаётся совместимым фасадом, cron создаёт WorkOrder.
+- Durable learning: verified completion создаёт `WorkLearning`; Celery формирует owner-scoped память с provenance и безопасный recipe candidate. Неудачная индексация повторяется из outbox, а expired/disputed/superseded факты исключаются из retrieval.
 - Scheduler/verifier: Celery beat подбирает шаги через `SKIP LOCKED`, восстанавливает пропавшие workers, продвигает зависимости и запускает проверку отдельно от executor. Ложный `completed` запрещён на уровне state machine.
 - Capability execution: durable-шаги вызывают единый `/api/agent/cap/{capability}`; approval-required автоматически создаёт точечно подписанное согласование и возобновляется после решения.
 - Plugin registry: `/api/agent/plugins` хранит manifest drafts и enable/disable state; shell execution не входит в первый срез.

@@ -7,8 +7,18 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.models import WorkAcceptanceCriterion, WorkEvent, WorkPlan
+from app.db.models import (
+    MemoryFact,
+    RecipeSkill,
+    WorkAcceptanceCriterion,
+    WorkEvent,
+    WorkLearning,
+    WorkPlan,
+    WorkToolCall,
+)
+from app.domain.work_learning import process_work_learning
 from app.domain.work_planning import (
     PlannedStep,
     PlannedWork,
@@ -89,6 +99,99 @@ async def test_verified_work_order_completes_with_evidence(db_session):
     assert [event.sequence for event in events] == list(range(1, len(events) + 1))
     assert events[-1].payload["to"] == "completed"
     assert step.id == claimed_step.id
+
+
+@pytest.mark.asyncio
+async def test_completed_work_order_materializes_provenance_memory_and_recipe(test_engine):
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as db:
+        recipe = RecipeSkill(
+            name="learned-test",
+            role="autonomous_worker",
+            trigger_examples=["Проверить обучение"],
+            steps=[],
+            status="draft",
+        )
+        db.add(recipe)
+        await db.flush()
+        recipe_id = recipe.id
+        order = await create_work_order(
+            db,
+            owner_key="learning-owner",
+            objective="Проверить обучение из завершённого поручения",
+            source="test",
+        )
+        _plan, step = await create_single_step_plan(
+            db,
+            order,
+            kind="capability",
+            title="Read data",
+            input_data={"query": "status"},
+            capability="workspace",
+            action="read",
+        )
+        claimed = await claim_ready_step(db, worker_id="learning-worker", work_order_id=order.id)
+        assert claimed is not None
+        claimed_order, claimed_step, attempt = claimed
+        db.add(
+            WorkToolCall(
+                work_order_id=order.id,
+                step_id=step.id,
+                attempt_id=attempt.id,
+                call_no=1,
+                executor="capability",
+                capability="workspace",
+                action="read",
+                arguments={"query": "status"},
+                resolved_from={},
+                risk_level="low",
+                status="succeeded",
+                action_digest="a" * 64,
+                idempotency_key=f"learning-test:{order.id}",
+                output={"text": "Состояние получено"},
+            )
+        )
+        await complete_attempt(
+            db,
+            order=claimed_order,
+            step=claimed_step,
+            attempt=attempt,
+            output={"text": "Состояние получено"},
+            actor="learning-worker",
+        )
+        assert await verify_nonempty_result(db, order=claimed_order, step=claimed_step)
+        order_id = order.id
+        await db.commit()
+
+    captured: dict = {}
+
+    async def fake_recipe_recorder(**kwargs):
+        captured.update(kwargs)
+        return True, str(recipe_id)
+
+    assert await process_work_learning(
+        order_id,
+        session_factory=factory,
+        recipe_recorder=fake_recipe_recorder,
+    )
+
+    async with factory() as db:
+        learning = (
+            await db.execute(
+                select(WorkLearning).where(WorkLearning.work_order_id == order_id)
+            )
+        ).scalar_one()
+        fact = await db.get(MemoryFact, learning.memory_fact_id)
+        assert learning.status == "recorded"
+        assert learning.recipe_skill_id == recipe_id
+        assert learning.provenance["work_order_id"] == str(order_id)
+        assert learning.provenance["tool_calls"][0]["digest"] == "a" * 64
+        assert fact is not None
+        assert fact.kind == "work_order_lesson"
+        assert fact.scope == "owner:learning-owner"
+        assert fact.confidence == 1.0
+        assert captured["steps"][0]["capability"] == "workspace"
+        assert captured["session_id"] == str(order_id)
 
 
 @pytest.mark.asyncio

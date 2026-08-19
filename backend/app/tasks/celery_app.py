@@ -158,6 +158,16 @@ celery_app.conf.beat_schedule = {
         "task": "work.dispatch_ready",
         "schedule": 5.0,
     },
+    # Durable learning outbox: recover memory/recipe extraction after transient
+    # Redis, model, or vector-store failures without reopening completed work.
+    "work-order-learning": {
+        "task": "work.learn_pending",
+        "schedule": 30.0,
+    },
+    "work-order-memory-expiry": {
+        "task": "work.expire_memory",
+        "schedule": 3_600.0,
+    },
     # Safety net: sweep business-entity graph nodes/edges left orphaned by
     # any path that bypassed the memory_builder hooks — every 30 minutes.
     "memory-reconcile-graph": {

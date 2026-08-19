@@ -24,6 +24,7 @@ from app.db.models import (
     WorkArtifact,
     WorkEvent,
     WorkEvidence,
+    WorkLearning,
     WorkOrder,
     WorkPlan,
     WorkStep,
@@ -146,6 +147,24 @@ class WorkOrderOut(BaseModel):
     model_config = {"from_attributes": True, "populate_by_name": True}
 
 
+class WorkLearningOut(BaseModel):
+    id: uuid.UUID
+    work_order_id: uuid.UUID
+    status: str
+    summary: str | None
+    lessons: list
+    provenance: dict
+    memory_fact_id: uuid.UUID | None
+    recipe_skill_id: uuid.UUID | None
+    extraction_attempts: int
+    last_error: dict | None
+    processed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 def _is_admin(user: UserInfo) -> bool:
     return UserRole.admin in user.roles
 
@@ -245,6 +264,47 @@ async def get_order(
     user: UserInfo = Depends(get_current_user),
 ) -> WorkOrder:
     return await _get_owned_order(db, work_order_id, user)
+
+
+@router.get("/{work_order_id}/learning", response_model=WorkLearningOut)
+async def get_work_learning(
+    work_order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> WorkLearning:
+    order = await _get_owned_order(db, work_order_id, user)
+    learning = (
+        await db.execute(
+            select(WorkLearning).where(WorkLearning.work_order_id == order.id)
+        )
+    ).scalar_one_or_none()
+    if learning is None:
+        raise HTTPException(status_code=404, detail="Work learning not found")
+    return learning
+
+
+@router.post("/{work_order_id}/learning/reprocess", response_model=WorkLearningOut)
+async def reprocess_work_learning(
+    work_order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> WorkLearning:
+    order = await _get_owned_order(db, work_order_id, user)
+    if order.status != "completed":
+        raise HTTPException(status_code=409, detail="Only completed work can be learned")
+    from app.domain.work_learning import reset_work_learning
+
+    learning = await reset_work_learning(db, order.id)
+    if learning is None:
+        learning = WorkLearning(work_order_id=order.id, status="pending")
+        db.add(learning)
+        await db.flush()
+    await db.commit()
+    await db.refresh(learning)
+    from app.tasks.work_orders import learn_work_order
+
+    learn_work_order.apply_async(args=[str(order.id)], queue="scheduler")
+    return learning
 
 
 @router.get("/{work_order_id}/plan")

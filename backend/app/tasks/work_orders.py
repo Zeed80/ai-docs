@@ -203,9 +203,48 @@ async def verify_completed_step(step_id: uuid.UUID, *, session_factory: Any | No
             return True
         passed = await verify_nonempty_result(db, order=order, step=step)
         await db.commit()
-    if passed:
-        return True
-    return await verify_semantic_criteria(step.work_order_id, session_factory=factory)
+    completed = passed or await verify_semantic_criteria(
+        step.work_order_id, session_factory=factory
+    )
+    if completed and session_factory is None:
+        learn_work_order.apply_async(args=[str(step.work_order_id)], queue="scheduler")
+    return completed
+
+
+async def process_pending_work_learnings(limit: int = 20) -> int:
+    """Retry durable learning jobs left pending or failed by transient services."""
+    from sqlalchemy import and_, or_, select
+
+    from app.db.models import WorkLearning
+    from app.db.session import _get_session_factory
+    from app.domain.work_learning import process_work_learning
+
+    factory = _get_session_factory()
+    async with factory() as db:
+        order_ids = list(
+            (
+                await db.execute(
+                    select(WorkLearning.work_order_id)
+                    .where(
+                        or_(
+                            WorkLearning.status.in_(["pending", "failed"]),
+                            and_(
+                                WorkLearning.status == "processing",
+                                WorkLearning.updated_at < utcnow() - timedelta(minutes=5),
+                            ),
+                        ),
+                        WorkLearning.extraction_attempts < 5,
+                    )
+                    .order_by(WorkLearning.created_at)
+                    .limit(limit)
+                )
+            ).scalars()
+        )
+    processed = 0
+    for order_id in order_ids:
+        if await process_work_learning(order_id):
+            processed += 1
+    return processed
 
 
 async def verify_semantic_criteria(
@@ -649,3 +688,39 @@ def execute_work_step(step_id: str, attempt_id: str) -> None:
 )
 def verify_work_step(step_id: str) -> None:
     run_async(verify_completed_step(uuid.UUID(step_id)))
+
+
+@celery_app.task(
+    name="work.learn_order",
+    queue="scheduler",
+    max_retries=0,
+    ignore_result=True,
+    soft_time_limit=120,
+    time_limit=150,
+)
+def learn_work_order(work_order_id: str) -> None:
+    from app.domain.work_learning import process_work_learning
+
+    run_async(process_work_learning(uuid.UUID(work_order_id)))
+
+
+@celery_app.task(
+    name="work.learn_pending",
+    queue="scheduler",
+    max_retries=0,
+    ignore_result=True,
+)
+def learn_pending_work_orders() -> None:
+    run_async(process_pending_work_learnings())
+
+
+@celery_app.task(
+    name="work.expire_memory",
+    queue="scheduler",
+    max_retries=0,
+    ignore_result=True,
+)
+def expire_work_memory() -> None:
+    from app.domain.work_learning import expire_stale_work_memory
+
+    run_async(expire_stale_work_memory())

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.ai_settings import get_ai_config
 from app.api.web_search import WebSearchRequest, execute_web_search
+from app.auth.acting import get_effective_user
 from app.auth.jwt import require_human_role
 from app.auth.models import UserInfo, UserRole
 from app.db.models import (
@@ -143,9 +144,142 @@ class MemoryFactOut(BaseModel):
     source: str
     confidence: float
     pinned: bool
+    last_verified_at: datetime | None = None
+    valid_from: datetime | None = None
+    expires_at: datetime | None = None
+    status: str = "active"
+    superseded_by_id: uuid.UUID | None = None
+    provenance: dict = Field(default_factory=dict)
     metadata_: dict | None = Field(None, serialization_alias="metadata")
 
     model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class MemoryFactVerifyRequest(BaseModel):
+    valid_days: int = Field(180, ge=1, le=3650)
+    confidence: float = Field(1.0, ge=0.0, le=1.0)
+
+
+class MemoryFactSupersedeRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=500)
+    summary: str = Field(..., min_length=1)
+    reason: str = Field(..., min_length=1, max_length=1000)
+    valid_days: int = Field(180, ge=1, le=3650)
+
+
+async def _get_owned_learned_fact(
+    db: AsyncSession, fact_id: uuid.UUID, user: UserInfo
+) -> MemoryFact:
+    fact = (
+        await db.execute(
+            select(MemoryFact).where(
+                MemoryFact.id == fact_id,
+                MemoryFact.kind == "work_order_lesson",
+                MemoryFact.scope == f"owner:{user.sub}",
+            )
+        )
+    ).scalar_one_or_none()
+    if fact is None:
+        raise HTTPException(status_code=404, detail="Learned memory not found")
+    return fact
+
+
+@router.get("/learned", response_model=list[MemoryFactOut])
+async def list_learned_memory(
+    include_inactive: bool = False,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
+) -> list[MemoryFact]:
+    stmt = select(MemoryFact).where(
+        MemoryFact.kind == "work_order_lesson",
+        MemoryFact.scope == f"owner:{user.sub}",
+    )
+    if not include_inactive:
+        stmt = stmt.where(
+            MemoryFact.status == "active",
+            or_(MemoryFact.expires_at.is_(None), MemoryFact.expires_at > datetime.now(timezone.utc)),
+        )
+    return list(
+        (
+            await db.execute(
+                stmt.order_by(MemoryFact.last_verified_at.desc()).limit(max(1, min(limit, 200)))
+            )
+        ).scalars()
+    )
+
+
+@router.post("/learned/{fact_id}/verify", response_model=MemoryFactOut)
+async def verify_learned_memory(
+    fact_id: uuid.UUID,
+    payload: MemoryFactVerifyRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
+) -> MemoryFact:
+    fact = await _get_owned_learned_fact(db, fact_id, user)
+    now = datetime.now(timezone.utc)
+    fact.status = "active"
+    fact.confidence = payload.confidence
+    fact.last_verified_at = now
+    fact.valid_from = fact.valid_from or now
+    fact.expires_at = now + timedelta(days=payload.valid_days)
+    await db.commit()
+    await db.refresh(fact)
+    return fact
+
+
+@router.post("/learned/{fact_id}/dispute", response_model=MemoryFactOut)
+async def dispute_learned_memory(
+    fact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
+) -> MemoryFact:
+    fact = await _get_owned_learned_fact(db, fact_id, user)
+    fact.status = "disputed"
+    fact.expires_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(fact)
+    return fact
+
+
+@router.post("/learned/{fact_id}/supersede", response_model=MemoryFactOut)
+async def supersede_learned_memory(
+    fact_id: uuid.UUID,
+    payload: MemoryFactSupersedeRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
+) -> MemoryFact:
+    old = await _get_owned_learned_fact(db, fact_id, user)
+    now = datetime.now(timezone.utc)
+    provenance = {
+        "supersedes": str(old.id),
+        "reason": payload.reason,
+        "actor": user.sub,
+        "at": now.isoformat(),
+    }
+    replacement = MemoryFact(
+        scope=old.scope,
+        kind=old.kind,
+        title=payload.title or old.title,
+        summary=payload.summary,
+        source="human_correction",
+        confidence=1.0,
+        pinned=False,
+        last_verified_at=now,
+        valid_from=now,
+        expires_at=now + timedelta(days=payload.valid_days),
+        status="active",
+        provenance=provenance,
+        metadata_={"corrected_from": str(old.id), "reason": payload.reason},
+    )
+    db.add(replacement)
+    await db.flush()
+    old.status = "superseded"
+    old.superseded_by_id = replacement.id
+    old.expires_at = now
+    await db.commit()
+    await db.refresh(replacement)
+    return replacement
 
 
 class WebSourceDiscoveryResponse(BaseModel):
@@ -177,6 +311,7 @@ def _normalize_chat_turn_scope(scope: str | None, metadata: dict | None) -> tupl
 async def search_memory(
     payload: MemorySearchRequest,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: memory.search — Search graph nodes, chunks, and evidence spans.
 
@@ -185,6 +320,8 @@ async def search_memory(
     compatibility hint only; users should not have to choose SQL vs vector vs
     graph manually.
     """
+    if payload.scope is None:
+        payload = payload.model_copy(update={"scope": f"owner:{user.sub}"})
     offset = _decode_cursor(payload.cursor)
     page_limit = payload.limit
     internal_limit = _memory_candidate_limit(payload)
@@ -821,11 +958,13 @@ async def _search_memory_facts(
 ) -> list[MemorySearchHit]:
     hits: list[MemorySearchHit] = []
     query = select(MemoryFact).where(
+        MemoryFact.status == "active",
+        or_(MemoryFact.expires_at.is_(None), MemoryFact.expires_at > datetime.now(timezone.utc)),
         or_(
             MemoryFact.title.ilike(pattern),
             MemoryFact.summary.ilike(pattern),
             MemoryFact.kind.ilike(pattern),
-        )
+        ),
     )
     if payload.scope == "session":
         safe_scopes = [MemoryFact.scope.in_(["project", "global"])]
@@ -837,6 +976,10 @@ async def _search_memory_facts(
                 )
             )
         query = query.where(or_(*safe_scopes))
+    elif payload.scope and payload.scope.startswith("owner:"):
+        query = query.where(
+            MemoryFact.scope.in_([payload.scope, "project", "global"])
+        )
     elif payload.scope:
         query = query.where(
             or_(MemoryFact.scope == payload.scope, MemoryFact.scope == "global")
@@ -1213,6 +1356,7 @@ def _parse_uuid(value: object) -> uuid.UUID | None:
 async def explain_memory(
     payload: MemoryExplainRequest,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: memory.explain — Search memory and return evidence with graph context."""
     search_response = await search_memory(
@@ -1227,6 +1371,7 @@ async def explain_memory(
             include_explain=payload.include_explain,
         ),
         db,
+        user,
     )
     nodes_by_id: dict = {}
     edges_by_id: dict = {}
@@ -1286,6 +1431,7 @@ async def explain_memory(
 async def query_memory(
     payload: MemoryQueryRequest,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ) -> MemoryQueryResponse:
     """Agent-facing RAG contract: compact evidence pack plus optional graph context."""
     explained = await explain_memory(
@@ -1293,13 +1439,14 @@ async def query_memory(
             query=payload.query,
             document_id=payload.document_id,
             node_types=payload.node_types,
-            scope=payload.scope,
+            scope=payload.scope or f"owner:{user.sub}",
             session_id=payload.session_id,
             limit=payload.limit,
             neighborhood_depth=payload.neighborhood_depth,
             include_explain=True,
         ),
         db,
+        user,
     )
     evidence_pack: list[MemoryEvidenceItem] = []
     seen: set[tuple[str, uuid.UUID]] = set()
