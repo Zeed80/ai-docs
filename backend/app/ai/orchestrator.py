@@ -90,18 +90,28 @@ def _response_budget_for(tier: "Tier", plan: "OrchestratorPlan") -> int:
     """Per-turn response token budget from task complexity and output shape.
 
     Short chat answers stay cheap (fast on local models); reports/tables/documents
-    and complex reasoning get more room. Replaces the old hardcoded 4096.
+    and complex reasoning get more room. Thresholds live in routes.yml
+    (response_budgets, A4) — this function only encodes which Tier/output_type
+    comparison applies, not the numbers themselves; a threshold change is a
+    YAML edit, not a deploy. Fallback literals match the pre-A4 hardcoded
+    values, so a missing/partial config section degrades to old behaviour
+    rather than erroring.
     """
+    budgets = route_table.response_budgets()
+    by_output_type = budgets.get("by_output_type") or {}
+    by_tier = budgets.get("by_tier") or {}
+    default = int(budgets.get("default", 2048))
+
     output_type = plan.workspace.output_type
-    if output_type in ("table", "document", "chart"):
-        return 8192
+    if output_type in by_output_type:
+        return int(by_output_type[output_type])
     if tier >= Tier.LARGE:
-        return 8192
+        return int(by_tier.get("large", 8192))
     if tier >= Tier.MEDIUM:
-        return 4096
+        return int(by_tier.get("medium", 4096))
     if tier <= Tier.MICRO:
-        return 1024
-    return 2048
+        return int(by_tier.get("micro", 1024))
+    return default
 
 
 # role → (mtime, text) — avoids re-reading role-*.md from disk on every turn.
