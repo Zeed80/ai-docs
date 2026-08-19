@@ -271,7 +271,13 @@ models:
     vram_gb_estimate: 0.6
     quality_score: 0.62
     speed_score: 0.75
-    notes: "Current production embedding model used by the existing 768-dim Qdrant collection."
+    notes: >
+      Fallback candidate only (embedding.fallback_chain, second after
+      qwen3_embedding_8b_ollama) — NOT the active model. ai_config's
+      embedding_model is qwen3_embedding_8b_ollama; every live Qdrant
+      collection (documents/*, recipe_triggers/*, correction_triggers/*)
+      is 4096-dim under that model, none are on this 768-dim nomic space.
+      Stale note corrected 2026-08-19 — see AGENT_LIVE_TEST_FINDINGS.md.
   qwen3_embedding_8b_ollama:
     provider: "ollama"
     provider_model: "qwen3-embedding:8b"

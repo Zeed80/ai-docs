@@ -1927,12 +1927,27 @@ class AgentOrchestrator:
         elif matched_route and matched_route.get("intent") == "image_studio" and _is_techdraw_request(text):
             skills = ["image_studio.techdraw", "image_studio.prompt_help"]
         if not skills:
-            # Bulk/listing turns ("выведи все...", "список...") need the real
-            # SQL-backed table engine, not a vector/text search round-trip —
-            # without this hint a degraded (heuristic-only) turn wanders
-            # through memory/search/documents and reports false negatives on
-            # data that's actually there (smart-filter would have found it).
-            skills = ["workspace.spec_table", "memory.search"] if workspace_required else ["memory.search"]
+            if workspace_required and supplier_name:
+                # A specific supplier name was already extracted
+                # deterministically above and is already carried into the
+                # SQL-backed spec_table call via workspace_filters.supplier_query
+                # — memory.search here adds nothing but a redundant
+                # embedding+reranking round trip. Found via live agent test:
+                # "Сколько всего счетов от поставщика ЦНК" burned a full
+                # memory/RAG call (and its GPU-bound reranking fallback
+                # chain, ~minutes on a shared GPU) resolving a supplier name
+                # that SQL ILIKE/pg_trgm (via suppliers.search /
+                # workspace.spec_table) already fully covers on its own.
+                skills = ["workspace.spec_table"]
+            elif workspace_required:
+                # Bulk/listing turns ("выведи все...", "список...") need the real
+                # SQL-backed table engine, not a vector/text search round-trip —
+                # without this hint a degraded (heuristic-only) turn wanders
+                # through memory/search/documents and reports false negatives on
+                # data that's actually there (smart-filter would have found it).
+                skills = ["workspace.spec_table", "memory.search"]
+            else:
+                skills = ["memory.search"]
 
         return OrchestratorPlan(
             goal=content.strip()[:500],
