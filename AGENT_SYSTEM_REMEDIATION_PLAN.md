@@ -604,28 +604,31 @@ Docker DNS (`postgres:5432`) с рабочими credentials из `infra/.env`.
 - **Готово, когда**: формулировка плана исправлена (шаг 1); тесты из шагов
   6-7 зелёные.
 
-### Б18. Тестирование — `P1`
+### Б18. Тестирование — `P1` — `[x]` сделано (2026-08-19)
 
-- **Факт**: весь домен (3049 строк) прикрыт одним файлом
-  `test_work_orders.py` (555 строк).
-- **Шаги**:
-  1. Прочитать текущий `test_work_orders.py` целиком, выписать смысловые
-     блоки (по `class Test*`/`def test_*` группам) — вероятно уже неявно
-     сгруппированы по темам (lease, verifier, replanning, computer_use).
-  2. Разбить механически по этим темам на файлы:
-     `test_work_order_lease.py`, `test_work_order_verifier.py`,
-     `test_work_order_replanning.py`, `test_computer_use_grants.py`,
-     оставив в `test_work_orders.py` только CRUD/API-уровень. Ничего не
-     переписывать по смыслу на этом шаге — чистый split.
-  3. Добавить новый тест на race condition: два асинхронных воркера
-     одновременно вызывают дозреватель `SKIP LOCKED`-запроса (искать
-     функцию дозревания ready-шагов в `domain/work_orders.py`, вероятно
-     рядом с `work.dispatch_ready` логикой) над одним `WorkStep` — assert,
-     что только один получает lease, второй видит шаг уже занятым.
-  4. Добавить тест на просроченный lease: `lease_expires_at` в прошлом →
-     следующий дозреватель считает шаг доступным для повторного захвата.
-- **Готово, когда**: файлы из шага 2 существуют и проходят; тесты из шагов
-  3-4 зелёные.
+- **Факт**: было 555 строк / 13 тестов в одном `test_work_orders.py`.
+- **Сделано**: split ровно по 4 темам из плана + новый race-condition тест —
+  `test_work_order_lease.py` (lease reclaim + оба Б15-теста budget +
+  новый race-тест — тематически бюджеты это тоже periodic housekeeping
+  рядом с lease reclaim, тот же вызов из `_dispatch_ready_work`),
+  `test_work_order_verifier.py`, `test_work_order_replanning.py`,
+  `test_computer_use_grants.py`. `test_work_orders.py` остался на 310
+  строк — CRUD/API + то, что не влезло ни в одну из 4 тем без натяжки
+  (learning provenance, approval-binding, DAG/dataflow,
+  capability-plan-валидация) — честно, не пытался силой распихать всё по
+  4 корзинам.
+- **Race-condition тест** (шаг 3) пришлось делать не через `db_session`
+  fixture (одна транзакция на тест, откатывается — не эмулирует
+  межпроцессную блокировку строки), а через `test_engine` напрямую с
+  раздельными сессиями + `asyncio.gather` — 6 «воркеров» реально
+  параллельно бьются за один `WorkStep` через отдельные подключения.
+  Тест на просроченный lease (шаг 4) уже существовал
+  (`test_expired_lease_is_reclaimed_and_retried`) — перенесён, не
+  писался заново.
+- **Верификация — на реальном Postgres**, тем же приёмом, что открылся в
+  Б15 (см. заметку там): все 15 тестов нового разбиения зелёные, включая
+  race-тест — реальная многопоточная гонка за `SKIP LOCKED`-блокировку,
+  не имитация.
 
 ### Б19. Production rollout — `P3`
 

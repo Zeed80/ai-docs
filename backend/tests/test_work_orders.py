@@ -1,105 +1,47 @@
-"""Durable work-order state machine, recovery, verification, and API contracts."""
+"""Durable work-order CRUD/API contracts, learning materialisation, DAG/dataflow.
+
+Б18: split from one 555-line file into thematic files — this one keeps
+CRUD/API-level contracts and the domain flows that don't fit the other
+buckets (learning provenance, approval binding, DAG dependents, dataflow
+resolution, capability-plan validation). See:
+  - test_work_order_lease.py      — lease recovery, budget housekeeping,
+                                     concurrent-claim race guard
+  - test_work_order_verifier.py   — independent verification, acceptance
+                                     criteria
+  - test_work_order_replanning.py — bounded replanning after terminal
+                                     failure
+  - test_computer_use_grants.py   — ComputerUseGrant broker enforcement
+"""
 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.models import (
-    MemoryFact,
-    RecipeSkill,
-    WorkAcceptanceCriterion,
-    WorkEvent,
-    WorkLearning,
-    WorkPlan,
-    WorkToolCall,
-)
+from app.db.models import MemoryFact, RecipeSkill, WorkLearning, WorkToolCall
 from app.domain.work_learning import process_work_learning
-from app.domain.work_planning import (
-    PlannedStep,
-    PlannedWork,
-    resolve_step_input,
-    validate_capability_plan,
-)
 from app.domain.work_orders import (
-    WorkStateError,
     apply_approval_decision,
     claim_ready_step,
     complete_attempt,
     create_single_step_plan,
     create_work_order,
     create_work_plan,
-    enforce_budgets,
     promote_ready_dependents,
-    reclaim_expired_leases,
-    record_verifier_verdict,
     transition_step,
     transition_work_order,
     verify_nonempty_result,
 )
-
-
-@pytest.mark.asyncio
-async def test_verified_work_order_completes_with_evidence(db_session):
-    order = await create_work_order(
-        db_session,
-        owner_key="tester",
-        objective="Подготовить проверяемый результат",
-    )
-    _plan, step = await create_single_step_plan(
-        db_session,
-        order,
-        kind="agent_turn",
-        title="Execute",
-        input_data={"prompt": order.objective},
-    )
-    claimed = await claim_ready_step(
-        db_session, worker_id="worker-1", work_order_id=order.id
-    )
-    assert claimed is not None
-    claimed_order, claimed_step, attempt = claimed
-
-    await complete_attempt(
-        db_session,
-        order=claimed_order,
-        step=claimed_step,
-        attempt=attempt,
-        output={"text": "Результат создан и проверен."},
-        actor="worker-1",
-    )
-    passed = await verify_nonempty_result(
-        db_session, order=claimed_order, step=claimed_step
-    )
-    await db_session.flush()
-
-    assert passed is True
-    assert claimed_order.status == "completed"
-    assert claimed_step.state == "succeeded"
-    assert claimed_order.completed_at is not None
-    criterion = (
-        await db_session.execute(
-            select(WorkAcceptanceCriterion).where(
-                WorkAcceptanceCriterion.work_order_id == order.id
-            )
-        )
-    ).scalar_one()
-    assert criterion.status == "passed"
-    events = list(
-        (
-            await db_session.execute(
-                select(WorkEvent)
-                .where(WorkEvent.work_order_id == order.id)
-                .order_by(WorkEvent.sequence)
-            )
-        ).scalars()
-    )
-    assert [event.sequence for event in events] == list(range(1, len(events) + 1))
-    assert events[-1].payload["to"] == "completed"
-    assert step.id == claimed_step.id
+from app.domain.work_planning import (
+    PlannedStep,
+    PlannedWork,
+    resolve_step_input,
+    validate_capability_plan,
+)
 
 
 @pytest.mark.asyncio
@@ -196,136 +138,6 @@ async def test_completed_work_order_materializes_provenance_memory_and_recipe(te
 
 
 @pytest.mark.asyncio
-async def test_completion_is_blocked_until_required_criteria_pass(db_session):
-    order = await create_work_order(
-        db_session,
-        owner_key="tester",
-        objective="Не разрешать ложный completed",
-    )
-    await create_single_step_plan(
-        db_session,
-        order,
-        kind="agent_turn",
-        title="Execute",
-        input_data={"prompt": order.objective},
-    )
-    await transition_work_order(db_session, order, "running", actor="test")
-    await transition_work_order(db_session, order, "verifying", actor="test")
-
-    with pytest.raises(WorkStateError, match="required criteria"):
-        await transition_work_order(db_session, order, "completed", actor="test")
-    assert order.status == "verifying"
-
-
-@pytest.mark.asyncio
-async def test_expired_lease_is_reclaimed_and_retried(db_session):
-    order = await create_work_order(
-        db_session,
-        owner_key="tester",
-        objective="Восстановиться после падения worker",
-    )
-    await create_single_step_plan(
-        db_session,
-        order,
-        kind="agent_turn",
-        title="Execute",
-        input_data={"prompt": order.objective},
-        max_attempts=2,
-    )
-    claimed = await claim_ready_step(
-        db_session, worker_id="dead-worker", work_order_id=order.id
-    )
-    assert claimed is not None
-    claimed_order, claimed_step, attempt = claimed
-    claimed_order.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
-    claimed_step.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
-    await db_session.flush()
-
-    reclaimed = await reclaim_expired_leases(db_session)
-
-    assert reclaimed == 1
-    assert claimed_order.status == "ready"
-    assert claimed_step.state == "retry_wait"
-    assert claimed_step.lease_owner is None
-    assert attempt.status == "abandoned"
-
-
-@pytest.mark.asyncio
-async def test_enforce_budgets_blocks_order_that_overspent_token_budget(db_session):
-    """Б15: a WorkOrder with an explicit token_budget gets blocked once the
-    sum of its attempts' tokens_used exceeds it — not before, and not for
-    orders with no token_budget set at all (default: unenforced, see A4/Б15
-    on why unset stays unset rather than defaulting to some magic number)."""
-    order = await create_work_order(
-        db_session,
-        owner_key="tester",
-        objective="Дорогой ход, который надо остановить по бюджету",
-        budgets={"token_budget": 100},
-    )
-    await create_single_step_plan(
-        db_session,
-        order,
-        kind="agent_turn",
-        title="Execute",
-        input_data={"prompt": order.objective},
-    )
-    claimed = await claim_ready_step(db_session, worker_id="w1", work_order_id=order.id)
-    assert claimed is not None
-    claimed_order, claimed_step, attempt = claimed
-    await complete_attempt(
-        db_session,
-        order=claimed_order,
-        step=claimed_step,
-        attempt=attempt,
-        output={"text": "готово", "tokens_used": {"input_tokens": 80, "output_tokens": 40}},
-        actor="worker",
-    )
-    await db_session.flush()
-    assert attempt.tokens_used == 120  # over the 100 budget, not blocked until enforce_budgets runs
-    assert claimed_order.status == "running"  # complete_attempt alone doesn't check budgets
-
-    blocked = await enforce_budgets(db_session)
-
-    assert blocked == 1
-    assert claimed_order.status == "blocked"
-    assert claimed_order.blocker["code"] == "token_budget_exceeded"
-    assert claimed_order.blocker["tokens_spent"] == 120
-
-
-@pytest.mark.asyncio
-async def test_enforce_budgets_ignores_orders_without_a_token_budget(db_session):
-    order = await create_work_order(
-        db_session,
-        owner_key="tester",
-        objective="Без явного бюджета — не трогаем",
-    )
-    await create_single_step_plan(
-        db_session,
-        order,
-        kind="agent_turn",
-        title="Execute",
-        input_data={"prompt": order.objective},
-    )
-    claimed = await claim_ready_step(db_session, worker_id="w1", work_order_id=order.id)
-    assert claimed is not None
-    claimed_order, claimed_step, attempt = claimed
-    await complete_attempt(
-        db_session,
-        order=claimed_order,
-        step=claimed_step,
-        attempt=attempt,
-        output={"text": "готово", "tokens_used": {"input_tokens": 999999, "output_tokens": 999999}},
-        actor="worker",
-    )
-    await db_session.flush()
-
-    blocked = await enforce_budgets(db_session)
-
-    assert blocked == 0
-    assert claimed_order.status == "running"
-
-
-@pytest.mark.asyncio
 async def test_approval_is_bound_to_step_and_resumes_execution(db_session):
     order = await create_work_order(
         db_session,
@@ -360,72 +172,6 @@ async def test_approval_is_bound_to_step_and_resumes_execution(db_session):
         "action_digest": "abc123",
         "approved_by": "manager",
     }
-
-
-@pytest.mark.asyncio
-async def test_unknown_required_criterion_blocks_false_completion(db_session):
-    order = await create_work_order(
-        db_session,
-        owner_key="tester",
-        objective="Не заявлять успех без независимой проверки",
-        acceptance_criteria=[
-            {
-                "criterion_key": "semantic_quality",
-                "description": "Результат соответствует задаче",
-                "kind": "semantic",
-                "predicate": {},
-                "required": True,
-            }
-        ],
-    )
-    _plan, step = await create_single_step_plan(
-        db_session,
-        order,
-        kind="agent_turn",
-        title="Execute",
-        input_data={"prompt": order.objective},
-    )
-    claimed = await claim_ready_step(
-        db_session, worker_id="worker-1", work_order_id=order.id
-    )
-    assert claimed is not None
-    claimed_order, claimed_step, attempt = claimed
-    await complete_attempt(
-        db_session,
-        order=claimed_order,
-        step=claimed_step,
-        attempt=attempt,
-        output={"text": "Правдоподобный, но ещё не проверенный результат"},
-        actor="worker-1",
-    )
-
-    passed = await verify_nonempty_result(
-        db_session, order=claimed_order, step=claimed_step
-    )
-
-    assert passed is False
-    assert claimed_order.status == "blocked"
-    assert claimed_order.blocker["code"] == "independent_verification_required"
-    criterion = (
-        await db_session.execute(
-            select(WorkAcceptanceCriterion).where(
-                WorkAcceptanceCriterion.work_order_id == order.id
-            )
-        )
-    ).scalar_one()
-
-    completed = await record_verifier_verdict(
-        db_session,
-        order=claimed_order,
-        criterion=criterion,
-        ok=True,
-        reason="Проверено независимым контуром",
-        evidence_payload={"checklist": ["objective", "constraints"]},
-        actor="independent-verifier",
-    )
-
-    assert completed is True
-    assert claimed_order.status == "completed"
 
 
 @pytest.mark.asyncio
@@ -516,43 +262,6 @@ def test_planner_rejects_unknown_capability_action():
 
 
 @pytest.mark.asyncio
-async def test_terminal_step_failure_enters_bounded_replanning(db_session):
-    order = await create_work_order(
-        db_session,
-        owner_key="tester",
-        objective="Recover",
-        budgets={"max_replans": 1},
-    )
-    await create_single_step_plan(
-        db_session, order, kind="agent_turn", title="Execute", input_data={"prompt": "x"}, max_attempts=1
-    )
-    claimed = await claim_ready_step(db_session, worker_id="worker", work_order_id=order.id)
-    assert claimed is not None
-    claimed_order, step, attempt = claimed
-    from app.domain.work_orders import fail_attempt
-
-    await fail_attempt(
-        db_session,
-        order=claimed_order,
-        step=step,
-        attempt=attempt,
-        error={"code": "boom"},
-        retryable=False,
-        actor="worker",
-    )
-    assert claimed_order.status == "replanning"
-    assert step.state == "failed"
-    active = list(
-        (
-            await db_session.execute(
-                select(WorkPlan).where(WorkPlan.work_order_id == order.id, WorkPlan.status == "active")
-            )
-        ).scalars()
-    )
-    assert len(active) == 1
-
-
-@pytest.mark.asyncio
 async def test_work_order_api_create_plan_events_and_cancel(client):
     response = await client.post(
         "/api/work-orders",
@@ -599,33 +308,3 @@ async def test_work_order_api_create_plan_events_and_cancel(client):
     canceled = await client.post(f"/api/work-orders/{work_order_id}/cancel")
     assert canceled.status_code == 200, canceled.text
     assert canceled.json()["status"] == "canceled"
-
-
-@pytest.mark.asyncio
-async def test_computer_use_broker_enforces_grant_and_audits_file_action(client, tmp_path):
-    created = await client.post("/api/work-orders", json={"objective": "Write broker file"})
-    assert created.status_code == 201
-    order_id = created.json()["id"]
-    target = tmp_path / "result.txt"
-    denied = await client.post(
-        "/api/computer-use/execute",
-        json={"action": "file_write", "work_order_id": order_id, "target": str(target), "arguments": {"content": "verified"}},
-    )
-    assert denied.status_code == 423
-    granted = await client.post(
-        f"/api/work-orders/{order_id}/computer-grants",
-        json={"actions": ["file_write", "file_read"], "allowed_roots": [str(tmp_path)], "max_actions": 2, "reason": "test"},
-    )
-    assert granted.status_code == 201, granted.text
-    written = await client.post(
-        "/api/computer-use/execute",
-        json={"action": "file_write", "work_order_id": order_id, "target": str(target), "arguments": {"content": "verified"}},
-    )
-    assert written.status_code == 200, written.text
-    assert written.json()["result"]["sha256"]
-    read = await client.post(
-        "/api/computer-use/execute",
-        json={"action": "file_read", "work_order_id": order_id, "target": str(target)},
-    )
-    assert read.status_code == 200, read.text
-    assert read.json()["result"]["content"] == "verified"
