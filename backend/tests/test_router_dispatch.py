@@ -123,3 +123,37 @@ async def test_dispatch_table_edit_falls_through_when_not_a_patch(monkeypatch):
 def _cfg():
     from app.ai.agent_config import get_builtin_agent_config
     return get_builtin_agent_config()
+
+
+# ── _plan_turn: heuristic fallback skills hint ───────────────────────────────
+#
+# Regression coverage for the SQL-vs-memory.query gap found via live agent
+# test (AGENT_LIVE_TEST_FINDINGS.md, "SQL vs memory.query для резолва
+# поставщика"): when a supplier name is deterministically extracted from the
+# text, an exact SQL filter is already queued via workspace.spec_table —
+# memory.search added nothing but a redundant embedding+reranking round trip.
+
+
+def test_plan_turn_supplier_name_skips_memory_search_hint():
+    orc = _orc()
+    plan = orc._plan_turn("Сколько всего счетов от поставщика ЦНК и на какую сумму?")
+    assert plan.workspace.required is True
+    assert plan.worker.recommended_skills == ["workspace.spec_table"]
+    assert "memory.search" not in plan.worker.recommended_skills
+
+
+def test_plan_turn_workspace_without_supplier_name_still_hints_memory_search():
+    """A workspace turn with no specific entity extracted keeps the old
+    dual hint — memory.search is still useful when SQL alone has nothing to
+    filter on."""
+    orc = _orc()
+    plan = orc._plan_turn("Покажи таблицу всех счетов за 2024 год")
+    assert plan.workspace.required is True
+    assert plan.worker.recommended_skills == ["workspace.spec_table", "memory.search"]
+
+
+def test_plan_turn_non_workspace_keeps_memory_search_only_hint():
+    orc = _orc()
+    plan = orc._plan_turn("Что ты умеешь делать?")
+    assert plan.workspace.required is False
+    assert plan.worker.recommended_skills == ["memory.search"]
