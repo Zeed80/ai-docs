@@ -106,7 +106,12 @@
 ## 17. Интеграции
 
 - [x] Capability manifest и внутренние бизнес-инструменты.
-- [ ] MCP/connectors, credential vault, OAuth lifecycle и health/recovery connectors.
+- [~] MCP: рабочий клиент (`ai/mcp_client.py`, stdio+HTTP, auto-reconnect)
+      подключён только к чат-`AgentSession` (`agent_loop.py`); 0 записей в
+      `capabilities.generated.yml` — WorkOrder planner про MCP не знает.
+      См. AGENT_SYSTEM_REMEDIATION_PLAN.md Б17 (решено: подключаем к
+      WorkOrder через тот же capability gateway).
+- [ ] Credential vault, OAuth lifecycle и health/recovery connectors.
 
 ## 18. Тестирование и evals
 
