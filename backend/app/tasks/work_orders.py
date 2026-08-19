@@ -827,3 +827,16 @@ def expire_work_memory() -> None:
     from app.domain.work_learning import expire_stale_work_memory
 
     run_async(expire_stale_work_memory())
+
+
+@celery_app.task(
+    name="work.detect_gaps",
+    queue="scheduler",
+    max_retries=0,
+    ignore_result=True,
+)
+def detect_capability_gaps_task() -> None:
+    """Б12: batched, periodic — never synchronous per failed attempt."""
+    from app.domain.work_gap_detection import run_gap_detection
+
+    run_async(run_gap_detection())

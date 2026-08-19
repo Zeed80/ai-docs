@@ -168,6 +168,13 @@ celery_app.conf.beat_schedule = {
         "task": "work.expire_memory",
         "schedule": 3_600.0,
     },
+    # Б12: repeated same-shape WorkStepAttempt failures -> a draft
+    # CapabilityProposal for a human to review. Batched hourly, never per
+    # failed attempt.
+    "work-order-gap-detection": {
+        "task": "work.detect_gaps",
+        "schedule": 3_600.0,
+    },
     # Safety net: sweep business-entity graph nodes/edges left orphaned by
     # any path that bypassed the memory_builder hooks — every 30 minutes.
     "memory-reconcile-graph": {
