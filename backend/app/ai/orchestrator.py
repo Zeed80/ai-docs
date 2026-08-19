@@ -279,6 +279,10 @@ class AgentOrchestrator:
         self._last_spec_source: str = ""
         # Last successfully-replayed recipe — penalised if the user corrects it.
         self._last_recipe_id: str = ""
+        # Result payload of the last successful _execute_workspace_spec call, for
+        # callers (e.g. table-patch correction learning) that need it without a
+        # second round trip.
+        self._last_direct_tool_result: dict[str, Any] = {}
         self._plan_source: str = "heuristic"
         # Set by _decide_turn: True when the LLM router produced no usable
         # decision (degrade to the heuristic planner this turn).
@@ -1135,47 +1139,41 @@ class AgentOrchestrator:
         if parsed is None:
             return False
 
-        self._workspace_before = _workspace_updated_at_snapshot()
+        # Routed through the same policy gate (check_tool_execution) and HTTP
+        # helper as every other direct tool call — see _execute_workspace_spec.
+        # A fast-path (0 LLM) must never be a second, ungated way to reach a
+        # skill; if workspace.spec_table_patch is ever added to approval_gates
+        # in gateway.yml, this call is blocked exactly like the worker-LLM path.
+        tool_spec = route_table.skill_spec("workspace.spec_table_patch")
+        if not tool_spec:
+            return False
+        args = {
+            "canvas_id": canvas_id,
+            "ops": [op.model_dump(mode="json", exclude_none=True) for op in parsed.ops],
+        }
         await self._outer_send({
             "type": "orchestrator.status",
             "content": "Секретарь: правка таблицы распознана — применяю мгновенно (без LLM).",
             "plan_source": "table_patch",
             "degraded": False,
         })
-        args = {
-            "canvas_id": canvas_id,
-            "ops": [op.model_dump(mode="json", exclude_none=True) for op in parsed.ops],
-        }
-        await self._record_orchestrator_tool_event({
-            "type": "tool_call", "tool": "workspace", "args": args,
-        })
-        try:
-            async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-                resp = await client.post(
-                    f"{config.backend_url.rstrip('/')}/api/workspace/agent/spec-table/patch",
-                    json=args,
-                    headers=_agent_headers(),
-                )
-            result = resp.json() if resp.content else {}
-        except Exception as exc:
-            log_degraded("orchestrator.spec_table_patch", exc)
-            return False
-        if resp.status_code >= 400 or result.get("status") not in ("published",):
-            await self._record_orchestrator_tool_event({
-                "type": "tool_result", "tool": "workspace",
-                "result": {"error": result.get("message") or f"HTTP {resp.status_code}"},
-            })
-            return False  # fall through to normal dispatch
+        ok = await self._execute_workspace_spec(
+            {"tool": "workspace__spec_table_patch", "path": tool_spec["path"], "args": args},
+            config,
+            announce="Секретарь: применяю правку таблицы…",
+        )
+        if not ok:
+            return False  # policy-blocked or HTTP failure — fall through to normal dispatch
 
-        await self._record_orchestrator_tool_event({
-            "type": "tool_result", "tool": "workspace", "result": result,
-        })
+        result = self._last_direct_tool_result
+        if result.get("status") not in ("published",):
+            return False  # backend rejected the patch — let the worker LLM retry it
+
         # Phase 3 — learn this correction against the request that built the table,
         # so a future identical request applies the fix without being corrected.
         if is_correction(content) and self._last_spec_request:
             await record_correction(self._last_spec_request, spec.source, content)
         answer = str(result.get("message") or "Готово.")
-        await self._outer_send({"type": "text", "content": answer})
         try:
             self._executor.record_external_turn(content, answer)
         except Exception as exc:
@@ -1237,6 +1235,37 @@ class AgentOrchestrator:
         if parsed is None:
             return False
 
+        action, path, body, label = parsed
+        # Same policy gate as _execute_workspace_spec — a scratch-sheet edit has
+        # no dedicated route_table skill entry (the target path is built from the
+        # parsed command, not a static manifest lookup), so the check is inlined
+        # here rather than delegated. No gate targets sheet edits today, but the
+        # fast-path must not be structurally exempt if one ever does. Checked
+        # before announcing "applying" — a blocked edit must not claim to run.
+        tool_name = "workspace__sheet_patch"
+        approval_gates: set[str] = set(config.approval_gates or [])
+        args = {"action": action, "sheet_id": sheet_id, **body}
+        policy = check_tool_execution(
+            skill_name=tool_name, args=args, config=config, approval_gates=approval_gates,
+        )
+        if not policy.allowed or tool_name in approval_gates:
+            reason = (
+                "требует подтверждения человеком (approval gate)"
+                if tool_name in approval_gates
+                else policy.reason
+            )
+            await self._outer_send({
+                "type": "orchestrator.direct_tool_blocked",
+                "content": (
+                    f"Оркестратор: инструмент {tool_name!r} заблокирован политикой — {reason}. "
+                    "Требуется явное подтверждение через интерфейс."
+                ),
+                "tool": tool_name,
+                "reason": reason,
+                "risk_level": policy.risk_level,
+            })
+            return False
+
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._outer_send({
             "type": "orchestrator.status",
@@ -1244,11 +1273,10 @@ class AgentOrchestrator:
             "plan_source": "sheet_patch",
             "degraded": False,
         })
-        action, path, body, label = parsed
         await self._record_orchestrator_tool_event({
             "type": "tool_call",
             "tool": "sheets",
-            "args": {"action": action, "sheet_id": sheet_id, **body},
+            "args": args,
         })
         try:
             async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
@@ -1325,16 +1353,30 @@ class AgentOrchestrator:
             async with _get_session_factory()() as _db:
                 corrected = await correct_category_error(_db, spec, content)
             if corrected is not None:
+                # Same policy gate as _execute_workspace_spec (see A1) — this
+                # background auto-correction is still a workspace write and must
+                # not be structurally exempt from a future approval gate.
+                tool_name = "workspace__spec_table"
+                approval_gates: set[str] = set(config.approval_gates or [])
                 args = {"canvas_id": canvas_id, "spec": corrected.model_dump(mode="json")}
-                async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-                    resp = await client.post(
-                        f"{config.backend_url.rstrip('/')}/api/workspace/agent/spec-table",
-                        json=args, headers=_agent_headers())
-                if resp.status_code < 400 and (resp.json() or {}).get("status") == "published":
-                    spec = corrected
-                    await self._outer_send({"type": "text", "content":
-                        "Поправил: искал товар в позициях счетов, а не в названиях поставщиков."})
-                    logger.info("category_error_corrected", canvas=canvas_id, term=str(corrected.filters))
+                policy = check_tool_execution(
+                    skill_name=tool_name, args=args, config=config, approval_gates=approval_gates,
+                )
+                if not policy.allowed or tool_name in approval_gates:
+                    logger.warning(
+                        "orchestrator.category_correction_blocked",
+                        canvas=canvas_id, reason=policy.reason,
+                    )
+                else:
+                    async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+                        resp = await client.post(
+                            f"{config.backend_url.rstrip('/')}/api/workspace/agent/spec-table",
+                            json=args, headers=_agent_headers())
+                    if resp.status_code < 400 and (resp.json() or {}).get("status") == "published":
+                        spec = corrected
+                        await self._outer_send({"type": "text", "content":
+                            "Поправил: искал товар в позициях счетов, а не в названиях поставщиков."})
+                        logger.info("category_error_corrected", canvas=canvas_id, term=str(corrected.filters))
         except Exception as exc:
             log_degraded("orchestrator.category_correction", exc)
 
@@ -1358,6 +1400,17 @@ class AgentOrchestrator:
             "canvas_id": canvas_id,
             "ops": [op.model_dump(mode="json", exclude_none=True) for op in ops],
         }
+        # Same policy gate as _execute_workspace_spec (see A1).
+        tool_name = "workspace__spec_table_patch"
+        approval_gates: set[str] = set(config.approval_gates or [])
+        policy = check_tool_execution(
+            skill_name=tool_name, args=args, config=config, approval_gates=approval_gates,
+        )
+        if not policy.allowed or tool_name in approval_gates:
+            logger.warning(
+                "orchestrator.spec_reconcile_blocked", canvas=canvas_id, reason=policy.reason,
+            )
+            return
         try:
             async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
                 resp = await client.post(
@@ -2623,6 +2676,9 @@ class AgentOrchestrator:
                 "type": "text",
                 "content": message,
             })
+        # Stashed for callers that need the raw result after a successful direct
+        # call (e.g. table-patch correction learning) without a second round trip.
+        self._last_direct_tool_result = result if isinstance(result, dict) else {}
         return True
 
     async def _record_orchestrator_tool_event(self, event: dict[str, Any]) -> None:

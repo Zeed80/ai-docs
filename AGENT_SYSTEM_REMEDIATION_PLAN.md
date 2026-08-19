@@ -21,7 +21,23 @@
 
 ## Часть А — Секретарь-оркестратор
 
-### A1. Единый enforcement-слой для fast-path — `P0`
+### A1. Единый enforcement-слой для fast-path — `P0` — `[x]` сделано (2026-08-19)
+
+- **Итог**: при реализации нашлось на 2 дыры больше, чем в изначальном
+  плане — тот же паттерн (`httpx` напрямую + `_agent_headers()`, без
+  `check_tool_execution`) был ещё в `_try_sheet_edit_directly` (соседний
+  fast-path, вызывается прямо перед spec-table-patch) и **дважды** в
+  `_reconcile_spec_table` (автоматическая пост-обработка после публикации
+  worker'ом spec-table — category-error correction и grouping/sort reconcile).
+  Итого 4 точки, не 1. Все 4 теперь проходят через `check_tool_execution`
+  (три — inline-гейт, `_try_spec_table_patch_directly` — делегированием в
+  уже policy-gated `_execute_workspace_spec`). Регрессионные тесты
+  (`test_gated_patch_never_applies_directly`,
+  `test_gated_sheet_edit_never_applies_directly`) подтверждены в обе
+  стороны: падают на исходном коде (gated skill реально уходил в сеть),
+  зелёные на исправленном. Полный `tests/ai/` прогнан — все провалы
+  предсуществующие (недоступность Postgres/сети/event-loop изоляция
+  тестов в песочнице), не regressions.
 
 - **Факт**: `_try_spec_table_patch_directly` (`orchestrator.py:1108`) не
   вызывает `check_tool_execution` вообще — идёт прямым `httpx.AsyncClient`
