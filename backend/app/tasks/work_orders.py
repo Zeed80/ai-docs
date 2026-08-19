@@ -17,8 +17,10 @@ from app.domain.work_orders import (
     claim_ready_step,
     complete_attempt,
     enforce_budgets,
+    enter_waiting_for_children,
     fail_attempt,
     promote_ready_dependents,
+    promote_waiting_parents,
     reclaim_expired_leases,
     record_verifier_verdict,
     transition_step,
@@ -165,6 +167,7 @@ async def _execute_step_kind(
     capability: str | None,
     action: str | None,
     idempotency_key: str | None = None,
+    work_order_id: uuid.UUID | None = None,
 ) -> dict:
     if kind == "agent_turn":
         return await _execute_agent_turn(input_data, timeout_seconds)
@@ -174,7 +177,92 @@ async def _execute_step_kind(
         return await _execute_capability(
             capability, action, input_data, timeout_seconds, idempotency_key
         )
+    if kind == "decompose":
+        if work_order_id is None:
+            raise ValueError("decompose step requires work_order_id")
+        return await _execute_decompose(work_order_id, input_data)
     raise ValueError(f"Unsupported durable work-step kind: {kind}")
+
+
+def _split_child_budgets(
+    parent_budgets: dict[str, Any], child_count: int, child_override: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Б11/Б15: a child never inherits the parent's full token_budget unsplit
+    — summed across N children that would let the group spend N times what
+    the parent was allowed. An explicit per-child override (PlannedChildSpec.
+    budgets) always wins; otherwise the parent's token_budget (if any) is
+    split evenly. max_replans is NOT divided — each child gets its own full
+    replanning allowance, that budget is about retry depth, not spend."""
+    if child_override:
+        return dict(child_override)
+    budgets: dict[str, Any] = {}
+    parent_token_budget = parent_budgets.get("token_budget")
+    if parent_token_budget is not None and child_count > 0:
+        budgets["token_budget"] = max(1, int(parent_token_budget) // child_count)
+    return budgets
+
+
+async def _execute_decompose(work_order_id: uuid.UUID, input_data: dict[str, Any]) -> dict:
+    """Б11: create one child WorkOrder per input.children entry.
+
+    Runs in its own transaction (unlike agent_turn/capability steps, this one
+    needs direct DB access to create rows) — commits before returning so the
+    children exist and are dispatchable the moment this step is observed as
+    succeeded. The parent order's own transition to "waiting_external" (not
+    "completed" — a decompose step succeeding is not the parent's objective
+    being done) happens separately in verify_completed_step, which is the
+    existing hook for "what happens after the last step of a plan succeeds".
+    """
+    from app.db.models import WorkOrder
+    from app.db.session import _get_session_factory
+    from app.domain.work_orders import create_single_step_plan, create_work_order
+
+    children_spec = list(input_data.get("children") or [])
+    if not children_spec:
+        raise ValueError("decompose step requires a non-empty children list")
+
+    factory = _get_session_factory()
+    child_ids: list[str] = []
+    async with factory() as db:
+        parent = await db.get(WorkOrder, work_order_id)
+        if parent is None:
+            raise ValueError(f"parent work order {work_order_id} not found")
+        parent_budgets = dict(parent.budgets or {})
+        for spec in children_spec:
+            objective = str(spec.get("objective") or "").strip()
+            if not objective:
+                continue
+            child_budgets = _split_child_budgets(
+                parent_budgets, len(children_spec), spec.get("budgets")
+            )
+            child = await create_work_order(
+                db,
+                owner_key=parent.owner_key,
+                objective=objective,
+                description=spec.get("description"),
+                source="decompose",
+                # A child never outranks the parent that spawned it — same
+                # ceiling, never higher, for both priority and risk gating.
+                priority=parent.priority,
+                risk_level=parent.risk_level,
+                budgets=child_budgets,
+                parent_id=parent.id,
+            )
+            await create_single_step_plan(
+                db,
+                child,
+                kind="agent_turn",
+                title=objective[:200],
+                input_data={"prompt": objective},
+            )
+            child_ids.append(str(child.id))
+        await db.commit()
+
+    return {
+        "text": f"Создано дочерних поручений: {len(child_ids)}",
+        "executor": "decompose",
+        "child_order_ids": child_ids,
+    }
 
 
 async def verify_completed_step(step_id: uuid.UUID, *, session_factory: Any | None = None) -> bool:
@@ -202,6 +290,17 @@ async def verify_completed_step(step_id: uuid.UUID, *, session_factory: Any | No
         ):
             await db.commit()
             return True
+        # Б11: a succeeded decompose step's "result" is the children it
+        # spawned, not a business result of its own — the parent order isn't
+        # done, it's waiting on them. Enters "waiting_external" instead of
+        # the normal verify_nonempty_result path; promote_waiting_parents
+        # (called from _dispatch_ready_work, same periodic-housekeeping
+        # pattern as reclaim_expired_leases/enforce_budgets) completes the
+        # parent once every child reaches a terminal state.
+        if step.kind == "decompose" and isinstance(step.output, dict) and step.output.get("child_order_ids"):
+            await enter_waiting_for_children(db, order=order, actor="scheduler")
+            await db.commit()
+            return False
         passed = await verify_nonempty_result(db, order=order, step=step)
         await db.commit()
     completed = passed or await verify_semantic_criteria(
@@ -426,6 +525,7 @@ async def execute_claimed_step(
             capability=capability,
             action=action,
             idempotency_key=step_idempotency_key,
+            work_order_id=work_order_id,
         )
     except ApprovalRequiredError as exc:
         from app.db.models import Approval, ApprovalActionType
@@ -607,6 +707,7 @@ async def _dispatch_ready_work(limit: int = 10) -> int:
     async with factory() as db:
         await reclaim_expired_leases(db)
         await enforce_budgets(db)
+        await promote_waiting_parents(db)
         pending_verification = list(
             (
                 await db.execute(
