@@ -126,8 +126,13 @@
 ## 20. Документация
 
 - [x] `CLAUDE.md`, `PLAN.md`, `DEVPLAN.md` описывают durable runtime.
-- [~] Этот файл является единым roadmap и журналом фактического статуса.
-- [ ] Диаграммы FSM, operator guide, capability guide, security handbook и SLO runbook.
+- [~] Этот файл является единым roadmap и журналом фактического статуса —
+      см. также `AGENT_SYSTEM_REMEDIATION_PLAN.md` (детальный план
+      доработки P0-P3, secretary-слой + WorkOrder-слой, с 2026-08-19).
+- [x] Operator guide: `docs/work-orders-operator-guide.md` (Б20) —
+      статусы поручения/шага, evidence, approval, force-run debug-кнопка,
+      метрики.
+- [ ] Диаграммы FSM, capability guide, security handbook и SLO runbook.
 
 ## Последовательность оставшейся реализации
 
