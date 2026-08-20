@@ -15,7 +15,19 @@ from app.ai.capability_manifest import CapabilityDefinition, load_capability_man
 from app.db.models import WorkOrder, WorkStep
 from app.domain.work_orders import append_event, create_work_plan, is_exploratory
 
-_REF = re.compile(r"^\$\{steps\.([a-zA-Z0-9_-]+)\.output(?:\.([a-zA-Z0-9_.-]+))?\}$")
+# Ф4-re (AGENT_AUTONOMY_ROADMAP.md): found live on the persistence
+# re-verification pilot — the path character class didn't allow "[" or "]",
+# so a model-written reference using bracket array indexing
+# (${steps.X.output.result.items[0].url}, the common JS/JSON-path
+# convention) failed to match this regex at all. resolve()'s fallback for a
+# non-matching string is to return it UNCHANGED — the literal template
+# string was passed straight through as if it were the real value, silently
+# (no error, no replan-triggering exception): every capability call fed
+# this got e.g. text="${steps.discover.output.result.items[0].text}" as its
+# actual argument, which of course produced zero real catalog entries. Path
+# character class widened to accept "[" and "]"; _path_get below is what
+# actually interprets them.
+_REF = re.compile(r"^\$\{steps\.([a-zA-Z0-9_-]+)\.output(?:\.([a-zA-Z0-9_.\[\]-]+))?\}$")
 
 
 class PlannedChildSpec(BaseModel):
@@ -305,11 +317,40 @@ async def plan_work_order(
 
 
 def _path_get(value: Any, path: str | None) -> Any:
-    for segment in (path or "").split("."):
+    # Normalize bracket array indexing (items[0].url, the common JS/JSON-
+    # path convention the model reliably reaches for) into this resolver's
+    # own dot-segment form (items.0.url) — reuses the existing
+    # isinstance(value, list) and segment.isdigit() branch below verbatim,
+    # rather than teaching the segment loop a second index syntax. See the
+    # _REF docstring comment above for why this exists.
+    normalized_path = re.sub(r"\[(\d+)\]", r".\1", path or "")
+    for segment in normalized_path.split("."):
         if not segment:
             continue
         if isinstance(value, dict):
-            value = value[segment]
+            if segment in value:
+                value = value[segment]
+            elif isinstance(value.get("result"), dict) and segment in value["result"]:
+                # Ф4-re (AGENT_AUTONOMY_ROADMAP.md): found live, TWICE now on
+                # two independent exploratory pilots (dataflow_resolution_
+                # error: 'supplier_id') — the model reliably writes
+                # ${steps.X.output.<field>} instead of the actually-correct
+                # ${steps.X.output.result.<field>} that _execute_capability's
+                # {"result": ..., "result_summary": ..., "executor": ...}
+                # wrapping requires. The base planner prompt already shows
+                # this exact ".result." pattern in its own worked example —
+                # recurring across independent live runs means this is a
+                # predictable generalization gap in the model, not one-off
+                # noise, so it's worth a bounded, one-level-deeper server-side
+                # fallback rather than burning a replan on something the
+                # runtime's own wrapping convention caused. Only kicks in
+                # when the direct path is missing — never changes behaviour
+                # for a correctly-written reference, and only unwraps one
+                # level (the exact shape _execute_capability produces), not
+                # an open-ended "guess the path" search.
+                value = value["result"][segment]
+            else:
+                raise KeyError(segment)
         elif isinstance(value, list) and segment.isdigit():
             value = value[int(segment)]
         else:

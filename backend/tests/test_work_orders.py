@@ -245,6 +245,120 @@ async def test_dataflow_resolves_only_succeeded_step_outputs(db_session):
     assert provenance["/document_id"] == {"step_key": "lookup", "path": "result.id"}
 
 
+@pytest.mark.asyncio
+async def test_dataflow_falls_back_to_result_wrapper_when_model_omits_it(db_session):
+    """Ф4-re (AGENT_AUTONOMY_ROADMAP.md): found live, twice, on independent
+    exploratory pilots (dataflow_resolution_error: 'supplier_id') — the
+    model reliably writes ${steps.X.output.supplier_id} instead of the
+    actually-correct ${steps.X.output.result.supplier_id} that
+    _execute_capability's {"result": ...} wrapping requires, despite the
+    base prompt's own worked example already showing the .result. form.
+    One level of server-side fallback compensates for exactly this
+    recurring, predictable gap instead of burning a replan on it."""
+    order = await create_work_order(db_session, owner_key="tester", objective="Dataflow fallback")
+    _plan, steps = await create_work_plan(
+        db_session,
+        order,
+        steps=[
+            {"step_key": "create", "title": "Create", "kind": "agent_turn", "input": {"prompt": "x"}},
+            {
+                "step_key": "consume",
+                "title": "Consume",
+                "kind": "capability",
+                "capability": "documents",
+                "action": "get",
+                # missing ".result." — the exact model mistake observed live
+                "input": {"supplier_id": "${steps.create.output.supplier_id}"},
+                "depends_on": ["create"],
+            },
+        ],
+    )
+    create, consume = steps
+    create.output = {"result": {"id": "sup-1", "supplier_id": "sup-1"}, "result_summary": "ok", "executor": "capability"}
+    create.state = "succeeded"
+
+    resolved, provenance = await resolve_step_input(db_session, consume)
+
+    assert resolved == {"supplier_id": "sup-1"}
+    assert provenance["/supplier_id"] == {"step_key": "create", "path": "supplier_id"}
+
+
+@pytest.mark.asyncio
+async def test_dataflow_fallback_does_not_mask_a_genuinely_missing_field(db_session):
+    """The fallback only kicks in when the field is missing at the top
+    level AND present one level down in .result — a field missing from
+    BOTH must still raise, not silently resolve to something wrong."""
+    order = await create_work_order(db_session, owner_key="tester", objective="Dataflow no fallback")
+    _plan, steps = await create_work_plan(
+        db_session,
+        order,
+        steps=[
+            {"step_key": "create", "title": "Create", "kind": "agent_turn", "input": {"prompt": "x"}},
+            {
+                "step_key": "consume",
+                "title": "Consume",
+                "kind": "capability",
+                "capability": "documents",
+                "action": "get",
+                "input": {"missing_field": "${steps.create.output.missing_field}"},
+                "depends_on": ["create"],
+            },
+        ],
+    )
+    create, consume = steps
+    create.output = {"result": {"id": "sup-1"}, "result_summary": "ok", "executor": "capability"}
+    create.state = "succeeded"
+
+    with pytest.raises(Exception):
+        await resolve_step_input(db_session, consume)
+
+
+@pytest.mark.asyncio
+async def test_dataflow_resolves_bracket_array_indexing(db_session):
+    """Ф4-re (AGENT_AUTONOMY_ROADMAP.md): found live on the persistence
+    re-verification pilot — ${steps.X.output.result.items[0].url} (the
+    common JS/JSON-path bracket-indexing convention) didn't even match the
+    reference regex (no "[" in the allowed path character class), so
+    resolve()'s fallback for a non-matching string returned it UNCHANGED —
+    the literal, unresolved template string was silently passed straight
+    through as a capability argument, with no error and no replan-
+    triggering exception. Every ingest_web_source call fed this got e.g.
+    text="${steps.discover.output.result.items[0].text}" as its actual
+    text argument, which produced zero real catalog entries — this is what
+    was actually behind several 'entries_created: 0' verification failures
+    observed live, not a genuine absence of catalog data."""
+    order = await create_work_order(db_session, owner_key="tester", objective="Bracket indexing")
+    _plan, steps = await create_work_plan(
+        db_session,
+        order,
+        steps=[
+            {"step_key": "discover", "title": "Discover", "kind": "agent_turn", "input": {"prompt": "x"}},
+            {
+                "step_key": "ingest",
+                "title": "Ingest",
+                "kind": "capability",
+                "capability": "tool_catalog",
+                "action": "ingest_web_source",
+                "input": {
+                    "url": "${steps.discover.output.result.items[0].url}",
+                    "text": "${steps.discover.output.result.items[0].text}",
+                },
+                "depends_on": ["discover"],
+            },
+        ],
+    )
+    discover, ingest = steps
+    discover.output = {
+        "result": {"items": [{"url": "https://haltec.ru/catalog", "text": "каталог свёрл..."}]}
+    }
+    discover.state = "succeeded"
+
+    resolved, provenance = await resolve_step_input(db_session, ingest)
+
+    assert resolved == {"url": "https://haltec.ru/catalog", "text": "каталог свёрл..."}
+    assert provenance["/url"] == {"step_key": "discover", "path": "result.items[0].url"}
+
+
 def test_planner_rejects_unknown_capability_action():
     plan = PlannedWork(
         steps=[

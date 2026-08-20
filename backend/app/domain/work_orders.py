@@ -68,7 +68,16 @@ WORK_TRANSITIONS: dict[str, frozenset[str]] = {
     "waiting_external": frozenset({"ready", "replanning", "blocked", "canceled", "verifying"}),
     "verifying": frozenset({"completed", "replanning", "blocked", "failed", "canceled"}),
     "replanning": frozenset({"ready", "blocked", "failed", "canceled"}),
-    "blocked": frozenset({"scoping", "planning", "ready", "verifying", "canceled"}),
+    # Ф4-re (AGENT_AUTONOMY_ROADMAP.md, found live on the persistence
+    # re-verification pilot): "replanning" added here. A semantic-verifier
+    # rejection (record_verifier_verdict) lands the order on "blocked" via
+    # the earlier "independent_verification_required" hold — without this,
+    # record_verifier_verdict's own bounded-replan attempt (mirroring
+    # verify_nonempty_result's deterministic-failure branch) had nowhere
+    # legal to go and silently no-op'ed, so the agent never got a second
+    # try when its OWN synthesis was judged insufficient — only step-level
+    # execution failures ever consumed the max_replans budget.
+    "blocked": frozenset({"scoping", "planning", "ready", "verifying", "replanning", "canceled"}),
     "failed": frozenset({"planning", "ready", "canceled"}),
     "completed": frozenset(),
     "canceled": frozenset(),
@@ -1316,6 +1325,27 @@ async def verify_nonempty_result(
                 failed_required.append(criterion.criterion_key)
         elif criterion.required:
             unresolved_required.append(criterion.criterion_key)
+            if criterion.status != "pending":
+                # Ф4-re (AGENT_AUTONOMY_ROADMAP.md): found live on the
+                # persistence re-verification pilot — a semantic criterion
+                # the independent verifier already rejected once (status
+                # left "failed" by record_verifier_verdict) stayed "failed"
+                # forever across every later replan attempt, because
+                # nothing ever reset it. verify_semantic_criteria only
+                # looks at criteria with status=="pending" — so after the
+                # first rejection, the independent verifier never ran
+                # again on any subsequent attempt, no matter how much
+                # better the agent's new evidence was. The order kept
+                # replanning (that part of the fix works) but could then
+                # only ever cycle between "verifying" and
+                # "independent_verification_required" — never able to
+                # reach either "completed" or a budget-exhausted "blocked",
+                # since nothing was left to judge it. Reset here, right
+                # where this attempt determines the criterion still needs
+                # independent judgment, so the fresh evidence from THIS
+                # attempt gets a fresh verdict.
+                criterion.status = "pending"
+                criterion.verdict = None
     await db.flush()
     if has_result and not failed_required and not unresolved_required:
         order.result_summary = text[:8000]
@@ -1332,7 +1362,23 @@ async def verify_nonempty_result(
             "criteria": failed_required,
             "reason": "acceptance criteria did not pass",
         }
-        await transition_work_order(db, order, "blocked", actor=actor)
+        # Ф4-re (AGENT_AUTONOMY_ROADMAP.md): found live on the persistence
+        # re-verification pilot — a required criterion genuinely failing
+        # (e.g. coverage_report: the final step's own output wasn't even a
+        # well-formed {covered,partial,not_found} shape) went straight to
+        # "blocked" unconditionally, with zero regard for max_replans. Only
+        # step-level EXECUTION failures (fail_attempt/reclaim_expired_leases)
+        # ever consumed the bounded-replan budget the whole Ф4-до doработка
+        # persistence fix raised to 30 for exploratory orders — a failure in
+        # the agent's own synthesis never got a second try. order.blocker
+        # (the specific reason set above) already flows into the next
+        # plan's failure_context (plan_work_order reads order.blocker
+        # directly) — the model already gets exactly this feedback on
+        # replan, so this was purely a missing transition, not a missing
+        # feedback channel.
+        max_replans = _max_replans_for(order)
+        target = "replanning" if order.plan_revision <= max_replans else "blocked"
+        await transition_work_order(db, order, target, actor=actor)
     return order.status == "completed"
 
 
@@ -1464,6 +1510,23 @@ async def record_verifier_verdict(
             "criterion": criterion.criterion_key,
             "reason": reason,
         }
+        # Ф4-re (AGENT_AUTONOMY_ROADMAP.md): same bounded-replan treatment
+        # as verify_nonempty_result's deterministic-failure branch — the
+        # independent verifier rejecting a semantic criterion (e.g.
+        # honest_not_found judging the agent's not_found entries fabricated
+        # or unattempted) is exactly the same kind of recoverable failure
+        # as a step erroring out, and deserves the same chance to try again
+        # within budget. The order is typically "blocked" here already (the
+        # earlier "independent_verification_required" hold from
+        # verify_nonempty_result while this semantic check was pending) —
+        # "blocked" -> "replanning" is a legal transition (see
+        # WORK_TRANSITIONS). Guarded rather than unconditional in case a
+        # caller reaches this from some other status this doesn't cover —
+        # silently doing nothing there is safer than raising mid-verdict.
+        max_replans = _max_replans_for(order)
+        target = "replanning" if order.plan_revision <= max_replans else "blocked"
+        if target in WORK_TRANSITIONS.get(order.status, frozenset()):
+            await transition_work_order(db, order, target, actor=actor)
         return False
     try:
         await assert_completion_allowed(db, order.id)

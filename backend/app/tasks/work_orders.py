@@ -139,7 +139,26 @@ async def _heartbeat_step(
         async with factory() as db:
             step = await db.get(WorkStep, step_id, with_for_update=True)
             attempt = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
-            order = await db.get(WorkOrder, work_order_id, with_for_update=True)
+            # Ф4-re (AGENT_AUTONOMY_ROADMAP.md): found live on the
+            # persistence re-verification pilot — a real Postgres deadlock
+            # among 4 concurrently executing sibling steps of the same
+            # plan, all raising DeadlockDetectedError. step/attempt rows
+            # are per-step-unique (no cross-sibling contention), but
+            # work_orders is the ONE row every concurrently-running
+            # sibling's heartbeat (every 30s, one per active step) plus
+            # its own execute_claimed_step/claim_ready_step/complete_
+            # attempt/fail_attempt flow all reach for — with_for_update
+            # here reserved an exclusive lock on it well before the write
+            # that actually needed one, for no correctness benefit this
+            # heartbeat requires (order.lease_expires_at is an informational
+            # timestamp, not a value anything depends on being strictly
+            # serialized against a concurrent sibling's own heartbeat).
+            # Dropped here specifically — the update below still commits
+            # safely under Postgres's normal implicit per-statement lock,
+            # held only for the instant of the UPDATE instead of reserved
+            # for the whole transaction, which is what was creating the
+            # circular-wait window across concurrent siblings.
+            order = await db.get(WorkOrder, work_order_id)
             if (
                 step is None
                 or attempt is None

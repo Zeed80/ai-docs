@@ -352,7 +352,15 @@ async def test_promote_waiting_parents_fails_when_every_child_fails(test_engine,
         "children": [{"objective": "Doomed child", "budgets": {"max_replans": 0}}]
     }
     async with factory() as db:
-        parent = await create_work_order(db, owner_key="tester", objective="Parent")
+        # Ф4-re (AGENT_AUTONOMY_ROADMAP.md): the parent's own max_replans
+        # also needs to be 0 now — a failed required criterion (zero
+        # successful children here) gets the same bounded-replan chance as
+        # a step failure since that fix, so an unset (default) budget would
+        # correctly send the parent to "replanning" instead of "blocked",
+        # which is a *different* scenario from the one this test is about.
+        parent = await create_work_order(
+            db, owner_key="tester", objective="Parent", budgets={"max_replans": 0}
+        )
         await create_single_step_plan(
             db, parent, kind="decompose", title="Fan out", input_data=children_input,
         )
@@ -393,4 +401,60 @@ async def test_promote_waiting_parents_fails_when_every_child_fails(test_engine,
         # normal step with an empty/errored result would get, not a
         # decompose-specific status.
         assert parent.status == "blocked"
+        assert parent.blocker["code"] == "verification_failed"
+
+
+@pytest.mark.asyncio
+async def test_promote_waiting_parents_replans_when_every_child_fails_but_budget_remains(
+    test_engine, monkeypatch,
+):
+    """Ф4-re (AGENT_AUTONOMY_ROADMAP.md): the counterpart to the test above —
+    same all-children-failed scenario, but this time the PARENT has an
+    unused replan budget. It must get a chance to try a different
+    decomposition instead of dying on the first attempt, same as any other
+    failed required criterion since that fix."""
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    import app.db.session as _db_session_module
+    monkeypatch.setattr(_db_session_module, "_get_session_factory", lambda: factory)
+
+    children_input = {
+        "children": [{"objective": "Doomed child", "budgets": {"max_replans": 0}}]
+    }
+    async with factory() as db:
+        parent = await create_work_order(
+            db, owner_key="tester", objective="Parent", budgets={"max_replans": 2}
+        )
+        await create_single_step_plan(
+            db, parent, kind="decompose", title="Fan out", input_data=children_input,
+        )
+        parent_id = parent.id
+        await db.commit()
+
+    output = await _execute_decompose(parent_id, children_input)
+
+    async with factory() as db:
+        parent = await db.get(WorkOrder, parent_id)
+        await transition_work_order(db, parent, "running", actor="test")
+        await enter_waiting_for_children(db, order=parent, actor="test")
+        child = (
+            await db.execute(
+                select(WorkOrder).where(WorkOrder.id == output["child_order_ids"][0])
+            )
+        ).scalar_one()
+        claimed = await claim_ready_step(db, worker_id="w", work_order_id=child.id)
+        assert claimed is not None
+        c_order, c_step, c_attempt = claimed
+        await fail_attempt(
+            db, order=c_order, step=c_step, attempt=c_attempt,
+            error={"code": "boom"}, retryable=False, actor="w",
+        )
+        await db.commit()
+
+        promoted = await promote_waiting_parents(db)
+        await db.commit()
+
+    async with factory() as db:
+        parent = await db.get(WorkOrder, parent_id)
+        assert promoted == 1
+        assert parent.status == "replanning"
         assert parent.blocker["code"] == "verification_failed"

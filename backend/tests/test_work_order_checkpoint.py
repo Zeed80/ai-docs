@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.models import WorkOrder
+from app.db.models import WorkOrder, WorkStep, WorkStepAttempt
 from app.domain.work_orders import (
     claim_ready_step,
     complete_attempt,
@@ -28,9 +28,70 @@ from app.domain.work_orders import (
 from app.tasks.work_orders import (
     PartialProgressError,
     _execute_capability,
+    _heartbeat_step,
     execute_claimed_step,
     verify_completed_step,
 )
+
+
+# ── Ф4-re: heartbeat renews leases without locking the shared WorkOrder ────
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_step_renews_leases_without_with_for_update_on_the_order(
+    test_engine,
+):
+    """Ф4-re (AGENT_AUTONOMY_ROADMAP.md): found live on the persistence
+    re-verification pilot — a real Postgres deadlock among 4 concurrently
+    executing sibling steps of the same plan (asyncpg.DeadlockDetectedError).
+    _heartbeat_step's with_for_update=True on the shared parent WorkOrder
+    (every 30s, one heartbeat per concurrently active sibling step) was the
+    likely source: an exclusive lock reserved well before the write that
+    needed one, for a value (order.lease_expires_at) nothing needs strictly
+    serialized against a sibling's own heartbeat. This only pins the basic
+    functional behaviour is unchanged after dropping it — a genuine
+    concurrency/deadlock stress test would need a dedicated multi-connection
+    setup (like test_concurrent_claim_only_one_worker_gets_the_ready_step
+    in test_work_order_lease.py), not attempted here."""
+    import asyncio
+
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as db:
+        order = await create_work_order(db, owner_key="local:alice", objective="heartbeat")
+        await create_single_step_plan(
+            db, order, kind="agent_turn", title="x", input_data={"prompt": "x"}
+        )
+        order_id = order.id
+        await db.commit()
+
+    async with factory() as db:
+        claimed = await claim_ready_step(db, worker_id="w1", work_order_id=order_id)
+        assert claimed is not None
+        _order, step, attempt = claimed
+        step_id, attempt_id, worker_id = step.id, attempt.id, "w1"
+        original_step_lease = step.lease_expires_at
+        original_order_lease = _order.lease_expires_at
+        await db.commit()
+
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        _heartbeat_step(
+            work_order_id=order_id, step_id=step_id, attempt_id=attempt_id,
+            worker_id=worker_id, stop=stop, interval_seconds=0.05, lease_seconds=120,
+            session_factory=factory,
+        )
+    )
+    await asyncio.sleep(0.2)  # let at least one 0.05s-interval tick land
+    stop.set()
+    await task
+
+    async with factory() as db:
+        step = await db.get(WorkStep, step_id)
+        order = await db.get(WorkOrder, order_id)
+        attempt = await db.get(WorkStepAttempt, attempt_id)
+        assert step.lease_expires_at > original_step_lease
+        assert order.lease_expires_at > original_order_lease
+        assert attempt.heartbeat_at is not None
 
 
 # ── Ф4: acting-user context set for the duration of capability execution ──
