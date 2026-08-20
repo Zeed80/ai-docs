@@ -60,4 +60,5 @@ async def get_effective_user(
         preferred_username=row.preferred_username,
         roles=roles,
         groups=list(user.groups or []),
+        department_id=str(row.department_id) if row.department_id else None,
     )

@@ -113,3 +113,134 @@ async def test_mark_all_read(client: AsyncClient, notification, read_notificatio
     data = resp.json()
     assert data.get("status") == "ok"
     assert "marked" in data
+
+
+# ── Feedback (accept/dismiss/snooze) — AGENT_AUTONOMY_ROADMAP.md Ф0.B ─────────
+
+
+@pytest.fixture
+async def proactive_notification(db_session):
+    """A notification from a per-user proactive task (source_task set) —
+    the kind feedback can be calibrated against."""
+    n = Notification(
+        user_sub="dev-user",
+        type=NotificationType.document_ready,
+        title="Приближается срок оплаты",
+        body="Счёт №1 — срок оплаты 25.05.2026",
+        entity_type="invoice",
+        entity_id=uuid.uuid4(),
+        source_task="proactive.check_due_dates",
+        is_read=False,
+    )
+    db_session.add(n)
+    await db_session.commit()
+    return n
+
+
+@pytest.mark.asyncio
+async def test_feedback_not_found(client: AsyncClient):
+    resp = await client.post(
+        f"/api/notifications/{uuid.uuid4()}/feedback", json={"action": "accepted"}
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_feedback_without_source_task_marks_read_but_not_calibrated(
+    client: AsyncClient, notification
+):
+    """`notification` fixture has no source_task (mimics approval/mention/system)."""
+    resp = await client.post(
+        f"/api/notifications/{notification.id}/feedback", json={"action": "dismissed"}
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["calibrated"] is False
+
+    listing = await client.get("/api/notifications", params={"unread": False})
+    ids = [n["id"] for n in listing.json()["items"]]
+    assert str(notification.id) in ids
+
+
+@pytest.mark.asyncio
+async def test_feedback_accepted_is_calibrated_and_recorded(
+    client: AsyncClient, proactive_notification, db_session
+):
+    from app.db.models import ProactiveTaskFeedback
+    from sqlalchemy import select
+
+    resp = await client.post(
+        f"/api/notifications/{proactive_notification.id}/feedback",
+        json={"action": "accepted"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["calibrated"] is True
+
+    row = (
+        await db_session.execute(
+            select(ProactiveTaskFeedback).where(
+                ProactiveTaskFeedback.notification_id == proactive_notification.id
+            )
+        )
+    ).scalar_one_or_none()
+    assert row is not None
+    assert row.beat_task_name == "proactive.check_due_dates"
+    assert row.action == "accepted"
+    assert row.user_sub == "dev-user"
+    assert row.entity_type == "invoice"
+
+
+@pytest.mark.asyncio
+async def test_feedback_snoozed_sets_snoozed_until(
+    client: AsyncClient, proactive_notification, db_session
+):
+    from app.db.models import ProactiveTaskFeedback
+    from sqlalchemy import select
+
+    resp = await client.post(
+        f"/api/notifications/{proactive_notification.id}/feedback",
+        json={"action": "snoozed", "snooze_minutes": 120},
+    )
+    assert resp.status_code == 200
+
+    row = (
+        await db_session.execute(
+            select(ProactiveTaskFeedback).where(
+                ProactiveTaskFeedback.notification_id == proactive_notification.id
+            )
+        )
+    ).scalar_one_or_none()
+    assert row is not None
+    assert row.action == "snoozed"
+    assert row.snoozed_until is not None
+
+
+@pytest.mark.asyncio
+async def test_feedback_calibrates_acceptance_rate(
+    client: AsyncClient, db_session
+):
+    """End-to-end: several accept/dismiss reactions move the acceptance rate."""
+    from app.domain.proactive_feedback import get_proactive_task_acceptance_rate
+
+    for i, action in enumerate(["dismissed"] * 8 + ["accepted"] * 2):
+        n = Notification(
+            user_sub="dev-user",
+            type=NotificationType.document_ready,
+            title=f"Напоминание {i}",
+            body="test",
+            source_task="proactive.dispatch_due_reminders",
+            is_read=False,
+        )
+        db_session.add(n)
+        await db_session.commit()
+        resp = await client.post(
+            f"/api/notifications/{n.id}/feedback", json={"action": action}
+        )
+        assert resp.status_code == 200
+
+    rate = await get_proactive_task_acceptance_rate(
+        db_session, "proactive.dispatch_due_reminders", min_sample_size=5
+    )
+    assert rate.status == "ok"
+    assert rate.rate == pytest.approx(0.2)

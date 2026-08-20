@@ -30,6 +30,10 @@ class UserInfo(BaseModel):
     # Resolved section keys the user may see/use (base + grant, or all for admin).
     # Populated at token-verification time; consumed by the frontend nav/guard.
     sections: list[str] = []
+    # Organization placement (users.department_id), same source as section_access
+    # below. None = no department set — department-scoped memory stays invisible
+    # to them, existing session/owner/project/global visibility is unaffected.
+    department_id: str | None = None
 
 
 # Role → allowed actions map (used by permission checks)

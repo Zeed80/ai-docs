@@ -3649,6 +3649,39 @@ class Notification(UUIDPrimaryKey, Base):
     action_url: Mapped[str | None] = mapped_column(String(500))
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    # Celery task name that created this notification (e.g.
+    # "proactive.check_due_dates"), set only by the proactive beat tasks that
+    # target a specific user. NULL for approvals/mentions/system notifications
+    # and for the proactive tasks that broadcast org-wide (critical anomalies,
+    # morning briefing, duplicate invoices) rather than notify one person —
+    # those don't have a single recipient to calibrate against and are out of
+    # scope for ProactiveTaskFeedback. See ProactiveTaskFeedback.beat_task_name.
+    source_task: Mapped[str | None] = mapped_column(String(120), index=True)
+
+
+class ProactiveTaskFeedback(UUIDPrimaryKey, TimestampMixin, Base):
+    """A user's reaction (accept/dismiss/snooze) to one proactive notification.
+
+    Feeds `app.domain.proactive_feedback.get_proactive_task_acceptance_rate`,
+    which calibrates whether a given proactive beat task (due-date reminders,
+    stale-approval nudges, ...) is actually wanted — see
+    AGENT_AUTONOMY_ROADMAP.md Фаза 0.B. Only the proactive tasks that create a
+    per-user Notification (source_task set) can be calibrated this way; the
+    broadcast-style proactive tasks have no single recipient and are
+    intentionally out of scope (documented on Notification.source_task).
+    """
+
+    __tablename__ = "proactive_task_feedback"
+
+    beat_task_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    notification_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("notifications.id", ondelete="SET NULL"), index=True
+    )
+    entity_type: Mapped[str | None] = mapped_column(String(50))
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(GUID())
+    user_sub: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)  # accepted|dismissed|snoozed
+    snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class DeviceRegistration(UUIDPrimaryKey, TimestampMixin, Base):

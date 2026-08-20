@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import pathlib
-import sys
 from types import SimpleNamespace
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
-
-from project_ifc_views import (
+# Ф5.1 moved the projection logic out of scripts/project_ifc_views.py (now a
+# thin CLI shell around app.ai.ifc_reader.project_ifc, see its docstring) and
+# into app.ai.ifc_reader so it's importable from a service, not just the
+# offline script — this test module's import was never updated to follow.
+from app.ai.ifc_reader import (
     _depth_visible,
     _drawing_edges,
     _edge_indices,
