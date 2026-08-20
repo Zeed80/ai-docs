@@ -200,3 +200,32 @@ class CatalogImportRow(BaseModel):
     price_value: float | None = None
     catalog_page: int | None = None
     parameters: dict[str, Any] | None = None
+
+
+# ── Web-sourced catalog ingestion — Ф3 (AGENT_AUTONOMY_ROADMAP.md) ────────────
+#
+# Draft-first: entries created this way get metadata_.review_status="ingested"
+# (see backend/app/tasks/drawing_analysis.py::_create_catalog_entries_from_rows),
+# unlike the manual-upload path (upload_catalog/refresh_catalog above), which
+# is unchanged and stays unreviewed-by-default for backward compatibility.
+
+
+class IngestWebSourceRequest(BaseModel):
+    """One fetched page/document (shape mirrors WebDiscoverSource from
+    app.api.computer_use — the exploratory web_discover capability's output)
+    to structure into catalog entries for one supplier."""
+
+    url: str = Field(..., min_length=4, max_length=2048)
+    title: str | None = None
+    text: str = Field(..., min_length=1)
+    snippet: str | None = None
+
+
+class IngestWebSourceResult(BaseModel):
+    supplier_id: uuid.UUID
+    source_url: str
+    entries_created: int
+    entries_conflicted: int
+    entries_skipped: int
+    anomaly_ids: list[uuid.UUID] = []
+    errors: list[str] = []

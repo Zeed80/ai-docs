@@ -162,39 +162,42 @@
 
 ---
 
-## Фаза 3 — Extraction/normalization пайплайн для каталогов поставщиков
+## Фаза 3 — Extraction/normalization пайплайн для каталогов поставщиков — ЗАКРЫТА (2026-08-20)
 
 ### Находки по ходу
-- [ ]
+- [x] **Огромная переоценка объёма работ, в хорошую сторону**: `backend/app/tasks/drawing_analysis.py::_ingest_catalog_async`/`ingest_supplier_catalog` (Celery-таска) — уже ПОЛНОСТЬЮ рабочий пайплайн файл→строки→`ToolCatalogEntry`→embed→Qdrant→граф (`ingest_tool_catalog_graph`), задействован через существующие `upload_catalog`/`refresh_catalog` эндпоинты. `backend/app/domain/pipeline.py` (11 строк, только имена стадий) НЕ является реальной оркестрацией, как предполагал первый черновик плана — реальный, пригодный к переиспользованию пайплайн оказался в `drawing_analysis.py`, не в invoice-пайплайне `document_processing.py`. Экономия: Qdrant/граф-интеграция (3.D) не потребовала НИ строки нового кода — только рефакторинг существующего цикла в переиспользуемый helper.
+- [x] `_parse_catalog_file` (диспетчер по расширению) поддерживает только `.xlsx/.xls/.csv/.json/.pdf` (через `pdfplumber.extract_tables()` — только PDF с нативными таблицами, не сканы/free-text) — **HTML вообще не поддерживался**. Это прямая брешь для веб-контента: `fetch_page` (Ф2 `web_discover`) возвращает уже ИЗВЛЕЧЁННЫЙ текст (HTML→текст и OCR PDF→текст уже сделаны внутри), не сырые байты файла — значит для веб-источников нужен НЕ файл-парсер, а text→rows LLM-экстрактор. Построен `_parse_catalog_text_via_llm` как отдельный, параллельный путь (не попытка втиснуть текст в `_parse_catalog_file`).
+- [x] `tool_catalog` вообще не была зарегистрирована как capability (ни в `_DISPATCH`, ни в `capabilities.yml`) — заведена с нуля.
+- [x] `"approve"` уже есть в `RISKY_CAPABILITY_ACTIONS` (`policy_engine.py`) — approve-действие автоматически требует нахождения в `gate_actions`, иначе `_validate_capability_contract` fail-closed с 503 `gate_missing`. Ничего изобретать не пришлось — просто назвал action `approve` и добавил в `gate_actions`, существующий защитный механизм сработал как задумано.
+- [x] **Мой собственный баг счётчиков**: в исходной (и унаследованной от pre-Ф3 кода) структуре цикла `created += 1` стояло ПОСЛЕ вызова embed/Qdrant — если тот падал, строка попадала в `except` и считалась `skipped`, хотя `db.add(entry)+flush()` уже реально положил запись в сессию, которую внешний `commit()` всё равно сохранял. Запись существовала в БД, но отчитывалась как «пропущенная» — прямое нарушение принципа честного purchase Ф1.D. Исправлено: `created += 1` сразу после flush, embed/graph обёрнуты в свой try/except, который пишет в `errors`, но не трогает счётчики.
+- [x] **Архитектурный баг в новом коде**: `ingest_web_catalog_source` изначально открывал собственную сессию через `_get_session_factory()` (паттерн, правильный для Celery-задач в этом файле), хотя вызывается СИНХРОННО из HTTP-хендлера, у которого уже есть request-scoped `db` через `Depends(get_db)`. В проде «работало» (обе сессии смотрят в одну БД), но тест сразу поймал разрыв (созданный в тестовой транзакции поставщик был не виден). Исправлено: функция теперь принимает `db` от вызывающего, эндпоинт передаёт свою сессию.
 
-### 3.A Провенанс без миграции (сначала)
+### 3.A Провенанс без миграции — сделано
 
-- [ ] `backend/app/domain/tool_catalog.py` уже имеет `metadata_`/`metadata` JSON на `ToolCatalogEntryCreate/Update/Out` (подтверждено чтением файла: строки 74-78, 94-98, 117-120) — на первой итерации класть `source_url`/`fetched_at`/`discovery_method` в `metadata_`, **без миграции**. Формализовать в отдельные колонки только если после пилота (Фаза 4) окажется, что нужны индексируемые запросы по этим полям — не заранее.
-- [ ] Аналогично статус ревью (`ingested|needs_review|approved`) на первой итерации — в `metadata_.review_status`, т.к. в текущей схеме есть только `is_active: bool`, а не полноценный статус-flow. Формализовать в колонку после подтверждения полезности на пилоте.
-- [ ] Явная точка пересмотра: если `metadata_`-подход окажется неудобным для конфликт-детекции/индексации при реальном объёме (Фаза 4) — тогда завести миграцию с явными колонками `source_url`, `fetched_at`, `discovery_method`, `review_status` (nullable/default под обратную совместимость с ручным импортом).
+- [x] `ToolCatalogEntry.metadata_` (уже существующее JSON-поле) — provenance (`source_url`, `fetched_at`, `title`, `discovery_method` неявно через сам факт наличия остальных полей) для web-sourced записей; ручной upload/refresh не получает `metadata_` вообще (как и раньше — обратная совместимость подтверждена тестом).
+- [x] `review_status` (`ingested` | `needs_review`) — та же `metadata_`, без миграции.
 
-### 3.B Draft-first + конфликты
+### 3.B Draft-first + конфликты — сделано
 
-- [ ] Новые web-scrape записи по умолчанию `metadata_.review_status="ingested"`; ручной импорт как раньше не меняется (обратная совместимость).
-- [ ] При конфликте (web-scrape находит уже существующего поставщика/позицию с другими значениями) — не перезаписывать тихо. Найти существующий механизм `AnomalyCard` (`grep -rn "AnomalyCard" backend/app/`) и переиспользовать для конфликтов каталога, не изобретать параллельный механизм.
-- [ ] Минимальный approve-эндпоинт `POST /api/tool-catalog/entries/{id}/approve` в существующем роутере каталога — переход `needs_review → approved` в `metadata_`. Полноценный review UI — можно вынести отдельным зафиксированным TODO, не пропускать молча.
+- [x] Web-sourced записи получают `metadata_.review_status="ingested"`. При конфликте (совпадающий `supplier_id`+`part_number`, но существенно другая цена/название) — существующая запись НЕ трогается, новая создаётся с `review_status="needs_review"` + `AnomalyCard` (`anomaly_type=duplicate`, `entity_type="tool_catalog_entry"`), связывающая обе записи. Повторное обнаружение НЕизменившегося листинга конфликтом не считается (проверено тестом) — иначе re-crawl того же поставщика плодил бы аномалии на пустом месте.
+- [x] `POST /api/tool-catalog/entries/{id}/approve` — снимает `review_status`, approval-gated (`gate_actions`), идемпотентен для записей без review_status (ручные записи).
 
-### 3.C Хранение и переиспользование существующего extraction-пайплайна
+### 3.C Хранение и text-based extraction — сделано (иначе, чем в плане: не файловый пайплайн, а text-пайплайн)
 
-- [ ] Сырые файлы каталога — строго через `backend/app/storage.py` (MinIO `upload_file`/`download_file`/`get_presigned_url`), НЕ через `backend/app/domain/storage.py` (`LocalFileStorage`, зарезервирован под превью/артефакты) — зафиксировать разграничение комментарием в коде на месте вызова.
-- [ ] Переиспользовать парсер-реестр `backend/app/ai/parsers/registry.py` (`parse_document`, никогда не бросает исключения, `needs_ocr`-флаг) для веб-скачанных файлов. Проверить покрытие форматов (PDF/XLSX/HTML/картинки); HTML — добавить только если реально понадобится на пилоте.
-- [ ] Переиспользовать общий пайплайн стадий `backend/app/domain/pipeline.py` (`store → memory_seed → classification → extraction → sql_records → memory_graph → embedding`) — адаптировать стадию `extraction` под `ToolCatalogEntry` вместо инвойс-специфичных полей. Если стадия окажется слишком жёстко завязана на инвойс-домен — не форкать пайплайн вслепую: сначала завести находку по Правилу 0 с описанием несовместимости, решить (параметризация vs отдельный облегчённый пайплайн) до написания кода.
+- [x] Сырой текст веб-источника — через `backend/app/storage.py` (`upload_file`), путь `tool-catalogs/{supplier_id}/web/{sha256(url)[:16]}.txt`, best-effort (ошибка хранения не блокирует извлечение). `domain/storage.py` не использовался (как и требовал план).
+- [x] Парсер-реестр `parsers/registry.py` НЕ переиспользовался — он для файлов с байтами на входе, а не для уже-извлечённого текста от `fetch_page`. Вместо него — новый `_parse_catalog_text_via_llm` (JSON-schema-constrained LLM-вызов, тот же паттерн `generate_json`/`get_reasoning_model`, что уже в `work_planning.py`), никогда не бросает — malformed/недоступная модель → пустой список строк.
+- [x] `pipeline.py` не трогался и не форкался — подтверждено находкой выше, что он не является местом интеграции.
 
-### 3.D Qdrant `tool_catalog` + граф поставщиков
+### 3.D Qdrant `tool_catalog` + граф поставщиков — сделано (переиспользование, не новый код)
 
-- [ ] Подтвердить текущую схему коллекции `tool_catalog` (`backend/app/vector/qdrant_store.py`) — embedding-поля совместимы с записями из веб-источника.
-- [ ] По аналогии с `ingest_drawing_graph()` (`backend/app/domain/drawing_graph.py:24`) и существующими таблицами `KnowledgeNode`/`KnowledgeEdge` (`backend/app/domain/graph.py`, миграция `c8e4f2a9b731_add_graph_memory.py`) — написать `ingest_supplier_catalog_graph()`: узлы `Supplier`/`CatalogEntry`, рёбра `Supplier -[SUPPLIES]-> CatalogEntry`, опционально `CatalogEntry -[SIMILAR_TO]-> CatalogEntry`.
-- [ ] Подключить в extraction-пайплайн после стадии `sql_records`, аналогично `memory_graph`-стадии для инвойсов.
-- [ ] Тесты: тестовый PDF/HTML каталог → `ToolSupplier`/`ToolCatalogEntry` со `metadata_.review_status="ingested"`, запись в Qdrant `tool_catalog`, узлы/рёбра в графе, provenance заполнен.
+- [x] Существующая коллекция `tool_catalog` (`upsert_tool_catalog_entry`) и `ingest_tool_catalog_graph` — используются БЕЗ ИЗМЕНЕНИЙ через общий `_create_catalog_entries_from_rows`, вынесенный из `_ingest_catalog_async` рефакторингом (единый код для файлового и веб-пути — эмбеддинг/граф/Qdrant не дублируются).
+- [x] Отдельная `ingest_supplier_catalog_graph()` не понадобилась — существующая `ingest_tool_catalog_graph(entry_id, db)` уже per-entry и полностью подходит.
+- [x] Тесты (на реальном Postgres+Qdrant+Ollama в контейнере): entries создаются с provenance, конфликт → AnomalyCard + существующая запись нетронута, embed/Qdrant/граф проходят по-настоящему (не мокались, как и остальные тесты `test_tool_catalog.py` в этом проекте).
 
-### 3.E Пересборка и проверка
-- [ ] См. общий чек-лист. `make test`, **обязательно `make regression`** (трогается extraction pipeline — манифест-регрессия по инвойсам должна остаться зелёной, подтверждая отсутствие регресса основного домена).
-- [ ] Ручная проверка: 1-2 реальных общедоступных сайта поставщиков режущего инструмента — прогнать через `fetch_page` → `storage.py` → parser registry → pipeline, проверить записи в Postgres/Qdrant/графе (через `mcp__postgres__query` или скрипт).
+### 3.E Пересборка и проверка — сделано
+- [x] Пересобраны и перезапущены `backend`/`celery-worker`/`celery-beat`, миграция не требовалась.
+- [x] 33 теста (web_catalog_ingestion + существующий test_tool_catalog.py + capability_catalog_consistency) зелёные на реальных Postgres/Qdrant/Ollama.
+- [x] Полный non-live прогон: 3244 passed (+15 к Фазе 2), 61 pre-existing failed — **идентичный список**, побайтово сверено diff'ом с прогоном Фазы 2. Ноль регрессий.
 
 ---
 

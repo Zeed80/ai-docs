@@ -38,6 +38,17 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "file_write": ("POST", "/api/computer-use/execute", []),
         "shell": ("POST", "/api/computer-use/execute", []),
     },
+    # Ф3 (AGENT_AUTONOMY_ROADMAP.md): draft-first ingestion of web-discovered
+    # supplier catalogs into the existing ToolSupplier/ToolCatalogEntry
+    # domain, structured through the same entry-creation/embed/graph pipeline
+    # as manual catalog uploads (app.tasks.drawing_analysis).
+    "tool_catalog": {
+        "create_supplier": ("POST", "/api/tool-catalog/suppliers", []),
+        "ingest_web_source": (
+            "POST", "/api/tool-catalog/suppliers/{supplier_id}/ingest-web-source", ["supplier_id"]
+        ),
+        "approve": ("POST", "/api/tool-catalog/entries/{entry_id}/approve", ["entry_id"]),
+    },
     "documents": {
         "list":         ("GET",    "/api/documents",                          []),
         "get":          ("GET",    "/api/documents/{document_id}",            ["document_id"]),

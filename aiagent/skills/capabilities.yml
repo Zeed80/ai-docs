@@ -58,6 +58,54 @@ capabilities:
           description: "Только для web_discover: макс. число источников на весь вызов (по умолчанию 10)"
       required: [action, work_order_id, target]
 
+  - name: tool_catalog
+    description: >
+      Каталог поставщиков инструмента (Ф3, AGENT_AUTONOMY_ROADMAP.md). Для
+      exploratory-задач: create_supplier заводит нового поставщика (по имени
+      и, если известен, сайту); ingest_web_source структурирует одну
+      найденную web_discover страницу (computer_use.web_discover) в
+      черновые записи каталога для указанного поставщика — draft-first,
+      новые записи получают review_status=ingested (или needs_review при
+      конфликте с уже существующей записью по артикулу — тогда заводится
+      AnomalyCard, старая запись не трогается); approve снимает
+      review_status с одной записи после проверки человеком (approval-gated —
+      это решение о доверии данным, не создание черновика).
+    path: /api/agent/cap/tool_catalog
+    method: POST
+    gate_actions: [approve]
+    non_recipeable_actions: [create_supplier, ingest_web_source, approve]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "create_supplier | ingest_web_source | approve"
+        supplier_id:
+          type: string
+          description: "ID поставщика (для ingest_web_source)"
+        entry_id:
+          type: string
+          description: "ID записи каталога (для approve)"
+        name:
+          type: string
+          description: "Для create_supplier: название поставщика"
+        website:
+          type: string
+          description: "Для create_supplier: сайт поставщика, если известен"
+        url:
+          type: string
+          description: "Для ingest_web_source: URL найденной страницы (из web_discover)"
+        title:
+          type: string
+          description: "Для ingest_web_source: заголовок страницы (из web_discover)"
+        text:
+          type: string
+          description: "Для ingest_web_source: извлечённый текст страницы (из web_discover)"
+        snippet:
+          type: string
+          description: "Для ingest_web_source: сниппет поиска, опциональная подсказка для извлечения"
+      required: [action]
+
   - name: documents
     description: >
       Работа с документами: загрузить файл, найти по фильтрам или запросу,
