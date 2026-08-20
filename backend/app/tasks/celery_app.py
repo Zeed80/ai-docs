@@ -190,6 +190,17 @@ celery_app.conf.beat_schedule = {
         "task": "memory.run_graph_analytics",
         "schedule": 1_800.0,
     },
+    # Ф6 (AGENT_AUTONOMY_ROADMAP.md): idle-reflection "subconscious" —
+    # consolidates duplicate pending memory proposals and revalidates
+    # overdue connector strategies, but only while no user has been active
+    # recently and not more often than settings.min_interval_seconds; see
+    # app.domain.idle_reflection for the actual throttle logic. The beat
+    # tick itself stays fixed at 20 min (same self-throttle split as
+    # memory-graph-analytics above), most ticks are a cheap no-op.
+    "idle-reflection": {
+        "task": "agent.idle_reflection",
+        "schedule": 1_200.0,
+    },
 }
 
 celery_app.autodiscover_tasks([
@@ -212,6 +223,7 @@ from app.tasks import agent_cron as _agent_cron  # noqa: F401
 from app.tasks import work_orders as _work_orders  # noqa: F401
 from app.tasks import graph_memory as _graph_memory  # noqa: F401
 from app.tasks import graph_analytics as _graph_analytics  # noqa: F401
+from app.tasks import idle_reflection as _idle_reflection  # noqa: F401
 from app.tasks import image_generation as _image_generation  # noqa: F401
 from app.tasks import lora_training as _lora_training  # noqa: F401
 from app.tasks import cad_trace as _cad_trace  # noqa: F401

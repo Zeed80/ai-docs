@@ -505,6 +505,17 @@ async def list_memory_promotions(
         .where(
             MemoryFact.source == "memory_promotion",
             MemoryFact.kind.in_(sorted(kinds)),
+            # Ф6 (AGENT_AUTONOMY_ROADMAP.md): found while wiring the
+            # idle-reflection duplicate-proposal consolidation task — this
+            # query never checked MemoryFact.status (the "active/superseded/
+            # disputed" column, unrelated to the "status" query param above,
+            # which maps to `kind`), so a proposal the idle job marks
+            # superseded (an exact duplicate collapsed onto a newer one)
+            # would still show up in the review queue as if still pending,
+            # letting a human act on a stale duplicate instead of the kept
+            # one. _search_memory_facts already excludes non-"active" facts
+            # from ordinary memory search for the same reason.
+            MemoryFact.status != "superseded",
         )
         .order_by(MemoryFact.created_at.desc())
         .limit(200)
