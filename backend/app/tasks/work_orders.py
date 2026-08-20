@@ -11,6 +11,7 @@ from datetime import timedelta
 from typing import Any
 
 import httpx
+import structlog
 
 from app.domain.work_orders import (
     append_event,
@@ -31,6 +32,8 @@ from app.domain.work_orders import (
 from app.domain.work_planning import resolve_step_input, tool_call_digest
 from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
+
+logger = structlog.get_logger()
 
 
 def _worker_id() -> str:
@@ -66,6 +69,43 @@ def _action_digest(capability: str, action: str, arguments: dict[str, Any]) -> s
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
+
+
+async def _notify_computer_use_needs_grant(
+    db: Any, *, order: Any, capability_action: str, reason: str
+) -> None:
+    """Ф2.B (AGENT_AUTONOMY_ROADMAP.md): notify-before-scope for computer_use,
+    not an approval — deciding the digest-Approval created alongside this
+    (see the caller) never creates a ComputerUseGrant, which only a manager
+    can (POST /work-orders/{id}/computer-grants). Best-effort: a notification
+    failure must never break the step-failure path that's already in
+    progress when this is called.
+    """
+    from app.db.models import NotificationType
+    from app.services.notifications import create_notification
+
+    try:
+        await create_notification(
+            db,
+            user_sub=order.owner_key,
+            type=NotificationType.system,
+            title="Нужен доступ в интернет для поручения",
+            body=(
+                f"Поручение «{order.objective[:200]}» пытается выполнить "
+                f"computer_use.{capability_action}, но для него нет активного "
+                "разрешения (ComputerUseGrant). Создать его может только "
+                f"руководитель: POST /work-orders/{order.id}/computer-grants. "
+                f"({reason[:200]})"
+            ),
+            entity_type="work_order",
+            entity_id=order.id,
+            action_url=f"/work-orders/{order.id}",
+            source_task="workorder.needs_computer_use_grant",
+        )
+    except Exception as exc:  # noqa: BLE001 - never break step-failure handling
+        logger.warning(
+            "computer_use_grant_notification_failed", work_order_id=str(order.id), error=str(exc)
+        )
 
 
 async def _heartbeat_step(
@@ -636,6 +676,27 @@ async def execute_claimed_step(
                     actor="policy",
                     payload={"approval_id": str(approval.id), "step_id": str(step_row.id)},
                 )
+                if exc.capability == "computer_use":
+                    # Ф2.B (AGENT_AUTONOMY_ROADMAP.md): deciding the Approval
+                    # row above (X-Agent-Approval: granted on retry) is not
+                    # enough by itself here — computer_use's own grant check
+                    # (ComputerUseGrant, a separate authorization primitive
+                    # from the digest-Approval one) still 423s without an
+                    # active grant, and only a manager can create one
+                    # (POST /work-orders/{id}/computer-grants). This exception
+                    # alone can't tell "no grant at all" apart from "a gated
+                    # computer_use action (shell/file_write/desktop_*) needs
+                    # its digest approved" — sent for both rather than
+                    # silently leaving the no-grant case with no signal at
+                    # all; a spurious nudge when a grant already exists costs
+                    # a manager one glance, silence costs the WorkOrder
+                    # stalling with no indication why. Must run BEFORE this
+                    # transaction's commit below — create_notification only
+                    # adds+flushes, it doesn't commit, so calling it after
+                    # commit() silently loses the row when this session exits.
+                    await _notify_computer_use_needs_grant(
+                        db, order=order, capability_action=exc.action, reason=str(exc)
+                    )
                 await db.commit()
         return False
     except PartialProgressError as exc:

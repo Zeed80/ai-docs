@@ -25,6 +25,9 @@ logger = structlog.get_logger()
 _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
     "computer_use": {
         "browser_fetch": ("POST", "/api/computer-use/execute", []),
+        # Ф2.A (AGENT_AUTONOMY_ROADMAP.md): search + read, scoped by the same
+        # grant as browser_fetch — see app.api.computer_use.web_discover.
+        "web_discover": ("POST", "/api/computer-use/web-discover", []),
         "desktop_snapshot": ("POST", "/api/computer-use/execute", []),
         "desktop_start": ("POST", "/api/computer-use/execute", []),
         "desktop_click": ("POST", "/api/computer-use/execute", []),

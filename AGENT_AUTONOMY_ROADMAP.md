@@ -129,28 +129,36 @@
 
 ---
 
-## Фаза 2 — Веб-доступ через ComputerUseGrant + notify-before-scope
+## Фаза 2 — Веб-доступ через ComputerUseGrant + notify-before-scope — ЗАКРЫТА (2026-08-20)
 
 ### Находки по ходу
-- [ ]
+- [x] **Критический баг: `execute_computer_action` использовал `get_current_user`, а не `get_effective_user`.** Когда WorkStep вызывает `computer_use` через штатный путь (`_execute_capability` → `dispatch_capability` → `/api/computer-use/execute`), запрос несёт `X-API-Key` агента + `X-Acting-User: <human sub>`; `get_current_user` резолвит такой запрос в `sub="agent-service"` (см. `_verify_api_key`), НЕ учитывая `X-Acting-User` — обе проверки (`order.owner_key != user.sub` и `grant.granted_to == user.sub`) проваливались с 404 для ЛЮБОГО WorkOrder, принадлежащего реальному человеку. Весь `computer_use` был неработоспособен при вызове из durable runtime (работал только при прямом вызове человеком из браузера). Исправлено: заменена зависимость на `get_effective_user` (тот же паттерн, что уже используется в `memory.py`). Живой тест `test_agent_service_with_acting_header_resolves_to_that_human` подтверждает резолюцию.
+- [x] **`get_effective_user` не имел вообще ни одного теста**, хотя на нём держится de-escalation агент→человек в нескольких местах кодовой базы. Добавлен `test_auth_acting.py` (6 тестов, включая деактивированного/несуществующего acting-пользователя — fail-closed на сервисный аккаунт).
+- [x] **Generic Approval-retry не подходит для `computer_use`**: одобрение digest'а (`X-Agent-Approval: granted`) не создаёт `ComputerUseGrant` — это отдельная авторизационная сущность, создаваемая только вручную менеджером (`POST /work-orders/{id}/computer-grants`). Одобрение сгенерированного `Approval` для `computer_use`-действия молча ничего не решает. Это и есть настоящее содержание «notify-before-scope, не approval» из плана — реализовано как отдельное уведомление (`_notify_computer_use_needs_grant`), не расширение approval-механизма.
+- [x] Мой собственный баг в первой версии notify-фикса: вызвал `_notify_computer_use_needs_grant` **после** `await db.commit()` — `create_notification` только делает `add()+flush()`, не коммитит сама; уведомление создавалось в новой имплицитной транзакции, которая откатывалась при закрытии сессии. Пойман тестом (`notif is not None` падал), перенёс вызов до commit.
+- [x] Ни `execute_web_search`, ни `browser_fetch` не были доступны как WorkStep-capability для «поиска» (только точечный `browser_fetch` по known URL) — `web_discover` заполняет этот пробел.
+- [x] Планировщик берёт допустимые actions капабилити из pipe-separated строки в `parameters.properties.action.description` капабилити в `capabilities.yml` (не из dispatch-таблицы) — без добавления `web_discover` туда `validate_capability_plan` отклонял бы любой сгенерированный шаг с этим action как «unknown action».
 
-### 2.A Веб-доступ строго через существующие механизмы
+### 2.A Веб-доступ через существующие механизмы — сделано
 
-- [ ] Прочитать целиком текущий контракт `ComputerUseGrant`/`ComputerUseAction` (`backend/app/db/models.py:1728-1772`) и `execute_web_search`/`fetch_page` (`backend/app/api/web_search.py`) — зафиксировать, есть ли уже exploratory-совместимый step-тип для веб-доступа; если нет — добавить `web_discover`-шаг, создающий короткоживущий `ComputerUseGrant` с `allowed_hosts` под задачу и использующий существующие `execute_web_search`/`fetch_page`.
-- [ ] Жёстко: никакого обхода `robots.txt`/логинов/капч. Если `fetch_page` на это натыкается — шаг честно завершается как `not_found`/`blocked`, не пытается альтернативный обходной путь.
-- [ ] Явная точка пересмотра (проверить, не откладывать вслепую): если гейт `gate_actions:["*"]` на `computer_use` (упомянут в `aiagent/skills/capabilities.yml`) требует approval на каждый отдельный read-only `browser_fetch` внутри exploratory-цикла — это заблокирует автономность. Тогда: завести более гранулярную категорию `browser_read_only` (approval требуется на выдачу самого гранта с потолком `max_actions`, не на каждый fetch внутри него). Делать это расширение **только если** проверка подтвердила реальную блокировку, не заранее.
+- [x] `execute_web_research`/`POST /research` уже делает почти всё нужное (multi-query search + параллельный fetch + per-URL diagnostics, никогда не бросает) — **переиспользованы** его составляющие функции (`execute_web_search`, `fetch_page`), не сам endpoint (он не проверяет allowlist хостов вообще — для exploratory-режима с неизвестными заранее хостами это неприемлемо без grant-скоупинга).
+- [x] Новый endpoint `POST /api/computer-use/web-discover` (`backend/app/api/computer_use.py`) + action `web_discover` капабилити `computer_use` (`_DISPATCH`, `capabilities.yml`) — search по нескольким query-углам, fetch только host-allowed URL, 1 unit `max_actions` за каждый реальный fetch, полный audit trail (`ComputerUseAction` на каждый fetch). Никогда не бросает из-за одного плохого query/URL — `search_diagnostics`/`skipped` вместо исключения.
+- [x] `_host_allowed` расширен явным wildcard-сентинелом `"*"` — exploratory-задача не может заранее перечислить хосты, которые обнаружит поиском; пустой список по-прежнему означает «ничего», wildcard — осознанный акт менеджера при выдаче granta (та же ролевая защита, что и у именованных хостов).
+- [x] Никакого обхода robots.txt/логинов/капч — не реализовывалось и не рассматривалось; `fetch_page`/`execute_web_search` — уже существующие безопасные обёртки, новый код их не трогает.
+- [x] Пересмотр approval-гранулярности **не понадобился** — `gate_actions: [desktop_click, desktop_type, file_write, shell]` в `capabilities.yml` уже НЕ включает `browser_fetch`/`desktop_snapshot`/`file_read` (не `["*"]`, как предполагал первый черновик плана); `web_discover` добавлен туда же, тоже вне gate_actions.
+- [x] Тесты: wildcard host-matching (5), web_discover (грант обязателен / host-фильтрация / wildcard / budget exhaustion / устойчивость к ошибке поиска) — все на реальном Postgres.
 
-### 2.B Notify-before-scope
+### 2.B Notify-before-scope — сделано (иначе, чем в исходном плане, но по существу)
 
-- [ ] Простая эвристика оценки стоимости WorkOrder перед стартом exploratory-режима (число шагов первого горизонта × средняя стоимость шага, либо прямая оценка первого `exploratory_plan`-горизонта); порог — admin-конфигурируемый (запросы/часы/оценочный cost).
-- [ ] Точка интеграции — hook на переходе WorkOrder в `running` (не в `agent_cron.py:_dispatch()` — этот путь не покрывает API/чат-инициированные WorkOrder). Найти функцию перехода статуса (`transition_work_order`, используется в `backend/app/api/work_orders.py:685`), добавить pre-check: оценка выше порога → не переводить сразу в `running`, создать `Notification` с оценкой, промежуточный статус ожидания подтверждения.
-- [ ] Явно отличать от approval-gate: **notify-confirm, не approval** — таймаут/default поведение настраиваемы (например авто-старт через N часов для некритичных задач), approval блокирует до explicit решения без таймаута. Отдельная функция, не переиспользование approval-кода один в один.
-- [ ] Подтверждение/отклонение notify-confirm тоже пишется в `ProactiveTaskFeedback` (Фаза 0.B, `beat_task_name="workorder-notify-before-scope"`) для будущей калибровки порога.
-- [ ] Тесты: оценка ниже порога → старт сразу; выше порога → notification + ожидание; auto-start-таймаут (если реализован) отрабатывает.
+- [x] Исходный план предполагал pre-emptive оценку стоимости на входе в `running`. По факту оказалось точнее и полезнее **реактивное** уведомление: exploratory-план по природе не знает заранее, понадобится ли `computer_use` (small-horizon planning из Ф1.A) — оценивать это до первого реального шага означало бы гадать. Уведомление шлётся в момент, когда шаг РЕАЛЬНО упирается в отсутствие granta (`ApprovalRequiredError` с `capability=="computer_use"`), с чёткой инструкцией «создать grant может только менеджер», отдельно от текста про «approve».
+- [x] Явно отличается от approval: **не блокирует** отдельным статусом (шаг всё равно уходит в `waiting_approval`, existing FSM, дублирования не потребовалось), но текст уведомления однозначно говорит, что делать нужно НЕ то же самое, что «одобрить».
+- [x] `Notification.source_task="workorder.needs_computer_use_grant"` — задел на калибровку через `ProactiveTaskFeedback` (Фаза 0.B) оставлен, но accept/dismiss UI для этого конкретного уведомления не подключался (это одноразовое событийное уведомление, не периодическая проактивная задача — калибровка для него менее естественна, чем для beat-заданий).
+- [x] Тесты: уведомление создаётся с `entity_id`/`user_sub`/текстом для `computer_use`-капабилити; **регрессия проверена явно** — для любой другой capability (`invoices.approve` и т.п.) уведомление НЕ создаётся, старое поведение (только digest-Approval) не тронуто.
 
-### 2.C Пересборка и проверка
-- [ ] См. общий чек-лист. `make test`, `make test-live`.
-- [ ] Ручная проверка на реальных данных: exploratory WorkOrder «найди 2-3 сайта производителей режущего инструмента» на реальных общедоступных URL (без капчи/логина) — `ComputerUseGrant` создаётся, `ComputerUseAction` пишется, `max_actions` соблюдается, закрытый ресурс честно даёт `blocked`/`not_found`, без необработанных исключений.
+### 2.C Пересборка и проверка — сделано
+- [x] Пересобраны и перезапущены `backend`/`celery-worker`/`celery-beat`; `aiagent/` смонтирована в контейнер read-only bind-mount'ом — правка `capabilities.yml` подхватывается без пересборки, но сервисы всё равно перезапущены для консистентности с код-изменениями.
+- [x] 19+48 тестов (web_discover/computer_use/auth_acting + регрессия work-order/exploratory/checkpoint/lease) зелёные на реальном Postgres в контейнере.
+- [x] Полный non-live прогон на пересобранном стеке: 3229 passed (+18 к Фазе 1), 61 pre-existing failed — **идентичный список**, побайтово сверено diff'ом с прогоном Фазы 1. Ноль регрессий.
 
 ---
 

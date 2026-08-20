@@ -17,7 +17,15 @@ capabilities:
       desktop_start/click/type/read/close ведут короткую интерактивную браузерную
       сессию и после каждого действия возвращают screenshot evidence,
       file_read/file_write работают только внутри разрешённых корней, shell —
-      только argv-команды из allowlist без shell-интерпретации.
+      только argv-команды из allowlist без shell-интерпретации. web_discover —
+      поиск + чтение найденного за один вызов (для exploratory-задач, когда
+      целевые хосты заранее не известны — см. AGENT_AUTONOMY_ROADMAP.md Ф2):
+      несколько поисковых запросов (queries), каждый найденный URL
+      фильтруется тем же allowlist грант'а (allowed_hosts, поддерживает "*"
+      как явный wildcard — грант с ним всё ещё выдаёт только человек с ролью
+      manager), каждое чтение расходует ту же квоту max_actions, что и
+      browser_fetch. Никогда не падает целиком из-за одного плохого запроса
+      или URL — недоступное репортится в skipped/diagnostics, не бросает.
     path: /api/agent/cap/computer_use
     method: POST
     gate_actions: [desktop_click, desktop_type, file_write, shell]
@@ -27,7 +35,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "browser_fetch | desktop_snapshot | desktop_start | desktop_click | desktop_type | desktop_read | desktop_close | file_read | file_write | shell"
+          description: "browser_fetch | desktop_snapshot | desktop_start | desktop_click | desktop_type | desktop_read | desktop_close | file_read | file_write | shell | web_discover"
         work_order_id:
           type: string
           description: "ID поручения, к которому привязан grant"
@@ -36,10 +44,18 @@ capabilities:
           description: "ID текущего шага для аудита"
         target:
           type: string
-          description: "URL, абсолютный путь или команда argv"
+          description: "URL, абсолютный путь или команда argv (не используется для web_discover — см. queries)"
         arguments:
           type: object
           description: "Параметры действия: content/cwd/timeout/max_chars/wait_ms"
+        queries:
+          type: array
+          items:
+            type: string
+          description: "Только для web_discover: 1-5 поисковых запросов (разные формулировки одной цели)"
+        max_sources:
+          type: integer
+          description: "Только для web_discover: макс. число источников на весь вызов (по умолчанию 10)"
       required: [action, work_order_id, target]
 
   - name: documents
