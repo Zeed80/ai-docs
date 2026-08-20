@@ -13,6 +13,12 @@ def _get_engine():
         echo=settings.app_debug,
         pool_size=20,
         max_overflow=10,
+        # A pooled connection can go stale behind our back (DB restart, idle
+        # timeout, network blip) — pre-ping does a cheap `SELECT 1` before
+        # handing a connection out and transparently reconnects if it's dead,
+        # instead of surfacing `InterfaceError: connection is closed` to the
+        # request that happened to draw the short straw.
+        pool_pre_ping=True,
     )
 
 
