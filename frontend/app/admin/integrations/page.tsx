@@ -105,7 +105,10 @@ function MailcowDeploySection({ onDeployed }: { onDeployed: () => void }) {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json", ...csrfHeaders() },
-        body: JSON.stringify({ mail_domain: domain.trim(), timezone: tz.trim() }),
+        body: JSON.stringify({
+          mail_domain: domain.trim(),
+          timezone: tz.trim(),
+        }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.detail ?? `HTTP ${res.status}`);
@@ -154,7 +157,9 @@ function MailcowDeploySection({ onDeployed }: { onDeployed: () => void }) {
 
   return (
     <div className="rounded-lg border border-border p-4 space-y-3">
-      <h2 className="text-base font-semibold">Развёртывание почтового сервера</h2>
+      <h2 className="text-base font-semibold">
+        Развёртывание почтового сервера
+      </h2>
 
       {state.installed && !active ? (
         <p className="text-xs text-green-600">
@@ -164,9 +169,9 @@ function MailcowDeploySection({ onDeployed }: { onDeployed: () => void }) {
       ) : (
         <p className="text-xs text-muted-foreground">
           Разворачивает Mailcow (Postfix + Dovecot + Rspamd + SOGo) отдельным
-          compose-проектом, подключает его к нашему Traefik и копирует TLS-сертификат
-          на почтовые порты. DNS-записи, порты фаервола, DKIM и API-ключ придётся
-          настроить руками — см. {guide}.
+          compose-проектом, подключает его к нашему Traefik и копирует
+          TLS-сертификат на почтовые порты. DNS-записи, порты фаервола, DKIM и
+          API-ключ придётся настроить руками — см. {guide}.
         </p>
       )}
 
@@ -204,8 +209,8 @@ function MailcowDeploySection({ onDeployed }: { onDeployed: () => void }) {
             </div>
           </div>
           <p className="text-xs text-amber-600">
-            Перед запуском заведите A-запись для этого хоста — без неё Traefik не
-            получит сертификат, и почтовые клиенты не подключатся.
+            Перед запуском заведите A-запись для этого хоста — без неё Traefik
+            не получит сертификат, и почтовые клиенты не подключатся.
           </p>
           <button
             onClick={deploy}
@@ -223,7 +228,8 @@ function MailcowDeploySection({ onDeployed }: { onDeployed: () => void }) {
             <span className="text-muted-foreground">Состояние</span>
             <span className="font-mono">
               {job.status === "requested" && "заявка принята, ждём агента"}
-              {job.status === "running" && `выполняется: ${job.current_step ?? "…"}`}
+              {job.status === "running" &&
+                `выполняется: ${job.current_step ?? "…"}`}
               {job.status === "done" && "развёрнуто"}
               {job.status === "error" && "ошибка"}
             </span>
@@ -675,6 +681,16 @@ function IntegrationsContent() {
             placeholder="https://example.com"
             className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background"
           />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Это НЕ отдельный поддомен вроде <code>auth.example.com</code> —
+            Traefik проксирует Authentik по путям (/application/, /if/, /flows/)
+            на том же домене, что и само приложение. Укажите тот же адрес, на
+            котором открыт этот сайт (например{" "}
+            {typeof window !== "undefined"
+              ? window.location.origin
+              : "https://example.com"}
+            ), иначе ссылка ниже не откроется — «сервер не найден».
+          </p>
         </div>
 
         <div>
