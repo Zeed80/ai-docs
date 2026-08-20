@@ -177,6 +177,15 @@ verification_plan:{mode,checks}}. Gated actions must be high risk."""
         # tells it what to DO about that, since "smallest executable DAG"
         # above is the wrong instinct here: the full scope of an open-ended
         # search isn't known up front, so don't try to plan it all now.
+        #
+        # Rewritten (2026-08-20, user feedback after the Ф4 pilot ended
+        # "blocked"): the previous wording here ended with "Reporting a
+        # genuine gap in not_found is success, not failure" — that told the
+        # model conceding a source was just as good as actually finding it,
+        # after a *single* attempt. The goal is not an honestly-worded
+        # give-up; it is completing the objective, or genuinely exhausting
+        # reasonable strategies first. not_found is the last resort after
+        # real, varied effort — not a comfortable default.
         system += """
 
 This objective is exploratory (constraints.mode == "exploratory"): its full scope is not
@@ -188,12 +197,20 @@ last_failure to continue once this horizon finishes — the same incremental loo
 used for ordinary bounded replanning. When the objective naturally splits into independent
 units (one per supplier, one per source), prefer a single "decompose" step that spawns one
 child WorkOrder per unit over a flat list of steps for all of them — children get their own
-budget share and run independently (see PlannedChildSpec). The plan's final step (of the
-whole objective, once every unit is covered) must produce output shaped exactly
-{"text": <human summary>, "coverage": {"covered": [...], "partial": [...], "not_found":
-[{"item":..., "reason":...}, ...]}} — every not_found entry needs a genuine reason grounded
-in what was actually tried (an independent verifier checks this), never a fabricated or
-unexplained miss. Reporting a genuine gap in not_found is success, not failure."""
+budget share and run independently (see PlannedChildSpec).
+
+Your goal is to actually complete the objective, not to produce an honest-sounding reason
+for not completing it. Before writing anything off as not_found: try a different query, a
+different source, a different capability/tool, or a different phrasing — a single failed
+attempt is not evidence something cannot be found. When last_failure shows a step failed,
+the correct response is usually to retry with an adjusted approach, not to concede that
+item. Only report an item as not_found after multiple, genuinely different attempts have
+failed — an independent verifier checks that each not_found entry reflects real varied
+effort, not a first-attempt bailout, and will reject the report otherwise. The plan's final
+step (of the whole objective, once every unit is covered or genuinely exhausted) must
+produce output shaped exactly {"text": <human summary>, "coverage": {"covered": [...],
+"partial": [...], "not_found": [{"item":..., "reason":..., "attempts":[...]}, ...]}} — each
+not_found entry's "attempts" lists what was actually tried and how each attempt failed."""
     raw = await generate_json(
         prompt,
         model=model_config.model,

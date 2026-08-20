@@ -279,6 +279,34 @@ def is_exploratory(order: WorkOrder) -> bool:
     return str((order.constraints or {}).get("mode") or "") == "exploratory"
 
 
+# Ф4 (AGENT_AUTONOMY_ROADMAP.md, user feedback 2026-08-20): a bounded
+# capability-grounded order's replans are genuine failure-recovery attempts —
+# 2 is a reasonable default ceiling before conceding to a human. An
+# exploratory order's replans are its *continue-working* mechanism (Ф1.A:
+# "rely on replanning ... to continue once this horizon finishes" — each
+# replan is the next horizon, not just an error retry), so the same small
+# default silently strangled persistence: the live Ф4 pilot spent most of
+# its manually-raised budget of 6 on transient infra bugs (now fixed, see
+# AGENT_AUTONOMY_ROADMAP.md Ф4 findings) rather than genuine strategy
+# exhaustion, and still ran out before the agent could try alternate
+# approaches on its last open item. The real ceiling on an exploratory
+# order's persistence should be its wall-clock/cost/tool-call budgets
+# (Ф1.C — resources actually spent), not an arbitrary small count of DAG
+# rebuilds; this default is generous specifically so plan-revision count
+# essentially never becomes the binding constraint before those do. An
+# order that explicitly sets budgets.max_replans always wins regardless of
+# mode — this is only the fallback when it's unset.
+_DEFAULT_MAX_REPLANS = 2
+_DEFAULT_MAX_REPLANS_EXPLORATORY = 30
+
+
+def _max_replans_for(order: WorkOrder) -> int:
+    configured = (order.budgets or {}).get("max_replans")
+    if configured is not None:
+        return max(0, int(configured))
+    return _DEFAULT_MAX_REPLANS_EXPLORATORY if is_exploratory(order) else _DEFAULT_MAX_REPLANS
+
+
 def exploratory_acceptance_criteria() -> list[dict[str, Any]]:
     """Ф1.D: the honest-coverage acceptance-criteria pair for an exploratory
     WorkOrder — pass as create_work_order's ``acceptance_criteria`` instead of
@@ -298,6 +326,12 @@ def exploratory_acceptance_criteria() -> list[dict[str, Any]]:
       fabricated. No new verifier code — the existing verifier already judges
       from each criterion's own ``description`` plus the supplied step
       outputs, so stating the expectation there is enough.
+
+    Description text tightened 2026-08-20 (user feedback after the Ф4
+    pilot): a criterion that only asked for "one real attempt" let the model
+    write off a source after its first failure and call that honest — the
+    goal is completing the objective, not an honestly-worded early exit. The
+    verifier must now reject a not_found entry backed by a single attempt.
     """
     return [
         {
@@ -315,10 +349,17 @@ def exploratory_acceptance_criteria() -> list[dict[str, Any]]:
         {
             "criterion_key": "honest_not_found",
             "description": (
-                "Каждый пункт not_found в итоговом отчёте подкреплён "
-                "реальной зафиксированной попыткой (что искали, где, "
-                "почему не нашли — видно по succeeded-шагам плана), а не "
-                "выдуман и не приведён без обоснования."
+                "Цель — реально выполнить задачу, а не подобрать честную "
+                "формулировку отказа. Каждый пункт not_found в итоговом "
+                "отчёте подкреплён НЕСКОЛЬКИМИ разными зафиксированными "
+                "попытками (видно по succeeded/failed-шагам плана: разные "
+                "запросы, источники, инструменты или подходы) — одна "
+                "неудачная попытка НЕ является достаточным основанием "
+                "считать пункт not_found; такой отчёт должен провалить "
+                "критерий, даже если формально не выдуман. Также "
+                "провалить, если очевидная альтернативная стратегия "
+                "(другой запрос/источник/capability) не была опробована, "
+                "хотя была доступна."
             ),
             "kind": "semantic",
             "predicate": {"type": "honest_not_found"},
@@ -912,7 +953,7 @@ async def reclaim_expired_leases(db: AsyncSession, *, actor: str = "scheduler") 
         else:
             await transition_step(db, step, "failed", actor=actor, payload={"error": error})
             order.blocker = {"code": "lease_expired", "step_id": str(step.id)}
-            max_replans = max(0, int((order.budgets or {}).get("max_replans", 2)))
+            max_replans = _max_replans_for(order)
             target = "replanning" if order.plan_revision <= max_replans else "blocked"
             if target in WORK_TRANSITIONS.get(order.status, frozenset()):
                 await transition_work_order(db, order, target, actor=actor)
@@ -1160,7 +1201,7 @@ async def fail_attempt(
     else:
         await transition_step(db, step, "failed", actor=actor, payload={"error": error})
         order.blocker = {"code": "step_failed", "step_id": str(step.id), "error": error}
-        max_replans = max(0, int((order.budgets or {}).get("max_replans", 2)))
+        max_replans = _max_replans_for(order)
         target = "replanning" if order.plan_revision <= max_replans else "blocked"
         await transition_work_order(db, order, target, actor=actor)
 
