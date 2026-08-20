@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import WorkAcceptanceCriterion, WorkOrder
+from app.db.models import Notification, WorkAcceptanceCriterion, WorkOrder
 from app.domain.work_orders import (
     claim_ready_step,
     complete_attempt,
@@ -23,6 +23,7 @@ from app.domain.work_orders import (
     create_work_order,
     exploratory_acceptance_criteria,
     is_exploratory,
+    transition_work_order,
     verify_nonempty_result,
 )
 from app.domain.work_planning import generate_capability_plan
@@ -299,3 +300,91 @@ class TestExploratoryPlannerPrompt:
             await generate_capability_plan(order)
 
         assert "exploratory" not in captured["system"].lower()
+
+
+# ── Ф4: progress notifications for long-running exploratory WorkOrders ─────
+
+
+class TestExploratoryProgressNotifications:
+    @pytest.mark.asyncio
+    async def test_exploratory_order_reaching_blocked_notifies_owner(self, db_session):
+        order = await create_work_order(
+            db_session,
+            owner_key="alice",
+            objective="Найди каталоги поставщиков",
+            constraints={"mode": "exploratory"},
+        )
+        await create_single_step_plan(
+            db_session, order, kind="agent_turn", title="x", input_data={"prompt": "x"}
+        )
+        await claim_ready_step(db_session, worker_id="w", work_order_id=order.id)
+        order.blocker = {"code": "no_grant"}
+
+        await transition_work_order(db_session, order, "blocked", actor="test")
+        await db_session.flush()
+
+        notif = (
+            await db_session.execute(
+                select(Notification).where(
+                    Notification.entity_id == order.id,
+                    Notification.source_task == "workorder.progress",
+                )
+            )
+        ).scalar_one_or_none()
+        assert notif is not None
+        assert notif.user_sub == "alice"
+        assert "no_grant" in notif.body
+
+    @pytest.mark.asyncio
+    async def test_non_exploratory_order_reaching_blocked_does_not_notify(self, db_session):
+        """Regression guard: the overwhelming majority of WorkOrders are
+        short capability-mode tasks — must stay exactly as noisy as before."""
+        order = await create_work_order(db_session, owner_key="bob", objective="Одобрить накладную")
+        await create_single_step_plan(
+            db_session, order, kind="agent_turn", title="x", input_data={"prompt": "x"}
+        )
+        await claim_ready_step(db_session, worker_id="w", work_order_id=order.id)
+        order.blocker = {"code": "boom"}
+
+        await transition_work_order(db_session, order, "blocked", actor="test")
+        await db_session.flush()
+
+        notif = (
+            await db_session.execute(select(Notification).where(Notification.entity_id == order.id))
+        ).scalar_one_or_none()
+        assert notif is None
+
+    @pytest.mark.asyncio
+    async def test_exploratory_order_completing_notifies_owner(self, db_session):
+        order = await create_work_order(
+            db_session,
+            owner_key="alice",
+            objective="Найди каталоги поставщиков",
+            constraints={"mode": "exploratory"},
+        )
+        _plan, step = await create_single_step_plan(
+            db_session, order, kind="agent_turn", title="x", input_data={"prompt": "x"}
+        )
+        claimed = await claim_ready_step(db_session, worker_id="w", work_order_id=order.id)
+        _order, claimed_step, attempt = claimed
+        await complete_attempt(
+            db_session, order=order, step=claimed_step, attempt=attempt,
+            output={"text": "готово"}, actor="w",
+        )
+
+        assert await verify_nonempty_result(db_session, order=order, step=claimed_step)
+        await db_session.flush()
+
+        notifs = (
+            await db_session.execute(
+                select(Notification).where(
+                    Notification.entity_id == order.id,
+                    Notification.source_task == "workorder.progress",
+                )
+            )
+        ).scalars().all()
+        # verify_nonempty_result transitions verifying -> completed — both
+        # are notify-worthy statuses, so two notifications are expected here,
+        # not a bug.
+        assert len(notifs) >= 1
+        assert any("заверш" in n.title.lower() for n in notifs)

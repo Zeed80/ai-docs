@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger()
@@ -175,7 +175,56 @@ async def transition_work_order(
         payload={"from": current, "to": target, **(payload or {})},
     )
     await db.flush()
+    if is_exploratory(work_order) and target in _EXPLORATORY_PROGRESS_NOTIFY_STATUSES:
+        # Ф4 (AGENT_AUTONOMY_ROADMAP.md): progress visibility for long-running
+        # exploratory WorkOrders — an hours-long unattended task going silent
+        # until it finishes is exactly the "black box" the roadmap's Ф2.B
+        # design section warned against. Reuses Ф0's Notification
+        # infrastructure (same create_notification, same source_task
+        # calibration hook) rather than a parallel channel. Every other
+        # WorkOrder (the overwhelming majority — short capability-mode tasks)
+        # is unaffected: this only fires for constraints.mode="exploratory".
+        # Best-effort — a notification failure must never break a status
+        # transition that has already been persisted.
+        try:
+            await _notify_exploratory_progress(db, work_order, target)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "exploratory_progress_notification_failed",
+                work_order_id=str(work_order.id),
+                error=str(exc),
+            )
     return work_order
+
+
+_EXPLORATORY_PROGRESS_NOTIFY_STATUSES = frozenset({"verifying", "blocked", "completed", "failed"})
+
+
+async def _notify_exploratory_progress(db: AsyncSession, order: WorkOrder, target: str) -> None:
+    from app.db.models import NotificationType
+    from app.services.notifications import create_notification
+
+    titles = {
+        "verifying": "Проверка результата поручения",
+        "blocked": "Поручение остановлено",
+        "completed": "Поручение завершено",
+        "failed": "Поручение не выполнено",
+    }
+    body = f"«{order.objective[:200]}» — статус: {target}."
+    if target == "blocked" and order.blocker:
+        reason = order.blocker.get("code") or order.blocker.get("message") or order.blocker
+        body += f" Причина: {reason}."
+    await create_notification(
+        db,
+        user_sub=order.owner_key,
+        type=NotificationType.system,
+        title=titles.get(target, "Обновление поручения"),
+        body=body,
+        entity_type="work_order",
+        entity_id=order.id,
+        action_url=f"/work-orders/{order.id}",
+        source_task="workorder.progress",
+    )
 
 
 async def transition_step(
@@ -678,6 +727,25 @@ async def enter_waiting_for_children(
     await transition_work_order(db, order, "waiting_external", actor=actor)
 
 
+def _blocker_reason(blocker: dict[str, Any] | None) -> str | None:
+    """Ф4: the most specific human-readable reason in a WorkOrder's blocker,
+    for coverage reporting (promote_waiting_parents below). Blocker shapes
+    vary by source — fail_attempt's terminal-failure branch wraps the real
+    cause one level deeper under "error" (``{"code": "step_failed", "error":
+    {"code": "no_grant", ...}}``), while enforce_budgets/verify_nonempty_result
+    put it straight at the top level (``{"code": "token_budget_exceeded", ...}``)
+    — surfacing the generic "step_failed" wrapper when a real cause sits right
+    underneath it would be technically honest but needlessly vague.
+    """
+    if not blocker:
+        return None
+    code = blocker.get("code")
+    if code == "step_failed" and isinstance(blocker.get("error"), dict):
+        inner = blocker["error"]
+        return inner.get("code") or inner.get("message") or code
+    return code or blocker.get("message")
+
+
 async def promote_waiting_parents(db: AsyncSession, *, actor: str = "scheduler") -> int:
     """Б11: resolve any decompose-parent whose children are all done.
 
@@ -743,6 +811,27 @@ async def promote_waiting_parents(db: AsyncSession, *, actor: str = "scheduler")
             "text": aggregated_text,
             **({} if succeeded else {"errors": ["all children failed"]}),
         }
+        if is_exploratory(order):
+            # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found integrating Ф1-Ф3 —
+            # exploratory_acceptance_criteria()'s coverage_report predicate
+            # needs output.coverage = {covered, partial, not_found}, but this
+            # function only ever produced a human-readable text summary. A
+            # decompose-fan-out (one child per discovered supplier/source —
+            # the exploratory planner's own preferred pattern, see the
+            # planner prompt addendum in work_planning.py) could never
+            # satisfy that criterion without this: no other step produces
+            # a structured coverage object for the parent. Built from the
+            # same per-child data the text summary above already uses, so
+            # it can't disagree with what a human reads in that summary.
+            decompose_step.output["coverage"] = {
+                "covered": [c.objective for c in succeeded],
+                "partial": [],
+                "not_found": [
+                    {"item": c.objective, "reason": _blocker_reason(c.blocker) or c.status}
+                    for c in children
+                    if c.status != "completed"
+                ],
+            }
         try:
             await verify_nonempty_result(db, order=order, step=decompose_step, actor=actor)
         except WorkStateError as exc:
@@ -804,14 +893,28 @@ async def reclaim_expired_leases(db: AsyncSession, *, actor: str = "scheduler") 
         if step.attempt_count < step.max_attempts:
             await transition_step(db, step, "retry_wait", actor=actor, payload={"error": error})
             step.next_attempt_at = now
-            if order.status == "running":
+            # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the Ф4 pilot —
+            # gating this on `order.status == "running"` silently dropped the
+            # order-level transition whenever the lease actually expired
+            # (>=120s later) with the order having already moved on to
+            # "ready" in the meantime (e.g. a sibling step finished first and
+            # promote_ready_dependents flipped it back). The order's blocker
+            # got recorded but its status never changed, so a permanently
+            # failed step with dependents left the whole WorkOrder stuck
+            # forever — dispatch_ready ticks with nothing claimable and
+            # nothing re-evaluates it. Checking WORK_TRANSITIONS instead of
+            # one specific source status covers every state that can
+            # legally reach the target (matches what transition_work_order
+            # itself would accept) while still no-op'ing for genuinely
+            # terminal orders (completed/canceled) instead of raising.
+            if "ready" in WORK_TRANSITIONS.get(order.status, frozenset()):
                 await transition_work_order(db, order, "ready", actor=actor)
         else:
             await transition_step(db, step, "failed", actor=actor, payload={"error": error})
             order.blocker = {"code": "lease_expired", "step_id": str(step.id)}
-            if order.status == "running":
-                max_replans = max(0, int((order.budgets or {}).get("max_replans", 2)))
-                target = "replanning" if order.plan_revision <= max_replans else "blocked"
+            max_replans = max(0, int((order.budgets or {}).get("max_replans", 2)))
+            target = "replanning" if order.plan_revision <= max_replans else "blocked"
+            if target in WORK_TRANSITIONS.get(order.status, frozenset()):
                 await transition_work_order(db, order, target, actor=actor)
     await db.flush()
     return len(steps)
@@ -892,6 +995,119 @@ async def promote_ready_dependents(
     if unfinished and order.status == "running":
         await transition_work_order(db, order, "ready", actor=actor)
     return unfinished
+
+
+async def find_active_plan_succeeded_steps(
+    db: AsyncSession, *, limit: int = 100
+) -> list[uuid.UUID]:
+    """Succeeded steps of a *currently active* plan, for a running order.
+
+    Feeds the periodic verify_work_step dispatch (_dispatch_ready_work).
+
+    Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the Ф4 pilot — the query
+    this replaced had no plan filter at all, so a WorkOrder that replanned
+    multiple times kept re-selecting already-succeeded steps from
+    *superseded* plans forever (nothing here or in verify_completed_step
+    ever stops re-querying a step just because it's already been verified
+    once). verify_completed_step then calls
+    promote_ready_dependents(plan_id=step.plan_id) for that stale plan,
+    which recomputes "unfinished" from the OLD plan's own steps (still
+    counting its permanently-failed/never-promotable siblings) and flips
+    the order back to "ready" — stomping on a completely different step
+    that was actively "running" in the *current* plan at that exact
+    moment. claim_ready_step already scopes its own query to
+    ``WorkPlan.status == "active"`` for the same reason; this needs the
+    identical join/filter.
+
+    Deliberately scoped to ``status == "running"``, not also "ready": a
+    "ready" order whose active plan is done stepping but never got
+    verified is a *separate* starvation case (see
+    unstick_ready_orders_with_stalled_active_plan) — nudging it back to
+    "running" once there is exactly right, but broadening this query
+    itself to "ready" would re-query and re-dispatch verify_work_step for
+    every already-succeeded step on every 5s tick for the entire time an
+    order sits "ready" between step claims (its normal resting state for
+    most of a multi-step plan's life), not just the one genuinely stalled
+    case.
+    """
+    rows = (
+        await db.execute(
+            select(WorkStep.id)
+            .join(WorkOrder, WorkOrder.id == WorkStep.work_order_id)
+            .join(WorkPlan, WorkPlan.id == WorkStep.plan_id)
+            .where(
+                WorkStep.state == "succeeded",
+                WorkOrder.status == "running",
+                WorkPlan.status == "active",
+            )
+            .limit(limit)
+        )
+    ).scalars()
+    return list(rows)
+
+
+async def unstick_ready_orders_with_stalled_active_plan(
+    db: AsyncSession, *, actor: str = "scheduler"
+) -> int:
+    """Recover a "ready" order whose active plan finished stepping but was
+    never handed back for verification.
+
+    Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the Ф4 pilot, right after
+    fixing find_active_plan_succeeded_steps above — a succeeded step that
+    was the *last* claimable one in its plan leaves the order "ready" with
+    nothing left for claim_ready_step to pick up (that is the only thing
+    that would otherwise flip it back to "running"), so the succeeded step
+    never gets verified and the order is stuck in "ready" forever. Scoped
+    narrowly on purpose: only orders whose active plan has zero steps left
+    in any in-flight state (ready/retry_wait/running/pending/
+    waiting_approval) *and* at least one succeeded step qualify — an order
+    resting in "ready" with real pending work is untouched, so this adds
+    no extra churn to the common case.
+    """
+    in_flight_states = ("ready", "retry_wait", "running", "pending", "waiting_approval")
+    stalled_plan_ids = list(
+        (
+            await db.execute(
+                select(WorkPlan.id)
+                .join(WorkOrder, WorkOrder.id == WorkPlan.work_order_id)
+                .where(
+                    WorkOrder.status == "ready",
+                    WorkPlan.status == "active",
+                    ~exists(
+                        select(1).where(
+                            WorkStep.plan_id == WorkPlan.id,
+                            WorkStep.state.in_(in_flight_states),
+                        )
+                    ),
+                    exists(
+                        select(1).where(
+                            WorkStep.plan_id == WorkPlan.id,
+                            WorkStep.state == "succeeded",
+                        )
+                    ),
+                )
+            )
+        ).scalars()
+    )
+    if not stalled_plan_ids:
+        return 0
+    orders = list(
+        (
+            await db.execute(
+                select(WorkOrder)
+                .join(WorkPlan, WorkPlan.work_order_id == WorkOrder.id)
+                .where(WorkPlan.id.in_(stalled_plan_ids))
+                .with_for_update(skip_locked=True)
+            )
+        ).scalars()
+    )
+    recovered = 0
+    for order in orders:
+        if order.status != "ready":
+            continue
+        await transition_work_order(db, order, "running", actor=actor)
+        recovered += 1
+    return recovered
 
 
 async def fail_attempt(

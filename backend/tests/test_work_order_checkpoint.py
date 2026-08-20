@@ -15,15 +15,228 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.db.models import WorkOrder
 from app.domain.work_orders import (
     claim_ready_step,
+    complete_attempt,
     create_single_step_plan,
     create_work_order,
     fail_attempt,
     transition_step,
     utcnow,
 )
-from app.tasks.work_orders import PartialProgressError, _execute_capability, execute_claimed_step
+from app.tasks.work_orders import (
+    PartialProgressError,
+    _execute_capability,
+    execute_claimed_step,
+    verify_completed_step,
+)
+
+
+# ── Ф4: acting-user context set for the duration of capability execution ──
+
+
+@pytest.mark.asyncio
+async def test_execute_claimed_step_sets_acting_user_to_the_orders_owner(test_engine):
+    """Ф4 finding: nothing in this durable runtime ever called set_acting_user
+    before this — every capability call authenticated as the bare
+    "agent-service" account (app.ai.actor_context's own documented fail-closed
+    default), so any endpoint scoping by the WorkOrder's owner via
+    get_effective_user (computer_use's execute/web_discover, Ф2.A) 404'd on
+    every real WorkOrder. Asserts the context is bound to owner_key exactly
+    while _execute_step_kind runs, and cleared afterwards — this worker
+    process/event loop may go on to execute unrelated tasks next."""
+    from app.ai.actor_context import get_acting_user
+
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as db:
+        order = await create_work_order(db, owner_key="local:alice", objective="x")
+        await create_single_step_plan(
+            db, order, kind="agent_turn", title="x", input_data={"prompt": "x"}
+        )
+        order_id = order.id
+        await db.commit()
+
+    async with factory() as db:
+        claimed = await claim_ready_step(db, worker_id="w1", work_order_id=order_id)
+        assert claimed is not None
+        _order, step, attempt = claimed
+        step_id, attempt_id = step.id, attempt.id
+        await db.commit()
+
+    observed: dict = {}
+
+    async def _capture_acting_user(kind, input_data, timeout_seconds, **kwargs):
+        observed["during"] = get_acting_user()
+        return {"text": "готово"}
+
+    assert get_acting_user() is None  # nothing bound before this test's own call
+    with patch(
+        "app.tasks.work_orders._execute_step_kind", new=AsyncMock(side_effect=_capture_acting_user)
+    ):
+        await execute_claimed_step(
+            step_id, attempt_id, schedule_verification=False, session_factory=factory
+        )
+
+    assert observed["during"] == "local:alice"
+    assert get_acting_user() is None  # cleared afterwards
+
+
+@pytest.mark.asyncio
+async def test_verify_completed_step_recovers_order_stuck_in_ready(test_engine):
+    """Ф4 (AGENT_AUTONOMY_ROADMAP.md): defense-in-depth companion to
+    domain.work_orders.unstick_ready_orders_with_stalled_active_plan — even
+    if verify_completed_step is reached directly (not just via
+    _dispatch_ready_work's housekeeping pass) for a succeeded step whose
+    order ended up "ready" instead of "running", it must self-heal rather
+    than bail out with a silent False forever (the order used to require
+    exactly "running").
+    """
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as db:
+        order = await create_work_order(db, owner_key="local:bob", objective="Recover from ready")
+        await create_single_step_plan(
+            db, order, kind="agent_turn", title="y", input_data={"prompt": "y"}
+        )
+        order_id = order.id
+        await db.commit()
+
+    async with factory() as db:
+        claimed = await claim_ready_step(db, worker_id="w1", work_order_id=order_id)
+        assert claimed is not None
+        order_ref, step, attempt = claimed
+        step_id = step.id
+        await complete_attempt(
+            db, order=order_ref, step=step, attempt=attempt, output={"text": "ok"}, actor="w1"
+        )
+        # Simulate the stuck state directly (the exact mechanism that
+        # produces it live doesn't matter here, only that verify_completed_step
+        # must recover from it): the order sits "ready" with nothing left to
+        # claim, instead of "running".
+        order_ref.status = "ready"
+        await db.commit()
+
+    result = await verify_completed_step(step_id, session_factory=factory)
+
+    assert result is True
+    async with factory() as db:
+        order_check = await db.get(WorkOrder, order_id)
+        assert order_check.status == "completed"
+
+
+# ── Ф4: work_order_id auto-filled into capability step arguments ──────────
+
+
+@pytest.mark.asyncio
+async def test_capability_step_gets_work_order_id_auto_filled_when_the_plan_omits_it(test_engine):
+    """Ф4 finding, live on the pilot: computer_use's parameter schema names
+    work_order_id as required, but the reasoning model generating the plan
+    consistently left it out of the step's input — every real web_discover
+    call 422'd. The durable runtime already knows this value authoritatively
+    (step.work_order_id); making the model responsible for perfectly
+    echoing it back was needless fragility. Applies to every capability step,
+    not just computer_use, since any future capability could need it too."""
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as db:
+        order = await create_work_order(db, owner_key="local:alice", objective="x")
+        await create_single_step_plan(
+            db,
+            order,
+            kind="capability",
+            title="Discover",
+            input_data={"queries": ["q"]},  # no work_order_id, as the model actually produced
+            capability="computer_use",
+            action="web_discover",
+        )
+        order_id = order.id
+        await db.commit()
+
+    async with factory() as db:
+        claimed = await claim_ready_step(db, worker_id="w1", work_order_id=order_id)
+        assert claimed is not None
+        _order, step, attempt = claimed
+        step_id, attempt_id = step.id, attempt.id
+        await db.commit()
+
+    captured: dict = {}
+
+    async def _capture_input(kind, input_data, timeout_seconds, **kwargs):
+        captured.update(input_data)
+        return {"text": "готово"}
+
+    with patch("app.tasks.work_orders._execute_step_kind", new=AsyncMock(side_effect=_capture_input)):
+        await execute_claimed_step(step_id, attempt_id, schedule_verification=False, session_factory=factory)
+
+    assert captured["work_order_id"] == str(order_id)
+    assert captured["queries"] == ["q"]  # the plan's own input is untouched
+
+
+@pytest.mark.asyncio
+async def test_capability_step_explicit_work_order_id_is_not_overridden(test_engine):
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as db:
+        order = await create_work_order(db, owner_key="local:alice", objective="x")
+        await create_single_step_plan(
+            db,
+            order,
+            kind="capability",
+            title="Discover",
+            input_data={"queries": ["q"], "work_order_id": "explicit-value"},
+            capability="computer_use",
+            action="web_discover",
+        )
+        order_id = order.id
+        await db.commit()
+
+    async with factory() as db:
+        claimed = await claim_ready_step(db, worker_id="w1", work_order_id=order_id)
+        assert claimed is not None
+        _order, step, attempt = claimed
+        step_id, attempt_id = step.id, attempt.id
+        await db.commit()
+
+    captured: dict = {}
+
+    async def _capture_input(kind, input_data, timeout_seconds, **kwargs):
+        captured.update(input_data)
+        return {"text": "готово"}
+
+    with patch("app.tasks.work_orders._execute_step_kind", new=AsyncMock(side_effect=_capture_input)):
+        await execute_claimed_step(step_id, attempt_id, schedule_verification=False, session_factory=factory)
+
+    assert captured["work_order_id"] == "explicit-value"
+
+
+@pytest.mark.asyncio
+async def test_agent_turn_step_does_not_get_a_work_order_id_injected(test_engine):
+    """Only kind="capability" steps get this — agent_turn's input is a free-
+    form prompt dict, not a capability argument set."""
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as db:
+        order = await create_work_order(db, owner_key="local:alice", objective="x")
+        await create_single_step_plan(
+            db, order, kind="agent_turn", title="x", input_data={"prompt": "x"}
+        )
+        order_id = order.id
+        await db.commit()
+
+    async with factory() as db:
+        claimed = await claim_ready_step(db, worker_id="w1", work_order_id=order_id)
+        assert claimed is not None
+        _order, step, attempt = claimed
+        step_id, attempt_id = step.id, attempt.id
+        await db.commit()
+
+    captured: dict = {}
+
+    async def _capture_input(kind, input_data, timeout_seconds, **kwargs):
+        captured.update(input_data)
+        return {"text": "готово"}
+
+    with patch("app.tasks.work_orders._execute_step_kind", new=AsyncMock(side_effect=_capture_input)):
+        await execute_claimed_step(step_id, attempt_id, schedule_verification=False, session_factory=factory)
+
+    assert "work_order_id" not in captured
 
 
 def _http_response(status_code: int, json_body: dict | None = None, text: str = ""):

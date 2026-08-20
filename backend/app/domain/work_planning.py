@@ -7,7 +7,7 @@ import re
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +42,35 @@ class PlannedStep(BaseModel):
     risk_level: str = Field("low", pattern="^(low|medium|high|critical)$")
     max_attempts: int = Field(3, ge=1, le=10)
     timeout_seconds: int = Field(600, ge=1, le=3600)
+
+    @field_validator("success_predicate", mode="before")
+    @classmethod
+    def _coerce_success_predicate(cls, value: Any) -> Any:
+        """Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the pilot's first
+        real planner call — the reasoning model sometimes describes this in
+        prose (e.g. "Supplier created successfully with a new supplier_id")
+        instead of the {"type": ...} shape the base system prompt names as a
+        schema field but never shows a worked example of. WorkStep.
+        success_predicate is stored for audit/display only — nothing in the
+        runtime actually evaluates it (order-level completion goes through
+        WorkAcceptanceCriterion instead, an entirely separate structure) — so
+        rejecting a plan outright over this shape mismatch was pure loss: the
+        whole multi-step/decompose plan got thrown away for a single-step
+        agent_turn fallback (plan_work_order's exception handler) that never
+        used the exploratory machinery. Coercing a bare string into a real
+        dict keeps the plan; no downstream code needs a specific "type".
+
+        Also observed live on the Ф4 pilot's replan 7: the same model wrote
+        a bare ``true`` for this field on one step instead of a string or a
+        dict — same root cause (the base prompt names the field but shows no
+        worked example), same "purely cosmetic, nothing evaluates it" fix
+        rationale as the string case above.
+        """
+        if isinstance(value, str):
+            return {"type": "custom", "description": value}
+        if isinstance(value, bool):
+            return {"type": "custom", "description": str(value)}
+        return value
 
     @model_validator(mode="after")
     def executor_is_complete(self) -> "PlannedStep":

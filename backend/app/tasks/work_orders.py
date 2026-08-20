@@ -326,6 +326,15 @@ async def _execute_decompose(work_order_id: uuid.UUID, input_data: dict[str, Any
                 priority=parent.priority,
                 risk_level=parent.risk_level,
                 budgets=child_budgets,
+                # Ф4: inherit constraints (notably mode="exploratory") — a
+                # child decomposed from an exploratory objective is itself
+                # still exploratory (e.g. "find catalog for supplier X" is
+                # small but still open-ended, not a bounded capability DAG
+                # known up front). Matters mainly if this child's own initial
+                # agent_turn step later fails and gets replanned — that
+                # replan should get the same small-horizon planner guidance
+                # the parent did, not silently fall back to default mode.
+                constraints=dict(parent.constraints or {}),
                 parent_id=parent.id,
             )
             await create_single_step_plan(
@@ -360,7 +369,29 @@ async def verify_completed_step(step_id: uuid.UUID, *, session_factory: Any | No
             return False
         if order.status == "completed":
             return True
-        if order.status != "running":
+        if order.status == "ready":
+            # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the Ф4 pilot — a
+            # succeeded step whose order ends up "ready" instead of
+            # "running" (e.g. it was the last claimable step, so nothing
+            # was left to keep the order in "running" until verification
+            # ran) used to be stuck forever here: this function required
+            # exactly "running", and nothing elsewhere ever transitions a
+            # "ready" order back to "running" on its own — claim_ready_step
+            # only does that when there's a ready/retry_wait step left to
+            # claim, and there isn't one once everything has succeeded.
+            # domain.work_orders.unstick_ready_orders_with_stalled_active_plan
+            # (called from _dispatch_ready_work, before this function is ever
+            # queued) is the primary fix for that starvation; this is
+            # defense-in-depth for any other caller that reaches
+            # verify_completed_step directly. "ready"->"running" is itself a
+            # legal transition (the same one claim_ready_step performs when
+            # picking up work), so recover it here before falling through to
+            # the normal path below, whose first step
+            # (verify_nonempty_result's own transition to "verifying") is
+            # only a legal move from "running"/"waiting_external", not from
+            # "ready".
+            await transition_work_order(db, order, "running", actor="scheduler")
+        elif order.status != "running":
             return False
         if await promote_ready_dependents(
             db,
@@ -569,8 +600,23 @@ async def execute_claimed_step(
             ).scalar_one_or_none()
             if prior is not None:
                 input_data = {**input_data, "_resume_checkpoint": prior}
+        # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the pilot —
+        # computer_use's own parameter schema names work_order_id as
+        # required, but the reasoning model generating the plan consistently
+        # left it out of the step's input, 422ing every real web_discover
+        # call. The durable runtime already knows this value authoritatively
+        # (step.work_order_id) — making the model responsible for perfectly
+        # echoing back a value the system already has was needless fragility
+        # for zero benefit. Filled in here, once, for every capability step,
+        # not special-cased to computer_use, so any future capability that
+        # needs it is covered too; an explicit value the plan already set
+        # always wins (e.g. a decompose child's own id, if that's ever a
+        # real use case) — this only fills the gap when it's missing.
+        if kind == "capability" and "work_order_id" not in input_data:
+            input_data = {**input_data, "work_order_id": str(step.work_order_id)}
         timeout_seconds = step.timeout_seconds
         work_order_id = step.work_order_id
+        owner_key = order.owner_key
         capability = step.capability
         action = step.action
         step_idempotency_key = step.idempotency_key
@@ -620,6 +666,20 @@ async def execute_claimed_step(
             session_factory=factory,
         )
     )
+    # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the pilot — nothing in this
+    # durable runtime ever called set_acting_user, so every capability call a
+    # WorkStep makes authenticated as the bare "agent-service" account (see
+    # app.ai.actor_context's own docstring: "headless turns... leave it
+    # unset"). Harmless for capabilities with no ownership check, but any
+    # endpoint using get_effective_user to scope by the WorkOrder's owner
+    # (computer_use's execute/web_discover, fixed in Ф2.A specifically for
+    # this "agent acts for a human" case) 404'd on every WorkOrder not
+    # literally owned by "agent-service" — which is all of them. Reset in
+    # `finally` since this worker process/event loop may go on to execute
+    # unrelated tasks after this one.
+    from app.ai.actor_context import set_acting_user
+
+    set_acting_user(owner_key)
     try:
         output = await _execute_step_kind(
             kind,
@@ -781,6 +841,7 @@ async def execute_claimed_step(
     finally:
         heartbeat_stop.set()
         await heartbeat
+        set_acting_user(None)
 
     async with factory() as db:
         order = await db.get(WorkOrder, work_order_id, with_for_update=True)
@@ -840,8 +901,12 @@ async def execute_work_order_now(
 async def _dispatch_ready_work(limit: int = 10) -> int:
     from sqlalchemy import select
 
-    from app.db.models import WorkOrder, WorkStep
+    from app.db.models import WorkOrder
     from app.db.session import _get_session_factory
+    from app.domain.work_orders import (
+        find_active_plan_succeeded_steps,
+        unstick_ready_orders_with_stalled_active_plan,
+    )
 
     factory = _get_session_factory()
     async with factory() as db:
@@ -861,16 +926,14 @@ async def _dispatch_ready_work(limit: int = 10) -> int:
         await reclaim_expired_leases(db)
         await enforce_budgets(db)
         await promote_waiting_parents(db)
-        pending_verification = list(
-            (
-                await db.execute(
-                    select(WorkStep.id)
-                    .join(WorkOrder, WorkOrder.id == WorkStep.work_order_id)
-                    .where(WorkStep.state == "succeeded", WorkOrder.status == "running")
-                    .limit(100)
-                )
-            ).scalars()
-        )
+        # Ф4 (AGENT_AUTONOMY_ROADMAP.md): must run before
+        # find_active_plan_succeeded_steps below — recovers a "ready" order
+        # whose active plan finished stepping but was never handed back for
+        # verification (see the function's own docstring), so its succeeded
+        # step is picked up by the very next query in this same pass instead
+        # of waiting a whole extra 5s tick.
+        await unstick_ready_orders_with_stalled_active_plan(db)
+        pending_verification = await find_active_plan_succeeded_steps(db, limit=100)
         await db.commit()
 
     for step_id in pending_verification:
