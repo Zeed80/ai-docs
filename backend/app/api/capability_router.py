@@ -25,6 +25,9 @@ logger = structlog.get_logger()
 _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
     "computer_use": {
         "browser_fetch": ("POST", "/api/computer-use/execute", []),
+        # Ф2.A (AGENT_AUTONOMY_ROADMAP.md): search + read, scoped by the same
+        # grant as browser_fetch — see app.api.computer_use.web_discover.
+        "web_discover": ("POST", "/api/computer-use/web-discover", []),
         "desktop_snapshot": ("POST", "/api/computer-use/execute", []),
         "desktop_start": ("POST", "/api/computer-use/execute", []),
         "desktop_click": ("POST", "/api/computer-use/execute", []),
@@ -34,6 +37,17 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "file_read": ("POST", "/api/computer-use/execute", []),
         "file_write": ("POST", "/api/computer-use/execute", []),
         "shell": ("POST", "/api/computer-use/execute", []),
+    },
+    # Ф3 (AGENT_AUTONOMY_ROADMAP.md): draft-first ingestion of web-discovered
+    # supplier catalogs into the existing ToolSupplier/ToolCatalogEntry
+    # domain, structured through the same entry-creation/embed/graph pipeline
+    # as manual catalog uploads (app.tasks.drawing_analysis).
+    "tool_catalog": {
+        "create_supplier": ("POST", "/api/tool-catalog/suppliers", []),
+        "ingest_web_source": (
+            "POST", "/api/tool-catalog/suppliers/{supplier_id}/ingest-web-source", ["supplier_id"]
+        ),
+        "approve": ("POST", "/api/tool-catalog/entries/{entry_id}/approve", ["entry_id"]),
     },
     "documents": {
         "list":         ("GET",    "/api/documents",                          []),

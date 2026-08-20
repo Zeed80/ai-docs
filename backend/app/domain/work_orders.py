@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger()
@@ -175,7 +175,56 @@ async def transition_work_order(
         payload={"from": current, "to": target, **(payload or {})},
     )
     await db.flush()
+    if is_exploratory(work_order) and target in _EXPLORATORY_PROGRESS_NOTIFY_STATUSES:
+        # Ф4 (AGENT_AUTONOMY_ROADMAP.md): progress visibility for long-running
+        # exploratory WorkOrders — an hours-long unattended task going silent
+        # until it finishes is exactly the "black box" the roadmap's Ф2.B
+        # design section warned against. Reuses Ф0's Notification
+        # infrastructure (same create_notification, same source_task
+        # calibration hook) rather than a parallel channel. Every other
+        # WorkOrder (the overwhelming majority — short capability-mode tasks)
+        # is unaffected: this only fires for constraints.mode="exploratory".
+        # Best-effort — a notification failure must never break a status
+        # transition that has already been persisted.
+        try:
+            await _notify_exploratory_progress(db, work_order, target)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "exploratory_progress_notification_failed",
+                work_order_id=str(work_order.id),
+                error=str(exc),
+            )
     return work_order
+
+
+_EXPLORATORY_PROGRESS_NOTIFY_STATUSES = frozenset({"verifying", "blocked", "completed", "failed"})
+
+
+async def _notify_exploratory_progress(db: AsyncSession, order: WorkOrder, target: str) -> None:
+    from app.db.models import NotificationType
+    from app.services.notifications import create_notification
+
+    titles = {
+        "verifying": "Проверка результата поручения",
+        "blocked": "Поручение остановлено",
+        "completed": "Поручение завершено",
+        "failed": "Поручение не выполнено",
+    }
+    body = f"«{order.objective[:200]}» — статус: {target}."
+    if target == "blocked" and order.blocker:
+        reason = order.blocker.get("code") or order.blocker.get("message") or order.blocker
+        body += f" Причина: {reason}."
+    await create_notification(
+        db,
+        user_sub=order.owner_key,
+        type=NotificationType.system,
+        title=titles.get(target, "Обновление поручения"),
+        body=body,
+        entity_type="work_order",
+        entity_id=order.id,
+        action_url=f"/work-orders/{order.id}",
+        source_task="workorder.progress",
+    )
 
 
 async def transition_step(
@@ -213,6 +262,110 @@ async def transition_step(
     )
     await db.flush()
     return step
+
+
+def is_exploratory(order: WorkOrder) -> bool:
+    """Ф1.A (AGENT_AUTONOMY_ROADMAP.md): the mode flag for an open-ended
+    WorkOrder (e.g. "find and structure supplier catalogs") whose full scope
+    isn't known up front, as opposed to the default capability-grounded mode
+    whose DAG is bounded at planning time. A plain ``constraints`` key, not a
+    new column — ``constraints``/``budgets``/``metadata_`` are already
+    unstructured JSON, and every existing WorkOrder (constraints defaulting to
+    ``{}``) reads as non-exploratory with zero migration. Read by the planner
+    (generate_capability_plan) to steer prompting and by callers deciding
+    which acceptance-criteria set (default vs exploratory_acceptance_criteria)
+    to pass to create_work_order.
+    """
+    return str((order.constraints or {}).get("mode") or "") == "exploratory"
+
+
+# Ф4 (AGENT_AUTONOMY_ROADMAP.md, user feedback 2026-08-20): a bounded
+# capability-grounded order's replans are genuine failure-recovery attempts —
+# 2 is a reasonable default ceiling before conceding to a human. An
+# exploratory order's replans are its *continue-working* mechanism (Ф1.A:
+# "rely on replanning ... to continue once this horizon finishes" — each
+# replan is the next horizon, not just an error retry), so the same small
+# default silently strangled persistence: the live Ф4 pilot spent most of
+# its manually-raised budget of 6 on transient infra bugs (now fixed, see
+# AGENT_AUTONOMY_ROADMAP.md Ф4 findings) rather than genuine strategy
+# exhaustion, and still ran out before the agent could try alternate
+# approaches on its last open item. The real ceiling on an exploratory
+# order's persistence should be its wall-clock/cost/tool-call budgets
+# (Ф1.C — resources actually spent), not an arbitrary small count of DAG
+# rebuilds; this default is generous specifically so plan-revision count
+# essentially never becomes the binding constraint before those do. An
+# order that explicitly sets budgets.max_replans always wins regardless of
+# mode — this is only the fallback when it's unset.
+_DEFAULT_MAX_REPLANS = 2
+_DEFAULT_MAX_REPLANS_EXPLORATORY = 30
+
+
+def _max_replans_for(order: WorkOrder) -> int:
+    configured = (order.budgets or {}).get("max_replans")
+    if configured is not None:
+        return max(0, int(configured))
+    return _DEFAULT_MAX_REPLANS_EXPLORATORY if is_exploratory(order) else _DEFAULT_MAX_REPLANS
+
+
+def exploratory_acceptance_criteria() -> list[dict[str, Any]]:
+    """Ф1.D: the honest-coverage acceptance-criteria pair for an exploratory
+    WorkOrder — pass as create_work_order's ``acceptance_criteria`` instead of
+    its default result_present/nonempty_result pair, which demands a single
+    complete result an open-ended search can never promise.
+
+    Both required, both going through the *existing* fail-closed criterion
+    machinery unchanged (verify_nonempty_result / verify_semantic_criteria /
+    record_verifier_verdict) — no new verdict path, no FSM change:
+
+    - ``coverage_report`` (deterministic, verify_nonempty_result): the plan's
+      final step output must be ``{"text": <summary>, "coverage":
+      {"covered": [...], "partial": [...], "not_found": [...]}}``. Checks
+      *shape*, not exhaustiveness.
+    - ``honest_not_found`` (independent semantic verifier): every
+      ``not_found`` entry must be backed by a real attempt/evidence, not
+      fabricated. No new verifier code — the existing verifier already judges
+      from each criterion's own ``description`` plus the supplied step
+      outputs, so stating the expectation there is enough.
+
+    Description text tightened 2026-08-20 (user feedback after the Ф4
+    pilot): a criterion that only asked for "one real attempt" let the model
+    write off a source after its first failure and call that honest — the
+    goal is completing the objective, not an honestly-worded early exit. The
+    verifier must now reject a not_found entry backed by a single attempt.
+    """
+    return [
+        {
+            "criterion_key": "coverage_report",
+            "description": (
+                "Финальный шаг вернул структурированный отчёт о покрытии: "
+                "output.coverage = {covered: [...], partial: [...], "
+                "not_found: [...]} — списки полностью найденного, частично "
+                "найденного и не найденного, плюс краткое текстовое summary."
+            ),
+            "kind": "artifact",
+            "predicate": {"type": "coverage_report"},
+            "required": True,
+        },
+        {
+            "criterion_key": "honest_not_found",
+            "description": (
+                "Цель — реально выполнить задачу, а не подобрать честную "
+                "формулировку отказа. Каждый пункт not_found в итоговом "
+                "отчёте подкреплён НЕСКОЛЬКИМИ разными зафиксированными "
+                "попытками (видно по succeeded/failed-шагам плана: разные "
+                "запросы, источники, инструменты или подходы) — одна "
+                "неудачная попытка НЕ является достаточным основанием "
+                "считать пункт not_found; такой отчёт должен провалить "
+                "критерий, даже если формально не выдуман. Также "
+                "провалить, если очевидная альтернативная стратегия "
+                "(другой запрос/источник/capability) не была опробована, "
+                "хотя была доступна."
+            ),
+            "kind": "semantic",
+            "predicate": {"type": "honest_not_found"},
+            "required": True,
+        },
+    ]
 
 
 async def create_work_order(
@@ -494,14 +647,30 @@ async def claim_ready_step(
 
 
 async def enforce_budgets(db: AsyncSession, *, actor: str = "scheduler") -> int:
-    """Б15: block any ready/running WorkOrder that exceeded its token_budget.
+    """Б15: block any ready/running WorkOrder that exceeded a configured budget.
 
     Runs as a periodic housekeeping pass (mirrors reclaim_expired_leases) —
     NOT inside claim_ready_step's SKIP LOCKED query — so a work order this
     blocks simply stops matching claim_ready_step's ``status.in_(["ready",
     "running"])`` filter on the next dispatch tick, with zero change to that
-    hot claim path. Only WorkOrders with an explicit ``budgets.token_budget``
-    are checked; nothing is enforced by default (see A4/Б15 on defaults).
+    hot claim path. Only WorkOrders with an explicit budget field set are
+    checked; nothing is enforced by default (see A4/Б15 on defaults).
+
+    Ф1.C (AGENT_AUTONOMY_ROADMAP.md): extends the original token_budget check
+    with three more dimensions an open-ended exploratory WorkOrder needs and a
+    capability-grounded one doesn't (its DAG is bounded up front) —
+    ``max_cost_usd`` (sum of WorkStepAttempt.cost_usd, for provider calls that
+    report cost instead of/alongside tokens), ``max_wall_clock_seconds``
+    (elapsed since the order started running), and ``max_tool_calls`` (count
+    of WorkToolCall rows, i.e. every capability
+    invocation regardless of kind — web fetch, search, whatever). A
+    capability-specific "web requests only" ceiling is deliberately not built
+    here: there's no web-facing capability yet to scope it to (that lands in
+    Ф2 alongside ComputerUseGrant wiring) — ``max_tool_calls`` is the honest
+    generic mechanism available today, not a placeholder for a narrower one.
+    Checked in this fixed order per order (first budget that's actually
+    exceeded wins the blocker reason) so a caller sees why it stopped rather
+    than an arbitrary pick among several exceeded budgets.
     """
     # Filtered in Python, not a JSON-path SQL predicate on `budgets` — matches
     # how every other budget field in this module is read (max_replans,
@@ -517,23 +686,72 @@ async def enforce_budgets(db: AsyncSession, *, actor: str = "scheduler") -> int:
     )
     blocked = 0
     for order in candidates:
-        token_budget = (order.budgets or {}).get("token_budget")
-        if token_budget is None:
+        budgets = order.budgets or {}
+        blocker: dict[str, Any] | None = None
+
+        token_budget = budgets.get("token_budget")
+        if token_budget is not None:
+            spent = (
+                await db.execute(
+                    select(func.coalesce(func.sum(WorkStepAttempt.tokens_used), 0))
+                    .join(WorkStep, WorkStep.id == WorkStepAttempt.step_id)
+                    .where(WorkStep.work_order_id == order.id)
+                )
+            ).scalar_one()
+            if spent > int(token_budget):
+                blocker = {
+                    "code": "token_budget_exceeded",
+                    "token_budget": int(token_budget),
+                    "tokens_spent": int(spent),
+                }
+
+        max_cost_usd = budgets.get("max_cost_usd")
+        if blocker is None and max_cost_usd is not None:
+            cost_spent = (
+                await db.execute(
+                    select(func.coalesce(func.sum(WorkStepAttempt.cost_usd), 0.0))
+                    .join(WorkStep, WorkStep.id == WorkStepAttempt.step_id)
+                    .where(WorkStep.work_order_id == order.id)
+                )
+            ).scalar_one()
+            if float(cost_spent) > float(max_cost_usd):
+                blocker = {
+                    "code": "cost_budget_exceeded",
+                    "max_cost_usd": float(max_cost_usd),
+                    "cost_spent_usd": round(float(cost_spent), 4),
+                }
+
+        max_wall_clock = budgets.get("max_wall_clock_seconds")
+        if blocker is None and max_wall_clock is not None and order.started_at is not None:
+            elapsed = (utcnow() - order.started_at).total_seconds()
+            if elapsed > float(max_wall_clock):
+                blocker = {
+                    "code": "wall_clock_budget_exceeded",
+                    "max_wall_clock_seconds": float(max_wall_clock),
+                    "elapsed_seconds": round(elapsed, 1),
+                }
+
+        max_tool_calls = budgets.get("max_tool_calls")
+        if blocker is None and max_tool_calls is not None:
+            from app.db.models import WorkToolCall
+
+            call_count = (
+                await db.execute(
+                    select(func.count())
+                    .select_from(WorkToolCall)
+                    .where(WorkToolCall.work_order_id == order.id)
+                )
+            ).scalar_one()
+            if call_count > int(max_tool_calls):
+                blocker = {
+                    "code": "tool_call_budget_exceeded",
+                    "max_tool_calls": int(max_tool_calls),
+                    "tool_calls_made": int(call_count),
+                }
+
+        if blocker is None:
             continue
-        spent = (
-            await db.execute(
-                select(func.coalesce(func.sum(WorkStepAttempt.tokens_used), 0))
-                .join(WorkStep, WorkStep.id == WorkStepAttempt.step_id)
-                .where(WorkStep.work_order_id == order.id)
-            )
-        ).scalar_one()
-        if spent <= int(token_budget):
-            continue
-        order.blocker = {
-            "code": "token_budget_exceeded",
-            "token_budget": int(token_budget),
-            "tokens_spent": int(spent),
-        }
+        order.blocker = blocker
         await transition_work_order(db, order, "blocked", actor=actor)
         blocked += 1
     if blocked:
@@ -548,6 +766,25 @@ async def enter_waiting_for_children(
     waiting on the children it spawned. See promote_waiting_parents for the
     other half (what happens once they all finish)."""
     await transition_work_order(db, order, "waiting_external", actor=actor)
+
+
+def _blocker_reason(blocker: dict[str, Any] | None) -> str | None:
+    """Ф4: the most specific human-readable reason in a WorkOrder's blocker,
+    for coverage reporting (promote_waiting_parents below). Blocker shapes
+    vary by source — fail_attempt's terminal-failure branch wraps the real
+    cause one level deeper under "error" (``{"code": "step_failed", "error":
+    {"code": "no_grant", ...}}``), while enforce_budgets/verify_nonempty_result
+    put it straight at the top level (``{"code": "token_budget_exceeded", ...}``)
+    — surfacing the generic "step_failed" wrapper when a real cause sits right
+    underneath it would be technically honest but needlessly vague.
+    """
+    if not blocker:
+        return None
+    code = blocker.get("code")
+    if code == "step_failed" and isinstance(blocker.get("error"), dict):
+        inner = blocker["error"]
+        return inner.get("code") or inner.get("message") or code
+    return code or blocker.get("message")
 
 
 async def promote_waiting_parents(db: AsyncSession, *, actor: str = "scheduler") -> int:
@@ -615,6 +852,27 @@ async def promote_waiting_parents(db: AsyncSession, *, actor: str = "scheduler")
             "text": aggregated_text,
             **({} if succeeded else {"errors": ["all children failed"]}),
         }
+        if is_exploratory(order):
+            # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found integrating Ф1-Ф3 —
+            # exploratory_acceptance_criteria()'s coverage_report predicate
+            # needs output.coverage = {covered, partial, not_found}, but this
+            # function only ever produced a human-readable text summary. A
+            # decompose-fan-out (one child per discovered supplier/source —
+            # the exploratory planner's own preferred pattern, see the
+            # planner prompt addendum in work_planning.py) could never
+            # satisfy that criterion without this: no other step produces
+            # a structured coverage object for the parent. Built from the
+            # same per-child data the text summary above already uses, so
+            # it can't disagree with what a human reads in that summary.
+            decompose_step.output["coverage"] = {
+                "covered": [c.objective for c in succeeded],
+                "partial": [],
+                "not_found": [
+                    {"item": c.objective, "reason": _blocker_reason(c.blocker) or c.status}
+                    for c in children
+                    if c.status != "completed"
+                ],
+            }
         try:
             await verify_nonempty_result(db, order=order, step=decompose_step, actor=actor)
         except WorkStateError as exc:
@@ -676,14 +934,28 @@ async def reclaim_expired_leases(db: AsyncSession, *, actor: str = "scheduler") 
         if step.attempt_count < step.max_attempts:
             await transition_step(db, step, "retry_wait", actor=actor, payload={"error": error})
             step.next_attempt_at = now
-            if order.status == "running":
+            # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the Ф4 pilot —
+            # gating this on `order.status == "running"` silently dropped the
+            # order-level transition whenever the lease actually expired
+            # (>=120s later) with the order having already moved on to
+            # "ready" in the meantime (e.g. a sibling step finished first and
+            # promote_ready_dependents flipped it back). The order's blocker
+            # got recorded but its status never changed, so a permanently
+            # failed step with dependents left the whole WorkOrder stuck
+            # forever — dispatch_ready ticks with nothing claimable and
+            # nothing re-evaluates it. Checking WORK_TRANSITIONS instead of
+            # one specific source status covers every state that can
+            # legally reach the target (matches what transition_work_order
+            # itself would accept) while still no-op'ing for genuinely
+            # terminal orders (completed/canceled) instead of raising.
+            if "ready" in WORK_TRANSITIONS.get(order.status, frozenset()):
                 await transition_work_order(db, order, "ready", actor=actor)
         else:
             await transition_step(db, step, "failed", actor=actor, payload={"error": error})
             order.blocker = {"code": "lease_expired", "step_id": str(step.id)}
-            if order.status == "running":
-                max_replans = max(0, int((order.budgets or {}).get("max_replans", 2)))
-                target = "replanning" if order.plan_revision <= max_replans else "blocked"
+            max_replans = _max_replans_for(order)
+            target = "replanning" if order.plan_revision <= max_replans else "blocked"
+            if target in WORK_TRANSITIONS.get(order.status, frozenset()):
                 await transition_work_order(db, order, target, actor=actor)
     await db.flush()
     return len(steps)
@@ -713,6 +985,16 @@ async def complete_attempt(
         attempt.tokens_used = (
             int(tokens_used.get("input_tokens") or 0) + int(tokens_used.get("output_tokens") or 0)
         )
+    # Ф1.C: symmetric with tokens_used above — an executor that knows its own
+    # USD cost (a cloud-provider call billed by the request, a paid web-search
+    # API, ...) can report it the same way, and max_cost_usd (enforce_budgets)
+    # will aggregate it. Same honest caveat as tokens_used: nothing populates
+    # this today (Ollama is free/local), so max_cost_usd only starts blocking
+    # once a real cost-reporting executor exists — but the aggregation itself
+    # is wired now, not a dead column waiting for one later.
+    cost_usd = output.get("cost_usd") if isinstance(output, dict) else None
+    if isinstance(cost_usd, (int, float)):
+        attempt.cost_usd = float(cost_usd)
     step.output = output
     await transition_step(db, step, "succeeded", actor=actor)
     await append_event(
@@ -756,6 +1038,119 @@ async def promote_ready_dependents(
     return unfinished
 
 
+async def find_active_plan_succeeded_steps(
+    db: AsyncSession, *, limit: int = 100
+) -> list[uuid.UUID]:
+    """Succeeded steps of a *currently active* plan, for a running order.
+
+    Feeds the periodic verify_work_step dispatch (_dispatch_ready_work).
+
+    Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the Ф4 pilot — the query
+    this replaced had no plan filter at all, so a WorkOrder that replanned
+    multiple times kept re-selecting already-succeeded steps from
+    *superseded* plans forever (nothing here or in verify_completed_step
+    ever stops re-querying a step just because it's already been verified
+    once). verify_completed_step then calls
+    promote_ready_dependents(plan_id=step.plan_id) for that stale plan,
+    which recomputes "unfinished" from the OLD plan's own steps (still
+    counting its permanently-failed/never-promotable siblings) and flips
+    the order back to "ready" — stomping on a completely different step
+    that was actively "running" in the *current* plan at that exact
+    moment. claim_ready_step already scopes its own query to
+    ``WorkPlan.status == "active"`` for the same reason; this needs the
+    identical join/filter.
+
+    Deliberately scoped to ``status == "running"``, not also "ready": a
+    "ready" order whose active plan is done stepping but never got
+    verified is a *separate* starvation case (see
+    unstick_ready_orders_with_stalled_active_plan) — nudging it back to
+    "running" once there is exactly right, but broadening this query
+    itself to "ready" would re-query and re-dispatch verify_work_step for
+    every already-succeeded step on every 5s tick for the entire time an
+    order sits "ready" between step claims (its normal resting state for
+    most of a multi-step plan's life), not just the one genuinely stalled
+    case.
+    """
+    rows = (
+        await db.execute(
+            select(WorkStep.id)
+            .join(WorkOrder, WorkOrder.id == WorkStep.work_order_id)
+            .join(WorkPlan, WorkPlan.id == WorkStep.plan_id)
+            .where(
+                WorkStep.state == "succeeded",
+                WorkOrder.status == "running",
+                WorkPlan.status == "active",
+            )
+            .limit(limit)
+        )
+    ).scalars()
+    return list(rows)
+
+
+async def unstick_ready_orders_with_stalled_active_plan(
+    db: AsyncSession, *, actor: str = "scheduler"
+) -> int:
+    """Recover a "ready" order whose active plan finished stepping but was
+    never handed back for verification.
+
+    Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the Ф4 pilot, right after
+    fixing find_active_plan_succeeded_steps above — a succeeded step that
+    was the *last* claimable one in its plan leaves the order "ready" with
+    nothing left for claim_ready_step to pick up (that is the only thing
+    that would otherwise flip it back to "running"), so the succeeded step
+    never gets verified and the order is stuck in "ready" forever. Scoped
+    narrowly on purpose: only orders whose active plan has zero steps left
+    in any in-flight state (ready/retry_wait/running/pending/
+    waiting_approval) *and* at least one succeeded step qualify — an order
+    resting in "ready" with real pending work is untouched, so this adds
+    no extra churn to the common case.
+    """
+    in_flight_states = ("ready", "retry_wait", "running", "pending", "waiting_approval")
+    stalled_plan_ids = list(
+        (
+            await db.execute(
+                select(WorkPlan.id)
+                .join(WorkOrder, WorkOrder.id == WorkPlan.work_order_id)
+                .where(
+                    WorkOrder.status == "ready",
+                    WorkPlan.status == "active",
+                    ~exists(
+                        select(1).where(
+                            WorkStep.plan_id == WorkPlan.id,
+                            WorkStep.state.in_(in_flight_states),
+                        )
+                    ),
+                    exists(
+                        select(1).where(
+                            WorkStep.plan_id == WorkPlan.id,
+                            WorkStep.state == "succeeded",
+                        )
+                    ),
+                )
+            )
+        ).scalars()
+    )
+    if not stalled_plan_ids:
+        return 0
+    orders = list(
+        (
+            await db.execute(
+                select(WorkOrder)
+                .join(WorkPlan, WorkPlan.work_order_id == WorkOrder.id)
+                .where(WorkPlan.id.in_(stalled_plan_ids))
+                .with_for_update(skip_locked=True)
+            )
+        ).scalars()
+    )
+    recovered = 0
+    for order in orders:
+        if order.status != "ready":
+            continue
+        await transition_work_order(db, order, "running", actor=actor)
+        recovered += 1
+    return recovered
+
+
 async def fail_attempt(
     db: AsyncSession,
     *,
@@ -765,13 +1160,37 @@ async def fail_attempt(
     error: dict[str, Any],
     retryable: bool,
     actor: str,
+    checkpoint: dict[str, Any] | None = None,
 ) -> None:
+    """checkpoint (Ф1.B, AGENT_AUTONOMY_ROADMAP.md): a capability that failed
+    partway through real progress (e.g. an exploratory web_discover step that
+    fetched 6 of 10 sources before timing out) can report that progress via
+    PartialProgressError (tasks/work_orders.py) instead of losing it. Persisted
+    here on the failed attempt; execute_claimed_step hands it to the next
+    retry's input so the capability can resume instead of starting over.
+    Every other failure path leaves this None — retries just restart clean,
+    unchanged from before.
+
+    Found while adding checkpoint (Ф1.B): this function never cleared
+    step.lease_owner/lease_expires_at on failure — reclaim_expired_leases
+    does (that's the *other* path into retry_wait, after a worker vanished),
+    but the ordinary in-transaction failure path here didn't, so a step that
+    fails and retries stayed unclaimable until its original claim_ready_step
+    lease (default 120s) expired on its own, however short the computed
+    backoff (as low as 5s) said the retry should wait — retries were
+    silently rate-limited to whichever was longer. Cleared unconditionally
+    below, matching reclaim_expired_leases, in both the retry and terminal
+    branches (a step moving to "failed" has no more use for a lease either).
+    """
     now = utcnow()
     attempt.status = "failed"
     attempt.error = error
+    attempt.checkpoint = checkpoint
     attempt.finished_at = now
     attempt.heartbeat_at = now
     step.last_error = error
+    step.lease_owner = None
+    step.lease_expires_at = None
     if retryable and step.attempt_count < step.max_attempts:
         await transition_step(db, step, "retry_wait", actor=actor, payload={"error": error})
         base = int((step.retry_policy or {}).get("base_seconds", 5))
@@ -782,7 +1201,7 @@ async def fail_attempt(
     else:
         await transition_step(db, step, "failed", actor=actor, payload={"error": error})
         order.blocker = {"code": "step_failed", "step_id": str(step.id), "error": error}
-        max_replans = max(0, int((order.budgets or {}).get("max_replans", 2)))
+        max_replans = _max_replans_for(order)
         target = "replanning" if order.plan_revision <= max_replans else "blocked"
         await transition_work_order(db, order, target, actor=actor)
 
@@ -844,6 +1263,36 @@ async def verify_nonempty_result(
                 verdict_ok = False
                 reason = f"invalid regular expression: {exc}"
             evidence_payload["pattern"] = pattern
+        elif predicate_type == "coverage_report":
+            # Ф1.D (AGENT_AUTONOMY_ROADMAP.md): honest-coverage for exploratory
+            # WorkOrders, expressed as an ordinary criterion — no FSM/verdict
+            # changes needed. Checks *shape* only (did the final step produce
+            # a structured covered/partial/not_found account), not
+            # exhaustiveness — an open-ended search can never promise "found
+            # everything", only "here is an honest account of what I tried".
+            # Whether not_found entries are genuinely justified (not
+            # fabricated) is a separate "honest_not_found" criterion, judged
+            # by the independent semantic verifier — see
+            # exploratory_acceptance_criteria().
+            report = output.get("coverage") if isinstance(output, dict) else None
+            well_formed = isinstance(report, dict) and all(
+                isinstance(report.get(key), list) for key in ("covered", "partial", "not_found")
+            )
+            nonempty = well_formed and any(
+                report.get(key) for key in ("covered", "partial", "not_found")
+            )
+            verdict_ok = nonempty and not output.get("errors")
+            if not well_formed:
+                reason = "output.coverage is missing or not a {covered, partial, not_found} object"
+            elif not nonempty:
+                reason = "coverage report is present but all three lists are empty"
+            else:
+                reason = "well-formed coverage report with covered/partial/not_found lists"
+            evidence_payload["coverage_counts"] = (
+                {key: len(report.get(key) or []) for key in ("covered", "partial", "not_found")}
+                if well_formed
+                else None
+            )
 
         if verdict_ok is not None:
             criterion.status = "passed" if verdict_ok else "failed"

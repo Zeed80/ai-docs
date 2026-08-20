@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.web_search import WebSearchResponse, WebSearchResult
 from app.auth.jwt import get_current_user
@@ -75,6 +76,39 @@ async def test_memory_promotion_from_session_fact_can_be_approved(client: AsyncC
     assert data["kind"] == "verified_fact"
     assert data["pinned"] is True
     assert data["metadata"]["promotion_status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_memory_promotion_list_excludes_superseded_duplicates(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """Ф6 (AGENT_AUTONOMY_ROADMAP.md): found while wiring the idle-reflection
+    duplicate-proposal consolidation task — list_memory_promotions never
+    checked MemoryFact.status, so a proposal the consolidation job marks
+    superseded (an exact duplicate collapsed onto a newer one) would still
+    show up in the review queue as if pending, letting a human act on a
+    stale duplicate instead of the kept one."""
+    from sqlalchemy import select
+
+    from app.db.models import MemoryFact
+
+    proposed = await client.post("/api/memory/promotions", json={
+        "title": "Дубль для теста Ф6",
+        "summary": "Будет помечен superseded вручную, как это делает idle-reflection",
+        "metadata": {"reason": "test"},
+    })
+    assert proposed.status_code == 200
+    proposal_id = proposed.json()["id"]
+
+    fact = (
+        await db_session.execute(select(MemoryFact).where(MemoryFact.id == proposal_id))
+    ).scalar_one()
+    fact.status = "superseded"
+    await db_session.commit()
+
+    listed = await client.get("/api/memory/promotions", params={"status": "pending"})
+    assert listed.status_code == 200
+    assert not any(item["id"] == proposal_id for item in listed.json())
 
 
 @pytest.mark.asyncio

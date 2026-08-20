@@ -254,6 +254,7 @@ async def _verify_local_session(token: str) -> UserInfo:
             roles = [db_role, *roles]
 
         section_access = await _db_section_access_for_sub(claims["sub"])
+        department_id = await _db_department_id_for_sub(claims["sub"])
 
         return UserInfo(
             sub=claims["sub"],
@@ -264,6 +265,7 @@ async def _verify_local_session(token: str) -> UserInfo:
             groups=groups,
             section_access=section_access,
             sections=visible_section_keys(roles, section_access),
+            department_id=department_id,
         )
     except HTTPException:
         raise
@@ -316,6 +318,7 @@ async def _verify_token(token: str) -> UserInfo:
             roles = [db_role, *roles]
 
         section_access = await _db_section_access_for_sub(claims["sub"])
+        department_id = await _db_department_id_for_sub(claims["sub"])
 
         return UserInfo(
             sub=claims["sub"],
@@ -326,6 +329,7 @@ async def _verify_token(token: str) -> UserInfo:
             groups=groups,
             section_access=section_access,
             sections=visible_section_keys(roles, section_access),
+            department_id=department_id,
         )
 
     except Exception as e:
@@ -393,12 +397,16 @@ _ROLE_CACHE_TTL = 45  # seconds
 _ROLE_CACHE_PREFIX = "auth:role:"
 _SECTION_CACHE_TTL = 45  # seconds
 _SECTION_CACHE_PREFIX = "auth:sections:"
+_DEPARTMENT_CACHE_TTL = 45  # seconds
+_DEPARTMENT_CACHE_PREFIX = "auth:department:"
+_DEPARTMENT_CACHE_EMPTY = "-"  # sentinel: "looked up, user has no department"
 
 
 async def invalidate_active_cache(sub: str) -> None:
-    """Drop the cached active-status, role and section grant for a user so a
-    change takes effect immediately. Call after activating/deactivating or
-    changing a user's role or section access. Best-effort — ignores Redis errors.
+    """Drop the cached active-status, role, section grant and department for a
+    user so a change takes effect immediately. Call after activating/
+    deactivating or changing a user's role, section access or department.
+    Best-effort — ignores Redis errors.
     """
     try:
         from app.utils.redis_client import get_async_redis
@@ -407,6 +415,7 @@ async def invalidate_active_cache(sub: str) -> None:
         await redis.delete(f"{_ACTIVE_CACHE_PREFIX}{sub}")
         await redis.delete(f"{_ROLE_CACHE_PREFIX}{sub}")
         await redis.delete(f"{_SECTION_CACHE_PREFIX}{sub}")
+        await redis.delete(f"{_DEPARTMENT_CACHE_PREFIX}{sub}")
     except Exception:  # pragma: no cover - cache invalidation is best-effort
         pass
 
@@ -508,6 +517,54 @@ async def _db_section_access_for_sub(sub: str) -> list[str] | None:
     if redis is not None:
         try:
             await redis.set(cache_key, json.dumps(value), ex=_SECTION_CACHE_TTL)
+        except Exception:  # pragma: no cover
+            pass
+    return value
+
+
+async def _db_department_id_for_sub(sub: str) -> str | None:
+    """Return ``users.department_id`` (as a string) for department-scoped memory
+    visibility (see MemoryFact scope ``department:{id}``). ``None`` = no
+    department set. Same cache/fail-open shape as :func:`_db_section_access_for_sub`
+    — a transient outage just means department-scoped facts are invisible for
+    up to the TTL, never that the wrong department's facts leak.
+    """
+    cache_key = f"{_DEPARTMENT_CACHE_PREFIX}{sub}"
+    redis = None
+    try:
+        from app.utils.redis_client import get_async_redis
+
+        redis = get_async_redis()
+        cached = await redis.get(cache_key)
+        if cached is not None:
+            return None if cached == _DEPARTMENT_CACHE_EMPTY else cached
+    except Exception:
+        redis = None
+
+    value: str | None = None
+    try:
+        from sqlalchemy import select
+
+        from app.db.models import User
+        from app.db.session import _get_session_factory
+
+        async with _get_session_factory()() as db:
+            row = (
+                await db.execute(select(User.department_id).where(User.sub == sub))
+            ).scalar_one_or_none()
+        if row is not None:
+            value = str(row)
+    except Exception as e:
+        logger.warning("department_id_lookup_db_failed", error=str(e))
+        return None
+
+    if redis is not None:
+        try:
+            await redis.set(
+                cache_key,
+                value if value is not None else _DEPARTMENT_CACHE_EMPTY,
+                ex=_DEPARTMENT_CACHE_TTL,
+            )
         except Exception:  # pragma: no cover
             pass
     return value

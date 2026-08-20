@@ -337,7 +337,11 @@ async def search_memory(
     for query_text in _expanded_memory_queries(payload):
         query_payload = search_payload.model_copy(update={"query": query_text})
         pattern = f"%{query_text}%"
-        hits.extend(await _search_memory_facts(db, query_payload, pattern))
+        hits.extend(
+            await _search_memory_facts(
+                db, query_payload, pattern, department_id=user.department_id
+            )
+        )
         hits.extend(await _search_graph_nodes(db, query_payload, pattern))
         hits.extend(await _search_sql_memory(db, query_payload, pattern, remaining=internal_limit))
 
@@ -501,6 +505,17 @@ async def list_memory_promotions(
         .where(
             MemoryFact.source == "memory_promotion",
             MemoryFact.kind.in_(sorted(kinds)),
+            # Ф6 (AGENT_AUTONOMY_ROADMAP.md): found while wiring the
+            # idle-reflection duplicate-proposal consolidation task — this
+            # query never checked MemoryFact.status (the "active/superseded/
+            # disputed" column, unrelated to the "status" query param above,
+            # which maps to `kind`), so a proposal the idle job marks
+            # superseded (an exact duplicate collapsed onto a newer one)
+            # would still show up in the review queue as if still pending,
+            # letting a human act on a stale duplicate instead of the kept
+            # one. _search_memory_facts already excludes non-"active" facts
+            # from ordinary memory search for the same reason.
+            MemoryFact.status != "superseded",
         )
         .order_by(MemoryFact.created_at.desc())
         .limit(200)
@@ -951,10 +966,55 @@ async def _search_graph_nodes(
     return hits
 
 
+def _resolve_visible_scopes(
+    payload: MemorySearchRequest,
+    *,
+    department_id: str | None = None,
+):
+    """Build the SQLAlchemy predicate for which ``MemoryFact.scope`` values a
+    request may read, given its requested scope and the caller's department.
+
+    Department visibility (``department:{department_id}``) is strictly
+    additive: it is OR'd onto whatever the requested scope already grants, on
+    every branch. A caller with no department (``department_id=None``) sees
+    exactly the same set as before this was added — this must never narrow or
+    change existing session/owner/project/global behaviour.
+    """
+    department_scope = f"department:{department_id}" if department_id else None
+    if payload.scope == "session":
+        safe_scopes = [MemoryFact.scope.in_(["project", "global"])]
+        if payload.session_id:
+            safe_scopes.append(
+                and_(
+                    MemoryFact.scope == "session",
+                    MemoryFact.metadata_["session_id"].as_string() == payload.session_id,
+                )
+            )
+        if department_scope:
+            safe_scopes.append(MemoryFact.scope == department_scope)
+        return or_(*safe_scopes)
+    if payload.scope and payload.scope.startswith("owner:"):
+        scopes = [payload.scope, "project", "global"]
+        if department_scope:
+            scopes.append(department_scope)
+        return MemoryFact.scope.in_(scopes)
+    if payload.scope:
+        branches = [MemoryFact.scope == payload.scope, MemoryFact.scope == "global"]
+        if department_scope:
+            branches.append(MemoryFact.scope == department_scope)
+        return or_(*branches)
+    scopes = ["project", "global"]
+    if department_scope:
+        scopes.append(department_scope)
+    return MemoryFact.scope.in_(scopes)
+
+
 async def _search_memory_facts(
     db: AsyncSession,
     payload: MemorySearchRequest,
     pattern: str,
+    *,
+    department_id: str | None = None,
 ) -> list[MemorySearchHit]:
     hits: list[MemorySearchHit] = []
     query = select(MemoryFact).where(
@@ -965,27 +1025,8 @@ async def _search_memory_facts(
             MemoryFact.summary.ilike(pattern),
             MemoryFact.kind.ilike(pattern),
         ),
+        _resolve_visible_scopes(payload, department_id=department_id),
     )
-    if payload.scope == "session":
-        safe_scopes = [MemoryFact.scope.in_(["project", "global"])]
-        if payload.session_id:
-            safe_scopes.append(
-                and_(
-                    MemoryFact.scope == "session",
-                    MemoryFact.metadata_["session_id"].as_string() == payload.session_id,
-                )
-            )
-        query = query.where(or_(*safe_scopes))
-    elif payload.scope and payload.scope.startswith("owner:"):
-        query = query.where(
-            MemoryFact.scope.in_([payload.scope, "project", "global"])
-        )
-    elif payload.scope:
-        query = query.where(
-            or_(MemoryFact.scope == payload.scope, MemoryFact.scope == "global")
-        )
-    else:
-        query = query.where(MemoryFact.scope.in_(["project", "global"]))
     result = await db.execute(
         query.order_by(MemoryFact.pinned.desc(), MemoryFact.created_at.desc()).limit(payload.limit)
     )

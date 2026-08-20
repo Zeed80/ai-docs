@@ -364,3 +364,65 @@ async def test_list_config_proposals(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
+
+
+# ── Ф7 (AGENT_AUTONOMY_ROADMAP.md): agent_tone is intentionally not protected ──
+
+
+@pytest.fixture
+def _isolated_agent_config(tmp_path, monkeypatch):
+    """save_builtin_agent_config writes to Redis + a JSON file (see
+    app/ai/agent_config.py) — neither is per-test-transaction-isolated like
+    db_session, so a real change here would leak into every later test in
+    the same run. Stubs both with a throwaway in-memory dict / tmp file."""
+    from app.ai import agent_config as ac
+
+    store: dict = {}
+    monkeypatch.setattr(ac, "_redis_get_agent_config", lambda: dict(store) if store else None)
+
+    def _set(data: dict) -> None:
+        store.clear()
+        store.update(data)
+
+    monkeypatch.setattr(ac, "_redis_set_agent_config", _set)
+    monkeypatch.setattr(ac, "_CONFIG_FILE", tmp_path / "agent_config.json")
+    yield
+
+
+@pytest.mark.asyncio
+async def test_agent_tone_proposal_applies_immediately_without_approval(
+    client: AsyncClient, _isolated_agent_config
+):
+    resp = await client.post("/api/agent/config/proposals", json={
+        "setting_path": "agent_tone",
+        "proposed_value": "friendly",
+        "reason": "Тест Ф7: тон не защищённая настройка",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["protected"] is False
+    assert data["status"] == "applied"
+
+    from app.ai.agent_config import get_builtin_agent_config
+    assert get_builtin_agent_config().agent_tone == "friendly"
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_proposal_still_requires_protected_flow(
+    client: AsyncClient, _isolated_agent_config
+):
+    """Regression guard: Ф7 only carves out agent_tone — system_prompt (and
+    every other PROTECTED_SETTINGS entry) must still land as a pending
+    proposal, not apply itself."""
+    resp = await client.post("/api/agent/config/proposals", json={
+        "setting_path": "system_prompt",
+        "proposed_value": "Ты — другой агент.",
+        "reason": "Regression test",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["protected"] is True
+    assert data["status"] == "pending"
+
+    from app.ai.agent_config import get_builtin_agent_config
+    assert get_builtin_agent_config().system_prompt != "Ты — другой агент."

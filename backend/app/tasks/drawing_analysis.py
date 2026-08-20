@@ -765,11 +765,9 @@ def ingest_supplier_catalog(self, supplier_id: str, file_path: str, filename: st
 async def _ingest_catalog_async(
     supplier_id: str, file_path: str, filename: str
 ) -> dict:
-    from app.ai.embeddings import embed_text as get_text_embedding
-    from app.db.models import ToolCatalogEntry, ToolSupplier
+    from app.db.models import ToolSupplier
     from app.db.session import _get_session_factory
-    from app.domain.drawing_graph import ingest_tool_catalog_graph
-    from app.vector.qdrant_store import ensure_drawing_collections, upsert_tool_catalog_entry
+    from app.vector.qdrant_store import ensure_drawing_collections
 
     supplier_uuid = uuid.UUID(supplier_id)
     file_ext = Path(filename).suffix.lower()
@@ -785,50 +783,183 @@ async def _ingest_catalog_async(
 
     ensure_drawing_collections()
 
-    created = 0
-    updated = 0
-    skipped = 0
-    errors: list[str] = []
-
     async with _get_session_factory()() as db:
         supplier = await db.get(ToolSupplier, supplier_uuid)
         if not supplier:
             return {"error": f"Supplier {supplier_id} not found"}
 
-        for row in rows:
+        # discovery_method="manual_upload" (the default _create_catalog_entries_from_rows
+        # falls back to when provenance omits it) deliberately does NOT set
+        # metadata_.review_status — manual uploads through this endpoint stay
+        # immediately usable, unchanged from before Ф3 added the web-sourced
+        # draft-first path below.
+        result = await _create_catalog_entries_from_rows(db, supplier_uuid, rows)
+        await db.commit()
+
+    logger.info(
+        "catalog_ingested",
+        supplier_id=supplier_id,
+        created=result["created"],
+        skipped=result["skipped"],
+    )
+    return {
+        "supplier_id": supplier_id,
+        "entries_created": result["created"],
+        "entries_updated": 0,
+        "entries_skipped": result["skipped"],
+        "errors": result["errors"][:10],
+    }
+
+
+async def _create_catalog_entries_from_rows(
+    db: Any,
+    supplier_uuid: uuid.UUID,
+    rows: list[dict[str, Any]],
+    *,
+    provenance: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Ф3 (AGENT_AUTONOMY_ROADMAP.md): the entry-creation/embed/graph loop,
+    split out of _ingest_catalog_async so both the file-upload path (above)
+    and the web-sourced path (ingest_web_catalog_source below) share exactly
+    one code path for turning normalized rows into ToolCatalogEntry rows —
+    same Qdrant upsert, same graph ingestion, same field mapping, instead of
+    two copies that would drift.
+
+    provenance (only set by the web-sourced caller — the file-upload path
+    passes none, preserving its pre-Ф3 behaviour exactly):
+      - discovery_method: "web_discover" | "manual_upload" (default)
+      - source_url, fetched_at, title: stored in metadata_ verbatim when present
+
+    Draft-first: when discovery_method != "manual_upload", new entries get
+    metadata_.review_status="ingested" and a supplier_id+part_number collision
+    against an existing entry becomes an AnomalyCard instead of a silent
+    overwrite — the existing entry is left untouched, the new one is created
+    alongside as "needs_review" so a human can compare and decide (see
+    backend/app/api/tool_catalog.py's approve endpoint).
+    """
+    from app.ai.embeddings import embed_text as get_text_embedding
+    from app.db.models import AnomalyCard, AnomalySeverity, AnomalyStatus, AnomalyType, ToolCatalogEntry, ToolTypeEnum
+    from app.domain.drawing_graph import ingest_tool_catalog_graph
+    from app.vector.qdrant_store import upsert_tool_catalog_entry
+    from sqlalchemy import select
+
+    prov = dict(provenance or {})
+    discovery_method = prov.get("discovery_method", "manual_upload")
+    is_web_sourced = discovery_method != "manual_upload"
+
+    created = 0
+    conflicted = 0
+    skipped = 0
+    errors: list[str] = []
+    anomaly_ids: list[uuid.UUID] = []
+
+    for row in rows:
+        try:
+            if not row.get("name") or not row.get("tool_type"):
+                skipped += 1
+                continue
+
+            tool_type_str = _normalize_tool_type(row.get("tool_type", ""))
             try:
-                if not row.get("name") or not row.get("tool_type"):
-                    skipped += 1
-                    continue
+                tool_type = ToolTypeEnum(tool_type_str)
+            except ValueError:
+                tool_type = ToolTypeEnum.other
 
-                from app.db.models import ToolTypeEnum
-                tool_type_str = _normalize_tool_type(row.get("tool_type", ""))
-                try:
-                    tool_type = ToolTypeEnum(tool_type_str)
-                except ValueError:
-                    tool_type = ToolTypeEnum.other
+            part_number = row.get("part_number")
+            name = str(row.get("name", ""))[:500]
+            price_value = _safe_float(row.get("price"))
 
-                entry = ToolCatalogEntry(
-                    supplier_id=supplier_uuid,
-                    part_number=row.get("part_number"),
-                    tool_type=tool_type,
-                    name=str(row.get("name", ""))[:500],
-                    description=row.get("description"),
-                    diameter_mm=_safe_float(row.get("diameter_mm") or row.get("diameter")),
-                    length_mm=_safe_float(row.get("length_mm") or row.get("length")),
-                    material=row.get("material"),
-                    coating=row.get("coating"),
-                    price_currency=row.get("currency", "RUB"),
-                    price_value=_safe_float(row.get("price")),
-                    catalog_page=_safe_int(row.get("catalog_page") or row.get("page")),
-                    parameters={k: v for k, v in row.items()
-                                if k not in ("name", "tool_type", "part_number", "description",
-                                            "diameter_mm", "diameter", "length_mm", "length",
-                                            "material", "coating", "currency", "price",
-                                            "catalog_page", "page")},
+            metadata: dict[str, Any] = {}
+            if is_web_sourced:
+                metadata["review_status"] = "ingested"
+                for key in ("source_url", "fetched_at", "title"):
+                    if prov.get(key):
+                        metadata[key] = prov[key]
+
+            # Conflict check: an existing entry for this supplier+part_number
+            # with materially different price/name is not silently overwritten.
+            existing = None
+            if part_number:
+                existing = (
+                    await db.execute(
+                        select(ToolCatalogEntry).where(
+                            ToolCatalogEntry.supplier_id == supplier_uuid,
+                            ToolCatalogEntry.part_number == part_number,
+                            ToolCatalogEntry.is_active.is_(True),
+                        )
+                    )
+                ).scalars().first()
+            conflict = existing is not None and (
+                existing.name != name
+                or (
+                    price_value is not None
+                    and existing.price_value is not None
+                    and abs(existing.price_value - price_value) > 0.01 * max(existing.price_value, 1.0)
                 )
-                db.add(entry)
-                await db.flush()
+            )
+            if conflict:
+                metadata["review_status"] = "needs_review"
+                metadata["conflicts_with_entry_id"] = str(existing.id)
+
+            entry = ToolCatalogEntry(
+                supplier_id=supplier_uuid,
+                part_number=part_number,
+                tool_type=tool_type,
+                name=name,
+                description=row.get("description"),
+                diameter_mm=_safe_float(row.get("diameter_mm") or row.get("diameter")),
+                length_mm=_safe_float(row.get("length_mm") or row.get("length")),
+                material=row.get("material"),
+                coating=row.get("coating"),
+                price_currency=row.get("currency", "RUB"),
+                price_value=price_value,
+                catalog_page=_safe_int(row.get("catalog_page") or row.get("page")),
+                parameters={k: v for k, v in row.items()
+                            if k not in ("name", "tool_type", "part_number", "description",
+                                        "diameter_mm", "diameter", "length_mm", "length",
+                                        "material", "coating", "currency", "price",
+                                        "catalog_page", "page")},
+                metadata_=metadata or None,
+            )
+            db.add(entry)
+            await db.flush()
+            # The entry itself is persisted here — count it as created now,
+            # before any enrichment below. Found while adding this function
+            # (Ф3): the original _ingest_catalog_async counted a row as
+            # "skipped" whenever the embed/Qdrant call after this point
+            # raised, even though db.flush() had already put a real row in
+            # the session that the caller's db.commit() would still persist
+            # — an entry could be silently both "created" (really, in the DB)
+            # and "skipped" (in the stats a caller/exploratory report reads).
+            # Ф1.D's whole point is honest counts, so this is fixed here:
+            # embedding/graph are best-effort enrichment of an already-real
+            # entry, not preconditions for it counting as created.
+            created += 1
+
+            try:
+                if conflict:
+                    anomaly = AnomalyCard(
+                        anomaly_type=AnomalyType.duplicate,
+                        severity=AnomalySeverity.warning,
+                        status=AnomalyStatus.open,
+                        entity_type="tool_catalog_entry",
+                        entity_id=entry.id,
+                        title=f"Расхождение в каталоге: {name} ({part_number})",
+                        description=(
+                            f"Новая запись из web-источника отличается от уже существующей "
+                            f"({existing.name!r}, цена {existing.price_value}) для того же "
+                            f"поставщика и артикула."
+                        ),
+                        details={
+                            "new_entry_id": str(entry.id),
+                            "existing_entry_id": str(existing.id),
+                            "source_url": prov.get("source_url"),
+                        },
+                    )
+                    db.add(anomaly)
+                    await db.flush()
+                    anomaly_ids.append(anomaly.id)
+                    conflicted += 1
 
                 # Embed → Qdrant
                 embed_text = (
@@ -856,27 +987,156 @@ async def _ingest_catalog_async(
                     await ingest_tool_catalog_graph(entry.id, db)
                 except Exception:
                     pass
+            except Exception as enrich_exc:
+                errors.append(f"enrichment_failed:{str(enrich_exc)[:180]}")
 
-                created += 1
+        except Exception as row_exc:
+            errors.append(str(row_exc)[:200])
+            skipped += 1
 
-            except Exception as row_exc:
-                errors.append(str(row_exc)[:200])
-                skipped += 1
+    return {
+        "created": created,
+        "conflicted": conflicted,
+        "skipped": skipped,
+        "errors": errors,
+        "anomaly_ids": anomaly_ids,
+    }
 
-        await db.commit()
+
+async def _parse_catalog_text_via_llm(text: str, *, hint: str | None = None) -> list[dict[str, Any]]:
+    """Ф3: structure free-form/HTML-derived catalog text into row dicts, for
+    content that arrived as already-extracted text (web_discover's fetch_page
+    output — HTML pages and OCR'd PDFs alike are normalized to text before
+    this ever sees them) rather than a file _parse_catalog_file can dispatch
+    on by extension. Same row-dict shape as the file parsers
+    (_parse_excel_catalog etc.) so _create_catalog_entries_from_rows doesn't
+    need to know which path produced them.
+
+    Best-effort: a malformed/empty LLM response yields an empty row list
+    (honest "nothing extracted"), never an exception — one bad source must
+    not break a multi-source exploratory discovery step.
+    """
+    from app.ai.model_resolver import get_reasoning_model
+    from app.ai.ollama_client import generate_json
+
+    model_config = get_reasoning_model()
+    prompt = json.dumps(
+        {"text": text[:20000], "hint": hint},
+        ensure_ascii=False,
+    )
+    system = """Extract a tool/instrument catalog from this page text into JSON rows.
+Return JSON only: {"rows": [{"part_number","name","tool_type","description","diameter_mm",
+"length_mm","material","coating","currency","price","catalog_page"}]}. tool_type must be one
+of: drill, endmill, insert, holder, tap, reamer, boring_bar, thread_mill, grinder,
+turning_tool, milling_cutter, countersink, counterbore, other. Omit fields you cannot find —
+never invent a value. If the text is not a product/tool catalog, return {"rows": []}."""
+    try:
+        raw = await generate_json(
+            prompt,
+            model=model_config.model,
+            provider=model_config.provider,
+            system=system,
+            temperature=0.0,
+            max_tokens=8192,
+            timeout_seconds=120,
+        )
+        rows = raw.get("rows") if isinstance(raw, dict) else None
+        return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    except Exception as exc:  # noqa: BLE001 - one bad source can't break the batch
+        logger.warning("catalog_text_llm_parse_failed", error=str(exc)[:200])
+        return []
+
+
+async def ingest_web_catalog_source(
+    db: Any,
+    supplier_id: str,
+    *,
+    url: str,
+    title: str | None,
+    text: str,
+    snippet: str | None = None,
+) -> dict[str, Any]:
+    """Ф3: structure one web_discover-fetched source into ToolCatalogEntry
+    rows for a supplier — the bridge between Ф2's web_discover output and the
+    same entry-creation/embed/graph pipeline _ingest_catalog_async uses for
+    uploaded files.
+
+    Takes ``db`` from the caller rather than opening its own session via
+    _get_session_factory() (the convention every other function in this file
+    uses) — deliberately, because unlike those, this isn't a detached Celery
+    task: it's called synchronously from the ingest-web-source HTTP endpoint,
+    which already has a properly request-scoped session from Depends(get_db).
+    Opening a second, independent session there would silently diverge from
+    it (found exactly this way: the endpoint's own session and this
+    function's self-opened one look identical in production against one real
+    database, but pointed at two different databases under test — the
+    supplier a test creates via the request-scoped session was invisible to
+    this function's own session, a 404 with no code path at fault except this
+    one not accepting the session it should have used).
+
+    The raw fetched text is stored in MinIO alongside the file-upload
+    catalogs' bucket convention (tool-catalogs/{supplier_id}/...) for
+    provenance/audit, even though nothing later reads it back — the point is
+    "what did we actually see", the same reason ComputerUseAction keeps a
+    hash of everything it fetches (Ф2).
+    """
+    import hashlib
+    from datetime import UTC, datetime
+
+    from app.db.models import ToolSupplier
+    from app.storage import upload_file
+    from app.vector.qdrant_store import ensure_drawing_collections
+
+    supplier_uuid = uuid.UUID(supplier_id)
+    fetched_at = datetime.now(UTC).isoformat()
+
+    try:
+        digest = hashlib.sha256(url.encode()).hexdigest()[:16]
+        upload_file(
+            text.encode("utf-8"),
+            f"tool-catalogs/{supplier_id}/web/{digest}.txt",
+            content_type="text/plain; charset=utf-8",
+        )
+    except Exception as exc:  # noqa: BLE001 - provenance storage must not block ingestion
+        logger.warning("web_catalog_source_storage_failed", url=url, error=str(exc)[:200])
+
+    rows = await _parse_catalog_text_via_llm(text, hint=title or snippet)
+    logger.info("web_catalog_rows_parsed", supplier_id=supplier_id, url=url, rows=len(rows))
+
+    ensure_drawing_collections()
+
+    supplier = await db.get(ToolSupplier, supplier_uuid)
+    if not supplier:
+        return {"error": f"Supplier {supplier_id} not found"}
+
+    result = await _create_catalog_entries_from_rows(
+        db,
+        supplier_uuid,
+        rows,
+        provenance={
+            "discovery_method": "web_discover",
+            "source_url": url,
+            "fetched_at": fetched_at,
+            "title": title,
+        },
+    )
+    await db.commit()
 
     logger.info(
-        "catalog_ingested",
+        "web_catalog_ingested",
         supplier_id=supplier_id,
-        created=created,
-        skipped=skipped,
+        url=url,
+        created=result["created"],
+        conflicted=result["conflicted"],
     )
     return {
         "supplier_id": supplier_id,
-        "entries_created": created,
-        "entries_updated": updated,
-        "entries_skipped": skipped,
-        "errors": errors[:10],
+        "source_url": url,
+        "entries_created": result["created"],
+        "entries_conflicted": result["conflicted"],
+        "entries_skipped": result["skipped"],
+        "anomaly_ids": [str(a) for a in result["anomaly_ids"]],
+        "errors": result["errors"][:10],
     }
 
 

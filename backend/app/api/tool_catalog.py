@@ -26,6 +26,8 @@ from app.db.session import get_db
 from pydantic import BaseModel, Field as PydanticField
 from app.domain.tool_catalog import (
     CatalogImportResult,
+    IngestWebSourceRequest,
+    IngestWebSourceResult,
     ToolCatalogEntryCreate,
     ToolCatalogEntryOut,
     ToolCatalogEntryUpdate,
@@ -271,6 +273,53 @@ async def refresh_catalog(
     )
 
 
+@router.post(
+    "/suppliers/{supplier_id}/ingest-web-source",
+    response_model=IngestWebSourceResult,
+    summary="Skill: tool_catalog.ingest_web_source — Structure one web_discover-fetched "
+    "page into draft catalog entries for a supplier (Ф3, AGENT_AUTONOMY_ROADMAP.md).",
+)
+async def ingest_web_source(
+    supplier_id: uuid.UUID,
+    payload: IngestWebSourceRequest,
+    db: AsyncSession = Depends(get_db),
+) -> IngestWebSourceResult:
+    """Draft-first: created entries get metadata.review_status="ingested" (or
+    "needs_review" if they conflict with an existing entry — see
+    _create_catalog_entries_from_rows) rather than being immediately final,
+    unlike the manual upload_catalog path above. Low risk / ungated
+    (creates draft data only, nothing destructive) but not recipe-replayable
+    (see capabilities.yml non_recipeable_actions) — blindly replaying it with
+    different fetched text on a different order would create duplicate
+    catalog data, not the intended "same known action" a recipe replay is for.
+    """
+    supplier = await db.get(ToolSupplier, supplier_id)
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Поставщик не найден")
+
+    from app.tasks.drawing_analysis import ingest_web_catalog_source
+
+    result = await ingest_web_catalog_source(
+        db,
+        str(supplier_id),
+        url=payload.url,
+        title=payload.title,
+        text=payload.text,
+        snippet=payload.snippet,
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=500, detail=result["error"])
+    return IngestWebSourceResult(
+        supplier_id=supplier_id,
+        source_url=result["source_url"],
+        entries_created=result["entries_created"],
+        entries_conflicted=result["entries_conflicted"],
+        entries_skipped=result["entries_skipped"],
+        anomaly_ids=[uuid.UUID(a) for a in result["anomaly_ids"]],
+        errors=result["errors"],
+    )
+
+
 # ── Catalog Entry CRUD ────────────────────────────────────────────────────────
 
 
@@ -340,6 +389,32 @@ async def update_entry(
             setattr(entry, field, value)
     await db.commit()
     await db.refresh(entry)
+    return ToolCatalogEntryOut.model_validate(entry)
+
+
+@router.post(
+    "/entries/{entry_id}/approve",
+    response_model=ToolCatalogEntryOut,
+    summary="Skill: tool_catalog.approve — Approve a draft/needs_review web-sourced "
+    "catalog entry (Ф3.B, AGENT_AUTONOMY_ROADMAP.md). Approval-gated.",
+)
+async def approve_entry(
+    entry_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> ToolCatalogEntryOut:
+    """Clears metadata.review_status (present only on web-sourced entries —
+    see ingest_web_source above; manually-created/uploaded entries have none
+    and are unaffected by this whole review flow). Idempotent: approving an
+    already-approved or never-gated entry is a no-op, not an error."""
+    entry = await db.get(ToolCatalogEntry, entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Инструмент не найден")
+    if entry.metadata_ and "review_status" in entry.metadata_:
+        metadata = dict(entry.metadata_)
+        metadata.pop("review_status")
+        entry.metadata_ = metadata or None
+        await db.commit()
+        await db.refresh(entry)
     return ToolCatalogEntryOut.model_validate(entry)
 
 

@@ -57,6 +57,20 @@ x-backend-env: &backend-env
   TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN:-localhost}
   SKILL_RUNNER_URL: http://skill-runner:8077
   GPU_TEMP_HELPER_URL: http://gpu-temp-helper:9966
+  # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the exploratory pilot's
+  # first real multi-step run — BuiltinAgentConfig.backend_url defaults to
+  # "http://localhost:8000" (correct only for code running inside the
+  # backend container itself, e.g. execute_work_order_now called
+  # synchronously from a FastAPI request handler). Every WorkStep dispatched
+  # via Celery (work.execute_step, running in celery-worker/-gpu/-lora, not
+  # backend) calls _execute_capability -> httpx POST to that URL — without
+  # this override it tried to reach "localhost:8000" inside the *worker*
+  # container, which doesn't run the FastAPI server, and every single
+  # kind="capability" WorkStep dispatched through Celery has been failing
+  # with a connection error since the durable runtime was built, for every
+  # capability, not just the ones this roadmap added. get_builtin_agent_
+  # config()'s _env_overrides() reads exactly this var and always prefers it.
+  FASTAPI_URL: http://backend:8000
   TRUSTED_PROXY: ${TRUSTED_PROXY:-true}
   AUTHENTIK_URL: ${AUTHENTIK_URL:-http://authentik-server:9000}
   AUTHENTIK_EXTERNAL_URL: ${AUTHENTIK_EXTERNAL_URL:-}

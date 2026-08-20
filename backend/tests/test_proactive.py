@@ -61,7 +61,9 @@ def _mock_db_ctx(rows_per_call: list):
     """Build an async context-manager mock whose execute() side_effect is rows_per_call.
 
     Each element of rows_per_call controls one execute() call:
-      - list[…]  → result.scalars().all() returns the list
+      - list[…]  → result.scalars().all() AND result.all() (as (col, col) rows)
+                   both return the list — the plain .all() form is what
+                   app.domain.proactive_feedback's acceptance-rate query uses
       - None     → result.scalar_one_or_none() returns None (no row found)
       - object   → result.scalar_one_or_none() returns that object
     """
@@ -81,6 +83,7 @@ def _mock_db_ctx(rows_per_call: list):
             scalars.scalar_one_or_none.return_value = rows[0] if rows else None
             result.scalars.return_value = scalars
             result.scalar_one_or_none = MagicMock(return_value=rows[0] if rows else None)
+            result.all = MagicMock(return_value=rows)
         else:
             # scalar result (None or single object)
             scalars = MagicMock()
@@ -88,10 +91,19 @@ def _mock_db_ctx(rows_per_call: list):
             scalars.scalar_one_or_none.return_value = rows
             result.scalars.return_value = scalars
             result.scalar_one_or_none = MagicMock(return_value=rows)
+            result.all = MagicMock(return_value=[] if rows is None else [rows])
         side_effects.append(result)
 
     mock_db.execute = AsyncMock(side_effect=side_effects)
     return mock_db
+
+
+# Every wired proactive task now opens with a self-throttle acceptance-rate
+# check (app.domain.proactive_feedback.should_throttle_proactive_task), which
+# issues one extra db.execute() before the task's own queries. An empty list
+# here means zero feedback rows → "insufficient_data" → never throttled, so
+# the rest of each test's mocked call sequence is unaffected.
+_NOT_THROTTLED = []
 
 
 # ── check_due_dates ────────────────────────────────────────────────────────────
@@ -102,7 +114,8 @@ class TestCheckDueDates:
         from app.tasks.proactive import _check_due_dates
 
         inv = _make_invoice(due_days=2)
-        mock_db = _mock_db_ctx([[inv], None])  # invoices, no existing reminder
+        # throttle check, invoices, no existing reminder, not snoozed
+        mock_db = _mock_db_ctx([_NOT_THROTTLED, [inv], None, None])
 
         create_notif = AsyncMock()
         mock_notif_obj = MagicMock()
@@ -126,7 +139,8 @@ class TestCheckDueDates:
 
         inv = _make_invoice(due_days=1)
         existing = MagicMock()
-        mock_db = _mock_db_ctx([[inv], existing])  # invoice found, reminder exists
+        # throttle check, invoice found, reminder exists (loop continues before any snooze check)
+        mock_db = _mock_db_ctx([_NOT_THROTTLED, [inv], existing])
 
         with (
             patch("app.db.session._get_session_factory", return_value=lambda: mock_db),
@@ -146,7 +160,8 @@ class TestCheckStaleApprovals:
         from app.tasks.proactive import _check_stale_approvals
 
         appr = _make_approval(hours_old=30, assigned="manager1")
-        mock_db = _mock_db_ctx([[appr]])
+        # throttle check, approvals, not snoozed
+        mock_db = _mock_db_ctx([_NOT_THROTTLED, [appr], None])
 
         create_notif = AsyncMock()
         mock_notif_obj = MagicMock()
@@ -170,7 +185,9 @@ class TestCheckStaleApprovals:
         from app.tasks.proactive import _check_stale_approvals
 
         appr = _make_approval(hours_old=30, assigned="sveta")
-        mock_db = _mock_db_ctx([[appr]])
+        # throttle check, approvals, not snoozed (assignee is not None, so
+        # is_snoozed still runs before the "sveta" special-case is checked)
+        mock_db = _mock_db_ctx([_NOT_THROTTLED, [appr], None])
 
         create_notif = AsyncMock()
 
@@ -188,7 +205,7 @@ class TestCheckStaleApprovals:
     async def test_empty_queue_returns_zero(self):
         from app.tasks.proactive import _check_stale_approvals
 
-        mock_db = _mock_db_ctx([[]])
+        mock_db = _mock_db_ctx([_NOT_THROTTLED, []])
 
         with patch("app.db.session._get_session_factory", return_value=lambda: mock_db):
             res = await _check_stale_approvals()
@@ -243,7 +260,8 @@ class TestDispatchDueReminders:
         from app.tasks.proactive import _dispatch_due_reminders
 
         reminder = _make_reminder(user_id="user1")
-        mock_db = _mock_db_ctx([[reminder]])
+        # throttle check, reminders, not snoozed (entity_type/id are set)
+        mock_db = _mock_db_ctx([_NOT_THROTTLED, [reminder], None])
 
         create_notif = AsyncMock()
         mock_notif_obj = MagicMock()
@@ -267,7 +285,9 @@ class TestDispatchDueReminders:
         from app.tasks.proactive import _dispatch_due_reminders
 
         reminder = _make_reminder(user_id="user")
-        mock_db = _mock_db_ctx([[reminder]])
+        # throttle check, reminders, not snoozed (checked by entity, regardless
+        # of the "user" placeholder taking the broadcast branch below)
+        mock_db = _mock_db_ctx([_NOT_THROTTLED, [reminder], None])
 
         bus_publish = AsyncMock()
         create_notif = AsyncMock()

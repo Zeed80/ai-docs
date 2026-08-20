@@ -7,13 +7,13 @@ import re
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.capability_manifest import CapabilityDefinition, load_capability_manifest
 from app.db.models import WorkOrder, WorkStep
-from app.domain.work_orders import append_event, create_work_plan
+from app.domain.work_orders import append_event, create_work_plan, is_exploratory
 
 _REF = re.compile(r"^\$\{steps\.([a-zA-Z0-9_-]+)\.output(?:\.([a-zA-Z0-9_.-]+))?\}$")
 
@@ -42,6 +42,35 @@ class PlannedStep(BaseModel):
     risk_level: str = Field("low", pattern="^(low|medium|high|critical)$")
     max_attempts: int = Field(3, ge=1, le=10)
     timeout_seconds: int = Field(600, ge=1, le=3600)
+
+    @field_validator("success_predicate", mode="before")
+    @classmethod
+    def _coerce_success_predicate(cls, value: Any) -> Any:
+        """Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the pilot's first
+        real planner call — the reasoning model sometimes describes this in
+        prose (e.g. "Supplier created successfully with a new supplier_id")
+        instead of the {"type": ...} shape the base system prompt names as a
+        schema field but never shows a worked example of. WorkStep.
+        success_predicate is stored for audit/display only — nothing in the
+        runtime actually evaluates it (order-level completion goes through
+        WorkAcceptanceCriterion instead, an entirely separate structure) — so
+        rejecting a plan outright over this shape mismatch was pure loss: the
+        whole multi-step/decompose plan got thrown away for a single-step
+        agent_turn fallback (plan_work_order's exception handler) that never
+        used the exploratory machinery. Coercing a bare string into a real
+        dict keeps the plan; no downstream code needs a specific "type".
+
+        Also observed live on the Ф4 pilot's replan 7: the same model wrote
+        a bare ``true`` for this field on one step instead of a string or a
+        dict — same root cause (the base prompt names the field but shows no
+        worked example), same "purely cosmetic, nothing evaluates it" fix
+        rationale as the string case above.
+        """
+        if isinstance(value, str):
+            return {"type": "custom", "description": value}
+        if isinstance(value, bool):
+            return {"type": "custom", "description": str(value)}
+        return value
 
     @model_validator(mode="after")
     def executor_is_complete(self) -> "PlannedStep":
@@ -120,6 +149,15 @@ async def generate_capability_plan(
     from app.ai.model_resolver import get_reasoning_model
 
     model_config = get_reasoning_model()
+    # Ф5 (AGENT_AUTONOMY_ROADMAP.md): self-learning connector hints — only
+    # for exploratory orders (a bounded/grounded order's DAG doesn't involve
+    # open-ended web discovery in the first place). Best-effort: an empty
+    # list changes nothing about the prompt below, and find_connector_hints
+    # itself never raises.
+    connector_hints: list[dict[str, Any]] = []
+    if is_exploratory(order):
+        from app.ai.connectors import find_connector_hints
+        connector_hints = await find_connector_hints(order.objective)
     prompt = json.dumps(
         {
             "objective": order.objective,
@@ -129,6 +167,7 @@ async def generate_capability_plan(
             "new_instructions": (order.metadata_ or {}).get("instructions", []),
             "completed_steps": completed_context or [],
             "last_failure": failure_context,
+            "connector_hints": connector_hints,
             "capabilities": _planner_catalog(),
         },
         ensure_ascii=False,
@@ -142,6 +181,49 @@ ${steps.lookup.output.result.items}. Never repeat completed work during replanni
 Schema: {assumptions:[string], steps:[{step_key,title,kind,capability?,action?,input,
 depends_on,success_predicate,risk_level,max_attempts,timeout_seconds}],
 verification_plan:{mode,checks}}. Gated actions must be high risk."""
+    if is_exploratory(order):
+        # Ф1.A (AGENT_AUTONOMY_ROADMAP.md): constraints.mode="exploratory" is
+        # already visible to the model inside the prompt JSON above — this
+        # tells it what to DO about that, since "smallest executable DAG"
+        # above is the wrong instinct here: the full scope of an open-ended
+        # search isn't known up front, so don't try to plan it all now.
+        #
+        # Rewritten (2026-08-20, user feedback after the Ф4 pilot ended
+        # "blocked"): the previous wording here ended with "Reporting a
+        # genuine gap in not_found is success, not failure" — that told the
+        # model conceding a source was just as good as actually finding it,
+        # after a *single* attempt. The goal is not an honestly-worded
+        # give-up; it is completing the objective, or genuinely exhausting
+        # reasonable strategies first. not_found is the last resort after
+        # real, varied effort — not a comfortable default.
+        system += """
+
+This objective is exploratory (constraints.mode == "exploratory"): its full scope is not
+knowable up front (e.g. "find and structure all supplier catalogs" — the set of suppliers
+and how to reach each one is discovered, not given). Do not attempt one large DAG covering
+everything. Plan only the next small horizon (1-3 steps: discover a batch of sources, or
+fetch/extract from ones already found) and rely on replanning with completed_steps/
+last_failure to continue once this horizon finishes — the same incremental loop already
+used for ordinary bounded replanning. When the objective naturally splits into independent
+units (one per supplier, one per source), prefer a single "decompose" step that spawns one
+child WorkOrder per unit over a flat list of steps for all of them — children get their own
+budget share and run independently (see PlannedChildSpec). connector_hints (if non-empty)
+lists domains/patterns that have actually worked before for similar objectives, each with the
+strategy (queries/sample URL) that succeeded — prefer trying these first over generic
+discovery from scratch when they plausibly match the current objective.
+
+Your goal is to actually complete the objective, not to produce an honest-sounding reason
+for not completing it. Before writing anything off as not_found: try a different query, a
+different source, a different capability/tool, or a different phrasing — a single failed
+attempt is not evidence something cannot be found. When last_failure shows a step failed,
+the correct response is usually to retry with an adjusted approach, not to concede that
+item. Only report an item as not_found after multiple, genuinely different attempts have
+failed — an independent verifier checks that each not_found entry reflects real varied
+effort, not a first-attempt bailout, and will reject the report otherwise. The plan's final
+step (of the whole objective, once every unit is covered or genuinely exhausted) must
+produce output shaped exactly {"text": <human summary>, "coverage": {"covered": [...],
+"partial": [...], "not_found": [{"item":..., "reason":..., "attempts":[...]}, ...]}} — each
+not_found entry's "attempts" lists what was actually tried and how each attempt failed."""
     raw = await generate_json(
         prompt,
         model=model_config.model,

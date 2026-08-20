@@ -11,6 +11,7 @@ from datetime import timedelta
 from typing import Any
 
 import httpx
+import structlog
 
 from app.domain.work_orders import (
     append_event,
@@ -32,6 +33,8 @@ from app.domain.work_planning import resolve_step_input, tool_call_digest
 from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
 
+logger = structlog.get_logger()
+
 
 def _worker_id() -> str:
     return f"{socket.gethostname()}:{uuid.uuid4()}"
@@ -45,11 +48,64 @@ class ApprovalRequiredError(RuntimeError):
         self.arguments = arguments
 
 
+class PartialProgressError(RuntimeError):
+    """Ф1.B: a capability failed partway through but made real progress worth
+    keeping — e.g. an exploratory discovery step that fetched 6 of 10 sources
+    before timing out. Raised instead of a plain RuntimeError/ConnectionError
+    when the capability's error response includes a ``checkpoint`` object;
+    execute_claimed_step persists it (WorkStepAttempt.checkpoint) and merges
+    it into the next retry's input as ``_resume_checkpoint`` so the capability
+    can resume rather than redo already-done work. Always retryable — that's
+    the point of reporting a checkpoint at all.
+    """
+
+    def __init__(self, message: str, *, checkpoint: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.checkpoint = checkpoint
+
+
 def _action_digest(capability: str, action: str, arguments: dict[str, Any]) -> str:
     payload = {"capability": capability, "action": action, "arguments": arguments}
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
+
+
+async def _notify_computer_use_needs_grant(
+    db: Any, *, order: Any, capability_action: str, reason: str
+) -> None:
+    """Ф2.B (AGENT_AUTONOMY_ROADMAP.md): notify-before-scope for computer_use,
+    not an approval — deciding the digest-Approval created alongside this
+    (see the caller) never creates a ComputerUseGrant, which only a manager
+    can (POST /work-orders/{id}/computer-grants). Best-effort: a notification
+    failure must never break the step-failure path that's already in
+    progress when this is called.
+    """
+    from app.db.models import NotificationType
+    from app.services.notifications import create_notification
+
+    try:
+        await create_notification(
+            db,
+            user_sub=order.owner_key,
+            type=NotificationType.system,
+            title="Нужен доступ в интернет для поручения",
+            body=(
+                f"Поручение «{order.objective[:200]}» пытается выполнить "
+                f"computer_use.{capability_action}, но для него нет активного "
+                "разрешения (ComputerUseGrant). Создать его может только "
+                f"руководитель: POST /work-orders/{order.id}/computer-grants. "
+                f"({reason[:200]})"
+            ),
+            entity_type="work_order",
+            entity_id=order.id,
+            action_url=f"/work-orders/{order.id}",
+            source_task="workorder.needs_computer_use_grant",
+        )
+    except Exception as exc:  # noqa: BLE001 - never break step-failure handling
+        logger.warning(
+            "computer_use_grant_notification_failed", work_order_id=str(order.id), error=str(exc)
+        )
 
 
 async def _heartbeat_step(
@@ -143,18 +199,42 @@ async def _execute_capability(
         )
     if response.status_code == 423:
         raise ApprovalRequiredError(capability, action, arguments)
-    if response.status_code >= 500:
-        raise ConnectionError(
-            f"Capability {capability}.{action} failed with HTTP {response.status_code}"
-        )
     if response.status_code >= 400:
-        raise RuntimeError(
+        # A capability that made real progress before failing may report it
+        # as {"error": ..., "checkpoint": {...}} in its response body — a
+        # convention, not a contract every capability has to implement;
+        # absent or malformed, this behaves exactly as before (plain
+        # RuntimeError/ConnectionError, retry starts clean).
+        checkpoint = None
+        try:
+            body = response.json()
+            if isinstance(body, dict) and isinstance(body.get("checkpoint"), dict):
+                checkpoint = body["checkpoint"]
+        except Exception:
+            pass
+        if response.status_code >= 500:
+            if checkpoint:
+                raise PartialProgressError(
+                    f"Capability {capability}.{action} failed with HTTP {response.status_code}",
+                    checkpoint=checkpoint,
+                )
+            raise ConnectionError(
+                f"Capability {capability}.{action} failed with HTTP {response.status_code}"
+            )
+        message = (
             f"Capability {capability}.{action} rejected with HTTP {response.status_code}: "
             f"{response.text[:500]}"
         )
+        if checkpoint:
+            raise PartialProgressError(message, checkpoint=checkpoint)
+        raise RuntimeError(message)
     result = response.json() if response.content else {}
     if isinstance(result, dict) and (result.get("error") or result.get("error_code")):
-        raise RuntimeError(str(result.get("error") or result.get("message") or result))
+        message = str(result.get("error") or result.get("message") or result)
+        checkpoint = result.get("checkpoint")
+        if isinstance(checkpoint, dict):
+            raise PartialProgressError(message, checkpoint=checkpoint)
+        raise RuntimeError(message)
     summary = json.dumps(result, ensure_ascii=False, default=str)[:8000]
     return {"result": result, "result_summary": summary, "executor": "capability"}
 
@@ -246,6 +326,15 @@ async def _execute_decompose(work_order_id: uuid.UUID, input_data: dict[str, Any
                 priority=parent.priority,
                 risk_level=parent.risk_level,
                 budgets=child_budgets,
+                # Ф4: inherit constraints (notably mode="exploratory") — a
+                # child decomposed from an exploratory objective is itself
+                # still exploratory (e.g. "find catalog for supplier X" is
+                # small but still open-ended, not a bounded capability DAG
+                # known up front). Matters mainly if this child's own initial
+                # agent_turn step later fails and gets replanned — that
+                # replan should get the same small-horizon planner guidance
+                # the parent did, not silently fall back to default mode.
+                constraints=dict(parent.constraints or {}),
                 parent_id=parent.id,
             )
             await create_single_step_plan(
@@ -280,7 +369,29 @@ async def verify_completed_step(step_id: uuid.UUID, *, session_factory: Any | No
             return False
         if order.status == "completed":
             return True
-        if order.status != "running":
+        if order.status == "ready":
+            # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the Ф4 pilot — a
+            # succeeded step whose order ends up "ready" instead of
+            # "running" (e.g. it was the last claimable step, so nothing
+            # was left to keep the order in "running" until verification
+            # ran) used to be stuck forever here: this function required
+            # exactly "running", and nothing elsewhere ever transitions a
+            # "ready" order back to "running" on its own — claim_ready_step
+            # only does that when there's a ready/retry_wait step left to
+            # claim, and there isn't one once everything has succeeded.
+            # domain.work_orders.unstick_ready_orders_with_stalled_active_plan
+            # (called from _dispatch_ready_work, before this function is ever
+            # queued) is the primary fix for that starvation; this is
+            # defense-in-depth for any other caller that reaches
+            # verify_completed_step directly. "ready"->"running" is itself a
+            # legal transition (the same one claim_ready_step performs when
+            # picking up work), so recover it here before falling through to
+            # the normal path below, whose first step
+            # (verify_nonempty_result's own transition to "verifying") is
+            # only a legal move from "running"/"waiting_external", not from
+            # "ready".
+            await transition_work_order(db, order, "running", actor="scheduler")
+        elif order.status != "running":
             return False
         if await promote_ready_dependents(
             db,
@@ -466,8 +577,46 @@ async def execute_claimed_step(
             )
             await db.commit()
             return False
+        # Ф1.B: hand this retry whatever checkpoint the step's last failed
+        # attempt reported (see PartialProgressError / fail_attempt), so a
+        # capability that supports it can resume instead of redoing work a
+        # prior attempt already finished. A plan-defined ``_resume_checkpoint``
+        # in the step's own static input always wins — this only fills the
+        # gap when the plan didn't set one.
+        if attempt.attempt_no > 1 and "_resume_checkpoint" not in input_data:
+            from sqlalchemy import select as _select
+
+            prior = (
+                await db.execute(
+                    _select(WorkStepAttempt.checkpoint)
+                    .where(
+                        WorkStepAttempt.step_id == step.id,
+                        WorkStepAttempt.attempt_no < attempt.attempt_no,
+                        WorkStepAttempt.checkpoint.is_not(None),
+                    )
+                    .order_by(WorkStepAttempt.attempt_no.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if prior is not None:
+                input_data = {**input_data, "_resume_checkpoint": prior}
+        # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the pilot —
+        # computer_use's own parameter schema names work_order_id as
+        # required, but the reasoning model generating the plan consistently
+        # left it out of the step's input, 422ing every real web_discover
+        # call. The durable runtime already knows this value authoritatively
+        # (step.work_order_id) — making the model responsible for perfectly
+        # echoing back a value the system already has was needless fragility
+        # for zero benefit. Filled in here, once, for every capability step,
+        # not special-cased to computer_use, so any future capability that
+        # needs it is covered too; an explicit value the plan already set
+        # always wins (e.g. a decompose child's own id, if that's ever a
+        # real use case) — this only fills the gap when it's missing.
+        if kind == "capability" and "work_order_id" not in input_data:
+            input_data = {**input_data, "work_order_id": str(step.work_order_id)}
         timeout_seconds = step.timeout_seconds
         work_order_id = step.work_order_id
+        owner_key = order.owner_key
         capability = step.capability
         action = step.action
         step_idempotency_key = step.idempotency_key
@@ -517,6 +666,20 @@ async def execute_claimed_step(
             session_factory=factory,
         )
     )
+    # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the pilot — nothing in this
+    # durable runtime ever called set_acting_user, so every capability call a
+    # WorkStep makes authenticated as the bare "agent-service" account (see
+    # app.ai.actor_context's own docstring: "headless turns... leave it
+    # unset"). Harmless for capabilities with no ownership check, but any
+    # endpoint using get_effective_user to scope by the WorkOrder's owner
+    # (computer_use's execute/web_discover, fixed in Ф2.A specifically for
+    # this "agent acts for a human" case) 404'd on every WorkOrder not
+    # literally owned by "agent-service" — which is all of them. Reset in
+    # `finally` since this worker process/event loop may go on to execute
+    # unrelated tasks after this one.
+    from app.ai.actor_context import set_acting_user
+
+    set_acting_user(owner_key)
     try:
         output = await _execute_step_kind(
             kind,
@@ -573,6 +736,56 @@ async def execute_claimed_step(
                     actor="policy",
                     payload={"approval_id": str(approval.id), "step_id": str(step_row.id)},
                 )
+                if exc.capability == "computer_use":
+                    # Ф2.B (AGENT_AUTONOMY_ROADMAP.md): deciding the Approval
+                    # row above (X-Agent-Approval: granted on retry) is not
+                    # enough by itself here — computer_use's own grant check
+                    # (ComputerUseGrant, a separate authorization primitive
+                    # from the digest-Approval one) still 423s without an
+                    # active grant, and only a manager can create one
+                    # (POST /work-orders/{id}/computer-grants). This exception
+                    # alone can't tell "no grant at all" apart from "a gated
+                    # computer_use action (shell/file_write/desktop_*) needs
+                    # its digest approved" — sent for both rather than
+                    # silently leaving the no-grant case with no signal at
+                    # all; a spurious nudge when a grant already exists costs
+                    # a manager one glance, silence costs the WorkOrder
+                    # stalling with no indication why. Must run BEFORE this
+                    # transaction's commit below — create_notification only
+                    # adds+flushes, it doesn't commit, so calling it after
+                    # commit() silently loses the row when this session exits.
+                    await _notify_computer_use_needs_grant(
+                        db, order=order, capability_action=exc.action, reason=str(exc)
+                    )
+                await db.commit()
+        return False
+    except PartialProgressError as exc:
+        # Ф1.B: distinct from the generic transient-error path only in that
+        # it carries a checkpoint to persist — always retryable, same as a
+        # transient error, so the next attempt (which will pick this
+        # checkpoint up, see the resume_step_input merge above) gets a chance
+        # to build on it rather than start over.
+        error = {"code": "partial_progress", "message": str(exc), "type": type(exc).__name__}
+        async with factory() as db:
+            order = await db.get(WorkOrder, work_order_id, with_for_update=True)
+            step_row = await db.get(WorkStep, step_id, with_for_update=True)
+            attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
+            call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
+            if order and step_row and attempt_row and attempt_row.status == "running":
+                await fail_attempt(
+                    db,
+                    order=order,
+                    step=step_row,
+                    attempt=attempt_row,
+                    error=error,
+                    retryable=True,
+                    actor=worker,
+                    checkpoint=exc.checkpoint,
+                )
+                if call_row is not None:
+                    call_row.status = "failed"
+                    call_row.error = error
+                    call_row.finished_at = utcnow()
                 await db.commit()
         return False
     except (TimeoutError, ConnectionError) as exc:
@@ -628,6 +841,7 @@ async def execute_claimed_step(
     finally:
         heartbeat_stop.set()
         await heartbeat
+        set_acting_user(None)
 
     async with factory() as db:
         order = await db.get(WorkOrder, work_order_id, with_for_update=True)
@@ -687,8 +901,12 @@ async def execute_work_order_now(
 async def _dispatch_ready_work(limit: int = 10) -> int:
     from sqlalchemy import select
 
-    from app.db.models import WorkOrder, WorkStep
+    from app.db.models import WorkOrder
     from app.db.session import _get_session_factory
+    from app.domain.work_orders import (
+        find_active_plan_succeeded_steps,
+        unstick_ready_orders_with_stalled_active_plan,
+    )
 
     factory = _get_session_factory()
     async with factory() as db:
@@ -708,16 +926,14 @@ async def _dispatch_ready_work(limit: int = 10) -> int:
         await reclaim_expired_leases(db)
         await enforce_budgets(db)
         await promote_waiting_parents(db)
-        pending_verification = list(
-            (
-                await db.execute(
-                    select(WorkStep.id)
-                    .join(WorkOrder, WorkOrder.id == WorkStep.work_order_id)
-                    .where(WorkStep.state == "succeeded", WorkOrder.status == "running")
-                    .limit(100)
-                )
-            ).scalars()
-        )
+        # Ф4 (AGENT_AUTONOMY_ROADMAP.md): must run before
+        # find_active_plan_succeeded_steps below — recovers a "ready" order
+        # whose active plan finished stepping but was never handed back for
+        # verification (see the function's own docstring), so its succeeded
+        # step is picked up by the very next query in this same pass instead
+        # of waiting a whole extra 5s tick.
+        await unstick_ready_orders_with_stalled_active_plan(db)
+        pending_verification = await find_active_plan_succeeded_steps(db, limit=100)
         await db.commit()
 
     for step_id in pending_verification:

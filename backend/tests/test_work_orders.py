@@ -261,6 +261,46 @@ def test_planner_rejects_unknown_capability_action():
         validate_capability_plan(plan)
 
 
+def test_planned_step_coerces_a_prose_success_predicate_instead_of_rejecting_the_plan():
+    """Ф4 finding, live on the pilot's first real planner call: a reasoning
+    model described success_predicate in prose instead of {"type": ...} — the
+    field name is in the base prompt's schema line but no worked example
+    shows its shape. Rejecting outright threw away an otherwise-valid
+    multi-step/decompose plan for the single-step agent_turn fallback."""
+    step = PlannedStep(
+        step_key="s1",
+        title="Create supplier",
+        kind="capability",
+        capability="tool_catalog",
+        action="create_supplier",
+        success_predicate="Supplier created successfully with a new supplier_id",
+    )
+    assert step.success_predicate == {
+        "type": "custom",
+        "description": "Supplier created successfully with a new supplier_id",
+    }
+
+
+def test_planned_step_coerces_a_bare_boolean_success_predicate_instead_of_rejecting_the_plan():
+    """Ф4 finding, live on the pilot's replan 7: the same model wrote a bare
+    ``true`` for this field on one step (plan.fallback_used event), same root
+    cause and same fix rationale as the prose case above — nothing downstream
+    evaluates success_predicate, so coercing it keeps the plan instead of
+    discarding a whole multi-step DAG for the single-step fallback."""
+    step = PlannedStep(
+        step_key="s1", title="x", kind="agent_turn", success_predicate=True,
+    )
+    assert step.success_predicate == {"type": "custom", "description": "True"}
+
+
+def test_planned_step_leaves_a_well_formed_success_predicate_untouched():
+    step = PlannedStep(
+        step_key="s1", title="x", kind="agent_turn",
+        success_predicate={"type": "min_length", "value": 10},
+    )
+    assert step.success_predicate == {"type": "min_length", "value": 10}
+
+
 @pytest.mark.asyncio
 async def test_work_order_api_create_plan_events_and_cancel(client):
     response = await client.post(

@@ -138,13 +138,19 @@ async def _check_due_dates() -> dict:
 
     from app.db.models import Invoice, InvoiceStatus, Notification, NotificationType, Reminder
     from app.db.session import _get_session_factory
+    from app.domain.proactive_feedback import is_snoozed, should_throttle_proactive_task
     from app.services.notifications import create_notification
 
+    _TASK_NAME = "proactive.check_due_dates"
     now = datetime.now(timezone.utc)
     window_end = now + timedelta(days=3)
     created = 0
 
     async with _get_session_factory()() as db:
+        if await should_throttle_proactive_task(db, _TASK_NAME):
+            logger.info("proactive_task_throttled", task=_TASK_NAME)
+            return {"created": 0, "throttled": True}
+
         result = await db.execute(
             select(Invoice).where(
                 and_(
@@ -188,7 +194,13 @@ async def _check_due_dates() -> dict:
             # Persist notification + real-time push for the invoice owner
             owner = getattr(inv, "created_by", None) or "system"
             # Only create DB notification for real users (not system placeholder)
-            if owner != "system":
+            if owner != "system" and not await is_snoozed(
+                db,
+                beat_task_name=_TASK_NAME,
+                entity_type="invoice",
+                entity_id=inv.id,
+                user_sub=owner,
+            ):
                 await create_notification(
                     db,
                     user_sub=owner,
@@ -198,6 +210,7 @@ async def _check_due_dates() -> dict:
                     entity_type="invoice",
                     entity_id=inv.id,
                     action_url=f"/invoices/{inv.id}",
+                    source_task=_TASK_NAME,
                 )
 
             notifier = await _get_notifier()
@@ -277,12 +290,18 @@ async def _dispatch_due_reminders() -> dict:
 
     from app.db.models import Notification, NotificationType, Reminder
     from app.db.session import _get_session_factory
+    from app.domain.proactive_feedback import is_snoozed, should_throttle_proactive_task
     from app.services.notifications import create_notification
 
+    _TASK_NAME = "proactive.dispatch_due_reminders"
     now = datetime.now(timezone.utc)
     dispatched = 0
 
     async with _get_session_factory()() as db:
+        if await should_throttle_proactive_task(db, _TASK_NAME):
+            logger.info("proactive_task_throttled", task=_TASK_NAME)
+            return {"dispatched": 0, "throttled": True}
+
         result = await db.execute(
             select(Reminder).where(
                 and_(
@@ -296,7 +315,20 @@ async def _dispatch_due_reminders() -> dict:
         for reminder in reminders:
             try:
                 user_sub = reminder.user_id
-                if user_sub and user_sub != "user":
+                snoozed = (
+                    reminder.entity_type is not None
+                    and reminder.entity_id is not None
+                    and await is_snoozed(
+                        db,
+                        beat_task_name=_TASK_NAME,
+                        entity_type=reminder.entity_type,
+                        entity_id=reminder.entity_id,
+                        user_sub=user_sub,
+                    )
+                )
+                if snoozed:
+                    pass
+                elif user_sub and user_sub != "user":
                     await create_notification(
                         db,
                         user_sub=user_sub,
@@ -309,6 +341,7 @@ async def _dispatch_due_reminders() -> dict:
                             f"/{reminder.entity_type}s/{reminder.entity_id}"
                             if reminder.entity_type else None
                         ),
+                        source_task=_TASK_NAME,
                     )
                 else:
                     # No specific user — broadcast to web clients
@@ -322,15 +355,19 @@ async def _dispatch_due_reminders() -> dict:
                         "entity_id": str(reminder.entity_id),
                     })
 
-                notifier = await _get_notifier()
-                if notifier:
-                    try:
-                        await notifier.notify_text(f"⏰ {reminder.message}")
-                    except Exception as exc:
-                        logger.warning("tg_notify_reminder_failed", error=str(exc))
+                if not snoozed:
+                    notifier = await _get_notifier()
+                    if notifier:
+                        try:
+                            await notifier.notify_text(f"⏰ {reminder.message}")
+                        except Exception as exc:
+                            logger.warning("tg_notify_reminder_failed", error=str(exc))
+                    dispatched += 1
+                # Mark sent either way — this one-shot Reminder has been
+                # handled (suppressed by a user's snooze counts as handled,
+                # not as "try again next tick").
                 reminder.is_sent = True
                 reminder.sent_at = now
-                dispatched += 1
             except Exception as exc:
                 logger.warning(
                     "reminder_dispatch_failed",
@@ -350,14 +387,20 @@ async def _check_stale_approvals() -> dict:
 
     from app.db.models import Approval, ApprovalStatus, NotificationType
     from app.db.session import _get_session_factory
+    from app.domain.proactive_feedback import is_snoozed, should_throttle_proactive_task
     from app.services.notifications import create_notification
 
+    _TASK_NAME = "proactive.check_stale_approvals"
     STALE_HOURS = 24
     now = datetime.now(timezone.utc)
     stale_threshold = now - timedelta(hours=STALE_HOURS)
     alerted = 0
 
     async with _get_session_factory()() as db:
+        if await should_throttle_proactive_task(db, _TASK_NAME):
+            logger.info("proactive_task_throttled", task=_TASK_NAME)
+            return {"alerted": 0, "throttled": True}
+
         result = await db.execute(
             select(Approval).where(
                 and_(
@@ -385,6 +428,15 @@ async def _check_stale_approvals() -> dict:
                 )
 
                 assignee = appr.assigned_to or appr.requested_by
+                snoozed = assignee is not None and await is_snoozed(
+                    db,
+                    beat_task_name=_TASK_NAME,
+                    entity_type=appr.entity_type,
+                    entity_id=appr.entity_id,
+                    user_sub=assignee,
+                )
+                if snoozed:
+                    continue
                 if assignee and assignee not in ("sveta", "system"):
                     await create_notification(
                         db,
@@ -395,6 +447,7 @@ async def _check_stale_approvals() -> dict:
                         entity_type=appr.entity_type,
                         entity_id=appr.entity_id,
                         action_url=f"/approvals/{appr.id}",
+                        source_task=_TASK_NAME,
                     )
 
                 await _tg_notify_stale_approval(

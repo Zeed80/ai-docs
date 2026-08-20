@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 import structlog
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +16,7 @@ from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo
 from app.db.models import Notification
 from app.db.session import get_db
+from app.domain.proactive_feedback import record_proactive_feedback
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -118,6 +121,71 @@ async def mark_read(
         notif.is_read = True
         await db.commit()
     return {"status": "ok"}
+
+
+class NotificationFeedbackRequest(BaseModel):
+    action: Literal["accepted", "dismissed", "snoozed"]
+    # Only meaningful (and required in practice) for action="snoozed"; a
+    # missing value there falls back to 60 minutes.
+    snooze_minutes: int | None = None
+
+
+class NotificationFeedbackResponse(BaseModel):
+    status: str
+    # False for notifications with no source_task (approvals, mentions,
+    # broadcast-style proactive alerts — see Notification.source_task) — the
+    # notification is still marked read, there's just no beat task to
+    # calibrate this reaction against.
+    calibrated: bool
+
+
+@router.post("/{notification_id}/feedback", response_model=NotificationFeedbackResponse)
+async def submit_notification_feedback(
+    notification_id: uuid.UUID,
+    payload: NotificationFeedbackRequest,
+    user: UserInfo = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> NotificationFeedbackResponse:
+    """Record accept/dismiss/snooze on a notification (AGENT_AUTONOMY_ROADMAP.md Ф0.B).
+
+    Calibrates whether the proactive task that created it is actually wanted —
+    see app.domain.proactive_feedback. Always marks the notification read: a
+    reaction means the user has seen it, whether or not it's calibratable.
+    """
+    result = await db.execute(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.user_sub == user.sub,
+        )
+    )
+    notif = result.scalar_one_or_none()
+    if notif is None:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    notif.is_read = True
+
+    if notif.source_task is None:
+        await db.commit()
+        return NotificationFeedbackResponse(status="ok", calibrated=False)
+
+    snoozed_until = None
+    if payload.action == "snoozed":
+        snoozed_until = datetime.now(timezone.utc) + timedelta(
+            minutes=payload.snooze_minutes or 60
+        )
+
+    await record_proactive_feedback(
+        db,
+        beat_task_name=notif.source_task,
+        user_sub=user.sub,
+        action=payload.action,
+        notification_id=notif.id,
+        entity_type=notif.entity_type,
+        entity_id=notif.entity_id,
+        snoozed_until=snoozed_until,
+    )
+    await db.commit()
+    return NotificationFeedbackResponse(status="ok", calibrated=True)
 
 
 @router.post("/read-all")
