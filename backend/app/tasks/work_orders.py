@@ -45,6 +45,22 @@ class ApprovalRequiredError(RuntimeError):
         self.arguments = arguments
 
 
+class PartialProgressError(RuntimeError):
+    """Ф1.B: a capability failed partway through but made real progress worth
+    keeping — e.g. an exploratory discovery step that fetched 6 of 10 sources
+    before timing out. Raised instead of a plain RuntimeError/ConnectionError
+    when the capability's error response includes a ``checkpoint`` object;
+    execute_claimed_step persists it (WorkStepAttempt.checkpoint) and merges
+    it into the next retry's input as ``_resume_checkpoint`` so the capability
+    can resume rather than redo already-done work. Always retryable — that's
+    the point of reporting a checkpoint at all.
+    """
+
+    def __init__(self, message: str, *, checkpoint: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.checkpoint = checkpoint
+
+
 def _action_digest(capability: str, action: str, arguments: dict[str, Any]) -> str:
     payload = {"capability": capability, "action": action, "arguments": arguments}
     return hashlib.sha256(
@@ -143,18 +159,42 @@ async def _execute_capability(
         )
     if response.status_code == 423:
         raise ApprovalRequiredError(capability, action, arguments)
-    if response.status_code >= 500:
-        raise ConnectionError(
-            f"Capability {capability}.{action} failed with HTTP {response.status_code}"
-        )
     if response.status_code >= 400:
-        raise RuntimeError(
+        # A capability that made real progress before failing may report it
+        # as {"error": ..., "checkpoint": {...}} in its response body — a
+        # convention, not a contract every capability has to implement;
+        # absent or malformed, this behaves exactly as before (plain
+        # RuntimeError/ConnectionError, retry starts clean).
+        checkpoint = None
+        try:
+            body = response.json()
+            if isinstance(body, dict) and isinstance(body.get("checkpoint"), dict):
+                checkpoint = body["checkpoint"]
+        except Exception:
+            pass
+        if response.status_code >= 500:
+            if checkpoint:
+                raise PartialProgressError(
+                    f"Capability {capability}.{action} failed with HTTP {response.status_code}",
+                    checkpoint=checkpoint,
+                )
+            raise ConnectionError(
+                f"Capability {capability}.{action} failed with HTTP {response.status_code}"
+            )
+        message = (
             f"Capability {capability}.{action} rejected with HTTP {response.status_code}: "
             f"{response.text[:500]}"
         )
+        if checkpoint:
+            raise PartialProgressError(message, checkpoint=checkpoint)
+        raise RuntimeError(message)
     result = response.json() if response.content else {}
     if isinstance(result, dict) and (result.get("error") or result.get("error_code")):
-        raise RuntimeError(str(result.get("error") or result.get("message") or result))
+        message = str(result.get("error") or result.get("message") or result)
+        checkpoint = result.get("checkpoint")
+        if isinstance(checkpoint, dict):
+            raise PartialProgressError(message, checkpoint=checkpoint)
+        raise RuntimeError(message)
     summary = json.dumps(result, ensure_ascii=False, default=str)[:8000]
     return {"result": result, "result_summary": summary, "executor": "capability"}
 
@@ -466,6 +506,29 @@ async def execute_claimed_step(
             )
             await db.commit()
             return False
+        # Ф1.B: hand this retry whatever checkpoint the step's last failed
+        # attempt reported (see PartialProgressError / fail_attempt), so a
+        # capability that supports it can resume instead of redoing work a
+        # prior attempt already finished. A plan-defined ``_resume_checkpoint``
+        # in the step's own static input always wins — this only fills the
+        # gap when the plan didn't set one.
+        if attempt.attempt_no > 1 and "_resume_checkpoint" not in input_data:
+            from sqlalchemy import select as _select
+
+            prior = (
+                await db.execute(
+                    _select(WorkStepAttempt.checkpoint)
+                    .where(
+                        WorkStepAttempt.step_id == step.id,
+                        WorkStepAttempt.attempt_no < attempt.attempt_no,
+                        WorkStepAttempt.checkpoint.is_not(None),
+                    )
+                    .order_by(WorkStepAttempt.attempt_no.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if prior is not None:
+                input_data = {**input_data, "_resume_checkpoint": prior}
         timeout_seconds = step.timeout_seconds
         work_order_id = step.work_order_id
         capability = step.capability
@@ -573,6 +636,35 @@ async def execute_claimed_step(
                     actor="policy",
                     payload={"approval_id": str(approval.id), "step_id": str(step_row.id)},
                 )
+                await db.commit()
+        return False
+    except PartialProgressError as exc:
+        # Ф1.B: distinct from the generic transient-error path only in that
+        # it carries a checkpoint to persist — always retryable, same as a
+        # transient error, so the next attempt (which will pick this
+        # checkpoint up, see the resume_step_input merge above) gets a chance
+        # to build on it rather than start over.
+        error = {"code": "partial_progress", "message": str(exc), "type": type(exc).__name__}
+        async with factory() as db:
+            order = await db.get(WorkOrder, work_order_id, with_for_update=True)
+            step_row = await db.get(WorkStep, step_id, with_for_update=True)
+            attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
+            call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
+            if order and step_row and attempt_row and attempt_row.status == "running":
+                await fail_attempt(
+                    db,
+                    order=order,
+                    step=step_row,
+                    attempt=attempt_row,
+                    error=error,
+                    retryable=True,
+                    actor=worker,
+                    checkpoint=exc.checkpoint,
+                )
+                if call_row is not None:
+                    call_row.status = "failed"
+                    call_row.error = error
+                    call_row.finished_at = utcnow()
                 await db.commit()
         return False
     except (TimeoutError, ConnectionError) as exc:

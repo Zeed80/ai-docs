@@ -90,41 +90,42 @@
 
 ---
 
-## Фаза 1 — Exploratory-режим WorkOrder: точечные расширения (не новая архитектура)
+## Фаза 1 — Exploratory-режим WorkOrder: точечные расширения — ЗАКРЫТА (2026-08-20)
 
 ### Находки по ходу
-- [ ]
+- [x] **`fail_attempt` никогда не сбрасывал `step.lease_owner`/`lease_expires_at`** — только `reclaim_expired_leases` (другой путь в `retry_wait`, после исчезновения воркера) это делал. Из-за этого шаг, упавший по обычному пути (`execute_claimed_step`'s exception-хендлеры), становился claimable только после истечения СТАРОЙ 120-секундной аренды с первого claim'а — независимо от того, каким коротким был вычисленный exponential backoff (мог быть 5с). Ретраи были незаметно rate-limited до ~120с минимум. Найдено тестом на checkpoint-ретрай (`claim_ready_step` не находил "готовую" retry_wait-запись), исправлено — `fail_attempt` теперь чистит lease в обеих ветках (retry и terminal), плюс отдельный регрессионный тест.
+- [x] В проде: в новом блоке `except PartialProgressError` забыт обязательный kwarg `actor=` у `fail_attempt` — поймано интеграционным тестом (`execute_claimed_step` end-to-end), не догадка/ревью, реальный `TypeError` при первом прогоне против живой БД.
+- [x] Мои же тесты на `coverage_report`-критерий изначально ожидали blocker `verification_failed`, но при паре критериев (детерминированный `coverage_report` + семантический `honest_not_found`) существующий (неизменяемый) приоритет в `verify_nonempty_result` всегда возвращает `independent_verification_required`, пока семантический критерий не резолвится — это корректное поведение FSM, не баг; тесты переписаны на проверку статуса конкретного `WorkAcceptanceCriterion`, а не агрегированного blocker-кода.
+- [x] Тест `max_tool_calls`-бюджета изначально подставлял `attempt_id=uuid.uuid4()` в `WorkToolCall` — поймано FK-ошибкой на реальном Postgres (`work_tool_calls_attempt_id_fkey`), локальный SQLite/мок этого не поймал бы. Переписан на 3 реальных `WorkStepAttempt` через `claim_ready_step`.
+- [x] `cost_usd` (как и `checkpoint` до Фазы 1) был мёртвым полем — никто и никогда его не писал. Раз строится бюджет `max_cost_usd` поверх него — `complete_attempt` теперь тоже заполняет `attempt.cost_usd` из `output.cost_usd` (симметрично уже существовавшему `tokens_used`), иначе бюджет был бы недостижим на практике.
 
-### 1.A Флаг режима без миграции
+### 1.A Флаг режима — сделано
 
-- [ ] Ввести конвенцию `order.constraints["mode"] = "exploratory"` (JSON-поле, миграция не нужна) — использовать в местах, которые должны вести себя иначе для открытых задач (выбор acceptance-критериев, honest-coverage проверка).
-- [ ] **Переиспользовать существующий decompose-механизм** (`PlannedStep.kind="decompose"`, `backend/app/tasks/work_orders.py:180-263`, `_split_child_budgets`) для fan-out по источникам/поставщикам — НЕ писать отдельный «горизонт-цикл» с нуля. Родительский exploratory WorkOrder decompose-шагом порождает дочерние WorkOrder (по одному на поставщика/партию поставщиков) с автоматически поделённым бюджетом.
-- [ ] Убедиться, что промпт `generate_capability_plan` (`backend/app/domain/work_planning.py:137-144`) для exploratory-режима явно поощряет открытое исследование малыми горизонтами + decompose, а не пытается построить полный DAG сразу на неизвестное число источников — при необходимости добавить в system-промпт отдельную ветку инструкции для `mode=exploratory` (проверить, не потребуется ли отдельный system-промпт вместо общего — если общий промпт достаточно гибкий, лучше не плодить копию).
+- [x] `is_exploratory(order)` — читает `order.constraints["mode"] == "exploratory"`, JSON-поле, миграция не понадобилась.
+- [x] **Decompose-механизм переиспользован как есть** (`PlannedStep.kind="decompose"`, `_split_child_budgets`) — новый «горизонт-цикл» не писался, он не нужен: существующий incremental replanning (`completed_context`/`failure_context` в `generate_capability_plan`) уже даёт именно это.
+- [x] Промпт планировщика (`backend/app/domain/work_planning.py`) — условная добавка к system-промпту при `is_exploratory(order)`: горизонт 1-3 шага вместо полного DAG, предпочтение decompose для независимых юнитов, обязательный контракт финального вывода `{text, coverage:{covered,partial,not_found}}`.
 
-### 1.B Checkpoint для длинных единичных шагов
+### 1.B Checkpoint — сделано (в объёме retry-возобновления, не потокового progress)
 
-- [ ] Задействовать `WorkStepAttempt.checkpoint` (JSON, `backend/app/db/models.py:1674`, сейчас не используется) — схема для exploratory: `{"phase": "discovering|fetching|extracting", "covered": [...], "pending": [...], "last_action_at": ...}`.
-- [ ] Найти исполнение attempt (`grep -rn "WorkStepAttempt(" backend/app/`) и добавить периодическую запись `checkpoint` во время долгого шага (не только на finish).
-- [ ] При retry/восстановлении — читать последний `checkpoint`, продолжать с него, не с нуля. Тест: «шаг упал на середине → возобновление из checkpoint, не re-discovery заново».
+- [x] Архитектурное решение, зафиксированное явно: mid-execution потоковый progress НЕ строился — философия существующей архитектуры («маленькие шаги + replanning», явная фраза в промпте планировщика «smallest executable DAG») делает это ненужным для MVP. Вместо этого — **checkpoint на failure-retry пути**: новое исключение `PartialProgressError` (`backend/app/tasks/work_orders.py`) — капабилити, упавшая с реальным прогрессом, сообщает `checkpoint` в теле ответа (`{"error":..., "checkpoint": {...}}`, конвенция, не обязательный контракт); `_execute_capability` парсит и поднимает `PartialProgressError`; `fail_attempt` сохраняет `checkpoint` на упавшем attempt; следующая попытка (`execute_claimed_step`) подмешивает его в `input_data["_resume_checkpoint"]`, если план сам не задал ключ явно.
+- [x] Тесты: `_execute_capability` поднимает `PartialProgressError` только когда `checkpoint` реально есть в теле (4xx/5xx/200-с-ошибкой); `fail_attempt` персистит/не персистит корректно; полный e2e (attempt 1 падает с checkpoint → attempt 2 получает `_resume_checkpoint`) — все на реальном Postgres.
 
-### 1.C Бюджет по времени/запросам поверх существующего `budgets`
+### 1.C Бюджеты — сделано (расширен существующий `enforce_budgets`, не написан параллельный механизм)
 
-- [ ] Расширить `order.budgets` новыми опциональными ключами (без миграции — JSON): `max_wall_clock_seconds`, `max_web_requests`, `max_llm_calls`/`max_cost_usd` (default `None` = безлимит — обратная совместимость).
-- [ ] `assert_budget_not_exceeded(order, usage)` рядом с текущей replan-budget-логикой (`backend/app/domain/work_orders.py:785-786`) — при превышении переводит в `blocked` с понятной причиной, аналогично текущему `max_replans`.
-- [ ] LLM-бюджет — агрегировать уже существующие `WorkStepAttempt.tokens_used`/`cost_usd` (`models.py:1687-1688`) по `work_order_id`, новый счётчик не нужен. Web-запросы — агрегировать по `ComputerUseAction` (см. Фазу 2) или `WorkToolCall`, смотря что фактически считает использование.
-- [ ] Тесты: `max_web_requests=5` блокирует на 6-м запросе; `max_wall_clock_seconds` блокирует по времени независимо от числа запросов.
+- [x] `enforce_budgets` (Б15) расширен тремя новыми измерениями поверх уже бывшего `token_budget`: `max_cost_usd` (сумма `WorkStepAttempt.cost_usd`), `max_wall_clock_seconds` (от `order.started_at`), `max_tool_calls` (счётчик строк `WorkToolCall` по `work_order_id`, независимо от статуса). Проверяются в фиксированном порядке — первый превышенный бюджет определяет причину блокировки.
+- [x] Целенаправленного `max_web_requests` (именно веб-запросы отдельно от прочих tool calls) не строилось — честно отложено до Фазы 2, где появится реальная веб-капабилити (`web_discover`) для которой это имело бы смысл; `max_tool_calls` — рабочий общий механизм уже сейчас, не заглушка.
+- [x] Тесты: `max_cost_usd`, `max_wall_clock_seconds` (блокирует/не блокирует), `max_tool_calls`, приоритет причины при одновременном превышении нескольких бюджетов — все на реальном Postgres.
 
-### 1.D Honest-coverage как acceptance-критерий, не новый verdict-режим
+### 1.D Honest-coverage — сделано (без изменения FSM/verdict-путей)
 
-- [ ] **Не трогать** FSM `assert_completion_allowed`/`verify_nonempty_result` (`backend/app/domain/work_orders.py:790-907`) — вместо этого для exploratory-задач определять acceptance-критерии так, чтобы «честное покрытие» само проходило существующую fail-closed логику:
-  - критерий 1 (детерминированный, `verify_nonempty_result`): структурированный отчёт `{covered:[...], partial:[...], not_found:[...]}` присутствует и непуст;
-  - критерий 2 (независимый semantic verifier, `record_verifier_verdict`): каждый пункт `not_found` подкреплён реальной попыткой/evidence (а не выдуман) — использовать существующий fail-closed промпт verifier'а (`backend/app/tasks/work_orders.py:350-431`), только с формулировкой предиката под «честность отчёта», не под «100% успех».
-- [ ] Прочитать `verify_nonempty_result`/`assert_completion_allowed`/`record_verifier_verdict` целиком перед изменением (уже сделано в рамках этого ресёрча — держать это понимание при реализации, не переоткрывать).
-- [ ] Тесты: exploratory order с 2 covered + 1 partial + 1 честно обоснованным not_found — проходит `completed`; тот же набор с фиктивным/неподтверждённым not_found (verifier возвращает `ok=false`) — блокируется, не завершается.
+- [x] `exploratory_acceptance_criteria()` — пара критериев для `create_work_order(acceptance_criteria=...)`: `coverage_report` (детерминированный, новая ветка `predicate_type == "coverage_report"` в `verify_nonempty_result` — проверяет ТОЛЬКО форму `{covered:[...], partial:[...], not_found:[...]}` и что не все три списка пусты, не исчерпанность) + `honest_not_found` (семантический, независимый verifier — **нового кода в `verify_semantic_criteria` не понадобилось**: существующий verifier уже судит по `predicate.description`, туда просто вписано требование честности).
+- [x] Глобальный gate `has_result` (непустой `text`) в `verify_nonempty_result` по-прежнему применяется — у exploratory-финального-шага обязателен человекочитаемый `text` рядом со структурным `coverage`, отдельный тест на этот случай.
+- [x] Тесты: well-formed report проходит `coverage_report`; пустой/malformed — падает; отсутствие `text` — блокирует несмотря на хороший `coverage`; промпт-подсказка планировщика подтверждена мок-тестом на `generate_json`.
 
-### 1.E Пересборка и проверка
-- [ ] См. общий чек-лист. `make test`, `make test-live` (планировщик и verifier используют LLM).
-- [ ] Ручная проверка: exploratory WorkOrder с `max_web_requests=2` корректно уходит в `blocked` с понятной причиной, не зависает и не падает молча.
+### 1.E Пересборка и проверка — сделано
+- [x] Пересобраны и перезапущены `backend`/`celery-worker`/`celery-beat` — миграция не требовалась (все изменения — существующие JSON/колонки). `celery-beat` прогнал `work.dispatch_ready` (гоняет `enforce_budgets` вживую) без ошибок на реальном трафике (бэкенд обслуживал реальные запросы пользователя параллельно).
+- [x] 56 тестов по work-order домену (exploratory + checkpoint + lease/budgets + verifier + replanning + decompose + computer-use + gap-detection) — зелёные на реальном Postgres в контейнере.
+- [x] Полный non-live прогон (3211 passed, 61 pre-existing failed — **идентичный список** тем же 61, что и до Фазы 1, побайтово сверено diff'ом) — ноль регрессий.
 
 ---
 

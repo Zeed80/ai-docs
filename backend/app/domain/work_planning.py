@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.capability_manifest import CapabilityDefinition, load_capability_manifest
 from app.db.models import WorkOrder, WorkStep
-from app.domain.work_orders import append_event, create_work_plan
+from app.domain.work_orders import append_event, create_work_plan, is_exploratory
 
 _REF = re.compile(r"^\$\{steps\.([a-zA-Z0-9_-]+)\.output(?:\.([a-zA-Z0-9_.-]+))?\}$")
 
@@ -142,6 +142,29 @@ ${steps.lookup.output.result.items}. Never repeat completed work during replanni
 Schema: {assumptions:[string], steps:[{step_key,title,kind,capability?,action?,input,
 depends_on,success_predicate,risk_level,max_attempts,timeout_seconds}],
 verification_plan:{mode,checks}}. Gated actions must be high risk."""
+    if is_exploratory(order):
+        # Ф1.A (AGENT_AUTONOMY_ROADMAP.md): constraints.mode="exploratory" is
+        # already visible to the model inside the prompt JSON above — this
+        # tells it what to DO about that, since "smallest executable DAG"
+        # above is the wrong instinct here: the full scope of an open-ended
+        # search isn't known up front, so don't try to plan it all now.
+        system += """
+
+This objective is exploratory (constraints.mode == "exploratory"): its full scope is not
+knowable up front (e.g. "find and structure all supplier catalogs" — the set of suppliers
+and how to reach each one is discovered, not given). Do not attempt one large DAG covering
+everything. Plan only the next small horizon (1-3 steps: discover a batch of sources, or
+fetch/extract from ones already found) and rely on replanning with completed_steps/
+last_failure to continue once this horizon finishes — the same incremental loop already
+used for ordinary bounded replanning. When the objective naturally splits into independent
+units (one per supplier, one per source), prefer a single "decompose" step that spawns one
+child WorkOrder per unit over a flat list of steps for all of them — children get their own
+budget share and run independently (see PlannedChildSpec). The plan's final step (of the
+whole objective, once every unit is covered) must produce output shaped exactly
+{"text": <human summary>, "coverage": {"covered": [...], "partial": [...], "not_found":
+[{"item":..., "reason":...}, ...]}} — every not_found entry needs a genuine reason grounded
+in what was actually tried (an independent verifier checks this), never a fabricated or
+unexplained miss. Reporting a genuine gap in not_found is success, not failure."""
     raw = await generate_json(
         prompt,
         model=model_config.model,
