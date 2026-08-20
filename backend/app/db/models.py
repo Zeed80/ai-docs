@@ -1961,6 +1961,61 @@ class RecipeSkill(UUIDPrimaryKey, TimestampMixin, Base):
     created_by: Mapped[str] = mapped_column(String(100), default="sveta", nullable=False)
 
 
+class SourceConnector(UUIDPrimaryKey, TimestampMixin, Base):
+    """Ф5 (AGENT_AUTONOMY_ROADMAP.md): a confirmed-working discovery/extraction
+    strategy for a web domain or source pattern, learned from real exploratory
+    WorkOrder cycles — a direct structural sibling of RecipeSkill, scoped to
+    "how to reach this kind of source" instead of "how to do this kind of
+    task". Deliberately its own model rather than an extension of the flat
+    MemoryFact(kind="web_source") proposal registry (backend/app/api/
+    memory.py's /sources/propose|discover|decide): that registry is "a URL
+    worth reviewing", unstructured and one-shot; this is "a strategy that has
+    actually worked before, with a track record" — needs the same structured
+    steps/status/schema_hash/fail-rate shape RecipeSkill already has, not a
+    JSON blob bolted onto an unrelated table. Linked via provenance
+    (metadata_["source_connector_id"] on the MemoryFact), not duplicated.
+
+    Lifecycle: draft (first real success) -> active (N successful repeats,
+    zero fails) -> retired (fail-rate demotion) — same shape as
+    RecipeSkill/record_outcome, via record_connector_outcome in
+    app/ai/connectors.py. Freshness (Ф5.C): a retired/failing connector is
+    never deleted, only marked due for periodic revalidation with a growing
+    interval (day -> week -> month) — actual revalidation execution is Ф6's
+    idle-reflection job; this only tracks the fields due_for_revalidation
+    needs.
+    """
+
+    __tablename__ = "source_connectors"
+
+    # e.g. a hostname ("haltec.ru") or a broader source pattern the strategy
+    # generalizes to — the identity key for exact-match lookup
+    # (find_active_connector) before falling back to vector-similarity hints.
+    domain_pattern: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # {"queries": [...], "sample_url": str, "notes": str, ...} — what actually
+    # worked, in enough detail for a planner hint or a direct retry; not a
+    # replayable step-by-step macro like RecipeSkill.steps (a web fetch/search
+    # isn't a deterministic capability sequence the same way).
+    strategy: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Objective/query texts that led to this connector; embedded into the
+    # connector_triggers Qdrant collection for similarity retrieval at plan
+    # time (mirrors RecipeSkill.trigger_examples / recipe_triggers).
+    trigger_examples: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # Hash of capabilities.yml at record time (reuses recipes.capabilities_schema_hash
+    # — same drift signal, not a second implementation).
+    schema_hash: Mapped[str | None] = mapped_column(String(64))
+    success_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    fail_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Ф5.C freshness — TTL-style revalidation, not instant retire.
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    revalidate_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(
+        String(20), default="draft", nullable=False, index=True
+    )  # draft | active | retired
+    created_by: Mapped[str] = mapped_column(String(100), default="sveta", nullable=False)
+
+
 class MemoryFact(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "memory_facts"
 

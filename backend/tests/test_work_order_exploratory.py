@@ -266,12 +266,62 @@ class TestExploratoryPlannerPrompt:
                 "app.ai.model_resolver.get_reasoning_model",
                 return_value=type("M", (), {"model": "m", "provider": "ollama"})(),
             ),
+            # Ф5: find_connector_hints already fails closed to [] on any error
+            # (never raises), but this test is about the prompt's own
+            # guidance text, not connector retrieval — stub it out so the
+            # test doesn't depend on real Qdrant/embedding infra being up.
+            patch("app.ai.connectors.find_connector_hints", new=AsyncMock(return_value=[])),
         ):
             await generate_capability_plan(order)
 
         assert "exploratory" in captured["system"].lower()
         assert "decompose" in captured["system"].lower()
         assert "not_found" in captured["system"]
+        # Ф4 regression (user feedback 2026-08-20): the prompt used to end with
+        # "Reporting a genuine gap in not_found is success, not failure" —
+        # telling the model conceding was as good as succeeding. Must be gone,
+        # replaced with an explicit persistence requirement.
+        assert "success, not failure" not in captured["system"]
+        assert "actually complete the objective" in captured["system"]
+
+    @pytest.mark.asyncio
+    async def test_exploratory_order_prompt_includes_connector_hints(self):
+        """Ф5 (AGENT_AUTONOMY_ROADMAP.md): the planner prompt's JSON payload
+        carries whatever find_connector_hints returns for the objective, so a
+        matching self-learned strategy is visible to the model."""
+        order = WorkOrder(
+            objective="Найди каталог поставщика Haltec",
+            description=None,
+            constraints={"mode": "exploratory"},
+            budgets={},
+            metadata_={},
+        )
+        captured: dict = {}
+
+        async def fake_generate_json(prompt, *, system, **kwargs):
+            captured["prompt"] = prompt
+            return {"assumptions": [], "steps": [
+                {"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}
+            ], "verification_plan": {}}
+
+        hint = {
+            "domain_pattern": "haltec.ru",
+            "strategy": {"queries": ["haltec сверла каталог"], "sample_url": "https://haltec.ru/catalog"},
+            "status": "active",
+            "score": 0.81,
+        }
+        with (
+            patch("app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)),
+            patch(
+                "app.ai.model_resolver.get_reasoning_model",
+                return_value=type("M", (), {"model": "m", "provider": "ollama"})(),
+            ),
+            patch("app.ai.connectors.find_connector_hints", new=AsyncMock(return_value=[hint])),
+        ):
+            await generate_capability_plan(order)
+
+        assert "haltec.ru" in captured["prompt"]
+        assert "connector_hints" in captured["prompt"]
 
     @pytest.mark.asyncio
     async def test_non_exploratory_order_gets_plain_system_prompt(self):

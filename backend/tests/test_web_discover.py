@@ -137,6 +137,154 @@ async def test_web_discover_wildcard_grant_fetches_any_host(client: AsyncClient)
     assert not data["skipped"]
 
 
+# ── Ф5: self-learning connector library, wired to real fetch outcomes ─────
+
+
+@pytest.mark.asyncio
+async def test_web_discover_success_drafts_a_connector_for_the_domain(
+    client: AsyncClient, db_session: AsyncSession
+):
+    from app.api.web_search import WebFetchResponse, WebSearchResponse
+    from app.db.models import SourceConnector
+
+    created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})
+    order_id = created.json()["id"]
+    granted = await client.post(
+        f"/api/work-orders/{order_id}/computer-grants",
+        json={"actions": ["browser_fetch"], "allowed_hosts": ["*"], "max_actions": 5, "reason": "test"},
+    )
+    assert granted.status_code == 201
+
+    search_response = WebSearchResponse(
+        query="q", provider="searxng",
+        results=[_mock_search_result_pydantic("https://haltec.ru/catalog", "s")],
+    )
+    fetch_response = WebFetchResponse(
+        url="https://haltec.ru/catalog", status=200, title="Haltec",
+        text="каталог режущего инструмента " * 10,  # well over the usefulness floor
+        truncated=False, diagnostics=[],
+    )
+    with (
+        patch("app.api.web_search.execute_web_search", new=AsyncMock(return_value=search_response)),
+        patch("app.api.web_search.fetch_page", new=AsyncMock(return_value=fetch_response)),
+    ):
+        resp = await client.post(
+            "/api/computer-use/web-discover",
+            json={"work_order_id": order_id, "queries": ["haltec каталог"]},
+        )
+    assert resp.status_code == 200
+
+    connector = (
+        await db_session.execute(
+            select(SourceConnector).where(SourceConnector.domain_pattern == "haltec.ru")
+        )
+    ).scalar_one()
+    assert connector.status == "draft"
+    assert connector.success_count == 1
+    assert connector.strategy["sample_url"] == "https://haltec.ru/catalog"
+
+
+@pytest.mark.asyncio
+async def test_web_discover_short_content_does_not_draft_a_connector(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """A 200 with near-empty content must not teach the connector library
+    the domain "works" — matches the earlier test's real (long) content
+    against this one's tiny snippet."""
+    from app.api.web_search import WebFetchResponse, WebSearchResponse
+    from app.db.models import SourceConnector
+
+    created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})
+    order_id = created.json()["id"]
+    granted = await client.post(
+        f"/api/work-orders/{order_id}/computer-grants",
+        json={"actions": ["browser_fetch"], "allowed_hosts": ["*"], "max_actions": 5, "reason": "test"},
+    )
+    assert granted.status_code == 201
+
+    search_response = WebSearchResponse(
+        query="q", provider="searxng",
+        results=[_mock_search_result_pydantic("https://thin.example/x", "s")],
+    )
+    fetch_response = WebFetchResponse(
+        url="https://thin.example/x", status=200, title="T", text="каталог", diagnostics=[],
+    )
+    with (
+        patch("app.api.web_search.execute_web_search", new=AsyncMock(return_value=search_response)),
+        patch("app.api.web_search.fetch_page", new=AsyncMock(return_value=fetch_response)),
+    ):
+        resp = await client.post(
+            "/api/computer-use/web-discover",
+            json={"work_order_id": order_id, "queries": ["q"]},
+        )
+    assert resp.status_code == 200
+
+    count = (
+        await db_session.execute(
+            select(SourceConnector).where(SourceConnector.domain_pattern == "thin.example")
+        )
+    ).scalar_one_or_none()
+    assert count is None
+
+
+@pytest.mark.asyncio
+async def test_web_discover_failure_updates_an_existing_connector(
+    client: AsyncClient, db_session: AsyncSession
+):
+    from app.api.web_search import WebFetchResponse, WebSearchResponse
+    from app.db.models import SourceConnector
+
+    created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})
+    order_id = created.json()["id"]
+    granted = await client.post(
+        f"/api/work-orders/{order_id}/computer-grants",
+        json={"actions": ["browser_fetch"], "allowed_hosts": ["*"], "max_actions": 5, "reason": "test"},
+    )
+    assert granted.status_code == 201
+
+    search_response = WebSearchResponse(
+        query="q", provider="searxng",
+        results=[_mock_search_result_pydantic("https://betar.ru/catalog", "s")],
+    )
+    fetch_response = WebFetchResponse(
+        url="https://betar.ru/catalog", status=200, title="Betar",
+        text="каталог фрез и свёрл " * 10, truncated=False, diagnostics=[],
+    )
+    with (
+        patch("app.api.web_search.execute_web_search", new=AsyncMock(return_value=search_response)),
+        patch("app.api.web_search.fetch_page", new=AsyncMock(return_value=fetch_response)),
+    ):
+        first = await client.post(
+            "/api/computer-use/web-discover",
+            json={"work_order_id": order_id, "queries": ["betar каталог"]},
+        )
+    assert first.status_code == 200
+
+    # Second call to the same domain fails outright.
+    search_response_2 = WebSearchResponse(
+        query="q", provider="searxng",
+        results=[_mock_search_result_pydantic("https://betar.ru/other-page", "s")],
+    )
+    with (
+        patch("app.api.web_search.execute_web_search", new=AsyncMock(return_value=search_response_2)),
+        patch("app.api.web_search.fetch_page", new=AsyncMock(side_effect=RuntimeError("timeout"))),
+    ):
+        second = await client.post(
+            "/api/computer-use/web-discover",
+            json={"work_order_id": order_id, "queries": ["betar каталог еще"]},
+        )
+    assert second.status_code == 200
+
+    connector = (
+        await db_session.execute(
+            select(SourceConnector).where(SourceConnector.domain_pattern == "betar.ru")
+        )
+    ).scalar_one()
+    assert connector.success_count == 1
+    assert connector.fail_count == 1
+    assert connector.consecutive_failures == 1
+
+
 @pytest.mark.asyncio
 async def test_web_discover_stops_fetching_once_budget_exhausted(client: AsyncClient):
     created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})

@@ -20,6 +20,7 @@ from pydantic import AliasChoices, BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.degradation import log_degraded
 from app.auth.acting import get_effective_user
 from app.auth.models import UserInfo
 from app.db.models import ComputerUseAction, ComputerUseGrant, WorkOrder
@@ -320,6 +321,14 @@ async def _discover_one(
         audit.error = {"type": "HTTPException", "message": str(detail)}
         audit.finished_at = datetime.now(UTC)
         await db.commit()
+        # Ф5 (AGENT_AUTONOMY_ROADMAP.md): self-learning connector library —
+        # only demotes an EXISTING connector for this domain (never creates
+        # one from a failure), see record_connector_failure's own docstring.
+        try:
+            from app.ai.connectors import record_connector_failure
+            await record_connector_failure(db, url=url)
+        except Exception as learn_exc:
+            log_degraded("computer_use.web_discover.connector_failure", learn_exc)
         reason = str(detail.get("error_code") or detail.get("message") or detail)
         return WebDiscoverSource(url=url, snippet=snippet, diagnostics=[reason])
     except Exception as exc:  # noqa: BLE001 - one bad URL must not fail the whole batch
@@ -328,6 +337,11 @@ async def _discover_one(
         audit.error = {"type": type(exc).__name__, "message": str(exc)[:500]}
         audit.finished_at = datetime.now(UTC)
         await db.commit()
+        try:
+            from app.ai.connectors import record_connector_failure
+            await record_connector_failure(db, url=url)
+        except Exception as learn_exc:
+            log_degraded("computer_use.web_discover.connector_failure", learn_exc)
         return WebDiscoverSource(url=url, snippet=snippet, diagnostics=[f"read_error:{str(exc)[:120]}"])
 
     is_pdf = any("pdf" in d for d in page.diagnostics)
@@ -337,6 +351,20 @@ async def _discover_one(
     audit.evidence = {"text_sha256": hashlib.sha256(page.text.encode()).hexdigest()}
     audit.finished_at = datetime.now(UTC)
     await db.commit()
+    # Ф5 (AGENT_AUTONOMY_ROADMAP.md): a fetch that actually returned usable
+    # content is the self-learning signal — draft/reinforce a connector for
+    # this domain so a future exploratory cycle can try it directly instead
+    # of discovering from scratch. Only real content counts (see
+    # _MIN_USEFUL_TEXT_LENGTH) — a 200 with an empty/error body must not
+    # teach the connector library the domain "works".
+    from app.ai.connectors import _MIN_USEFUL_TEXT_LENGTH
+
+    if page.status == 200 and len(page.text.strip()) >= _MIN_USEFUL_TEXT_LENGTH:
+        try:
+            from app.ai.connectors import record_connector_success
+            await record_connector_success(db, url=url, queries=queries)
+        except Exception as learn_exc:
+            log_degraded("computer_use.web_discover.connector_success", learn_exc)
     return WebDiscoverSource(
         url=url,
         title=page.title,

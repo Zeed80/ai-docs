@@ -149,6 +149,15 @@ async def generate_capability_plan(
     from app.ai.model_resolver import get_reasoning_model
 
     model_config = get_reasoning_model()
+    # Ф5 (AGENT_AUTONOMY_ROADMAP.md): self-learning connector hints — only
+    # for exploratory orders (a bounded/grounded order's DAG doesn't involve
+    # open-ended web discovery in the first place). Best-effort: an empty
+    # list changes nothing about the prompt below, and find_connector_hints
+    # itself never raises.
+    connector_hints: list[dict[str, Any]] = []
+    if is_exploratory(order):
+        from app.ai.connectors import find_connector_hints
+        connector_hints = await find_connector_hints(order.objective)
     prompt = json.dumps(
         {
             "objective": order.objective,
@@ -158,6 +167,7 @@ async def generate_capability_plan(
             "new_instructions": (order.metadata_ or {}).get("instructions", []),
             "completed_steps": completed_context or [],
             "last_failure": failure_context,
+            "connector_hints": connector_hints,
             "capabilities": _planner_catalog(),
         },
         ensure_ascii=False,
@@ -197,7 +207,10 @@ last_failure to continue once this horizon finishes — the same incremental loo
 used for ordinary bounded replanning. When the objective naturally splits into independent
 units (one per supplier, one per source), prefer a single "decompose" step that spawns one
 child WorkOrder per unit over a flat list of steps for all of them — children get their own
-budget share and run independently (see PlannedChildSpec).
+budget share and run independently (see PlannedChildSpec). connector_hints (if non-empty)
+lists domains/patterns that have actually worked before for similar objectives, each with the
+strategy (queries/sample URL) that succeeded — prefer trying these first over generic
+discovery from scratch when they plausibly match the current objective.
 
 Your goal is to actually complete the objective, not to produce an honest-sounding reason
 for not completing it. Before writing anything off as not_found: try a different query, a
