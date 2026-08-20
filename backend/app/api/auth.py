@@ -160,9 +160,28 @@ async def callback(
 
     try:
         user_info = await _verify_token(access_token)
+    except HTTPException as exc:
+        # A deliberate rejection (deactivated account, bad signature, …) must
+        # NOT fall through to setting a cookie below — Authentik's own SSO
+        # session is still live at this point, so a swallowed rejection here
+        # sends the browser straight back through /auth/login → Authentik →
+        # this same callback in a tight loop, until the login rate limiter
+        # stops it with an opaque "Too many requests" (see incident 2026-08-20:
+        # a deactivated duplicate account produced exactly this loop). Land on
+        # a plain error page instead so the loop can't start.
+        logger.warning("oidc_callback_rejected", status=exc.status_code, detail=exc.detail)
+        frontend_base = _frontend_base_from_uri(redirect_uri)
+        reason = "deactivated" if exc.status_code == 403 else "verification_failed"
+        return RedirectResponse(
+            url=f"{frontend_base}/auth/login?error={reason}", status_code=302
+        )
+
+    try:
         await upsert_user(db, user_info)
         await db.commit()
     except Exception as exc:
+        # The token itself is already verified-good — a DB hiccup on the
+        # denormalized sync shouldn't block login, just log it.
         logger.warning("user_upsert_failed", error=str(exc))
         await db.rollback()
 

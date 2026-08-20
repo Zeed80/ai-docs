@@ -49,17 +49,24 @@ function LoginScreen() {
   const bioTried = useRef(false);
 
   const next = params.get("next") ?? "/inbox";
+  // Set by the backend callback when it deliberately refused to log the user
+  // in (e.g. a deactivated account) instead of setting a session cookie. Must
+  // stop here rather than auto-redirect into SSO again — Authentik's own
+  // session is still live, so blindly retrying just recreates the same
+  // reject → redirect loop until the login rate limiter cuts it off.
+  const authError = params.get("error");
 
   useEffect(() => {
     const isApp = isNative();
     setNative(isApp);
+    if (authError) return;
     if (!isApp) {
       // On the desktop/web, keep the original behaviour: go straight to SSO.
       window.location.href = loginUrl(next);
       return;
     }
     if (hasQuickLogin()) setQuick(quickLoginMethod());
-  }, [next]);
+  }, [next, authError]);
 
   const onUnlocked = useCallback(() => {
     // Full navigation so the freshly set session cookie is picked up.
@@ -135,6 +142,26 @@ function LoginScreen() {
     // Fall back to SSO for this launch without dropping the saved quick-login.
     setQuick(null);
     window.location.href = loginUrl(next);
+  }
+
+  if (authError) {
+    const message =
+      authError === "deactivated"
+        ? "Учётная запись деактивирована. Обратитесь к администратору."
+        : "Не удалось подтвердить вход. Попробуйте ещё раз или обратитесь к администратору.";
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+        <div className="max-w-sm text-center">
+          <p className="mb-4 text-sm text-red-600">{message}</p>
+          <button
+            onClick={() => (window.location.href = loginUrl(next))}
+            className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white"
+          >
+            Попробовать снова
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // Web: blank while redirecting to SSO.

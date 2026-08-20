@@ -4,11 +4,20 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+import structlog
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import UserInfo, UserRole
 from app.db.models import User
+
+logger = structlog.get_logger()
+
+# `/api/admin/users` pre-provisions a row before the person's first real SSO
+# login, under a synthetic sub it can't know in advance (see admin.create_user).
+# These prefixes mark such placeholders so upsert_user can recognize and adopt
+# them below instead of leaving them orphaned.
+_PLACEHOLDER_SUB_PREFIXES = ("authentik:", "local:")
 
 _ROLE_PRIORITY = [
     UserRole.admin,
@@ -53,6 +62,48 @@ async def upsert_user(db: AsyncSession, info: UserInfo) -> User:
 
     result = await db.execute(select(User).where(User.sub == info.sub))
     user = result.scalar_one_or_none()
+
+    if user is None:
+        # No row for this real `sub` yet. If an admin pre-provisioned this
+        # person via /api/admin/users before their first SSO login, a
+        # placeholder row exists under a synthetic sub that will never match a
+        # real JWT `sub` claim — left as-is, upsert would create a second row
+        # for the same email (silently orphaning the admin's role/permission
+        # setup on the placeholder). Adopt the placeholder instead.
+        placeholder = (
+            await db.execute(
+                select(User).where(
+                    User.email == info.email,
+                    or_(*(User.sub.startswith(p) for p in _PLACEHOLDER_SUB_PREFIXES)),
+                )
+            )
+        ).scalar_one_or_none()
+        if placeholder is not None:
+            old_sub = placeholder.sub
+            user = placeholder
+            user.sub = info.sub
+            logger.info(
+                "user_placeholder_adopted",
+                email=info.email,
+                placeholder_sub=old_sub,
+                real_sub=info.sub,
+            )
+        else:
+            # A *different* real (non-placeholder) sub already using this email
+            # is a genuine identity duplicate (e.g. two separate Authentik
+            # accounts) — not something upsert can safely resolve on its own.
+            # Create the new row as usual but flag it so an admin can merge or
+            # deactivate the stale one instead of it going unnoticed.
+            stray = (
+                await db.execute(select(User).where(User.email == info.email))
+            ).scalar_one_or_none()
+            if stray is not None:
+                logger.warning(
+                    "duplicate_email_different_identity",
+                    email=info.email,
+                    existing_sub=stray.sub,
+                    new_sub=info.sub,
+                )
 
     canonical_role = pick_primary_role(info.roles)
 
