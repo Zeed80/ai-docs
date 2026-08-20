@@ -679,6 +679,34 @@ def _today_context() -> str:
     )
 
 
+# Ф7 (AGENT_AUTONOMY_ROADMAP.md): pure wording/register guidance — must never
+# be phrased as instructions that could bias which action/decision the model
+# reaches, only how the resulting text reads. "neutral" (the default) adds no
+# suffix at all, so nobody who has never touched this setting sees any prompt
+# change from before Ф7 existed.
+_TONE_STYLE_HINTS: dict[str, str] = {
+    "friendly": (
+        "## Стиль ответа\n"
+        "Отвечай тепло и по-человечески, обращайся на «вы», без сухого "
+        "канцелярита — как коллега, а не отчёт."
+    ),
+    "formal": (
+        "## Стиль ответа\n"
+        "Отвечай официально и по-деловому: точные формулировки, без "
+        "разговорных оборотов и эмодзи."
+    ),
+    "concise": (
+        "## Стиль ответа\n"
+        "Отвечай предельно кратко — только суть, без вводных фраз и "
+        "повторов вопроса."
+    ),
+}
+
+
+def _tone_style_hint(tone: str) -> str | None:
+    return _TONE_STYLE_HINTS.get(tone)
+
+
 def _load_system_prompt(config: BuiltinAgentConfig | None = None) -> str:
     if config and config.system_prompt:
         return f"{config.system_prompt.strip()}\n\n{_OPERATIONAL_POLICY}"
@@ -1858,8 +1886,19 @@ class AgentSession:
         from the deployment's real clock. Recomputed on every call (not
         baked in once at session start) so a session spanning midnight still
         sees the correct day.
+
+        Ф7 (AGENT_AUTONOMY_ROADMAP.md): also appends the agent_tone style
+        hint (if any) — a suffix, same mechanism as role_context below, not
+        a rewrite of the base prompt. Read fresh from self._config each call
+        (not baked into self._system at _rebuild_runtime_components time)
+        for the same reason _today_context is recomputed here rather than
+        cached: a config change should take effect on the very next turn,
+        not require a session restart.
         """
         system = f"{self._system}\n\n{_today_context()}"
+        tone_hint = _tone_style_hint(getattr(self._config, "agent_tone", "neutral"))
+        if tone_hint:
+            system = f"{system}\n\n{tone_hint}"
         if self._role_context:
             return f"{system}\n\n## Роль в этой задаче\n{self._role_context}"
         return system

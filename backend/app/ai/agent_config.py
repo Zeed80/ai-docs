@@ -111,6 +111,15 @@ class BuiltinAgentConfig(BaseModel):
     context_compression_threshold: float = Field(0.85, ge=0.5, le=0.98)
     compression_model: str | None = None  # None = use primary model
     mcp_servers: list[dict] = Field(default_factory=list)  # [{name, transport, ...}]
+    # Ф7 (AGENT_AUTONOMY_ROADMAP.md): a pure response-style modifier — the
+    # wording/register of the final answer only. Deliberately NOT in
+    # PROTECTED_SETTINGS (see that set's own comment in policy_engine.py):
+    # it never touches system_prompt, capability access, approval gates, or
+    # any decision/outcome logic — the same objective evaluated under two
+    # tones must reach the same decision, only phrased differently (see
+    # test_agent_tone.py's identical-outcome test). Applies immediately via
+    # the existing non-protected config-proposal path, no risk diff needed.
+    agent_tone: Literal["neutral", "friendly", "formal", "concise"] = "neutral"
 
 
 class BuiltinAgentConfigUpdate(BaseModel):
@@ -175,6 +184,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     context_compression_threshold: float | None = Field(default=None, ge=0.5, le=0.98)
     compression_model: str | None = None
     mcp_servers: list[dict] | None = None
+    agent_tone: Literal["neutral", "friendly", "formal", "concise"] | None = None
 
 
 _registry_skill_names_cache: list[str] | None = None

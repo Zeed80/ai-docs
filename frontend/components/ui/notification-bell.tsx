@@ -18,12 +18,25 @@ interface Notification {
   created_at: string;
 }
 
+// Ф0.B (AGENT_AUTONOMY_ROADMAP.md): the backend endpoint
+// (POST /api/notifications/{id}/feedback) has existed since Ф0 — this was
+// the deliberately-deferred frontend half, not forgotten before closing the
+// roadmap. Shown on every notification, not only proactive ones: the
+// backend already no-ops harmlessly (calibrated: false) for notifications
+// with no source_task (approvals, mentions, broadcast alerts) rather than
+// rejecting the call, so gating the buttons client-side on a field the list
+// endpoint doesn't even return today would add API surface for no benefit.
+type FeedbackAction = "accepted" | "dismissed" | "snoozed";
+
 export function NotificationBell() {
   const router = useRouter();
   const [count, setCount] = useState(0);
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(false);
+  const [feedbackGiven, setFeedbackGiven] = useState<
+    Record<string, FeedbackAction>
+  >({});
   const drawerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -117,6 +130,29 @@ export function NotificationBell() {
       credentials: "include",
       headers: csrfHeaders(),
     });
+  }
+
+  async function submitFeedback(
+    id: string,
+    action: FeedbackAction,
+    e: React.MouseEvent,
+  ) {
+    e.stopPropagation(); // don't also trigger the item's own onClick (mark-read + navigate)
+    setFeedbackGiven((prev) => ({ ...prev, [id]: action }));
+    setItems((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)),
+    );
+    setCount((c) => Math.max(0, c - 1));
+    try {
+      await fetch(`${API}/api/notifications/${id}/feedback`, {
+        method: "POST",
+        credentials: "include",
+        headers: { ...csrfHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ action, snooze_minutes: 60 }),
+      });
+    } catch {
+      /* best-effort — the notification is already marked read either way */
+    }
   }
 
   async function markAllRead() {
@@ -219,6 +255,38 @@ export function NotificationBell() {
                         minute: "2-digit",
                       })}
                     </p>
+                    {feedbackGiven[n.id] ? (
+                      <p className="text-[10px] text-muted-foreground/60 mt-1.5 italic">
+                        {feedbackGiven[n.id] === "accepted" &&
+                          "Отмечено полезным"}
+                        {feedbackGiven[n.id] === "dismissed" && "Отклонено"}
+                        {feedbackGiven[n.id] === "snoozed" && "Отложено на час"}
+                      </p>
+                    ) : (
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <button
+                          onClick={(e) => submitFeedback(n.id, "accepted", e)}
+                          title="Полезно"
+                          className="text-[10px] text-muted-foreground hover:text-green-500 transition-colors"
+                        >
+                          ✓ Полезно
+                        </button>
+                        <button
+                          onClick={(e) => submitFeedback(n.id, "snoozed", e)}
+                          title="Отложить на час"
+                          className="text-[10px] text-muted-foreground hover:text-amber-500 transition-colors"
+                        >
+                          ⏰ Позже
+                        </button>
+                        <button
+                          onClick={(e) => submitFeedback(n.id, "dismissed", e)}
+                          title="Не нужно"
+                          className="text-[10px] text-muted-foreground hover:text-red-500 transition-colors"
+                        >
+                          ✕ Не нужно
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

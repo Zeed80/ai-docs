@@ -33,6 +33,16 @@ PROTECTED_SETTINGS = {
     "auditor_allow_cloud",
 }
 
+# Ф7 (AGENT_AUTONOMY_ROADMAP.md): agent_tone (BuiltinAgentConfig) is
+# deliberately NOT here. It is a pure response-style modifier — wording
+# register only, applied as a suffix in agent_loop._effective_system — and
+# never touches system_prompt, capability access, approval gates, memory/
+# audit, or any decision/outcome logic. The identity/safety surface this set
+# protects is untouched by changing how the same decision gets phrased, so
+# it applies immediately through the ordinary non-protected config-proposal
+# path (see agent_control_plane._create_config_proposal) like any other
+# cosmetic setting — no risk diff, no human confirmation gate.
+
 EXTERNAL_SKILL_PREFIXES = ("email.", "telegram.", "export.", "procurement.")
 
 # Markers that indicate a high-risk legacy registry skill (dot-separated names).

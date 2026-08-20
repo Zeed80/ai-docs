@@ -5,6 +5,7 @@
 > Актуальный TODO исправления точности `чертёж → чтение → 3D → виды → DXF` находится в [`CAD_REDRAW_ACCURACY_TODO.md`](./CAD_REDRAW_ACCURACY_TODO.md).
 > Последовательный TO DO оставшихся mechanical/construction работ находится в [`CAD_UNIVERSAL_REMAINING_TODO.md`](./CAD_UNIVERSAL_REMAINING_TODO.md).
 > Единый roadmap автономной агентской системы с фактическими отметками находится в [`AGENT_SYSTEM_DEVELOPMENT_PLAN.md`](./AGENT_SYSTEM_DEVELOPMENT_PLAN.md).
+> Roadmap автономности агента (exploratory-режим, self-learning connector library, idle-reflection «подсознание», тон/характер) — все 7 фаз завершены — находится в [`AGENT_AUTONOMY_ROADMAP.md`](./AGENT_AUTONOMY_ROADMAP.md).
 
 ## Контекст
 
