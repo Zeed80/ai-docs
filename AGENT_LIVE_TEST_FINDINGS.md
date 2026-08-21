@@ -626,3 +626,44 @@ CPU — правильный выбор: **60-100 мс** на эмбеддинг
 **Тест-контракт** `test_all_invoice_tables_accept_supplier_query` проверяет
 наличие поля во всех request-моделях счётных таблиц: параметр, которого схема
 не объявляет, исчезает молча — и виноватым выглядит агент.
+
+## №18 — 20 действий агента вели в никуда; контракт расширен на весь реестр ✅
+
+Владелец попросил применить приём «тест-контракт на семейство» (находка №17)
+к остальным группам эндпоинтов. Расширение вскрыло куда больше, чем ожидалось.
+
+**20 действий были маршрутизированы на несуществующие пути** — 404 при каждом
+вызове, без единого признака в логах, что каталог врёт:
+`documents.search` (`/api/documents/search` вместо `/api/search/documents`),
+`documents.bulk_delete` (POST вместо DELETE), `documents.link` (`/link` вместо
+`/links`), `invoices.bulk_delete`, `procurement.update_contract` (вёл на
+`/api/compare/{id}` — чужой домен целиком), `anomalies.explain` (POST вместо
+GET), все 7 действий `normalization` (`cards`/`canonical` вместо
+`norm-cards`/`canonical-items`), три экспорта `analytics`, `search.nl_to_query`,
+`tech.bom_purchase_request`, `agent_control.capability_status` (без
+обязательного `{proposal_id}`), `workspace.supplier_lookup` (эндпоинта не
+существовало никогда → теперь `/api/suppliers/search`).
+
+**Два дефекта имён параметров** того же класса, что `supplier_query`:
+`documents.search` слал `query`, а эндпоинт требовал `q`;
+`normalization.list_canonical_items` слал `query`, а эндпоинт читал `search`.
+Оба теперь принимают оба написания.
+
+**Системный дефект прокси:** `_proxy` отправлял ВСЕ не-path аргументы POST как
+JSON, а FastAPI объявляет скаляры query-параметрами — то есть у семи действий
+аргументы просто не доезжали (`force` у classify/extract/reprocess,
+`received_by` у invoice.receive, `batch_qty` у bom_purchase_request, вся строка
+поиска у documents.search). Теперь `_route_query_params` разбирает живую
+таблицу маршрутов и раскладывает аргументы туда, где эндпоинт их читает —
+самоподдерживающееся решение вместо списка в `_DISPATCH`, который бы разошёлся.
+Плюс 422 от capability-вызова логируется как `capability_argument_contract_mismatch`
+с перечнем отправленного: несовпадение имён больше не выглядит как ошибка агента.
+
+**Новый файл `backend/tests/test_capability_route_contract.py`** держит четыре
+инварианта: каждое действие ведёт на существующий маршрут; каждый объявленный
+параметр кем-то принимается; query-only параметры уходят в query-строку;
+критичные имена (`q`/`query`, `search`/`query`) приняты обеими сторонами.
+
+**Живая проверка:** `documents.search` возвращает реальные документы и по
+`query`, и по `q`; `normalization.list_canonical_items`, `search.nl_to_query`,
+`analytics.table_export_excel` (отдаёт настоящий xlsx) — 200.

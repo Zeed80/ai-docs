@@ -62,15 +62,15 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
     "documents": {
         "list":         ("GET",    "/api/documents",                          []),
         "get":          ("GET",    "/api/documents/{document_id}",            ["document_id"]),
-        "search":       ("POST",   "/api/documents/search",                   []),
+        "search":       ("POST",   "/api/search/documents",                   []),
         "ingest":       ("POST",   "/api/documents/ingest",                   []),
         "classify":     ("POST",   "/api/documents/{document_id}/classify",   ["document_id"]),
         "extract":      ("POST",   "/api/documents/{document_id}/extract",    ["document_id"]),
         "summarize":    ("POST",   "/api/documents/{document_id}/summarize",  ["document_id"]),
         "update":       ("PATCH",  "/api/documents/{document_id}",            ["document_id"]),
         "delete":       ("DELETE", "/api/documents/{document_id}",            ["document_id"]),
-        "bulk_delete":  ("POST",   "/api/documents/bulk-delete",              []),
-        "link":         ("POST",   "/api/documents/{document_id}/link",       ["document_id"]),
+        "bulk_delete":  ("DELETE", "/api/documents/bulk-delete",              []),
+        "link":         ("POST",   "/api/documents/{document_id}/links",      ["document_id"]),
         "dependencies": ("GET",    "/api/documents/{document_id}/dependencies", ["document_id"]),
         # Processing-queue visibility & control (sequential GPU pipeline)
         "queue":           ("GET",  "/api/documents/workspace",                  []),
@@ -88,7 +88,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "export_1c":      ("POST",   "/api/invoices/{invoice_id}/export-1c",        ["invoice_id"]),
         "update":         ("PATCH",  "/api/invoices/{invoice_id}",                  ["invoice_id"]),
         "delete":         ("DELETE", "/api/invoices/{invoice_id}",                  ["invoice_id"]),
-        "bulk_delete":    ("POST",   "/api/invoices/bulk-delete",                   []),
+        "bulk_delete":    ("DELETE", "/api/invoices",                               []),
         "bulk_approve":   ("POST",   "/api/invoices/bulk-approve",                  []),
         "bulk_reject":    ("POST",   "/api/invoices/bulk-reject",                   []),
         "receive":        ("POST",   "/api/invoices/{invoice_id}/receive",          ["invoice_id"]),
@@ -151,7 +151,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "list_contracts":  ("GET",   "/api/compare",                                  []),
         "create_contract": ("POST",  "/api/compare",                                  []),
         "get_contract":    ("GET",   "/api/compare/{contract_id}",                    ["contract_id"]),
-        "update_contract": ("PATCH", "/api/compare/{contract_id}",                    ["contract_id"]),
+        "update_contract": ("PATCH", "/api/supplier-contracts/{contract_id}",        ["contract_id"]),
     },
     "payments": {
         "list_schedule":         ("GET",   "/api/payment-schedules",                          []),
@@ -164,21 +164,21 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
     "anomalies": {
         "list":        ("GET",   "/api/anomalies",                   []),
         "check_all":   ("POST",  "/api/anomalies/check",             []),
-        "explain":     ("POST",  "/api/anomalies/{anomaly_id}/explain", ["anomaly_id"]),
+        "explain":     ("GET",   "/api/anomalies/{anomaly_id}/explain", ["anomaly_id"]),
         "resolve":     ("POST",  "/api/anomalies/{anomaly_id}/resolve", ["anomaly_id"]),
         "create_card": ("POST",  "/api/anomalies",                   []),
     },
     "normalization": {
         "list_rules":            ("GET",   "/api/normalization/rules",                    []),
-        "suggest_rule":          ("POST",  "/api/normalization/rules/suggest",            []),
+        "suggest_rule":          ("POST",  "/api/normalization/suggest",                  []),
         "activate_rule":         ("POST",  "/api/normalization/rules/{rule_id}/activate", ["rule_id"]),
         "apply_rules":           ("POST",  "/api/normalization/apply",                    []),
-        "list_norm_cards":       ("GET",   "/api/normalization/cards",                    []),
-        "create_norm_card":      ("POST",  "/api/normalization/cards",                    []),
-        "update_norm_card":      ("PATCH", "/api/normalization/cards/{item_id}",          ["item_id"]),
-        "list_canonical_items":  ("GET",   "/api/normalization/canonical",                []),
-        "get_canonical_item":    ("GET",   "/api/normalization/canonical/{item_id}",      ["item_id"]),
-        "update_canonical_item": ("PATCH", "/api/normalization/canonical/{item_id}",      ["item_id"]),
+        "list_norm_cards":       ("GET",   "/api/normalization/norm-cards",               []),
+        "create_norm_card":      ("POST",  "/api/normalization/norm-cards",               []),
+        "update_norm_card":      ("PATCH", "/api/normalization/norm-cards/{card_id}",     ["card_id"]),
+        "list_canonical_items":  ("GET",   "/api/normalization/canonical-items",          []),
+        "get_canonical_item":    ("GET",   "/api/normalization/canonical-items/{item_id}", ["item_id"]),
+        "update_canonical_item": ("PATCH", "/api/normalization/canonical-items/{item_id}", ["item_id"]),
     },
     "workspace": {
         # Spec-driven tables: LLM supplies only the spec, data flows SQL→table.
@@ -196,7 +196,9 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         # Guarded free SQL (SELECT-only, validated) when no spec source fits.
         "sql_table":                 ("POST", "/api/workspace/agent/generated/sql-table",          []),
         "compare_table_data":        ("POST", "/api/workspace/agent/compare-table-data",           []),
-        "supplier_lookup":           ("POST", "/api/workspace/agent/generated/supplier_lookup",    []),
+        # No workspace endpoint ever existed for this; supplier search is the
+        # real implementation (the workspace path 404'd on every call).
+        "supplier_lookup":           ("POST", "/api/suppliers/search",                           []),
         "verify":                    ("POST", "/api/workspace/agent/verify-block",                 []),
         "get_block":                 ("GET",  "/api/workspace/blocks/{canvas_id}",                 ["canvas_id"]),
     },
@@ -220,7 +222,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
     "search": {
         "hybrid":        ("POST", "/api/search/hybrid",                             []),
         "nl":            ("POST", "/api/search/nl",                                 []),
-        "nl_to_query":   ("POST", "/api/search/nl-to-query",                        []),
+        "nl_to_query":   ("POST", "/api/search/nl",                                 []),
         "web":           ("POST", "/api/web-search/query",                          []),
         # Open a specific URL and read it like a human (headless Chromium +
         # stealth): JS renders, basic bot walls clear. Returns readable text
@@ -274,7 +276,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "bom_update":                    ("PATCH", "/api/boms/{entity_id}",                                            ["entity_id"]),
         "bom_approve":                   ("POST",  "/api/boms/{entity_id}/approve",                                    ["entity_id"]),
         "bom_stock_check":               ("GET",   "/api/boms/{entity_id}/stock-check",                                ["entity_id"]),
-        "bom_purchase_request":          ("POST",  "/api/boms/{entity_id}/purchase-request",                           ["entity_id"]),
+        "bom_purchase_request":          ("POST",  "/api/boms/{entity_id}/create-purchase-request",                    ["entity_id"]),
         "ntd_list":                      ("GET",   "/api/ntd/documents",                                               []),
         "ntd_get":                       ("GET",   "/api/ntd/checks/{entity_id}",                                      ["entity_id"]),
         "ntd_run_check":                 ("POST",  "/api/ntd/checks/run",                                              []),
@@ -313,9 +315,9 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
     "analytics": {
         "dashboard_today":       ("GET",   "/api/dashboard/today",            []),
         "table_query":           ("POST",  "/api/tables/query",                []),
-        "table_export_excel":    ("POST",  "/api/tables/export/excel",         []),
-        "table_export_1c":       ("POST",  "/api/tables/export/1c",            []),
-        "table_import_excel":    ("POST",  "/api/tables/import/excel",         []),
+        "table_export_excel":    ("POST",  "/api/tables/export",               []),
+        "table_export_1c":       ("POST",  "/api/tables/export-1c",            []),
+        "table_import_excel":    ("POST",  "/api/tables/import",               []),
         "table_apply_diff":      ("POST",  "/api/tables/apply-diff",           []),
         "table_inline_edit":     ("POST",  "/api/tables/inline-edit",          []),
         "table_list_views":      ("GET",   "/api/tables/views",                []),
@@ -350,7 +352,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "task_decide":         ("POST", "/api/agent/tasks/{entity_id}/decide", ["entity_id"]),
         "task_run":            ("POST", "/api/agent/tasks/{entity_id}/run",    ["entity_id"]),
         "capability_propose":  ("POST", "/api/agent/capabilities/propose",     []),
-        "capability_status":   ("GET",  "/api/agent/capabilities/status",      []),
+        "capability_status":   ("GET",  "/api/agent/capabilities/{proposal_id}/status", ["proposal_id"]),
         "approval_list":       ("GET",  "/api/approvals/pending",              []),
         "approval_status":     ("GET",  "/api/approvals/{entity_id}",          ["entity_id"]),
         "config_status":       ("GET",  "/api/agent/control-plane/status",     []),
@@ -472,6 +474,56 @@ def _service_headers(acting_user: str | None = None) -> dict:
     return headers
 
 
+_QUERY_PARAM_CACHE: dict[tuple[str, str], frozenset[str]] = {}
+
+
+def _route_query_params(method: str, path_tpl: str) -> frozenset[str]:
+    """Names the target route expects in the QUERY STRING, not the body.
+
+    The dispatcher used to send every non-path argument of a POST/PATCH as
+    JSON. For endpoints whose parameters are query-only (FastAPI's default for
+    scalars) that meant the argument silently never arrived: the agent's
+    document search landed with an empty query and failed validation, and
+    flags like `force`/`received_by`/`batch_qty` were quietly ignored.
+
+    Resolved from the live route table — same process, so it always matches the
+    real signatures instead of a hand-maintained list that drifts.
+    """
+    import re as _re
+
+    key = (method, path_tpl)
+    cached = _QUERY_PARAM_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    def _shape(path: str) -> str:
+        return _re.sub(r"\{[^}]+\}", "{}", path or "")
+
+    names: frozenset[str] = frozenset()
+    try:
+        from app.main import app as _app
+
+        want = _shape(path_tpl)
+        for route in _app.routes:
+            if _shape(getattr(route, "path", "")) != want:
+                continue
+            if method not in (getattr(route, "methods", None) or []):
+                continue
+            dependant = getattr(route, "dependant", None)
+            if dependant is not None:
+                names = frozenset(
+                    n
+                    for p in dependant.query_params
+                    for n in (p.name, getattr(p, "alias", None))
+                    if n
+                )
+            break
+    except Exception:  # noqa: BLE001 — routing must never fail on introspection
+        names = frozenset()
+    _QUERY_PARAM_CACHE[key] = names
+    return names
+
+
 async def _proxy(
     method: str,
     path: str,
@@ -485,10 +537,11 @@ async def _proxy(
     query: dict = {}
     payload: dict = {}
 
+    query_only = _route_query_params(method, path) if method != "GET" else frozenset()
     for k, v in body.items():
         if k in path_params:
             path = path.replace(f"{{{k}}}", str(v))
-        elif method == "GET":
+        elif method == "GET" or k in query_only:
             query[k] = v
         else:
             payload[k] = v
@@ -513,11 +566,11 @@ async def _proxy(
             if method == "GET":
                 resp = await client.get(url, params=query, headers=headers)
             elif method == "POST":
-                resp = await client.post(url, json=payload, headers=headers)
+                resp = await client.post(url, params=query or None, json=payload, headers=headers)
             elif method == "PATCH":
-                resp = await client.patch(url, json=payload, headers=headers)
+                resp = await client.patch(url, params=query or None, json=payload, headers=headers)
             elif method == "DELETE":
-                resp = await client.delete(url, headers=headers)
+                resp = await client.delete(url, params=query or None, headers=headers)
             else:
                 return {"error": f"Unsupported method: {method}"}
 
@@ -530,6 +583,17 @@ async def _proxy(
                 return data
             except Exception:
                 return {"text": resp.text[:2000]}
+        if resp.status_code == 422:
+            # A 422 on a capability call is usually a NAME mismatch between what
+            # the capability declares and what the endpoint accepts (live: the
+            # agent sent `query`, the endpoint wanted `q`). Say so explicitly —
+            # otherwise it reads as "the agent called it wrong".
+            logger.warning(
+                "capability_argument_contract_mismatch",
+                method=method, path=path,
+                sent=sorted(set(query) | set(payload)),
+                detail=resp.text[:300],
+            )
         return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:300]}
     except Exception as exc:
         return {"error": str(exc)}

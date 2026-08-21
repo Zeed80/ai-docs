@@ -64,13 +64,43 @@ class HybridSearchRequest(BaseModel):
 # ── doc.search ──────────────────────────────────────────────────────────────
 
 
+class DocumentSearchBody(BaseModel):
+    """JSON body form of the search parameters.
+
+    This endpoint is a POST whose parameters were query-string only, while the
+    capability dispatcher sends every POST argument as JSON — so the agent's
+    search silently arrived empty and failed validation. Accept both shapes,
+    and both spellings (`q` from the GUI, `query` from capabilities.yml).
+    """
+
+    q: str | None = None
+    query: str | None = None
+    limit: int | None = None
+
+
 @router.post("/documents", response_model=list[DocumentSummary])
 async def search_documents(
-    q: str = Query(..., min_length=1),
+    q: str | None = Query(None, min_length=1),
+    # Named query_text, exposed as `query`: the function body already uses the
+    # name `query` for its SQLAlchemy statement, and shadowing it here returned
+    # the parameter tuple instead of the documents.
+    query_text: str | None = Query(None, alias="query", min_length=1),
     limit: int = Query(20, le=100),
+    body: DocumentSearchBody | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: doc.search — Hybrid search: Postgres FTS + ILIKE fallback."""
+    q = (
+        q
+        or query_text
+        or (body.q if body else None)
+        or (body.query if body else None)
+        or ""
+    ).strip()
+    if body and body.limit:
+        limit = min(int(body.limit), 100)
+    if not q:
+        raise HTTPException(status_code=422, detail="Укажите строку поиска (q или query)")
     columns = [
         Document.file_name,
         DocumentChunk.text,

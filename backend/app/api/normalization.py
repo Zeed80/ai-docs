@@ -497,14 +497,20 @@ class CanonicalItemListResponse(BaseModel):
 @router.get("/canonical-items", response_model=CanonicalItemListResponse)
 async def list_canonical_items(
     search: str | None = None,
+    # The agent's capability declares this filter as `query` (see
+    # capabilities.yml: normalization.query) while the GUI sends `search`.
+    # Accepting only one name meant the other was dropped in silence and the
+    # caller got the whole catalog back instead of a search result.
+    query: str | None = None,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: norm.list_canonical_items — List canonical items."""
+    needle = (search or query or "").strip()
     q = select(CanonicalItem)
-    if search:
-        q = q.where(CanonicalItem.name.ilike(f"%{search}%"))
+    if needle:
+        q = q.where(CanonicalItem.name.ilike(f"%{needle}%"))
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     items = (await db.execute(q.order_by(CanonicalItem.name).offset(offset).limit(limit))).scalars().all()
     return CanonicalItemListResponse(items=items, total=total, offset=offset, limit=limit)
