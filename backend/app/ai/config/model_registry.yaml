@@ -300,6 +300,31 @@ models:
     quality_score: 0.87
     speed_score: 0.55
     notes: "MTEB SOTA 2025 multilingual embedding, strong Russian. Uses task prefix query:/passage: for best results."
+  qwen3_embedding_4b_ollama:
+    provider: "ollama"
+    # Official Ollama build, NOT dengcao/Qwen3-Embedding-4B:Q8_0 — that GGUF
+    # carries no embedding capability, so Ollama starts llama-server without
+    # --embeddings and /api/embed answers 501 (verified on this deployment).
+    provider_model: "qwen3-embedding:4b"
+    status: "production"
+    modalities: ["embedding"]
+    max_context_tokens: 32768
+    embedding_dimension: 2560
+    distance_metric: "cosine"
+    normalize_embeddings: true
+    max_input_tokens: 32768
+    batch_size: 8
+    pooling: "native"
+    supports_batching: true
+    model_family: "qwen3"
+    capability_source: "manual"
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    vram_gb_estimate: 2.6
+    quality_score: 0.85
+    speed_score: 0.9
+    notes: "Qwen3-Embedding 4B (official Ollama build, Q4_K_M, 2560-dim). Runs on the ollama-cpu node — measured 60-100 ms per text on Zen 5, so embeddings never evict the reasoning model from VRAM. Task prefix query:/passage: as with the 8B."
   local_embedding_vllm:
     provider: "vllm"
     provider_model: "intfloat/multilingual-e5-large"
@@ -340,6 +365,25 @@ models:
     quality_score: 0.75
     speed_score: 0.70
     notes: "Cross-encoder reranker via Ollama generate. Compact (1.2 GB), reliable."
+  qwen3_reranker_4b_ollama:
+    provider: "ollama"
+    provider_model: "dengcao/Qwen3-Reranker-4B:Q8_0"
+    status: "production"
+    modalities: ["rerank"]
+    max_context_tokens: 32768
+    max_input_tokens: 32768
+    batch_size: 8
+    supports_batching: true
+    rerank_score_range: "0..1"
+    model_family: "qwen3-reranker"
+    capability_source: "manual"
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    vram_gb_estimate: 4.3
+    quality_score: 0.86
+    speed_score: 0.60
+    notes: "Qwen3-Reranker 4B Q8_0, paired with qwen3_embedding_4b_ollama. Runs on the CPU node."
   local_reranker_openai_compatible:
     provider: "openai_compatible"
     provider_model: "BAAI/bge-reranker-v2-m3"

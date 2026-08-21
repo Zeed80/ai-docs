@@ -525,6 +525,97 @@ async def get_embedding_profile() -> dict:
     return get_active_embedding_profile().__dict__
 
 
+class VectorReindexResult(BaseModel):
+    """What a switch of the embedding model actually rebuilt."""
+
+    model_key: str
+    dimension: int
+    documents_indexed: int = 0
+    catalog_indexed: int = 0
+    recipe_triggers_indexed: int = 0
+    connector_triggers_indexed: int = 0
+    errors: list[str] = []
+    message: str = ""
+
+
+@router.post("/vector-reindex", response_model=VectorReindexResult)
+async def reindex_vector_stores(db: AsyncSession = Depends(get_db)) -> VectorReindexResult:
+    """Rebuild every vector store for the CURRENTLY assigned embedding model.
+
+    Changing the embedding model changes the vector dimension, and the stores
+    do not follow on their own: name-scoped collections (documents, recipe and
+    connector triggers) start empty under the new name, while the fixed-name
+    ones (tool_catalog, drawings) keep the old dimension and reject writes.
+    Both symptoms are silent — searches simply stop finding things — so this
+    is one explicit button that puts everything back on the active profile.
+    """
+    from app.ai import connectors as connectors_module
+    from app.ai import recipes as recipes_module
+    from app.ai.embeddings import get_active_embedding_profile
+
+    profile = get_active_embedding_profile()
+    errors: list[str] = []
+
+    documents_indexed = 0
+    try:
+        from app.api.memory import (
+            index_active_memory_embeddings,
+            rebuild_active_memory_embeddings,
+        )
+        from app.domain.graph import (
+            MemoryEmbeddingIndexRequest,
+            MemoryEmbeddingRebuildRequest,
+        )
+
+        await rebuild_active_memory_embeddings(
+            MemoryEmbeddingRebuildRequest(limit=5000), db
+        )
+        while True:
+            batch = await index_active_memory_embeddings(
+                MemoryEmbeddingIndexRequest(limit=500), db
+            )
+            if not batch.indexed:
+                break
+            documents_indexed += batch.indexed
+    except Exception as exc:  # noqa: BLE001 — report, don't abort the rest
+        errors.append(f"documents: {str(exc)[:200]}")
+
+    catalog_indexed = 0
+    try:
+        from app.api.tool_catalog import ReindexCatalogRequest, reindex_catalog
+
+        result = await reindex_catalog(ReindexCatalogRequest(), db)
+        catalog_indexed = result.entries_indexed
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"tool_catalog: {str(exc)[:200]}")
+
+    recipe_triggers = connector_triggers = 0
+    try:
+        recipe_triggers = (await recipes_module.reindex_all_triggers(db))["triggers_indexed"]
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"recipes: {str(exc)[:200]}")
+    try:
+        connector_triggers = (await connectors_module.reindex_all_triggers(db))["triggers_indexed"]
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"connectors: {str(exc)[:200]}")
+
+    return VectorReindexResult(
+        model_key=profile.model_key,
+        dimension=profile.dimension,
+        documents_indexed=documents_indexed,
+        catalog_indexed=catalog_indexed,
+        recipe_triggers_indexed=recipe_triggers,
+        connector_triggers_indexed=connector_triggers,
+        errors=errors,
+        message=(
+            f"Переиндексировано под «{profile.model_key}» ({profile.dimension} измерений): "
+            f"документы {documents_indexed}, каталог {catalog_indexed}, "
+            f"триггеры рецептов {recipe_triggers}, коннекторов {connector_triggers}."
+            + (f" Ошибки: {'; '.join(errors)}" if errors else "")
+        ),
+    )
+
+
 @router.get("/models/capabilities")
 async def list_model_capabilities() -> dict:
     """List registry models with embedding/reranker capabilities."""

@@ -2580,6 +2580,9 @@ interface ProvModel extends CatalogEntry {
   thinking_level_default?: string | null;
   loaded?: boolean;
   node?: string | null;
+  // Pinned node for this model (null = router picks). Rendered as a selector
+  // when the provider kind has more than one node — e.g. Ollama GPU vs CPU.
+  preferred_instance?: string | null;
 }
 
 // Required modality per slot is provided by the backend (`required_modality`)
@@ -2595,6 +2598,9 @@ function AssignmentTab() {
   const [slots, setSlots] = useState<SlotItem[]>([]);
   const [draft, setDraft] = useState<Record<string, string | null>>({});
   const [models, setModels] = useState<ProvModel[]>([]);
+  // Nodes of each local provider kind — a kind can have several (e.g. the GPU
+  // Ollama and the CPU-only one), and a model can be pinned to one of them.
+  const [nodes, setNodes] = useState<ProviderInstanceT[]>([]);
   const [running, setRunning] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
@@ -2615,12 +2621,13 @@ function AssignmentTab() {
 
   const load = useCallback(async () => {
     try {
-      const [sl, md, st] = await Promise.all([
+      const [sl, md, st, nd] = await Promise.all([
         fetch(`${API}/api/providers/assignment-draft`, {
           credentials: "include",
         }),
         fetch(`${API}/api/providers/live-models`, { credentials: "include" }),
         fetch(`${API}/api/local-models/status`, { credentials: "include" }),
+        fetch(`${API}/api/providers`, { credentials: "include" }),
       ]);
       if (sl.ok) {
         const d = await sl.json();
@@ -2647,6 +2654,10 @@ function AssignmentTab() {
           llamacpp: !!p.llamacpp?.running,
           vllm: !!p.vllm?.running,
         });
+      }
+      if (nd.ok) {
+        const d = await nd.json();
+        setNodes(d.instances || []);
       }
     } catch {
       /* ignore */
@@ -2796,6 +2807,36 @@ function AssignmentTab() {
         },
       );
       flash(enabled ? "Рассуждение включено" : "Рассуждение выключено");
+      load();
+    } catch (e) {
+      alert(`Ошибка: ${e}`);
+    }
+  };
+
+  // Enabled nodes of one local provider kind, in listing order.
+  const localNodes = (kind: string) =>
+    nodes.filter((n) => n.is_local && n.kind === kind && n.enabled);
+
+  // Pin a model to a specific node of its provider kind (e.g. the GPU Ollama
+  // vs the CPU-only one). Empty string clears the pin — the router then picks
+  // whichever enabled node actually hosts the model.
+  const setModelNode = async (key: string, instanceName: string) => {
+    try {
+      await fetch(
+        `${API}/api/providers/models/${encodeURIComponent(key)}/preferred-instance`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            ...(await csrfHeaders()),
+          },
+          credentials: "include",
+          body: JSON.stringify({ instance_name: instanceName || null }),
+        },
+      );
+      flash(
+        instanceName ? `Модель закреплена за «${instanceName}»` : "Узел выбирается автоматически",
+      );
       load();
     } catch (e) {
       alert(`Ошибка: ${e}`);
@@ -3277,6 +3318,23 @@ function AssignmentTab() {
                       >
                         {m.loaded ? "загружена" : m.status}
                       </span>
+                    </td>
+                    <td className="py-1.5 px-2 whitespace-nowrap">
+                      {localNodes(m.provider).length > 1 && (
+                        <select
+                          className="rounded border border-slate-600 bg-slate-900 px-1 py-0.5 text-xs text-slate-200"
+                          title="На каком узле выполнять эту модель (например GPU или CPU)"
+                          value={m.preferred_instance ?? ""}
+                          onChange={(e) => setModelNode(m.key, e.target.value)}
+                        >
+                          <option value="">Узел: авто</option>
+                          {localNodes(m.provider).map((n) => (
+                            <option key={n.id} value={n.name}>
+                              {n.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </td>
                     <td className="py-1.5 px-2 whitespace-nowrap">
                       {m.thinking_supported ? (

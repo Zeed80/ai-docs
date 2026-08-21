@@ -423,6 +423,9 @@ class LiveModelOut(BaseModel):
     thinking_levels: list[str] = []
     loaded: bool              # actually present on a node right now
     node: str | None          # which node hosts it (local multi-node)
+    # Node this model is pinned to, if any (None = the router picks). Lets the
+    # UI offer "run this model on the GPU node / on the CPU node".
+    preferred_instance: str | None = None
     vram_gb_estimate: float | None
 
 
@@ -761,6 +764,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                             cap.thinking_supported, kind.value, cap.thinking_levels
                         ),
                         loaded=True, node=inst.name,
+                        preferred_instance=cap.preferred_instance,
                         vram_gb_estimate=cap.vram_gb_estimate or vram,
                     )
                 else:
@@ -801,6 +805,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                             th.thinking_supported, kind.value, th.thinking_levels
                         ),
                         loaded=True, node=inst.name,
+                        preferred_instance=th.preferred_instance,
                         vram_gb_estimate=vram,
                     )
 
@@ -826,6 +831,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                 cap.thinking_supported, cap.provider.value, cap.thinking_levels
             ),
             loaded=False, node=None,
+            preferred_instance=cap.preferred_instance,
             vram_gb_estimate=cap.vram_gb_estimate,
         )
 

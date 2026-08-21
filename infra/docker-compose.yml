@@ -255,6 +255,34 @@ services:
     networks:
       - app
 
+  # Ollama on CPU — embeddings and reranking only.
+  #
+  # The GPU node holds one big reasoning model (OLLAMA_MAX_LOADED_MODELS=1 on
+  # the host service), so every embedding request had to evict it and reload:
+  # measured live, /api/embed simply hung for minutes while the GPU sat idle
+  # (AGENT_LIVE_TEST_FINDINGS.md #14). Vector work is small and memory-bound —
+  # a Zen 5 CPU handles it fine — so it gets its own node and never competes
+  # with reasoning for VRAM.
+  #
+  # Model blobs are shared with the host's Ollama (same directory) so nothing
+  # is downloaded twice; only pulls write there, and pulls go through one node.
+  ollama-cpu:
+    image: ollama/ollama:latest
+    environment:
+      # Hard CPU-only: no device reservation AND no visible CUDA devices.
+      CUDA_VISIBLE_DEVICES: ""
+      OLLAMA_MODELS: /models
+      # Embedding + reranker both resident: they alternate constantly.
+      OLLAMA_MAX_LOADED_MODELS: "2"
+      OLLAMA_NUM_PARALLEL: "2"
+      OLLAMA_KEEP_ALIVE: "30m"
+      OLLAMA_HOST: "0.0.0.0:11434"
+    volumes:
+      - ${OLLAMA_MODELS_DIR:-/home/ollama-models/gpu/models}:/models
+    # Reachable internally as http://ollama-cpu:11434 — no published port.
+    networks:
+      - app
+
   # === ComfyUI — image generation / editing (drawings studio) ===
   # Optional, opt-in. Bring up with:  docker compose --profile comfyui up -d
   # Reachable internally as http://comfyui:8188 (no published port — on-prem only;

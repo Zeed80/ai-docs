@@ -386,3 +386,31 @@ def due_for_revalidation(connector) -> bool:
     if connector.revalidate_after is None:
         return False
     return datetime.now(UTC) >= connector.revalidate_after
+
+
+async def reindex_all_triggers(db) -> dict[str, int]:
+    """Re-embed every connector trigger into the ACTIVE profile's collection.
+
+    Same reason as recipes.reindex_all_triggers: a changed embedding model
+    leaves the learned connector library unreachable by similarity even though
+    the rows are still in Postgres.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import SourceConnector
+
+    rows = (await db.execute(select(SourceConnector))).scalars().all()
+    indexed = failed = 0
+    for connector in rows:
+        for idx, example in enumerate(connector.trigger_examples or []):
+            text = example if isinstance(example, str) else str(example.get("text") or "")
+            if not text.strip():
+                continue
+            try:
+                await _index_trigger(str(connector.id), idx, text)
+                indexed += 1
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                logger.warning("connector_trigger_reindex_failed", connector=str(connector.id), error=str(exc)[:200])
+    logger.info("connector_triggers_reindexed", connectors=len(rows), indexed=indexed, failed=failed)
+    return {"connectors": len(rows), "triggers_indexed": indexed, "triggers_failed": failed}

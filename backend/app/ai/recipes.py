@@ -828,3 +828,32 @@ async def record_outcome(recipe_id, *, success: bool, retire: bool = False) -> N
             await db.commit()
     except Exception as exc:
         log_degraded("recipes.record_outcome", exc)
+
+
+async def reindex_all_triggers(db) -> dict[str, int]:
+    """Re-embed every stored recipe trigger into the ACTIVE profile's collection.
+
+    Triggers are indexed when a recipe is learned, so switching the embedding
+    model leaves them stranded in the old collection: the recipes stay in
+    Postgres but stop being findable, and the agent silently re-plans work it
+    already knows. Run this after changing the embedding assignment.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import RecipeSkill
+
+    rows = (await db.execute(select(RecipeSkill))).scalars().all()
+    indexed = failed = 0
+    for recipe in rows:
+        for idx, example in enumerate(recipe.trigger_examples or []):
+            text = example if isinstance(example, str) else str(example.get("text") or "")
+            if not text.strip():
+                continue
+            try:
+                await _index_trigger(str(recipe.id), idx, text)
+                indexed += 1
+            except Exception as exc:  # noqa: BLE001 — one bad trigger can't stop the rebuild
+                failed += 1
+                logger.warning("recipe_trigger_reindex_failed", recipe=str(recipe.id), error=str(exc)[:200])
+    logger.info("recipe_triggers_reindexed", recipes=len(rows), indexed=indexed, failed=failed)
+    return {"recipes": len(rows), "triggers_indexed": indexed, "triggers_failed": failed}

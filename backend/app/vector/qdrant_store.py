@@ -26,7 +26,21 @@ COLLECTION = "documents"
 COLLECTION_DRAWINGS = "drawings"
 COLLECTION_DRAWING_FEATURES = "drawing_features"
 COLLECTION_TOOL_CATALOG = "tool_catalog"
+# Legacy default, kept only as a last-resort fallback. The real dimension comes
+# from the ACTIVE embedding profile — hardcoding it meant that switching the
+# embedding model left the fixed-name collections (drawings, drawing_features,
+# tool_catalog) on the old size and every write failed on a dimension mismatch.
 VECTOR_SIZE = 4096
+
+
+def active_vector_size(default: int = VECTOR_SIZE) -> int:
+    """Vector dimension of the currently assigned embedding model."""
+    try:
+        from app.ai.embeddings import get_active_embedding_profile
+
+        return int(get_active_embedding_profile().dimension) or default
+    except Exception:  # noqa: BLE001 — never block a write path on config lookup
+        return default
 
 
 def get_client() -> QdrantClient:
@@ -36,14 +50,55 @@ def get_client() -> QdrantClient:
     return QdrantClient(**kwargs)
 
 
+def _collection_vector_size(client: QdrantClient, name: str) -> int | None:
+    """Configured vector dimension of an existing collection (None if unknown)."""
+    try:
+        params = client.get_collection(name).config.params.vectors
+    except Exception:  # noqa: BLE001
+        return None
+    size = getattr(params, "size", None)
+    if size:
+        return int(size)
+    if isinstance(params, dict):
+        for value in params.values():
+            inner = getattr(value, "size", None)
+            if inner:
+                return int(inner)
+    return None
+
+
 def ensure_collection(
     collection_name: str = COLLECTION,
-    vector_size: int = VECTOR_SIZE,
+    vector_size: int | None = None,
     distance_metric: str = "cosine",
+    *,
+    recreate_on_mismatch: bool = False,
 ) -> None:
-    """Create Qdrant collection if it doesn't exist."""
+    """Create Qdrant collection if it doesn't exist.
+
+    When it exists with a DIFFERENT vector size (the embedding model changed),
+    either recreate it — losing its points, so the caller must reindex — or
+    leave it alone and log loudly. Silently keeping the old size is the worst
+    option: every subsequent upsert fails on a dimension mismatch.
+    """
+    vector_size = vector_size or active_vector_size()
     client = get_client()
     existing = {c.name for c in client.get_collections().collections}
+    if collection_name in existing:
+        current = _collection_vector_size(client, collection_name)
+        if current is not None and current != vector_size:
+            if not recreate_on_mismatch:
+                logger.warning(
+                    "qdrant_collection_dimension_mismatch",
+                    collection=collection_name, existing=current, expected=vector_size,
+                )
+                return
+            logger.warning(
+                "qdrant_collection_recreated_for_new_dimension",
+                collection=collection_name, existing=current, expected=vector_size,
+            )
+            client.delete_collection(collection_name)
+            existing.discard(collection_name)
     if collection_name not in existing:
         client.create_collection(
             collection_name=collection_name,
@@ -73,8 +128,17 @@ def ensure_collection(
         logger.debug("qdrant_collection_exists", collection=collection_name)
 
 
-def ensure_drawing_collections(vector_size: int = VECTOR_SIZE) -> None:
-    """Create drawing-related Qdrant collections if they don't exist."""
+def ensure_drawing_collections(
+    vector_size: int | None = None, *, recreate_on_mismatch: bool = False
+) -> None:
+    """Create drawing-related Qdrant collections if they don't exist.
+
+    ``vector_size`` defaults to the active embedding model's dimension.
+    ``recreate_on_mismatch`` drops and rebuilds a collection whose stored
+    dimension differs — data is lost, so only the explicit reindex path passes
+    it; normal write paths log the mismatch instead of silently deleting.
+    """
+    vector_size = vector_size or active_vector_size()
     for collection_name, payload_indexes in [
         (
             COLLECTION_DRAWINGS,
@@ -90,7 +154,11 @@ def ensure_drawing_collections(vector_size: int = VECTOR_SIZE) -> None:
              ("is_active", PayloadSchemaType.KEYWORD)],
         ),
     ]:
-        ensure_collection(collection_name=collection_name, vector_size=vector_size)
+        ensure_collection(
+            collection_name=collection_name,
+            vector_size=vector_size,
+            recreate_on_mismatch=recreate_on_mismatch,
+        )
         client = get_client()
         existing_collection = client.get_collection(collection_name)
         for field, schema_type in payload_indexes:

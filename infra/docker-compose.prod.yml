@@ -35,6 +35,9 @@ services:
   cad-kernel:
     restart: unless-stopped
 
+  ollama-cpu:
+    restart: unless-stopped
+
   gpu-temp-helper:
     restart: unless-stopped
 

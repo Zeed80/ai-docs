@@ -1702,3 +1702,107 @@ async def catalog_ingest_status(
         report=_attach_report_block(supplier.name, sources),
         message=message,
     )
+
+
+class ReindexCatalogRequest(BaseModel):
+    """Rebuild the tool-catalog vector index (e.g. after an embedding change)."""
+
+    # The fixed-name collections carry no dimension in their name, so switching
+    # the embedding model leaves them on the old size and every upsert fails.
+    # Recreating is destructive by nature — hence explicit, not automatic.
+    recreate_collection: bool = True
+    limit: int = PydanticField(default=10000, ge=1, le=100000)
+
+
+class ReindexCatalogResult(BaseModel):
+    entries_total: int
+    entries_indexed: int
+    entries_failed: int
+    collection: str
+    dimension: int
+    message: str = ""
+
+
+@router.post(
+    "/reindex",
+    response_model=ReindexCatalogResult,
+    summary="Skill: tool_catalog.reindex — Re-embed every catalog entry into Qdrant "
+    "(use after switching the embedding model).",
+)
+async def reindex_catalog(
+    payload: ReindexCatalogRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ReindexCatalogResult:
+    from app.ai.embeddings import embed_text as _embed_text
+    from app.ai.embeddings import get_active_embedding_profile
+    from app.vector.qdrant_store import (
+        COLLECTION_TOOL_CATALOG,
+        ensure_drawing_collections,
+        upsert_tool_catalog_entry,
+    )
+
+    profile = get_active_embedding_profile()
+    ensure_drawing_collections(
+        profile.dimension, recreate_on_mismatch=payload.recreate_collection
+    )
+
+    rows = (
+        (
+            await db.execute(
+                select(ToolCatalogEntry)
+                .where(ToolCatalogEntry.is_active.is_(True))
+                .limit(payload.limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    indexed = failed = 0
+    for entry in rows:
+        text = " ".join(
+            part
+            for part in (
+                entry.tool_type.value if entry.tool_type else "",
+                entry.name,
+                f"Ø{entry.diameter_mm}мм" if entry.diameter_mm else "",
+                entry.material or "",
+                entry.coating or "",
+                entry.description or "",
+            )
+            if part
+        )
+        try:
+            vector = await _embed_text(text)
+            if not vector:
+                failed += 1
+                continue
+            upsert_tool_catalog_entry(
+                entry_id=str(entry.id),
+                vector=vector,
+                tool_type=entry.tool_type.value if entry.tool_type else "other",
+                name=entry.name,
+                supplier_id=str(entry.supplier_id) if entry.supplier_id else "",
+                diameter_mm=entry.diameter_mm,
+                material=entry.material,
+            )
+            entry.embedding_id = f"tool_catalog:{entry.id}"
+            indexed += 1
+        except Exception as exc:  # noqa: BLE001 — one bad row can't stop the rebuild
+            failed += 1
+            logger.warning("tool_catalog_reindex_entry_failed", entry_id=str(entry.id), error=str(exc)[:200])
+    await db.commit()
+
+    return ReindexCatalogResult(
+        entries_total=len(rows),
+        entries_indexed=indexed,
+        entries_failed=failed,
+        collection=COLLECTION_TOOL_CATALOG,
+        dimension=profile.dimension,
+        message=(
+            f"Каталог переиндексирован моделью «{profile.model_key}» "
+            f"({profile.dimension} измерений): {indexed} из {len(rows)}"
+            + (f", ошибок: {failed}" if failed else "")
+            + "."
+        ),
+    )
