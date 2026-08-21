@@ -104,3 +104,42 @@ def test_normalize_accepts_percentage_style_vat_rate():
     )
     assert round(price, 2) == 120.0
     assert assumed is False and packed is False
+
+
+# ── Э6: canonical matching ──────────────────────────────────────────────────
+
+
+def test_strong_name_match_is_automatic():
+    from app.domain.canonical_matching import best_match
+
+    match = best_match(
+        "Фреза концевая Ø12 твердосплавная",
+        [("1", "Фреза концевая", None), ("2", "Сверло спиральное", ["сверло"])],
+    )
+    assert match.decision == "auto"
+    assert match.canonical_item_id == "1"
+
+
+def test_alias_is_considered():
+    from app.domain.canonical_matching import best_match
+
+    match = best_match("Сверло Ø6", [("2", "Сверло спиральное по металлу", ["сверло"])])
+    assert match.canonical_item_id == "2"
+
+
+def test_unrelated_item_is_left_unmapped():
+    from app.domain.canonical_matching import best_match
+
+    match = best_match(
+        "Ящик для инструмента", [("1", "Фреза концевая", None), ("2", "Сверло", None)]
+    )
+    assert match.decision == "none"
+    assert match.canonical_item_id is None
+
+
+def test_middling_match_goes_to_review_not_auto():
+    from app.domain.canonical_matching import best_match
+
+    match = best_match("Фреза дисковая отрезная 63х2", [("1", "Фреза концевая 12", None)])
+    assert match.decision in {"review", "none"}
+    assert match.decision != "auto"

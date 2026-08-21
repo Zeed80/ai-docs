@@ -178,8 +178,14 @@ async def _ingest_document_async(document_id: str, celery_task_id: str | None) -
         skipped=result["skipped"],
         skipped_by_reason=result.get("skipped_by_reason") or {},
     )
-    # canonical matching is Э6; embedding and graph happen inside the entry loop.
-    await _update_step(factory, job_id, "canonical", "skipped")
+    canonical_stats = await _map_canonical_items(factory, doc_uuid)
+    await _update_step(
+        factory,
+        job_id,
+        "canonical",
+        "done",
+        **canonical_stats,
+    )
     await _update_step(factory, job_id, "embedding", "done")
     await _update_step(factory, job_id, "graph", "done")
     await _finish(factory, job_id, "done")
@@ -200,6 +206,76 @@ async def _ingest_document_async(document_id: str, celery_task_id: str | None) -
         "entries_skipped": result["skipped"],
         "errors": result["errors"][:10],
     }
+
+
+async def _map_canonical_items(factory, doc_uuid) -> dict:
+    """Link this file's entries to canonical items and record their prices.
+
+    Only a strong match is written automatically; a middling one is stored as a
+    candidate in metadata_ for review. A wrong mapping silently poisons price
+    history, so "unknown" stays unknown.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import CanonicalItem, PriceHistoryEntry, ToolCatalogEntry, ToolSupplier
+    from app.domain.canonical_matching import best_match
+
+    mapped = 0
+    for_review = 0
+    prices_recorded = 0
+
+    async with factory() as db:
+        entries = (
+            await db.execute(
+                select(ToolCatalogEntry).where(
+                    ToolCatalogEntry.source_document_id == doc_uuid,
+                    ToolCatalogEntry.is_active.is_(True),
+                )
+            )
+        ).scalars().all()
+        if not entries:
+            return {"mapped": 0, "for_review": 0, "prices_recorded": 0}
+
+        items = (await db.execute(select(CanonicalItem))).scalars().all()
+        if not items:
+            return {"mapped": 0, "for_review": 0, "prices_recorded": 0}
+        candidates = [(str(item.id), item.name, item.aliases) for item in items]
+
+        party_id = None
+        supplier_id = entries[0].supplier_id
+        if supplier_id:
+            supplier = await db.get(ToolSupplier, supplier_id)
+            party_id = supplier.main_supplier_id if supplier else None
+
+        for entry in entries:
+            text = " ".join(filter(None, [entry.name, entry.description]))
+            match = best_match(text, candidates)
+            if match.decision == "auto" and match.canonical_item_id:
+                entry.canonical_item_id = uuid.UUID(match.canonical_item_id)
+                mapped += 1
+                if entry.price_value:
+                    db.add(
+                        PriceHistoryEntry(
+                            canonical_item_id=entry.canonical_item_id,
+                            supplier_id=party_id,
+                            price=entry.price_value,
+                            currency=entry.price_currency or "RUB",
+                            source="catalog",
+                        )
+                    )
+                    prices_recorded += 1
+            elif match.decision == "review" and match.canonical_item_id:
+                metadata = dict(entry.metadata_ or {})
+                metadata["canonical_candidate"] = {
+                    "canonical_item_id": match.canonical_item_id,
+                    "canonical_name": match.canonical_name,
+                    "score": match.score,
+                }
+                entry.metadata_ = metadata
+                for_review += 1
+        await db.commit()
+
+    return {"mapped": mapped, "for_review": for_review, "prices_recorded": prices_recorded}
 
 
 async def _with_job(factory, job_id, fn):
