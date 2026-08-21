@@ -42,6 +42,8 @@ from app.db.models import (
     PaymentSchedule,
     Project,
     SiteObject,
+    ToolCatalogEntry,
+    ToolSupplier,
 )
 
 if TYPE_CHECKING:
@@ -364,6 +366,28 @@ SOURCES: dict[str, SourceDef] = {
         ),
         default_columns=("drawing_number", "title", "material", "drawing_type", "status"),
     ),
+    "tool_catalog": SourceDef(
+        key="tool_catalog",
+        title="Каталог инструмента поставщиков",
+        synonyms=("каталог", "каталоги", "номенклатура поставщика", "прайс",
+                  "прайс-лист", "инструмент поставщика"),
+        fields=_fields(
+            FieldDef("name", "Наименование", "text",
+                     ("наименование", "название", "инструмент"), primary_text=True),
+            FieldDef("part_number", "Артикул", "text", ("артикул", "код", "обозначение")),
+            FieldDef("tool_type", "Тип", "text", ("тип", "вид инструмента")),
+            FieldDef("diameter_mm", "Ø, мм", "number", ("диаметр", "ø")),
+            FieldDef("length_mm", "Длина, мм", "number", ("длина",)),
+            FieldDef("material", "Материал", "text", ("материал", "сплав")),
+            FieldDef("coating", "Покрытие", "text", ("покрытие",)),
+            FieldDef("price_value", "Цена", "number", ("цена", "стоимость")),
+            FieldDef("price_currency", "Валюта", "text", ("валюта",)),
+            FieldDef("supplier_name", "Поставщик", "text", ("поставщик", "контрагент")),
+            FieldDef("created_at", "Добавлено", "date", ("дата", "добавлено")),
+        ),
+        default_columns=("part_number", "name", "tool_type", "diameter_mm",
+                         "price_value", "supplier_name"),
+    ),
     # ── Virtual sources (not SQL tables) ────────────────────────────────────
     # Resolved by provider functions, not the SQL engine, but exposed in the
     # same catalog so the agent picks them like any other table.
@@ -669,6 +693,24 @@ def _drawings_exprs() -> dict[str, Any]:
     }
 
 
+def _tool_catalog_exprs() -> dict[str, Any]:
+    return {
+        "name": ToolCatalogEntry.name,
+        "part_number": ToolCatalogEntry.part_number,
+        "tool_type": ToolCatalogEntry.tool_type,
+        "diameter_mm": ToolCatalogEntry.diameter_mm,
+        "length_mm": ToolCatalogEntry.length_mm,
+        "material": ToolCatalogEntry.material,
+        "coating": ToolCatalogEntry.coating,
+        "price_value": ToolCatalogEntry.price_value,
+        "price_currency": ToolCatalogEntry.price_currency,
+        # Catalog suppliers carry their own name; the procurement Party name is
+        # what the user says out loud, so prefer it and fall back.
+        "supplier_name": func.coalesce(Party.name, ToolSupplier.name),
+        "created_at": ToolCatalogEntry.created_at,
+    }
+
+
 def _base_stmt(
     source_key: str,
     exprs: dict[str, Any],
@@ -713,6 +755,14 @@ def _base_stmt(
         return select(*cols).select_from(EmailMessage)
     if source_key == "drawings":
         return select(*cols).select_from(Drawing)
+    if source_key == "tool_catalog":
+        return (
+            select(*cols)
+            .select_from(ToolCatalogEntry)
+            .outerjoin(ToolSupplier, ToolCatalogEntry.supplier_id == ToolSupplier.id)
+            .outerjoin(Party, ToolSupplier.main_supplier_id == Party.id)
+            .where(ToolCatalogEntry.is_active.is_(True))
+        )
     raise ValueError(f"Unknown table source: {source_key}")
 
 
@@ -726,6 +776,7 @@ _EXPRS = {
     "anomalies": _anomalies_exprs,
     "emails": _emails_exprs,
     "drawings": _drawings_exprs,
+    "tool_catalog": _tool_catalog_exprs,
 }
 
 
@@ -896,6 +947,7 @@ def _smart_targets(source_key: str) -> tuple[Any, Any | None] | None:
         "anomalies": (AnomalyCard.title, None),
         "emails": (EmailMessage.subject, None),
         "drawings": (Drawing.filename, None),
+        "tool_catalog": (ToolCatalogEntry.name, None),
     }.get(source_key)
 
 

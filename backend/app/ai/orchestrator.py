@@ -2180,6 +2180,35 @@ class AgentOrchestrator:
                 },
             ))
 
+        # ── Does the published table deliver what its title promises? ──────────
+        # A hand-built block can claim any number: live, the agent published 3
+        # rows under the title «Каталог поставщика … — 1046 позиций». The user
+        # sees three items and believes that is the whole catalog — the worst
+        # kind of silent failure, because nothing looks broken.
+        for item in self._trace.tool_results:
+            result_payload = item.get("result")
+            if not isinstance(result_payload, dict) or result_payload.get("status") != "published":
+                continue
+            args = self._trace.tool_call_args.get(item.get("tool", "")) or {}
+            title = str(
+                (result_payload.get("spec") or {}).get("title")
+                or (args.get("body") or {}).get("title")
+                or ""
+            )
+            claimed = _claimed_total_in_title(title)
+            shown = result_payload.get("shown")
+            if claimed and isinstance(shown, int) and shown and claimed > shown:
+                issues.append(AuditIssue(
+                    code=AuditCode.TOTAL_OVERSTATED,
+                    message=(
+                        f"Заголовок обещает {claimed}, а опубликовано {shown} строк. "
+                        "Опубликуй полные данные (spec_table отдаёт весь набор из SQL) "
+                        "или назови в заголовке фактическое количество."
+                    ),
+                    context={"claimed": claimed, "shown": shown, "title": title[:200]},
+                ))
+                break
+
         # ── Requested action actually performed? ───────────────────────────────
         # A turn that asked the agent to DO something ("загрузи каталог",
         # "прикрепи прайс к поставщику", "отправь письмо") but only produced
@@ -2240,6 +2269,17 @@ class AgentOrchestrator:
                     if isinstance(matched_tool_args.get("filters"), dict)
                     else {}
                 )
+                # A hand-built block (workspace.general / sql_table) carries no
+                # spec and no filters argument — the caller already narrowed the
+                # data, and naming the entity in the title is the only evidence
+                # it can offer. Live: «Каталог поставщика — ООО Мир Станочника»
+                # was failed for a "missing" filter and cost a retry.
+                published_title = str(
+                    (published_spec or {}).get("title")
+                    or (matched_tool_args.get("body") or {}).get("title")
+                    or result.get("title")
+                    or ""
+                )
                 for fk, fv in plan.workspace.filters.items():
                     # The filter may arrive top-level or inside `filters` —
                     # both shapes are legal for capability calls, and reading
@@ -2247,6 +2287,8 @@ class AgentOrchestrator:
                     actual = matched_tool_args.get(fk, nested_args.get(fk))
                     if _filter_satisfied_by_spec(fk, fv, published_spec):
                         continue  # the spec-table filters by the real column
+                    if _entity_named_in_title(fv, published_title):
+                        continue  # hand-built block, entity named in its title
                     if actual is None and result_filters.get(fk) is None:
                         issues.append(AuditIssue(
                             code=AuditCode.FILTER_MISSING,
@@ -4025,6 +4067,40 @@ def _normalise_entity_value(value: Any) -> str:
     text = _norm(str(value or ""))
     text = _re.sub(r"\b(ооо|оао|зао|пао|ао|ип)\b", " ", text)
     return " ".join(text.replace('"', " ").replace("«", " ").replace("»", " ").split())
+
+
+_CLAIMED_TOTAL_RE = re.compile(
+    r"(\d[\d \u00a0]*)\s*(?:позиц|строк|запис|товар|наименован|счет|счёт|шт\b)",
+    re.IGNORECASE,
+)
+
+
+def _claimed_total_in_title(title: str) -> int | None:
+    """Row count a title promises («— 1046 позиций», «всего 152 строки»).
+
+    Only counts numbers standing next to a unit word: a bare year in
+    «Счета за 2024 год» is not a promise about row count.
+    """
+    best: int | None = None
+    for raw in _CLAIMED_TOTAL_RE.findall(title or ""):
+        try:
+            value = int(raw.replace(" ", "").replace("\u00a0", ""))
+        except ValueError:
+            continue
+        best = value if best is None else max(best, value)
+    return best
+
+
+def _entity_named_in_title(expected: Any, title: str) -> bool:
+    """True when a published block's title names the required entity.
+
+    The only filter evidence a hand-built block (workspace.general, sql_table)
+    can offer: its rows were narrowed by the caller, not by a spec the audit
+    can read. Compared without case or legal form, like the spec check below.
+    """
+    expected_norm = _normalise_entity_value(expected)
+    title_norm = _normalise_entity_value(title)
+    return bool(expected_norm) and expected_norm in title_norm
 
 
 def _filter_satisfied_by_spec(filter_key: str, expected: Any, spec: Any) -> bool:

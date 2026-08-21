@@ -37,6 +37,7 @@ class AuditCode(StrEnum):
     SEMANTIC_SUSPECT = "semantic_suspect"                # semantic audit doubts the answer
     INTENT_MISMATCH = "intent_mismatch"                  # published artifact doesn't match the request
     ACTION_NOT_PERFORMED = "action_not_performed"        # user asked to DO something; only reads happened
+    TOTAL_OVERSTATED = "total_overstated"                # title claims more rows than were published
 
 
 Severity = Literal["blocking", "advisory"]
@@ -64,6 +65,7 @@ RETRYABLE: frozenset[AuditCode] = frozenset({
     AuditCode.EMPTY_ANSWER,
     AuditCode.INTENT_MISMATCH,
     AuditCode.ACTION_NOT_PERFORMED,
+    AuditCode.TOTAL_OVERSTATED,
 })
 
 # Issues that signal a genuinely missing capability (feed the builder flow).

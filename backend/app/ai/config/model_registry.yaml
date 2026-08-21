@@ -302,10 +302,21 @@ models:
     notes: "MTEB SOTA 2025 multilingual embedding, strong Russian. Uses task prefix query:/passage: for best results."
   qwen3_embedding_4b_ollama:
     provider: "ollama"
-    # Official Ollama build, NOT dengcao/Qwen3-Embedding-4B:Q8_0 — that GGUF
-    # carries no embedding capability, so Ollama starts llama-server without
-    # --embeddings and /api/embed answers 501 (verified on this deployment).
-    provider_model: "qwen3-embedding:4b"
+    # Official Ollama build at Q8_0 — NOT dengcao/Qwen3-Embedding-4B:Q8_0, whose
+    # GGUF carries no embedding capability (Ollama then starts llama-server
+    # without --embeddings and /api/embed answers 501, verified here).
+    #
+    # Q8 over Q4_K_M deliberately: measured on this deployment, Q4 and Q8
+    # vectors of the same text differ by cosine 0.973-0.983 — the quantisation
+    # error lands straight in the coordinates, unlike generation where sampling
+    # absorbs it. Ranking held on well-separated candidates, but near-duplicates
+    # (two articles of one series) sit within that margin. Cost of the choice:
+    # 154 ms vs 130 ms per text on the CPU node.
+    #
+    # NOTE: the collection name carries model_key + dimension, NOT quantisation.
+    # Swapping the build without a full reindex would mix Q4 and Q8 vectors in
+    # one space — always run POST /api/ai/vector-reindex after this.
+    provider_model: "qwen3-embedding:4b-q8_0"
     status: "production"
     modalities: ["embedding"]
     max_context_tokens: 32768
@@ -324,7 +335,7 @@ models:
     vram_gb_estimate: 2.6
     quality_score: 0.85
     speed_score: 0.9
-    notes: "Qwen3-Embedding 4B (official Ollama build, Q4_K_M, 2560-dim). Runs on the ollama-cpu node — measured 60-100 ms per text on Zen 5, so embeddings never evict the reasoning model from VRAM. Task prefix query:/passage: as with the 8B."
+    notes: "Qwen3-Embedding 4B (official Ollama build, Q8_0, 2560-dim). Runs on the ollama-cpu node — measured 60-100 ms per text on Zen 5, so embeddings never evict the reasoning model from VRAM. Task prefix query:/passage: as with the 8B."
   local_embedding_vllm:
     provider: "vllm"
     provider_model: "intfloat/multilingual-e5-large"

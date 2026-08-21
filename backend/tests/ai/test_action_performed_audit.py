@@ -305,3 +305,111 @@ async def test_audit_reads_filter_passed_inside_nested_filters_arg():
     })
     audit = await orc._audit_turn(plan, get_builtin_agent_config())
     assert AuditCode.FILTER_MISSING.value not in audit.issue_codes
+
+
+def test_entity_named_in_a_hand_built_block_title_counts_as_the_filter():
+    """workspace.general has no spec and no filters argument — its title is the
+    only filter evidence it can offer, and it is truthful (live: «Каталог
+    поставщика — ООО Мир Станочника» was failed for a "missing" filter)."""
+    from app.ai.orchestrator import _entity_named_in_title
+
+    assert _entity_named_in_title(
+        "ооо мир станочника", "Каталог поставщика — ООО Мир Станочника (всего 1046 позиций)"
+    )
+    assert _entity_named_in_title("Мир Станочника", "ООО «Мир Станочника» — каталог")
+    assert not _entity_named_in_title("ЦНК", "Каталог поставщика — ООО Мир Станочника")
+    assert not _entity_named_in_title("Мир Станочника", "")
+
+
+@pytest.mark.asyncio
+async def test_audit_accepts_hand_built_block_naming_the_supplier():
+    from app.ai.orchestrator import WorkspaceOutputSpec
+
+    orc = _orc("Что в каталоге ООО Мир Станочника?", [("workspace", {"action": "general"})])
+    orc._trace.workspace_events = [{"type": "workspace.updated", "canvas_id": "agent:invoice-items"}]
+    orc._trace.tool_call_args = {
+        "workspace": {
+            "action": "general",
+            "canvas_id": "agent:invoice-items",
+            "body": {"title": "Каталог поставщика — ООО Мир Станочника", "rows": [{"a": 1}]},
+        }
+    }
+    orc._trace.tool_results = [{
+        "tool": "workspace",
+        "result": {"canvas_id": "agent:invoice-items", "status": "published", "total": 1046, "filters": {}},
+    }]
+    plan = _plan(intent="analytical_table").model_copy(update={
+        "workspace": WorkspaceOutputSpec(
+            channel="workspace", output_type="table", required=True,
+            canvas_id="agent:invoice-items", filters={"supplier_query": "ооо мир станочника"},
+        )
+    })
+    audit = await orc._audit_turn(plan, get_builtin_agent_config())
+    assert AuditCode.FILTER_MISSING.value not in audit.issue_codes
+
+
+# ── A table must deliver what its title promises ────────────────────────────
+
+
+def test_claimed_total_reads_counts_but_not_years():
+    from app.ai.orchestrator import _claimed_total_in_title
+
+    assert _claimed_total_in_title("Каталог поставщика — 1046 позиций") == 1046
+    assert _claimed_total_in_title("Счета: всего 152 строки") == 152
+    # A year is not a promise about row count.
+    assert _claimed_total_in_title("Счета за 2024 год") is None
+    assert _claimed_total_in_title("") is None
+
+
+@pytest.mark.asyncio
+async def test_audit_flags_a_table_that_shows_less_than_its_title_claims():
+    """Live: 3 rows published under «… — 1046 позиций». Nothing looks broken,
+    and the user believes three items are the whole catalog."""
+    from app.ai.orchestrator import WorkspaceOutputSpec
+
+    orc = _orc("Покажи каталог поставщика", [("workspace", {"action": "general"})])
+    orc._trace.workspace_events = [{"type": "workspace.updated", "canvas_id": "agent:invoice-items"}]
+    orc._trace.tool_call_args = {
+        "workspace": {
+            "action": "general",
+            "body": {"title": "Каталог поставщика «ООО Мир Станочника» — 1046 позиций"},
+        }
+    }
+    orc._trace.tool_results = [{
+        "tool": "workspace",
+        "result": {"canvas_id": "agent:invoice-items", "status": "published", "total": 3, "shown": 3},
+    }]
+    plan = _plan(intent="analytical_table").model_copy(update={
+        "workspace": WorkspaceOutputSpec(
+            channel="workspace", output_type="table", required=True,
+            canvas_id="agent:invoice-items",
+        )
+    })
+    audit = await orc._audit_turn(plan, get_builtin_agent_config())
+    assert AuditCode.TOTAL_OVERSTATED.value in audit.issue_codes
+    assert audit.passed is False
+
+
+@pytest.mark.asyncio
+async def test_audit_accepts_a_table_that_shows_what_it_claims():
+    from app.ai.orchestrator import WorkspaceOutputSpec
+
+    orc = _orc("Покажи каталог поставщика", [("workspace", {"action": "spec_table"})])
+    orc._trace.workspace_events = [{"type": "workspace.updated", "canvas_id": "agent:invoice-items"}]
+    orc._trace.tool_call_args = {"workspace": {"action": "spec_table"}}
+    orc._trace.tool_results = [{
+        "tool": "workspace",
+        "result": {
+            "canvas_id": "agent:invoice-items", "status": "published",
+            "total": 1046, "shown": 1046,
+            "spec": {"title": "Каталог поставщика — 1046 позиций"},
+        },
+    }]
+    plan = _plan(intent="analytical_table").model_copy(update={
+        "workspace": WorkspaceOutputSpec(
+            channel="workspace", output_type="table", required=True,
+            canvas_id="agent:invoice-items",
+        )
+    })
+    audit = await orc._audit_turn(plan, get_builtin_agent_config())
+    assert AuditCode.TOTAL_OVERSTATED.value not in audit.issue_codes

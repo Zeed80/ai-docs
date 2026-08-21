@@ -463,6 +463,12 @@ capabilities:
           has_attachments («Да»/«Нет»), direction (Входящее/Исходящее).
         drawings (чертежи): drawing_number, filename, title, material,
           revision, format, drawing_type, part_class, status, created_at.
+        tool_catalog (каталог/номенклатура поставщика — то, что загружено
+          через tool_catalog.attach_web_catalog): part_number, name, tool_type,
+          diameter_mm, length_mm, material, coating, price_value,
+          price_currency, supplier_name, created_at. Для «покажи каталог
+          поставщика X» — source=tool_catalog с фильтром
+          {field: supplier_name, op: contains, value: "X"}.
         vector_search (семантический поиск по документам): query (фильтр с
           текстом запроса — обязателен), score, file_name, doc_type, status,
           snippet, doc_id. Пример: source=vector_search,

@@ -1045,3 +1045,61 @@ def test_and_filter_question_word_ignored():
     spec = ts.TableSpec(source="invoice_items", columns=[ts.ColumnSpec(field="item_name")])
     cmd = ts.parse_patch_command("и почему так", spec)
     assert cmd is None
+
+
+# ── tool_catalog source ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_spec_table_can_show_a_supplier_catalog(db_session):
+    """«Покажи каталог поставщика таблицей» must be expressible as a spec.
+
+    Live turn (2026-08-21): the agent resolved the supplier and fetched its
+    catalog entries correctly, then failed to publish — the table engine had
+    no `tool_catalog` source, so the only way left was hand-built rows.
+    """
+    from app.db.models import Party, PartyRole, ToolCatalogEntry, ToolSupplier, ToolTypeEnum
+    from app.domain import table_spec as ts
+
+    party = Party(name="ООО Каталожный", role=PartyRole.supplier)
+    db_session.add(party)
+    await db_session.flush()
+    supplier = ToolSupplier(name="ООО Каталожный", main_supplier_id=party.id)
+    db_session.add(supplier)
+    await db_session.flush()
+    db_session.add_all([
+        ToolCatalogEntry(supplier_id=supplier.id, part_number="MT-100", name="Фреза концевая",
+                         tool_type=ToolTypeEnum.endmill, diameter_mm=12.0, price_value=1500.0),
+        ToolCatalogEntry(supplier_id=supplier.id, part_number="DR-050", name="Сверло",
+                         tool_type=ToolTypeEnum.drill, diameter_mm=5.0, price_value=300.0),
+    ])
+    await db_session.commit()
+
+    spec = ts.TableSpec(
+        source="tool_catalog",
+        columns=[
+            ts.ColumnSpec(field="part_number"),
+            ts.ColumnSpec(field="name"),
+            ts.ColumnSpec(field="diameter_mm"),
+            ts.ColumnSpec(field="supplier_name"),
+        ],
+        filters=[ts.FilterSpec(field="supplier_name", op="contains", value="Каталожный")],
+        sort=[ts.SortSpec(field="part_number", dir="asc")],
+    )
+    result = await ts.execute_spec(db_session, spec)
+    assert result.total == 2
+    assert [row["part_number"] for row in result.rows] == ["DR-050", "MT-100"]
+    assert result.rows[0]["supplier_name"] == "ООО Каталожный"
+
+
+def test_tool_catalog_source_is_in_the_public_catalog():
+    """It must be listed like any other source — that is how the agent learns
+    the source exists at all (spec_table_catalog action)."""
+    from app.domain import table_spec as ts
+
+    assert "tool_catalog" in ts.SOURCES
+    source = ts.SOURCES["tool_catalog"]
+    field_names = {f.key for f in source.fields.values()} if isinstance(source.fields, dict) else {
+        f.key for f in source.fields
+    }
+    assert {"part_number", "name", "supplier_name", "price_value"} <= field_names
