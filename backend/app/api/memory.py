@@ -1542,6 +1542,29 @@ async def rebuild_memory_embeddings(
             record.status = "stale"
             stale_marked += 1
 
+    # Existing bookkeeping rows for this collection, by point_id. Rebuilding is
+    # a routine operation (every embedding-model switch runs it), and creating a
+    # second row for the same point turned 311 chunks into 622 records on the
+    # live deployment — Qdrant deduplicates by stable point UUID, so the extra
+    # rows were pure bookkeeping drift that made "indexed" counts meaningless.
+    known_query = select(MemoryEmbeddingRecord).where(
+        MemoryEmbeddingRecord.collection_name == payload.collection_name
+    )
+    if payload.document_id:
+        known_query = known_query.where(
+            MemoryEmbeddingRecord.document_id == payload.document_id
+        )
+    known: dict[str, MemoryEmbeddingRecord] = {
+        record.point_id: record
+        for record in (await db.execute(known_query)).scalars().all()
+    }
+
+    def _requeue(existing: MemoryEmbeddingRecord, template: MemoryEmbeddingRecord) -> None:
+        existing.embedding_model = template.embedding_model
+        existing.vector_size = template.vector_size
+        existing.metadata_ = template.metadata_
+        existing.status = "queued"
+
     if "document_chunk" in payload.content_types:
         chunk_query = select(DocumentChunk).limit(payload.limit)
         if payload.document_id:
@@ -1549,8 +1572,14 @@ async def rebuild_memory_embeddings(
         chunk_result = await db.execute(chunk_query)
         for chunk in chunk_result.scalars().all():
             record = _embedding_record_for_chunk(chunk, payload)
-            db.add(record)
-            records.append(record)
+            existing = known.get(record.point_id)
+            if existing is not None:
+                _requeue(existing, record)
+                records.append(existing)
+            else:
+                db.add(record)
+                known[record.point_id] = record
+                records.append(record)
             chunk.embedding_id = record.point_id
             created += 1
 
@@ -1561,8 +1590,14 @@ async def rebuild_memory_embeddings(
         evidence_result = await db.execute(evidence_query)
         for evidence in evidence_result.scalars().all():
             record = _embedding_record_for_evidence(evidence, payload)
-            db.add(record)
-            records.append(record)
+            existing = known.get(record.point_id)
+            if existing is not None:
+                _requeue(existing, record)
+                records.append(existing)
+            else:
+                db.add(record)
+                known[record.point_id] = record
+                records.append(record)
             created += 1
 
     await db.commit()

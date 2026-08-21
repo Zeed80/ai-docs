@@ -191,3 +191,61 @@ async def test_learned_memory_is_owner_scoped_and_can_be_superseded(
     await db_session.refresh(owned)
     assert owned.status == "superseded"
     assert str(owned.superseded_by_id) == replacement_data["id"]
+
+
+# ── Rebuild idempotency ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_embeddings_rebuild_is_idempotent(client: AsyncClient, db_session):
+    """Rebuilding twice must not create a second bookkeeping row per point.
+
+    Live migration (2026-08-21, switching the embedding model): two rebuild
+    runs turned 311 chunks into 622 records. Qdrant deduplicates by stable
+    point UUID, so the surplus rows were invisible there but made the
+    "indexed" counters meaningless.
+    """
+    from sqlalchemy import func, select as sa_select
+
+    from app.db.models import (
+        Document,
+        DocumentChunk,
+        DocumentStatus,
+        MemoryEmbeddingRecord,
+    )
+
+    doc = Document(
+        file_name="rebuild-idem.pdf",
+        file_hash="rebuildidem1",
+        file_size=512,
+        mime_type="application/pdf",
+        storage_path="r/1.pdf",
+        status=DocumentStatus.needs_review,
+    )
+    db_session.add(doc)
+    await db_session.flush()
+    db_session.add(
+        DocumentChunk(document_id=doc.id, chunk_index=0, text="Фреза концевая Ø12")
+    )
+    await db_session.commit()
+
+    body = {
+        "collection_name": "test_rebuild_idem",
+        "embedding_model": "test-model",
+        "vector_size": 8,
+        "content_types": ["document_chunk"],
+        "document_id": str(doc.id),
+    }
+    first = await client.post("/api/memory/embeddings/rebuild", json=body)
+    assert first.status_code == 200, first.text
+    second = await client.post("/api/memory/embeddings/rebuild", json=body)
+    assert second.status_code == 200, second.text
+
+    rows = (
+        await db_session.execute(
+            sa_select(func.count())
+            .select_from(MemoryEmbeddingRecord)
+            .where(MemoryEmbeddingRecord.collection_name == "test_rebuild_idem")
+        )
+    ).scalar_one()
+    assert rows == 1, "second rebuild duplicated the bookkeeping row"
