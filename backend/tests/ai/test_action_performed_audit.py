@@ -205,3 +205,59 @@ def test_heuristic_plan_still_routes_a_real_table_request():
     assert plan.workspace.required is True
     assert plan.workspace.canvas_id
     assert plan.workspace.filters.get("supplier_query")
+
+
+# ── Filter compliance must understand spec-table filters ───────────────────
+
+
+def test_spec_filter_on_real_column_satisfies_plan_filter():
+    """The plan asks for supplier_query=X; a spec table expresses that as
+    supplier_name contains X. Treating those as different cost a live turn a
+    19-minute retry for a filter that WAS applied."""
+    from app.ai.orchestrator import _filter_satisfied_by_spec
+
+    spec = {
+        "source": "invoices",
+        "filters": [{"field": "supplier_name", "op": "contains", "value": "Мир Станочника"}],
+    }
+    assert _filter_satisfied_by_spec("supplier_query", "ооо мир станочника", spec) is True
+    assert _filter_satisfied_by_spec("supplier_query", "Мир Станочника", spec) is True
+    # A different supplier is still a miss.
+    assert _filter_satisfied_by_spec("supplier_query", "ЦНК", spec) is False
+    # An unfiltered table is a miss too.
+    assert _filter_satisfied_by_spec("supplier_query", "Мир Станочника", {"filters": []}) is False
+
+
+@pytest.mark.asyncio
+async def test_audit_accepts_spec_filtered_table():
+    from app.ai.orchestrator import WorkspaceOutputSpec
+
+    orc = _orc("Покажи счета поставщика ООО Мир Станочника", [("workspace", {"action": "spec_table"})])
+    orc._trace.workspace_events = [
+        {"type": "workspace.updated", "canvas_id": "agent:invoices"}
+    ]
+    orc._trace.tool_call_args = {"workspace": {"action": "spec_table"}}
+    orc._trace.tool_results = [{
+        "tool": "workspace",
+        "result": {
+            "canvas_id": "agent:invoices",
+            "status": "published",
+            "total": 3,
+            "filters": {},
+            "spec": {
+                "source": "invoices",
+                "filters": [
+                    {"field": "supplier_name", "op": "contains", "value": "Мир Станочника"}
+                ],
+            },
+        },
+    }]
+    plan = _plan(intent="analytical_table")
+    plan = plan.model_copy(update={
+        "workspace": WorkspaceOutputSpec(
+            channel="workspace", output_type="table", required=True,
+            canvas_id="agent:invoices", filters={"supplier_query": "ооо мир станочника"},
+        )
+    })
+    audit = await orc._audit_turn(plan, get_builtin_agent_config())
+    assert AuditCode.FILTER_MISSING.value not in audit.issue_codes

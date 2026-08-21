@@ -44,6 +44,18 @@ from app.config import settings
 
 logger = structlog.get_logger()
 
+# Per-dispatch deadline for cheap vector tasks, and a budget for the whole
+# fallback chain. Conversational tasks keep the provider's own timeout: a
+# reasoning model legitimately takes minutes, an embedding never does.
+_FAST_TASK_DISPATCH_TIMEOUT: dict[AITask, float] = {
+    AITask.EMBEDDING: 25.0,
+    AITask.RERANKING: 25.0,
+}
+_FAST_TASK_CHAIN_BUDGET: dict[AITask, float] = {
+    AITask.EMBEDDING: 40.0,
+    AITask.RERANKING: 40.0,
+}
+
 
 class AIConfidentialityPolicyError(RuntimeError):
     """Raised when an AI request would violate local-only/confidential policy."""
@@ -261,10 +273,28 @@ class AIRouter:
 
         last_error: Exception | None = None
 
+        import asyncio as _asyncio
         import time as _time
+
+        # Vector calls answer in seconds or are broken — they must not inherit
+        # the provider's 180s conversational timeout. Measured live: a hung
+        # Ollama /api/embed held a chat turn for minutes per candidate while the
+        # GPU sat idle, and the fallback chain multiplied that by the number of
+        # embedding models configured.
+        per_call_timeout = _FAST_TASK_DISPATCH_TIMEOUT.get(request.task)
+        chain_budget = _FAST_TASK_CHAIN_BUDGET.get(request.task)
+        chain_started = _time.perf_counter()
 
         filtered_candidates = [name for name in candidates if name]
         for model_name in filtered_candidates:
+            if chain_budget is not None and _time.perf_counter() - chain_started > chain_budget:
+                logger.warning(
+                    "ai_route_chain_budget_exhausted",
+                    task=request.task.value,
+                    budget_seconds=chain_budget,
+                    tried=filtered_candidates[: filtered_candidates.index(model_name)],
+                )
+                break
             # An unknown/unresolvable candidate (e.g. an agent slot pointing at a
             # model no longer in the catalog) must not abort the whole turn — skip
             # to the next configured candidate. Confidentiality policy errors are
@@ -322,7 +352,13 @@ class AIRouter:
                 logger.debug("ensure_server_running_failed", model=model_name, error=str(exc))
             started = _time.perf_counter()
             try:
-                response = await self._dispatch(provider, request, model)
+                response = await (
+                    _asyncio.wait_for(
+                        self._dispatch(provider, request, model), timeout=per_call_timeout
+                    )
+                    if per_call_timeout is not None
+                    else self._dispatch(provider, request, model)
+                )
                 response = self._validate_structured_output(request, response)
                 response.proposed_tool_calls = self._filter_tool_calls(request, response)
                 # Reranking providers deliberately return scores=[] instead of

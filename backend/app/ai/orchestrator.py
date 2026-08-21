@@ -2234,8 +2234,11 @@ class AgentOrchestrator:
                     self._trace.tool_call_args.get(last_match.get("tool", "")) or {}
                 )
                 result_filters: dict[str, Any] = result.get("filters") or {}
+                published_spec = result.get("spec") or matched_tool_args.get("spec")
                 for fk, fv in plan.workspace.filters.items():
                     actual = matched_tool_args.get(fk)
+                    if _filter_satisfied_by_spec(fk, fv, published_spec):
+                        continue  # the spec-table filters by the real column
                     if actual is None and result_filters.get(fk) is None:
                         issues.append(AuditIssue(
                             code=AuditCode.FILTER_MISSING,
@@ -3991,6 +3994,57 @@ def _is_state_changing_call(tool: str, args: dict[str, Any]) -> bool:
     if not action:
         return False
     return not action.startswith(_READ_ONLY_ACTION_PREFIXES)
+
+
+# Plan filter key → the spec-table fields that satisfy it. A spec table
+# expresses "only this supplier" as a filter on a real column, not as the
+# plan's shorthand argument name.
+_PLAN_FILTER_SPEC_FIELDS: dict[str, tuple[str, ...]] = {
+    "supplier_query": ("supplier_name", "supplier", "supplier_inn"),
+}
+
+
+def _normalise_entity_value(value: Any) -> str:
+    """Comparable form of an entity name: no legal form, no quotes, no case."""
+    import re as _re
+
+    text = _norm(str(value or ""))
+    text = _re.sub(r"\b(ооо|оао|зао|пао|ао|ип)\b", " ", text)
+    return " ".join(text.replace('"', " ").replace("«", " ").replace("»", " ").split())
+
+
+def _filter_satisfied_by_spec(filter_key: str, expected: Any, spec: Any) -> bool:
+    """True when a published spec-table already applies the required filter.
+
+    The audit used to look only for the plan's own argument name
+    (``supplier_query``) among the tool's kwargs. A spec table filters by real
+    column instead (``supplier_name contains "Мир Станочника"``), so a
+    correctly-filtered table was reported as "фильтр не применён" — and the
+    retry that followed cost ~19 minutes on a live turn for nothing.
+    """
+    if not isinstance(spec, dict):
+        return False
+    filters = spec.get("filters")
+    if not isinstance(filters, list):
+        return False
+    wanted_fields = _PLAN_FILTER_SPEC_FIELDS.get(filter_key, (filter_key,))
+    expected_norm = _normalise_entity_value(expected)
+    if not expected_norm:
+        return False
+    for entry in filters:
+        if not isinstance(entry, dict):
+            continue
+        field = str(entry.get("field") or "")
+        if field not in wanted_fields:
+            continue
+        actual_norm = _normalise_entity_value(entry.get("value"))
+        if not actual_norm:
+            continue
+        # Either side may be the fuller phrasing ("ооо мир станочника" vs
+        # "мир станочника") — both mean the same supplier.
+        if expected_norm in actual_norm or actual_norm in expected_norm:
+            return True
+    return False
 
 
 def _looks_like_chat_table(text: str) -> bool:
