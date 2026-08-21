@@ -984,7 +984,12 @@ async def _plan_order(work_order_id: uuid.UUID) -> bool:
         if order is None or order.status not in {"received", "planning", "replanning"}:
             return False
         await plan_work_order(db, order, use_model=True)
-        order.blocker = None
+        # Ф4-re post-mortem: plan_work_order can now itself transition the
+        # order straight to "blocked" (planner_schema_failure_streak) and
+        # set order.blocker to explain why — unconditionally clearing it
+        # here would immediately erase that reason on every commit.
+        if order.status not in ("blocked", "failed"):
+            order.blocker = None
         await db.commit()
         return True
 

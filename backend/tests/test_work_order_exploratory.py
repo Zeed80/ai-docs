@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Notification, WorkAcceptanceCriterion, WorkOrder
+from app.db.models import Notification, WorkAcceptanceCriterion, WorkOrder, WorkStep
 from app.domain.work_orders import (
     claim_ready_step,
     complete_attempt,
@@ -26,7 +26,12 @@ from app.domain.work_orders import (
     transition_work_order,
     verify_nonempty_result,
 )
-from app.domain.work_planning import generate_capability_plan
+from app.domain.work_planning import (
+    _MAX_CONSECUTIVE_PLANNER_FALLBACKS,
+    _summarize_step_output,
+    generate_capability_plan,
+    plan_work_order,
+)
 
 
 async def _coverage_criterion(db: AsyncSession, order_id: uuid.UUID) -> WorkAcceptanceCriterion:
@@ -438,3 +443,192 @@ class TestExploratoryProgressNotifications:
         # not a bug.
         assert len(notifs) >= 1
         assert any("заверш" in n.title.lower() for n in notifs)
+
+
+# ── Ф4-re post-mortem (pilot 5db58ac6): completed_context bounding + a cap
+# on the planner-schema-failure/free-form-narration fallback cascade ───────
+
+
+class TestSummarizeStepOutput:
+    def test_agent_turn_output_is_relabeled_not_passed_through_raw(self):
+        step = WorkStep(kind="agent_turn", output={"text": "Не удалось завершить.", "executor": "agent_turn"})
+        summary = _summarize_step_output(step)
+        assert summary["kind"] == "agent_turn"
+        assert "not a capability result" in summary["note"].lower()
+        assert summary["excerpt"] == "Не удалось завершить."
+        # The raw {"text": ...} shape must not appear verbatim — that shape is
+        # exactly what taught the model to imitate it as a top-level plan reply.
+        assert "text" not in summary
+
+    def test_agent_turn_excerpt_is_truncated(self):
+        step = WorkStep(kind="agent_turn", output={"text": "x" * 1000})
+        summary = _summarize_step_output(step)
+        assert len(summary["excerpt"]) == 240
+
+    def test_capability_output_passed_through_when_small(self):
+        step = WorkStep(kind="capability", output={"result": {"supplier_id": "abc"}})
+        assert _summarize_step_output(step) == {"result": {"supplier_id": "abc"}}
+
+    def test_large_capability_output_is_truncated(self):
+        step = WorkStep(kind="capability", output={"text": "y" * 5000})
+        summary = _summarize_step_output(step)
+        assert "_truncated_output" in summary
+        assert summary["_truncated_output"].endswith("...[truncated]")
+        assert len(summary["_truncated_output"]) < 5000
+
+
+class TestPlannerErrorFeedback:
+    @pytest.mark.asyncio
+    async def test_planner_error_context_reaches_prompt_and_system_when_present(self):
+        order = WorkOrder(
+            objective="Найди каталоги поставщиков",
+            description=None,
+            constraints={},
+            budgets={},
+            metadata_={},
+        )
+        captured: dict = {}
+
+        async def fake_generate_json(prompt, *, system, **kwargs):
+            captured["prompt"] = prompt
+            captured["system"] = system
+            return {"assumptions": [], "steps": [
+                {"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}
+            ], "verification_plan": {}}
+
+        with (
+            patch("app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)),
+            patch(
+                "app.ai.model_resolver.get_reasoning_model",
+                return_value=type("M", (), {"model": "m", "provider": "ollama"})(),
+            ),
+        ):
+            await generate_capability_plan(
+                order, planner_error_context="steps: Field required"
+            )
+
+        assert "last_planner_error" in captured["prompt"]
+        assert "steps: Field required" in captured["prompt"]
+        assert "REJECTED" in captured["system"]
+        assert "steps: Field required" in captured["system"]
+
+    @pytest.mark.asyncio
+    async def test_no_error_context_when_planner_error_context_absent(self):
+        order = WorkOrder(
+            objective="Найди каталоги поставщиков", description=None,
+            constraints={}, budgets={}, metadata_={},
+        )
+        captured: dict = {}
+
+        async def fake_generate_json(prompt, *, system, **kwargs):
+            captured["system"] = system
+            return {"assumptions": [], "steps": [
+                {"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}
+            ], "verification_plan": {}}
+
+        with (
+            patch("app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)),
+            patch(
+                "app.ai.model_resolver.get_reasoning_model",
+                return_value=type("M", (), {"model": "m", "provider": "ollama"})(),
+            ),
+        ):
+            await generate_capability_plan(order)
+
+        assert "REJECTED" not in captured["system"]
+
+
+class TestPlannerFallbackStreakCap:
+    @pytest.mark.asyncio
+    async def test_consecutive_schema_failures_below_threshold_keep_replanning(self, db_session):
+        order = await create_work_order(
+            db_session, owner_key="tester", objective="Найди каталоги поставщиков",
+        )
+        with patch(
+            "app.domain.work_planning.generate_capability_plan",
+            new=AsyncMock(side_effect=ValueError("planner produced an invalid capability DAG: boom")),
+        ):
+            for _ in range(_MAX_CONSECUTIVE_PLANNER_FALLBACKS - 1):
+                order.status = "replanning"
+                await plan_work_order(db_session, order, use_model=True)
+                await db_session.flush()
+
+        assert order.status != "blocked"
+        assert order.metadata_["planner_fallback_streak"] == _MAX_CONSECUTIVE_PLANNER_FALLBACKS - 1
+
+    @pytest.mark.asyncio
+    async def test_reaching_threshold_blocks_with_a_distinct_honest_reason(self, db_session):
+        order = await create_work_order(
+            db_session, owner_key="tester", objective="Найди каталоги поставщиков",
+        )
+        with patch(
+            "app.domain.work_planning.generate_capability_plan",
+            new=AsyncMock(side_effect=ValueError("planner produced an invalid capability DAG: boom")),
+        ):
+            for _ in range(_MAX_CONSECUTIVE_PLANNER_FALLBACKS):
+                order.status = "replanning"
+                await plan_work_order(db_session, order, use_model=True)
+                await db_session.flush()
+
+        assert order.status == "blocked"
+        assert order.blocker["code"] == "planner_schema_failure_streak"
+        assert order.blocker["streak"] == _MAX_CONSECUTIVE_PLANNER_FALLBACKS
+
+    @pytest.mark.asyncio
+    async def test_a_successful_plan_in_between_resets_the_streak(self, db_session):
+        order = await create_work_order(
+            db_session, owner_key="tester", objective="Найди каталоги поставщиков",
+        )
+        good_plan = {"assumptions": [], "steps": [
+            {"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}
+        ], "verification_plan": {}}
+
+        with patch(
+            "app.domain.work_planning.generate_capability_plan",
+            new=AsyncMock(side_effect=ValueError("boom")),
+        ):
+            for _ in range(_MAX_CONSECUTIVE_PLANNER_FALLBACKS - 1):
+                order.status = "replanning"
+                await plan_work_order(db_session, order, use_model=True)
+                await db_session.flush()
+        assert order.metadata_["planner_fallback_streak"] == _MAX_CONSECUTIVE_PLANNER_FALLBACKS - 1
+
+        from app.domain.work_planning import PlannedWork
+
+        with patch(
+            "app.domain.work_planning.generate_capability_plan",
+            new=AsyncMock(return_value=PlannedWork.model_validate(good_plan)),
+        ):
+            order.status = "replanning"
+            await plan_work_order(db_session, order, use_model=True)
+            await db_session.flush()
+
+        assert order.status != "blocked"
+        assert "planner_fallback_streak" not in order.metadata_
+        assert "last_planner_error" not in order.metadata_
+
+        # Streak must start over, not resume from before the reset.
+        with patch(
+            "app.domain.work_planning.generate_capability_plan",
+            new=AsyncMock(side_effect=ValueError("boom again")),
+        ):
+            order.status = "replanning"
+            await plan_work_order(db_session, order, use_model=True)
+            await db_session.flush()
+        assert order.status != "blocked"
+        assert order.metadata_["planner_fallback_streak"] == 1
+
+    @pytest.mark.asyncio
+    async def test_use_model_false_never_triggers_the_streak_cap(self, db_session):
+        """fallback_plan() itself never raises — use_model=False (test/manual
+        single-step) runs are not the schema-cascade this cap targets."""
+        order = await create_work_order(
+            db_session, owner_key="tester", objective="Найди каталоги поставщиков",
+        )
+        for _ in range(_MAX_CONSECUTIVE_PLANNER_FALLBACKS + 2):
+            order.status = "replanning"
+            await plan_work_order(db_session, order, use_model=False)
+            await db_session.flush()
+
+        assert order.status != "blocked"
+        assert "planner_fallback_streak" not in (order.metadata_ or {})
