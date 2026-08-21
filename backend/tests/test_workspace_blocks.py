@@ -166,3 +166,72 @@ async def test_compare_table_data_publishes_diff(client: AsyncClient):
     block = next(b for b in blocks if b["id"] == "test:compare-result")
     statuses = {row["status"] for row in block["rows"]}
     assert {"changed", "removed", "added"} <= statuses
+
+
+# ── Supplier filter on the invoice table ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_invoice_table_filters_by_supplier(client: AsyncClient, db_session):
+    """A request for ONE supplier's invoices must not publish everyone's.
+
+    Live finding (2026-08-21): the agent did pass supplier_query, but this
+    request schema had no such field — it was dropped silently and all 152
+    invoices went to the desktop under the title "полный список".
+    """
+    from datetime import UTC, datetime
+
+    from app.db.models import Document, DocumentStatus, Invoice, Party, PartyRole
+
+    wanted = Party(name="ООО Нужный Поставщик", role=PartyRole.supplier)
+    other = Party(name="ООО Другой Поставщик", role=PartyRole.supplier)
+    db_session.add_all([wanted, other])
+    await db_session.flush()
+
+    def _doc(name: str, digest: str) -> Document:
+        return Document(
+            file_name=name,
+            file_hash=digest,
+            file_size=1024,
+            mime_type="application/pdf",
+            storage_path=f"w/{digest}.pdf",
+            status=DocumentStatus.needs_review,
+        )
+
+    doc_wanted, doc_other = _doc("wanted.pdf", "wsfilter1"), _doc("other.pdf", "wsfilter2")
+    db_session.add_all([doc_wanted, doc_other])
+    await db_session.flush()
+
+    now = datetime.now(UTC)
+    db_session.add_all([
+        Invoice(document_id=doc_wanted.id, invoice_number="F-1", invoice_date=now,
+                supplier_id=wanted.id, total_amount=100),
+        Invoice(document_id=doc_other.id, invoice_number="O-1", invoice_date=now,
+                supplier_id=other.id, total_amount=200),
+    ])
+    await db_session.commit()
+
+    resp = await client.post("/api/workspace/agent/invoices/table", json={
+        "canvas_id": "test:invoice-supplier-filter",
+        "supplier_query": "Нужный Поставщик",
+    })
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["total"] == 1
+    # …and the applied filter is reported back, which is what the audit reads.
+    assert data["filters"]["supplier_query"] == "Нужный Поставщик"
+
+    block = (await client.get("/api/workspace/blocks/test:invoice-supplier-filter")).json()
+    numbers = [row.get("invoice_number") for row in block["rows"]]
+    assert numbers == ["F-1"]
+
+
+@pytest.mark.asyncio
+async def test_invoice_table_unknown_supplier_is_not_found(client: AsyncClient):
+    """An unknown name must not read as "done, 0 invoices" (finding #5)."""
+    resp = await client.post("/api/workspace/agent/invoices/table", json={
+        "canvas_id": "test:invoice-unknown-supplier",
+        "supplier_query": "ООО Совсем Неизвестный Контрагент",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "not_found"

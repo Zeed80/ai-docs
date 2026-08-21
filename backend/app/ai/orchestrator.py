@@ -2235,8 +2235,16 @@ class AgentOrchestrator:
                 )
                 result_filters: dict[str, Any] = result.get("filters") or {}
                 published_spec = result.get("spec") or matched_tool_args.get("spec")
+                nested_args = (
+                    matched_tool_args.get("filters")
+                    if isinstance(matched_tool_args.get("filters"), dict)
+                    else {}
+                )
                 for fk, fv in plan.workspace.filters.items():
-                    actual = matched_tool_args.get(fk)
+                    # The filter may arrive top-level or inside `filters` —
+                    # both shapes are legal for capability calls, and reading
+                    # only the top level reported a passed filter as missing.
+                    actual = matched_tool_args.get(fk, nested_args.get(fk))
                     if _filter_satisfied_by_spec(fk, fv, published_spec):
                         continue  # the spec-table filters by the real column
                     if actual is None and result_filters.get(fk) is None:
@@ -4002,6 +4010,12 @@ def _is_state_changing_call(tool: str, args: dict[str, Any]) -> bool:
 _PLAN_FILTER_SPEC_FIELDS: dict[str, tuple[str, ...]] = {
     "supplier_query": ("supplier_name", "supplier", "supplier_inn"),
 }
+# Filtering by the entity's id satisfies the same requirement more precisely
+# than its name (the worker often resolves the supplier first, then filters
+# by supplier_id — live 2026-08-21).
+_PLAN_FILTER_ID_FIELDS: dict[str, tuple[str, ...]] = {
+    "supplier_query": ("supplier_id", "party_id"),
+}
 
 
 def _normalise_entity_value(value: Any) -> str:
@@ -4031,6 +4045,16 @@ def _filter_satisfied_by_spec(filter_key: str, expected: Any, spec: Any) -> bool
     expected_norm = _normalise_entity_value(expected)
     if not expected_norm:
         return False
+    # An id-based filter identifies the entity exactly — stricter than the
+    # name match below, so accept it without comparing the human name.
+    id_fields = _PLAN_FILTER_ID_FIELDS.get(filter_key, ())
+    for entry in filters:
+        if (
+            isinstance(entry, dict)
+            and str(entry.get("field") or "") in id_fields
+            and str(entry.get("value") or "").strip()
+        ):
+            return True
     for entry in filters:
         if not isinstance(entry, dict):
             continue

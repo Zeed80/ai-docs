@@ -261,3 +261,47 @@ async def test_audit_accepts_spec_filtered_table():
     })
     audit = await orc._audit_turn(plan, get_builtin_agent_config())
     assert AuditCode.FILTER_MISSING.value not in audit.issue_codes
+
+
+def test_spec_filter_by_supplier_id_satisfies_plan_filter():
+    """The worker often resolves the supplier first and then filters by id —
+    that is stricter than the name the plan carries, not a missing filter."""
+    from app.ai.orchestrator import _filter_satisfied_by_spec
+
+    spec = {
+        "source": "invoices",
+        "filters": [
+            {"field": "supplier_id", "op": "eq", "value": "d604c3b3-e4ff-4535-9c00-a905fab5a193"}
+        ],
+    }
+    assert _filter_satisfied_by_spec("supplier_query", "ооо мир станочника", spec) is True
+    assert _filter_satisfied_by_spec("supplier_query", "ооо мир станочника", {"filters": []}) is False
+
+
+@pytest.mark.asyncio
+async def test_audit_reads_filter_passed_inside_nested_filters_arg():
+    """Capability calls may carry the filter top-level or inside `filters`;
+    reading only the top level reported a passed filter as missing."""
+    from app.ai.orchestrator import WorkspaceOutputSpec
+
+    orc = _orc("Покажи счета поставщика ООО Мир Станочника", [("workspace", {"action": "invoice_table"})])
+    orc._trace.workspace_events = [{"type": "workspace.updated", "canvas_id": "agent:invoices"}]
+    orc._trace.tool_call_args = {
+        "workspace": {
+            "action": "invoice_table",
+            "canvas_id": "agent:invoices",
+            "filters": {"supplier_query": "ооо мир станочника"},
+        }
+    }
+    orc._trace.tool_results = [{
+        "tool": "workspace",
+        "result": {"canvas_id": "agent:invoices", "status": "published", "total": 3, "filters": {}},
+    }]
+    plan = _plan(intent="analytical_table").model_copy(update={
+        "workspace": WorkspaceOutputSpec(
+            channel="workspace", output_type="table", required=True,
+            canvas_id="agent:invoices", filters={"supplier_query": "ооо мир станочника"},
+        )
+    })
+    audit = await orc._audit_turn(plan, get_builtin_agent_config())
+    assert AuditCode.FILTER_MISSING.value not in audit.issue_codes

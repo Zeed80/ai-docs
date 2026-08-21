@@ -42,6 +42,11 @@ class WorkspaceInvoiceTableRequest(BaseModel):
     canvas_id: str = "agent:invoice-list"
     limit: int = 5000
     include_delete_actions: bool = True
+    # Same filter the items-table has always accepted. Without it a request for
+    # ONE supplier's invoices published all 152 of them: the agent did pass
+    # supplier_query, the schema silently dropped it, and the audit then
+    # (correctly) reported a missing filter — observed live 2026-08-21.
+    supplier_query: str | None = None
 
 
 class WorkspaceInvoiceItemsTableRequest(BaseModel):
@@ -159,15 +164,41 @@ async def publish_invoice_table(
     Workspace table schema, adds supported file actions, stores the block, and
     notifies active clients to switch to the existing Workspace section.
     """
-    total = (
-        await db.execute(select(func.count()).select_from(Invoice))
-    ).scalar_one()
-    result = await db.execute(
+    supplier_filter = (payload.supplier_query or "").strip()
+    count_stmt = select(func.count()).select_from(Invoice)
+    rows_stmt = (
         select(Invoice)
         .options(selectinload(Invoice.supplier))
         .order_by(Invoice.created_at.desc())
         .limit(_WORKSPACE_MAX_ROWS)
     )
+    if supplier_filter:
+        pattern = f"%{supplier_filter}%"
+        count_stmt = count_stmt.join(Party, Invoice.supplier_id == Party.id).where(
+            Party.name.ilike(pattern)
+        )
+        rows_stmt = rows_stmt.join(Party, Invoice.supplier_id == Party.id).where(
+            Party.name.ilike(pattern)
+        )
+    total = (await db.execute(count_stmt)).scalar_one()
+    if supplier_filter and total == 0:
+        # Same honest empty-state split as the items table (finding #5): a
+        # supplier that doesn't exist must not look like "done, 0 invoices".
+        supplier_exists = (
+            await db.execute(
+                select(func.count()).select_from(Party).where(Party.name.ilike(pattern))
+            )
+        ).scalar_one() > 0
+        if not supplier_exists:
+            return WorkspaceToolResponse(
+                status="not_found",
+                canvas_id=payload.canvas_id,
+                total=0,
+                shown=0,
+                message=f"Поставщик «{supplier_filter}» не найден в базе.",
+                filters={"supplier_query": supplier_filter},
+            )
+    result = await db.execute(rows_stmt)
     invoices = result.scalars().all()
     rows = [
         _invoice_workspace_row(inv, index, include_delete=payload.include_delete_actions)
@@ -176,7 +207,11 @@ async def publish_invoice_table(
     block = {
         "id": payload.canvas_id,
         "type": "table",
-        "title": f"Счета: полный список ({total})",
+        "title": (
+            f"Счета: {supplier_filter} ({total})"
+            if supplier_filter
+            else f"Счета: полный список ({total})"
+        ),
         "columns": _invoice_columns(include_delete=payload.include_delete_actions),
         "rows": rows,
         "source": "workspace.invoice_table",
@@ -192,8 +227,15 @@ async def publish_invoice_table(
         canvas_id=payload.canvas_id,
         total=total,
         shown=len(rows),
-        message=f"Открыл на Рабочем столе таблицу со счетами: {len(rows)} из {total}.",
-        filters={},
+        message=(
+            f"Открыл на Рабочем столе счета поставщика «{supplier_filter}»: "
+            f"{len(rows)} из {total}."
+            if supplier_filter
+            else f"Открыл на Рабочем столе таблицу со счетами: {len(rows)} из {total}."
+        ),
+        # Report the filter that was actually applied — the audit reads this to
+        # verify the published table matches what was asked for.
+        filters={"supplier_query": supplier_filter} if supplier_filter else {},
     )
 
 
