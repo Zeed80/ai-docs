@@ -94,6 +94,14 @@ class BuiltinAgentConfig(BaseModel):
     use_turn_router: bool = True
     # Router decisions below this confidence escalate to the orchestrator model.
     turn_router_min_confidence: float = Field(0.55, ge=0.0, le=1.0)
+    # Timeout for the turn ROUTER specifically — deliberately separate from the
+    # planner's. Measured live: with a 27B model in the fast slot the router
+    # needs far longer than the planner's 8s default, so it timed out on every
+    # turn and the heuristic planner silently became the primary path (that is
+    # what produced "the agent turned my action into a table" bugs). Raising
+    # this keeps routing by meaning; if the latency hurts, assign a small model
+    # to the fast slot in /settings/models rather than lowering it back.
+    turn_router_timeout_seconds: float = Field(45.0, ge=2.0, le=180.0)
     max_worker_steps: int = Field(12, ge=1, le=60)
     max_audit_retries: int = Field(1, ge=0, le=5)
     memory_enabled: bool = True
@@ -167,6 +175,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     orchestrator_plan_timeout_seconds: float | None = Field(default=None, ge=2.0, le=180.0)
     use_turn_router: bool | None = None
     turn_router_min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    turn_router_timeout_seconds: float | None = Field(default=None, ge=2.0, le=180.0)
     max_worker_steps: int | None = Field(default=None, ge=1, le=60)
     max_audit_retries: int | None = Field(default=None, ge=0, le=5)
     memory_enabled: bool | None = None

@@ -1607,6 +1607,7 @@ class AgentSession:
         # the worker off slow RAG tools (memory/search/documents) when the task
         # is structured-data only (e.g. a spec_table). Reset each turn.
         self._excluded_tools: set[str] = set()
+        self._recommended_capabilities: set[str] = set()
         # Orchestrator routed this turn to the desktop — reliable auto-publish
         # fallback in _deliver_final_content (by intent, not keyword). Reset each turn.
         self._workspace_expected: bool = False
@@ -1818,6 +1819,22 @@ class AgentSession:
         """
         self._excluded_tools = set(names or ())
 
+    def set_recommended_capabilities(self, names: set[str] | None) -> None:
+        """Capabilities the router/planner chose for this turn — always visible.
+
+        The role allowlist scopes tools by JOB, but the turn router picks the
+        tool by MEANING of the request; when the two disagreed the worker simply
+        never saw the recommended capability and improvised with whatever was in
+        the allowlist (live finding: "прикрепи каталог к поставщику" → the
+        catalog tool was invisible, so the worker published a summary table
+        instead). A capability the planner explicitly chose is in scope for that
+        turn by construction. Reset each turn by the orchestrator; ``exclude``
+        still wins (that gate is about cost, not scope).
+        """
+        self._recommended_capabilities = {
+            str(n).strip() for n in (names or ()) if str(n).strip()
+        }
+
     def set_response_budget(self, max_tokens: int) -> None:
         """Set the per-turn max response tokens (clamped to a sane range)."""
         self._response_budget = max(256, min(int(max_tokens), 16384))
@@ -1867,7 +1884,7 @@ class AgentSession:
             return _apply_exclusions(self._tools)
         # Names of registry capabilities (excludes MCP tools, which pass through).
         capability_names = set(_load_capabilities()[1].keys())
-        visible = set(allowed) | self._CORE_CAPABILITIES
+        visible = set(allowed) | self._CORE_CAPABILITIES | self._recommended_capabilities
 
         return _apply_exclusions([
             tool

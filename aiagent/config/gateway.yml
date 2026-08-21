@@ -332,27 +332,27 @@ prompts:
   roles:
     invoice_specialist:
       prompt: ./prompts/role-invoice-specialist.md
-      capabilities: [invoices, documents, suppliers, payments, anomalies, normalization, analytics]
+      capabilities: [invoices, documents, suppliers, payments, anomalies, normalization, analytics, tool_catalog]
       default_canvases: ["agent:invoices", "agent:invoice-items"]
     data_analyst:
       prompt: ./prompts/role-data-analyst.md
-      capabilities: [invoices, documents, suppliers, warehouse, procurement, payments, anomalies, analytics, agent_control]
+      capabilities: [invoices, documents, suppliers, warehouse, procurement, payments, anomalies, analytics, agent_control, tool_catalog]
     warehouse_specialist:
       prompt: ./prompts/role-warehouse.md
-      capabilities: [warehouse, documents, procurement, analytics]
+      capabilities: [warehouse, documents, procurement, analytics, tool_catalog]
     procurement_specialist:
       prompt: ./prompts/role-procurement.md
-      capabilities: [procurement, suppliers, invoices, email, documents, analytics]
+      capabilities: [procurement, suppliers, invoices, email, documents, analytics, tool_catalog]
     accountant:
       prompt: ./prompts/role-accountant.md
       capabilities: [invoices, payments, documents, suppliers, normalization, analytics]
     engineer:
       prompt: ./prompts/role-engineer.md
-      capabilities: [documents, tech, analytics, image_studio]
+      capabilities: [documents, tech, analytics, image_studio, tool_catalog]
       default_canvases: ["agent:image-studio"]
     technologist:
       prompt: ./prompts/role-technologist.md
-      capabilities: [tech, documents, analytics, image_studio]
+      capabilities: [tech, documents, analytics, image_studio, tool_catalog]
       default_canvases: ["agent:image-studio"]
     memory_researcher:
       prompt: ./prompts/role-memory-researcher.md

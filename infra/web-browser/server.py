@@ -113,6 +113,16 @@ class FetchRequest(BaseModel):
     wait_ms: int = Field(0, ge=0, le=15000)
     # For a scanned PDF (no text layer): how many pages to rasterize for OCR.
     pdf_ocr_pages: int = Field(5, ge=0, le=20)
+    # Also return the page's outgoing links (absolute URL + anchor text). Used
+    # to DISCOVER a supplier's catalogs/price lists: the extracted text says
+    # nothing about which file a "Скачать каталог" button points at.
+    include_links: bool = False
+    max_links: int = Field(200, ge=1, le=1000)
+
+
+class PageLink(BaseModel):
+    url: str
+    text: str = ""
 
 
 class FetchResponse(BaseModel):
@@ -120,6 +130,7 @@ class FetchResponse(BaseModel):
     status: int | None = None
     title: str | None = None
     text: str = ""
+    links: list[PageLink] = []
     screenshot_b64: str | None = None
     truncated: bool = False
     # Base64 PNGs of scanned-PDF pages, for the backend to OCR.
@@ -359,6 +370,7 @@ async def fetch(req: FetchRequest) -> FetchResponse:
     final_url: str | None = None
     title: str | None = None
     text = ""
+    links: list[PageLink] = []
     screenshot_b64: str | None = None
     response = None
     try:
@@ -433,6 +445,24 @@ async def fetch(req: FetchRequest) -> FetchResponse:
         ):
             diagnostics.append("bot_challenge_detected")
 
+        if req.include_links:
+            try:
+                raw_links = await page.evaluate(
+                    "Array.from(document.querySelectorAll('a[href]'))"
+                    ".map(a => ({url: a.href, text: (a.textContent || '').trim().slice(0, 200)}))"
+                )
+                seen_links: set[str] = set()
+                for item in raw_links or []:
+                    href = str((item or {}).get("url") or "")
+                    if not href.startswith(("http://", "https://")) or href in seen_links:
+                        continue
+                    seen_links.add(href)
+                    links.append(PageLink(url=href, text=str(item.get("text") or "")))
+                    if len(links) >= req.max_links:
+                        break
+            except Exception as exc:  # noqa: BLE001
+                diagnostics.append(f"links_error:{str(exc)[:120]}")
+
         if req.screenshot:
             try:
                 shot = await page.screenshot(
@@ -454,6 +484,7 @@ async def fetch(req: FetchRequest) -> FetchResponse:
         status=status,
         title=title,
         text=text[: req.max_chars],
+        links=links,
         screenshot_b64=screenshot_b64,
         truncated=truncated,
         diagnostics=diagnostics,

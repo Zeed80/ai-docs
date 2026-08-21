@@ -25,9 +25,20 @@ from sqlalchemy import delete as sa_delete
 from app.db.session import get_db
 from pydantic import BaseModel, Field as PydanticField
 from app.domain.tool_catalog import (
+    AttachedSourceResult,
+    AttachWebCatalogRequest,
+    AttachWebCatalogResult,
+    CatalogCandidate,
+    CatalogIngestStatusRequest,
+    CatalogIngestStatusResult,
+    DiscoverCatalogsRequest,
+    DiscoverCatalogsResult,
     CatalogImportResult,
     IngestWebSourceRequest,
     IngestWebSourceResult,
+    ResolveSupplierResult,
+    SupplierCandidate,
+    SupplierRefRequest,
     ToolCatalogEntryCreate,
     ToolCatalogEntryOut,
     ToolCatalogEntryUpdate,
@@ -787,25 +798,7 @@ async def upload_catalog_for_party(
     if not party:
         raise HTTPException(status_code=404, detail="Поставщик не найден")
 
-    # Find or create ToolSupplier linked to this party
-    result = await db.execute(
-        select(ToolSupplier).where(ToolSupplier.main_supplier_id == party_id).limit(1)
-    )
-    tool_supplier = result.scalar_one_or_none()
-
-    if not tool_supplier:
-        tool_supplier = ToolSupplier(
-            name=party.name,
-            main_supplier_id=party_id,
-            contact_info={
-                "email": party.contact_email,
-                "phone": party.contact_phone,
-                "address": party.address,
-            },
-        )
-        db.add(tool_supplier)
-        await db.commit()
-        await db.refresh(tool_supplier)
+    tool_supplier = await _get_or_create_tool_supplier_for_party(db, party)
 
     # Delegate to the existing upload logic
     filename = file.filename or "catalog"
@@ -965,3 +958,747 @@ async def _upload_catalog_to_minio(
     except Exception as exc:
         logger.warning("catalog_minio_upload_failed", error=str(exc))
         return None
+
+
+# ── Supplier resolution (name → Party → ToolSupplier) ─────────────────────────
+#
+# The agent knows a supplier by NAME; the catalog is keyed by ToolSupplier.id
+# and procurement by Party.id. Every catalog action an agent can call goes
+# through _resolve_supplier so a chat turn never has to invent a UUID — and so
+# an ambiguous name comes back as CANDIDATES (the agent asks the user) instead
+# of silently picking one.
+
+
+async def _get_or_create_tool_supplier_for_party(
+    db: AsyncSession, party: "Party"
+) -> ToolSupplier:
+    """Return the ToolSupplier linked to this Party, creating it on demand.
+
+    Same find-or-create the GUI upload path uses (upload_catalog_for_party) —
+    extracted so the agent-facing actions share one behaviour with the GUI.
+    """
+    result = await db.execute(
+        select(ToolSupplier).where(ToolSupplier.main_supplier_id == party.id).limit(1)
+    )
+    tool_supplier = result.scalar_one_or_none()
+    if tool_supplier:
+        return tool_supplier
+    tool_supplier = ToolSupplier(
+        name=party.name,
+        main_supplier_id=party.id,
+        contact_info={
+            "email": party.contact_email,
+            "phone": party.contact_phone,
+            "address": party.address,
+        },
+    )
+    db.add(tool_supplier)
+    await db.commit()
+    await db.refresh(tool_supplier)
+    return tool_supplier
+
+
+async def _resolve_supplier(
+    db: AsyncSession, ref: SupplierRefRequest
+) -> tuple[ToolSupplier | None, ResolveSupplierResult]:
+    """Resolve a supplier reference to exactly one ToolSupplier.
+
+    Returns (supplier, result). ``supplier`` is None when the name matched
+    nothing or several counterparties — the result then carries the candidates
+    so the caller can ask a clarifying question rather than guess.
+    """
+    from app.db.models import Party
+
+    if ref.supplier_id:
+        supplier = await db.get(ToolSupplier, ref.supplier_id)
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Поставщик каталога не найден")
+        return supplier, ResolveSupplierResult(
+            resolved=True,
+            tool_supplier_id=supplier.id,
+            party_id=supplier.main_supplier_id,
+            name=supplier.name,
+            message=f"Поставщик каталога: {supplier.name}",
+        )
+
+    if ref.party_id:
+        party = await db.get(Party, ref.party_id)
+        if not party:
+            raise HTTPException(status_code=404, detail="Поставщик не найден")
+        supplier = await _get_or_create_tool_supplier_for_party(db, party)
+        return supplier, ResolveSupplierResult(
+            resolved=True,
+            tool_supplier_id=supplier.id,
+            party_id=party.id,
+            name=party.name,
+            message=f"Поставщик: {party.name}",
+        )
+
+    name = (ref.supplier_name or "").strip()
+    if not name:
+        raise HTTPException(
+            status_code=422,
+            detail="Укажите поставщика: supplier_name, party_id или supplier_id",
+        )
+
+    # Match on the distinctive part of the name: "ООО Мир Станочника" and
+    # "Мир Станочника" must resolve to the same counterparty, so the legal-form
+    # prefix is stripped before the ILIKE.
+    import re as _re
+
+    core = _re.sub(
+        r"^\s*(ООО|ОАО|ЗАО|ПАО|АО|ИП)\s+", "", name, flags=_re.IGNORECASE
+    ).strip(' "«»\'')
+    pattern = f"%{core or name}%"
+
+    parties = (
+        (await db.execute(select(Party).where(Party.name.ilike(pattern)).limit(10)))
+        .scalars()
+        .all()
+    )
+    if len(parties) == 1:
+        supplier = await _get_or_create_tool_supplier_for_party(db, parties[0])
+        return supplier, ResolveSupplierResult(
+            resolved=True,
+            tool_supplier_id=supplier.id,
+            party_id=parties[0].id,
+            name=parties[0].name,
+            message=f"Поставщик: {parties[0].name}",
+        )
+    if len(parties) > 1:
+        return None, ResolveSupplierResult(
+            resolved=False,
+            candidates=[
+                SupplierCandidate(party_id=p.id, name=p.name, inn=p.inn) for p in parties
+            ],
+            message=(
+                f"По названию «{name}» найдено несколько поставщиков "
+                f"({len(parties)}). Уточните, какой именно нужен."
+            ),
+        )
+
+    # No Party — maybe a catalog-only supplier (tool vendor without invoices).
+    tool_suppliers = (
+        (
+            await db.execute(
+                select(ToolSupplier).where(ToolSupplier.name.ilike(pattern)).limit(10)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(tool_suppliers) == 1:
+        supplier = tool_suppliers[0]
+        return supplier, ResolveSupplierResult(
+            resolved=True,
+            tool_supplier_id=supplier.id,
+            party_id=supplier.main_supplier_id,
+            name=supplier.name,
+            message=f"Поставщик каталога: {supplier.name}",
+        )
+    if len(tool_suppliers) > 1:
+        return None, ResolveSupplierResult(
+            resolved=False,
+            candidates=[
+                SupplierCandidate(tool_supplier_id=s.id, name=s.name)
+                for s in tool_suppliers
+            ],
+            message=(
+                f"По названию «{name}» найдено несколько поставщиков каталога "
+                f"({len(tool_suppliers)}). Уточните, какой именно нужен."
+            ),
+        )
+
+    return None, ResolveSupplierResult(
+        resolved=False,
+        message=(
+            f"Поставщик «{name}» не найден ни среди контрагентов, ни среди "
+            "поставщиков каталога. Уточните название или создайте поставщика "
+            "(action=create_supplier)."
+        ),
+    )
+
+
+@router.post(
+    "/resolve-supplier",
+    response_model=ResolveSupplierResult,
+    summary="Skill: tool_catalog.resolve_supplier — Resolve a supplier by name/party_id "
+    "to a catalog supplier, or return candidates to ask the user about.",
+)
+async def resolve_supplier_endpoint(
+    payload: SupplierRefRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ResolveSupplierResult:
+    _supplier, result = await _resolve_supplier(db, payload)
+    return result
+
+
+@router.post(
+    "/attach-web-catalog",
+    response_model=AttachWebCatalogResult,
+    summary="Skill: tool_catalog.attach_web_catalog — Fetch catalog pages or PDFs by URL "
+    "and attach their contents to a supplier's catalog (name → Party → ToolSupplier).",
+)
+async def attach_web_catalog(
+    payload: AttachWebCatalogRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AttachWebCatalogResult:
+    """One call for "найди каталоги на сайте и прикрепи к поставщику".
+
+    Before this existed the agent had to chain search.browse → (a supplier id it
+    had no way to obtain) → tool_catalog.ingest_web_source, and in a live chat
+    it never completed the chain: it published a summary table instead. The
+    fetch (HTML or PDF, OCR included — app.api.web_search.fetch_page) and the
+    draft-first ingestion (app.tasks.drawing_analysis.ingest_web_catalog_source,
+    Ф3) are both reused unchanged; only the wiring is new.
+
+    Several URLs are attached in ONE call and each source's outcome is reported
+    separately: a supplier publishes a catalog per product line, and "прикрепи
+    все каталоги" must not depend on the model remembering to loop. One dead
+    link never fails the others — it comes back as an ``error`` row.
+    """
+    supplier, resolution = await _resolve_supplier(db, payload)
+    if supplier is None:
+        # Not an error the agent should retry — it's a question for the user.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "supplier_ambiguous",
+                "message": resolution.message,
+                "candidates": [c.model_dump(mode="json") for c in resolution.candidates],
+            },
+        )
+
+    urls = payload.source_urls()
+    if not urls:
+        raise HTTPException(
+            status_code=422, detail="Укажите url или urls каталога поставщика"
+        )
+
+    if not payload.wait:
+        # Default path: hand the work to the worker and answer now. Parsing one
+        # real PDF catalog is minutes of local-LLM time per fragment — a chat
+        # turn holding that open (and the GPU with it) is the wrong shape.
+        from app.domain.catalog_ingest_status import record_source_status
+
+        queued = [
+            AttachedSourceResult(
+                url=url, status="queued", message="Поставлен в очередь загрузки."
+            )
+            for url in urls
+        ]
+        for item in queued:
+            record_source_status(
+                str(supplier.id), item.url, status="queued",
+                message="Поставлен в очередь загрузки.",
+            )
+        task_id: str | None = None
+        try:
+            from app.tasks.drawing_analysis import ingest_web_catalog_sources
+
+            # One task per source: a huge catalog must not eat the time budget
+            # of the others (a shared task hit the worker's time limit mid-parse
+            # and left the remaining sources stuck at "queued" — live finding).
+            task_ids = [
+                ingest_web_catalog_sources.delay(
+                    str(supplier.id), [url], payload.max_pages, payload.max_chunks
+                ).id
+                for url in urls
+            ]
+            task_id = task_ids[0] if task_ids else None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("web_catalog_enqueue_failed", error=str(exc))
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error_code": "catalog_ingest_enqueue_failed",
+                    "message": (
+                        "Не удалось поставить загрузку каталога в очередь "
+                        f"({str(exc)[:150]}). Попробуйте позже."
+                    ),
+                },
+            ) from exc
+
+        return AttachWebCatalogResult(
+            tool_supplier_id=supplier.id,
+            party_id=supplier.main_supplier_id,
+            supplier_name=supplier.name,
+            source_url=urls[0],
+            status="queued",
+            task_id=task_id,
+            sources=queued,
+            report=_attach_report_block(supplier.name, queued),
+            message=(
+                f"Взял в работу каталогов: {len(urls)} для «{supplier.name}». "
+                "Разбор идёт в фоне (крупный каталог — несколько минут на файл); "
+                "позиции появляются на карточке поставщика во вкладке «Каталог "
+                "инструментов» по мере разбора. Текущий прогресс — action=ingest_status."
+            ),
+        )
+
+    from app.api.web_search import WebFetchRequest, fetch_page
+    from app.tasks.drawing_analysis import ingest_web_catalog_source
+
+    sources: list[AttachedSourceResult] = []
+    anomaly_ids: list[uuid.UUID] = []
+    errors: list[str] = []
+    first_final_url: str | None = None
+
+    for url in urls:
+        try:
+            fetched = await fetch_page(
+                WebFetchRequest(
+                    url=url,
+                    max_chars=200000,
+                    ocr=payload.max_pages > 0,
+                    ocr_max_pages=payload.max_pages,
+                )
+            )
+        except HTTPException as exc:
+            detail = exc.detail
+            message = (
+                detail.get("message") if isinstance(detail, dict) else str(detail)
+            )
+            sources.append(AttachedSourceResult(
+                url=url, status="error", message=f"Не удалось открыть источник: {message}"[:300]
+            ))
+            errors.append(f"{url}: {message}"[:300])
+            continue
+
+        first_final_url = first_final_url or fetched.final_url
+        text = (fetched.text or "").strip()
+        if len(text) < 200:
+            # Honest failure: a JS-only page or a blocked download must not look
+            # like a successful attach with zero entries.
+            sources.append(AttachedSourceResult(
+                url=url,
+                title=fetched.title,
+                status="empty",
+                text_chars=len(text),
+                message=(
+                    f"Читаемого текста нет ({len(text)} симв.) — JS-каталог или файл, "
+                    "требующий скачивания. Нужна прямая ссылка на PDF/прайс."
+                ),
+            ))
+            continue
+
+        result = await ingest_web_catalog_source(
+            db,
+            str(supplier.id),
+            url=url,
+            title=payload.title or fetched.title,
+            text=text,
+            snippet=None,
+            max_chunks=payload.max_chunks,
+        )
+        if result.get("error"):
+            sources.append(AttachedSourceResult(
+                url=url, title=fetched.title, status="error",
+                text_chars=len(text), message=str(result["error"])[:300],
+            ))
+            errors.append(f"{url}: {result['error']}"[:300])
+            continue
+
+        created = int(result["entries_created"])
+        conflicted = int(result["entries_conflicted"])
+        anomaly_ids.extend(uuid.UUID(a) for a in result["anomaly_ids"])
+        errors.extend(str(e)[:300] for e in result["errors"])
+        sources.append(AttachedSourceResult(
+            url=url,
+            title=fetched.title,
+            status="attached" if created or conflicted else "empty",
+            entries_created=created,
+            entries_conflicted=conflicted,
+            entries_skipped=int(result["entries_skipped"]),
+            text_chars=len(text),
+            message=(
+                f"Добавлено позиций: {created}"
+                + (f", на проверку: {conflicted}" if conflicted else "")
+                if created or conflicted
+                else "Позиций каталога в тексте не найдено."
+            ),
+        ))
+
+    total_created = sum(item.entries_created for item in sources)
+    total_conflicted = sum(item.entries_conflicted for item in sources)
+    attached_sources = [item for item in sources if item.status == "attached"]
+
+    if total_created or total_conflicted:
+        message = (
+            f"В каталог поставщика «{supplier.name}» добавлено позиций: {total_created}"
+            + (f", конфликтов на проверку: {total_conflicted}" if total_conflicted else "")
+            + f" (источников обработано: {len(attached_sources)} из {len(urls)}). "
+            "Записи черновые — видны на карточке поставщика, вкладка «Каталог инструментов»."
+        )
+    else:
+        # Nothing attached from anything — an honest failure, not a "success"
+        # with zero rows the agent can report as done.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_code": "catalog_source_empty",
+                "message": (
+                    f"Ни из одного из {len(urls)} источников не удалось выделить позиции "
+                    f"каталога для «{supplier.name}». Нужна страница со списком "
+                    "артикулов/прайсом или прямая ссылка на PDF-каталог."
+                ),
+                "sources": [item.model_dump(mode="json") for item in sources],
+            },
+        )
+
+    return AttachWebCatalogResult(
+        tool_supplier_id=supplier.id,
+        party_id=supplier.main_supplier_id,
+        supplier_name=supplier.name,
+        source_url=urls[0],
+        final_url=first_final_url,
+        entries_created=total_created,
+        entries_conflicted=total_conflicted,
+        entries_skipped=sum(item.entries_skipped for item in sources),
+        anomaly_ids=anomaly_ids,
+        errors=errors,
+        text_chars=sum(item.text_chars for item in sources),
+        message=message,
+        sources=sources,
+        report=_attach_report_block(supplier.name, sources),
+    )
+
+
+def _readable_source_name(url: str, title: str | None = None) -> str:
+    """Human-readable name for a catalog source.
+
+    A direct PDF link carries its name percent-encoded ("%D0%9A%D0%B0..."),
+    which is unreadable in the report table the user actually looks at.
+    """
+    from urllib.parse import unquote
+
+    if title and not title.lower().endswith((".pdf", ".xls", ".xlsx", ".csv")):
+        return title
+    name = unquote(url.split("?")[0].rsplit("/", 1)[-1]) or url
+    return unquote(title) if title else name
+
+
+def _attach_report_block(
+    supplier_name: str, sources: list[AttachedSourceResult]
+) -> dict:
+    """Ready-to-publish workspace block for what was attached.
+
+    Built here, from the real per-source outcome, so the agent publishes facts
+    instead of re-describing them: the ``url`` column is typed ``link``, which
+    the desktop grid renders as a clickable anchor (a ``text`` column, which
+    the model picked on its own in the live session, is not clickable).
+    """
+    status_label = {
+        "attached": "Добавлен в каталог",
+        "empty": "Позиции не найдены",
+        "error": "Ошибка",
+        "queued": "В очереди на загрузку",
+        "running": "Загружается…",
+    }
+    return {
+        "title": f"{supplier_name} — загруженные каталоги",
+        "columns": [
+            {"key": "title", "header": "Каталог", "type": "text"},
+            {"key": "url", "header": "Ссылка", "type": "link"},
+            {"key": "status", "header": "Статус", "type": "text"},
+            {"key": "entries", "header": "Позиций", "type": "number"},
+            {"key": "note", "header": "Комментарий", "type": "text"},
+        ],
+        "rows": [
+            {
+                "title": _readable_source_name(item.url, item.title),
+                "url": {"href": item.url, "label": item.url},
+                "status": status_label.get(item.status, item.status),
+                "entries": item.entries_created,
+                "note": item.message,
+            }
+            for item in sources
+        ],
+    }
+
+
+# ── Catalog discovery (find EVERY catalog a supplier publishes) ──────────────
+
+_CATALOG_FILE_EXTENSIONS = (".pdf", ".xls", ".xlsx", ".csv")
+# Words that mark a link as a catalog/price list, in the URL or the anchor text.
+_CATALOG_WORDS = (
+    "каталог", "katalog", "catalog", "catalogue", "прайс", "price", "прайс-лист",
+    "прейскурант", "номенклатур", "ассортимент", "brochure", "брошюр",
+)
+
+
+def _candidate_kind(url: str) -> str:
+    path = url.split("?")[0].lower()
+    if path.endswith(".pdf"):
+        return "pdf"
+    if path.endswith((".xls", ".xlsx", ".csv")):
+        return "spreadsheet"
+    return "page"
+
+
+def _looks_like_catalog_link(url: str, text: str) -> bool:
+    haystack = f"{url} {text}".lower()
+    if url.split("?")[0].lower().endswith(_CATALOG_FILE_EXTENSIONS):
+        return True
+    return any(word in haystack for word in _CATALOG_WORDS)
+
+
+def _same_site(url: str, website: str | None) -> bool:
+    if not website:
+        return False
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    site_host = (urlparse(website if "//" in website else f"https://{website}").hostname or "")
+    site_host = site_host.lower().removeprefix("www.")
+    return bool(site_host) and (host == site_host or host.endswith("." + site_host))
+
+
+@router.post(
+    "/discover-catalogs",
+    response_model=DiscoverCatalogsResult,
+    summary="Skill: tool_catalog.discover_catalogs — Find every catalog / price list "
+    "a supplier publishes (web search + scan of the supplier's own site).",
+)
+async def discover_catalogs(
+    payload: DiscoverCatalogsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> DiscoverCatalogsResult:
+    """Answer "найди ВСЕ каталоги поставщика" in one call.
+
+    Two passes, because neither alone is enough: a web search finds catalogs
+    that are indexed (and PDFs on other hosts), while the supplier's own
+    catalog page usually advertises its files through <a href> that no search
+    engine surfaced. The page scan needs the links the browser sidecar now
+    returns (``include_links``) — the readable text says nothing about what a
+    "Скачать каталог" button points at.
+
+    Returns candidates only; attaching is a separate, explicit call
+    (attach_web_catalog) so "найди" and "прикрепи" stay distinguishable.
+    """
+    from app.api.web_search import (
+        WebFetchRequest,
+        WebSearchRequest,
+        execute_web_search,
+        fetch_page,
+    )
+
+    supplier, resolution = await _resolve_supplier(db, payload)
+    if supplier is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "supplier_ambiguous",
+                "message": resolution.message,
+                "candidates": [c.model_dump(mode="json") for c in resolution.candidates],
+            },
+        )
+
+    diagnostics: list[str] = []
+    website = (payload.website or supplier.website or "").strip() or None
+    name = supplier.name
+
+    queries = [f"{name} каталог pdf", f"{name} прайс-лист"]
+    if website:
+        from urllib.parse import urlparse
+
+        host = (urlparse(website if "//" in website else f"https://{website}").hostname or "")
+        host = host.removeprefix("www.")
+        if host:
+            queries = [f"site:{host} каталог", f"site:{host} pdf прайс", *queries]
+
+    candidates: dict[str, CatalogCandidate] = {}
+    search_hits: list[tuple[str, str]] = []  # (url, title) — page candidates to scan
+    for query in queries:
+        try:
+            found = await execute_web_search(WebSearchRequest(query=query, limit=10))
+        except HTTPException as exc:
+            diagnostics.append(f"search_failed:{query}:{str(exc.detail)[:120]}")
+            continue
+        for hit in found.results:
+            if not _looks_like_catalog_link(hit.url, hit.title or ""):
+                continue
+            search_hits.append((hit.url, hit.title or ""))
+            if hit.url in candidates:
+                continue
+            candidates[hit.url] = CatalogCandidate(
+                url=hit.url,
+                title=hit.title or "",
+                kind=_candidate_kind(hit.url),
+                found_via="search",
+                on_supplier_site=_same_site(hit.url, website),
+            )
+            # A supplier's site was unknown → learn it from the first on-site hit.
+            if website is None and hit.url.startswith("http"):
+                from urllib.parse import urlparse
+
+                host = urlparse(hit.url).hostname or ""
+                if host and name.split()[-1].lower()[:5] in host.lower():
+                    website = f"https://{host}"
+
+    # Pass 2 — open the supplier's own catalog pages and mine their file links.
+    pages_to_scan: list[str] = []
+    if website:
+        base = website if "//" in website else f"https://{website}"
+        pages_to_scan.append(base.rstrip("/") + "/catalog/")
+        pages_to_scan.append(base.rstrip("/"))
+    pages_to_scan.extend(
+        url for url, _ in search_hits if _candidate_kind(url) == "page"
+    )
+    seen_pages: list[str] = []
+    for page_url in pages_to_scan:
+        if len(seen_pages) >= payload.max_pages_to_scan:
+            break
+        if page_url in seen_pages:
+            continue
+        try:
+            fetched = await fetch_page(
+                WebFetchRequest(
+                    url=page_url, max_chars=2000, ocr=False, include_links=True
+                )
+            )
+        except HTTPException as exc:
+            diagnostics.append(f"scan_failed:{page_url}:{str(exc.detail)[:120]}")
+            continue
+        seen_pages.append(page_url)
+        for link in fetched.links:
+            if link.url in candidates or not _looks_like_catalog_link(link.url, link.text):
+                continue
+            candidates[link.url] = CatalogCandidate(
+                url=link.url,
+                title=link.text[:200],
+                kind=_candidate_kind(link.url),
+                found_via="site_scan",
+                on_supplier_site=_same_site(link.url, website),
+            )
+
+    # Files (PDF/Excel) on the supplier's own site first — those attach cleanly;
+    # pages last, since many are JS-rendered listings with no readable text.
+    ordered = sorted(
+        candidates.values(),
+        key=lambda c: (
+            c.kind == "page",
+            not c.on_supplier_site,
+            c.url,
+        ),
+    )[: payload.max_candidates]
+
+    files = [c for c in ordered if c.kind != "page"]
+    kind_label = {"pdf": "PDF-каталог", "spreadsheet": "Прайс (таблица)", "page": "Страница"}
+    report = {
+        "title": f"{name} — найденные каталоги",
+        "columns": [
+            {"key": "title", "header": "Каталог", "type": "text"},
+            {"key": "url", "header": "Ссылка", "type": "link"},
+            {"key": "kind", "header": "Тип", "type": "text"},
+            {"key": "where", "header": "Где найден", "type": "text"},
+        ],
+        "rows": [
+            {
+                "title": _readable_source_name(c.url, c.title),
+                "url": {"href": c.url, "label": c.url},
+                "kind": kind_label.get(c.kind, c.kind),
+                "where": (
+                    "сайт поставщика" if c.on_supplier_site else "внешний источник"
+                ) + (" (обход сайта)" if c.found_via == "site_scan" else " (поиск)"),
+            }
+            for c in ordered
+        ],
+    }
+    return DiscoverCatalogsResult(
+        tool_supplier_id=supplier.id,
+        party_id=supplier.main_supplier_id,
+        supplier_name=name,
+        website=website,
+        candidates=ordered,
+        scanned_pages=seen_pages,
+        diagnostics=diagnostics,
+        report=report,
+        message=(
+            f"Найдено кандидатов каталогов: {len(ordered)} "
+            f"(из них файлов PDF/Excel: {len(files)}). "
+            "Чтобы прикрепить к поставщику, вызови attach_web_catalog со списком urls."
+            if ordered
+            else (
+                f"Каталогов для «{name}» не найдено ни поиском, ни на сайте"
+                + (f" {website}" if website else "")
+                + ". Уточните адрес сайта или прямую ссылку на каталог."
+            )
+        ),
+    )
+
+
+@router.post(
+    "/ingest-status",
+    response_model=CatalogIngestStatusResult,
+    summary="Skill: tool_catalog.ingest_status — Progress of the background catalog "
+    "ingestion for a supplier (what is queued, loading, attached or failed).",
+)
+async def catalog_ingest_status(
+    payload: CatalogIngestStatusRequest,
+    db: AsyncSession = Depends(get_db),
+) -> CatalogIngestStatusResult:
+    """What happened to each queued source — the honest answer to "как там каталоги?".
+
+    Reads the per-source progress the worker writes, so the agent reports the
+    real state instead of repeating what it queued minutes ago.
+    """
+    from app.domain.catalog_ingest_status import list_source_statuses
+
+    supplier, resolution = await _resolve_supplier(db, payload)
+    if supplier is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "supplier_ambiguous",
+                "message": resolution.message,
+                "candidates": [c.model_dump(mode="json") for c in resolution.candidates],
+            },
+        )
+
+    records = list_source_statuses(str(supplier.id))
+    sources = [
+        AttachedSourceResult(
+            url=str(record.get("url") or ""),
+            title=record.get("title"),
+            status=str(record.get("status") or "queued"),
+            entries_created=int(record.get("entries_created") or 0),
+            entries_conflicted=int(record.get("entries_conflicted") or 0),
+            message=str(record.get("message") or ""),
+        )
+        for record in records
+        if record.get("url")
+    ]
+    created = sum(item.entries_created for item in sources)
+    conflicted = sum(item.entries_conflicted for item in sources)
+    pending = [item for item in sources if item.status in ("queued", "running")]
+
+    if not sources:
+        message = (
+            f"Для «{supplier.name}» фоновых загрузок каталога не запускалось "
+            "(или сведения о них уже истекли)."
+        )
+    elif pending:
+        message = (
+            f"Загрузка каталогов «{supplier.name}» идёт: готово "
+            f"{len(sources) - len(pending)} из {len(sources)}, добавлено позиций: {created}."
+        )
+    else:
+        message = (
+            f"Загрузка каталогов «{supplier.name}» завершена: источников "
+            f"{len(sources)}, добавлено позиций: {created}"
+            + (f", на проверку: {conflicted}" if conflicted else "")
+            + "."
+        )
+
+    return CatalogIngestStatusResult(
+        tool_supplier_id=supplier.id,
+        party_id=supplier.main_supplier_id,
+        supplier_name=supplier.name,
+        in_progress=bool(pending),
+        entries_created=created,
+        entries_conflicted=conflicted,
+        sources=[item.model_dump(mode="json") for item in sources],
+        report=_attach_report_block(supplier.name, sources),
+        message=message,
+    )

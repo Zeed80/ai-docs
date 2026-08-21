@@ -37,6 +37,9 @@ class FakeExecutor:
     def set_excluded_tools(self, tools) -> None:
         return None
 
+    def set_recommended_capabilities(self, names) -> None:
+        return None
+
     def set_workspace_expected(self, expected: bool) -> None:
         return None
 

@@ -135,9 +135,15 @@ def _cfg():
 
 
 def test_plan_turn_supplier_name_skips_memory_search_hint():
+    """A named supplier still routes to SQL rather than RAG — but naming one no
+    longer *forces* a desktop table on its own (2026-08-21: that rule turned
+    action turns into invoice-item tables and invented supplier_query filters
+    the audit then demanded). A count question is answered in chat; only real
+    listing phrasing ("покажи таблицу…") marks the turn as a desktop turn."""
     orc = _orc()
     plan = orc._plan_turn("Сколько всего счетов от поставщика ЦНК и на какую сумму?")
-    assert plan.workspace.required is True
+    assert plan.workspace.required is False
+    assert plan.workspace.filters == {}
     assert plan.worker.recommended_skills == ["workspace.spec_table"]
     assert "memory.search" not in plan.worker.recommended_skills
 

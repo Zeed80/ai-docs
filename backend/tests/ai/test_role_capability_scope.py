@@ -105,3 +105,32 @@ def test_role_without_allowlist_sees_full_set(session):
 def test_no_role_sees_full_set(session):
     session.set_active_role(None)
     assert _tool_names(session._tools_for_turn()) == _tool_names(session._tools)
+
+
+def test_recommended_capability_is_visible_outside_role_allowlist(session):
+    """The router picks the tool by MEANING; the role allowlist scopes by JOB.
+
+    When they disagreed the worker never saw the recommended capability and
+    improvised with whatever the role happened to allow (live: "прикрепи
+    каталог к поставщику" → tool_catalog invisible → a summary table instead).
+    """
+    if gateway_config.skills_mode != "capabilities":
+        pytest.skip("role scoping applies in capabilities mode only")
+
+    session.set_active_role("accountant")
+    assert "tool_catalog" not in gateway_config.role_capabilities("accountant")
+    assert "tool_catalog" not in _tool_names(session._tools_for_turn())
+
+    session.set_recommended_capabilities({"tool_catalog"})
+    assert "tool_catalog" in _tool_names(session._tools_for_turn())
+
+
+def test_excluded_tools_still_win_over_recommended(session):
+    """The exclusion gate is about cost (RAG on a structured turn), not scope."""
+    if gateway_config.skills_mode != "capabilities":
+        pytest.skip("role scoping applies in capabilities mode only")
+
+    session.set_active_role("accountant")
+    session.set_recommended_capabilities({"search"})
+    session.set_excluded_tools({"search"})
+    assert "search" not in _tool_names(session._tools_for_turn())

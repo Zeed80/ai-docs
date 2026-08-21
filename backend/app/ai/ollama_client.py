@@ -283,6 +283,60 @@ async def generate(
     raise RuntimeError(f"Ollama generation failed after {max_retries + 1} attempts: {last_error}")
 
 
+def salvage_truncated_json(text: str) -> dict | None:
+    """Rebuild a usable object from a reply that hit the token ceiling.
+
+    A long extraction ("give me every catalog row") is frequently cut off
+    mid-string: the whole reply — hundreds of already-complete rows — is then
+    lost to a JSONDecodeError plus retries that truncate at the same place.
+    This keeps every element that closed properly and drops the partial tail.
+
+    Returns None when nothing can be recovered, so callers can treat salvage as
+    a strict improvement over the exception they would otherwise get.
+    """
+    if not text:
+        return None
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    escape = False
+    # Offsets where a top-level array element ended cleanly.
+    last_complete_element = -1
+    array_depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_str:
+            escape = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch in "{[":
+            depth += 1
+            if ch == "[":
+                array_depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if ch == "]":
+                array_depth -= 1
+            # An element of the outer array closed (array + object still open).
+            if ch == "}" and array_depth >= 1 and depth == 2:
+                last_complete_element = i
+    if last_complete_element == -1:
+        return None
+    candidate = text[start : last_complete_element + 1] + "]}"
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+
+
 def _extract_json_from_text(text: str) -> str:
     """Strip <think>…</think> blocks and markdown fences, then return the JSON portion."""
     import re
@@ -447,8 +501,13 @@ async def generate_json(
     temperature: float = 0.1,
     max_tokens: int = 4096,
     timeout_seconds: float = 120.0,
+    salvage_truncated: bool = False,
 ) -> dict:
     """Generate structured JSON — routes to the correct backend based on provider.
+
+    ``salvage_truncated``: when the reply is cut off by the token ceiling,
+    recover the complete elements instead of raising (opt-in — a caller that
+    needs an all-or-nothing object must not silently receive a partial one).
 
     Provider routing:
       ollama            → Ollama /api/chat (with format:json + think:false)
@@ -578,6 +637,17 @@ async def generate_json(
             return json.loads(cleaned)
 
         except json.JSONDecodeError as e:
+            if salvage_truncated:
+                recovered = salvage_truncated_json(raw)
+                if recovered is not None:
+                    logger.warning(
+                        "generate_json_salvaged_truncated",
+                        model=model,
+                        error=str(e),
+                        attempt=attempt + 1,
+                    )
+                    breaker.record_success()
+                    return recovered
             logger.warning(
                 "generate_json_parse_error",
                 model=model,

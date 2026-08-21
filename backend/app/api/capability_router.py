@@ -44,8 +44,18 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
     # as manual catalog uploads (app.tasks.drawing_analysis).
     "tool_catalog": {
         "create_supplier": ("POST", "/api/tool-catalog/suppliers", []),
+        # Name → Party → ToolSupplier. The agent never has a UUID at hand in a
+        # chat turn; without these two the "найди каталог и прикрепи к
+        # поставщику" turn had no reachable path at all (live finding).
+        "resolve_supplier": ("POST", "/api/tool-catalog/resolve-supplier", []),
+        "discover_catalogs": ("POST", "/api/tool-catalog/discover-catalogs", []),
+        "attach_web_catalog": ("POST", "/api/tool-catalog/attach-web-catalog", []),
+        "ingest_status": ("POST", "/api/tool-catalog/ingest-status", []),
         "ingest_web_source": (
             "POST", "/api/tool-catalog/suppliers/{supplier_id}/ingest-web-source", ["supplier_id"]
+        ),
+        "list_entries": (
+            "GET", "/api/tool-catalog/by-supplier/{party_id}/entries", ["party_id"]
         ),
         "approve": ("POST", "/api/tool-catalog/entries/{entry_id}/approve", ["entry_id"]),
     },
@@ -490,7 +500,14 @@ async def _proxy(
     # Web research/browse read many live pages (+ PDF OCR) and legitimately take
     # minutes — the default 30s would time out and trigger wasteful retries that
     # re-run the whole search. Give these paths a generous budget.
-    timeout = 300.0 if "/api/web-search/" in path else 30.0
+    # Catalog ingestion fetches a live page or PDF (with OCR) and then runs an
+    # LLM extraction over it — same minutes-scale shape as web research, and it
+    # is not retry-safe: a 30s timeout here left half-created draft entries.
+    _LONG_RUNNING = (
+        "/api/web-search/", "/attach-web-catalog", "/ingest-web-source",
+        "/discover-catalogs",
+    )
+    timeout = 900.0 if any(marker in path for marker in _LONG_RUNNING) else 30.0
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             if method == "GET":

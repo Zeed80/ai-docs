@@ -285,6 +285,10 @@ class AgentOrchestrator:
         # Phase 3 (learning): the request that built the current spec-table, so a
         # follow-up correction can be learned against it and replayed later.
         # Persists across turns (one orchestrator per chat session).
+        self._turn_content: str = ""
+        # A state-changing call already made in THIS turn (survives the trace
+        # reset a retry does) — the action must not be demanded twice.
+        self._turn_action_done: bool = False
         self._last_spec_request: str = ""
         self._last_spec_source: str = ""
         # Last successfully-replayed recipe — penalised if the user corrects it.
@@ -345,6 +349,7 @@ class AgentOrchestrator:
             self._executor.set_model_override(None)
             self._executor.set_active_role(None)
             self._executor.set_excluded_tools(set())
+            self._executor.set_recommended_capabilities(set())
             await self._executor.on_user_message(content)
             return
 
@@ -572,6 +577,10 @@ class AgentOrchestrator:
         worker-run + audit + recipe + telemetry tail lives in exactly one place.
         """
         tier = self._tier
+        # Remembered for the audit below: whether the user asked to DO something
+        # is a property of the request, not of the plan the model produced.
+        self._turn_content = content
+        self._turn_action_done = False
         # Phase 2 — adaptive clarify: a gated (expensive/external) action with an
         # ambiguous target asks BEFORE acting instead of guessing. Cheap turns are
         # never gated here — they build the best result and show assumptions.
@@ -602,8 +611,13 @@ class AgentOrchestrator:
         # never accumulated in history.
         role_context = _load_role_prompt(plan.worker.role)
         self._executor.set_role_context(role_context)
-        # Scope the visible tool set to the role's capability allowlist.
+        # Scope the visible tool set to the role's capability allowlist — plus
+        # whatever the router/planner explicitly recommended for THIS turn, so a
+        # tool chosen by meaning is never hidden by a role allowlist chosen by job.
         self._executor.set_active_role(plan.worker.role)
+        self._executor.set_recommended_capabilities({
+            skill.split(".", 1)[0] for skill in plan.worker.recommended_skills
+        })
         # Structured-data turns (spec_table) must not touch slow RAG tools — the
         # 35B worker otherwise "searches" for line items in documents (minutes).
         # Hard-hide them so it has no choice but to build the table from SQL.
@@ -676,6 +690,12 @@ class AgentOrchestrator:
             and risk_class(plan) == "cheap"
         ):
             await self._explain_intent_mismatch(plan, content)
+        # The requested action never happened, even after the retry. Say so and
+        # ask ONE question instead of letting a report stand in for the action —
+        # silently substituting a table is exactly what the user has to catch
+        # manually otherwise.
+        if not audit.passed and _has_code(audit.issues, AuditCode.ACTION_NOT_PERFORMED):
+            await self._explain_action_not_performed(plan, content)
         # Semantic correctness check on the settled answer (advisory; runs once).
         await self._run_semantic_audit(plan, config, audit)
         # Reactive self-refine: only when the auditor flagged a generative answer.
@@ -802,7 +822,14 @@ class AgentOrchestrator:
             config.orchestrator_model or config.worker_model or config.model
         )
         min_conf = float(config.turn_router_min_confidence)
-        timeout = float(config.orchestrator_plan_timeout_seconds)
+        # The router gets its own budget: sharing the planner's 8s default meant
+        # a 27B model in the fast slot timed out on every single turn and the
+        # heuristic planner quietly took over (live finding).
+        timeout = float(
+            getattr(config, "turn_router_timeout_seconds", None)
+            or config.orchestrator_plan_timeout_seconds
+        )
+        routing_started_at = time.time()
         # Per-assignment thinking: the router IS the fast/agent_fast slot, so its
         # reasoning toggle comes from fast_disable_thinking (tri-state) — passed
         # explicitly so it's independent of the orchestrator slot's setting.
@@ -863,8 +890,20 @@ class AgentOrchestrator:
             decision = turn_router.safe_default_decision(content)
             source = "safe_default"
         self._plan_source = f"router:{source}:{decision.intent}"
+        routing_ms = int((time.time() - routing_started_at) * 1000)
+        if routing_ms > 15_000 or self._route_unavailable:
+            # Visible, actionable signal instead of a silent degrade: routing
+            # this slow (or failing) means the fast slot holds a heavy model.
+            logger.warning(
+                "turn_router_slow",
+                duration_ms=routing_ms,
+                unavailable=self._route_unavailable,
+                timeout_seconds=timeout,
+                hint="assign a small model to the fast slot in /settings/models",
+            )
         logger.info(
             "turn_router_decision",
+            duration_ms=routing_ms,
             intent=decision.intent, role=decision.role,
             channel=decision.output_channel, grounding=decision.grounding,
             confidence=decision.confidence, source=source,
@@ -1865,9 +1904,27 @@ class AgentOrchestrator:
         )
 
     def _plan_turn(self, content: str) -> OrchestratorPlan:
-        """Lightweight heuristic plan — used only as a soft hint for the LLM planner."""
+        """Degraded-mode routing: pick a role, a canvas and candidate skills.
+
+        Deliberately NOT a full plan any more. It used to derive *requirements*
+        from phrasing — "the text says «найди все», so a desktop table is
+        required"; "a supplier is named, so filter by supplier_query" — and the
+        audit then enforced those invented requirements: it failed turns for a
+        missing filter nobody asked for and let the repair path overwrite the
+        agent's real answer with a generic table (both reproduced live).
+
+        Now only an explicit route from ``routes.yml`` (or a canvas it resolves)
+        can mark a turn as a desktop turn, and no filters are invented at all —
+        the worker decides those from the request itself. This runs only when
+        the LLM router is unavailable; it should stay a routing hint, not a
+        second, dumber product opinion.
+        """
         text = _norm(content)
-        workspace_required = _is_workspace_request(text)
+        # Phrasing may still say "show me a table" — that stays a table turn.
+        # What it may no longer do is turn an ACTION into one ("найди все
+        # каталоги … и прикрепи их" tripped the listing markers and was served
+        # as an invoice-items table).
+        workspace_required = _is_workspace_request(text) and not has_action_intent(content)
         output_type: OutputType = "table" if workspace_required else "text"
         canvas_id: str | None = None
 
@@ -1898,14 +1955,10 @@ class AgentOrchestrator:
             output_type = "table"
             canvas_id = sg.get("canvas_id", "agent:invoice-items-by-supplier")
 
-        # Supplier-specific filter: carry it to the LLM as a hint in filters
+        # A supplier name is a hint for skill choice below — never a filter the
+        # audit will demand and never a reason to turn the request into a table.
         workspace_filters: dict[str, str] = {}
         supplier_name = _extract_supplier_name(text)
-        if supplier_name:
-            workspace_required = True
-            output_type = "table"
-            canvas_id = canvas_id or "agent:invoice-items"
-            workspace_filters = {"supplier_query": supplier_name}
 
         # Resolve canvas_id from workspace state or JSON fallback rules if still unset
         if workspace_required and not canvas_id:
@@ -1927,17 +1980,14 @@ class AgentOrchestrator:
         elif matched_route and matched_route.get("intent") == "image_studio" and _is_techdraw_request(text):
             skills = ["image_studio.techdraw", "image_studio.prompt_help"]
         if not skills:
-            if workspace_required and supplier_name:
-                # A specific supplier name was already extracted
-                # deterministically above and is already carried into the
-                # SQL-backed spec_table call via workspace_filters.supplier_query
-                # — memory.search here adds nothing but a redundant
-                # embedding+reranking round trip. Found via live agent test:
-                # "Сколько всего счетов от поставщика ЦНК" burned a full
-                # memory/RAG call (and its GPU-bound reranking fallback
-                # chain, ~minutes on a shared GPU) resolving a supplier name
-                # that SQL ILIKE/pg_trgm (via suppliers.search /
-                # workspace.spec_table) already fully covers on its own.
+            if supplier_name:
+                # A named supplier on a table turn resolves via SQL
+                # (ILIKE/pg_trgm inside spec_table / suppliers.search), so
+                # memory.search here only adds a redundant embedding+reranking
+                # round trip. Found via live agent test: "Сколько всего счетов
+                # от поставщика ЦНК" burned a full memory/RAG call and its
+                # GPU-bound reranking fallback chain (~minutes on a shared GPU)
+                # resolving a name SQL already covers on its own.
                 skills = ["workspace.spec_table"]
             elif workspace_required:
                 # Bulk/listing turns ("выведи все...", "список...") need the real
@@ -2130,6 +2180,37 @@ class AgentOrchestrator:
                 },
             ))
 
+        # ── Requested action actually performed? ───────────────────────────────
+        # A turn that asked the agent to DO something ("загрузи каталог",
+        # "прикрепи прайс к поставщику", "отправь письмо") but only produced
+        # reads/reports did not do the job — however good the published table
+        # looks. Found live: "найди каталоги и загрузи в его каталог" ended as
+        # a summary table on the desktop and nothing attached anywhere.
+        # Table/report intents are excluded: "обнови таблицу", "отсортируй" are
+        # action verbs whose action IS the publication, so requiring a
+        # state-changing call there would fail every legitimate table turn.
+        if (
+            has_action_intent(self._turn_content)
+            and plan.intent not in _REPORTING_INTENTS
+        ):
+            performed = [
+                tool
+                for tool, args in self._trace.tool_call_seq
+                if _is_state_changing_call(tool, args)
+            ]
+            if performed:
+                self._turn_action_done = True
+            if not performed and not self._turn_action_done:
+                issues.append(AuditIssue(
+                    code=AuditCode.ACTION_NOT_PERFORMED,
+                    message=(
+                        "Пользователь просил выполнить действие, но ни один "
+                        "изменяющий инструмент не был вызван — выполнено только "
+                        "чтение/публикация отчёта."
+                    ),
+                    context={"tools_used": sorted(set(self._trace.tool_calls))},
+                ))
+
         # ── Filter compliance check ────────────────────────────────────────────
         # Only enforce filter compliance when:
         #   a) the plan specifies required filters (e.g. supplier_query=X), AND
@@ -2321,6 +2402,28 @@ class AgentOrchestrator:
                 f"(фильтры: {filters or 'без фильтров'}). Я не стал публиковать пустую "
                 "таблицу как ответ. Уточните условие (период, поставщика, формулировку) "
                 "— и я перестрою."
+            ),
+        })
+
+    async def _explain_action_not_performed(
+        self, plan: OrchestratorPlan, content: str
+    ) -> None:
+        """Honest close-out for an action turn that produced only reads.
+
+        Names what was actually done, states plainly that the requested action
+        was not performed, and asks the single question most likely to unblock
+        it. No apology theatre, no substitute artifact presented as success.
+        """
+        used = sorted({t.split("__", 1)[0] for t in self._trace.tool_calls if t})
+        used_text = ", ".join(used) if used else "ничего"
+        await self._outer_send({
+            "type": "text",
+            "content": (
+                f"Действие по запросу «{content[:120]}» я не выполнила — "
+                f"использовала только просмотр данных ({used_text}). "
+                "Чтобы довести до конца, уточните, пожалуйста, одно: "
+                "к какому именно объекту (поставщик, счёт, документ) и "
+                "с каким источником (ссылка, файл) нужно выполнить действие?"
             ),
         })
 
@@ -2569,12 +2672,17 @@ class AgentOrchestrator:
         return plan.workspace.required and not audit.workspace_verified
 
     def _can_retry_with_executor(self, plan: OrchestratorPlan, audit: AuditReport) -> bool:
+        if _has_code(audit.issues, AuditCode.UNKNOWN_SKILL):
+            return False  # retrying cannot invent a missing tool
+        # An unperformed action is worth one more pass regardless of the output
+        # channel: action turns are usually chat turns, and the old
+        # workspace-only gate meant they were never retried at all.
+        if _has_code(audit.issues, AuditCode.ACTION_NOT_PERFORMED):
+            return True
         if not plan.workspace.required:
             return False
         if not plan.worker.recommended_skills:
             return False
-        if _has_code(audit.issues, AuditCode.UNKNOWN_SKILL):
-            return False  # retrying cannot invent a missing tool
         return _issues_retryable(audit.issues)
 
     async def _try_execute_planned_workspace_tool(
@@ -2589,6 +2697,18 @@ class AgentOrchestrator:
             return False
         spec = _workspace_tool_spec_for_plan(plan)
         if not spec:
+            return False
+        # Never overwrite a canvas the agent already published to in this turn:
+        # the "repair" then destroys the real answer (live: a report of attached
+        # supplier catalogs was replaced by a generic invoice-items table).
+        target_canvas = str((spec.get("args") or {}).get("canvas_id") or plan.workspace.canvas_id or "")
+        published_now = {
+            str(canvas_id)
+            for canvas_id in (_event_canvas_id(event) for event in self._trace.workspace_events)
+            if canvas_id
+        }
+        if target_canvas and target_canvas in published_now:
+            logger.info("workspace_repair_skipped_already_published", canvas_id=target_canvas)
             return False
         return await self._execute_workspace_spec(
             spec, config,
@@ -3121,7 +3241,19 @@ def _build_skill_registry_context(user_text: str) -> str:
 
 
 def _normalize_model_plan(plan: OrchestratorPlan, content: str) -> OrchestratorPlan:
+    """Fill in the desktop details a plan left unset (canvas, table skills).
+
+    Only for turns that are actually about showing data. A turn that asks the
+    agent to DO something ("загрузи каталог ООО …", "отправь письмо …") is left
+    alone: deriving a canvas and a supplier_query filter from the mere presence
+    of a supplier name is what made the audit fail such turns for a "missing"
+    filter nobody asked for, and what let the repair path replace the agent's
+    real answer with an invoice-items table (both reproduced live 2026-08-21).
+    """
     text = _norm(content)
+    if has_action_intent(content) and not plan.workspace.required:
+        return plan.model_copy(update={"goal": plan.goal or content[:500]})
+
     workspace_required = plan.workspace.required or _is_workspace_request(text)
     output_type = plan.workspace.output_type
     if workspace_required and output_type == "text":
@@ -3434,6 +3566,18 @@ def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str
         lines.append(f"- ОБЯЗАТЕЛЬНЫЕ фильтры: {filter_str}")
     if plan.workspace.required:
         lines.append("- Результат должен быть опубликован в Рабочий стол (не только текст в чат).")
+    if _has_code(audit.issues, AuditCode.ACTION_NOT_PERFORMED):
+        lines.append(
+            "- ГЛАВНОЕ: пользователь просил ВЫПОЛНИТЬ действие, а не показать данные. "
+            "Вызови инструмент, который реально его выполняет (например "
+            "tool_catalog.attach_web_catalog — прикрепить каталог к поставщику). "
+            "Публикация таблицы/отчёта действием НЕ считается."
+        )
+        lines.append(
+            "- Если подходящего инструмента нет или не хватает данных (какой "
+            "поставщик, какая ссылка) — НЕ подменяй действие отчётом: напиши "
+            "прямо, что именно мешает, и задай один короткий уточняющий вопрос."
+        )
     return "\n".join(lines)
 
 
@@ -3805,6 +3949,48 @@ def _event_canvas_id(event: dict[str, Any]) -> str | None:
     if isinstance(block, dict) and block.get("id"):
         return str(block["id"])
     return None
+
+
+# Capabilities whose calls only produce views/notes — never a change to the
+# business data the user asked to change. A turn that asked for an ACTION and
+# only touched these did not do what was asked.
+_REPORTING_CAPABILITIES = frozenset({"workspace", "sheets", "search", "memory", "analytics"})
+
+# Turn intents whose whole point is a view: the "action" is the publication.
+_REPORTING_INTENTS = frozenset({
+    "analytical_table", "table_edit", "count", "flow_status", "smalltalk",
+    "answer_self", "invoice_list", "invoice_items_analytics", "table_build",
+})
+
+# Read-only action prefixes shared by every capability (list/get/search/…).
+_READ_ONLY_ACTION_PREFIXES = (
+    "list", "get", "search", "query", "find", "read", "browse", "web", "research",
+    "explain", "status", "verify", "catalog", "similar", "neighborhood", "path",
+    "resolve", "suggest", "check", "upcoming", "today", "history", "compare",
+    # discover_* only searches and reads pages — finding a catalog is not
+    # attaching it, and the audit must keep telling those two apart.
+    "discover", "ingest_status",
+    "preview", "stats", "summary", "summarize", "risk_", "extract", "classify",
+)
+
+
+def _is_state_changing_call(tool: str, args: dict[str, Any]) -> bool:
+    """True when this executor call actually changed something for the user.
+
+    Deliberately conservative in the "changed" direction: an unknown action on
+    a non-reporting capability counts as a change, so the audit below only
+    fires when the turn was demonstrably all-reads.
+    """
+    capability = str(tool or "").split("__", 1)[0]
+    if not capability or capability in _REPORTING_CAPABILITIES:
+        return False
+    action = str((args or {}).get("action") or "")
+    if not action and "__" in str(tool):
+        action = str(tool).split("__", 1)[1]
+    action = action.strip().lower()
+    if not action:
+        return False
+    return not action.startswith(_READ_ONLY_ACTION_PREFIXES)
 
 
 def _looks_like_chat_table(text: str) -> bool:

@@ -60,44 +60,89 @@ capabilities:
 
   - name: tool_catalog
     description: >
-      Каталог поставщиков инструмента (Ф3, AGENT_AUTONOMY_ROADMAP.md). Для
-      exploratory-задач: create_supplier заводит нового поставщика (по имени
-      и, если известен, сайту); ingest_web_source структурирует одну
-      найденную web_discover страницу (computer_use.web_discover) в
-      черновые записи каталога для указанного поставщика — draft-first,
-      новые записи получают review_status=ingested (или needs_review при
-      конфликте с уже существующей записью по артикулу — тогда заводится
-      AnomalyCard, старая запись не трогается); approve снимает
-      review_status с одной записи после проверки человеком (approval-gated —
-      это решение о доверии данным, не создание черновика).
+      Каталог (номенклатура) поставщика — то, что видно на карточке поставщика
+      во вкладке «Каталог инструментов». Используй ВСЕГДА, когда просят найти,
+      загрузить, прикрепить, обновить каталог/прайс-лист/номенклатуру
+      поставщика — это и есть «прикрепить каталог к поставщику», а не публикация
+      таблицы на Рабочий стол и не заметка в памяти.
+      - discover_catalogs — найти ВСЕ каталоги и прайсы поставщика: веб-поиск
+        плюс обход сайта поставщика со сбором ссылок на PDF/Excel-каталоги.
+        Достаточно supplier_name (можно указать website, если знаешь). Отдаёт
+        список кандидатов (url, title, kind: pdf|spreadsheet|page) и готовый
+        блок отчёта report с кликабельными ссылками — если просили ТОЛЬКО
+        найти, публикуй его через workspace.general и на этом всё.
+      - attach_web_catalog — ГЛАВНОЕ действие: прикрепить каталоги к поставщику.
+        Принимает список urls (или один url) — отправляй ВСЕ найденные файлы
+        за один вызов, не по одному. Разбор идёт В ФОНЕ (крупный каталог —
+        несколько минут на файл): вызов сразу возвращает status=queued,
+        список источников и готовый блок отчёта (report) со статусами и
+        кликабельными ссылками. Публикуй report на Рабочий стол как есть через
+        workspace.general (columns/rows из report), не переписывая колонки:
+        колонка ссылки имеет type=link. Не жди завершения и не зови повторно.
+      - ingest_status — прогресс фоновой загрузки по поставщику: сколько
+        источников готово, сколько позиций добавлено, что не получилось.
+        Вызывай, когда спрашивают «как там каталоги» или нужен итог.
+        Типовой поток «найди каталоги и прикрепи»: discover_catalogs →
+        attach_web_catalog(urls=[все найденные файлы]) → workspace.general(report)
+        → (позже, по запросу) ingest_status → workspace.general(report).
+      - resolve_supplier — найти поставщика по имени. Если вернулись
+        candidates (несколько совпадений) или resolved=false — СПРОСИ
+        пользователя, какой поставщик имелся в виду, не угадывай.
+      - list_entries — что уже есть в каталоге поставщика (party_id).
+      - create_supplier заводит нового поставщика каталога (по имени и сайту).
+      - ingest_web_source — низкоуровневый вариант attach_web_catalog, когда
+        текст страницы уже получен (computer_use.web_discover) и известен
+        supplier_id.
+      Все записи черновые (draft-first): review_status=ingested, а при
+      конфликте по артикулу — needs_review + AnomalyCard, старая запись не
+      трогается. approve снимает review_status с одной записи после проверки
+      человеком (approval-gated — это решение о доверии данным).
     path: /api/agent/cap/tool_catalog
     method: POST
     gate_actions: [approve]
-    non_recipeable_actions: [create_supplier, ingest_web_source, approve]
+    non_recipeable_actions: [create_supplier, ingest_web_source, attach_web_catalog, approve]
+    # discover_catalogs is read-only (search + fetch), so it stays recipeable.
     parameters:
       type: object
       properties:
         action:
           type: string
-          description: "create_supplier | ingest_web_source | approve"
+          description: "discover_catalogs | attach_web_catalog | ingest_status | resolve_supplier | list_entries | create_supplier | ingest_web_source | approve"
+        supplier_name:
+          type: string
+          description: "Название поставщика как в счетах («ООО Мир Станочника») — для attach_web_catalog/resolve_supplier"
+        party_id:
+          type: string
+          description: "ID поставщика-контрагента (Party), если известен — для attach_web_catalog/resolve_supplier/list_entries"
+        max_pages:
+          type: integer
+          description: "Для attach_web_catalog: сколько страниц PDF распознавать OCR (0-20, по умолчанию 10)"
+        max_chunks:
+          type: integer
+          description: "Для attach_web_catalog: сколько фрагментов длинного каталога разбирать (1-24, по умолчанию 8; больше = полнее, но дольше)"
         supplier_id:
           type: string
-          description: "ID поставщика (для ingest_web_source)"
+          description: "ID поставщика каталога (ToolSupplier) — для ingest_web_source"
         entry_id:
           type: string
           description: "ID записи каталога (для approve)"
         name:
           type: string
           description: "Для create_supplier: название поставщика"
-        website:
-          type: string
-          description: "Для create_supplier: сайт поставщика, если известен"
         url:
           type: string
-          description: "Для ingest_web_source: URL найденной страницы (из web_discover)"
+          description: "URL страницы каталога или PDF-прайса — для attach_web_catalog/ingest_web_source"
+        urls:
+          type: array
+          items:
+            type: string
+          description: "Для attach_web_catalog: список URL каталогов/прайсов (прикрепляются все за один вызов)"
+        website:
+          type: string
+          description: "Для discover_catalogs/create_supplier: сайт поставщика, если известен"
         title:
           type: string
-          description: "Для ingest_web_source: заголовок страницы (из web_discover)"
+          description: "Заголовок страницы/каталога (опционально)"
         text:
           type: string
           description: "Для ingest_web_source: извлечённый текст страницы (из web_discover)"

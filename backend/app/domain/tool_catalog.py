@@ -229,3 +229,149 @@ class IngestWebSourceResult(BaseModel):
     entries_skipped: int
     anomaly_ids: list[uuid.UUID] = []
     errors: list[str] = []
+
+
+class SupplierRefRequest(BaseModel):
+    """Reference to a supplier by any identifier the agent actually has.
+
+    The agent talks about suppliers by NAME (what the user said, what the
+    invoice says); the tool catalog is keyed by ToolSupplier.id and the
+    procurement side by Party.id. Accepting all three here is what lets a
+    chat turn ("прикрепи каталог к ООО Мир Станочника") reach the catalog
+    without the model having to guess a UUID.
+    """
+
+    supplier_id: uuid.UUID | None = None   # ToolSupplier.id
+    party_id: uuid.UUID | None = None      # Party.id (procurement supplier)
+    supplier_name: str | None = Field(default=None, max_length=500)
+
+
+class SupplierCandidate(BaseModel):
+    party_id: uuid.UUID | None = None
+    tool_supplier_id: uuid.UUID | None = None
+    name: str
+    inn: str | None = None
+
+
+class ResolveSupplierResult(BaseModel):
+    """Either a single resolved supplier, or the candidates to ask about."""
+
+    resolved: bool
+    tool_supplier_id: uuid.UUID | None = None
+    party_id: uuid.UUID | None = None
+    name: str | None = None
+    candidates: list[SupplierCandidate] = []
+    message: str = ""
+
+
+class AttachWebCatalogRequest(SupplierRefRequest):
+    """Fetch web pages/PDFs and attach their contents to a supplier's catalog.
+
+    Accepts one ``url`` or a list of ``urls`` — "найди ВСЕ каталоги и прикрепи"
+    is one call, not one call per file the agent has to remember to repeat.
+    """
+
+    url: str | None = Field(default=None, min_length=4, max_length=2048)
+    urls: list[str] | None = Field(default=None, max_length=20)
+    title: str | None = None
+    # Scanned-PDF catalogs need OCR; keep the page cap explicit and bounded.
+    max_pages: int = Field(10, ge=0, le=20)
+    # How much of a long catalog to actually parse (chunks of ~6 000 chars).
+    # Each chunk is one LLM call on a shared GPU — the default keeps a chat
+    # turn to a few minutes; raise it for a deliberate full-catalog import.
+    max_chunks: int = Field(8, ge=1, le=24)
+    # Wait for the ingestion instead of queueing it. Off by default: parsing a
+    # real catalog is minutes per fragment, and a chat turn must not hold the
+    # connection (or the GPU) for that long.
+    wait: bool = False
+
+    def source_urls(self) -> list[str]:
+        out: list[str] = []
+        for candidate in [self.url, *(self.urls or [])]:
+            value = (candidate or "").strip()
+            if value and value not in out:
+                out.append(value)
+        return out
+
+
+class CatalogIngestStatusRequest(SupplierRefRequest):
+    """Progress of the background catalog ingestion for one supplier."""
+
+
+class CatalogIngestStatusResult(BaseModel):
+    tool_supplier_id: uuid.UUID
+    party_id: uuid.UUID | None = None
+    supplier_name: str
+    in_progress: bool = False
+    entries_created: int = 0
+    entries_conflicted: int = 0
+    sources: list[dict] = []
+    report: dict = {}
+    message: str = ""
+
+
+class AttachWebCatalogResult(BaseModel):
+    tool_supplier_id: uuid.UUID
+    party_id: uuid.UUID | None = None
+    supplier_name: str
+    source_url: str
+    final_url: str | None = None
+    entries_created: int = 0
+    entries_conflicted: int = 0
+    entries_skipped: int = 0
+    anomaly_ids: list[uuid.UUID] = []
+    errors: list[str] = []
+    text_chars: int = 0
+    message: str = ""
+    # queued (handed to the worker) | done (parsed inline, wait=true)
+    status: str = "done"
+    task_id: str | None = None
+    # Per-source outcome + a ready-to-publish report block (clickable links),
+    # so the agent's summary table is built from what actually happened rather
+    # than re-derived by the model from prose.
+    sources: list["AttachedSourceResult"] = []
+    report: dict = {}
+
+
+class DiscoverCatalogsRequest(SupplierRefRequest):
+    """Find every catalog / price list a supplier publishes on the web."""
+
+    # Explicit site when the supplier's is known; otherwise it is resolved from
+    # ToolSupplier.website, then from a web search on the supplier's name.
+    website: str | None = None
+    max_candidates: int = Field(20, ge=1, le=50)
+    # Catalog pages to open and mine for file links (each is a real page load).
+    max_pages_to_scan: int = Field(4, ge=0, le=10)
+
+
+class CatalogCandidate(BaseModel):
+    url: str
+    title: str = ""
+    kind: str = "page"  # pdf | page | spreadsheet
+    found_via: str = ""  # search | site_scan
+    on_supplier_site: bool = False
+
+
+class DiscoverCatalogsResult(BaseModel):
+    tool_supplier_id: uuid.UUID | None = None
+    party_id: uuid.UUID | None = None
+    supplier_name: str | None = None
+    website: str | None = None
+    candidates: list[CatalogCandidate] = []
+    scanned_pages: list[str] = []
+    diagnostics: list[str] = []
+    message: str = ""
+    # Ready-to-publish workspace block (clickable links), same contract as
+    # AttachWebCatalogResult.report — "найди каталоги" also deserves a table.
+    report: dict = {}
+
+
+class AttachedSourceResult(BaseModel):
+    url: str
+    title: str | None = None
+    status: str  # queued | running | attached | empty | error
+    entries_created: int = 0
+    entries_conflicted: int = 0
+    entries_skipped: int = 0
+    text_chars: int = 0
+    message: str = ""

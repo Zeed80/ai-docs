@@ -344,6 +344,14 @@ class WebFetchRequest(BaseModel):
     # OCR scanned PDFs (no text layer) via the local VLM. Cap pages to bound cost.
     ocr: bool = True
     ocr_max_pages: int = Field(5, ge=0, le=20)
+    # Also return the page's outgoing links — a catalog page advertises its PDFs
+    # through <a href>, not through the readable text the extractor returns.
+    include_links: bool = False
+
+
+class PageLink(BaseModel):
+    url: str
+    text: str = ""
 
 
 class WebFetchResponse(BaseModel):
@@ -352,6 +360,7 @@ class WebFetchResponse(BaseModel):
     status: int | None = None
     title: str | None = None
     text: str = ""
+    links: list[PageLink] = []
     screenshot_b64: str | None = None
     truncated: bool = False
     diagnostics: list[str] = []
@@ -408,6 +417,7 @@ async def fetch_page(payload: WebFetchRequest) -> WebFetchResponse:
         "max_chars": payload.max_chars,
         "wait_ms": payload.wait_ms,
         "pdf_ocr_pages": payload.ocr_max_pages if payload.ocr else 0,
+        "include_links": payload.include_links,
     }
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
@@ -440,12 +450,19 @@ async def fetch_page(payload: WebFetchRequest) -> WebFetchResponse:
         else:
             diagnostics.append("ocr_empty")
 
+    links = [
+        PageLink(url=str(item.get("url") or ""), text=str(item.get("text") or ""))
+        for item in (data.get("links") or [])
+        if isinstance(item, dict) and item.get("url")
+    ]
+
     return WebFetchResponse(
         url=payload.url,
         final_url=data.get("final_url"),
         status=data.get("status"),
         title=data.get("title"),
         text=text[: payload.max_chars],
+        links=links,
         screenshot_b64=data.get("screenshot_b64"),
         truncated=bool(data.get("truncated")),
         diagnostics=diagnostics,

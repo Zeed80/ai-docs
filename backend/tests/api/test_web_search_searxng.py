@@ -210,3 +210,55 @@ async def test_research_reads_many_sources_and_publishes(monkeypatch):
     assert published.get("type") == "workspace.updated"
     assert published["block"]["type"] == "markdown"
     assert "Веб-исследование" in published["block"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_passes_include_links_and_returns_them(monkeypatch):
+    """A catalog page advertises its PDFs through <a href>, not through the
+    readable text — so the sidecar's links must survive the proxy hop."""
+    from app.api import web_search as ws
+
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "final_url": "https://supplier.example/catalog/",
+                "status": 200,
+                "title": "Каталог",
+                "text": "страница каталога",
+                "links": [
+                    {"url": "https://supplier.example/files/price.pdf", "text": "Прайс"},
+                    {"url": "", "text": "пустая ссылка"},  # dropped
+                ],
+            }
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            captured["body"] = json
+            return _Resp()
+
+    monkeypatch.setattr(ws.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(
+        ws.wsc, "get_config",
+        lambda: type("C", (), {"browsing_enabled": True, "browser_url": "http://browser"})(),
+    )
+
+    result = await ws.fetch_page(
+        ws.WebFetchRequest(url="https://supplier.example/catalog/", include_links=True)
+    )
+    assert captured["body"]["include_links"] is True
+    assert [link.url for link in result.links] == [
+        "https://supplier.example/files/price.pdf"
+    ]

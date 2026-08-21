@@ -97,6 +97,11 @@ _ACTION_SIGNALS = frozenset({
     "подтвердить", "валидир", "исправь", "исправить", "обнови", "обновить",
     "измени", "изменить", "согласуй", "согласовать", "заполни", "создай счёт",
     "проведи", "разнеси", "верифицир",
+    # Ingest/attach verbs: "загрузи каталог", "прикрепи прайс к поставщику".
+    # Without these a request to PUT data somewhere resolved a supplier canvas
+    # and was answered with a table of what was already in the DB (live finding).
+    "загрузи", "загрузить", "прикрепи", "прикрепить", "привяжи", "привязать",
+    "импортируй", "импортировать", "скачай", "скачать", "добавь в каталог",
     # English
     "validate", "approve", "reject", "send", "delete", "pay", "confirm",
     "verify", "fix", "update record",

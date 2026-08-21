@@ -1003,7 +1003,27 @@ async def _create_catalog_entries_from_rows(
     }
 
 
-async def _parse_catalog_text_via_llm(text: str, *, hint: str | None = None) -> list[dict[str, Any]]:
+_CATALOG_SIGNAL_RE = re.compile(
+    r"[A-ZА-Я0-9]{2,}[-–/][A-ZА-Я0-9]{2,}"          # article numbers: MT245-040G16
+    r"|\bØ\s*\d|\d+[,.]?\d*\s*мм\b"             # dimensions
+    r"|\d[\d\s]{2,}\s*(?:руб|₽|RUB)",              # prices
+    re.IGNORECASE,
+)
+
+
+def _catalog_density(chunk: str) -> int:
+    """How many catalog-ish signals (article numbers, sizes, prices) a chunk has."""
+    return len(_CATALOG_SIGNAL_RE.findall(chunk))
+
+
+async def _parse_catalog_text_via_llm(
+    text: str,
+    *,
+    hint: str | None = None,
+    chunk_chars: int = 2500,
+    max_chunks: int = 8,
+    concurrency: int = 1,
+) -> list[dict[str, Any]]:
     """Ф3: structure free-form/HTML-derived catalog text into row dicts, for
     content that arrived as already-extracted text (web_discover's fetch_page
     output — HTML pages and OCR'd PDFs alike are normalized to text before
@@ -1012,39 +1032,117 @@ async def _parse_catalog_text_via_llm(text: str, *, hint: str | None = None) -> 
     (_parse_excel_catalog etc.) so _create_catalog_entries_from_rows doesn't
     need to know which path produced them.
 
+    Long sources are parsed in CHUNKS, not truncated. A real supplier PDF
+    catalog opens with a cover, a foreword and a table of contents: the first
+    single-shot 20 000-character window contained no articles at all, so a
+    200 000-character catalog of real cutting tools yielded exactly zero rows
+    (verified live on mirstan.ru's СКИФ-М catalog). ``max_chunks`` bounds the
+    cost; anything beyond it is left unparsed rather than silently claimed.
+
+    The chunk is deliberately small (2 500 chars): a dense catalog page yields
+    roughly three times its own length in JSON, and at 15 000 chars the reply
+    hit the token ceiling mid-string — the whole chunk was then lost to a
+    JSONDecodeError plus two futile retries (observed live, ~2 min each).
+    Chunks are parsed one at a time: the local Ollama server serves a single
+    slot, so "concurrent" chunks only queue behind each other — and the ones
+    waiting burned their own request timeout while doing nothing.
+
     Best-effort: a malformed/empty LLM response yields an empty row list
-    (honest "nothing extracted"), never an exception — one bad source must
-    not break a multi-source exploratory discovery step.
+    (honest "nothing extracted"), never an exception — one bad chunk must not
+    break the source, and one bad source must not break a multi-source
+    exploratory discovery step.
     """
-    from app.ai.model_resolver import get_reasoning_model
+    import asyncio as _asyncio
+
+    from app.ai.model_resolver import get_verify_model
     from app.ai.ollama_client import generate_json
 
-    model_config = get_reasoning_model()
-    prompt = json.dumps(
-        {"text": text[:20000], "hint": hint},
-        ensure_ascii=False,
-    )
+    # Structured extraction, not reasoning: the model comes from the
+    # STRUCTURED_EXTRACTION assignment in settings (same slot invoice-line
+    # extraction uses), so changing it is a GUI decision, not a code edit.
+    model_config = get_verify_model()
     system = """Extract a tool/instrument catalog from this page text into JSON rows.
 Return JSON only: {"rows": [{"part_number","name","tool_type","description","diameter_mm",
 "length_mm","material","coating","currency","price","catalog_page"}]}. tool_type must be one
 of: drill, endmill, insert, holder, tap, reamer, boring_bar, thread_mill, grinder,
 turning_tool, milling_cutter, countersink, counterbore, other. Omit fields you cannot find —
 never invent a value. If the text is not a product/tool catalog, return {"rows": []}."""
-    try:
-        raw = await generate_json(
-            prompt,
-            model=model_config.model,
-            provider=model_config.provider,
-            system=system,
-            temperature=0.0,
-            max_tokens=8192,
-            timeout_seconds=120,
-        )
+
+    # Rank chunks by catalog density instead of taking the first N: a real PDF
+    # catalog opens with a cover, a foreword and a table of contents, and a
+    # first-N window spends the whole budget there and returns zero rows
+    # (measured live: 24 000 leading chars of the СКИФ-М catalog → 0 rows,
+    # while the same budget spent on its dense pages → hundreds). Order within
+    # the source is preserved for the chunks that are actually parsed.
+    all_chunks = [
+        text[offset : offset + chunk_chars]
+        for offset in range(0, len(text), chunk_chars)
+    ]
+    scored = [
+        (index, chunk, _catalog_density(chunk))
+        for index, chunk in enumerate(all_chunks)
+    ]
+    ranked = sorted(scored, key=lambda item: item[2], reverse=True)[:max_chunks]
+    selected = [item for item in sorted(ranked, key=lambda item: item[0]) if item[2] > 0]
+    chunks = [chunk for _index, chunk, _score in selected]
+    if not chunks:
+        # No chunk shows any catalog signal — parse the densest one anyway so a
+        # source in an unexpected shape still gets one honest attempt.
+        chunks = [item[1] for item in ranked[:1]]
+    semaphore = _asyncio.Semaphore(max(1, concurrency))
+
+    failed_chunks = 0
+
+    async def _parse_chunk(chunk: str) -> list[dict[str, Any]]:
+        nonlocal failed_chunks
+        prompt = json.dumps({"text": chunk, "hint": hint}, ensure_ascii=False)
+        async with semaphore:
+            try:
+                raw = await generate_json(
+                    prompt,
+                    model=model_config.model,
+                    provider=model_config.provider,
+                    system=system,
+                    temperature=0.0,
+                    max_tokens=8192,
+                    timeout_seconds=300,
+                    # A dense catalog page can overflow the token ceiling
+                    # mid-row; keep the rows that completed instead of losing
+                    # the whole chunk to a JSONDecodeError (live finding).
+                    salvage_truncated=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - one bad chunk can't break the source
+                failed_chunks += 1
+                logger.warning("catalog_text_llm_parse_failed", error=str(exc)[:200])
+                return []
         rows = raw.get("rows") if isinstance(raw, dict) else None
         return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
-    except Exception as exc:  # noqa: BLE001 - one bad source can't break the batch
-        logger.warning("catalog_text_llm_parse_failed", error=str(exc)[:200])
-        return []
+
+    parsed = await _asyncio.gather(*(_parse_chunk(chunk) for chunk in chunks))
+
+    # De-duplicate across chunks: catalogs repeat a part in a summary table and
+    # again in its detail block, and chunk boundaries can cut a row in two.
+    seen: set[tuple[str, str]] = set()
+    rows_out: list[dict[str, Any]] = []
+    for chunk_rows in parsed:
+        for row in chunk_rows:
+            key = (
+                str(row.get("part_number") or "").strip().lower(),
+                str(row.get("name") or "").strip().lower(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            rows_out.append(row)
+    logger.info(
+        "catalog_text_parsed",
+        chars=len(text),
+        chunks=len(chunks),
+        failed_chunks=failed_chunks,
+        truncated=len(text) > len(chunks) * chunk_chars,
+        rows=len(rows_out),
+    )
+    return rows_out
 
 
 async def ingest_web_catalog_source(
@@ -1055,6 +1153,7 @@ async def ingest_web_catalog_source(
     title: str | None,
     text: str,
     snippet: str | None = None,
+    max_chunks: int | None = None,
 ) -> dict[str, Any]:
     """Ф3: structure one web_discover-fetched source into ToolCatalogEntry
     rows for a supplier — the bridge between Ф2's web_discover output and the
@@ -1100,7 +1199,11 @@ async def ingest_web_catalog_source(
     except Exception as exc:  # noqa: BLE001 - provenance storage must not block ingestion
         logger.warning("web_catalog_source_storage_failed", url=url, error=str(exc)[:200])
 
-    rows = await _parse_catalog_text_via_llm(text, hint=title or snippet)
+    rows = await _parse_catalog_text_via_llm(
+        text,
+        hint=title or snippet,
+        **({"max_chunks": max_chunks} if max_chunks else {}),
+    )
     logger.info("web_catalog_rows_parsed", supplier_id=supplier_id, url=url, rows=len(rows))
 
     ensure_drawing_collections()
@@ -2178,3 +2281,146 @@ async def _load_few_shot_corrections(db: Any, *, drawing_type: str, limit: int =
         }
         for c in corrections
     ]
+
+
+# ── Background web-catalog ingestion (Ф3 / live-finding follow-up) ────────────
+
+
+@celery_app.task(
+    bind=True,
+    name="drawing_analysis.ingest_web_catalog_sources",
+    max_retries=0,
+    # One source per task, with its own generous limits: the app-wide default
+    # (soft 300s) killed a real catalog mid-parse and left the remaining
+    # sources stuck at "queued" forever (caught on a live run).
+    soft_time_limit=1800,
+    time_limit=1860,
+)
+def ingest_web_catalog_sources(
+    self,
+    supplier_id: str,
+    urls: list[str],
+    max_pages: int = 10,
+    max_chunks: int = 8,
+) -> dict:
+    """Fetch and ingest web catalog sources for one supplier.
+
+    Runs in the worker because a real PDF catalog is minutes of local-LLM work
+    per fragment: holding a chat turn open for that is the wrong shape — the
+    agent queues the work, reports what it queued, and the per-source progress
+    is readable from app.domain.catalog_ingest_status while it runs.
+
+    Callers normally enqueue ONE url per task (see the attach endpoint), so a
+    slow or broken source cannot consume another source's time budget.
+    """
+    from billiard.exceptions import SoftTimeLimitExceeded
+
+    from app.domain.catalog_ingest_status import record_source_status
+
+    try:
+        return run_async(
+            _ingest_web_catalog_sources_async(supplier_id, urls, max_pages, max_chunks)
+        )
+    except SoftTimeLimitExceeded:
+        # Be explicit about what was cut off — a source silently frozen at
+        # "running"/"queued" is indistinguishable from one still in progress.
+        for url in urls:
+            record_source_status(
+                supplier_id, url, status="error",
+                message="Разбор прерван по таймауту — источник слишком большой.",
+            )
+        raise
+
+
+async def _ingest_web_catalog_sources_async(
+    supplier_id: str, urls: list[str], max_pages: int, max_chunks: int
+) -> dict:
+    from app.api.web_search import WebFetchRequest, fetch_page
+    from app.db.session import _get_session_factory
+    from app.domain.catalog_ingest_status import record_source_status
+
+    session_factory = _get_session_factory()
+    totals = {"created": 0, "conflicted": 0, "sources": len(urls)}
+
+    for url in urls:
+        record_source_status(supplier_id, url, status="running", message="Читаю источник…")
+        try:
+            fetched = await fetch_page(
+                WebFetchRequest(
+                    url=url,
+                    max_chars=200000,
+                    ocr=max_pages > 0,
+                    ocr_max_pages=max_pages,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — one dead link can't stop the rest
+            record_source_status(
+                supplier_id, url, status="error",
+                message=f"Не удалось открыть источник: {str(exc)[:200]}",
+            )
+            continue
+
+        text = (fetched.text or "").strip()
+        if len(text) < 200:
+            record_source_status(
+                supplier_id, url, status="empty", title=fetched.title,
+                message=(
+                    f"Читаемого текста нет ({len(text)} симв.) — JS-каталог или файл, "
+                    "требующий скачивания."
+                ),
+            )
+            continue
+
+        record_source_status(
+            supplier_id, url, status="running", title=fetched.title,
+            message="Разбираю позиции каталога…",
+        )
+        try:
+            async with session_factory() as db:
+                result = await ingest_web_catalog_source(
+                    db,
+                    supplier_id,
+                    url=url,
+                    title=fetched.title,
+                    text=text,
+                    snippet=None,
+                    max_chunks=max_chunks,
+                )
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001
+            record_source_status(
+                supplier_id, url, status="error", title=fetched.title,
+                message=f"Ошибка разбора: {str(exc)[:200]}",
+            )
+            continue
+
+        if result.get("error"):
+            record_source_status(
+                supplier_id, url, status="error", title=fetched.title,
+                message=str(result["error"])[:200],
+            )
+            continue
+
+        created = int(result["entries_created"])
+        conflicted = int(result["entries_conflicted"])
+        totals["created"] += created
+        totals["conflicted"] += conflicted
+        record_source_status(
+            supplier_id, url,
+            status="attached" if created or conflicted else "empty",
+            title=fetched.title,
+            entries_created=created,
+            entries_conflicted=conflicted,
+            message=(
+                f"Добавлено позиций: {created}"
+                + (f", на проверку: {conflicted}" if conflicted else "")
+                if created or conflicted
+                else "Позиций каталога в тексте не найдено."
+            ),
+        )
+
+    logger.info(
+        "web_catalog_sources_ingested",
+        supplier_id=supplier_id, sources=len(urls), created=totals["created"],
+    )
+    return totals
