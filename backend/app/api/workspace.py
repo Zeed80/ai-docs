@@ -60,11 +60,16 @@ class WorkspaceInvoiceItemsGroupedTableRequest(BaseModel):
     canvas_id: str = "agent:invoice-items-grouped"
     limit: int = 5000
     include_supplier: bool = False
+    # Every invoice-scoped table accepts the same supplier filter. Where it was
+    # missing, the agent's filter was silently dropped and the user got every
+    # supplier's data (live: "что закупали у X" → all 33 suppliers).
+    supplier_query: str | None = None
 
 
 class WorkspaceInvoiceItemsBySupplierTableRequest(BaseModel):
     canvas_id: str = "agent:invoice-items-by-supplier"
     limit: int = 10000
+    supplier_query: str | None = None
 
 
 class WorkspaceInvoicePivotRequest(BaseModel):
@@ -352,16 +357,25 @@ async def publish_invoice_items_grouped_table(
 ) -> WorkspaceToolResponse:
     """Skill: workspace.invoice_items_grouped_table — Group invoice items by invoice."""
     await _publish_workspace_status("Готовлю шаблон: товары сгруппированы по счетам")
-    total = (
-        await db.execute(select(func.count()).select_from(Invoice))
-    ).scalar_one()
-    await _publish_workspace_status("Загружаю счета и строки товаров из БД")
-    result = await db.execute(
+    supplier_filter = (payload.supplier_query or "").strip()
+    count_stmt = select(func.count()).select_from(Invoice)
+    rows_stmt = (
         select(Invoice)
         .options(selectinload(Invoice.lines), selectinload(Invoice.supplier))
         .order_by(Invoice.created_at.desc())
         .limit(_WORKSPACE_MAX_ROWS)
     )
+    if supplier_filter:
+        pattern = f"%{supplier_filter}%"
+        count_stmt = count_stmt.join(Party, Invoice.supplier_id == Party.id).where(
+            Party.name.ilike(pattern)
+        )
+        rows_stmt = rows_stmt.join(Party, Invoice.supplier_id == Party.id).where(
+            Party.name.ilike(pattern)
+        )
+    total = (await db.execute(count_stmt)).scalar_one()
+    await _publish_workspace_status("Загружаю счета и строки товаров из БД")
+    result = await db.execute(rows_stmt)
     invoices = result.scalars().all()
     rows = [
         _invoice_items_grouped_workspace_row(
@@ -395,10 +409,11 @@ async def publish_invoice_items_grouped_table(
         total=total,
         shown=len(rows),
         message=(
-            "Открыл на Рабочем столе таблицу товаров, сгруппированных по счетам: "
-            f"{len(rows)} из {total}."
+            "Открыл на Рабочем столе таблицу товаров, сгруппированных по счетам"
+            + (f" (поставщик «{supplier_filter}»)" if supplier_filter else "")
+            + f": {len(rows)} из {total}."
         ),
-        filters={},
+        filters={"supplier_query": supplier_filter} if supplier_filter else {},
     )
 
 
@@ -415,13 +430,19 @@ async def publish_invoice_items_by_supplier_table(
     # supplier. payload.limit bounds the number of OUTPUT supplier rows, NOT the
     # pre-grouping line fetch: limiting lines here (ordered by invoice recency)
     # silently dropped whole suppliers whose invoices weren't the most recent.
-    result = await db.execute(
+    supplier_filter = (payload.supplier_query or "").strip()
+    lines_stmt = (
         select(InvoiceLine, Invoice)
         .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
         .options(selectinload(Invoice.supplier))
         .order_by(Invoice.created_at.desc(), InvoiceLine.line_number.asc())
         .limit(_WORKSPACE_MAX_ROWS)
     )
+    if supplier_filter:
+        lines_stmt = lines_stmt.join(Party, Invoice.supplier_id == Party.id).where(
+            Party.name.ilike(f"%{supplier_filter}%")
+        )
+    result = await db.execute(lines_stmt)
     groups: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "supplier": "",
@@ -473,10 +494,11 @@ async def publish_invoice_items_by_supplier_table(
         total=len(rows),
         shown=len(rows),
         message=(
-            "Открыл на Рабочем столе таблицу товаров, сгруппированных по поставщикам: "
-            f"{len(rows)} поставщиков, {total_lines} строк товаров."
+            "Открыл на Рабочем столе таблицу товаров, сгруппированных по поставщикам"
+            + (f" (фильтр: «{supplier_filter}»)" if supplier_filter else "")
+            + f": {len(rows)} поставщиков, {total_lines} строк товаров."
         ),
-        filters={},
+        filters={"supplier_query": supplier_filter} if supplier_filter else {},
     )
 
 

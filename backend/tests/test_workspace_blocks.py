@@ -235,3 +235,83 @@ async def test_invoice_table_unknown_supplier_is_not_found(client: AsyncClient):
     })
     assert resp.status_code == 200
     assert resp.json()["status"] == "not_found"
+
+
+# ── Contract: every invoice-scoped table accepts the supplier filter ────────
+
+
+def test_all_invoice_tables_accept_supplier_query():
+    """A parameter a schema doesn't declare disappears silently — and the agent
+    looks guilty. Twice on this deployment (2026-08-21) a per-supplier request
+    published EVERY supplier's data because the table's request model had no
+    supplier_query field. Keep the family consistent.
+    """
+    from app.api import workspace as ws
+
+    invoice_table_requests = [
+        ws.WorkspaceInvoiceTableRequest,
+        ws.WorkspaceInvoiceItemsTableRequest,
+        ws.WorkspaceInvoiceItemsGroupedTableRequest,
+        ws.WorkspaceInvoiceItemsBySupplierTableRequest,
+    ]
+    missing = [
+        model.__name__
+        for model in invoice_table_requests
+        if "supplier_query" not in model.model_fields
+    ]
+    assert not missing, f"invoice tables without a supplier filter: {missing}"
+
+
+@pytest.mark.asyncio
+async def test_items_by_supplier_table_honours_the_filter(client: AsyncClient, db_session):
+    from datetime import UTC, datetime
+
+    from app.db.models import (
+        Document,
+        DocumentStatus,
+        Invoice,
+        InvoiceLine,
+        Party,
+        PartyRole,
+    )
+
+    wanted = Party(name="ООО Фильтруемый", role=PartyRole.supplier)
+    other = Party(name="ООО Посторонний", role=PartyRole.supplier)
+    db_session.add_all([wanted, other])
+    await db_session.flush()
+
+    def _doc(digest: str) -> Document:
+        return Document(
+            file_name=f"{digest}.pdf", file_hash=digest, file_size=256,
+            mime_type="application/pdf", storage_path=f"g/{digest}.pdf",
+            status=DocumentStatus.needs_review,
+        )
+
+    d1, d2 = _doc("grpfilter1"), _doc("grpfilter2")
+    db_session.add_all([d1, d2])
+    await db_session.flush()
+
+    now = datetime.now(UTC)
+    inv1 = Invoice(document_id=d1.id, invoice_number="G-1", invoice_date=now,
+                   supplier_id=wanted.id, total_amount=100)
+    inv2 = Invoice(document_id=d2.id, invoice_number="G-2", invoice_date=now,
+                   supplier_id=other.id, total_amount=200)
+    db_session.add_all([inv1, inv2])
+    await db_session.flush()
+    db_session.add_all([
+        InvoiceLine(invoice_id=inv1.id, line_number=1, description="Фреза", quantity=1, amount=100),
+        InvoiceLine(invoice_id=inv2.id, line_number=1, description="Болт", quantity=1, amount=200),
+    ])
+    await db_session.commit()
+
+    resp = await client.post(
+        "/api/workspace/agent/invoices/items-by-supplier-table",
+        json={"canvas_id": "test:by-supplier-filter", "supplier_query": "Фильтруемый"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["filters"]["supplier_query"] == "Фильтруемый"
+
+    block = (await client.get("/api/workspace/blocks/test:by-supplier-filter")).json()
+    suppliers = {row.get("supplier") for row in block["rows"]}
+    assert suppliers == {"ООО Фильтруемый"}, f"filter ignored: {suppliers}"
