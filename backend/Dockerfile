@@ -34,6 +34,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl libxml2 libglib2.0-0 libcairo2 libpango-1.0-0 libpangocairo-1.0-0 \
     gosu tesseract-ocr tesseract-ocr-rus \
+    unar \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy libredwg runtime: binaries + shared library

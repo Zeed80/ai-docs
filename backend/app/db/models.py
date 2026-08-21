@@ -38,6 +38,7 @@ class DocumentType(str, enum.Enum):
     commercial_offer = "commercial_offer"
     act = "act"
     waybill = "waybill"
+    supplier_catalog = "supplier_catalog"
     other = "other"
 
 

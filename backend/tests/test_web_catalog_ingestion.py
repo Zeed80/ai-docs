@@ -175,10 +175,23 @@ async def test_matching_part_number_same_price_and_name_is_not_a_conflict(db_ses
 
 
 @pytest.mark.asyncio
-async def test_row_missing_required_fields_is_skipped_not_created(db_session, supplier):
-    result = await _create_catalog_entries_from_rows(db_session, supplier.id, [{"name": "Без типа"}])
-    assert result["created"] == 0
+async def test_row_without_tool_type_is_kept_not_skipped(db_session, supplier):
+    """Changed deliberately 2026-08-21: requiring `tool_type` per row dropped
+    every line of a normal price list (measured live: created=0, skipped=2 on a
+    two-row CSV). The type is now derived from the name, falling back to
+    "other" — only a row without a NAME is skipped."""
+    result = await _create_catalog_entries_from_rows(
+        db_session,
+        supplier.id,
+        [
+            {"name": "Фреза концевая Ø8"},   # type inferred
+            {"name": "Ящик инструментальный"},  # unrecognised → other
+            {"part_number": "NO-NAME"},          # no name → skipped
+        ],
+    )
+    assert result["created"] == 2
     assert result["skipped"] == 1
+    assert result["skipped_by_reason"] == {"no_name": 1}
 
 
 # ── _parse_catalog_text_via_llm ─────────────────────────────────────────────

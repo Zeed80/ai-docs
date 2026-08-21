@@ -24,8 +24,8 @@ interface CatalogSummary {
 
 async function fetchCatalogSummary(partyId: string): Promise<CatalogSummary> {
   const [tsResp, entriesResp] = await Promise.all([
-    fetch(`${API}/tool-catalog/by-supplier/${partyId}`),
-    fetch(`${API}/tool-catalog/by-supplier/${partyId}/entries?page_size=1`),
+    fetch(`${API}/api/tool-catalog/by-supplier/${partyId}`),
+    fetch(`${API}/api/tool-catalog/by-supplier/${partyId}/entries?page_size=1`),
   ]);
   const ts = tsResp.ok ? await tsResp.json() : { items: [] };
   const entries = entriesResp.ok ? await entriesResp.json() : { total: 0 };

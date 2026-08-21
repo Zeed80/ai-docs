@@ -13,7 +13,6 @@ from typing import Any
 
 import structlog
 from sqlalchemy import create_engine, func, select
-from sqlalchemy import update as _sa_update_top
 from sqlalchemy.orm import Session
 
 from app.ai import ru_validators as rv
@@ -36,7 +35,8 @@ from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
 
-from app.domain.pipeline import PIPELINE_STEP_DEFINITIONS
+from app.domain import processing_jobs as pj
+from app.domain.pipeline import PIPELINE_STEP_DEFINITIONS  # noqa: F401  (re-exported)
 
 
 @lru_cache(maxsize=1)
@@ -80,20 +80,14 @@ def _run_async(coro):
     return asyncio.run(coro)
 
 
-def _default_pipeline_steps() -> list[dict]:
-    return [
-        {"key": key, "label": label, "status": "pending"}
-        for key, label in PIPELINE_STEP_DEFINITIONS
-    ]
+# Job bookkeeping lives in app/domain/processing_jobs.py so the supplier-catalog
+# pipeline can reuse it with its own stage list; these thin aliases keep the
+# existing call sites in this module unchanged.
+_default_pipeline_steps = pj.default_pipeline_steps
 
 
 def _latest_processing_job(db: Session, doc: Document) -> DocumentProcessingJob | None:
-    return db.execute(
-        select(DocumentProcessingJob)
-        .where(DocumentProcessingJob.document_id == doc.id)
-        .order_by(DocumentProcessingJob.created_at.desc())
-        .limit(1)
-    ).scalar_one_or_none()
+    return pj.latest_processing_job(db, doc.id)
 
 
 def _get_or_create_processing_job(
@@ -103,101 +97,22 @@ def _get_or_create_processing_job(
     current_step: str,
     celery_task_id: str | None = None,
 ) -> DocumentProcessingJob:
-    job = _latest_processing_job(db, doc)
-    if not job or job.status in {"done", "failed"}:
-        # New run: store and memory_seed are always already done at this point
-        steps = _default_pipeline_steps()
-        for step in steps:
-            if step["key"] in ("store", "memory_seed"):
-                step["status"] = "done"
-        job = DocumentProcessingJob(
-            document_id=doc.id,
-            status="running",
-            pipeline_steps=steps,
-            current_step=current_step,
-            started_at=datetime.now(UTC),
-            celery_task_id=celery_task_id,
-        )
-        db.add(job)
-        db.flush()
-    else:
-        job.status = "running"
-        job.current_step = current_step
-        job.started_at = job.started_at or datetime.now(UTC)
-        if celery_task_id and not job.celery_task_id:
-            job.celery_task_id = celery_task_id
-    return job
-
-
-def _ensure_step_entries(job: DocumentProcessingJob) -> list[dict]:
-    existing = {
-        step.get("key"): dict(step)
-        for step in (job.pipeline_steps or [])
-        if isinstance(step, dict) and step.get("key")
-    }
-    steps = []
-    for key, label in PIPELINE_STEP_DEFINITIONS:
-        step = existing.get(key, {"key": key, "label": label, "status": "pending"})
-        step.setdefault("label", label)
-        step.setdefault("status", "pending")
-        steps.append(step)
-    return steps
-
-
-def _set_job_step(
-    job: DocumentProcessingJob,
-    key: str,
-    status: str,
-    *,
-    error: str | None = None,
-) -> None:
-    steps = []
-    for step in _ensure_step_entries(job):
-        if step["key"] == key:
-            step = {**step, "status": status}
-            if error:
-                step["error"] = error
-        steps.append(step)
-    job.pipeline_steps = steps
-    job.current_step = key if status in {"queued", "running", "failed"} else job.current_step
-    if error:
-        job.error = error
-
-
-def _step_status(job: DocumentProcessingJob, key: str) -> str | None:
-    for step in _ensure_step_entries(job):
-        if step["key"] == key:
-            return step.get("status")
-    return None
-
-
-def _skip_remaining_steps(job: DocumentProcessingJob, keys: set[str]) -> None:
-    for key in keys:
-        if _step_status(job, key) in {"pending", "queued", None}:
-            _set_job_step(job, key, "skipped")
-
-
-def _finish_job(
-    job: DocumentProcessingJob,
-    status: str,
-    *,
-    error: str | None = None,
-) -> None:
-    job.status = status
-    job.error = error
-    job.finished_at = datetime.now(UTC)
-    if status == "done":
-        job.current_step = "completed"
-
-
-def _touch_job(db: Session, job: DocumentProcessingJob) -> None:
-    """Refresh job.updated_at so the watchdog doesn't fire during long GPU inference."""
-    db.execute(
-        _sa_update_top(DocumentProcessingJob)
-        .where(DocumentProcessingJob.id == job.id)
-        .values(updated_at=datetime.now(UTC))
+    # store and memory_seed are always already done by the time a task starts.
+    return pj.get_or_create_processing_job(
+        db,
+        doc.id,
+        current_step=current_step,
+        celery_task_id=celery_task_id,
+        already_done=("store", "memory_seed"),
     )
-    db.commit()
+
+
+_ensure_step_entries = pj.ensure_step_entries
+_set_job_step = pj.set_job_step
+_step_status = pj.step_status
+_skip_remaining_steps = pj.skip_remaining_steps
+_finish_job = pj.finish_job
+_touch_job = pj.touch_job
 
 
 @celery_app.task(name="app.tasks.extraction.classify_document", bind=True, max_retries=2)

@@ -58,6 +58,17 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
             "GET", "/api/tool-catalog/by-supplier/{party_id}/entries", ["party_id"]
         ),
         "approve": ("POST", "/api/tool-catalog/entries/{entry_id}/approve", ["entry_id"]),
+        # Uploaded catalog files: the agent must be able to see what it (or a
+        # human) uploaded and how far the parse got, and to re-run one file.
+        "list_uploads": (
+            "GET", "/api/tool-catalog/by-supplier/{party_id}/uploads", ["party_id"]
+        ),
+        "reingest_upload": (
+            "POST", "/api/tool-catalog/uploads/{document_id}/reingest", ["document_id"]
+        ),
+        "refresh": (
+            "POST", "/api/tool-catalog/suppliers/{supplier_id}/refresh", ["supplier_id"]
+        ),
     },
     "documents": {
         "list":         ("GET",    "/api/documents",                          []),

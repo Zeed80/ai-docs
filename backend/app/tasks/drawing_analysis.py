@@ -751,7 +751,16 @@ def _create_drawing_from_doc_sync(
 # ── Supplier Catalog Ingestion Task ───────────────────────────────────────────
 
 
-@celery_app.task(bind=True, name="drawing_analysis.ingest_supplier_catalog", max_retries=2)
+@celery_app.task(
+    bind=True,
+    name="drawing_analysis.ingest_supplier_catalog",
+    max_retries=2,
+    # A real price list is minutes of parsing plus one embedding per row; the
+    # app-wide default (soft 300s) killed it halfway and, with acks_late, then
+    # retried the same doomed work. Same treatment the web path already got.
+    soft_time_limit=3600,
+    time_limit=3660,
+)
 def ingest_supplier_catalog(self, supplier_id: str, file_path: str, filename: str) -> dict:
     """
     Parse supplier tool catalog file and ingest into DB + Qdrant + Graph.
@@ -801,6 +810,8 @@ async def _ingest_catalog_async(
         supplier_id=supplier_id,
         created=result["created"],
         skipped=result["skipped"],
+        skipped_by_reason=result.get("skipped_by_reason") or {},
+        rows_parsed=len(rows),
     )
     return {
         "supplier_id": supplier_id,
@@ -817,6 +828,7 @@ async def _create_catalog_entries_from_rows(
     rows: list[dict[str, Any]],
     *,
     provenance: dict[str, Any] | None = None,
+    source_document_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Ф3 (AGENT_AUTONOMY_ROADMAP.md): the entry-creation/embed/graph loop,
     split out of _ingest_catalog_async so both the file-upload path (above)
@@ -850,16 +862,32 @@ async def _create_catalog_entries_from_rows(
     created = 0
     conflicted = 0
     skipped = 0
+    # Why rows were dropped, not just how many — "0 из 5000" with no reason is
+    # what made a silently-empty catalog look like a successful import.
+    skipped_by_reason: dict[str, int] = {}
     errors: list[str] = []
     anomaly_ids: list[uuid.UUID] = []
 
     for row in rows:
         try:
-            if not row.get("name") or not row.get("tool_type"):
+            if not row.get("name"):
                 skipped += 1
+                skipped_by_reason["no_name"] = skipped_by_reason.get("no_name", 0) + 1
                 continue
 
-            tool_type_str = _normalize_tool_type(row.get("tool_type", ""))
+            # The type is derived, never required: column → name heuristic →
+            # "other". A row is no longer lost just because the supplier's price
+            # list has no "тип инструмента" column (it almost never does).
+            raw_tool_type = row.get("tool_type") or ""
+            if raw_tool_type:
+                tool_type_str = _normalize_tool_type(raw_tool_type)
+            else:
+                tool_type_str = (
+                    _infer_tool_type(
+                        row.get("name"), row.get("description"), row.get("part_number")
+                    )
+                    or "other"
+                )
             try:
                 tool_type = ToolTypeEnum(tool_type_str)
             except ValueError:
@@ -903,6 +931,7 @@ async def _create_catalog_entries_from_rows(
 
             entry = ToolCatalogEntry(
                 supplier_id=supplier_uuid,
+                source_document_id=source_document_id,
                 part_number=part_number,
                 tool_type=tool_type,
                 name=name,
@@ -998,6 +1027,7 @@ async def _create_catalog_entries_from_rows(
         "created": created,
         "conflicted": conflicted,
         "skipped": skipped,
+        "skipped_by_reason": skipped_by_reason,
         "errors": errors,
         "anomaly_ids": anomaly_ids,
     }
@@ -1896,44 +1926,155 @@ async def _parse_catalog_file(
     """Parse catalog file into list of row dicts."""
     rows: list[dict] = []
 
-    if file_ext in (".xlsx", ".xls"):
+    if file_ext in (".xlsx", ".xlsm"):
         rows = _parse_excel_catalog(file_bytes)
+    elif file_ext == ".xls":
+        rows = _parse_xls_catalog(file_bytes)
     elif file_ext == ".csv":
         rows = _parse_csv_catalog(file_bytes)
     elif file_ext == ".json":
         rows = _parse_json_catalog(file_bytes)
     elif file_ext == ".pdf":
         rows = await _parse_pdf_catalog(file_bytes)
-    else:
-        logger.warning("unknown_catalog_format", ext=file_ext)
+
+    if not rows:
+        # Anything else — .txt, .docx, .html, .xml, an unknown extension — goes
+        # through the shared document parser and then the LLM row extractor.
+        # The old behaviour was a warning and zero rows, i.e. a task that
+        # "succeeded" while importing nothing.
+        rows = await _parse_catalog_any_format(file_bytes, file_ext, filename)
 
     return rows
 
 
+async def _parse_catalog_any_format(
+    file_bytes: bytes, file_ext: str, filename: str
+) -> list[dict[str, Any]]:
+    """Last-resort path: extract text with the shared parser, then ask the LLM.
+
+    Reuses app.ai.parsers.registry (the same one document ingest uses), so any
+    format it understands becomes a catalog source without new code here.
+    """
+    try:
+        from app.ai.parsers.registry import parse_document
+
+        parsed = parse_document(file_bytes, filename)
+        text = (getattr(parsed, "text", "") or "").strip()
+    except Exception as exc:  # noqa: BLE001 — unknown formats must not crash ingest
+        logger.warning("catalog_generic_parse_failed", ext=file_ext, error=str(exc)[:200])
+        return []
+
+    if len(text) < 50:
+        logger.warning(
+            "catalog_format_unreadable", ext=file_ext, filename=filename, chars=len(text)
+        )
+        return []
+    return await _parse_catalog_text_via_llm(text, hint=filename)
+
+
+# Header cells a supplier price list actually uses. A row is treated as the
+# header when enough of its cells map to known fields — real files start with a
+# company banner, a date and empty rows, so "row 1 is the header" was wrong for
+# most of them.
+_KNOWN_HEADER_FIELDS = {
+    "name", "part_number", "price", "description", "diameter_mm",
+    "length_mm", "material", "coating", "currency", "tool_type", "unit", "quantity",
+}
+
+
+def _find_header_row(raw_rows: list[tuple], scan_limit: int = 20) -> tuple[int, list[str]]:
+    """Index and normalised names of the header row.
+
+    Returns (-1, []) when nothing in the first ``scan_limit`` rows looks like a
+    header, so the caller can fall back instead of silently treating a banner
+    line as column names.
+    """
+    best_idx, best_headers, best_score = -1, [], 0
+    for idx, row in enumerate(raw_rows[:scan_limit]):
+        headers = [_normalize_header(str(cell or "")) for cell in row]
+        score = sum(1 for h in headers if h in _KNOWN_HEADER_FIELDS)
+        if score > best_score:
+            best_idx, best_headers, best_score = idx, headers, score
+    # One recognised column is a coincidence; two is a header.
+    if best_score < 2:
+        return -1, []
+    return best_idx, best_headers
+
+
+def _rows_from_sheet(raw_rows: list[tuple], sheet_name: str | None = None) -> list[dict]:
+    """Turn one sheet's raw cells into catalog rows."""
+    header_idx, headers = _find_header_row(raw_rows)
+    if header_idx < 0:
+        return []
+    rows: list[dict] = []
+    # A lone non-empty cell is usually a category separator ("Фрезы концевые");
+    # it is the only type hint many price lists carry, so it is remembered and
+    # attached to the rows that follow instead of being dropped.
+    current_category: str | None = None
+    for raw in raw_rows[header_idx + 1:]:
+        filled = [cell for cell in raw if cell not in (None, "")]
+        if not filled:
+            continue
+        if len(filled) == 1 and isinstance(filled[0], str):
+            current_category = str(filled[0]).strip()
+            continue
+        row_dict: dict[str, Any] = {}
+        for j, cell in enumerate(raw):
+            if j < len(headers) and headers[j]:
+                row_dict[headers[j]] = cell
+        if not row_dict:
+            continue
+        if current_category:
+            row_dict.setdefault("_category", current_category)
+        if sheet_name:
+            row_dict.setdefault("_sheet", sheet_name)
+        rows.append(row_dict)
+    return rows
+
+
 def _parse_excel_catalog(file_bytes: bytes) -> list[dict]:
-    """Parse Excel catalog file."""
+    """Parse an .xlsx catalog: every sheet, header found rather than assumed.
+
+    Previously only ``wb.active`` was read and the header had to sit in row 1 —
+    a two-sheet price list with a banner on top produced zero rows.
+    ``data_only=True`` matters too: without it a price computed by a formula
+    arrives as the literal "=B2*1.2".
+    """
     try:
         import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True)
-        ws = wb.active
-        rows = []
-        headers: list[str] = []
-        for i, row in enumerate(ws.iter_rows(values_only=True)):
-            if i == 0:
-                headers = [_normalize_header(str(c or "")) for c in row]
-                continue
-            if not any(row):
-                continue
-            row_dict = {}
-            for j, cell in enumerate(row):
-                if j < len(headers) and headers[j]:
-                    row_dict[headers[j]] = cell
-            if row_dict:
-                rows.append(row_dict)
+
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+        rows: list[dict] = []
+        for ws in wb.worksheets:
+            raw_rows = list(ws.iter_rows(values_only=True))
+            rows.extend(_rows_from_sheet(raw_rows, ws.title))
         wb.close()
         return rows
     except Exception as exc:
         logger.error("excel_catalog_parse_failed", error=str(exc))
+        return []
+
+
+def _parse_xls_catalog(file_bytes: bytes) -> list[dict]:
+    """Parse a legacy binary .xls catalog.
+
+    openpyxl cannot read this format at all — the file used to land in the
+    .xlsx branch and yield zero rows without any error.
+    """
+    try:
+        import xlrd
+    except ImportError:
+        logger.warning("xls_support_missing", hint="pip install xlrd>=2.0")
+        return []
+    try:
+        book = xlrd.open_workbook(file_contents=file_bytes)
+        rows: list[dict] = []
+        for sheet in book.sheets():
+            raw_rows = [tuple(sheet.row_values(i)) for i in range(sheet.nrows)]
+            rows.extend(_rows_from_sheet(raw_rows, sheet.name))
+        return rows
+    except Exception as exc:  # noqa: BLE001
+        logger.error("xls_catalog_parse_failed", error=str(exc))
         return []
 
 
@@ -1969,20 +2110,35 @@ def _parse_json_catalog(file_bytes: bytes) -> list[dict]:
         return []
 
 
-async def _parse_pdf_catalog(file_bytes: bytes) -> list[dict]:
-    """Extract tables from PDF catalog using pdfplumber."""
-    rows = []
+async def _parse_pdf_catalog(file_bytes: bytes, max_pages: int = 500) -> list[dict]:
+    """Extract catalog rows from a PDF.
+
+    Two passes, because supplier catalogs come in both shapes: ruled tables
+    (pdfplumber reads them directly) and free layout with columns drawn by
+    whitespace (tables yield nothing — then the accumulated text goes through
+    the LLM row extractor, the same one the web path uses).
+
+    The old code stopped at page 50 and had no text fallback at all: a
+    200-page catalog without table borders imported zero rows and reported
+    success.
+    """
+    rows: list[dict] = []
+    text_parts: list[str] = []
     try:
         import pdfplumber
 
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for page in pdf.pages[:50]:
+            for page in pdf.pages[:max_pages]:
                 tables = page.extract_tables()
+                page_rows = 0
                 for table in tables:
                     if not table or len(table) < 2:
                         continue
-                    headers = [_normalize_header(str(h or "")) for h in table[0]]
-                    for row in table[1:]:
+                    header_idx, headers = _find_header_row([tuple(r) for r in table[:3]])
+                    if header_idx < 0:
+                        headers = [_normalize_header(str(h or "")) for h in table[0]]
+                        header_idx = 0
+                    for row in table[header_idx + 1:]:
                         if not any(row):
                             continue
                         row_dict: dict = {}
@@ -1991,11 +2147,29 @@ async def _parse_pdf_catalog(file_bytes: bytes) -> list[dict]:
                                 row_dict[headers[j]] = cell
                         if row_dict:
                             rows.append(row_dict)
+                            page_rows += 1
+                if page_rows == 0:
+                    # No usable table on this page — keep its text for the
+                    # LLM pass instead of discarding the page.
+                    try:
+                        text_parts.append(page.extract_text() or "")
+                    except Exception:  # noqa: BLE001
+                        pass
     except ImportError:
         logger.warning("pdfplumber_not_installed")
     except Exception as exc:
         logger.error("pdf_catalog_parse_failed", error=str(exc))
-    return rows
+
+    if rows:
+        logger.info("pdf_catalog_tables_parsed", rows=len(rows))
+        return rows
+
+    text = "\n".join(part for part in text_parts if part).strip()
+    if len(text) < 50:
+        logger.warning("pdf_catalog_no_text_layer", chars=len(text))
+        return []
+    logger.info("pdf_catalog_text_fallback", chars=len(text))
+    return await _parse_catalog_text_via_llm(text, hint="PDF-каталог")
 
 
 # ── MinIO Helpers ─────────────────────────────────────────────────────────────
@@ -2211,6 +2385,49 @@ def _normalize_header(header: str) -> str:
         "страница": "catalog_page", "page": "catalog_page",
     }
     return mappings.get(h, re.sub(r"[^a-z0-9_]", "_", h))
+
+
+# Название инструмента → ToolTypeEnum. Порядок важен: более длинные и более
+# специфичные маркеры проверяются первыми («фреза концевая» перед «фреза»,
+# «фреза дисковая» — это уже milling_cutter, а не endmill).
+_TOOL_TYPE_MARKERS: tuple[tuple[str, str], ...] = (
+    ("фреза концев", "endmill"), ("концевая фреза", "endmill"), ("endmill", "endmill"),
+    ("end mill", "endmill"), ("фреза сферическ", "endmill"), ("фреза радиусн", "endmill"),
+    ("фреза дисков", "milling_cutter"), ("фреза торцов", "milling_cutter"),
+    ("фреза червячн", "milling_cutter"), ("фреза шпоночн", "endmill"),
+    ("milling cutter", "milling_cutter"), ("фреза", "milling_cutter"),
+    ("резьбофрез", "thread_mill"), ("thread mill", "thread_mill"),
+    ("сверло", "drill"), ("сверл", "drill"), ("drill", "drill"), ("бор ", "drill"),
+    ("метчик", "tap"), ("tap", "tap"),
+    ("развертк", "reamer"), ("развёртк", "reamer"), ("reamer", "reamer"),
+    ("зенковк", "countersink"), ("зенкер", "countersink"), ("countersink", "countersink"),
+    ("цековк", "counterbore"), ("counterbore", "counterbore"),
+    ("пластина", "insert"), ("пластин", "insert"), ("insert", "insert"), ("смп", "insert"),
+    ("резец", "turning_tool"), ("резц", "turning_tool"), ("turning", "turning_tool"),
+    ("расточн", "boring_bar"), ("boring", "boring_bar"),
+    ("оправк", "holder"), ("патрон", "holder"), ("держател", "holder"),
+    ("цанг", "holder"), ("holder", "holder"), ("chuck", "holder"),
+    ("шлифов", "grinder"), ("круг", "grinder"), ("grind", "grinder"),
+)
+
+
+def _infer_tool_type(*parts: str | None) -> str | None:
+    """Guess the tool type from the item's own text.
+
+    Real price lists almost never carry a "тип инструмента" column, and the
+    ingest used to DROP every row without one — a successful task with an empty
+    catalog (measured: created=0, skipped=2 on a two-row CSV). Guessing from
+    the name keeps the row; when nothing matches the caller falls back to
+    ``other`` rather than discarding data.
+    """
+    haystack = " ".join(part for part in parts if part).lower().replace("ё", "е")
+    if not haystack.strip():
+        return None
+    best: tuple[int, str] | None = None
+    for marker, tool_type in _TOOL_TYPE_MARKERS:
+        if marker in haystack and (best is None or len(marker) > best[0]):
+            best = (len(marker), tool_type)
+    return best[1] if best else None
 
 
 def _normalize_tool_type(value: str) -> str:

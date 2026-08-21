@@ -179,11 +179,20 @@ class ToolSuggestionResponse(BaseModel):
 class CatalogImportResult(BaseModel):
     supplier_id: uuid.UUID
     supplier_name: str
+    # Counters stay zero on the upload response: the file is parsed by a worker,
+    # so real numbers only exist later. Read them from the ingest status, not
+    # from here — before `status` existed these zeros read as "0 позиций
+    # найдено", which is exactly how a queued import looked like a failed one.
     entries_created: int
     entries_updated: int
     entries_skipped: int
     errors: list[str] = []
     task_id: str | None = None
+    status: str = "queued"  # queued | done | duplicate | unpacking
+    storage_path: str | None = None
+    message: str = ""
+    document_id: uuid.UUID | None = None
+    job_id: uuid.UUID | None = None
 
 
 class CatalogImportRow(BaseModel):
@@ -375,3 +384,33 @@ class AttachedSourceResult(BaseModel):
     entries_skipped: int = 0
     text_chars: int = 0
     message: str = ""
+
+
+class CatalogUploadStep(BaseModel):
+    key: str
+    label: str | None = None
+    status: str
+    error: str | None = None
+    progress: dict | None = None
+
+
+class CatalogUploadOut(BaseModel):
+    """One uploaded catalog file with its processing state."""
+
+    document_id: uuid.UUID
+    file_name: str
+    file_size: int
+    uploaded_at: datetime | None = None
+    status: str = "queued"
+    current_step: str | None = None
+    error: str | None = None
+    steps: list[CatalogUploadStep] = []
+    entries_count: int = 0
+    is_archive: bool = False
+    parent_document_id: uuid.UUID | None = None
+    supplier_id: uuid.UUID | None = None
+
+
+class CatalogUploadsResponse(BaseModel):
+    items: list[CatalogUploadOut] = []
+    total: int = 0

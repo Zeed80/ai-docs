@@ -67,6 +67,10 @@ celery_app.conf.update(
         # (process_approved_document, check_invoice_anomalies, …).
         "app.tasks.extraction.*": {"queue": "extraction"},
         "app.tasks.scheduler.*": {"queue": "scheduler"},
+        # Supplier catalogs: minutes of parsing plus an embedding per row. They
+        # used to route to "gpu" through the drawing_analysis.* glob and blocked
+        # document recognition for the duration; own queue, own worker.
+        "catalog.*": {"queue": "catalog"},
         "tp_generation.*": {"queue": "celery"},
     },
 )
@@ -213,6 +217,8 @@ celery_app.autodiscover_tasks([
 
 # Flat module — not discovered by autodiscover_tasks(related_name="tasks").
 from app.tasks import drawing_analysis as _drawing_analysis  # noqa: F401
+from app.tasks import catalog_ingest as _catalog_ingest  # noqa: F401
+from app.tasks import catalog_archive as _catalog_archive  # noqa: F401
 from app.tasks import approval_escalation as _approval_escalation  # noqa: F401
 from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
 from app.tasks import proactive as _proactive  # noqa: F401

@@ -5,6 +5,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { mutFetch } from "@/lib/auth";
+import { PipelineSteps, type PipelineStep } from "@/components/pipeline";
 
 const API = getApiBaseUrl();
 
@@ -83,6 +84,28 @@ interface ToolCatalogEntry {
   price_value: number | null;
   catalog_page: number | null;
   is_active: boolean;
+}
+
+interface CatalogUpload {
+  document_id: string;
+  file_name: string;
+  file_size: number;
+  uploaded_at: string | null;
+  status: string;
+  current_step: string | null;
+  error: string | null;
+  steps: PipelineStep[];
+  entries_count: number;
+  is_archive: boolean;
+  parent_document_id: string | null;
+  supplier_id: string | null;
+}
+
+interface CatalogCandidate {
+  url: string;
+  title: string | null;
+  kind?: string | null;
+  snippet?: string | null;
 }
 
 const TOOL_TYPE_LABELS: Record<string, string> = {
@@ -256,6 +279,15 @@ function CatalogTab({
   const [deletingEntries, setDeletingEntries] = useState(false);
   const [confirmDeleteEntries, setConfirmDeleteEntries] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [uploads, setUploads] = useState<CatalogUpload[]>([]);
+  const [uploadQueue, setUploadQueue] = useState<string[]>([]);
+  const [candidates, setCandidates] = useState<CatalogCandidate[] | null>(null);
+  const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(
+    new Set(),
+  );
+  const [discovering, setDiscovering] = useState(false);
+  const [attaching, setAttaching] = useState(false);
   const PAGE_SIZE = 50;
 
   const loadEntries = useCallback(async () => {
@@ -268,13 +300,21 @@ function CatalogTab({
       if (search) params.set("query", search);
       if (toolType) params.set("tool_type", toolType);
       const resp = await fetch(
-        `${API}/tool-catalog/by-supplier/${partyId}/entries?${params}`,
+        `${API}/api/tool-catalog/by-supplier/${partyId}/entries?${params}`,
       );
-      if (resp.ok) {
-        const data = await resp.json();
-        setEntries(data.items ?? []);
-        setTotal(data.total ?? 0);
+      if (!resp.ok) {
+        // Silently swallowing this showed "0 позиций" for an unreachable
+        // backend — indistinguishable from an empty catalog.
+        const err = await resp.json().catch(() => ({}));
+        setLoadError(
+          typeof err.detail === "string" ? err.detail : `Не удалось загрузить каталог (${resp.status})`,
+        );
+        return;
       }
+      setLoadError(null);
+      const data = await resp.json();
+      setEntries(data.items ?? []);
+      setTotal(data.total ?? 0);
     } finally {
       setLoading(false);
     }
@@ -284,45 +324,186 @@ function CatalogTab({
     loadEntries();
   }, [loadEntries]);
 
+  const loadUploads = useCallback(async () => {
+    try {
+      const resp = await fetch(
+        `${API}/api/tool-catalog/by-supplier/${partyId}/uploads`,
+      );
+      if (!resp.ok) return;
+      const data = await resp.json();
+      setUploads(data.items ?? []);
+    } catch {
+      // The uploads panel is supplementary — a failure here must not blank
+      // the catalog itself, which has its own error banner.
+    }
+  }, [partyId]);
+
+  useEffect(() => {
+    loadUploads();
+  }, [loadUploads]);
+
+  // Poll fast only while something is actually being processed.
+  useEffect(() => {
+    const active = uploads.some((u) =>
+      ["queued", "running"].includes(u.status),
+    );
+    const interval = window.setInterval(
+      () => {
+        loadUploads();
+        if (active) loadEntries();
+      },
+      active ? 2000 : 15000,
+    );
+    return () => window.clearInterval(interval);
+  }, [uploads, loadUploads, loadEntries]);
+
   // Reset page on filter change
   useEffect(() => {
     setPage(1);
   }, [search, toolType]);
 
-  async function handleFileUpload(file: File) {
+  async function uploadOne(file: File): Promise<string> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const resp = await mutFetch(
+      `${API}/api/tool-catalog/by-supplier/${partyId}/catalog`,
+      { method: "POST", body: formData },
+    );
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      const detail =
+        typeof err.detail === "string"
+          ? err.detail
+          : (err.detail?.message ?? `Ошибка загрузки (${resp.status})`);
+      throw new Error(detail);
+    }
+    const data = await resp.json();
+    return data.message ?? "Файл принят в обработку.";
+  }
+
+  async function handleFileUpload(files: File[]) {
+    if (!files.length) return;
     setUploading(true);
     setUploadError(null);
     setUploadSuccess(null);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const resp = await mutFetch(
-        `${API}/tool-catalog/by-supplier/${partyId}/catalog`,
-        {
-          method: "POST",
-          body: formData,
-        },
-      );
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.detail ?? "Ошибка загрузки");
+    setUploadQueue(files.map((f) => f.name));
+    const failures: string[] = [];
+    const messages: string[] = [];
+    for (const file of files) {
+      try {
+        messages.push(await uploadOne(file));
+      } catch (e: unknown) {
+        failures.push(
+          `${file.name}: ${e instanceof Error ? e.message : "ошибка загрузки"}`,
+        );
+      } finally {
+        setUploadQueue((prev) => prev.filter((n) => n !== file.name));
       }
-      const data = await resp.json();
-      setUploadSuccess(
-        `Каталог принят в обработку${data.task_id ? ` (задача ${data.task_id.slice(0, 8)}...)` : ""}. Позиции появятся после индексации.`,
-      );
-      setTimeout(() => loadEntries(), 3000);
-    } catch (e: unknown) {
-      setUploadError(e instanceof Error ? e.message : "Ошибка загрузки");
-    } finally {
-      setUploading(false);
     }
+    // One bad file must not hide the other four — report both sides.
+    if (messages.length) setUploadSuccess(messages.join(" "));
+    if (failures.length) setUploadError(failures.join("; "));
+    setUploading(false);
+    loadUploads();
+    setTimeout(() => loadEntries(), 3000);
   }
 
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) handleFileUpload(file);
+    handleFileUpload(Array.from(e.dataTransfer.files));
+  }
+
+  async function handleDiscoverCatalogs() {
+    setDiscovering(true);
+    setUploadError(null);
+    setCandidates(null);
+    try {
+      const resp = await mutFetch(`${API}/api/tool-catalog/discover-catalogs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ supplier_name: partyName }),
+      });
+      if (!resp.ok) {
+        throw new Error(`Поиск каталогов не удался (${resp.status})`);
+      }
+      const data = await resp.json();
+      setCandidates(data.candidates ?? []);
+      setSelectedCandidates(new Set());
+      if (!(data.candidates ?? []).length) {
+        setUploadError("Каталоги в интернете не найдены.");
+      }
+    } catch (e: unknown) {
+      setUploadError(e instanceof Error ? e.message : "Ошибка поиска каталогов");
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  async function handleAttachSelected() {
+    if (!selectedCandidates.size) return;
+    setAttaching(true);
+    setUploadError(null);
+    try {
+      const resp = await mutFetch(`${API}/api/tool-catalog/attach-web-catalog`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          supplier_name: partyName,
+          urls: Array.from(selectedCandidates),
+        }),
+      });
+      if (!resp.ok) {
+        throw new Error(`Не удалось прикрепить каталоги (${resp.status})`);
+      }
+      const data = await resp.json();
+      setUploadSuccess(
+        data.message ??
+          `Прикреплено источников: ${(data.attached ?? []).length}. Разбор идёт в фоне.`,
+      );
+      setCandidates(null);
+      setSelectedCandidates(new Set());
+      loadUploads();
+    } catch (e: unknown) {
+      setUploadError(
+        e instanceof Error ? e.message : "Ошибка прикрепления каталогов",
+      );
+    } finally {
+      setAttaching(false);
+    }
+  }
+
+  async function handleDeleteUpload(documentId: string) {
+    try {
+      const resp = await mutFetch(
+        `${API}/api/tool-catalog/uploads/${documentId}`,
+        { method: "DELETE" },
+      );
+      if (!resp.ok) {
+        throw new Error(`Не удалось удалить загрузку (${resp.status})`);
+      }
+      await loadUploads();
+      await loadEntries();
+    } catch (e: unknown) {
+      setUploadError(e instanceof Error ? e.message : "Ошибка удаления загрузки");
+    }
+  }
+
+  async function handleReingestUpload(documentId: string) {
+    try {
+      const resp = await mutFetch(
+        `${API}/api/tool-catalog/uploads/${documentId}/reingest`,
+        { method: "POST" },
+      );
+      if (!resp.ok) {
+        throw new Error(`Не удалось перезапустить обработку (${resp.status})`);
+      }
+      setUploadSuccess("Файл поставлен на повторную обработку.");
+      await loadUploads();
+    } catch (e: unknown) {
+      setUploadError(
+        e instanceof Error ? e.message : "Ошибка повторной обработки",
+      );
+    }
   }
 
   async function handleRefreshCatalog() {
@@ -330,37 +511,33 @@ function CatalogTab({
     setUploadError(null);
     setUploadSuccess(null);
     try {
+      // The catalog supplier is addressed by its own id; there is no
+      // "suppliers-by-party/…/refresh" route on the backend (the previous code
+      // called one and relied on its 404 to fall through).
+      const tsResp = await mutFetch(
+        `${API}/api/tool-catalog/by-supplier/${partyId}`,
+      );
+      if (!tsResp.ok) {
+        throw new Error(`Не удалось получить поставщика каталога (${tsResp.status})`);
+      }
+      const tsData = await tsResp.json();
+      const supplierId = (tsData.items ?? [])[0]?.id;
+      if (!supplierId) {
+        throw new Error(
+          "У этого поставщика ещё нет каталога — сначала загрузите файл или найдите каталог в интернете.",
+        );
+      }
       const resp = await mutFetch(
-        `${API}/api/tool-catalog/suppliers-by-party/${partyId}/refresh`,
-        {
-          method: "POST",
-        },
+        `${API}/api/tool-catalog/suppliers/${supplierId}/refresh`,
+        { method: "POST" },
       );
       if (!resp.ok) {
-        // Try finding the tool_supplier id first
-        const tsResp = await mutFetch(
-          `${API}/api/tool-catalog/by-supplier/${partyId}`,
-        );
-        if (tsResp.ok) {
-          const tsData = await tsResp.json();
-          const supplierId = (tsData.items ?? [])[0]?.id;
-          if (supplierId) {
-            const r2 = await mutFetch(
-              `${API}/api/tool-catalog/suppliers/${supplierId}/refresh`,
-              { method: "POST" },
-            );
-            if (r2.ok) {
-              const d2 = await r2.json();
-              setUploadSuccess(
-                `Обновление каталога запущено${d2.task_id ? ` (задача ${d2.task_id.slice(0, 8)}...)` : ""}. Данные появятся через несколько минут.`,
-              );
-              setTimeout(() => loadEntries(), 4000);
-              return;
-            }
-          }
-        }
         const err = await resp.json().catch(() => ({}));
-        throw new Error(err.detail ?? "Ошибка обновления");
+        const detail =
+          typeof err.detail === "string"
+            ? err.detail
+            : (err.detail?.message ?? `Ошибка обновления (${resp.status})`);
+        throw new Error(detail);
       }
       const data = await resp.json();
       setUploadSuccess(
@@ -395,22 +572,33 @@ function CatalogTab({
 
   async function handleDeleteEntry(entryId: string) {
     try {
-      await mutFetch(`${API}/api/tool-catalog/entries/${entryId}`, {
+      // An empty catch here meant a failed delete looked exactly like a
+      // successful one — the row simply stayed after the reload.
+      const resp = await mutFetch(`${API}/api/tool-catalog/entries/${entryId}`, {
         method: "DELETE",
       });
+      if (!resp.ok) {
+        throw new Error(`Не удалось удалить позицию (${resp.status})`);
+      }
       await loadEntries();
-    } catch {}
+    } catch (e: unknown) {
+      setUploadError(e instanceof Error ? e.message : "Ошибка удаления позиции");
+    }
   }
 
   async function handleBulkDeleteEntries() {
     if (!selectedEntryIds.size) return;
     setDeletingEntries(true);
     try {
-      await mutFetch(`${API}/api/tool-catalog/entries/bulk-delete`, {
+      const resp = await mutFetch(`${API}/api/tool-catalog/entries/bulk-delete`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ entry_ids: Array.from(selectedEntryIds) }),
       });
+      if (!resp.ok) {
+        setUploadError(`Не удалось удалить выбранные позиции (${resp.status})`);
+        return;
+      }
       setSelectedEntryIds(new Set());
       setConfirmDeleteEntries(false);
       await loadEntries();
@@ -431,11 +619,11 @@ function CatalogTab({
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.xlsx,.xls,.csv,.json"
+          multiple
+          accept=".pdf,.xlsx,.xls,.xlsm,.csv,.json,.txt,.docx,.xml,.html,.zip,.7z,.rar,.tar,.gz"
           className="hidden"
           onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) handleFileUpload(file);
+            handleFileUpload(Array.from(e.target.files ?? []));
             e.target.value = "";
           }}
         />
@@ -444,7 +632,9 @@ function CatalogTab({
             <>
               <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
               <span className="text-sm text-slate-400">
-                Загрузка каталога...
+                Загрузка каталога
+                {uploadQueue.length > 1 ? ` (осталось ${uploadQueue.length})` : ""}
+                ...
               </span>
             </>
           ) : (
@@ -466,7 +656,8 @@ function CatalogTab({
                 Перетащите или нажмите для загрузки каталога инструментов
               </span>
               <span className="text-xs text-slate-600">
-                PDF, Excel (.xlsx), CSV, JSON
+                PDF, Excel (.xlsx/.xls), CSV, JSON, Word, HTML, архивы
+                (.zip/.7z/.rar) — можно несколько файлов сразу
               </span>
             </>
           )}
@@ -481,6 +672,156 @@ function CatalogTab({
       {uploadError && (
         <div className="px-4 py-2 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-sm">
           {uploadError}
+        </div>
+      )}
+
+      {loadError && (
+        <div className="px-4 py-2 bg-amber-500/10 border border-amber-500/30 rounded text-amber-300 text-sm">
+          {loadError}
+        </div>
+      )}
+
+      {/* Web catalog discovery — previously reachable only from the agent chat */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          onClick={handleDiscoverCatalogs}
+          disabled={discovering}
+          className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded text-slate-300 disabled:opacity-50 transition-colors"
+        >
+          {discovering ? "Ищу каталоги…" : "Найти каталог в интернете"}
+        </button>
+        {candidates && candidates.length > 0 && (
+          <button
+            onClick={handleAttachSelected}
+            disabled={attaching || selectedCandidates.size === 0}
+            className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 rounded text-white disabled:opacity-50 transition-colors"
+          >
+            {attaching
+              ? "Прикрепляю…"
+              : `Прикрепить выбранные (${selectedCandidates.size})`}
+          </button>
+        )}
+      </div>
+
+      {candidates && candidates.length > 0 && (
+        <div className="rounded border border-slate-700 bg-slate-800/50 divide-y divide-slate-700">
+          {candidates.map((c) => (
+            <label
+              key={c.url}
+              className="flex items-start gap-3 px-3 py-2 text-sm cursor-pointer hover:bg-slate-700/40"
+            >
+              <input
+                type="checkbox"
+                checked={selectedCandidates.has(c.url)}
+                onChange={() =>
+                  setSelectedCandidates((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(c.url)) next.delete(c.url);
+                    else next.add(c.url);
+                    return next;
+                  })
+                }
+                className="mt-1"
+              />
+              <span className="min-w-0">
+                <span className="block text-slate-200">
+                  {c.title || c.url}
+                </span>
+                <a
+                  href={c.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="block truncate text-xs text-blue-400 hover:underline"
+                >
+                  {c.url}
+                </a>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {/* Uploaded catalog files with their processing stages */}
+      {uploads.length > 0 && (
+        <div className="rounded border border-slate-700 bg-slate-800/50">
+          <div className="px-3 py-2 text-xs uppercase tracking-wide text-slate-500">
+            Загрузки каталогов
+          </div>
+          <div className="divide-y divide-slate-700">
+            {uploads
+              .filter((u) => !u.parent_document_id)
+              .map((upload) => {
+                const members = uploads.filter(
+                  (m) => m.parent_document_id === upload.document_id,
+                );
+                return (
+                  <div key={upload.document_id} className="px-3 py-2">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <span className="text-sm text-slate-200">
+                          {upload.file_name}
+                        </span>
+                        <span className="ml-2 text-xs text-slate-500">
+                          {Math.max(1, Math.round(upload.file_size / 1024))} КБ ·{" "}
+                          {upload.entries_count.toLocaleString("ru")} позиций
+                          {upload.is_archive ? " · архив" : ""}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleReingestUpload(upload.document_id)}
+                          className="px-2 py-1 text-xs text-slate-300 bg-slate-700 hover:bg-slate-600 rounded"
+                        >
+                          Перечитать
+                        </button>
+                        <button
+                          onClick={() => handleDeleteUpload(upload.document_id)}
+                          className="px-2 py-1 text-xs text-red-300 bg-slate-700 hover:bg-red-900/50 rounded"
+                        >
+                          Удалить
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <PipelineSteps steps={upload.steps} compact />
+                    </div>
+                    {upload.error && (
+                      <p className="mt-1 text-xs text-red-400">{upload.error}</p>
+                    )}
+                    {members.map((member) => (
+                      <div
+                        key={member.document_id}
+                        className="mt-2 ml-4 border-l border-slate-700 pl-3"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs text-slate-300">
+                            {member.file_name}
+                            <span className="ml-2 text-slate-500">
+                              {member.entries_count.toLocaleString("ru")} позиций
+                            </span>
+                          </span>
+                          <button
+                            onClick={() => handleDeleteUpload(member.document_id)}
+                            className="px-2 py-0.5 text-[11px] text-red-300 bg-slate-700 hover:bg-red-900/50 rounded"
+                          >
+                            Удалить
+                          </button>
+                        </div>
+                        <div className="mt-1">
+                          <PipelineSteps steps={member.steps} compact />
+                        </div>
+                        {member.error && (
+                          <p className="mt-1 text-[11px] text-red-400">
+                            {member.error}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+          </div>
         </div>
       )}
 

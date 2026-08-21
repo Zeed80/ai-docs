@@ -18,6 +18,11 @@ dependencies = [
     "python-multipart>=0.0.18",
     "pymupdf>=1.25",
     "openpyxl>=3.1",
+    # Legacy binary .xls price lists — openpyxl cannot read them at all.
+    "xlrd>=2.0",
+    # Suppliers routinely ship several price lists in one archive.
+    "py7zr>=0.21",
+    "rarfile>=4.2",
     "qdrant-client>=1.13",
     "structlog>=24.4",
     "python-jose[cryptography]>=3.3",

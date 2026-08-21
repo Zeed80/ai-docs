@@ -1,6 +1,7 @@
 """Tests for Tool Catalog API — suppliers and catalog entries CRUD."""
 
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -183,3 +184,92 @@ async def test_update_catalog_entry(client: AsyncClient, catalog_entry):
 async def test_delete_catalog_entry(client: AsyncClient, catalog_entry):
     resp = await client.delete(f"/api/tool-catalog/entries/{catalog_entry.id}")
     assert resp.status_code in (200, 204)
+
+
+# ── Upload path: honest failures instead of a fake success ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_catalog_upload_returns_503_when_enqueue_fails(client: AsyncClient, db_session):
+    """A dead broker used to yield HTTP 200 with task_id=null, and the UI said
+    "каталог принят в обработку" while nothing was ever scheduled."""
+    from app.db.models import ToolSupplier
+
+    supplier = ToolSupplier(name="ООО Очередь", is_active=True)
+    db_session.add(supplier)
+    await db_session.commit()
+
+    def _broker_down(*args, **kwargs):
+        raise RuntimeError("broker unreachable")
+
+    with (
+        patch("app.tasks.catalog_ingest.ingest_catalog_document.delay", _broker_down),
+        patch("app.storage.upload_file", lambda *a, **k: "p/1.csv"),
+    ):
+        resp = await client.post(
+            f"/api/tool-catalog/suppliers/{supplier.id}/catalog",
+            files={"file": ("price.csv", b"name,price\nfreza,100\n", "text/csv")},
+        )
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error_code"] == "catalog_ingest_enqueue_failed"
+
+
+@pytest.mark.asyncio
+async def test_catalog_upload_rejects_empty_file(client: AsyncClient, db_session):
+    from app.db.models import ToolSupplier
+
+    supplier = ToolSupplier(name="ООО Пустышка", is_active=True)
+    db_session.add(supplier)
+    await db_session.commit()
+
+    resp = await client.post(
+        f"/api/tool-catalog/suppliers/{supplier.id}/catalog",
+        files={"file": ("empty.csv", b"", "text/csv")},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error_code"] == "empty_file"
+
+
+@pytest.mark.asyncio
+async def test_catalog_upload_reports_queued_status(client: AsyncClient, db_session):
+    """The response must say the work is queued — the old all-zero counters
+    were indistinguishable from "parsed, found nothing"."""
+    from app.db.models import ToolSupplier
+
+    supplier = ToolSupplier(name="ООО Очередь ОК", is_active=True)
+    db_session.add(supplier)
+    await db_session.commit()
+
+    class _Task:
+        id = "task-abc"
+
+    with (
+        patch("app.tasks.catalog_ingest.ingest_catalog_document.delay", lambda *a, **k: _Task()),
+        patch("app.storage.upload_file", lambda *a, **k: "p/2.csv"),
+    ):
+        resp = await client.post(
+            f"/api/tool-catalog/suppliers/{supplier.id}/catalog",
+            files={"file": ("price.csv", b"name,price\nfreza,100\n", "text/csv")},
+        )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "queued"
+    assert data["task_id"] == "task-abc"
+    assert "принят в обработку" in data["message"]
+
+
+def test_catalog_storage_path_is_content_addressed():
+    """Two files named price.xlsx must not overwrite each other."""
+    import hashlib
+
+    from app.domain.catalog_documents import catalog_storage_path
+
+    first = catalog_storage_path(
+        "supplier-1", hashlib.sha256(b"first catalog").hexdigest(), "price.xlsx"
+    )
+    second = catalog_storage_path(
+        "supplier-1", hashlib.sha256(b"second catalog").hexdigest(), "price.xlsx"
+    )
+
+    assert first != second, "same-named files collided in storage"
+    assert hashlib.sha256(b"first catalog").hexdigest() in first

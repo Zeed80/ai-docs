@@ -13,6 +13,14 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
 import { enqueueUpload } from "@/lib/offline-queue";
 import { useHasRole } from "@/lib/rbac";
+import {
+  PipelineProgressCard,
+  PipelineSteps,
+  ProgressBar,
+  pipelineProgress,
+  pipelineSteps,
+  type PipelineStep,
+} from "@/components/pipeline";
 
 const API = getApiBaseUrl();
 const MAX_UPLOAD_MB = 100;
@@ -54,20 +62,6 @@ interface PipelineStatus {
   embedding_records: number;
   ntd_checks: number;
   ntd_open_findings: number;
-}
-
-interface PipelineStep {
-  key: string;
-  label: string;
-  status:
-    | "pending"
-    | "queued"
-    | "running"
-    | "done"
-    | "failed"
-    | "skipped"
-    | string;
-  error?: string;
 }
 
 interface WorkspaceItem {
@@ -236,38 +230,6 @@ const TYPE_SOURCE_LABEL: Record<string, string> = {
   ai: "ИИ",
 };
 
-const PIPELINE_STEP_LABELS: Record<string, string> = {
-  store: "Файл",
-  memory_seed: "Память",
-  classification: "Класс",
-  extraction: "OCR",
-  sql_records: "SQL",
-  memory_graph: "Граф",
-  embedding: "Векторы",
-};
-
-const CURRENT_STEP_LABELS: Record<string, string> = {
-  store: "Сохранение файла",
-  memory_seed: "Первичная память",
-  classification: "Классификация",
-  extraction: "Извлечение данных",
-  sql_records: "Сохранение записей",
-  memory_graph: "Построение графа",
-  embedding: "Векторизация",
-  completed: "Завершён",
-  watchdog_reset: "Сброс по таймауту",
-};
-
-const FALLBACK_PROCESS_STEPS: PipelineStep[] = [
-  { key: "store", label: "Файл", status: "pending" },
-  { key: "memory_seed", label: "Память", status: "pending" },
-  { key: "classification", label: "Класс", status: "pending" },
-  { key: "extraction", label: "OCR", status: "pending" },
-  { key: "sql_records", label: "SQL", status: "pending" },
-  { key: "memory_graph", label: "Граф", status: "pending" },
-  { key: "embedding", label: "Векторы", status: "pending" },
-];
-
 function fmtBytes(value: number) {
   if (value > 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
   if (value > 1024) return `${Math.round(value / 1024)} KB`;
@@ -286,29 +248,6 @@ function statusLabel(value: string | null | undefined) {
     value ??
     "Не задан"
   );
-}
-
-function pipelineSteps(
-  pipeline: PipelineStatus | null | undefined,
-): PipelineStep[] {
-  const steps = pipeline?.pipeline_steps?.length
-    ? pipeline.pipeline_steps
-    : FALLBACK_PROCESS_STEPS;
-  return steps
-    .filter((step) => step.key !== "ntd")
-    .map((step) => ({
-      ...step,
-      label: PIPELINE_STEP_LABELS[step.key] ?? step.label ?? step.key,
-    }));
-}
-
-function pipelineProgress(pipeline: PipelineStatus | null | undefined) {
-  const steps = pipelineSteps(pipeline);
-  if (!steps.length) return 0;
-  const completed = steps.filter((step) =>
-    ["done", "skipped"].includes(step.status),
-  ).length;
-  return Math.round((completed / steps.length) * 100);
 }
 
 function isPipelineActive(item: WorkspaceItem) {
@@ -2831,96 +2770,6 @@ function DetailPanel({
         </div>
       )}
     </aside>
-  );
-}
-
-function ProgressBar({
-  value,
-  failed = false,
-}: {
-  value: number;
-  failed?: boolean;
-}) {
-  return (
-    <div>
-      <div className="mb-1 text-xs text-slate-500">{value}%</div>
-      <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-        <div
-          className={`h-full rounded-full ${failed ? "bg-red-500" : "bg-emerald-500"}`}
-          style={{ width: `${Math.max(4, value)}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function PipelineSteps({
-  steps,
-  compact = false,
-}: {
-  steps: PipelineStep[];
-  compact?: boolean;
-}) {
-  const colors: Record<string, string> = {
-    done: "border-emerald-900 bg-emerald-950/50 text-emerald-200",
-    skipped: "border-slate-700 bg-slate-900 text-slate-500",
-    running: "border-blue-800 bg-blue-950/60 text-blue-200",
-    queued: "border-amber-800 bg-amber-950/40 text-amber-200",
-    failed: "border-red-800 bg-red-950/50 text-red-200",
-    pending: "border-slate-800 bg-slate-950 text-slate-600",
-  };
-  return (
-    <div className={`flex flex-wrap ${compact ? "gap-1" : "gap-2"}`}>
-      {steps.map((step) => (
-        <span
-          key={step.key}
-          title={step.error ?? step.status}
-          className={`rounded-md border px-2 py-1 text-[11px] ${
-            colors[step.status] ?? colors.pending
-          }`}
-        >
-          {step.label}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function PipelineProgressCard({
-  pipeline,
-}: {
-  pipeline: PipelineStatus | null;
-}) {
-  const progress = pipelineProgress(pipeline);
-  return (
-    <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-xs text-slate-500">Пайплайн</p>
-          <p className="mt-1 text-sm text-slate-300">
-            {pipeline?.processing_status === "running"
-              ? "выполняется"
-              : pipeline?.processing_status === "done"
-                ? "завершён"
-                : pipeline?.processing_status === "failed"
-                  ? "ошибка"
-                  : pipeline?.processing_status === "queued"
-                    ? "в очереди"
-                    : "нет задачи"}
-            {pipeline?.current_step
-              ? ` · ${CURRENT_STEP_LABELS[pipeline.current_step] ?? pipeline.current_step}`
-              : ""}
-          </p>
-        </div>
-        <div className="w-24">
-          <ProgressBar
-            value={progress}
-            failed={Boolean(pipeline?.processing_error)}
-          />
-        </div>
-      </div>
-      <PipelineSteps steps={pipelineSteps(pipeline)} />
-    </div>
   );
 }
 

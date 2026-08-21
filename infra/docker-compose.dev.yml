@@ -19,7 +19,7 @@ services:
     volumes:
       - ../backend:/app
       - ../aiagent:/aiagent:ro
-    command: celery -A app.tasks.celery_app worker -l debug -c 2 -Q celery,extraction,ingest,scheduler
+    command: celery -A app.tasks.celery_app worker -l debug -c 2 -Q celery,extraction,ingest,scheduler,catalog
     environment:
       AIAGENT_ROOT: /aiagent
 

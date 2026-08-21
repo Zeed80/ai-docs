@@ -4,6 +4,7 @@ Skill: tool_catalog.*, supplier_catalog.*
 """
 
 import uuid
+from pathlib import Path
 from typing import Annotated
 
 import structlog
@@ -24,8 +25,12 @@ from app.db.models import (
 from sqlalchemy import delete as sa_delete
 from app.db.session import get_db
 from pydantic import BaseModel, Field as PydanticField
+from app.domain.catalog_documents import ARCHIVE_SUFFIXES
 from app.domain.tool_catalog import (
     AttachedSourceResult,
+    CatalogUploadOut,
+    CatalogUploadsResponse,
+    CatalogUploadStep,
     AttachWebCatalogRequest,
     AttachWebCatalogResult,
     CatalogCandidate,
@@ -180,6 +185,120 @@ async def delete_supplier(
 # ── Catalog Upload & Refresh ──────────────────────────────────────────────────
 
 
+def _validate_catalog_upload(file_bytes: bytes, filename: str) -> None:
+    """Reject what the ingestion pipeline cannot possibly handle.
+
+    The upload path had no size check at all (unlike document ingest, which
+    enforces settings.max_upload_size_mb): a 2 GB file was read fully into
+    memory and only then failed somewhere downstream.
+    """
+    from app.config import settings
+
+    if not file_bytes:
+        raise HTTPException(
+            status_code=422,
+            detail={"error_code": "empty_file", "message": f"Файл «{filename}» пуст."},
+        )
+    max_bytes = settings.max_upload_size_mb * 1024 * 1024
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "error_code": "file_too_large",
+                "message": (
+                    f"Файл «{filename}» — {len(file_bytes) // (1024 * 1024)} МБ, "
+                    f"это больше лимита {settings.max_upload_size_mb} МБ."
+                ),
+            },
+        )
+
+
+def _enqueue_catalog_ingest(document_id: str) -> str:
+    """Queue the ingestion task, failing loudly when the broker is unreachable.
+
+    Previously the enqueue sat in a bare try/except: a dead broker produced
+    HTTP 200 with task_id=null, the UI printed "каталог принят в обработку",
+    and the file sat in storage forever with nothing scheduled to read it.
+    """
+    try:
+        from app.tasks.catalog_ingest import ingest_catalog_document
+
+        return ingest_catalog_document.delay(document_id).id
+    except Exception as exc:  # noqa: BLE001 — surfaced to the caller below
+        logger.warning("catalog_ingest_enqueue_failed", error=str(exc))
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "catalog_ingest_enqueue_failed",
+                "message": (
+                    "Файл сохранён, но обработку поставить в очередь не удалось "
+                    f"({str(exc)[:150]}). Повторите позже."
+                ),
+            },
+        ) from exc
+
+
+async def _accept_catalog_upload(
+    db: AsyncSession,
+    supplier: ToolSupplier,
+    file_bytes: bytes,
+    filename: str,
+    *,
+    party_id: uuid.UUID | None = None,
+) -> CatalogImportResult:
+    """Shared body of both upload endpoints: Document → links → job → queue."""
+    from app.domain.catalog_documents import register_catalog_document
+
+    _validate_catalog_upload(file_bytes, filename)
+    try:
+        registered = await register_catalog_document(
+            db,
+            supplier=supplier,
+            file_bytes=file_bytes,
+            filename=filename,
+            party_id=party_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — storage/DB failure must be visible
+        logger.warning("catalog_upload_store_failed", error=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": "catalog_store_failed",
+                "message": f"Ошибка сохранения файла каталога: {str(exc)[:150]}",
+            },
+        ) from exc
+    await db.commit()
+
+    doc = registered.document
+    task_id = _enqueue_catalog_ingest(str(doc.id))
+    is_archive = Path(filename).suffix.lower() in ARCHIVE_SUFFIXES
+    if registered.is_duplicate:
+        message = (
+            f"Файл «{filename}» уже загружался ранее — обработка запущена повторно "
+            "для того же файла, дубликат не создан."
+        )
+    elif is_archive:
+        message = f"Архив «{filename}» принят: файлы внутри будут обработаны по отдельности."
+    else:
+        message = f"Файл «{filename}» принят в обработку. Позиции появятся по мере разбора."
+
+    return CatalogImportResult(
+        supplier_id=supplier.id,
+        supplier_name=supplier.name,
+        entries_created=0,
+        entries_updated=0,
+        entries_skipped=0,
+        task_id=task_id,
+        storage_path=doc.storage_path,
+        status="duplicate" if registered.is_duplicate else ("unpacking" if is_archive else "queued"),
+        document_id=doc.id,
+        job_id=registered.job.id,
+        message=message,
+    )
+
+
 @router.post(
     "/suppliers/{supplier_id}/catalog",
     response_model=CatalogImportResult,
@@ -194,85 +313,224 @@ async def upload_catalog(
     if not supplier:
         raise HTTPException(status_code=404, detail="Поставщик не найден")
 
-    filename = file.filename or "catalog"
-    file_bytes = await file.read()
+    return await _accept_catalog_upload(
+        db, supplier, await file.read(), file.filename or "catalog"
+    )
 
-    # Upload to MinIO
-    storage_path = await _upload_catalog_to_minio(file_bytes, filename, str(supplier_id))
 
-    if not storage_path:
-        raise HTTPException(status_code=500, detail="Ошибка сохранения файла каталога")
+@router.get(
+    "/by-supplier/{party_id}/uploads",
+    response_model=CatalogUploadsResponse,
+    summary="Skill: tool_catalog.list_uploads — Uploaded catalog files and their processing state.",
+)
+async def list_catalog_uploads(
+    party_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> CatalogUploadsResponse:
+    """Every catalog file of this party's suppliers, with pipeline stages.
 
-    # Enqueue ingestion task
-    task_id = None
-    try:
-        from app.tasks.drawing_analysis import ingest_supplier_catalog
-        task = ingest_supplier_catalog.delay(str(supplier_id), storage_path, filename)
-        task_id = task.id
-    except Exception as exc:
-        logger.warning("catalog_ingest_enqueue_failed", error=str(exc))
+    This is what makes ingestion honest in the UI: before it, an upload either
+    silently produced entries or silently produced nothing.
+    """
+    from app.db.models import DocumentProcessingJob
+    from app.domain.catalog_documents import catalog_documents_for_supplier
 
+    supplier_ids = [
+        row[0]
+        for row in (
+            await db.execute(
+                select(ToolSupplier.id).where(ToolSupplier.main_supplier_id == party_id)
+            )
+        ).all()
+    ]
+    docs = await catalog_documents_for_supplier(db, supplier_ids)
+    if not docs:
+        return CatalogUploadsResponse(items=[], total=0)
+
+    doc_ids = [d.id for d in docs]
+    jobs = (
+        await db.execute(
+            select(DocumentProcessingJob)
+            .where(DocumentProcessingJob.document_id.in_(doc_ids))
+            .order_by(DocumentProcessingJob.created_at.desc())
+        )
+    ).scalars().all()
+    latest_job: dict[uuid.UUID, object] = {}
+    for job in jobs:
+        latest_job.setdefault(job.document_id, job)
+
+    counts = dict(
+        (row[0], row[1])
+        for row in (
+            await db.execute(
+                select(ToolCatalogEntry.source_document_id, func.count())
+                .where(
+                    ToolCatalogEntry.source_document_id.in_(doc_ids),
+                    ToolCatalogEntry.is_active.is_(True),
+                )
+                .group_by(ToolCatalogEntry.source_document_id)
+            )
+        ).all()
+    )
+
+    items: list[CatalogUploadOut] = []
+    for doc in docs:
+        job = latest_job.get(doc.id)
+        meta = doc.metadata_ or {}
+        steps = [
+            CatalogUploadStep(
+                key=step.get("key", ""),
+                label=step.get("label"),
+                status=step.get("status", "pending"),
+                error=step.get("error"),
+                progress=step.get("progress"),
+            )
+            for step in (getattr(job, "pipeline_steps", None) or [])
+            if isinstance(step, dict)
+        ]
+        parent = meta.get("parent_document_id")
+        items.append(
+            CatalogUploadOut(
+                document_id=doc.id,
+                file_name=doc.file_name,
+                file_size=doc.file_size,
+                uploaded_at=doc.created_at,
+                status=getattr(job, "status", None) or "queued",
+                current_step=getattr(job, "current_step", None),
+                error=getattr(job, "error", None),
+                steps=steps,
+                entries_count=counts.get(doc.id, 0),
+                is_archive=bool(meta.get("is_archive")),
+                parent_document_id=uuid.UUID(parent) if parent else None,
+                supplier_id=(
+                    uuid.UUID(meta["tool_supplier_id"]) if meta.get("tool_supplier_id") else None
+                ),
+            )
+        )
+    return CatalogUploadsResponse(items=items, total=len(items))
+
+
+@router.post(
+    "/uploads/{document_id}/reingest",
+    response_model=CatalogImportResult,
+    summary="Skill: tool_catalog.reingest — Re-run ingestion for one uploaded catalog file.",
+)
+async def reingest_catalog_upload(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> CatalogImportResult:
+    from app.db.models import Document
+
+    doc = await db.get(Document, document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Загрузка каталога не найдена")
+    supplier_id = (doc.metadata_ or {}).get("tool_supplier_id")
+    if not supplier_id:
+        raise HTTPException(status_code=400, detail="Документ не привязан к поставщику")
+    supplier = await db.get(ToolSupplier, uuid.UUID(supplier_id))
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Поставщик не найден")
+
+    task_id = _enqueue_catalog_ingest(str(document_id))
     return CatalogImportResult(
-        supplier_id=supplier_id,
+        supplier_id=supplier.id,
         supplier_name=supplier.name,
         entries_created=0,
         entries_updated=0,
         entries_skipped=0,
         task_id=task_id,
+        document_id=document_id,
+        storage_path=doc.storage_path,
+        status="queued",
+        message=f"Файл «{doc.file_name}» поставлен на повторную обработку.",
     )
+
+
+@router.delete(
+    "/uploads/{document_id}",
+    summary="Skill: tool_catalog.delete_upload — Remove one uploaded catalog and its entries.",
+)
+async def delete_catalog_upload(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Removes only what came from THIS file.
+
+    Deleting one of several catalogs must not touch the others — the reason
+    refresh no longer clears "all entries of the supplier". The entries are
+    removed rather than deactivated: they carry an FK to the document, and an
+    orphaned price with no traceable source is worse than no price.
+    """
+    from app.db.models import Document, DocumentLink, DocumentProcessingJob
+
+    doc = await db.get(Document, document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Загрузка каталога не найдена")
+
+    entries = (
+        await db.execute(
+            select(ToolCatalogEntry).where(ToolCatalogEntry.source_document_id == document_id)
+        )
+    ).scalars().all()
+    for entry in entries:
+        try:
+            from app.vector.qdrant_store import delete_tool_catalog_entry
+
+            delete_tool_catalog_entry(str(entry.id))
+        except Exception as exc:  # noqa: BLE001 — vector cleanup is best effort
+            logger.warning("entry_qdrant_cleanup_failed", entry_id=str(entry.id), error=str(exc))
+        try:
+            from app.domain.drawing_graph import delete_tool_catalog_graph
+
+            await delete_tool_catalog_graph(entry.id, db)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("entry_graph_cleanup_failed", entry_id=str(entry.id), error=str(exc))
+        await db.delete(entry)
+    await db.flush()
+
+    await db.execute(sa_delete(DocumentLink).where(DocumentLink.document_id == document_id))
+    # The processing job holds an FK on the document too.
+    await db.execute(
+        sa_delete(DocumentProcessingJob).where(DocumentProcessingJob.document_id == document_id)
+    )
+    await db.delete(doc)
+    await db.commit()
+    return {
+        "deleted": True,
+        "document_id": str(document_id),
+        "entries_removed": len(entries),
+    }
 
 
 @router.post(
     "/suppliers/{supplier_id}/refresh",
     response_model=CatalogImportResult,
-    summary="Skill: tool_catalog.refresh — Re-ingest the last uploaded catalog for a supplier.",
+    summary="Skill: tool_catalog.refresh — Re-ingest the most recent catalog file of a supplier.",
 )
 async def refresh_catalog(
     supplier_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ) -> CatalogImportResult:
-    """Re-run catalog ingestion from MinIO for the last uploaded file.
-    Also clears existing entries first so the catalog is rebuilt cleanly.
+    """Re-run ingestion of the newest catalog document for this supplier.
+
+    It no longer clears the supplier's entries: with several catalogs per
+    supplier that would destroy the other files' data. Each file's own entries
+    are replaced by the ingest itself, keyed by source_document_id.
     """
+    from app.domain.catalog_documents import catalog_documents_for_supplier
+
     supplier = await db.get(ToolSupplier, supplier_id)
     if not supplier:
         raise HTTPException(status_code=404, detail="Поставщик не найден")
 
-    # Find last uploaded catalog file in MinIO
-    last_file_path: str | None = None
-    last_filename: str | None = None
-    try:
-        from app.config import settings
-        from minio import Minio
-        client = Minio(
-            settings.minio_endpoint,
-            access_key=settings.minio_access_key,
-            secret_key=settings.minio_secret_key,
-            secure=settings.minio_secure,
-        )
-        prefix = f"tool-catalogs/{supplier_id}/"
-        objects = list(client.list_objects(settings.minio_bucket, prefix=prefix, recursive=True))
-        if objects:
-            latest = max(objects, key=lambda o: o.last_modified or 0)
-            last_file_path = latest.object_name
-            last_filename = last_file_path.rsplit("/", 1)[-1]
-    except Exception as exc:
-        logger.warning("refresh_catalog_minio_list_failed", supplier_id=str(supplier_id), error=str(exc))
-
-    if not last_file_path:
+    docs = await catalog_documents_for_supplier(db, [supplier_id])
+    if not docs:
         raise HTTPException(
             status_code=404,
             detail="Нет ранее загруженных файлов каталога для этого поставщика",
         )
-
-    # Enqueue re-ingestion
-    task_id = None
-    try:
-        from app.tasks.drawing_analysis import ingest_supplier_catalog
-        task = ingest_supplier_catalog.delay(str(supplier_id), last_file_path, last_filename)
-        task_id = task.id
-    except Exception as exc:
-        logger.warning("refresh_catalog_enqueue_failed", error=str(exc))
+    doc = docs[0]
+    task_id = _enqueue_catalog_ingest(str(doc.id))
 
     return CatalogImportResult(
         supplier_id=supplier_id,
@@ -281,6 +539,10 @@ async def refresh_catalog(
         entries_updated=0,
         entries_skipped=0,
         task_id=task_id,
+        document_id=doc.id,
+        storage_path=doc.storage_path,
+        status="queued",
+        message=f"Файл «{doc.file_name}» поставлен на повторную обработку.",
     )
 
 
@@ -800,29 +1062,12 @@ async def upload_catalog_for_party(
 
     tool_supplier = await _get_or_create_tool_supplier_for_party(db, party)
 
-    # Delegate to the existing upload logic
-    filename = file.filename or "catalog"
-    file_bytes = await file.read()
-    storage_path = await _upload_catalog_to_minio(file_bytes, filename, str(tool_supplier.id))
-
-    if not storage_path:
-        raise HTTPException(status_code=500, detail="Ошибка сохранения файла каталога")
-
-    task_id = None
-    try:
-        from app.tasks.drawing_analysis import ingest_supplier_catalog
-        task = ingest_supplier_catalog.delay(str(tool_supplier.id), storage_path, filename)
-        task_id = task.id
-    except Exception as exc:
-        logger.warning("catalog_ingest_enqueue_failed", error=str(exc))
-
-    return CatalogImportResult(
-        supplier_id=tool_supplier.id,
-        supplier_name=tool_supplier.name,
-        entries_created=0,
-        entries_updated=0,
-        entries_skipped=0,
-        task_id=task_id,
+    return await _accept_catalog_upload(
+        db,
+        tool_supplier,
+        await file.read(),
+        file.filename or "catalog",
+        party_id=party_id,
     )
 
 
@@ -931,33 +1176,6 @@ def _is_valid_tool_type(value: str) -> bool:
         return True
     except ValueError:
         return False
-
-
-async def _upload_catalog_to_minio(
-    file_bytes: bytes, filename: str, supplier_id: str
-) -> str | None:
-    try:
-        import io as _io
-        from app.config import settings
-        from minio import Minio
-
-        client = Minio(
-            settings.minio_endpoint,
-            access_key=settings.minio_access_key,
-            secret_key=settings.minio_secret_key,
-            secure=settings.minio_secure,
-        )
-        path = f"tool-catalogs/{supplier_id}/{filename}"
-        client.put_object(
-            settings.minio_bucket,
-            path,
-            _io.BytesIO(file_bytes),
-            len(file_bytes),
-        )
-        return path
-    except Exception as exc:
-        logger.warning("catalog_minio_upload_failed", error=str(exc))
-        return None
 
 
 # ── Supplier resolution (name → Party → ToolSupplier) ─────────────────────────
