@@ -528,6 +528,157 @@ async def price_check(
     )
 
 
+class CatalogPriceCheckLine(BaseModel):
+    line_number: int | None = None
+    description: str | None = None
+    invoice_price: float | None = None
+    catalog_price: float | None = None
+    catalog_entry_id: uuid.UUID | None = None
+    catalog_name: str | None = None
+    difference_pct: float | None = None
+    verdict: str = "unknown"
+    vat_assumed: bool = False
+    pack_normalized: bool = False
+    catalog_stale_days: int | None = None
+    notes: list[str] = []
+
+
+class CatalogPriceCheckResponse(BaseModel):
+    invoice_id: uuid.UUID
+    supplier_name: str | None = None
+    lines: list[CatalogPriceCheckLine] = []
+    matched_lines: int = 0
+    above_catalog_lines: int = 0
+    message: str = ""
+
+
+@router.get("/{invoice_id}/catalog-price-check", response_model=CatalogPriceCheckResponse)
+async def catalog_price_check(
+    invoice_id: uuid.UUID,
+    invoice_prices_include_vat: bool = True,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: invoice.catalog_price_check — Compare invoice lines with the supplier's catalog.
+
+    Distinct from /price-check, which compares against this supplier's PREVIOUS
+    INVOICES. Here the reference is the supplier's own price list, normalised
+    for VAT and pack size — without that normalisation every line reads as a
+    20% overpayment, since catalogs quote net prices and invoices gross ones.
+    """
+    from app.db.models import ToolCatalogEntry, ToolSupplier
+    from app.domain.catalog_price_check import compare_line, match_score
+
+    result = await db.execute(
+        select(Invoice).where(Invoice.id == invoice_id).options(selectinload(Invoice.lines))
+    )
+    invoice = result.scalar_one_or_none()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    supplier_name = None
+    if invoice.supplier_id:
+        party = (
+            await db.execute(select(Party).where(Party.id == invoice.supplier_id))
+        ).scalar_one_or_none()
+        supplier_name = party.name if party else None
+
+    if not invoice.supplier_id:
+        return CatalogPriceCheckResponse(
+            invoice_id=invoice.id,
+            message="У счёта не указан поставщик — сверять не с чем.",
+        )
+
+    entries = (
+        await db.execute(
+            select(ToolCatalogEntry)
+            .join(ToolSupplier, ToolCatalogEntry.supplier_id == ToolSupplier.id)
+            .where(
+                ToolSupplier.main_supplier_id == invoice.supplier_id,
+                ToolCatalogEntry.is_active.is_(True),
+            )
+        )
+    ).scalars().all()
+
+    if not entries:
+        return CatalogPriceCheckResponse(
+            invoice_id=invoice.id,
+            supplier_name=supplier_name,
+            message=(
+                "У этого поставщика нет загруженного каталога — "
+                "загрузите прайс или найдите каталог в интернете."
+            ),
+        )
+
+    lines: list[CatalogPriceCheckLine] = []
+    matched = 0
+    above = 0
+    for line in sorted(invoice.lines, key=lambda item: item.line_number or 0):
+        text = " ".join(filter(None, [line.description, line.sku]))
+        best = None
+        best_score = 0.0
+        for entry in entries:
+            score = match_score(text, entry.name, entry.part_number)
+            if score > best_score:
+                best, best_score = entry, score
+        # Below this the "match" is one shared word — reporting a price gap on
+        # that basis is how a comparison starts lying.
+        if best is None or best_score < 0.5:
+            lines.append(
+                CatalogPriceCheckLine(
+                    line_number=line.line_number,
+                    description=line.description,
+                    invoice_price=line.unit_price,
+                    notes=["позиция не найдена в каталоге"],
+                )
+            )
+            continue
+
+        matched += 1
+        comparison = compare_line(
+            description=line.description,
+            invoice_unit_price=line.unit_price,
+            invoice_includes_vat=invoice_prices_include_vat,
+            catalog_price=best.price_value,
+            catalog_name=best.name,
+            catalog_entry_id=str(best.id),
+            includes_vat=best.price_includes_vat,
+            vat_rate=best.vat_rate,
+            pack_size=best.pack_size,
+            valid_until=best.valid_until,
+            catalog_recorded_at=best.updated_at or best.created_at,
+        )
+        if comparison.verdict == "above_catalog":
+            above += 1
+        lines.append(
+            CatalogPriceCheckLine(
+                line_number=line.line_number,
+                description=comparison.line_description,
+                invoice_price=comparison.invoice_price,
+                catalog_price=comparison.catalog_price,
+                catalog_entry_id=best.id,
+                catalog_name=comparison.catalog_name,
+                difference_pct=comparison.difference_pct,
+                verdict=comparison.verdict,
+                vat_assumed=comparison.vat_assumed,
+                pack_normalized=comparison.pack_normalized,
+                catalog_stale_days=comparison.catalog_stale_days,
+                notes=comparison.notes,
+            )
+        )
+
+    return CatalogPriceCheckResponse(
+        invoice_id=invoice.id,
+        supplier_name=supplier_name,
+        lines=lines,
+        matched_lines=matched,
+        above_catalog_lines=above,
+        message=(
+            f"Сопоставлено с каталогом: {matched} из {len(invoice.lines)} строк; "
+            f"дороже каталога: {above}."
+        ),
+    )
+
+
 # ── invoice.delete (single) ──────────────────────────────────────────────────
 
 

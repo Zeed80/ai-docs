@@ -4,12 +4,28 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 from app.db.models import ToolTypeEnum, ToolSourceEnum
 
 
 # ── Tool Supplier ─────────────────────────────────────────────────────────────
+
+
+def _reject_unresolved_placeholder(value: str | None) -> str | None:
+    """A plan placeholder must never become a stored supplier name.
+
+    Two live rows were literally named
+    "${steps.discover_suppliers.output.suppliers[0].name}" — the planner's
+    dataflow reference reached entity creation unresolved. The root cause is
+    fixed in domain/work_planning.py; this is the guard at the storage door.
+    """
+    if value and ("${" in value or "}" in value):
+        raise ValueError(
+            "имя содержит неразрешённый плейсхолдер плана — "
+            "передайте настоящее название поставщика"
+        )
+    return value
 
 
 class ToolSupplierCreate(BaseModel):
@@ -21,6 +37,8 @@ class ToolSupplierCreate(BaseModel):
     notes: str | None = None
     main_supplier_id: uuid.UUID | None = None
 
+    _check_name = field_validator("name")(_reject_unresolved_placeholder)
+
 
 class ToolSupplierUpdate(BaseModel):
     name: str | None = None
@@ -31,6 +49,8 @@ class ToolSupplierUpdate(BaseModel):
     notes: str | None = None
     is_active: bool | None = None
     main_supplier_id: uuid.UUID | None = None
+
+    _check_name = field_validator("name")(_reject_unresolved_placeholder)
 
 
 class ToolSupplierOut(BaseModel):
@@ -301,6 +321,32 @@ class AttachWebCatalogRequest(SupplierRefRequest):
             if value and value not in out:
                 out.append(value)
         return out
+
+
+class CrawlSiteRequest(SupplierRefRequest):
+    """Build a catalog from the supplier's own website.
+
+    The third mode next to files and web sources, not a replacement: many
+    suppliers publish no PDF at all — the catalog *is* the site.
+    """
+
+    start_url: str | None = Field(
+        default=None,
+        min_length=4,
+        max_length=2048,
+        description="Where to start; defaults to the supplier's known website.",
+    )
+    max_pages: int = Field(60, ge=1, le=300)
+    max_depth: int = Field(3, ge=1, le=5)
+
+
+class CrawlSiteResult(BaseModel):
+    supplier_id: uuid.UUID
+    supplier_name: str
+    start_url: str
+    task_id: str | None = None
+    status: str = "queued"
+    message: str = ""
 
 
 class CatalogIngestStatusRequest(SupplierRefRequest):

@@ -829,6 +829,9 @@ async def _create_catalog_entries_from_rows(
     *,
     provenance: dict[str, Any] | None = None,
     source_document_id: uuid.UUID | None = None,
+    # Off by default: the pre-pass costs an LLM call, so only the real ingestion
+    # paths turn it on — unit tests and cheap callers stay dictionary-only.
+    infer_types_with_llm: bool = False,
 ) -> dict[str, Any]:
     """Ф3 (AGENT_AUTONOMY_ROADMAP.md): the entry-creation/embed/graph loop,
     split out of _ingest_catalog_async so both the file-upload path (above)
@@ -859,6 +862,21 @@ async def _create_catalog_entries_from_rows(
     discovery_method = prov.get("discovery_method", "manual_upload")
     is_web_sourced = discovery_method != "manual_upload"
 
+    # Pre-pass: whatever the dictionary cannot classify goes to the model in
+    # batches — one call per 50 names instead of per row, and only for the
+    # leftovers. The row is kept either way; this only improves its type.
+    llm_types: dict[str, str] = {}
+    if infer_types_with_llm:
+        unresolved_names = []
+        for row in rows:
+            if row.get("tool_type") or not row.get("name"):
+                continue
+            if _infer_tool_type(row.get("name"), row.get("description"), row.get("part_number")):
+                continue
+            unresolved_names.append(str(row["name"])[:200])
+        if unresolved_names:
+            llm_types = await _infer_tool_types_via_llm(sorted(set(unresolved_names)))
+
     created = 0
     conflicted = 0
     skipped = 0
@@ -886,6 +904,7 @@ async def _create_catalog_entries_from_rows(
                     _infer_tool_type(
                         row.get("name"), row.get("description"), row.get("part_number")
                     )
+                    or llm_types.get(str(row.get("name") or "")[:200])
                     or "other"
                 )
             try:
@@ -2078,18 +2097,61 @@ def _parse_xls_catalog(file_bytes: bytes) -> list[dict]:
         return []
 
 
+def _sniff_csv_delimiter(sample: str) -> str:
+    """Pick the delimiter by counting candidates on the header line.
+
+    Russian Excel writes ";" by default and uses "," as the DECIMAL separator,
+    so a comma-assuming reader splits "3450,50" into two fields — measured
+    live: every row of a real semicolon price list either crashed the parser
+    (row longer than the single-column header → restkey None → .lower() on
+    None) or silently fell through to the LLM, which returned 2 of 3 rows.
+    """
+    import csv
+
+    head = sample.splitlines()[0] if sample.splitlines() else ""
+    counts = {sep: head.count(sep) for sep in (";", "\t", "|", ",")}
+    best = max(counts, key=lambda sep: counts[sep])
+    if counts[best] > 0:
+        return best
+    try:
+        return csv.Sniffer().sniff(sample[:4096], delimiters=";,\t|").delimiter
+    except Exception:  # noqa: BLE001 — a single-column file is still valid
+        return ","
+
+
 def _parse_csv_catalog(file_bytes: bytes) -> list[dict]:
-    """Parse CSV catalog file."""
+    """Parse a CSV/TSV catalog, delimiter sniffed and banner rows skipped."""
     import csv
 
     try:
         text = file_bytes.decode("utf-8-sig", errors="replace")
-        reader = csv.DictReader(io.StringIO(text))
-        rows = []
-        for row in reader:
-            normalized = {_normalize_header(k): v for k, v in row.items()}
-            if normalized:
-                rows.append(normalized)
+        delimiter = _sniff_csv_delimiter(text)
+        raw_rows = [
+            [cell for cell in row]
+            for row in csv.reader(io.StringIO(text), delimiter=delimiter)
+        ]
+        if not raw_rows:
+            return []
+        # Real price lists start with a company banner and a date; reuse the
+        # same header detection the Excel path uses instead of assuming row 1.
+        header_index, headers = _find_header_row(raw_rows)
+        if header_index < 0:
+            header_index, headers = 0, [_normalize_header(str(c)) for c in raw_rows[0]]
+
+        rows: list[dict] = []
+        for raw in raw_rows[header_index + 1 :]:
+            if not any(str(cell).strip() for cell in raw):
+                continue
+            row: dict[str, Any] = {}
+            for index, cell in enumerate(raw):
+                key = headers[index] if index < len(headers) else f"column_{index}"
+                if not key:
+                    continue
+                value = str(cell).strip()
+                if value:
+                    row[key] = value
+            if row:
+                rows.append(row)
         return rows
     except Exception as exc:
         logger.error("csv_catalog_parse_failed", error=str(exc))
@@ -2351,10 +2413,30 @@ def _safe_roughness_type(value: str) -> Any:
 
 
 def _safe_float(value: Any) -> float | None:
+    """Parse a number as a Russian price list writes it.
+
+    "1 200,00" (thin/non-breaking space as the thousands separator, comma as
+    the decimal one) previously returned None — the price of every four-digit
+    item was silently dropped while the row itself was imported.
+    """
     if value is None:
         return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    # Strip currency markers and thousands separators (space, NBSP, thin space,
+    # apostrophe), then normalise the decimal comma.
+    text = re.sub(r"[₽$€]|руб\.?|rub|eur|usd", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"[\s\u00a0\u2009\u202f']", "", text)
+    if "," in text and "." in text:
+        # "1.234,56" — dot as thousands, comma as decimal.
+        text = text.replace(".", "").replace(",", ".")
+    else:
+        text = text.replace(",", ".")
     try:
-        return float(str(value).replace(",", ".").strip())
+        return float(text)
     except (ValueError, TypeError):
         return None
 
@@ -2409,6 +2491,54 @@ _TOOL_TYPE_MARKERS: tuple[tuple[str, str], ...] = (
     ("цанг", "holder"), ("holder", "holder"), ("chuck", "holder"),
     ("шлифов", "grinder"), ("круг", "grinder"), ("grind", "grinder"),
 )
+
+
+async def _infer_tool_types_via_llm(names: list[str]) -> dict[str, str]:
+    """Second pass for rows the dictionary could not classify.
+
+    One call per 50 names, not per row: the dictionary already resolves the
+    common Russian wording, so this only sees the leftovers (brand-only names,
+    English-only lines, transliterations). Failure is not fatal — the caller
+    keeps "other" and the row stays in the catalog either way.
+    """
+    if not names:
+        return {}
+
+    from app.ai import ollama_client
+    from app.ai.model_resolver import get_verify_model
+    from app.db.models import ToolTypeEnum
+
+    allowed = {t.value for t in ToolTypeEnum}
+    model_config = get_verify_model()
+    system = (
+        "Classify each item name into one tool type. Return JSON only: "
+        '{"types": {"<name>": "<type>"}}. The type must be one of: '
+        + ", ".join(sorted(allowed))
+        + ". Use \"other\" when the name is not a cutting/measuring tool. "
+        "Never invent names that were not given."
+    )
+
+    resolved: dict[str, str] = {}
+    for start in range(0, len(names), 50):
+        batch = names[start : start + 50]
+        try:
+            response = await ollama_client.generate_json(
+                json.dumps({"names": batch}, ensure_ascii=False),
+                model=model_config.model,
+                provider=model_config.provider,
+                system=system,
+            )
+        except Exception as exc:  # noqa: BLE001 — classification is enrichment
+            logger.warning("tool_type_llm_batch_failed", error=str(exc)[:200])
+            continue
+        types = (response or {}).get("types") or {}
+        if not isinstance(types, dict):
+            continue
+        for name, value in types.items():
+            normalized = _normalize_tool_type(str(value))
+            if normalized in allowed and name in batch:
+                resolved[name] = normalized
+    return resolved
 
 
 def _infer_tool_type(*parts: str | None) -> str | None:

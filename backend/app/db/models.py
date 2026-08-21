@@ -1343,6 +1343,10 @@ class PriceHistoryEntry(UUIDPrimaryKey, Base):
     price: Mapped[float] = mapped_column(Float, nullable=False)
     quantity: Mapped[float | None] = mapped_column(Float)
     currency: Mapped[str] = mapped_column(String(3), default="RUB")
+    # Where the price came from: "invoice" | "catalog" | "manual". Without it a
+    # catalog price and a paid invoice price were indistinguishable in history
+    # (and app/scripts/seed_data.py already passed the field, so the seed failed).
+    source: Mapped[str | None] = mapped_column(String(30), index=True)
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -3295,6 +3299,20 @@ class ToolCatalogEntry(UUIDPrimaryKey, TimestampMixin, Base):
     # TiN, TiAlN, TiCN, DLC, uncoated
     price_currency: Mapped[str] = mapped_column(String(3), default="RUB", nullable=False)
     price_value: Mapped[float | None] = mapped_column(Float)
+    # Comparing a catalog price to an invoice line is meaningless without these:
+    # catalogs normally quote VAT-exclusive prices per pack, invoices quote
+    # VAT-inclusive per unit. Nullable — unknown must stay unknown, not default
+    # to a guess that makes the comparison silently wrong.
+    unit: Mapped[str | None] = mapped_column(String(30))
+    price_includes_vat: Mapped[bool | None] = mapped_column(Boolean)
+    vat_rate: Mapped[float | None] = mapped_column(Float)
+    pack_size: Mapped[float | None] = mapped_column(Float)
+    min_order_qty: Mapped[float | None] = mapped_column(Float)
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    canonical_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("canonical_items.id"), nullable=True, index=True
+    )
     catalog_page: Mapped[int | None] = mapped_column(Integer)
     source_document_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("documents.id"), nullable=True, index=True

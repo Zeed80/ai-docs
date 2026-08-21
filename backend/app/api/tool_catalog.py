@@ -36,6 +36,8 @@ from app.domain.tool_catalog import (
     CatalogCandidate,
     CatalogIngestStatusRequest,
     CatalogIngestStatusResult,
+    CrawlSiteRequest,
+    CrawlSiteResult,
     DiscoverCatalogsRequest,
     DiscoverCatalogsResult,
     CatalogImportResult,
@@ -1670,6 +1672,75 @@ def _same_site(url: str, website: str | None) -> bool:
     site_host = (urlparse(website if "//" in website else f"https://{website}").hostname or "")
     site_host = site_host.lower().removeprefix("www.")
     return bool(site_host) and (host == site_host or host.endswith("." + site_host))
+
+
+@router.post(
+    "/crawl-site",
+    response_model=CrawlSiteResult,
+    summary="Skill: tool_catalog.crawl_site — Build a supplier catalog by walking their website.",
+)
+async def crawl_supplier_site_endpoint(
+    payload: CrawlSiteRequest,
+    db: AsyncSession = Depends(get_db),
+) -> CrawlSiteResult:
+    """For suppliers who publish no catalog file — the site itself is the catalog.
+
+    Queued, never inline: a crawl is dozens of page fetches plus an LLM call per
+    page. Entries land draft-first (discovery_method="web_crawl").
+    """
+    supplier, resolution = await _resolve_supplier(db, payload)
+    if supplier is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "supplier_ambiguous",
+                "message": resolution.message,
+                "candidates": [c.model_dump(mode="json") for c in resolution.candidates],
+            },
+        )
+
+    start_url = (payload.start_url or supplier.website or "").strip()
+    if not start_url:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_code": "supplier_website_unknown",
+                "message": (
+                    f"У поставщика «{supplier.name}» не указан сайт. "
+                    "Передайте start_url или заполните сайт в карточке."
+                ),
+            },
+        )
+    if "//" not in start_url:
+        start_url = f"https://{start_url}"
+
+    try:
+        from app.tasks.catalog_crawl import crawl_supplier_site
+
+        task_id = crawl_supplier_site.delay(
+            str(supplier.id), start_url, payload.max_pages, payload.max_depth
+        ).id
+    except Exception as exc:  # noqa: BLE001 — a dead broker must not read as success
+        logger.warning("catalog_crawl_enqueue_failed", error=str(exc))
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "catalog_crawl_enqueue_failed",
+                "message": f"Не удалось поставить обход сайта в очередь ({str(exc)[:150]}).",
+            },
+        ) from exc
+
+    return CrawlSiteResult(
+        supplier_id=supplier.id,
+        supplier_name=supplier.name,
+        start_url=start_url,
+        task_id=task_id,
+        status="queued",
+        message=(
+            f"Обход сайта {start_url} запущен (до {payload.max_pages} страниц). "
+            "Позиции появятся по мере разбора; статус — в tool_catalog.ingest_status."
+        ),
+    )
 
 
 @router.post(

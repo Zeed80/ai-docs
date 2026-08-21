@@ -60,6 +60,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "approve": ("POST", "/api/tool-catalog/entries/{entry_id}/approve", ["entry_id"]),
         # Uploaded catalog files: the agent must be able to see what it (or a
         # human) uploaded and how far the parse got, and to re-run one file.
+        "crawl_site": ("POST", "/api/tool-catalog/crawl-site", []),
         "list_uploads": (
             "GET", "/api/tool-catalog/by-supplier/{party_id}/uploads", ["party_id"]
         ),
@@ -95,6 +96,10 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "approve":        ("POST",   "/api/invoices/{invoice_id}/approve",          ["invoice_id"]),
         "reject":         ("POST",   "/api/invoices/{invoice_id}/reject",           ["invoice_id"]),
         "compare_prices": ("GET",    "/api/invoices/{invoice_id}/price-check",      ["invoice_id"]),
+        # Against the supplier's CATALOG (VAT/pack normalised), not past invoices.
+        "catalog_price_check": (
+            "GET", "/api/invoices/{invoice_id}/catalog-price-check", ["invoice_id"]
+        ),
         "export_excel":   ("POST",   "/api/invoices/{invoice_id}/export",           ["invoice_id"]),
         "export_1c":      ("POST",   "/api/invoices/{invoice_id}/export-1c",        ["invoice_id"]),
         "update":         ("PATCH",  "/api/invoices/{invoice_id}",                  ["invoice_id"]),

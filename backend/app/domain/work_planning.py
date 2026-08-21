@@ -56,6 +56,11 @@ _MAX_CONSECUTIVE_PLANNER_FALLBACKS = 5
 # character class widened to accept "[" and "]"; _path_get below is what
 # actually interprets them.
 _REF = re.compile(r"^\$\{steps\.([a-zA-Z0-9_-]+)\.output(?:\.([a-zA-Z0-9_.\[\]-]+))?\}$")
+# The same reference EMBEDDED in a longer string ("каталог ${steps.x.output.name}").
+# Without this the whole string used to pass through untouched, and a literal
+# "${steps.discover_suppliers.output.suppliers[0].name}" was stored as a
+# supplier NAME in production (two such rows found on the live database).
+_REF_INLINE = re.compile(r"\$\{steps\.([a-zA-Z0-9_-]+)\.output(?:\.([a-zA-Z0-9_.\[\]-]+))?\}")
 
 
 class PlannedChildSpec(BaseModel):
@@ -504,14 +509,47 @@ async def resolve_step_input(
                 resolved = _path_get(outputs[key], path)
                 provenance[pointer] = {"step_key": key, "path": path or ""}
                 return resolved
-            return value
+
+            def _inline(m: re.Match[str]) -> str:
+                key, path = m.group(1), m.group(2)
+                if key not in outputs:
+                    raise ValueError(f"dataflow source is not complete: {key}")
+                provenance[pointer] = {"step_key": key, "path": path or ""}
+                resolved = _path_get(outputs[key], path)
+                return "" if resolved is None else str(resolved)
+
+            return _REF_INLINE.sub(_inline, value)
         if isinstance(value, list):
             return [resolve(item, f"{pointer}/{index}") for index, item in enumerate(value)]
         if isinstance(value, dict):
             return {key: resolve(item, f"{pointer}/{key}") for key, item in value.items()}
         return value
 
-    return resolve(dict(step.input_ or {}), ""), provenance
+    resolved_input = resolve(dict(step.input_ or {}), "")
+    # Post-check: an unresolved placeholder must never reach a real tool call.
+    # resolve() leaves unknown shapes untouched by design, which is how the
+    # literal "${steps.…}" ended up as stored data; failing here sends the step
+    # back to replanning instead.
+    leftovers = _unresolved_refs(resolved_input)
+    if leftovers:
+        raise ValueError(
+            "unresolved dataflow references remain: " + ", ".join(sorted(leftovers)[:5])
+        )
+    return resolved_input, provenance
+
+
+def _unresolved_refs(value: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, str):
+        if "${steps." in value:
+            found.add(value[:120])
+    elif isinstance(value, list):
+        for item in value:
+            found |= _unresolved_refs(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            found |= _unresolved_refs(item)
+    return found
 
 
 def tool_call_digest(executor: str, capability: str | None, action: str | None, args: dict) -> str:

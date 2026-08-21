@@ -135,10 +135,19 @@ async def _ingest_document_async(document_id: str, celery_task_id: str | None) -
     async with factory() as db:
         # Re-ingesting the same file replaces its own entries only; entries
         # from the supplier's other catalogs are untouched.
+        from sqlalchemy import text as sa_text
         from sqlalchemy import update as sa_update
 
         from app.db.models import ToolCatalogEntry
 
+        # Serialise per document. Measured on the stand: the same task reached
+        # two workers, each deactivated the old rows inside its own uncommitted
+        # transaction and then inserted a full set — the catalog came out
+        # doubled. The lock is transaction-scoped and released by the commit.
+        await db.execute(
+            sa_text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": f"catalog_ingest:{doc_uuid}"},
+        )
         await db.execute(
             sa_update(ToolCatalogEntry)
             .where(
@@ -152,7 +161,11 @@ async def _ingest_document_async(document_id: str, celery_task_id: str | None) -
             await _fail(factory, job_id, "entries", "Поставщик не найден")
             return {"error": f"Supplier {supplier_uuid} not found"}
         result = await _create_catalog_entries_from_rows(
-            db, supplier_uuid, rows, source_document_id=doc_uuid
+            db,
+            supplier_uuid,
+            rows,
+            source_document_id=doc_uuid,
+            infer_types_with_llm=True,
         )
         await db.commit()
 

@@ -216,3 +216,46 @@ async def test_pdf_without_tables_falls_back_to_text_extraction(monkeypatch):
     rows = await da._parse_pdf_catalog(b"%PDF-1.4 fake")
     assert rows and rows[0]["part_number"] == "CN-1"
     assert "CNMG" in called["text"]
+
+
+# ── found live on the stand, 2026-08-21 ─────────────────────────────────────
+
+
+def test_semicolon_csv_keeps_every_row():
+    """Russian Excel writes ";" and uses "," as the decimal separator.
+
+    Measured on the stand: a comma-assuming reader crashed on the first data
+    row ('NoneType' has no attribute 'lower' — csv.DictReader's restkey), the
+    LLM fallback then returned 2 of 3 rows, and the import looked successful.
+    """
+    from app.tasks.drawing_analysis import _parse_csv_catalog
+
+    data = (
+        "Артикул;Наименование;Цена\n"
+        "MT-9-12;Фреза концевая Ø12 твердосплавная;3450,50\n"
+        "DR-6-5;Сверло спиральное Ø6.5 HSS;480,00\n"
+        "BOX-1;Ящик для инструмента;1 200,00\n"
+    ).encode("utf-8")
+
+    rows = _parse_csv_catalog(data)
+    assert len(rows) == 3
+    assert rows[0]["part_number"] == "MT-9-12"
+    assert rows[2]["name"] == "Ящик для инструмента"
+
+
+def test_tab_separated_catalog_is_parsed():
+    from app.tasks.drawing_analysis import _parse_csv_catalog
+
+    data = "Артикул\tНаименование\tЦена\nX-1\tСверло\t100\n".encode("utf-8")
+    rows = _parse_csv_catalog(data)
+    assert rows == [{"part_number": "X-1", "name": "Сверло", "price": "100"}]
+
+
+def test_price_with_thousands_separator_is_not_lost():
+    from app.tasks.drawing_analysis import _safe_float
+
+    assert _safe_float("1 200,00") == 1200.0
+    assert _safe_float("1 234,56") == 1234.56
+    assert _safe_float("1.234,56") == 1234.56
+    assert _safe_float("15 000 руб.") == 15000.0
+    assert _safe_float("—") is None
