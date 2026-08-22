@@ -79,11 +79,18 @@ export default function CatalogViewerPage() {
   }, [loadEntries]);
 
   // Keep the URL in step so a position's page can be linked to directly.
+  //
+  // history.replaceState, NOT router.replace: the router treats a query change
+  // as a navigation and fires an RSC request, which the next page turn aborts —
+  // the browser then shows a red net::ERR_ABORTED for every keypress (user
+  // report: «красным проскакивает networkerror»). The address bar is all we
+  // actually need to update here.
   useEffect(() => {
-    const next = new URLSearchParams(Array.from(search.entries()));
-    next.set("page", String(page));
-    router.replace(`/catalogs/${documentId}?${next}`, { scroll: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("page") === String(page)) return;
+    url.searchParams.set("page", String(page));
+    window.history.replaceState(window.history.state, "", url.toString());
   }, [page]);
 
   // Keep the current page inside the rendered window when navigating.
