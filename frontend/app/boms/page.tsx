@@ -259,6 +259,7 @@ export default function BomsPage() {
             <Link
               key={bom.id}
               href={`/boms/${bom.id}`}
+              prefetch={false}
               className="block bg-slate-800 rounded-lg p-4 hover:bg-slate-750 transition-colors"
             >
               <div className="flex items-start justify-between gap-4">

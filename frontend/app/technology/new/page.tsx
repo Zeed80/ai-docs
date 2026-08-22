@@ -37,7 +37,9 @@ function NewTechProcessContent() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`/api/drawings/?limit=50&q=${encodeURIComponent(drawingSearch)}`)
+    // No trailing slash: it triggers a backend redirect, and a redirect is one
+    // more thing that can go wrong (it did — see the proxy-headers fix).
+    fetch(`/api/drawings?limit=50&q=${encodeURIComponent(drawingSearch)}`)
       .then((r) => r.json())
       .then((d) => {
         const items: Drawing[] = d.items ?? d.drawings ?? [];

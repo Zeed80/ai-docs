@@ -58,4 +58,9 @@ RUN chmod +x entrypoint.sh
 EXPOSE 8000
 
 ENTRYPOINT ["./entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers alone is not enough: uvicorn trusts X-Forwarded-* only from
+# 127.0.0.1 by default, and Traefik reaches this container from the docker
+# network. Without the allow-list every redirect (any trailing-slash 307) came
+# back as http:// on an https site, and the browser's CSP blocked it — the
+# drawings picker on /technology/new never loaded because of exactly this.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000",      "--proxy-headers", "--forwarded-allow-ips", "*"]

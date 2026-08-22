@@ -2725,6 +2725,7 @@ function DetailPanel({
             </button>
             <Link
               href={`/documents/${selected.id}/review`}
+              prefetch={false}
               className="rounded-md bg-slate-700 px-3 py-2 text-center text-sm hover:bg-slate-600"
             >
               Review

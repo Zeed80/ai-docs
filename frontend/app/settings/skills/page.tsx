@@ -72,6 +72,7 @@ export default function SkillsMarketplacePage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -79,7 +80,9 @@ export default function SkillsMarketplacePage() {
         r.ok ? r.json() : { skills: [] },
       ),
       fetch(`${API}/api/agent/plugins`).then((r) => (r.ok ? r.json() : [])),
-      fetch(`${API}/api/ai/settings`).then((r) => (r.ok ? r.json() : null)),
+      // /api/ai/settings never existed: the request 404'd, the checkboxes fell
+      // back to "all exposed" and Save silently did nothing.
+      fetch(`${API}/api/ai/config`).then((r) => (r.ok ? r.json() : null)),
     ])
       .then(([skillsData, pluginsData, config]) => {
         setSkills(skillsData.skills ?? []);
@@ -143,18 +146,25 @@ export default function SkillsMarketplacePage() {
 
   async function saveExposed() {
     setSaving(true);
+    setError(null);
     try {
-      const configR = await mutFetch(`${API}/api/ai/settings`);
-      if (!configR.ok) return;
-      const config = await configR.json();
-      await mutFetch(`${API}/api/ai/settings`, {
+      const resp = await mutFetch(`${API}/api/ai/config`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...config,
           exposed_skills: Array.from(exposedSkills).sort(),
         }),
       });
+      if (!resp.ok) {
+        // Failing quietly here is how a Save button becomes a lie.
+        const body = await resp.json().catch(() => ({}));
+        setError(
+          typeof body.detail === "string"
+            ? body.detail
+            : `Не удалось сохранить (${resp.status})`,
+        );
+        return;
+      }
       setDirty(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -202,6 +212,11 @@ export default function SkillsMarketplacePage() {
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {error && (
+            <span className="text-sm text-red-400" title={error}>
+              {error}
+            </span>
+          )}
           {dirty && (
             <button
               onClick={() => void saveExposed()}

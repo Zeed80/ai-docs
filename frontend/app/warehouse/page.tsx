@@ -432,6 +432,7 @@ function PendingReceiptCard({
           </button>
           <Link
             href={`/warehouse/receipts/${receipt.id}`}
+            prefetch={false}
             className="text-xs text-blue-400 hover:text-blue-300 px-2"
           >
             Детали →
@@ -949,6 +950,7 @@ function ReceiptsTab() {
                 <td className="py-2">
                   <Link
                     href={`/warehouse/receipts/${r.id}`}
+                    prefetch={false}
                     className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
                   >
                     Открыть →

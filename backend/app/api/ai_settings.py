@@ -306,6 +306,9 @@ async def get_config_status() -> dict:
 
 
 class ConfigUpdate(BaseModel):
+    # Which skills the chat agent may see. Kept here rather than in gateway.yml
+    # because the file is read-only in the deployment.
+    exposed_skills: list[str] | None = None
     model_agent: str | None = None
     model_ocr: str | None = None
     model_ocr_provider: str | None = None

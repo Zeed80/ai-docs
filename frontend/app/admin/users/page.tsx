@@ -449,6 +449,11 @@ function UsersContent() {
                     <td className="px-4 py-2 font-medium">
                       <Link
                         href={`/admin/users/${encodeURIComponent(u.sub)}`}
+                        // Next prefetches a row per visible link and cancels
+                        // them as the list re-renders; the browser logs a red
+                        // net::ERR_ABORTED for each. A list row is one click
+                        // away either way — prefetch buys nothing here.
+                        prefetch={false}
                         className="hover:underline"
                       >
                         {u.name}
@@ -485,6 +490,7 @@ function UsersContent() {
                       <div className="flex justify-end gap-2">
                         <Link
                           href={`/admin/users/${encodeURIComponent(u.sub)}`}
+                          prefetch={false}
                           className="text-xs text-primary hover:underline"
                         >
                           Изменить

@@ -73,7 +73,7 @@ export default function EngineeringPage() {
         </div>
         {projects.map((project) => (
           <div key={project.id} className="grid grid-cols-[minmax(0,1fr)_140px_130px] gap-3 border-b border-white/5 px-4 py-3 text-sm last:border-b-0">
-            <Link href={`/engineering/${project.id}`} className="truncate text-sky-200 hover:text-sky-100 hover:underline">{project.name}</Link>
+            <Link href={`/engineering/${project.id}`} prefetch={false} className="truncate text-sky-200 hover:text-sky-100 hover:underline">{project.name}</Link>
             <span className="truncate font-mono text-xs text-zinc-400">{project.code || "-"}</span>
             <span className={STATUS_COLOR[project.status]}>{STATUS[project.status]}</span>
           </div>

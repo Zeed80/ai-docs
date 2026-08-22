@@ -55,7 +55,20 @@ class GatewayConfig:
 
     @property
     def exposed_skills(self) -> set[str]:
-        """Whitelist of skills shown to the chat agent."""
+        """Whitelist of skills shown to the chat agent.
+
+        A choice made in the interface (/settings/skills) wins over the file:
+        gateway.yml is mounted read-only in the deployment, so the settings page
+        could not persist anything and its Save button silently did nothing.
+        """
+        from app.api.ai_settings import get_ai_config
+
+        try:
+            override = get_ai_config().get("exposed_skills")
+        except Exception:  # noqa: BLE001 — config store must never break routing
+            override = None
+        if isinstance(override, list) and override:
+            return set(override)
         return set(self._raw.get("skills", {}).get("exposed", []))
 
     @property

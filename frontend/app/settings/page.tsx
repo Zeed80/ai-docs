@@ -1821,7 +1821,26 @@ export default function SettingsPage() {
                           </div>
                         </div>
                         {agentRuntime.counters.last_error && (
-                          <div className="mt-2 line-clamp-2 rounded bg-red-950/40 p-2 text-red-200">
+                          // A days-old failure shown in red next to "Errors 24h: 0"
+                          // reads as a live problem. Keep it visible — it is
+                          // useful history — but only alarming while it is fresh,
+                          // and always with the date it happened.
+                          <div
+                            className={`mt-2 line-clamp-2 rounded p-2 ${
+                              agentRuntime.counters.errors_24h > 0
+                                ? "bg-red-950/40 text-red-200"
+                                : "bg-slate-800/60 text-slate-400"
+                            }`}
+                            title={agentRuntime.counters.last_error}
+                          >
+                            {agentRuntime.counters.errors_24h > 0
+                              ? "Последняя ошибка: "
+                              : "Последняя ошибка (за пределами 24 ч): "}
+                            {agentRuntime.counters.last_error_at
+                              ? `${new Date(
+                                  agentRuntime.counters.last_error_at,
+                                ).toLocaleString("ru")} — `
+                              : ""}
                             {agentRuntime.counters.last_error}
                           </div>
                         )}

@@ -426,7 +426,11 @@ function DrawingCard({
         </svg>
       </button>
 
-      <Link href={`/drawings/${drawing.id}`} className="flex flex-col flex-1">
+      <Link
+        href={`/drawings/${drawing.id}`}
+        prefetch={false}
+        className="flex flex-col flex-1"
+      >
         {/* Thumbnail or placeholder */}
         <div className="h-32 bg-zinc-800 flex items-center justify-center border-b border-white/5 relative overflow-hidden">
           {drawing.thumbnail_path || drawing.svg_path ? (
