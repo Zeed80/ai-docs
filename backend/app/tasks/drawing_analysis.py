@@ -1110,12 +1110,23 @@ async def _parse_catalog_text_via_llm(
     # STRUCTURED_EXTRACTION assignment in settings (same slot invoice-line
     # extraction uses), so changing it is a GUI decision, not a code edit.
     model_config = get_verify_model()
-    system = """Extract a tool/instrument catalog from this page text into JSON rows.
+    # The type list is a HINT, not a gate. Measured live on a real supplier's
+    # measuring-instrument catalog: with "tool_type must be one of <cutting
+    # tools>" the model decided the page "is not a tool catalog" and returned
+    # {"rows": []} for every chunk — 948 pages of real products imported as
+    # zero. Suppliers sell gauges, machines, fixtures and consumables too; the
+    # type is derived downstream from the name anyway (_infer_tool_type).
+    system = """Extract a product catalog (tools, instruments, equipment, accessories,
+consumables — any goods a supplier sells) from this page text into JSON rows.
 Return JSON only: {"rows": [{"part_number","name","tool_type","description","diameter_mm",
-"length_mm","material","coating","currency","price","catalog_page"}]}. tool_type must be one
-of: drill, endmill, insert, holder, tap, reamer, boring_bar, thread_mill, grinder,
-turning_tool, milling_cutter, countersink, counterbore, other. Omit fields you cannot find —
-never invent a value. If the text is not a product/tool catalog, return {"rows": []}."""
+"length_mm","material","coating","currency","price","catalog_page"}]}.
+name and part_number matter most — extract a row whenever you can see an article code or a
+product name, even if there is no price. For tool_type prefer one of: drill, endmill, insert,
+holder, tap, reamer, boring_bar, thread_mill, grinder, turning_tool, milling_cutter,
+countersink, counterbore, other — and use "other" for anything that does not fit (gauges,
+machines, fixtures). NEVER return an empty list just because the products are not cutting
+tools. Omit fields you cannot find — never invent a value. Return {"rows": []} only when the
+text contains no products at all (a cover page, contacts, a foreword)."""
 
     # Rank chunks by catalog density instead of taking the first N: a real PDF
     # catalog opens with a cover, a foreword and a table of contents, and a
@@ -1135,9 +1146,11 @@ never invent a value. If the text is not a product/tool catalog, return {"rows":
     selected = [item for item in sorted(ranked, key=lambda item: item[0]) if item[2] > 0]
     chunks = [chunk for _index, chunk, _score in selected]
     if not chunks:
-        # No chunk shows any catalog signal — parse the densest one anyway so a
-        # source in an unexpected shape still gets one honest attempt.
-        chunks = [item[1] for item in ranked[:1]]
+        # No chunk shows any catalog signal — that is exactly what a graphical
+        # PDF catalog looks like after text extraction. Parsing ONE chunk of a
+        # 200 000-character catalog and reporting success was the live failure
+        # here (chunks=1, rows=0); spend the whole budget instead.
+        chunks = [item[1] for item in ranked[:max_chunks]]
     semaphore = _asyncio.Semaphore(max(1, concurrency))
 
     failed_chunks = 0
@@ -1956,6 +1969,28 @@ async def _parse_catalog_file(
     elif file_ext == ".pdf":
         rows = await _parse_pdf_catalog(file_bytes)
 
+    # A table extractor that returns JUNK is worse than one that returns
+    # nothing: measured live on a real graphical PDF catalog, pdfplumber
+    # produced 20 "rows" whose only key was a run of underscores, the
+    # `if not rows` gate below saw a non-empty list, the text/LLM fallback never
+    # ran, and the import finished with rows_parsed=20, created=0.
+    usable = _usable_row_count(rows)
+    if rows and usable == 0:
+        logger.info(
+            "catalog_tables_discarded_as_unusable",
+            ext=file_ext,
+            filename=filename,
+            rows=len(rows),
+        )
+        rows = []
+        if file_ext == ".pdf":
+            # Keep the PDF-aware path (OCR when the text layer is unreadable,
+            # chunk budget scaled to the file) instead of the generic one, and
+            # do NOT fall through afterwards: the generic path re-extracts the
+            # same unreadable text layer and spends another 120 LLM calls on it
+            # (measured: four minutes of GPU on "(cid:NN)" noise).
+            return await _parse_pdf_text_path(file_bytes)
+
     if not rows:
         # Anything else — .txt, .docx, .html, .xml, an unknown extension — goes
         # through the shared document parser and then the LLM row extractor.
@@ -1964,6 +1999,25 @@ async def _parse_catalog_file(
         rows = await _parse_catalog_any_format(file_bytes, file_ext, filename)
 
     return rows
+
+
+def _usable_row_count(rows: list[dict[str, Any]]) -> int:
+    """Rows a human would recognise as catalog positions.
+
+    A name, or an article plus a price — anything less is layout noise from a
+    table extractor, not a product.
+    """
+    count = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if len(name) >= 3:
+            count += 1
+            continue
+        if row.get("part_number") and row.get("price"):
+            count += 1
+    return count
 
 
 async def _parse_catalog_any_format(
@@ -1988,7 +2042,9 @@ async def _parse_catalog_any_format(
             "catalog_format_unreadable", ext=file_ext, filename=filename, chars=len(text)
         )
         return []
-    return await _parse_catalog_text_via_llm(text, hint=filename)
+    return await _parse_catalog_text_via_llm(
+        text, hint=filename, max_chunks=_chunk_budget_for(text)
+    )
 
 
 # Header cells a supplier price list actually uses. A row is treated as the
@@ -2226,12 +2282,122 @@ async def _parse_pdf_catalog(file_bytes: bytes, max_pages: int = 500) -> list[di
         logger.info("pdf_catalog_tables_parsed", rows=len(rows))
         return rows
 
+    return await _parse_pdf_text_path(file_bytes, text_parts, max_pages)
+
+
+async def _parse_pdf_text_path(
+    file_bytes: bytes, text_parts: list[str] | None = None, max_pages: int = 500
+) -> list[dict]:
+    """Text (or OCR) → LLM rows for a PDF whose tables gave nothing usable.
+
+    Reached both when pdfplumber finds no tables AND when it finds junk ones
+    (a graphical catalog draws its layout with rules, so extract_tables returns
+    thousands of underscore-keyed rows) — the second case used to fall through
+    to the generic any-format path with the chat-sized 8-chunk budget, which
+    read 1.4% of a 1.5 M character catalog and reported success.
+    """
+    if text_parts is None:
+        text_parts = []
+        try:
+            import pdfplumber
+
+            with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+                for page in pdf.pages[:max_pages]:
+                    try:
+                        text_parts.append(page.extract_text() or "")
+                    except Exception:  # noqa: BLE001
+                        continue
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("pdf_text_extract_failed", error=str(exc)[:150])
+
     text = "\n".join(part for part in text_parts if part).strip()
+    if _pdf_text_is_unreadable(text):
+        # A PDF whose fonts carry no ToUnicode map extracts as "(cid:12)(cid:7)…".
+        # Measured live on a real 948-page supplier catalog: 1.47 M characters of
+        # it, catalog density 0, and the LLM was fed pure noise while the import
+        # reported success. Render and OCR instead.
+        logger.info("pdf_catalog_text_unreadable_switching_to_ocr", chars=len(text))
+        text = await _ocr_pdf_text(file_bytes, max_pages=min(max_pages, 60))
+
     if len(text) < 50:
         logger.warning("pdf_catalog_no_text_layer", chars=len(text))
         return []
     logger.info("pdf_catalog_text_fallback", chars=len(text))
-    return await _parse_catalog_text_via_llm(text, hint="PDF-каталог")
+    return await _parse_catalog_text_via_llm(
+        text, hint="PDF-каталог", max_chunks=_chunk_budget_for(text)
+    )
+
+
+def _chunk_budget_for(text: str, chunk_chars: int = 2500) -> int:
+    """How many chunks a FILE-sized catalog deserves.
+
+    The chat-turn default (8) is right for a web page and absurd for a 1.5 M
+    character catalog — it read 1.4% of it and reported success. A file is
+    parsed by a worker with an hour-long budget, so scale with the content and
+    cap where the wall-clock stops being reasonable.
+    """
+    needed = max(1, len(text) // chunk_chars)
+    return min(needed, 120)
+
+
+def _pdf_text_is_unreadable(text: str) -> bool:
+    """Does this "text layer" actually contain words?
+
+    Two real shapes of failure: CID placeholders (no ToUnicode map) and a page
+    of punctuation from a scanned page's stray artefacts.
+    """
+    sample = text[:20000]
+    if not sample.strip():
+        return False  # genuinely empty — the caller handles that separately
+    if sample.count("(cid:") > 20:
+        return True
+    letters = sum(1 for ch in sample if ch.isalpha())
+    return letters / max(len(sample), 1) < 0.25
+
+
+async def _ocr_pdf_text(file_bytes: bytes, max_pages: int = 60) -> str:
+    """Render pages and OCR them (rus+eng), bounded by page budget."""
+    try:
+        import fitz  # PyMuPDF
+        import pytesseract
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover — depends on the image
+        logger.warning("pdf_ocr_unavailable", error=str(exc))
+        return ""
+
+    def _run() -> str:
+        parts: list[str] = []
+        with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+            total = doc.page_count
+            # Sample ACROSS the document, never the first N pages: a real
+            # 948-page catalog opens with covers and ~30 pages of contents, so
+            # the first 60 pages OCR'd cleanly and contained not one article
+            # (measured live — 92 000 characters, zero rows).
+            if total <= max_pages:
+                indices = list(range(total))
+            else:
+                stride = total / max_pages
+                indices = sorted({int(i * stride) for i in range(max_pages)})
+            for index in indices:
+                page = doc.load_page(index)
+                pixmap = page.get_pixmap(dpi=200)
+                image = Image.frombytes(
+                    "RGB", (pixmap.width, pixmap.height), pixmap.samples
+                )
+                try:
+                    parts.append(pytesseract.image_to_string(image, lang="rus+eng"))
+                except Exception as exc:  # noqa: BLE001 — one bad page is not fatal
+                    logger.warning("pdf_ocr_page_failed", page=index, error=str(exc)[:120])
+            if total > max_pages:
+                logger.info(
+                    "pdf_ocr_sampled",
+                    pages_ocr=len(indices),
+                    pages_total=total,
+                    stride=round(total / max_pages, 1),
+                )
+        return "\n".join(parts)
+
+    return await asyncio.to_thread(_run)
 
 
 # ── MinIO Helpers ─────────────────────────────────────────────────────────────

@@ -72,8 +72,11 @@ capabilities:
         блок отчёта report с кликабельными ссылками — если просили ТОЛЬКО
         найти, публикуй его через workspace.general и на этом всё.
       - attach_web_catalog — ГЛАВНОЕ действие: прикрепить каталоги к поставщику.
-        Принимает список urls (или один url) — отправляй ВСЕ найденные файлы
-        за один вызов, не по одному. Разбор идёт В ФОНЕ (крупный каталог —
+        Для «найди в интернете каталоги поставщика X и загрузи» достаточно
+        ОДНОГО вызова с supplier_name и БЕЗ urls: он сам найдёт файлы на сайте
+        поставщика, а если файлов нет — запустит обход страниц сайта. urls
+        передавай, только когда ссылки уже известны (тогда все сразу, одним
+        вызовом, не по одному). Разбор идёт В ФОНЕ (крупный каталог —
         несколько минут на файл): вызов сразу возвращает status=queued,
         список источников и готовый блок отчёта (report) со статусами и
         кликабельными ссылками. Публикуй report на Рабочий стол как есть через
@@ -82,9 +85,12 @@ capabilities:
       - ingest_status — прогресс фоновой загрузки по поставщику: сколько
         источников готово, сколько позиций добавлено, что не получилось.
         Вызывай, когда спрашивают «как там каталоги» или нужен итог.
-        Типовой поток «найди каталоги и прикрепи»: discover_catalogs →
-        attach_web_catalog(urls=[все найденные файлы]) → workspace.general(report)
+        Типовой поток «найди каталоги и прикрепи» — это ОДИН вызов:
+        attach_web_catalog(supplier_name) → workspace.general(report)
         → (позже, по запросу) ingest_status → workspace.general(report).
+        Публикация таблицы товаров из счетов вместо загрузки каталога —
+        невыполненная задача, так делать нельзя. Если в ответе
+        supplier_website_unknown — задай один вопрос про адрес сайта.
       - resolve_supplier — найти поставщика по имени. Если вернулись
         candidates (несколько совпадений) или resolved=false — СПРОСИ
         пользователя, какой поставщик имелся в виду, не угадывай.
@@ -107,7 +113,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "discover_catalogs | attach_web_catalog | ingest_status | resolve_supplier | list_entries | create_supplier | ingest_web_source | approve"
+          description: "discover_catalogs | attach_web_catalog | crawl_site | ingest_status | resolve_supplier | list_entries | list_uploads | reingest_upload | refresh | create_supplier | ingest_web_source | approve"
         supplier_name:
           type: string
           description: "Название поставщика как в счетах («ООО Мир Станочника») — для attach_web_catalog/resolve_supplier"

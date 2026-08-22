@@ -598,7 +598,12 @@ async def test_discover_catalogs_reports_nothing_found_honestly(client: AsyncCli
     assert resp.status_code == 200
     data = resp.json()
     assert data["candidates"] == []
-    assert "не найдено" in data["message"]
+    # Changed 2026-08-21: "не найдено" left the agent with nothing to do, and it
+    # published a table of invoice items instead. With no verified site the
+    # answer now says what blocks it and what to ask.
+    message = data["message"]
+    assert "сайт" in message.lower()
+    assert "спроси" in message.lower() or "уточните" in message.lower()
 
 
 @pytest.mark.asyncio
@@ -714,30 +719,46 @@ async def test_attach_queues_by_default_and_answers_immediately(client: AsyncCli
     hold the connection (or the GPU) for it."""
     from app.domain.catalog_ingest_status import clear_source_statuses
 
-    sent: list[list[str]] = []
+    files_sent: list[str] = []
+    pages_sent: list[list[str]] = []
 
     class _Task:
         id = "task-123"
 
-    def fake_delay(supplier_id, urls, max_pages, max_chunks):
-        sent.append(urls)
+    def fake_page_delay(supplier_id, urls, max_pages, max_chunks):
+        pages_sent.append(urls)
         return _Task()
 
-    with patch("app.tasks.drawing_analysis.ingest_web_catalog_sources.delay", fake_delay):
+    def fake_file_delay(supplier_id, url, *args, **kwargs):
+        files_sent.append(url)
+        return _Task()
+
+    with (
+        patch("app.tasks.drawing_analysis.ingest_web_catalog_sources.delay", fake_page_delay),
+        patch("app.tasks.catalog_ingest.ingest_catalog_url.delay", fake_file_delay),
+    ):
         resp = await client.post(
             "/api/tool-catalog/attach-web-catalog",
             json={
                 "supplier_name": "ООО Мир Станочника",
-                "urls": ["https://mirstan.example/a.pdf", "https://mirstan.example/b.pdf"],
+                "urls": [
+                    "https://mirstan.example/a.pdf",
+                    "https://mirstan.example/b.pdf",
+                    "https://mirstan.example/katalog/",
+                ],
             },
         )
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["status"] == "queued"
     assert data["task_id"] == "task-123"
-    # One task per source — a huge catalog must not eat another's time budget.
-    assert sent == [["https://mirstan.example/a.pdf"], ["https://mirstan.example/b.pdf"]]
-    assert [s["status"] for s in data["sources"]] == ["queued", "queued"]
+    # A downloadable FILE goes through the document pipeline (page-by-page table
+    # extraction, OCR when the text layer is unreadable); a PAGE keeps the
+    # text/LLM path. Sending a 44 MB PDF through the page path read a fraction
+    # of it and reported success — measured live.
+    assert files_sent == ["https://mirstan.example/a.pdf", "https://mirstan.example/b.pdf"]
+    assert pages_sent == [["https://mirstan.example/katalog/"]]
+    assert [s["status"] for s in data["sources"]] == ["queued", "queued", "queued"]
     # The report is publishable right away — with clickable links.
     assert next(c for c in data["report"]["columns"] if c["key"] == "url")["type"] == "link"
 
@@ -748,7 +769,7 @@ async def test_attach_queues_by_default_and_answers_immediately(client: AsyncCli
     assert status.status_code == 200
     status_data = status.json()
     assert status_data["in_progress"] is True
-    assert len(status_data["sources"]) == 2
+    assert len(status_data["sources"]) == 3
     clear_source_statuses(status_data["tool_supplier_id"])
 
 

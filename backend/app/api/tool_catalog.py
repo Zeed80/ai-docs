@@ -1390,10 +1390,83 @@ async def attach_web_catalog(
         )
 
     urls = payload.source_urls()
+    discovery_note = ""
     if not urls:
-        raise HTTPException(
-            status_code=422, detail="Укажите url или urls каталога поставщика"
+        # "Найди каталоги и загрузи" is ONE intention, so it is one call: with no
+        # urls given, discover them here instead of failing. The live turn this
+        # fixes stopped after discovery and published a table of invoice items —
+        # the model is not required to remember the second step any more.
+        discovered = await discover_catalogs(
+            DiscoverCatalogsRequest(**payload.model_dump(include={
+                "supplier_name", "supplier_id", "party_id", "inn", "website",
+            })),
+            db,
         )
+        urls = [c.url for c in discovered.candidates if c.kind != "page"]
+        discovery_note = f"Найдено файлов каталогов: {len(urls)}. "
+        # A supplier usually publishes BOTH: PDFs per product line and product
+        # pages in a web catalog ("их очень много по оборудованию, PDF и просто
+        # на сайте"). Attaching only the files would quietly cover half the
+        # request, so the site walk is started alongside them.
+        site_pages = [
+            c for c in discovered.candidates if c.kind == "page" and c.on_supplier_site
+        ]
+        if urls and site_pages and discovered.website:
+            try:
+                from app.tasks.catalog_crawl import crawl_supplier_site
+
+                crawl_task_id = crawl_supplier_site.delay(
+                    str(supplier.id), discovered.website, 60, 3
+                ).id
+                discovery_note += (
+                    f"Каталог опубликован ещё и страницами сайта — запущен обход "
+                    f"{discovered.website} (задача {crawl_task_id[:8]}). "
+                )
+            except Exception as exc:  # noqa: BLE001 — files still proceed
+                logger.warning("catalog_crawl_alongside_failed", error=str(exc)[:150])
+        if not urls:
+            page_urls = [c.url for c in discovered.candidates if c.on_supplier_site]
+            if discovered.website:
+                # Nothing downloadable: the catalog lives as site pages. Crawl it
+                # rather than coming back empty-handed.
+                try:
+                    from app.tasks.catalog_crawl import crawl_supplier_site
+
+                    task_id = crawl_supplier_site.delay(
+                        str(supplier.id), discovered.website, 60, 3
+                    ).id
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(
+                        status_code=503,
+                        detail={
+                            "error_code": "catalog_crawl_enqueue_failed",
+                            "message": f"Обход сайта не встал в очередь: {str(exc)[:150]}",
+                        },
+                    ) from exc
+                return AttachWebCatalogResult(
+                    tool_supplier_id=supplier.id,
+                    party_id=supplier.main_supplier_id,
+                    supplier_name=supplier.name,
+                    source_url=discovered.website,
+                    entries_created=0,
+                    entries_conflicted=0,
+                    task_id=task_id,
+                    status="queued",
+                    message=(
+                        f"Файлов каталога у «{supplier.name}» нет — каталог опубликован "
+                        f"страницами сайта {discovered.website}. Запущен обход сайта "
+                        f"({len(page_urls)} разделов найдено); позиции появятся в каталоге "
+                        "поставщика по мере разбора. Статус — tool_catalog.ingest_status."
+                    ),
+                    report=discovered.report,
+                )
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error_code": "supplier_website_unknown",
+                    "message": discovered.message,
+                },
+            )
 
     if not payload.wait:
         # Default path: hand the work to the worker and answer now. Parsing one
@@ -1414,14 +1487,27 @@ async def attach_web_catalog(
             )
         task_id: str | None = None
         try:
+            from app.tasks.catalog_ingest import (
+                ingest_catalog_url,
+                looks_like_catalog_file_url,
+            )
             from app.tasks.drawing_analysis import ingest_web_catalog_sources
 
             # One task per source: a huge catalog must not eat the time budget
             # of the others (a shared task hit the worker's time limit mid-parse
             # and left the remaining sources stuck at "queued" — live finding).
+            #
+            # A FILE (pdf/xlsx/zip) is downloaded and run through the document
+            # pipeline: the web-text path fetches only a few OCR'd pages, and on
+            # a real 200 000-character PDF catalog it returned rows=0 while
+            # reporting success. Pages keep the text/LLM path.
             task_ids = [
-                ingest_web_catalog_sources.delay(
-                    str(supplier.id), [url], payload.max_pages, payload.max_chunks
+                (
+                    ingest_catalog_url.delay(str(supplier.id), url)
+                    if looks_like_catalog_file_url(url)
+                    else ingest_web_catalog_sources.delay(
+                        str(supplier.id), [url], payload.max_pages, payload.max_chunks
+                    )
                 ).id
                 for url in urls
             ]
@@ -1449,7 +1535,8 @@ async def attach_web_catalog(
             sources=queued,
             report=_attach_report_block(supplier.name, queued),
             message=(
-                f"Взял в работу каталогов: {len(urls)} для «{supplier.name}». "
+                discovery_note
+                + f"Взял в работу каталогов: {len(urls)} для «{supplier.name}». "
                 "Разбор идёт в фоне (крупный каталог — несколько минут на файл); "
                 "позиции появляются на карточке поставщика во вкладке «Каталог "
                 "инструментов» по мере разбора. Текущий прогресс — action=ingest_status."
@@ -1647,6 +1734,192 @@ _CATALOG_WORDS = (
 )
 
 
+async def _known_host_from_entries(db: AsyncSession, supplier_id: uuid.UUID) -> str | None:
+    """The host the supplier's existing catalog entries came from.
+
+    Found live: "ООО Мир Станочника" had 1046 entries ingested from mirstan.ru
+    and an EMPTY website field, so discovery had no anchor and web search
+    returned gloves and panel benders from unrelated hosts. The system already
+    knew the site — it just never wrote it down.
+    """
+    from urllib.parse import urlparse
+
+    rows = (
+        await db.execute(
+            select(ToolCatalogEntry.metadata_).where(
+                ToolCatalogEntry.supplier_id == supplier_id,
+                ToolCatalogEntry.metadata_.isnot(None),
+            )
+        )
+    ).scalars().all()
+    counts: dict[str, int] = {}
+    for meta in rows:
+        url = (meta or {}).get("source_url") if isinstance(meta, dict) else None
+        if not url:
+            continue
+        host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+        if host:
+            counts[host] = counts.get(host, 0) + 1
+    if not counts:
+        return None
+    return max(counts, key=lambda host: counts[host])
+
+
+def _name_tokens(name: str) -> list[str]:
+    import re as _re
+
+    cleaned = _re.sub(
+        r"\b(ооо|оао|зао|ао|ип|пао|тд|торговый дом|llc|ltd|gmbh)\b",
+        " ",
+        name.lower().replace("ё", "е"),
+    )
+    return [token for token in _re.split(r"[^a-zа-я0-9]+", cleaned) if len(token) > 3]
+
+
+async def _discover_official_site(name: str, inn: str | None) -> tuple[str | None, list[str]]:
+    """Search for the supplier's own site and VERIFY it before trusting it.
+
+    Verification matters more than the search: an unverified host turns every
+    later step into noise (that is exactly how a glove price list ended up
+    among a machine-tool supplier's "catalogs").
+    """
+    from app.api.web_search import (
+        WebFetchRequest,
+        WebSearchRequest,
+        execute_web_search,
+        fetch_page,
+    )
+
+    diagnostics: list[str] = []
+    queries = [f"{name} официальный сайт"]
+    if inn:
+        queries.insert(0, f"{name} ИНН {inn} официальный сайт")
+    tokens = _name_tokens(name)
+
+    seen_hosts: list[str] = []
+    for query in queries:
+        try:
+            found = await execute_web_search(WebSearchRequest(query=query, limit=8))
+        except HTTPException as exc:
+            diagnostics.append(f"site_search_failed:{str(exc.detail)[:100]}")
+            continue
+        for hit in found.results:
+            from urllib.parse import urlparse
+
+            host = (urlparse(hit.url).hostname or "").lower().removeprefix("www.")
+            if not host or host in seen_hosts:
+                continue
+            # Aggregators and directories are never the supplier's own site.
+            if any(
+                bad in host
+                for bad in (
+                    "rusprofile", "list-org", "sbis", "zachestnyibiznes", "checko",
+                    "vk.com", "facebook", "youtube", "avito", "yandex", "google",
+                    "wikipedia", "2gis", "flamp", "spark-interfax", "audit-it",
+                )
+            ):
+                continue
+            seen_hosts.append(host)
+            if len(seen_hosts) > 6:
+                break
+            try:
+                page = await fetch_page(
+                    WebFetchRequest(url=f"https://{host}", max_chars=6000, ocr=False)
+                )
+            except HTTPException:
+                continue
+            text = (page.text or "").lower().replace("ё", "е")
+            if inn and inn in text:
+                return f"https://{host}", diagnostics
+            if tokens and all(token in text for token in tokens[:2]):
+                return f"https://{host}", diagnostics
+    diagnostics.append("site_not_verified")
+    return None, diagnostics
+
+
+async def _ensure_supplier_website(
+    db: AsyncSession, supplier: ToolSupplier, explicit: str | None = None
+) -> tuple[str | None, list[str]]:
+    """Resolve the supplier's site once and REMEMBER it.
+
+    Order: what the caller passed → what the card already stores → the host the
+    supplier's own catalog entries came from → a verified web search.
+    """
+    diagnostics: list[str] = []
+    website = (explicit or supplier.website or "").strip() or None
+
+    if not website:
+        host = await _known_host_from_entries(db, supplier.id)
+        if host:
+            website = f"https://{host}"
+            diagnostics.append(f"site_from_existing_entries:{host}")
+
+    if not website:
+        inn = None
+        if supplier.main_supplier_id:
+            from app.db.models import Party
+
+            party = await db.get(Party, supplier.main_supplier_id)
+            inn = getattr(party, "inn", None)
+        website, search_diag = await _discover_official_site(supplier.name, inn)
+        diagnostics.extend(search_diag)
+
+    if website and not supplier.website:
+        supplier.website = website
+        await db.commit()
+        diagnostics.append("site_saved_to_supplier")
+    return website, diagnostics
+
+
+def _mentions_supplier(url: str, title: str | None, name: str) -> bool:
+    """Does an off-site link actually belong to this supplier?"""
+    haystack = f"{url} {title or ''}".lower().replace("ё", "е")
+    tokens = _name_tokens(name)
+    return bool(tokens) and any(token in haystack for token in tokens)
+
+
+def _discovery_message(
+    name: str, website: str | None, ordered: list, files: list
+) -> str:
+    """Say what to do next, not just what happened.
+
+    The live failure this addresses: discovery returned links, the model had no
+    instruction attached to them, and it fell back to publishing a table of
+    invoice items — the one thing the request did not ask for.
+    """
+    if ordered:
+        pages = len(ordered) - len(files)
+        parts = [
+            f"Найдено кандидатов каталогов: {len(ordered)} "
+            f"(файлов PDF/Excel: {len(files)}, страниц: {pages})."
+        ]
+        if files:
+            parts.append(
+                "СЛЕДУЮЩИЙ ШАГ: вызови tool_catalog.attach_web_catalog с supplier_name "
+                "и списком urls ВСЕХ найденных файлов — одним вызовом."
+            )
+        if pages and website:
+            parts.append(
+                "Если каталог опубликован страницами сайта, а не файлом — вызови "
+                "tool_catalog.crawl_site (start_url — сайт поставщика), он соберёт "
+                "позиции со страниц."
+            )
+        return " ".join(parts)
+
+    if not website:
+        return (
+            f"Сайт поставщика «{name}» неизвестен, поэтому искать негде: поиск по "
+            "одному названию возвращает чужие прайсы. СПРОСИ у пользователя адрес "
+            "сайта или прямую ссылку на каталог — не публикуй вместо этого таблицу "
+            "товаров из счетов."
+        )
+    return (
+        f"На сайте {website} каталогов-файлов не найдено. Возможные действия: "
+        "tool_catalog.crawl_site (собрать каталог со страниц сайта) или спроси у "
+        "пользователя прямую ссылку на каталог."
+    )
+
+
 def _candidate_kind(url: str) -> str:
     path = url.split("?")[0].lower()
     if path.endswith(".pdf"):
@@ -1656,8 +1929,40 @@ def _candidate_kind(url: str) -> str:
     return "page"
 
 
+_AGGREGATOR_HOSTS = (
+    "rusprofile", "list-org", "sbis", "zachestnyibiznes", "checko", "bizorg",
+    "expocentr", "spark-interfax", "audit-it", "2gis", "flamp", "yell.ru",
+    "wikipedia", "avito", "vk.com", "facebook", "youtube",
+)
+
+
+def _normalize_candidate_url(url: str) -> str:
+    """Drop the fragment so "…/catalog/", "…/catalog/#" and "…/catalog/#content"
+    are one candidate instead of three (measured live on a real supplier site)."""
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(url)
+    return urlunparse(parsed._replace(fragment=""))
+
+
+def _is_navigation_link(url: str) -> bool:
+    """JS handlers and mail links are page furniture, not catalogs."""
+    from urllib.parse import urlparse
+
+    return urlparse(url).scheme in ("javascript", "mailto", "tel")
+
+
+def _is_aggregator(url: str) -> bool:
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    return any(bad in host for bad in _AGGREGATOR_HOSTS)
+
+
 def _looks_like_catalog_link(url: str, text: str) -> bool:
     haystack = f"{url} {text}".lower()
+    if _is_navigation_link(url) or _is_aggregator(url):
+        return False
     if url.split("?")[0].lower().endswith(_CATALOG_FILE_EXTENSIONS):
         return True
     return any(word in haystack for word in _CATALOG_WORDS)
@@ -1783,8 +2088,11 @@ async def discover_catalogs(
             },
         )
 
-    diagnostics: list[str] = []
-    website = (payload.website or supplier.website or "").strip() or None
+    # Without a verified site every later step is noise — resolve (and store)
+    # it first. Live finding: a supplier with 1046 entries already ingested
+    # from their own site had an empty website field, so search-only discovery
+    # returned work gloves and panel benders from unrelated hosts.
+    website, diagnostics = await _ensure_supplier_website(db, supplier, payload.website)
     name = supplier.name
 
     queries = [f"{name} каталог pdf", f"{name} прайс-лист"]
@@ -1805,41 +2113,50 @@ async def discover_catalogs(
             diagnostics.append(f"search_failed:{query}:{str(exc.detail)[:120]}")
             continue
         for hit in found.results:
-            if not _looks_like_catalog_link(hit.url, hit.title or ""):
+            hit_url = _normalize_candidate_url(hit.url)
+            if not _looks_like_catalog_link(hit_url, hit.title or ""):
                 continue
-            search_hits.append((hit.url, hit.title or ""))
-            if hit.url in candidates:
+            search_hits.append((hit_url, hit.title or ""))
+            if hit_url in candidates:
                 continue
-            candidates[hit.url] = CatalogCandidate(
-                url=hit.url,
+            candidates[hit_url] = CatalogCandidate(
+                url=hit_url,
                 title=hit.title or "",
-                kind=_candidate_kind(hit.url),
+                kind=_candidate_kind(hit_url),
                 found_via="search",
-                on_supplier_site=_same_site(hit.url, website),
+                on_supplier_site=_same_site(hit_url, website),
             )
             # A supplier's site was unknown → learn it from the first on-site hit.
-            if website is None and hit.url.startswith("http"):
+            if website is None and hit_url.startswith("http"):
                 from urllib.parse import urlparse
 
-                host = urlparse(hit.url).hostname or ""
+                host = urlparse(hit_url).hostname or ""
                 if host and name.split()[-1].lower()[:5] in host.lower():
                     website = f"https://{host}"
 
     # Pass 2 — open the supplier's own catalog pages and mine their file links.
     pages_to_scan: list[str] = []
     if website:
-        base = website if "//" in website else f"https://{website}"
-        pages_to_scan.append(base.rstrip("/") + "/catalog/")
-        pages_to_scan.append(base.rstrip("/"))
+        base = (website if "//" in website else f"https://{website}").rstrip("/")
+        # Russian machine-tool sites publish catalogs under many names; trying a
+        # handful of them beats depending on one guess.
+        pages_to_scan.extend(
+            base + path
+            for path in (
+                "/catalog/", "/katalog/", "/price/", "/prays/", "/prajs/",
+                "/produktsiya/", "/products/", "/oborudovanie/", "/",
+            )
+        )
     pages_to_scan.extend(
         url for url, _ in search_hits if _candidate_kind(url) == "page"
     )
     seen_pages: list[str] = []
-    for page_url in pages_to_scan:
-        if len(seen_pages) >= payload.max_pages_to_scan:
-            break
-        if page_url in seen_pages:
-            continue
+    # Second level: catalog sections found on the first pass are opened too —
+    # a machine-tool supplier keeps one PDF per product line behind a section
+    # page, so a single-level scan sees the sections and none of the files.
+    queued_second_level: list[str] = []
+
+    async def _scan(page_url: str, *, second_level: bool) -> None:
         try:
             fetched = await fetch_page(
                 WebFetchRequest(
@@ -1848,18 +2165,65 @@ async def discover_catalogs(
             )
         except HTTPException as exc:
             diagnostics.append(f"scan_failed:{page_url}:{str(exc.detail)[:120]}")
-            continue
+            return
         seen_pages.append(page_url)
         for link in fetched.links:
-            if link.url in candidates or not _looks_like_catalog_link(link.url, link.text):
+            link_url = _normalize_candidate_url(link.url)
+            on_site = _same_site(link_url, website)
+            if (
+                not second_level
+                and on_site
+                and _candidate_kind(link_url) == "page"
+                and _looks_like_catalog_link(link_url, link.text)
+                and link_url not in queued_second_level
+                and link_url not in seen_pages
+            ):
+                queued_second_level.append(link_url)
+            if link_url in candidates or not _looks_like_catalog_link(link_url, link.text):
                 continue
-            candidates[link.url] = CatalogCandidate(
-                url=link.url,
+            candidates[link_url] = CatalogCandidate(
+                url=link_url,
                 title=link.text[:200],
-                kind=_candidate_kind(link.url),
+                kind=_candidate_kind(link_url),
                 found_via="site_scan",
-                on_supplier_site=_same_site(link.url, website),
+                on_supplier_site=on_site,
             )
+
+    for page_url in pages_to_scan:
+        if len(seen_pages) >= payload.max_pages_to_scan:
+            break
+        if page_url in seen_pages:
+            continue
+        await _scan(page_url, second_level=False)
+
+    for page_url in queued_second_level:
+        if len(seen_pages) >= payload.max_pages_to_scan:
+            break
+        if page_url in seen_pages:
+            continue
+        await _scan(page_url, second_level=True)
+
+    # Drop foreign hosts once the site is known. A search for a supplier's name
+    # reliably returns other companies' price lists (measured: work gloves and
+    # panel benders came back as "catalogs" of a machine-tool supplier), and a
+    # list where 19 of 20 rows are wrong is worse than a short honest one.
+    if website:
+        foreign = [
+            url
+            for url, candidate in candidates.items()
+            if not candidate.on_supplier_site
+            and (
+                # An off-site PAGE is a directory listing or a marketplace, never
+                # this supplier's catalog. Only off-site FILES that carry the
+                # supplier's name are worth keeping (a CDN-hosted PDF).
+                candidate.kind == "page"
+                or not _mentions_supplier(url, candidate.title, name)
+            )
+        ]
+        for url in foreign:
+            candidates.pop(url, None)
+        if foreign:
+            diagnostics.append(f"filtered_foreign_hosts:{len(foreign)}")
 
     # Files (PDF/Excel) on the supplier's own site first — those attach cleanly;
     # pages last, since many are JS-rendered listings with no readable text.
@@ -1903,17 +2267,7 @@ async def discover_catalogs(
         scanned_pages=seen_pages,
         diagnostics=diagnostics,
         report=report,
-        message=(
-            f"Найдено кандидатов каталогов: {len(ordered)} "
-            f"(из них файлов PDF/Excel: {len(files)}). "
-            "Чтобы прикрепить к поставщику, вызови attach_web_catalog со списком urls."
-            if ordered
-            else (
-                f"Каталогов для «{name}» не найдено ни поиском, ни на сайте"
-                + (f" {website}" if website else "")
-                + ". Уточните адрес сайта или прямую ссылку на каталог."
-            )
-        ),
+        message=_discovery_message(name, website, ordered, files),
     )
 
 

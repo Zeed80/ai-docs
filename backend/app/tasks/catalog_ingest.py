@@ -310,3 +310,92 @@ async def _finish(factory, job_id, status: str, *, warning: str | None = None):
             job.error = warning
 
     await _with_job(factory, job_id, _apply)
+
+
+CATALOG_FILE_SUFFIXES = {".pdf", ".xls", ".xlsx", ".xlsm", ".csv", ".json", ".txt", ".docx"}
+
+
+def looks_like_catalog_file_url(url: str) -> bool:
+    """Is this URL a downloadable catalog file rather than a web page?"""
+    from urllib.parse import urlparse
+
+    path = urlparse(url).path.lower()
+    return Path(path).suffix in CATALOG_FILE_SUFFIXES or Path(path).suffix in ARCHIVE_SUFFIXES
+
+
+@celery_app.task(
+    bind=True,
+    name="catalog.ingest_url",
+    max_retries=1,
+    soft_time_limit=3600,
+    time_limit=3660,
+)
+def ingest_catalog_url(self, supplier_id: str, url: str, title: str | None = None) -> dict:
+    """Download a catalog FILE from the web and run the document pipeline on it.
+
+    Web pages go through the text/LLM path, but a PDF or Excel catalog must not:
+    that path fetches at most a handful of OCR'd pages and, measured live on a
+    real 200 000-character supplier catalog, produced `rows=0` while reporting
+    success. Downloading the file and feeding the normal pipeline gives page-by
+    -page table extraction, dedup by hash, visible stages and a real row count.
+    """
+    from app.tasks.drawing_analysis import run_async
+
+    return run_async(_ingest_url_async(supplier_id, url, title))
+
+
+async def _ingest_url_async(supplier_id: str, url: str, title: str | None) -> dict:
+    import uuid as _uuid
+    from urllib.parse import unquote, urlparse
+
+    import httpx
+
+    from app.db.models import ToolSupplier
+    from app.db.session import _get_session_factory
+    from app.domain.catalog_documents import register_catalog_document
+
+    filename = Path(unquote(urlparse(url).path)).name or "catalog.pdf"
+    try:
+        async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.content
+    except Exception as exc:  # noqa: BLE001 — one dead link must not fail the batch
+        logger.warning("catalog_url_download_failed", url=url, error=str(exc)[:200])
+        return {"url": url, "error": f"скачать не удалось: {str(exc)[:150]}"}
+
+    if not payload:
+        return {"url": url, "error": "пустой файл"}
+
+    factory = _get_session_factory()
+    async with factory() as db:
+        supplier = await db.get(ToolSupplier, _uuid.UUID(supplier_id))
+        if supplier is None:
+            return {"url": url, "error": f"поставщик {supplier_id} не найден"}
+        registered = await register_catalog_document(
+            db,
+            supplier=supplier,
+            file_bytes=payload,
+            filename=filename,
+            source_channel="web",
+            metadata={"source_url": url, "title": title} if title else {"source_url": url},
+        )
+        await db.commit()
+        document_id = str(registered.document.id)
+        duplicate = registered.is_duplicate
+
+    ingest_catalog_document.delay(document_id)
+    logger.info(
+        "catalog_url_downloaded",
+        url=url,
+        document_id=document_id,
+        bytes=len(payload),
+        duplicate=duplicate,
+    )
+    return {
+        "url": url,
+        "document_id": document_id,
+        "bytes": len(payload),
+        "duplicate": duplicate,
+        "status": "queued",
+    }

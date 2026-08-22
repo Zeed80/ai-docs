@@ -259,3 +259,91 @@ def test_price_with_thousands_separator_is_not_lost():
     assert _safe_float("1.234,56") == 1234.56
     assert _safe_float("15 000 руб.") == 15000.0
     assert _safe_float("—") is None
+
+
+def test_junk_tables_do_not_mask_the_text_fallback():
+    """A table extractor returning layout noise must not count as a result.
+
+    Live: a graphical PDF catalog produced 20 "rows" whose only key was a run
+    of underscores; the non-empty list suppressed the text/LLM fallback and the
+    import ended rows_parsed=20, created=0.
+    """
+    from app.tasks.drawing_analysis import _usable_row_count
+
+    junk = [
+        {"________________________": "ДОСТУПНЫЕ ПРОФИЛИ КРУГОВ"},
+        {"________________________": None},
+        {"__________________": "ВЫШЛИФОВКА КАНАВКИ"},
+    ]
+    assert _usable_row_count(junk) == 0
+
+    real = [
+        {"name": "Фреза концевая Ø12"},
+        {"part_number": "DR-6-5", "price": "480,00"},
+        {"name": "х"},  # too short to be a name
+    ]
+    assert _usable_row_count(real) == 2
+
+
+def test_cid_pdf_text_is_recognised_as_unreadable():
+    """A PDF without a ToUnicode map extracts as "(cid:NN)" — not text.
+
+    Live: a 948-page supplier catalog produced 1.47 M characters of this, the
+    LLM was fed noise, and the import reported success with zero rows.
+    """
+    from app.tasks.drawing_analysis import _pdf_text_is_unreadable
+
+    assert _pdf_text_is_unreadable("(cid:12)(cid:7)(cid:19)" * 40)
+    assert not _pdf_text_is_unreadable(
+        "Фреза концевая Ø12 твердосплавная, артикул MT-9-12, цена 3450 руб"
+    )
+    assert not _pdf_text_is_unreadable(""), "empty text is handled by the caller"
+
+
+def test_chunk_budget_scales_with_file_size():
+    from app.tasks.drawing_analysis import _chunk_budget_for
+
+    assert _chunk_budget_for("x" * 7000) == 2
+    # A 1.5M-character catalog must not be read at 1.4% and called done.
+    assert _chunk_budget_for("x" * 1_470_000) == 120
+
+
+def test_ocr_samples_across_the_document_not_just_the_front():
+    """A 948-page catalog opens with covers and ~30 pages of contents.
+
+    OCR'ing the first 60 pages produced 92 000 readable characters and zero
+    articles — the budget must be spread over the whole book instead.
+    """
+    import inspect
+
+    from app.tasks.drawing_analysis import _ocr_pdf_text
+
+    source = inspect.getsource(_ocr_pdf_text)
+    assert "stride" in source, "page sampling must be strided, not head-first"
+
+    # The index maths itself, mirrored here so the contract is executable.
+    total, max_pages = 948, 60
+    stride = total / max_pages
+    indices = sorted({int(i * stride) for i in range(max_pages)})
+    assert len(indices) == max_pages
+    assert indices[0] == 0
+    assert indices[-1] > total * 0.9, "the tail of the catalog must be reached"
+
+
+def test_extraction_prompt_does_not_reject_non_cutting_tools():
+    """Suppliers sell gauges, machines and consumables too.
+
+    Live: with "tool_type must be one of <cutting tools>" in the prompt, a real
+    948-page measuring-instrument catalog returned {"rows": []} for every chunk
+    — 1.8 s per call, zero products imported, task reported success. The same
+    text with the type demoted to a hint yielded 36 rows from two pages.
+    """
+    import inspect
+
+    from app.tasks.drawing_analysis import _parse_catalog_text_via_llm
+
+    source = inspect.getsource(_parse_catalog_text_via_llm)
+    prompt = source.split('system = """', 1)[1].split('"""', 1)[0]
+    assert "NEVER return an empty list just because" in prompt
+    assert "must be one of" not in prompt, "the type list must stay a hint, not a gate"
+    assert "prefer one of" in prompt

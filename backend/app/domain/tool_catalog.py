@@ -300,8 +300,13 @@ class AttachWebCatalogRequest(SupplierRefRequest):
     is one call, not one call per file the agent has to remember to repeat.
     """
 
+    # Both optional: with neither, the endpoint discovers the catalogs itself —
+    # "найди и загрузи" is one intention and must be one call, or the model can
+    # stop after finding and report instead of attaching (observed live).
     url: str | None = Field(default=None, min_length=4, max_length=2048)
-    urls: list[str] | None = Field(default=None, max_length=20)
+    urls: list[str] | None = Field(default=None, max_length=40)
+    # Site to search, when the supplier card has none yet.
+    website: str | None = None
     title: str | None = None
     # Scanned-PDF catalogs need OCR; keep the page cap explicit and bounded.
     max_pages: int = Field(10, ge=0, le=20)
@@ -394,9 +399,11 @@ class DiscoverCatalogsRequest(SupplierRefRequest):
     # Explicit site when the supplier's is known; otherwise it is resolved from
     # ToolSupplier.website, then from a web search on the supplier's name.
     website: str | None = None
-    max_candidates: int = Field(20, ge=1, le=50)
+    max_candidates: int = Field(40, ge=1, le=100)
     # Catalog pages to open and mine for file links (each is a real page load).
-    max_pages_to_scan: int = Field(4, ge=0, le=10)
+    # A supplier keeps one PDF per product line behind a section page, so four
+    # pages saw the sections and none of the files.
+    max_pages_to_scan: int = Field(12, ge=0, le=40)
 
 
 class CatalogCandidate(BaseModel):
