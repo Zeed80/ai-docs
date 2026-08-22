@@ -3314,6 +3314,22 @@ class ToolCatalogEntry(UUIDPrimaryKey, TimestampMixin, Base):
         GUID(), ForeignKey("canonical_items.id"), nullable=True, index=True
     )
     catalog_page: Mapped[int | None] = mapped_column(Integer)
+    # The physical page this position was read from (catalog_page above stays
+    # the PRINTED page number, which a catalog may number differently).
+    catalog_page_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("catalog_pages.id"), nullable=True, index=True
+    )
+    # Product picture cropped from the catalog page; when nothing could be
+    # matched, image_kind="page" and the path points at the page preview — the
+    # user always sees something, and always knows which of the two it is.
+    image_path: Mapped[str | None] = mapped_column(String(1000))
+    image_thumb_path: Mapped[str | None] = mapped_column(String(1000))
+    image_bbox: Mapped[dict | None] = mapped_column(JSON)  # px of the page raster
+    image_kind: Mapped[str | None] = mapped_column(String(20), index=True)  # crop | page
+    image_confidence: Mapped[float | None] = mapped_column(Float)
+    # sha256(source_document_id, page, normalized part_number|name) — re-running
+    # a batch must not create a second copy of the same position.
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     source_document_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("documents.id"), nullable=True, index=True
     )
@@ -3352,6 +3368,50 @@ class FeatureToolBinding(UUIDPrimaryKey, TimestampMixin, Base):
     catalog_entry: Mapped["ToolCatalogEntry | None"] = relationship(
         foreign_keys=[catalog_entry_id]
     )
+
+
+class CatalogPage(UUIDPrimaryKey, TimestampMixin, Base):
+    """One page of a supplier catalog PDF — and the pipeline's checkpoint.
+
+    A 948-page catalog cannot be parsed in one task: the old path sampled 60
+    pages, glued their text together and lost the page number entirely, so 94 %
+    of the file was never read and no position could be traced back to a page.
+    Making the page a row gives three things at once: a resumable cursor (the
+    status column IS the checkpoint), a real page number for every entry, and a
+    rendered image to show the user and to crop product pictures from.
+    """
+
+    __tablename__ = "catalog_pages"
+    __table_args__ = (
+        UniqueConstraint("document_id", "page_number", name="uq_catalog_pages_document_page"),
+    )
+
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("documents.id"), nullable=False, index=True
+    )
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-based
+    width_pt: Mapped[float | None] = mapped_column(Float)
+    height_pt: Mapped[float | None] = mapped_column(Float)
+
+    image_path: Mapped[str | None] = mapped_column(String(1000))
+    image_width: Mapped[int | None] = mapped_column(Integer)
+    image_height: Mapped[int | None] = mapped_column(Integer)
+    thumb_path: Mapped[str | None] = mapped_column(String(1000))
+
+    # pending → rendering → rendered → parsing → parsed | skipped | failed
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
+    skip_reason: Mapped[str | None] = mapped_column(String(50))
+    # "cover" | "toc" | "blank" | "no_product_signals"
+    text_source: Mapped[str | None] = mapped_column(String(10))  # "text" | "ocr" | "none"
+    text_chars: Mapped[int | None] = mapped_column(Integer)
+    entries_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Image candidates found on the page: [{k, bbox, path, thumb_path, w, h, ...}].
+    # JSON rather than a child table because the page is the unit of idempotency:
+    # rewriting one column is safer on re-run than DELETE+INSERT of child rows.
+    images: Mapped[list | None] = mapped_column(JSON)
+    run_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
 
 class DrawingViewSection(UUIDPrimaryKey, TimestampMixin, Base):

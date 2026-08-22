@@ -71,7 +71,8 @@ async def test_upload_creates_document_links_and_job(client: AsyncClient, db_ses
     ).scalars().first()
     assert job is not None
     keys = [s["key"] for s in job.pipeline_steps]
-    assert keys[:3] == ["store", "unpack", "parse"]
+    # "pages" and "images" joined the pipeline when parsing became page-wise.
+    assert keys[:5] == ["store", "unpack", "pages", "parse", "images"]
 
 
 @pytest.mark.asyncio

@@ -101,6 +101,18 @@ async def _ingest_document_async(document_id: str, celery_task_id: str | None) -
         return {"document_id": document_id, "status": "unpacking"}
 
     await _update_step(factory, job_id, "unpack", "skipped")
+
+    if suffix == ".pdf":
+        # A PDF goes through the page-wise pipeline: every page is rendered,
+        # parsed and kept as a row, so the run is resumable, each position knows
+        # its page, and product pictures can be cropped. The old whole-file path
+        # read a sample of pages and could do none of that.
+        from app.tasks.catalog_pages import prepare_catalog_pages
+
+        await _update_step(factory, job_id, "pages", "running")
+        prepare_catalog_pages.delay(document_id)
+        return {"document_id": document_id, "status": "pages"}
+
     await _update_step(factory, job_id, "parse", "running")
 
     catalog_bytes = await _load_catalog_file(storage_path)
@@ -114,6 +126,8 @@ async def _ingest_document_async(document_id: str, celery_task_id: str | None) -
         await _fail(factory, job_id, "parse", f"Разбор не удался: {exc}"[:400])
         raise
 
+    await _update_step(factory, job_id, "pages", "skipped")
+    await _update_step(factory, job_id, "images", "skipped")
     await _update_step(factory, job_id, "parse", "done", rows_parsed=len(rows))
     await _update_step(factory, job_id, "normalize", "done", rows_parsed=len(rows))
 

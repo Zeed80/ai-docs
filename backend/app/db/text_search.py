@@ -82,3 +82,41 @@ def _postgres_config_literal(config: str) -> ColumnElement:
     if config not in {"russian", "english", "simple"}:
         raise ValueError(f"Unsupported PostgreSQL text search config: {config}")
     return literal_column(f"'{config}'")
+
+
+def immutable_fts_expression(
+    columns: list[ColumnElement], *, config: str = "russian"
+) -> ColumnElement:
+    """A tsvector expression PostgreSQL can build a GIN index on.
+
+    `concat_ws` is only STABLE, so `CREATE INDEX ... USING gin (to_tsvector(...,
+    concat_ws(...)))` is rejected with "functions in index expression must be
+    marked IMMUTABLE". Plain `||` over coalesced text is immutable, so the same
+    expression can live in both the index and the query — which is the only way
+    the planner will actually use the index.
+    """
+    pg_config = _postgres_config_literal(config)
+    parts: ColumnElement | None = None
+    for column in columns:
+        piece = func.coalesce(column, "")
+        parts = piece if parts is None else parts.op("||")(literal_column("' '")).op("||")(piece)
+    return func.to_tsvector(pg_config, parts)
+
+
+def immutable_fts_condition(
+    columns: list[ColumnElement], query: str, *, config: str = "russian"
+) -> ColumnElement:
+    pg_config = _postgres_config_literal(config)
+    return immutable_fts_expression(columns, config=config).op("@@")(
+        func.plainto_tsquery(pg_config, query)
+    )
+
+
+def immutable_fts_rank(
+    columns: list[ColumnElement], query: str, *, config: str = "russian"
+) -> ColumnElement:
+    pg_config = _postgres_config_literal(config)
+    return func.ts_rank_cd(
+        immutable_fts_expression(columns, config=config),
+        func.plainto_tsquery(pg_config, query),
+    )

@@ -1027,6 +1027,13 @@ async def _create_catalog_entries_from_rows(
                         supplier_id=str(supplier_uuid),
                         diameter_mm=entry.diameter_mm,
                         material=entry.material,
+                        part_number=entry.part_number,
+                        catalog_document_id=(
+                            str(source_document_id) if source_document_id else None
+                        ),
+                        catalog_page=entry.catalog_page,
+                        has_image=bool(entry.image_path),
+                        price_value=entry.price_value,
                     )
                     entry.embedding_id = f"tool_catalog:{entry.id}"
 

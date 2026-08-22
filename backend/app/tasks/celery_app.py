@@ -70,6 +70,10 @@ celery_app.conf.update(
         # Supplier catalogs: minutes of parsing plus an embedding per row. They
         # used to route to "gpu" through the drawing_analysis.* glob and blocked
         # document recognition for the duration; own queue, own worker.
+        # Rendering/OCR is CPU work and must not occupy the LLM slot; the parse
+        # step takes gpu_single_flight per page so invoices interleave.
+        "catalog.render_page_batch": {"queue": "catalog_render"},
+        "catalog.prepare_pages": {"queue": "catalog_render"},
         "catalog.*": {"queue": "catalog"},
         "tp_generation.*": {"queue": "celery"},
     },
@@ -201,6 +205,10 @@ celery_app.conf.beat_schedule = {
     # app.domain.idle_reflection for the actual throttle logic. The beat
     # tick itself stays fixed at 20 min (same self-throttle split as
     # memory-graph-analytics above), most ticks are a cheap no-op.
+    "catalog-resume-stalled": {
+        "task": "catalog.resume_stalled",
+        "schedule": 300.0,
+    },
     "idle-reflection": {
         "task": "agent.idle_reflection",
         "schedule": 1_200.0,
@@ -220,6 +228,7 @@ from app.tasks import drawing_analysis as _drawing_analysis  # noqa: F401
 from app.tasks import catalog_ingest as _catalog_ingest  # noqa: F401
 from app.tasks import catalog_archive as _catalog_archive  # noqa: F401
 from app.tasks import catalog_crawl as _catalog_crawl  # noqa: F401
+from app.tasks import catalog_pages as _catalog_pages  # noqa: F401
 from app.tasks import approval_escalation as _approval_escalation  # noqa: F401
 from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
 from app.tasks import proactive as _proactive  # noqa: F401

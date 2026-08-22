@@ -17,7 +17,9 @@ PIPELINE_STEP_DEFINITIONS: list[tuple[str, str]] = [
 CATALOG_PIPELINE_STEP_DEFINITIONS: list[tuple[str, str]] = [
     ("store", "Файл сохранен"),
     ("unpack", "Распаковка архива"),
+    ("pages", "Рендер страниц"),
     ("parse", "Разбор каталога"),
+    ("images", "Картинки позиций"),
     ("normalize", "Нормализация строк"),
     ("entries", "Позиции каталога"),
     ("canonical", "Сопоставление номенклатуры"),

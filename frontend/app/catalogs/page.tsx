@@ -4,6 +4,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
+import { CatalogEntryGrid } from "@/components/catalogs/CatalogEntryGrid";
+import {
+  catalogsApi,
+  type CatalogEntry,
+  type CatalogSearchResult,
+} from "@/lib/catalogs-api";
 
 const API = getApiBaseUrl();
 
@@ -38,6 +44,17 @@ async function fetchCatalogSummary(partyId: string): Promise<CatalogSummary> {
 
 export default function CatalogsPage() {
   const router = useRouter();
+  // Two modes on one page: pick a supplier, or search positions across every
+  // catalog of every supplier — the "удобный поиск" the catalogs lacked.
+  const [mode, setMode] = useState<"suppliers" | "items">("suppliers");
+  const [itemQuery, setItemQuery] = useState("");
+  const [itemResult, setItemResult] = useState<CatalogSearchResult | null>(
+    null,
+  );
+  const [itemLoading, setItemLoading] = useState(false);
+  const [itemError, setItemError] = useState<string | null>(null);
+  const [catalogFilter, setCatalogFilter] = useState<string | null>(null);
+  const [onlyWithImage, setOnlyWithImage] = useState(false);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -88,6 +105,35 @@ export default function CatalogsPage() {
     );
   }, [suppliers]);
 
+  useEffect(() => {
+    if (mode !== "items") return;
+    const handle = window.setTimeout(async () => {
+      setItemLoading(true);
+      setItemError(null);
+      try {
+        const result = await catalogsApi.search({
+          query: itemQuery || undefined,
+          catalog_document_id: catalogFilter ?? undefined,
+          has_image: onlyWithImage ? true : undefined,
+          page_size: 40,
+        });
+        setItemResult(result);
+      } catch (e: unknown) {
+        setItemError(e instanceof Error ? e.message : "Поиск не удался");
+      } finally {
+        setItemLoading(false);
+      }
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [mode, itemQuery, catalogFilter, onlyWithImage]);
+
+  function openEntryPage(entry: CatalogEntry) {
+    if (!entry.catalog_document_id) return;
+    router.push(
+      `/catalogs/${entry.catalog_document_id}?page=${entry.page_number ?? 1}&entry=${entry.id}`,
+    );
+  }
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
@@ -103,8 +149,106 @@ export default function CatalogsPage() {
         </div>
       </div>
 
+      <div className="flex gap-1 px-6 pt-4">
+        {(
+          [
+            ["suppliers", "Поставщики"],
+            ["items", "Поиск по позициям"],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setMode(key)}
+            className={`rounded px-3 py-1.5 text-sm transition-colors ${
+              mode === key
+                ? "bg-zinc-700 text-white"
+                : "text-white/50 hover:text-white/80"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "items" && (
+        <div className="flex flex-1 flex-col overflow-hidden px-6 pt-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              type="text"
+              placeholder="Артикул, название, размер…"
+              value={itemQuery}
+              onChange={(e) => setItemQuery(e.target.value)}
+              className="w-full max-w-md rounded-lg border border-white/10 bg-zinc-800 px-4 py-2 text-sm text-white placeholder-white/30 focus:border-blue-500/50 focus:outline-none"
+            />
+            <label className="flex items-center gap-2 text-sm text-white/60">
+              <input
+                type="checkbox"
+                checked={onlyWithImage}
+                onChange={(e) => setOnlyWithImage(e.target.checked)}
+              />
+              только с картинкой товара
+            </label>
+            {itemResult && (
+              <span className="text-xs text-white/40">
+                найдено: {itemResult.total.toLocaleString("ru")}
+              </span>
+            )}
+          </div>
+
+          {itemResult?.facets?.catalogs &&
+            itemResult.facets.catalogs.length > 1 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  onClick={() => setCatalogFilter(null)}
+                  className={`rounded-full px-3 py-1 text-xs ${
+                    catalogFilter === null
+                      ? "bg-blue-600 text-white"
+                      : "bg-zinc-800 text-white/60 hover:text-white"
+                  }`}
+                >
+                  все каталоги
+                </button>
+                {itemResult.facets.catalogs.map((facet) => (
+                  <button
+                    key={facet.key}
+                    onClick={() => setCatalogFilter(facet.key)}
+                    className={`rounded-full px-3 py-1 text-xs ${
+                      catalogFilter === facet.key
+                        ? "bg-blue-600 text-white"
+                        : "bg-zinc-800 text-white/60 hover:text-white"
+                    }`}
+                    title={facet.label}
+                  >
+                    {facet.label.length > 28
+                      ? `${facet.label.slice(0, 28)}…`
+                      : facet.label}{" "}
+                    · {facet.count}
+                  </button>
+                ))}
+              </div>
+            )}
+
+          {itemError && (
+            <div className="mt-3 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+              {itemError}
+            </div>
+          )}
+
+          <div className="mt-4 flex-1 overflow-y-auto pb-6">
+            {itemLoading && !itemResult ? (
+              <div className="py-12 text-sm text-white/40">Поиск…</div>
+            ) : (
+              <CatalogEntryGrid
+                entries={itemResult?.items ?? []}
+                onOpenPage={openEntryPage}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Search */}
-      <div className="px-6 pt-4">
+      <div className={`px-6 pt-4 ${mode === "items" ? "hidden" : ""}`}>
         <input
           type="text"
           placeholder="Поиск по поставщикам..."
@@ -115,7 +259,9 @@ export default function CatalogsPage() {
       </div>
 
       {/* List */}
-      <div className="flex-1 overflow-y-auto px-6 py-4">
+      <div
+        className={`flex-1 overflow-y-auto px-6 py-4 ${mode === "items" ? "hidden" : ""}`}
+      >
         {loading ? (
           <div className="flex items-center gap-2 py-12 text-white/40 text-sm">
             <div className="w-4 h-4 border border-white/30 border-t-white rounded-full animate-spin" />

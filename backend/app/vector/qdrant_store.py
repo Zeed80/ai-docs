@@ -151,7 +151,10 @@ def ensure_drawing_collections(
         (
             COLLECTION_TOOL_CATALOG,
             [("tool_type", PayloadSchemaType.KEYWORD), ("supplier_id", PayloadSchemaType.KEYWORD),
-             ("is_active", PayloadSchemaType.KEYWORD)],
+             ("is_active", PayloadSchemaType.KEYWORD),
+             # Scoping a vector search to one catalog needs this indexed too.
+             ("catalog_document_id", PayloadSchemaType.KEYWORD),
+             ("has_image", PayloadSchemaType.KEYWORD)],
         ),
     ]:
         ensure_collection(
@@ -245,8 +248,18 @@ def upsert_tool_catalog_entry(
     material: str | None = None,
     is_active: bool = True,
     embedding_model: str | None = None,
+    part_number: str | None = None,
+    catalog_document_id: str | None = None,
+    catalog_page: int | None = None,
+    has_image: bool = False,
+    price_value: float | None = None,
 ) -> None:
-    """Upsert tool catalog entry embedding into Qdrant."""
+    """Upsert tool catalog entry embedding into Qdrant.
+
+    The payload carries the catalog and page so a vector hit can be filtered
+    the same way the SQL branch is — a search scoped to one catalog must not
+    quietly return positions from another one.
+    """
     client = get_client()
     client.upsert(
         collection_name=COLLECTION_TOOL_CATALOG,
@@ -263,6 +276,11 @@ def upsert_tool_catalog_entry(
                     "material": material or "",
                     "is_active": str(is_active).lower(),
                     "embedding_model": embedding_model or "",
+                    "part_number": part_number or "",
+                    "catalog_document_id": catalog_document_id or "",
+                    "catalog_page": catalog_page,
+                    "has_image": str(bool(has_image)).lower(),
+                    "price_value": price_value,
                 },
             )
         ],
@@ -311,6 +329,8 @@ def search_tool_catalog(
     *,
     tool_type: str | None = None,
     supplier_id: str | None = None,
+    catalog_document_id: str | None = None,
+    has_image: bool | None = None,
     limit: int = 20,
     score_threshold: float = 0.0,
 ) -> list[dict]:
@@ -321,6 +341,16 @@ def search_tool_catalog(
         must.append(FieldCondition(key="tool_type", match=MatchValue(value=tool_type)))
     if supplier_id:
         must.append(FieldCondition(key="supplier_id", match=MatchValue(value=supplier_id)))
+    if catalog_document_id:
+        must.append(
+            FieldCondition(
+                key="catalog_document_id", match=MatchValue(value=catalog_document_id)
+            )
+        )
+    if has_image is not None:
+        must.append(
+            FieldCondition(key="has_image", match=MatchValue(value=str(has_image).lower()))
+        )
     query_filter = Filter(must=must)
     response = client.query_points(
         collection_name=COLLECTION_TOOL_CATALOG,

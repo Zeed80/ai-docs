@@ -6,6 +6,8 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { mutFetch } from "@/lib/auth";
 import { PipelineSteps, type PipelineStep } from "@/components/pipeline";
+import { CatalogCard } from "@/components/catalogs/CatalogCard";
+import { catalogsApi, type CatalogSummary } from "@/lib/catalogs-api";
 
 const API = getApiBaseUrl();
 
@@ -84,6 +86,11 @@ interface ToolCatalogEntry {
   price_value: number | null;
   catalog_page: number | null;
   is_active: boolean;
+  // Filled by the page-wise pipeline: the picture cut from the catalog page,
+  // or the page preview itself when no per-item picture could be matched.
+  thumb_url?: string | null;
+  image_kind?: string | null;
+  catalog_document_id?: string | null;
 }
 
 interface CatalogUpload {
@@ -281,6 +288,8 @@ function CatalogTab({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [uploads, setUploads] = useState<CatalogUpload[]>([]);
+  const [view, setView] = useState<"catalogs" | "entries">("catalogs");
+  const [catalogs, setCatalogs] = useState<CatalogSummary[]>([]);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
   const [candidates, setCandidates] = useState<CatalogCandidate[] | null>(null);
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(
@@ -293,28 +302,45 @@ function CatalogTab({
   const loadEntries = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({
-        page: String(page),
-        page_size: String(PAGE_SIZE),
+      // Через /api/catalogs/search — он отдаёт картинку, номер страницы и имя
+      // каталога, а также ранжирует точный артикул выше, чем сортировка по имени.
+      const data = await catalogsApi.search({
+        party_id: partyId,
+        query: search || undefined,
+        tool_type: toolType || undefined,
+        page,
+        page_size: PAGE_SIZE,
+        include_facets: false,
       });
-      if (search) params.set("query", search);
-      if (toolType) params.set("tool_type", toolType);
-      const resp = await fetch(
-        `${API}/api/tool-catalog/by-supplier/${partyId}/entries?${params}`,
-      );
-      if (!resp.ok) {
-        // Silently swallowing this showed "0 позиций" for an unreachable
-        // backend — indistinguishable from an empty catalog.
-        const err = await resp.json().catch(() => ({}));
-        setLoadError(
-          typeof err.detail === "string" ? err.detail : `Не удалось загрузить каталог (${resp.status})`,
-        );
-        return;
-      }
       setLoadError(null);
-      const data = await resp.json();
-      setEntries(data.items ?? []);
+      setEntries(
+        (data.items ?? []).map((item) => ({
+          id: item.id,
+          supplier_id: item.supplier_id,
+          part_number: item.part_number,
+          tool_type: item.tool_type,
+          name: item.name,
+          description: item.description,
+          diameter_mm: item.diameter_mm,
+          length_mm: item.length_mm,
+          material: item.material,
+          coating: item.coating,
+          price_currency: item.price_currency,
+          price_value: item.price_value,
+          catalog_page: item.page_number,
+          is_active: true,
+          thumb_url: item.thumb_url,
+          image_kind: item.image_kind,
+          catalog_document_id: item.catalog_document_id,
+        })),
+      );
       setTotal(data.total ?? 0);
+    } catch (e: unknown) {
+      // Silently swallowing this showed "0 позиций" for an unreachable
+      // backend — indistinguishable from an empty catalog.
+      setLoadError(
+        e instanceof Error ? e.message : "Не удалось загрузить каталог",
+      );
     } finally {
       setLoading(false);
     }
@@ -342,20 +368,39 @@ function CatalogTab({
     loadUploads();
   }, [loadUploads]);
 
+  const loadCatalogs = useCallback(async () => {
+    try {
+      const data = await catalogsApi.list({ party_id: partyId });
+      setCatalogs(data.items ?? []);
+    } catch {
+      // Same reasoning as loadUploads: a failure here must not blank the tab.
+    }
+  }, [partyId]);
+
+  useEffect(() => {
+    loadCatalogs();
+  }, [loadCatalogs]);
+
   // Poll fast only while something is actually being processed.
   useEffect(() => {
     const active = uploads.some((u) =>
       ["queued", "running"].includes(u.status),
     );
+    const parsing = catalogs.some((item) =>
+      ["queued", "running"].includes(item.status),
+    );
     const interval = window.setInterval(
       () => {
         loadUploads();
-        if (active) loadEntries();
+        if (active || parsing) {
+          loadCatalogs();
+          loadEntries();
+        }
       },
-      active ? 2000 : 15000,
+      active || parsing ? 3000 : 15000,
     );
     return () => window.clearInterval(interval);
-  }, [uploads, loadUploads, loadEntries]);
+  }, [uploads, catalogs, loadUploads, loadCatalogs, loadEntries]);
 
   // Reset page on filter change
   useEffect(() => {
@@ -433,7 +478,9 @@ function CatalogTab({
         setUploadError("Каталоги в интернете не найдены.");
       }
     } catch (e: unknown) {
-      setUploadError(e instanceof Error ? e.message : "Ошибка поиска каталогов");
+      setUploadError(
+        e instanceof Error ? e.message : "Ошибка поиска каталогов",
+      );
     } finally {
       setDiscovering(false);
     }
@@ -444,14 +491,17 @@ function CatalogTab({
     setAttaching(true);
     setUploadError(null);
     try {
-      const resp = await mutFetch(`${API}/api/tool-catalog/attach-web-catalog`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          supplier_name: partyName,
-          urls: Array.from(selectedCandidates),
-        }),
-      });
+      const resp = await mutFetch(
+        `${API}/api/tool-catalog/attach-web-catalog`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            supplier_name: partyName,
+            urls: Array.from(selectedCandidates),
+          }),
+        },
+      );
       if (!resp.ok) {
         throw new Error(`Не удалось прикрепить каталоги (${resp.status})`);
       }
@@ -484,7 +534,9 @@ function CatalogTab({
       await loadUploads();
       await loadEntries();
     } catch (e: unknown) {
-      setUploadError(e instanceof Error ? e.message : "Ошибка удаления загрузки");
+      setUploadError(
+        e instanceof Error ? e.message : "Ошибка удаления загрузки",
+      );
     }
   }
 
@@ -518,7 +570,9 @@ function CatalogTab({
         `${API}/api/tool-catalog/by-supplier/${partyId}`,
       );
       if (!tsResp.ok) {
-        throw new Error(`Не удалось получить поставщика каталога (${tsResp.status})`);
+        throw new Error(
+          `Не удалось получить поставщика каталога (${tsResp.status})`,
+        );
       }
       const tsData = await tsResp.json();
       const supplierId = (tsData.items ?? [])[0]?.id;
@@ -574,15 +628,20 @@ function CatalogTab({
     try {
       // An empty catch here meant a failed delete looked exactly like a
       // successful one — the row simply stayed after the reload.
-      const resp = await mutFetch(`${API}/api/tool-catalog/entries/${entryId}`, {
-        method: "DELETE",
-      });
+      const resp = await mutFetch(
+        `${API}/api/tool-catalog/entries/${entryId}`,
+        {
+          method: "DELETE",
+        },
+      );
       if (!resp.ok) {
         throw new Error(`Не удалось удалить позицию (${resp.status})`);
       }
       await loadEntries();
     } catch (e: unknown) {
-      setUploadError(e instanceof Error ? e.message : "Ошибка удаления позиции");
+      setUploadError(
+        e instanceof Error ? e.message : "Ошибка удаления позиции",
+      );
     }
   }
 
@@ -590,11 +649,14 @@ function CatalogTab({
     if (!selectedEntryIds.size) return;
     setDeletingEntries(true);
     try {
-      const resp = await mutFetch(`${API}/api/tool-catalog/entries/bulk-delete`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entry_ids: Array.from(selectedEntryIds) }),
-      });
+      const resp = await mutFetch(
+        `${API}/api/tool-catalog/entries/bulk-delete`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entry_ids: Array.from(selectedEntryIds) }),
+        },
+      );
       if (!resp.ok) {
         setUploadError(`Не удалось удалить выбранные позиции (${resp.status})`);
         return;
@@ -633,7 +695,9 @@ function CatalogTab({
               <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
               <span className="text-sm text-slate-400">
                 Загрузка каталога
-                {uploadQueue.length > 1 ? ` (осталось ${uploadQueue.length})` : ""}
+                {uploadQueue.length > 1
+                  ? ` (осталось ${uploadQueue.length})`
+                  : ""}
                 ...
               </span>
             </>
@@ -681,6 +745,60 @@ function CatalogTab({
         </div>
       )}
 
+      {/* Catalogs vs positions: several catalogs of one supplier used to be one
+          undivided list of thousands of rows. */}
+      <div className="flex gap-1 rounded border border-slate-700 bg-slate-800/40 p-1 text-sm">
+        {(
+          [
+            [
+              "catalogs",
+              `Каталоги${catalogs.length ? ` (${catalogs.length})` : ""}`,
+            ],
+            [
+              "entries",
+              `Позиции${total ? ` (${total.toLocaleString("ru")})` : ""}`,
+            ],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setView(key)}
+            className={`rounded px-3 py-1.5 transition-colors ${
+              view === key
+                ? "bg-slate-700 text-white"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "catalogs" && (
+        <div>
+          {catalogs.length === 0 ? (
+            <div className="rounded border border-slate-700 bg-slate-800/40 p-6 text-center text-sm text-slate-400">
+              Каталогов пока нет — загрузите файл выше или найдите каталог в
+              интернете.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {catalogs.map((item) => (
+                <CatalogCard
+                  key={item.document_id}
+                  catalog={item}
+                  onOpen={() => {
+                    window.location.href = `/catalogs/${item.document_id}`;
+                  }}
+                  onReparse={() => handleReingestUpload(item.document_id)}
+                  onDelete={() => handleDeleteUpload(item.document_id)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Web catalog discovery — previously reachable only from the agent chat */}
       <div className="flex items-center gap-3 flex-wrap">
         <button
@@ -724,9 +842,7 @@ function CatalogTab({
                 className="mt-1"
               />
               <span className="min-w-0">
-                <span className="block text-slate-200">
-                  {c.title || c.url}
-                </span>
+                <span className="block text-slate-200">{c.title || c.url}</span>
                 <a
                   href={c.url}
                   target="_blank"
@@ -763,14 +879,16 @@ function CatalogTab({
                           {upload.file_name}
                         </span>
                         <span className="ml-2 text-xs text-slate-500">
-                          {Math.max(1, Math.round(upload.file_size / 1024))} КБ ·{" "}
-                          {upload.entries_count.toLocaleString("ru")} позиций
+                          {Math.max(1, Math.round(upload.file_size / 1024))} КБ
+                          · {upload.entries_count.toLocaleString("ru")} позиций
                           {upload.is_archive ? " · архив" : ""}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => handleReingestUpload(upload.document_id)}
+                          onClick={() =>
+                            handleReingestUpload(upload.document_id)
+                          }
                           className="px-2 py-1 text-xs text-slate-300 bg-slate-700 hover:bg-slate-600 rounded"
                         >
                           Перечитать
@@ -787,7 +905,9 @@ function CatalogTab({
                       <PipelineSteps steps={upload.steps} compact />
                     </div>
                     {upload.error && (
-                      <p className="mt-1 text-xs text-red-400">{upload.error}</p>
+                      <p className="mt-1 text-xs text-red-400">
+                        {upload.error}
+                      </p>
                     )}
                     {members.map((member) => (
                       <div
@@ -798,11 +918,14 @@ function CatalogTab({
                           <span className="text-xs text-slate-300">
                             {member.file_name}
                             <span className="ml-2 text-slate-500">
-                              {member.entries_count.toLocaleString("ru")} позиций
+                              {member.entries_count.toLocaleString("ru")}{" "}
+                              позиций
                             </span>
                           </span>
                           <button
-                            onClick={() => handleDeleteUpload(member.document_id)}
+                            onClick={() =>
+                              handleDeleteUpload(member.document_id)
+                            }
                             className="px-2 py-0.5 text-[11px] text-red-300 bg-slate-700 hover:bg-red-900/50 rounded"
                           >
                             Удалить
@@ -825,249 +948,282 @@ function CatalogTab({
         </div>
       )}
 
-      {/* Filters + actions row */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <input
-          type="text"
-          placeholder="Поиск по каталогу..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 min-w-40 px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 rounded text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500"
-        />
-        <select
-          value={toolType}
-          onChange={(e) => setToolType(e.target.value)}
-          className="px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 rounded text-slate-200 focus:outline-none focus:border-blue-500"
-        >
-          <option value="">Все типы</option>
-          {Object.entries(TOOL_TYPE_LABELS).map(([k, v]) => (
-            <option key={k} value={k}>
-              {v}
-            </option>
-          ))}
-        </select>
-        <span className="text-xs text-slate-500 shrink-0">
-          {total.toLocaleString("ru")} позиций
-        </span>
-        {/* Refresh button */}
-        <button
-          onClick={handleRefreshCatalog}
-          disabled={refreshing}
-          title="Повторно проиндексировать последний загруженный файл каталога"
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded text-slate-300 disabled:opacity-50 transition-colors"
-        >
-          {refreshing ? (
-            <span className="w-3.5 h-3.5 border border-slate-400 border-t-white rounded-full animate-spin" />
-          ) : (
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 16 16">
-              <path
-                d="M2 8a6 6 0 0110.5-3.96M14 8a6 6 0 01-10.5 3.96M12 4.5V2l2 2.5-2 2.5V4.5zM4 11.5V14l-2-2.5 2-2.5v2.5z"
-                stroke="currentColor"
-                strokeWidth="1.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          )}
-          Обновить каталог
-        </button>
-        {/* Select all toggle */}
-        {entries.length > 0 && (
-          <button
-            onClick={toggleSelectAllEntries}
-            className="px-3 py-1.5 text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded transition-colors"
-          >
-            {selectedEntryIds.size === entries.length
-              ? "Снять всё"
-              : "Выбрать всё"}
-          </button>
-        )}
-      </div>
-
-      {/* Bulk delete bar */}
-      {selectedEntryIds.size > 0 && (
-        <div className="flex items-center gap-3 bg-slate-700/60 border border-slate-600 rounded-lg px-4 py-2">
-          <span className="text-sm text-slate-300">
-            Выбрано:{" "}
-            <strong className="text-white">{selectedEntryIds.size}</strong>
-          </span>
-          <button
-            onClick={() => setSelectedEntryIds(new Set())}
-            className="text-xs text-slate-400 hover:text-white px-2 transition-colors"
-          >
-            Снять
-          </button>
-          {confirmDeleteEntries ? (
-            <>
-              <span className="text-red-400 text-sm">
-                Удалить {selectedEntryIds.size} позиций?
-              </span>
-              <button
-                onClick={handleBulkDeleteEntries}
-                disabled={deletingEntries}
-                className="px-3 py-1 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded text-sm transition-colors"
-              >
-                {deletingEntries ? "Удаление..." : "Да"}
-              </button>
-              <button
-                onClick={() => setConfirmDeleteEntries(false)}
-                className="px-3 py-1 bg-slate-600 text-white rounded text-sm transition-colors"
-              >
-                Отмена
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={() => setConfirmDeleteEntries(true)}
-              className="ml-auto px-3 py-1 bg-red-700/60 hover:bg-red-700 text-white rounded text-sm transition-colors"
-            >
-              Удалить выбранные
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Table */}
-      {loading ? (
-        <div className="py-8 text-center text-slate-500 text-sm">
-          Загрузка...
-        </div>
-      ) : entries.length === 0 ? (
-        <div className="py-10 text-center text-slate-500 text-sm">
-          {total === 0
-            ? "Каталог пуст. Загрузите файл каталога выше."
-            : "Ничего не найдено по фильтру."}
-        </div>
-      ) : (
+      {view === "entries" && (
         <>
-          <div className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-700/50 text-slate-400 text-xs uppercase">
-                  <tr>
-                    <th className="w-8 px-2 py-2" />
-                    <th className="text-left px-3 py-2">Артикул</th>
-                    <th className="text-left px-3 py-2">Наименование</th>
-                    <th className="text-left px-3 py-2">Тип</th>
-                    <th className="text-right px-3 py-2">Ø мм</th>
-                    <th className="text-left px-3 py-2">Материал</th>
-                    <th className="text-left px-3 py-2">Покрытие</th>
-                    <th className="text-right px-3 py-2">Цена</th>
-                    <th className="w-8 px-2 py-2" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-700">
-                  {entries.map((e) => (
-                    <tr
-                      key={e.id}
-                      className={`group hover:bg-slate-700/30 transition-colors ${selectedEntryIds.has(e.id) ? "bg-blue-900/20" : ""}`}
-                    >
-                      <td className="px-2 py-2">
-                        <button
-                          onClick={() => toggleSelectEntry(e.id)}
-                          className="w-4 h-4 rounded border flex items-center justify-center transition-colors"
-                          style={{
-                            background: selectedEntryIds.has(e.id)
-                              ? "rgb(37 99 235)"
-                              : "rgba(51,65,85,0.8)",
-                            borderColor: selectedEntryIds.has(e.id)
-                              ? "rgb(37 99 235)"
-                              : "rgba(100,116,139,0.5)",
-                          }}
-                        >
-                          {selectedEntryIds.has(e.id) && (
-                            <svg
-                              className="w-2.5 h-2.5 text-white"
-                              fill="none"
-                              viewBox="0 0 10 10"
-                            >
-                              <path
-                                d="M1.5 5l2.5 2.5 4.5-4.5"
-                                stroke="currentColor"
-                                strokeWidth="1.5"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            </svg>
-                          )}
-                        </button>
-                      </td>
-                      <td className="px-3 py-2 font-mono text-xs text-slate-400">
-                        {e.part_number ?? "—"}
-                      </td>
-                      <td className="px-3 py-2 text-slate-200 max-w-xs truncate">
-                        {e.name}
-                      </td>
-                      <td className="px-3 py-2 text-slate-400 text-xs">
-                        {TOOL_TYPE_LABELS[e.tool_type] ?? e.tool_type}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono text-xs text-slate-300">
-                        {e.diameter_mm != null ? e.diameter_mm.toFixed(2) : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-slate-400 text-xs">
-                        {e.material ?? "—"}
-                      </td>
-                      <td className="px-3 py-2 text-slate-400 text-xs">
-                        {e.coating ?? "—"}
-                      </td>
-                      <td className="px-3 py-2 text-right text-xs text-slate-300">
-                        {e.price_value != null
-                          ? `${e.price_value.toLocaleString("ru")} ${e.price_currency}`
-                          : "—"}
-                      </td>
-                      <td className="px-2 py-2">
-                        <button
-                          onClick={() => handleDeleteEntry(e.id)}
-                          className="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:text-red-400 hover:bg-red-900/30 transition-colors opacity-0 group-hover:opacity-100"
-                          title="Удалить"
-                        >
-                          <svg
-                            className="w-3.5 h-3.5"
-                            fill="none"
-                            viewBox="0 0 14 14"
-                          >
-                            <path
-                              d="M2 3.5h10M5.5 3.5V2.5h3v1M4.5 3.5l.5 8h4l.5-8"
-                              stroke="currentColor"
-                              strokeWidth="1.2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          {/* Filters + actions row */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              type="text"
+              placeholder="Поиск по каталогу..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="flex-1 min-w-40 px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 rounded text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500"
+            />
+            <select
+              value={toolType}
+              onChange={(e) => setToolType(e.target.value)}
+              className="px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 rounded text-slate-200 focus:outline-none focus:border-blue-500"
+            >
+              <option value="">Все типы</option>
+              {Object.entries(TOOL_TYPE_LABELS).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-slate-500 shrink-0">
+              {total.toLocaleString("ru")} позиций
+            </span>
+            {/* Refresh button */}
+            <button
+              onClick={handleRefreshCatalog}
+              disabled={refreshing}
+              title="Повторно проиндексировать последний загруженный файл каталога"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded text-slate-300 disabled:opacity-50 transition-colors"
+            >
+              {refreshing ? (
+                <span className="w-3.5 h-3.5 border border-slate-400 border-t-white rounded-full animate-spin" />
+              ) : (
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 16 16">
+                  <path
+                    d="M2 8a6 6 0 0110.5-3.96M14 8a6 6 0 01-10.5 3.96M12 4.5V2l2 2.5-2 2.5V4.5zM4 11.5V14l-2-2.5 2-2.5v2.5z"
+                    stroke="currentColor"
+                    strokeWidth="1.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
+              Обновить каталог
+            </button>
+            {/* Select all toggle */}
+            {entries.length > 0 && (
+              <button
+                onClick={toggleSelectAllEntries}
+                className="px-3 py-1.5 text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded transition-colors"
+              >
+                {selectedEntryIds.size === entries.length
+                  ? "Снять всё"
+                  : "Выбрать всё"}
+              </button>
+            )}
           </div>
 
-          {/* Pagination */}
-          {total > PAGE_SIZE && (
-            <div className="flex items-center justify-between text-xs text-slate-500">
-              <span>
-                Показано {(page - 1) * PAGE_SIZE + 1}–
-                {Math.min(page * PAGE_SIZE, total)} из{" "}
-                {total.toLocaleString("ru")}
+          {/* Bulk delete bar */}
+          {selectedEntryIds.size > 0 && (
+            <div className="flex items-center gap-3 bg-slate-700/60 border border-slate-600 rounded-lg px-4 py-2">
+              <span className="text-sm text-slate-300">
+                Выбрано:{" "}
+                <strong className="text-white">{selectedEntryIds.size}</strong>
               </span>
-              <div className="flex gap-2">
+              <button
+                onClick={() => setSelectedEntryIds(new Set())}
+                className="text-xs text-slate-400 hover:text-white px-2 transition-colors"
+              >
+                Снять
+              </button>
+              {confirmDeleteEntries ? (
+                <>
+                  <span className="text-red-400 text-sm">
+                    Удалить {selectedEntryIds.size} позиций?
+                  </span>
+                  <button
+                    onClick={handleBulkDeleteEntries}
+                    disabled={deletingEntries}
+                    className="px-3 py-1 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded text-sm transition-colors"
+                  >
+                    {deletingEntries ? "Удаление..." : "Да"}
+                  </button>
+                  <button
+                    onClick={() => setConfirmDeleteEntries(false)}
+                    className="px-3 py-1 bg-slate-600 text-white rounded text-sm transition-colors"
+                  >
+                    Отмена
+                  </button>
+                </>
+              ) : (
                 <button
-                  disabled={page === 1}
-                  onClick={() => setPage((p) => p - 1)}
-                  className="px-3 py-1 border border-slate-600 rounded hover:bg-slate-700 disabled:opacity-40 transition-colors"
+                  onClick={() => setConfirmDeleteEntries(true)}
+                  className="ml-auto px-3 py-1 bg-red-700/60 hover:bg-red-700 text-white rounded text-sm transition-colors"
                 >
-                  ←
+                  Удалить выбранные
                 </button>
-                <button
-                  disabled={page * PAGE_SIZE >= total}
-                  onClick={() => setPage((p) => p + 1)}
-                  className="px-3 py-1 border border-slate-600 rounded hover:bg-slate-700 disabled:opacity-40 transition-colors"
-                >
-                  →
-                </button>
-              </div>
+              )}
             </div>
+          )}
+
+          {/* Table */}
+          {loading ? (
+            <div className="py-8 text-center text-slate-500 text-sm">
+              Загрузка...
+            </div>
+          ) : entries.length === 0 ? (
+            <div className="py-10 text-center text-slate-500 text-sm">
+              {total === 0
+                ? "Каталог пуст. Загрузите файл каталога выше."
+                : "Ничего не найдено по фильтру."}
+            </div>
+          ) : (
+            <>
+              <div className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-700/50 text-slate-400 text-xs uppercase">
+                      <tr>
+                        <th className="w-8 px-2 py-2" />
+                        <th className="w-14 px-2 py-2" />
+                        <th className="text-left px-3 py-2">Артикул</th>
+                        <th className="text-left px-3 py-2">Наименование</th>
+                        <th className="text-left px-3 py-2">Тип</th>
+                        <th className="text-right px-3 py-2">Ø мм</th>
+                        <th className="text-left px-3 py-2">Материал</th>
+                        <th className="text-left px-3 py-2">Покрытие</th>
+                        <th className="text-right px-3 py-2">Цена</th>
+                        <th className="w-8 px-2 py-2" />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700">
+                      {entries.map((e) => (
+                        <tr
+                          key={e.id}
+                          className={`group hover:bg-slate-700/30 transition-colors ${selectedEntryIds.has(e.id) ? "bg-blue-900/20" : ""}`}
+                        >
+                          <td className="px-2 py-2">
+                            <button
+                              onClick={() => toggleSelectEntry(e.id)}
+                              className="w-4 h-4 rounded border flex items-center justify-center transition-colors"
+                              style={{
+                                background: selectedEntryIds.has(e.id)
+                                  ? "rgb(37 99 235)"
+                                  : "rgba(51,65,85,0.8)",
+                                borderColor: selectedEntryIds.has(e.id)
+                                  ? "rgb(37 99 235)"
+                                  : "rgba(100,116,139,0.5)",
+                              }}
+                            >
+                              {selectedEntryIds.has(e.id) && (
+                                <svg
+                                  className="w-2.5 h-2.5 text-white"
+                                  fill="none"
+                                  viewBox="0 0 10 10"
+                                >
+                                  <path
+                                    d="M1.5 5l2.5 2.5 4.5-4.5"
+                                    stroke="currentColor"
+                                    strokeWidth="1.5"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                  />
+                                </svg>
+                              )}
+                            </button>
+                          </td>
+                          <td className="px-2 py-2">
+                            {e.thumb_url ? (
+                              <a
+                                href={
+                                  e.catalog_document_id
+                                    ? `/catalogs/${e.catalog_document_id}?page=${e.catalog_page ?? 1}&entry=${e.id}`
+                                    : undefined
+                                }
+                                title={
+                                  e.image_kind === "page"
+                                    ? "Изображение — страница каталога (отдельной картинки товара не нашлось)"
+                                    : "Картинка из каталога — открыть страницу"
+                                }
+                              >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={e.thumb_url}
+                                  alt={e.name}
+                                  loading="lazy"
+                                  className="h-10 w-10 rounded bg-slate-900 object-contain"
+                                />
+                              </a>
+                            ) : (
+                              <div className="h-10 w-10 rounded bg-slate-900" />
+                            )}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-xs text-slate-400">
+                            {e.part_number ?? "—"}
+                          </td>
+                          <td className="px-3 py-2 text-slate-200 max-w-xs truncate">
+                            {e.name}
+                          </td>
+                          <td className="px-3 py-2 text-slate-400 text-xs">
+                            {TOOL_TYPE_LABELS[e.tool_type] ?? e.tool_type}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-xs text-slate-300">
+                            {e.diameter_mm != null
+                              ? e.diameter_mm.toFixed(2)
+                              : "—"}
+                          </td>
+                          <td className="px-3 py-2 text-slate-400 text-xs">
+                            {e.material ?? "—"}
+                          </td>
+                          <td className="px-3 py-2 text-slate-400 text-xs">
+                            {e.coating ?? "—"}
+                          </td>
+                          <td className="px-3 py-2 text-right text-xs text-slate-300">
+                            {e.price_value != null
+                              ? `${e.price_value.toLocaleString("ru")} ${e.price_currency}`
+                              : "—"}
+                          </td>
+                          <td className="px-2 py-2">
+                            <button
+                              onClick={() => handleDeleteEntry(e.id)}
+                              className="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:text-red-400 hover:bg-red-900/30 transition-colors opacity-0 group-hover:opacity-100"
+                              title="Удалить"
+                            >
+                              <svg
+                                className="w-3.5 h-3.5"
+                                fill="none"
+                                viewBox="0 0 14 14"
+                              >
+                                <path
+                                  d="M2 3.5h10M5.5 3.5V2.5h3v1M4.5 3.5l.5 8h4l.5-8"
+                                  stroke="currentColor"
+                                  strokeWidth="1.2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Pagination */}
+              {total > PAGE_SIZE && (
+                <div className="flex items-center justify-between text-xs text-slate-500">
+                  <span>
+                    Показано {(page - 1) * PAGE_SIZE + 1}–
+                    {Math.min(page * PAGE_SIZE, total)} из{" "}
+                    {total.toLocaleString("ru")}
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      disabled={page === 1}
+                      onClick={() => setPage((p) => p - 1)}
+                      className="px-3 py-1 border border-slate-600 rounded hover:bg-slate-700 disabled:opacity-40 transition-colors"
+                    >
+                      ←
+                    </button>
+                    <button
+                      disabled={page * PAGE_SIZE >= total}
+                      onClick={() => setPage((p) => p + 1)}
+                      className="px-3 py-1 border border-slate-600 rounded hover:bg-slate-700 disabled:opacity-40 transition-colors"
+                    >
+                      →
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </>
       )}
@@ -1107,7 +1263,9 @@ export default function SupplierProfilePage() {
     Promise.all([
       mutFetch(`${API}/api/suppliers/${id}`).then((r) => r.json()),
       mutFetch(`${API}/api/suppliers/${id}/trust-score`).then((r) => r.json()),
-      mutFetch(`${API}/api/suppliers/${id}/price-history`).then((r) => r.json()),
+      mutFetch(`${API}/api/suppliers/${id}/price-history`).then((r) =>
+        r.json(),
+      ),
       mutFetch(`${API}/api/suppliers/${id}/alerts`).then((r) => r.json()),
       mutFetch(`${API}/api/suppliers/${id}/check-requisites`, {
         method: "POST",

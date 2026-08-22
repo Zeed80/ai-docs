@@ -75,6 +75,7 @@ from app.api import (
     tables,
     technology,
     telegram,
+    catalogs as catalogs_api,
     tool_catalog,
     cases,
     warehouse,
@@ -419,6 +420,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(drawings.router, prefix="/api/drawings", tags=["drawings"], dependencies=_auth)
     app.include_router(tool_catalog.router, prefix="/api/tool-catalog", tags=["tool-catalog"], dependencies=_auth)
+    app.include_router(catalogs_api.router, prefix="/api/catalogs", tags=["catalogs"], dependencies=_auth)
     app.include_router(cases.router, tags=["cases"], dependencies=_auth)
     app.include_router(chat_sessions.router, prefix="/api/chat", tags=["chat"], dependencies=_auth)
     app.include_router(dynamic_skill_runner.router, tags=["agent-generated"], dependencies=_auth)
