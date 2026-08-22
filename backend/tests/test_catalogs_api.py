@@ -217,3 +217,80 @@ async def test_missing_page_image_is_404_not_500(client: AsyncClient, supplier_w
     doc = supplier_with_catalogs["first"]
     resp = await client.get(f"/api/catalogs/{doc.id}/pages/999/image")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_pause_stops_parsing_and_keeps_what_is_done(
+    client: AsyncClient, db_session, supplier_with_catalogs
+):
+    """Parsing a big catalog holds the GPU for hours — it must be stoppable
+    without losing the pages already parsed, and it must STAY stopped (the
+    resume watchdog would otherwise restart it minutes later)."""
+    from app.tasks.catalog_pages import _is_paused
+
+    doc = supplier_with_catalogs["first"]
+    resp = await client.post(f"/api/catalogs/{doc.id}/pause")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["paused"] is True
+    assert body["pages_done"] == 3, "already parsed pages stay parsed"
+    assert "остановлен" in body["message"]
+
+    await db_session.refresh(doc)
+    assert await _is_paused(db_session, doc.id) is True
+
+    with __import__("unittest.mock", fromlist=["patch"]).patch(
+        "app.tasks.catalog_pages.render_catalog_page_batch.delay", lambda *a, **k: None
+    ):
+        again = await client.post(f"/api/catalogs/{doc.id}/pause?resume=true")
+    assert again.status_code == 200, again.text
+    assert again.json()["paused"] is False
+    await db_session.refresh(doc)
+    assert await _is_paused(db_session, doc.id) is False
+
+
+@pytest.mark.asyncio
+async def test_positions_without_a_catalog_are_shown_honestly(
+    client: AsyncClient, db_session, supplier_with_catalogs
+):
+    """Positions imported before page-wise parsing have no file behind them.
+
+    Hiding them would make a supplier's catalog look smaller than it is; the
+    list carries them as one pseudo-catalog with no document id, so the UI can
+    offer a re-parse instead of a broken "open".
+    """
+    supplier = supplier_with_catalogs["supplier"]
+    party = supplier_with_catalogs["party"]
+    db_session.add(
+        ToolCatalogEntry(
+            supplier_id=supplier.id,
+            part_number="LEGACY-1",
+            tool_type=ToolTypeEnum.other,
+            name="Старая позиция без каталога",
+            metadata_={"legacy_import": True},
+        )
+    )
+    await db_session.commit()
+
+    resp = await client.get(f"/api/catalogs?party_id={party.id}")
+    assert resp.status_code == 200, resp.text
+    legacy = [item for item in resp.json()["items"] if item["document_id"] is None]
+    assert len(legacy) == 1
+    assert legacy[0]["entries_count"] == 1
+    assert legacy[0]["legacy"] is True
+    assert legacy[0]["download_url"] is None, "there is no file to download"
+
+
+@pytest.mark.asyncio
+async def test_old_search_endpoint_uses_the_same_ranking(
+    client: AsyncClient, supplier_with_catalogs
+):
+    """Two searches over the same data that disagree is a bug waiting to be
+    reported; the legacy endpoint now delegates to the hybrid one."""
+    supplier = supplier_with_catalogs["supplier"]
+    resp = await client.get(
+        f"/api/tool-catalog/search?query=MT190-016C04&supplier_id={supplier.id}"
+    )
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert items and items[0]["part_number"] == "MT190-016C04"

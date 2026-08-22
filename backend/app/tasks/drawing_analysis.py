@@ -880,6 +880,7 @@ async def _create_catalog_entries_from_rows(
     created = 0
     conflicted = 0
     skipped = 0
+    pending_embeddings: list[tuple[Any, str, str]] = []
     # Why rows were dropped, not just how many — "0 из 5000" with no reason is
     # what made a silently-empty catalog look like a successful import.
     skipped_by_reason: dict[str, int] = {}
@@ -1009,33 +1010,20 @@ async def _create_catalog_entries_from_rows(
                     anomaly_ids.append(anomaly.id)
                     conflicted += 1
 
-                # Embed → Qdrant
-                embed_text = (
-                    f"{tool_type.value} {entry.name} "
-                    + (f"Ø{entry.diameter_mm}мм " if entry.diameter_mm else "")
-                    + (f"{entry.material} " if entry.material else "")
-                    + (f"{entry.coating} " if entry.coating else "")
-                    + (entry.description or "")
-                )
-                vector = await get_text_embedding(embed_text)
-                if vector:
-                    upsert_tool_catalog_entry(
-                        entry_id=str(entry.id),
-                        vector=vector,
-                        tool_type=tool_type.value,
-                        name=entry.name,
-                        supplier_id=str(supplier_uuid),
-                        diameter_mm=entry.diameter_mm,
-                        material=entry.material,
-                        part_number=entry.part_number,
-                        catalog_document_id=(
-                            str(source_document_id) if source_document_id else None
-                        ),
-                        catalog_page=entry.catalog_page,
-                        has_image=bool(entry.image_path),
-                        price_value=entry.price_value,
+                # Embedding is collected now and done in ONE batch after the
+                # loop: a call per position meant thousands of round trips to
+                # the same GPU that parses the catalog's pages.
+                pending_embeddings.append(
+                    (
+                        entry,
+                        tool_type.value,
+                        f"{tool_type.value} {entry.name} "
+                        + (f"Ø{entry.diameter_mm}мм " if entry.diameter_mm else "")
+                        + (f"{entry.material} " if entry.material else "")
+                        + (f"{entry.coating} " if entry.coating else "")
+                        + (entry.description or ""),
                     )
-                    entry.embedding_id = f"tool_catalog:{entry.id}"
+                )
 
                 # Graph node
                 try:
@@ -1048,6 +1036,35 @@ async def _create_catalog_entries_from_rows(
         except Exception as row_exc:
             errors.append(str(row_exc)[:200])
             skipped += 1
+
+    if pending_embeddings:
+        try:
+            from app.ai.embeddings import embed_texts
+
+            vectors = await embed_texts([text for _entry, _type, text in pending_embeddings])
+            for (entry, type_value, _text), vector in zip(pending_embeddings, vectors):
+                if not vector or not any(vector):
+                    continue
+                upsert_tool_catalog_entry(
+                    entry_id=str(entry.id),
+                    vector=vector,
+                    tool_type=type_value,
+                    name=entry.name,
+                    supplier_id=str(supplier_uuid),
+                    diameter_mm=entry.diameter_mm,
+                    material=entry.material,
+                    part_number=entry.part_number,
+                    catalog_document_id=(
+                        str(source_document_id) if source_document_id else None
+                    ),
+                    catalog_page=entry.catalog_page,
+                    has_image=bool(entry.image_path),
+                    price_value=entry.price_value,
+                )
+                entry.embedding_id = f"tool_catalog:{entry.id}"
+        except Exception as exc:  # noqa: BLE001 — entries are real either way
+            logger.warning("catalog_batch_embedding_failed", error=str(exc)[:200])
+            errors.append(f"embedding: {str(exc)[:150]}")
 
     return {
         "created": created,

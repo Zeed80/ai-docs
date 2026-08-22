@@ -6,7 +6,9 @@ import { mutFetch } from "@/lib/auth";
 const API = getApiBaseUrl();
 
 export interface CatalogSummary {
-  document_id: string;
+  // null for the "Без привязки" pseudo-catalog: positions imported before
+  // page-wise parsing have no file behind them.
+  document_id: string | null;
   file_name: string;
   file_size: number;
   uploaded_at: string | null;
@@ -24,6 +26,7 @@ export interface CatalogSummary {
   cover_url: string | null;
   download_url: string | null;
   is_archive: boolean;
+  legacy?: boolean;
 }
 
 export interface CatalogPageInfo {

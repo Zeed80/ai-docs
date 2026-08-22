@@ -188,6 +188,38 @@ async def list_catalogs(
                 is_archive=bool(meta.get("is_archive")),
             )
         )
+    # Positions that predate page-wise parsing (or came from a web page rather
+    # than a file) have no catalog behind them. They stay searchable and are
+    # shown as one honest pseudo-catalog instead of quietly disappearing.
+    orphans = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(ToolCatalogEntry)
+                .where(
+                    ToolCatalogEntry.supplier_id.in_(supplier_ids),
+                    ToolCatalogEntry.is_active.is_(True),
+                    or_(
+                        ToolCatalogEntry.source_document_id.is_(None),
+                        ToolCatalogEntry.source_document_id.notin_(doc_ids),
+                    ),
+                )
+            )
+        ).scalar_one()
+    )
+    if orphans:
+        items.append(
+            CatalogOut(
+                document_id=None,
+                file_name="Без привязки к каталогу",
+                file_size=0,
+                supplier_id=supplier_ids[0],
+                entries_count=orphans,
+                status="legacy",
+                legacy=True,
+            )
+        )
+
     return CatalogListResponse(items=items, total=len(items))
 
 
@@ -282,6 +314,71 @@ async def get_catalog(document_id: uuid.UUID, db: AsyncSession = Depends(get_db)
         download_url=f"/api/documents/{doc.id}/download",
         is_archive=bool(meta.get("is_archive")),
     )
+
+
+@router.post(
+    "/{document_id}/pause",
+    summary="Skill: catalog.pause — Stop parsing a catalog, keeping what is done.",
+)
+async def pause_catalog(
+    document_id: uuid.UUID,
+    resume: bool = Query(False, description="true — продолжить разбор"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Parsing a big catalog occupies the GPU for hours; stopping it must be
+    possible without losing the pages already parsed. Resuming continues from
+    the same page — the page registry is the checkpoint."""
+    doc = await db.get(Document, document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Каталог не найден")
+    meta = dict(doc.metadata_ or {})
+    meta["catalog_paused"] = not resume
+    doc.metadata_ = meta
+    await db.commit()
+
+    if resume:
+        from app.tasks.catalog_pages import render_catalog_page_batch
+
+        try:
+            render_catalog_page_batch.delay(str(document_id), None)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=503,
+                detail={"error_code": "catalog_resume_enqueue_failed", "message": str(exc)[:150]},
+            ) from exc
+
+    done = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(CatalogPage)
+                .where(
+                    CatalogPage.document_id == document_id,
+                    CatalogPage.status.in_(("parsed", "skipped")),
+                )
+            )
+        ).scalar_one()
+    )
+    total = int(
+        (
+            await db.execute(
+                select(func.count()).select_from(CatalogPage).where(
+                    CatalogPage.document_id == document_id
+                )
+            )
+        ).scalar_one()
+    )
+    return {
+        "document_id": str(document_id),
+        "paused": not resume,
+        "pages_done": done,
+        "page_count": total,
+        "message": (
+            f"Разбор продолжен со страницы {done + 1}."
+            if resume
+            else f"Разбор остановлен: {done} из {total} страниц разобрано, результат сохранён."
+        ),
+    }
 
 
 @router.get(

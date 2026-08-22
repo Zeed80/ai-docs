@@ -103,6 +103,61 @@ async def embed_text(
     return vec
 
 
+async def embed_texts(
+    texts: list[str],
+    profile: EmbeddingProfile | None = None,
+    task_type: str = "passage",
+    batch_size: int = 32,
+) -> list[list[float]]:
+    """Embed many texts with as few model calls as possible.
+
+    Ingesting a catalog used to call the embedding model once per position —
+    thousands of round trips on the same GPU that parses the pages. Ollama's
+    /api/embed takes an array, so a page's worth of positions costs one call.
+    Providers that ignore ``input_texts`` fall back to per-text embedding, so
+    the caller never has to care which one is configured.
+    """
+    active_profile = profile or get_active_embedding_profile()
+    if not texts:
+        return []
+
+    prefix = ""
+    if "qwen3" in active_profile.model_key.lower():
+        prefix = "query: " if task_type == "query" else "passage: "
+
+    registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
+    router = AIRouter(registry)
+    results: list[list[float]] = []
+
+    for start in range(0, len(texts), max(1, batch_size)):
+        chunk = texts[start : start + max(1, batch_size)]
+        prepared = [f"{prefix}{(text or '').strip()}"[:32000] for text in chunk]
+        vectors: list[list[float]] = []
+        try:
+            response = await router.run(
+                AIRequest(
+                    task=AITask.EMBEDDING,
+                    input_text=prepared[0],
+                    input_texts=prepared,
+                    preferred_model=active_profile.model_key,
+                    confidential=True,
+                )
+            )
+            vectors = response.embeddings or []
+        except Exception as exc:  # noqa: BLE001 — fall back to one-by-one
+            logger.warning("embed_batch_failed", error=str(exc)[:200], size=len(chunk))
+
+        if len(vectors) != len(chunk):
+            vectors = [await embed_text(text, active_profile, task_type) for text in chunk]
+
+        for index, vector in enumerate(vectors):
+            if not vector:
+                vectors[index] = [0.0] * active_profile.dimension
+        results.extend(vectors)
+
+    return results
+
+
 def build_document_text(
     file_name: str,
     doc_type: str | None,

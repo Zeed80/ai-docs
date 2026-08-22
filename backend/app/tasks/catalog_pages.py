@@ -163,6 +163,18 @@ async def _mark_step(factory, document_id: uuid.UUID, step: str, status: str, **
         await db.commit()
 
 
+async def _is_paused(db, document_id: uuid.UUID) -> bool:
+    """A long parse must be stoppable — and stay stopped.
+
+    Without an explicit flag `catalog.resume_stalled` would helpfully restart
+    the very run a person just stopped, five minutes later.
+    """
+    from app.db.models import Document
+
+    doc = await db.get(Document, document_id)
+    return bool((doc.metadata_ or {}).get("catalog_paused")) if doc else False
+
+
 async def _local_pdf(storage_path: str) -> str:
     """Download once into a temp file — a 44 MB PDF must not live in RAM
     across four workers, and fitz opens a path lazily."""
@@ -299,6 +311,8 @@ async def _render_batch_async(document_id: str, run_id: str | None) -> dict:
         doc, _job = await _document_and_job(db, doc_uuid)
         if doc is None:
             return {"error": "document not found"}
+        if await _is_paused(db, doc_uuid):
+            return {"document_id": document_id, "status": "paused"}
         storage_path = doc.storage_path
         claimed = await _claim_pages(db, doc_uuid, "pending", "rendering", RENDER_BATCH)
         page_numbers = [(row.id, row.page_number) for row in claimed]
@@ -456,6 +470,8 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
         doc, _job = await _document_and_job(db, doc_uuid)
         if doc is None:
             return {"error": "document not found"}
+        if await _is_paused(db, doc_uuid):
+            return {"document_id": document_id, "status": "paused"}
         storage_path = doc.storage_path
         supplier_id = (doc.metadata_ or {}).get("tool_supplier_id")
         claimed = await _claim_pages(db, doc_uuid, "rendered", "parsing", PARSE_BATCH)
@@ -895,9 +911,139 @@ async def _resume_stalled_async() -> dict:
             if updated_at is None or updated_at < cutoff:
                 resumed.setdefault(str(document_id), 0)
 
+    if resumed:
+        from app.db.models import Document
+
+        async with factory() as db:
+            paused = {
+                str(row[0])
+                for row in (
+                    await db.execute(
+                        select(Document.id).where(
+                            Document.id.in_([uuid.UUID(key) for key in resumed])
+                        )
+                    )
+                ).all()
+                if await _is_paused(db, row[0])
+            }
+        for key in paused:
+            resumed.pop(key, None)
+
     for document_id in resumed:
         render_catalog_page_batch.delay(document_id, None)
 
     if resumed:
         logger.info("catalog_pages_resumed", documents=len(resumed), pages=resumed)
     return {"resumed": resumed}
+
+
+@celery_app.task(
+    bind=True,
+    name="catalog.reindex_payload",
+    max_retries=1,
+    soft_time_limit=1800,
+    time_limit=1860,
+)
+def reindex_catalog_payload(self, document_id: str | None = None) -> dict:
+    """Backfill catalog/page/image keys on already-indexed vector points."""
+    return _run_async(_reindex_payload_async(document_id))
+
+
+async def _reindex_payload_async(document_id: str | None) -> dict:
+    from app.db.models import ToolCatalogEntry
+    from app.vector.qdrant_store import set_tool_catalog_payload
+
+    factory = await _session()
+    updated = 0
+    failed = 0
+
+    async with factory() as db:
+        query = select(ToolCatalogEntry).where(
+            ToolCatalogEntry.is_active.is_(True),
+            ToolCatalogEntry.embedding_id.isnot(None),
+        )
+        if document_id:
+            query = query.where(ToolCatalogEntry.source_document_id == uuid.UUID(document_id))
+        entries = (await db.execute(query)).scalars().all()
+
+    for entry in entries:
+        payload = {
+            "part_number": entry.part_number or "",
+            "catalog_document_id": (
+                str(entry.source_document_id) if entry.source_document_id else ""
+            ),
+            "catalog_page": entry.catalog_page,
+            "has_image": str(entry.image_kind == "crop").lower(),
+            "price_value": entry.price_value,
+        }
+        try:
+            await __import__("asyncio").to_thread(
+                set_tool_catalog_payload, str(entry.id), payload
+            )
+            updated += 1
+        except Exception as exc:  # noqa: BLE001 — one missing point is not fatal
+            failed += 1
+            logger.debug("catalog_payload_backfill_failed", entry=str(entry.id), error=str(exc)[:120])
+
+    logger.info("catalog_payload_reindexed", updated=updated, failed=failed)
+    return {"updated": updated, "failed": failed}
+
+
+@celery_app.task(
+    bind=True,
+    name="catalog.purge_inactive",
+    max_retries=1,
+    soft_time_limit=1800,
+    time_limit=1860,
+)
+def purge_inactive_entries(self, older_than_days: int = 30, dry_run: bool = True) -> dict:
+    """Physically delete long-deactivated positions and their vector points.
+
+    Re-parsing a catalog retires the previous run's rows rather than deleting
+    them, so a mistake stays recoverable. They should not accumulate forever;
+    dry_run by default because deletion is the one step that cannot be undone.
+    """
+    return _run_async(_purge_inactive_async(older_than_days, dry_run))
+
+
+async def _purge_inactive_async(older_than_days: int, dry_run: bool) -> dict:
+    from datetime import UTC, datetime, timedelta
+
+    from app.db.models import ToolCatalogEntry
+    from app.vector.qdrant_store import delete_tool_catalog_entry
+
+    cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
+    factory = await _session()
+
+    async with factory() as db:
+        rows = (
+            await db.execute(
+                select(ToolCatalogEntry).where(
+                    ToolCatalogEntry.is_active.is_(False),
+                    ToolCatalogEntry.updated_at < cutoff,
+                )
+            )
+        ).scalars().all()
+        candidates = [(entry.id, entry.embedding_id) for entry in rows]
+
+        if dry_run:
+            logger.info("catalog_purge_dry_run", candidates=len(candidates))
+            return {"dry_run": True, "candidates": len(candidates)}
+
+        deleted = 0
+        for entry_id, embedding_id in candidates:
+            if embedding_id:
+                try:
+                    await __import__("asyncio").to_thread(
+                        delete_tool_catalog_entry, str(entry_id)
+                    )
+                except Exception as exc:  # noqa: BLE001 — DB row still goes
+                    logger.debug("catalog_purge_vector_failed", error=str(exc)[:120])
+            entry = await db.get(ToolCatalogEntry, entry_id)
+            if entry is not None:
+                await db.delete(entry)
+                deleted += 1
+        await db.commit()
+
+    logger.info("catalog_purged", deleted=deleted, older_than_days=older_than_days)
+    return {"dry_run": False, "deleted": deleted}

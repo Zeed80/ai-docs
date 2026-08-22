@@ -22,6 +22,7 @@ export function CatalogCard({
 }) {
   const [coverFailed, setCoverFailed] = useState(false);
 
+  const legacy = catalog.legacy || !catalog.document_id;
   const active = ["queued", "running"].includes(catalog.status);
   const percent =
     catalog.progress_total > 0
@@ -38,9 +39,10 @@ export function CatalogCard({
     <div className="flex flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-800/60 transition-colors hover:border-slate-500">
       <button
         type="button"
-        onClick={onOpen}
+        onClick={legacy ? undefined : onOpen}
+        disabled={legacy}
         className="relative flex h-44 items-center justify-center bg-slate-900"
-        title="Открыть каталог"
+        title={legacy ? "У этих позиций нет исходного файла" : "Открыть каталог"}
       >
         {catalog.cover_url && !coverFailed ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -106,14 +108,23 @@ export function CatalogCard({
           </p>
         )}
 
+        {legacy && (
+          <p className="text-[11px] text-amber-300/80">
+            Импортировано до постраничного разбора: без страниц и картинок.
+            Загрузите файл каталога заново, чтобы получить их.
+          </p>
+        )}
+
         <div className="mt-auto flex flex-wrap gap-2 pt-1">
-          <button
-            onClick={onOpen}
-            className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-600"
-          >
-            Открыть
-          </button>
-          {catalog.download_url && (
+          {!legacy && (
+            <button
+              onClick={onOpen}
+              className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-600"
+            >
+              Открыть
+            </button>
+          )}
+          {catalog.download_url && !legacy && (
             <a
               href={catalog.download_url}
               className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-600"
@@ -121,7 +132,7 @@ export function CatalogCard({
               Скачать PDF
             </a>
           )}
-          {onReparse && (
+          {onReparse && !legacy && (
             <button
               onClick={onReparse}
               className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-600"
@@ -130,7 +141,7 @@ export function CatalogCard({
               Перечитать
             </button>
           )}
-          {onDelete && (
+          {onDelete && !legacy && (
             <button
               onClick={onDelete}
               className="rounded bg-slate-700 px-2 py-1 text-xs text-red-300 hover:bg-red-900/50"

@@ -580,3 +580,18 @@ def _distance(distance_metric: str) -> Distance:
     if normalized == "euclid":
         return Distance.EUCLID
     return Distance.COSINE
+
+
+def set_tool_catalog_payload(entry_id: str, payload: dict) -> None:
+    """Update a catalog point's payload WITHOUT re-embedding it.
+
+    Positions indexed before the catalog/page/image fields existed are invisible
+    to the new filters ("в этом каталоге", "только с картинкой"). Re-embedding
+    thousands of rows to add three keys would cost hours of GPU for nothing.
+    """
+    client = get_client()
+    client.set_payload(
+        collection_name=COLLECTION_TOOL_CATALOG,
+        payload=payload,
+        points=[_stable_point_uuid(f"tool_catalog:{entry_id}")],
+    )

@@ -324,9 +324,10 @@ class OllamaProvider(AIProvider):
 
     async def embedding(self, request: AIRequest, model: str) -> AIResponse:
         started = time.perf_counter()
+        batch = request.input_texts or None
         payload = {
             "model": model,
-            "input": request.input_text or request.prompt or "",
+            "input": batch if batch else (request.input_text or request.prompt or ""),
             "keep_alive": _ollama_keep_alive(model),
         }
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
@@ -343,6 +344,7 @@ class OllamaProvider(AIProvider):
             provider=self.kind,
             model=model,
             embedding=embedding,
+            embeddings=embeddings if batch else None,
             usage=AIUsage(latency_ms=int((time.perf_counter() - started) * 1000)),
             raw=body,
         )

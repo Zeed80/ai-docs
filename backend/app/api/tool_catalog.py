@@ -769,7 +769,7 @@ async def delete_entry(
     summary="Skill: tool_catalog.search — Search tool catalog by parameters and semantic query.",
 )
 async def search_tools(
-    query: str | None = Query(None),
+    query: str | None = Query(None, description="Free-text search"),
     tool_type: ToolTypeEnum | None = Query(None),
     supplier_id: uuid.UUID | None = Query(None),
     diameter_min: float | None = Query(None),
@@ -777,75 +777,55 @@ async def search_tools(
     material: str | None = Query(None),
     coating: str | None = Query(None),
     max_price: float | None = Query(None),
-    semantic: bool = Query(True),
+    semantic: bool = Query(True, description="Оставлен для совместимости"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> ToolCatalogListResponse:
-    # Semantic search via Qdrant
-    semantic_ids: list[uuid.UUID] = []
-    if query and semantic:
-        try:
-            from app.ai.embeddings import embed_text as get_text_embedding
-            from app.vector.qdrant_store import search_tool_catalog, ensure_drawing_collections
+    """Skill: tool_catalog.search — Search catalog entries.
 
-            ensure_drawing_collections()
-            vector = await get_text_embedding(query)
-            if vector:
-                hits = search_tool_catalog(
-                    query_vector=vector,
-                    tool_type=tool_type.value if tool_type else None,
-                    supplier_id=str(supplier_id) if supplier_id else None,
-                    limit=100,
-                )
-                semantic_ids = [uuid.UUID(h["entry_id"]) for h in hits if h.get("entry_id")]
-        except Exception as exc:
-            logger.warning("tool_catalog_semantic_search_failed", error=str(exc))
+    Delegates to the hybrid search in api/catalogs.py so there is ONE ranking in
+    the product. This endpoint used to run its own "vector OR ILIKE" branch and
+    then sort by name, which meant two searches over the same data that
+    disagreed with each other.
+    """
+    from app.api.catalogs import search_catalog
+    from app.domain.catalogs import CatalogSearchRequest
 
-    q = select(ToolCatalogEntry).where(ToolCatalogEntry.is_active.is_(True))
+    result = await search_catalog(
+        CatalogSearchRequest(
+            query=query,
+            supplier_id=supplier_id,
+            tool_type=tool_type.value if tool_type else None,
+            diameter_min=diameter_min,
+            diameter_max=diameter_max,
+            price_max=max_price,
+            page=page,
+            page_size=page_size,
+            include_facets=False,
+        ),
+        db,
+    )
 
-    if semantic_ids:
-        q = q.where(ToolCatalogEntry.id.in_(semantic_ids))
-    elif query:
-        q = q.where(
-            or_(
-                ToolCatalogEntry.name.ilike(f"%{query}%"),
-                ToolCatalogEntry.description.ilike(f"%{query}%"),
-                ToolCatalogEntry.part_number.ilike(f"%{query}%"),
-            )
-        )
+    ids = [item.id for item in result.items]
+    entries: list[ToolCatalogEntry] = []
+    if ids:
+        rows = (
+            await db.execute(select(ToolCatalogEntry).where(ToolCatalogEntry.id.in_(ids)))
+        ).scalars().all()
+        order = {entry_id: index for index, entry_id in enumerate(ids)}
+        entries = sorted(rows, key=lambda entry: order.get(entry.id, 0))
 
-    if tool_type:
-        q = q.where(ToolCatalogEntry.tool_type == tool_type)
-    if supplier_id:
-        q = q.where(ToolCatalogEntry.supplier_id == supplier_id)
-    if diameter_min is not None:
-        q = q.where(ToolCatalogEntry.diameter_mm >= diameter_min)
-    if diameter_max is not None:
-        q = q.where(ToolCatalogEntry.diameter_mm <= diameter_max)
+    # Material/coating are not part of the hybrid contract; keep them as a
+    # post-filter so the older callers' behaviour does not change.
     if material:
-        q = q.where(ToolCatalogEntry.material.ilike(f"%{material}%"))
+        entries = [e for e in entries if (e.material or "").lower().find(material.lower()) >= 0]
     if coating:
-        q = q.where(ToolCatalogEntry.coating.ilike(f"%{coating}%"))
-    if max_price is not None:
-        q = q.where(
-            or_(
-                ToolCatalogEntry.price_value.is_(None),
-                ToolCatalogEntry.price_value <= max_price,
-            )
-        )
-
-    total_result = await db.execute(select(func.count()).select_from(q.subquery()))
-    total = total_result.scalar_one()
-
-    q = q.order_by(ToolCatalogEntry.name)
-    q = q.offset((page - 1) * page_size).limit(page_size)
-    result = await db.execute(q)
-    items = result.scalars().all()
+        entries = [e for e in entries if (e.coating or "").lower().find(coating.lower()) >= 0]
 
     return ToolCatalogListResponse(
-        items=[ToolCatalogEntryOut.model_validate(e) for e in items],
-        total=total,
+        items=[ToolCatalogEntryOut.model_validate(entry) for entry in entries],
+        total=result.total,
         page=page,
         page_size=page_size,
     )

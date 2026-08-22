@@ -785,13 +785,23 @@ function CatalogTab({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {catalogs.map((item) => (
                 <CatalogCard
-                  key={item.document_id}
+                  key={item.document_id ?? "legacy"}
                   catalog={item}
                   onOpen={() => {
-                    window.location.href = `/catalogs/${item.document_id}`;
+                    if (item.document_id) {
+                      window.location.href = `/catalogs/${item.document_id}`;
+                    }
                   }}
-                  onReparse={() => handleReingestUpload(item.document_id)}
-                  onDelete={() => handleDeleteUpload(item.document_id)}
+                  onReparse={
+                    item.document_id
+                      ? () => handleReingestUpload(item.document_id as string)
+                      : undefined
+                  }
+                  onDelete={
+                    item.document_id
+                      ? () => handleDeleteUpload(item.document_id as string)
+                      : undefined
+                  }
                 />
               ))}
             </div>

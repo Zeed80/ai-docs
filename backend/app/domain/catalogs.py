@@ -25,9 +25,14 @@ class CatalogPageOut(BaseModel):
 
 
 class CatalogOut(BaseModel):
-    """One catalog file of one supplier, with its parsing progress."""
+    """One catalog file of one supplier, with its parsing progress.
 
-    document_id: uuid.UUID
+    `document_id` is None for the pseudo-catalog "Без привязки": positions
+    imported before page-wise parsing have no file behind them, and hiding them
+    would be worse than showing them honestly.
+    """
+
+    document_id: uuid.UUID | None = None
     file_name: str
     file_size: int
     uploaded_at: datetime | None = None

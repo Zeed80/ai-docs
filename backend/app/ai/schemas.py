@@ -113,6 +113,10 @@ class AIRequest(BaseModel):
     images: list[str] = Field(default_factory=list, description="Base64 strings or provider URLs.")
     audio: str | None = None
     input_text: str | None = None
+    # Batch embedding: Ollama's /api/embed accepts an array and returns all
+    # vectors in one round trip. Embedding a catalog one row at a time was a
+    # separate model call per position — the slowest step after extraction.
+    input_texts: list[str] | None = None
     response_schema: type[BaseModel] | None = Field(default=None, exclude=True)
     tools: list[ToolSpec] = Field(default_factory=list)
     confidential: bool = True
@@ -145,6 +149,7 @@ class AIResponse(BaseModel):
     text: str | None = None
     data: Any = None
     embedding: list[float] | None = None
+    embeddings: list[list[float]] | None = None
     scores: list[float] | None = None
     proposed_tool_calls: list[ProposedToolCall] = Field(default_factory=list)
     usage: AIUsage = Field(default_factory=AIUsage)

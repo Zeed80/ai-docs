@@ -201,3 +201,36 @@ def test_a_spread_with_more_pictures_than_positions_stays_on_the_page_preview():
         [{"part_number": "X"}, {"part_number": "Y"}], [], six, (3544, 2500)
     )
     assert all(m.kind == "page" for m in matches), "guessing which picture is which would lie"
+
+
+# ── batch embedding ─────────────────────────────────────────────────────────
+
+
+@__import__("pytest").mark.asyncio
+async def test_embed_texts_falls_back_to_one_by_one_when_batch_unsupported():
+    """A provider that ignores input_texts must not silently produce vectors of
+    the wrong length — the caller would upsert garbage into Qdrant."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.ai.embeddings import EmbeddingProfile, embed_texts
+
+    profile = EmbeddingProfile(
+        model_key="test_model",
+        provider_model="test",
+        collection_name="test",
+        dimension=4,
+        distance_metric="cosine",
+        normalize=True,
+    )
+
+    class _NoBatch:
+        embeddings = None
+
+    with (
+        patch("app.ai.embeddings.AIRouter.run", new=AsyncMock(return_value=_NoBatch())),
+        patch("app.ai.embeddings.embed_text", new=AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])),
+    ):
+        vectors = await embed_texts(["a", "b", "c"], profile)
+
+    assert len(vectors) == 3
+    assert all(len(vector) == 4 for vector in vectors)
