@@ -1,0 +1,21 @@
+# Default certificate for local access (localhost, the LAN address).
+#
+# Traefik answers https://localhost with its built-in "TRAEFIK DEFAULT CERT",
+# which no browser trusts: Chrome refuses the page outright with
+# ERR_CERT_AUTHORITY_INVALID and — the practical consequence — never registers
+# the service worker, so the console shows "An SSL certificate error occurred
+# when fetching the script" on every page.
+#
+# This store's certificate is used ONLY when no other one matches; the ACME
+# certificates for the real domain keep priority, so production is unaffected.
+# The matching CA (traefik/certs/local-ca.crt) must be imported once into the
+# browser or the OS trust store — see infra/README-local-tls.md.
+# Only the default store: listing the same file under `tls.certificates` makes
+# Traefik prefer it over the ACME certificate whenever the SNI matches, and the
+# real domain then serves an untrusted certificate.
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/local.crt
+        keyFile: /etc/traefik/certs/local.key

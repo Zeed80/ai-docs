@@ -17,6 +17,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.prod.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/prod:/etc/traefik/dynamic:ro
+      # Locally-trusted certificate for localhost / LAN access (see
+      # traefik/prod/tls-local.yml). Keys are gitignored.
+      - ./traefik/certs:/etc/traefik/certs:ro
       - traefik_acme:/etc/traefik/acme
     environment:
       TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN:?set TRAEFIK_DOMAIN in infra/.env}

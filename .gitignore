@@ -136,3 +136,10 @@ infra/monitoring/backend-token
 # API, TLS-сертификаты и почтовые данные. В наш репозиторий это попадать не
 # должно ни при каких обстоятельствах.
 infra/mailcow/
+
+# Local TLS material for the stand: the private keys never belong in the repo
+# (the CA certificate is regenerated per machine by infra/scripts/make-local-cert.sh).
+infra/traefik/certs/*.key
+infra/traefik/certs/*.crt
+infra/traefik/certs/*.srl
+infra/traefik/certs/*.cnf
