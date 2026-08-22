@@ -22,24 +22,35 @@ interface Supplier {
   user_rating: number | null;
 }
 
-interface CatalogSummary {
+interface SupplierCatalogCounts {
   party_id: string;
   entries_count: number;
-  tool_suppliers: { id: string; name: string; catalog_format: string | null }[];
+  catalogs_count: number;
 }
 
-async function fetchCatalogSummary(partyId: string): Promise<CatalogSummary> {
-  const [tsResp, entriesResp] = await Promise.all([
-    fetch(`${API}/api/tool-catalog/by-supplier/${partyId}`),
-    fetch(`${API}/api/tool-catalog/by-supplier/${partyId}/entries?page_size=1`),
-  ]);
-  const ts = tsResp.ok ? await tsResp.json() : { items: [] };
-  const entries = entriesResp.ok ? await entriesResp.json() : { total: 0 };
-  return {
-    party_id: partyId,
-    entries_count: entries.total ?? 0,
-    tool_suppliers: ts.items ?? [],
-  };
+async function fetchAllCatalogSummaries(): Promise<Record<string, SupplierCatalogCounts>> {
+  // One request for every supplier's catalogs. The previous version asked two
+  // questions per supplier and the rate limiter answered 429 to most of them,
+  // so suppliers with catalogs showed up as "каталог не загружен".
+  const summaries: Record<string, SupplierCatalogCounts> = {};
+  try {
+    const data = await catalogsApi.list({});
+    for (const item of data.items ?? []) {
+      const key = item.party_id ?? item.supplier_id;
+      if (!key) continue;
+      const current = summaries[key] ?? {
+        party_id: key,
+        entries_count: 0,
+        catalogs_count: 0,
+      };
+      current.entries_count += item.entries_count ?? 0;
+      current.catalogs_count += 1;
+      summaries[key] = current;
+    }
+  } catch {
+    // The counters are decoration; the supplier list itself must still render.
+  }
+  return summaries;
 }
 
 export default function CatalogsPage() {
@@ -58,7 +69,7 @@ export default function CatalogsPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const [summaries, setSummaries] = useState<Record<string, CatalogSummary>>(
+  const [summaries, setSummaries] = useState<Record<string, SupplierCatalogCounts>>(
     {},
   );
 
@@ -89,20 +100,16 @@ export default function CatalogsPage() {
     return () => clearTimeout(t);
   }, [search]);
 
-  // Load catalog summaries for visible suppliers
+  // Load catalog counters for every supplier in one request.
   useEffect(() => {
     if (!suppliers.length) return;
-    const missing = suppliers.filter((s) => !summaries[s.id]);
-    if (!missing.length) return;
-    Promise.all(missing.map((s) => fetchCatalogSummary(s.id))).then(
-      (results) => {
-        setSummaries((prev) => {
-          const next = { ...prev };
-          for (const r of results) next[r.party_id] = r;
-          return next;
-        });
-      },
-    );
+    let cancelled = false;
+    fetchAllCatalogSummaries().then((result) => {
+      if (!cancelled) setSummaries(result);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [suppliers]);
 
   useEffect(() => {
@@ -338,7 +345,12 @@ export default function CatalogsPage() {
                         <div className="text-sm font-semibold text-blue-400">
                           {summary.entries_count.toLocaleString("ru")}
                         </div>
-                        <div className="text-xs text-white/30">позиций</div>
+                        <div className="text-xs text-white/30">
+                          позиций
+                          {summary.catalogs_count > 1
+                            ? ` · ${summary.catalogs_count} каталога`
+                            : ""}
+                        </div>
                       </div>
                     ) : (
                       <span className="text-xs text-white/20 italic">

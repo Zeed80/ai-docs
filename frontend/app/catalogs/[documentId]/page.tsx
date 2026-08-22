@@ -22,6 +22,11 @@ export default function CatalogViewerPage() {
   const [entries, setEntries] = useState<CatalogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(Number(search.get("page") || 1));
+  // The strip must never render every page at once: a 948-page catalog fired
+  // 948 thumbnail requests on open and the rate limiter answered 429 to most of
+  // them (found in the browser — the API tests could not see this).
+  const STRIP_WINDOW = 40;
+  const [stripEnd, setStripEnd] = useState(STRIP_WINDOW);
   const highlightId = search.get("entry");
 
   useEffect(() => {
@@ -81,6 +86,16 @@ export default function CatalogViewerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
+  // Keep the current page inside the rendered window when navigating.
+  useEffect(() => {
+    setStripEnd((end) => (page + 10 > end ? page + 10 : end));
+  }, [page]);
+
+  const visiblePages = useMemo(
+    () => pages.slice(0, Math.min(stripEnd, pages.length)),
+    [pages, stripEnd],
+  );
+
   const highlight = useMemo(
     () => entries.find((entry) => entry.id === highlightId) ?? null,
     [entries, highlightId],
@@ -132,7 +147,7 @@ export default function CatalogViewerPage() {
 
       <div className="flex min-h-0 flex-1 gap-3">
         <aside className="w-28 shrink-0 overflow-y-auto rounded border border-slate-700 bg-slate-800/40 p-1">
-          {pages.map((item) => (
+          {visiblePages.map((item) => (
             <button
               key={item.page_number}
               onClick={() => setPage(item.page_number)}
@@ -166,6 +181,15 @@ export default function CatalogViewerPage() {
               </div>
             </button>
           ))}
+          {visiblePages.length < pages.length && (
+            <button
+              onClick={() => setStripEnd((end) => end + STRIP_WINDOW)}
+              className="mb-1 w-full rounded border border-slate-700 py-2 text-[11px] text-slate-400 hover:border-slate-500 hover:text-slate-200"
+            >
+              ещё {Math.min(STRIP_WINDOW, pages.length - visiblePages.length)} из{" "}
+              {pages.length - visiblePages.length}
+            </button>
+          )}
         </aside>
 
         <main className="min-w-0 flex-1 overflow-hidden rounded border border-slate-700">

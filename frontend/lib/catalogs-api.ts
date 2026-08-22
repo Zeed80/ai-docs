@@ -14,6 +14,7 @@ export interface CatalogSummary {
   uploaded_at: string | null;
   supplier_id: string | null;
   supplier_name: string | null;
+  party_id: string | null;
   page_count: number;
   pages_ready: number;
   entries_count: number;
@@ -156,6 +157,19 @@ export const catalogsApi = {
       body: JSON.stringify(params),
     });
     return json<CatalogSearchResult>(response, "Поиск по каталогам не удался");
+  },
+
+  async pause(documentId: string, resume = false) {
+    const response = await mutFetch(
+      `${API}/api/catalogs/${documentId}/pause?resume=${resume}`,
+      { method: "POST" },
+    );
+    return json<{
+      paused: boolean;
+      pages_done: number;
+      page_count: number;
+      message: string;
+    }>(response, "Не удалось изменить состояние разбора");
   },
 
   pageImageUrl(

@@ -802,6 +802,26 @@ function CatalogTab({
                       ? () => handleDeleteUpload(item.document_id as string)
                       : undefined
                   }
+                  onPauseToggle={
+                    item.document_id
+                      ? async (resume: boolean) => {
+                          try {
+                            const result = await catalogsApi.pause(
+                              item.document_id as string,
+                              resume,
+                            );
+                            setUploadSuccess(result.message);
+                            loadCatalogs();
+                          } catch (e: unknown) {
+                            setUploadError(
+                              e instanceof Error
+                                ? e.message
+                                : "Не удалось изменить состояние разбора",
+                            );
+                          }
+                        }
+                      : undefined
+                  }
                 />
               ))}
             </div>

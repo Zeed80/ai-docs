@@ -87,6 +87,13 @@ async def list_catalogs(
         supplier_ids = [supplier_id]
     elif party_id:
         supplier_ids = await _supplier_ids_for_party(db, party_id)
+    else:
+        # No filter → every supplier's catalogs in ONE call. The catalogs page
+        # used to ask two questions per supplier and ran straight into the rate
+        # limiter (24 parallel requests answered with 429 — seen in the browser).
+        supplier_ids = [
+            row[0] for row in (await db.execute(select(ToolSupplier.id))).all()
+        ]
     if not supplier_ids:
         return CatalogListResponse(items=[], total=0)
 
@@ -207,13 +214,14 @@ async def list_catalogs(
             )
         ).scalar_one()
     )
-    if orphans:
+    if orphans and (party_id or supplier_id):
         items.append(
             CatalogOut(
                 document_id=None,
                 file_name="Без привязки к каталогу",
                 file_size=0,
                 supplier_id=supplier_ids[0],
+                party_id=party_id,
                 entries_count=orphans,
                 status="legacy",
                 legacy=True,
@@ -563,7 +571,9 @@ def _entry_out(
     catalog_name: str | None = None,
     score: float | None = None,
 ) -> CatalogEntryOut:
-    meta = entry.metadata_ or {}
+    # Some historical rows stored a LIST in this JSON column; `.get` on it threw
+    # a 500 for the whole search page (found in the browser, not in tests).
+    meta = entry.metadata_ if isinstance(entry.metadata_, dict) else {}
     return CatalogEntryOut(
         id=entry.id,
         part_number=entry.part_number,

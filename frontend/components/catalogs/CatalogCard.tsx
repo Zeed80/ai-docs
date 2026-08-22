@@ -14,16 +14,22 @@ export function CatalogCard({
   onOpen,
   onReparse,
   onDelete,
+  onPauseToggle,
 }: {
   catalog: CatalogSummary;
   onOpen: () => void;
   onReparse?: () => void;
   onDelete?: () => void;
+  onPauseToggle?: (resume: boolean) => void;
 }) {
   const [coverFailed, setCoverFailed] = useState(false);
 
   const legacy = catalog.legacy || !catalog.document_id;
   const active = ["queued", "running"].includes(catalog.status);
+  // Parsing a big catalog holds the GPU for hours; a person must be able to
+  // stop it from here and pick it up later at the same page.
+  const unfinished =
+    catalog.page_count > 0 && catalog.pages_ready < catalog.page_count;
   const percent =
     catalog.progress_total > 0
       ? Math.round((catalog.progress_done / catalog.progress_total) * 100)
@@ -131,6 +137,19 @@ export function CatalogCard({
             >
               Скачать PDF
             </a>
+          )}
+          {onPauseToggle && !legacy && (active || unfinished) && (
+            <button
+              onClick={() => onPauseToggle(!active)}
+              className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-600"
+              title={
+                active
+                  ? "Остановить разбор — уже разобранные страницы сохранятся"
+                  : "Продолжить разбор с той же страницы"
+              }
+            >
+              {active ? "Приостановить" : "Продолжить разбор"}
+            </button>
           )}
           {onReparse && !legacy && (
             <button

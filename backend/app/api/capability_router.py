@@ -61,6 +61,13 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         # Uploaded catalog files: the agent must be able to see what it (or a
         # human) uploaded and how far the parse got, and to re-run one file.
         "crawl_site": ("POST", "/api/tool-catalog/crawl-site", []),
+        # Browsing side: which catalogs a supplier has, what is on a page, and a
+        # search that returns the position's picture and page — without these the
+        # agent can find a catalog but cannot answer "покажи фрезу Ø12 из него".
+        "list_catalogs": ("GET", "/api/catalogs", []),
+        "catalog_pages": ("GET", "/api/catalogs/{document_id}/pages", ["document_id"]),
+        "search_positions": ("POST", "/api/catalogs/search", []),
+        "pause_parsing": ("POST", "/api/catalogs/{document_id}/pause", ["document_id"]),
         "list_uploads": (
             "GET", "/api/tool-catalog/by-supplier/{party_id}/uploads", ["party_id"]
         ),
