@@ -51,7 +51,7 @@ PARSE_BATCH = 3
 # render the first pages eagerly (covers the viewer's first screen) and let the
 # endpoint render the rest on demand.
 EAGER_FULL_PAGES = 24
-STALE_LEASE_MINUTES = 10
+STALE_LEASE_MINUTES = 5
 
 
 def _run_async(coro):
@@ -878,6 +878,22 @@ async def _resume_stalled_async() -> dict:
             for document_id, count in rows:
                 resumed[str(document_id)] = resumed.get(str(document_id), 0) + int(count)
         await db.commit()
+
+    # A chain can also die BETWEEN batches: nothing is left in flight, but pages
+    # are waiting and no task exists to pick them up. Restart those too — this
+    # is the case a worker restart actually produces (measured: 927 pages left
+    # in `rendered` with an empty queue).
+    async with factory() as db:
+        idle = (
+            await db.execute(
+                select(CatalogPage.document_id, func.max(CatalogPage.updated_at))
+                .where(CatalogPage.status.in_(("pending", "rendered")))
+                .group_by(CatalogPage.document_id)
+            )
+        ).all()
+        for document_id, updated_at in idle:
+            if updated_at is None or updated_at < cutoff:
+                resumed.setdefault(str(document_id), 0)
 
     for document_id in resumed:
         render_catalog_page_batch.delay(document_id, None)
