@@ -68,6 +68,9 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "catalog_pages": ("GET", "/api/catalogs/{document_id}/pages", ["document_id"]),
         "search_positions": ("POST", "/api/catalogs/search", []),
         "pause_parsing": ("POST", "/api/catalogs/{document_id}/pause", ["document_id"]),
+        # "Чем заменить эту позицию" — by meaning, since a replacement's article
+        # number differs by definition between manufacturers.
+        "similar_positions": ("POST", "/api/catalogs/similar", []),
         "list_uploads": (
             "GET", "/api/tool-catalog/by-supplier/{party_id}/uploads", ["party_id"]
         ),

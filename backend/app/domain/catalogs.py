@@ -115,9 +115,15 @@ class CatalogFacets(BaseModel):
 
 class CatalogSearchRequest(BaseModel):
     query: str | None = None
+    # Singular fields stay for existing callers; the plural ones are what the
+    # UI uses — "искать в этих двух каталогах" and "у этих поставщиков" are the
+    # normal questions, and one-at-a-time filters could not express them.
     supplier_id: uuid.UUID | None = None
     party_id: uuid.UUID | None = None
     catalog_document_id: uuid.UUID | None = None
+    supplier_ids: list[uuid.UUID] | None = None
+    party_ids: list[uuid.UUID] | None = None
+    catalog_document_ids: list[uuid.UUID] | None = None
     page_number: int | None = None
     tool_type: str | None = None
     has_price: bool | None = None
@@ -137,6 +143,26 @@ class CatalogSearchResponse(BaseModel):
     page: int = 1
     page_size: int = 40
     facets: CatalogFacets | None = None
+    # Ready-to-publish workspace block: the agent shows what it found without
+    # re-deriving a table from prose (same contract as attach_web_catalog).
+    report: dict = {}
+    message: str = ""
     # Which retrieval branches contributed — an empty vector branch is a real
     # finding (positions not embedded yet), not something to hide.
     diagnostics: dict = {}
+
+
+class CatalogSimilarRequest(BaseModel):
+    """Analogues of a position — "чем это заменить"."""
+
+    entry_id: uuid.UUID | None = None
+    query: str | None = None
+    exclude_same_supplier: bool = False
+    limit: int = Field(10, ge=1, le=50)
+
+
+class CatalogSimilarResponse(BaseModel):
+    source: CatalogEntryOut | None = None
+    items: list[CatalogEntryOut] = []
+    message: str = ""
+    report: dict = {}

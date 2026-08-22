@@ -169,7 +169,9 @@ async def test_deleting_one_upload_keeps_other_catalog_entries(
 
     resp = await client.delete(f"/api/tool-catalog/uploads/{doc_ids[0]}")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["entries_removed"] == 1
+    # The endpoint now delegates to /api/catalogs, which reports what each
+    # deletion mode actually removed instead of one opaque counter.
+    assert resp.json()["entries"] == 1
 
     remaining = (
         await db_session.execute(

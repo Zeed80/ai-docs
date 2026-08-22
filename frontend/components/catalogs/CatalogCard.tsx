@@ -19,10 +19,13 @@ export function CatalogCard({
   catalog: CatalogSummary;
   onOpen: () => void;
   onReparse?: () => void;
-  onDelete?: () => void;
+  onDelete?: (mode: "data" | "file" | "all") => void;
   onPauseToggle?: (resume: boolean) => void;
 }) {
   const [coverFailed, setCoverFailed] = useState(false);
+  // Deleting a catalog is three different intentions; asking which one keeps a
+  // person from losing prices when they only wanted the disk space back.
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const legacy = catalog.legacy || !catalog.document_id;
   const active = ["queued", "running"].includes(catalog.status);
@@ -48,7 +51,9 @@ export function CatalogCard({
         onClick={legacy ? undefined : onOpen}
         disabled={legacy}
         className="relative flex h-44 items-center justify-center bg-slate-900"
-        title={legacy ? "У этих позиций нет исходного файла" : "Открыть каталог"}
+        title={
+          legacy ? "У этих позиций нет исходного файла" : "Открыть каталог"
+        }
       >
         {catalog.cover_url && !coverFailed ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -162,13 +167,57 @@ export function CatalogCard({
           )}
           {onDelete && !legacy && (
             <button
-              onClick={onDelete}
+              onClick={() => setDeleteOpen((open) => !open)}
               className="rounded bg-slate-700 px-2 py-1 text-xs text-red-300 hover:bg-red-900/50"
             >
-              Удалить
+              Удалить…
             </button>
           )}
         </div>
+
+        {deleteOpen && onDelete && (
+          <div className="rounded border border-slate-700 bg-slate-900/80 p-2 text-xs">
+            <p className="mb-2 text-slate-400">Что удалить?</p>
+            <div className="flex flex-col gap-1">
+              <button
+                onClick={() => {
+                  setDeleteOpen(false);
+                  onDelete("data");
+                }}
+                className="rounded px-2 py-1 text-left text-slate-200 hover:bg-slate-700"
+                title="Позиции, страницы и векторы. Файл останется — можно разобрать заново"
+              >
+                Только данные ({catalog.entries_count.toLocaleString("ru")}{" "}
+                позиций)
+              </button>
+              <button
+                onClick={() => {
+                  setDeleteOpen(false);
+                  onDelete("file");
+                }}
+                className="rounded px-2 py-1 text-left text-slate-200 hover:bg-slate-700"
+                title="PDF и отрисованные страницы. Позиции и цены сохранятся"
+              >
+                Только файл и картинки
+              </button>
+              <button
+                onClick={() => {
+                  setDeleteOpen(false);
+                  onDelete("all");
+                }}
+                className="rounded px-2 py-1 text-left text-red-300 hover:bg-red-900/50"
+              >
+                Каталог целиком
+              </button>
+              <button
+                onClick={() => setDeleteOpen(false)}
+                className="rounded px-2 py-1 text-left text-slate-500 hover:text-slate-300"
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

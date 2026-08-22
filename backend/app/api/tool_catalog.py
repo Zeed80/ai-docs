@@ -454,54 +454,19 @@ async def reingest_catalog_upload(
 )
 async def delete_catalog_upload(
     document_id: uuid.UUID,
+    mode: str = Query("all", pattern="^(data|file|all)$"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Removes only what came from THIS file.
+    """Skill: tool_catalog.delete_upload — Remove one uploaded catalog.
 
-    Deleting one of several catalogs must not touch the others — the reason
-    refresh no longer clears "all entries of the supplier". The entries are
-    removed rather than deactivated: they carry an FK to the document, and an
-    orphaned price with no traceable source is worse than no price.
+    Delegates to /api/catalogs so there is one deletion path. The local copy
+    knew nothing about the page registry (which holds a foreign key on the
+    document) or the rendered images, so it would now fail outright on any
+    page-parsed catalog and leave ~150 MB of images behind on the others.
     """
-    from app.db.models import Document, DocumentLink, DocumentProcessingJob
+    from app.api.catalogs import delete_catalog
 
-    doc = await db.get(Document, document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Загрузка каталога не найдена")
-
-    entries = (
-        await db.execute(
-            select(ToolCatalogEntry).where(ToolCatalogEntry.source_document_id == document_id)
-        )
-    ).scalars().all()
-    for entry in entries:
-        try:
-            from app.vector.qdrant_store import delete_tool_catalog_entry
-
-            delete_tool_catalog_entry(str(entry.id))
-        except Exception as exc:  # noqa: BLE001 — vector cleanup is best effort
-            logger.warning("entry_qdrant_cleanup_failed", entry_id=str(entry.id), error=str(exc))
-        try:
-            from app.domain.drawing_graph import delete_tool_catalog_graph
-
-            await delete_tool_catalog_graph(entry.id, db)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("entry_graph_cleanup_failed", entry_id=str(entry.id), error=str(exc))
-        await db.delete(entry)
-    await db.flush()
-
-    await db.execute(sa_delete(DocumentLink).where(DocumentLink.document_id == document_id))
-    # The processing job holds an FK on the document too.
-    await db.execute(
-        sa_delete(DocumentProcessingJob).where(DocumentProcessingJob.document_id == document_id)
-    )
-    await db.delete(doc)
-    await db.commit()
-    return {
-        "deleted": True,
-        "document_id": str(document_id),
-        "entries_removed": len(entries),
-    }
+    return await delete_catalog(document_id, mode, db)
 
 
 @router.post(

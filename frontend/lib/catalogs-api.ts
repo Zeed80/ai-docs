@@ -93,6 +93,9 @@ export interface CatalogSearchParams {
   party_id?: string;
   supplier_id?: string;
   catalog_document_id?: string;
+  catalog_document_ids?: string[];
+  supplier_ids?: string[];
+  party_ids?: string[];
   page_number?: number;
   tool_type?: string;
   has_price?: boolean;
@@ -157,6 +160,37 @@ export const catalogsApi = {
       body: JSON.stringify(params),
     });
     return json<CatalogSearchResult>(response, "Поиск по каталогам не удался");
+  },
+
+  async remove(documentId: string, mode: "data" | "file" | "all") {
+    const response = await mutFetch(
+      `${API}/api/catalogs/${documentId}?mode=${mode}`,
+      { method: "DELETE" },
+    );
+    return json<{
+      mode: string;
+      entries: number;
+      pages: number;
+      images: number;
+      message: string;
+    }>(response, "Не удалось удалить каталог");
+  },
+
+  async similar(params: {
+    entry_id?: string;
+    query?: string;
+    exclude_same_supplier?: boolean;
+    limit?: number;
+  }) {
+    const response = await mutFetch(`${API}/api/catalogs/similar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    return json<{ items: CatalogEntry[]; message: string }>(
+      response,
+      "Подбор аналогов не удался",
+    );
   },
 
   async pause(documentId: string, resume = false) {

@@ -15,6 +15,7 @@ import uuid
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +31,8 @@ from app.db.models import (
 from app.db.session import get_db
 from app.domain.catalogs import (
     CatalogEntryOut,
+    CatalogSimilarRequest,
+    CatalogSimilarResponse,
     CatalogFacets,
     CatalogFacetValue,
     CatalogListResponse,
@@ -389,6 +392,132 @@ async def pause_catalog(
     }
 
 
+@router.delete(
+    "/{document_id}",
+    summary="Skill: catalog.delete — Remove a catalog: its data, its file, or both.",
+)
+async def delete_catalog(
+    document_id: uuid.UUID,
+    mode: str = Query("all", pattern="^(data|file|all)$"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Three honest options instead of one all-or-nothing button.
+
+    * ``data`` — positions, their vectors, graph nodes, page registry and
+      rendered images. The file stays, so the catalog can be re-parsed.
+    * ``file`` — the stored PDF and the rendered page images; the positions and
+      their prices stay. This is how you reclaim storage without losing data.
+    * ``all`` — everything, including the document record itself.
+
+    Page rows carry a foreign key to the document, and the rendered images live
+    in object storage: deleting the row without them left ~150 MB per catalog
+    behind and made the delete fail outright once page-wise parsing landed.
+    """
+    from app.db.models import DocumentProcessingJob
+    from app.domain.catalog_pages import catalog_pages_prefix
+    from app.storage import delete_file, delete_prefix
+
+    doc = await db.get(Document, document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Каталог не найден")
+
+    removed = {"entries": 0, "pages": 0, "images": 0, "file": False}
+
+    if mode in ("data", "all"):
+        entries = (
+            await db.execute(
+                select(ToolCatalogEntry).where(
+                    ToolCatalogEntry.source_document_id == document_id
+                )
+            )
+        ).scalars().all()
+        for entry in entries:
+            try:
+                from app.vector.qdrant_store import delete_tool_catalog_entry
+
+                await asyncio.to_thread(delete_tool_catalog_entry, str(entry.id))
+            except Exception as exc:  # noqa: BLE001 — vector cleanup is best effort
+                logger.warning("entry_qdrant_cleanup_failed", error=str(exc)[:120])
+            try:
+                from app.domain.drawing_graph import delete_tool_catalog_graph
+
+                await delete_tool_catalog_graph(entry.id, db)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("entry_graph_cleanup_failed", error=str(exc)[:120])
+            await db.delete(entry)
+        removed["entries"] = len(entries)
+        await db.flush()
+
+        pages = (
+            await db.execute(
+                select(CatalogPage).where(CatalogPage.document_id == document_id)
+            )
+        ).scalars().all()
+        for page in pages:
+            await db.delete(page)
+        removed["pages"] = len(pages)
+
+    if mode in ("file", "all"):
+        # Page images and crops live next to the file; one prefix covers both.
+        try:
+            removed["images"] = await asyncio.to_thread(
+                delete_prefix, f"{catalog_pages_prefix(doc.storage_path)}/"
+            )
+            removed["file"] = True
+        except Exception as exc:  # noqa: BLE001 — the DB part still proceeds
+            logger.warning("catalog_storage_cleanup_failed", error=str(exc)[:150])
+        if mode == "file":
+            # Keep the record, but say plainly that the bytes are gone.
+            meta = dict(doc.metadata_ or {})
+            meta["file_removed"] = True
+            doc.metadata_ = meta
+            for page in (
+                await db.execute(
+                    select(CatalogPage).where(CatalogPage.document_id == document_id)
+                )
+            ).scalars():
+                page.image_path = None
+                page.thumb_path = None
+
+    if mode == "all":
+        await db.execute(sa_delete(DocumentLink).where(DocumentLink.document_id == document_id))
+        await db.execute(
+            sa_delete(DocumentProcessingJob).where(
+                DocumentProcessingJob.document_id == document_id
+            )
+        )
+        await db.delete(doc)
+    elif mode == "data":
+        # Nothing parsed any more — the job's stages would lie otherwise.
+        await db.execute(
+            sa_delete(DocumentProcessingJob).where(
+                DocumentProcessingJob.document_id == document_id
+            )
+        )
+
+    await db.commit()
+    logger.info("catalog_deleted", document_id=str(document_id), mode=mode, **removed)
+    return {
+        "document_id": str(document_id),
+        "mode": mode,
+        **removed,
+        "message": {
+            "data": (
+                f"Удалены данные каталога: {removed['entries']} позиций и "
+                f"{removed['pages']} страниц. Файл сохранён — можно разобрать заново."
+            ),
+            "file": (
+                f"Файл и {removed['images']} изображений удалены, "
+                "позиции каталога сохранены."
+            ),
+            "all": (
+                f"Каталог удалён полностью: {removed['entries']} позиций, "
+                f"{removed['pages']} страниц, {removed['images']} файлов хранилища."
+            ),
+        }[mode],
+    }
+
+
 @router.get(
     "/{document_id}/pages",
     response_model=CatalogPagesResponse,
@@ -614,8 +743,11 @@ def _apply_filters(query, payload: CatalogSearchRequest, supplier_ids: list[uuid
     query = query.where(ToolCatalogEntry.is_active.is_(True))
     if supplier_ids:
         query = query.where(ToolCatalogEntry.supplier_id.in_(supplier_ids))
+    catalog_ids = list(payload.catalog_document_ids or [])
     if payload.catalog_document_id:
-        query = query.where(ToolCatalogEntry.source_document_id == payload.catalog_document_id)
+        catalog_ids.append(payload.catalog_document_id)
+    if catalog_ids:
+        query = query.where(ToolCatalogEntry.source_document_id.in_(catalog_ids))
     if payload.page_number:
         query = query.where(ToolCatalogEntry.catalog_page == payload.page_number)
     if payload.tool_type:
@@ -662,13 +794,20 @@ async def search_catalog(
         text_search_condition,
     )
 
-    supplier_ids: list[uuid.UUID] = []
+    supplier_ids: list[uuid.UUID] = list(payload.supplier_ids or [])
     if payload.supplier_id:
-        supplier_ids = [payload.supplier_id]
-    elif payload.party_id:
-        supplier_ids = await _supplier_ids_for_party(db, payload.party_id)
-        if not supplier_ids:
-            return CatalogSearchResponse(page=payload.page, page_size=payload.page_size)
+        supplier_ids.append(payload.supplier_id)
+    parties = list(payload.party_ids or [])
+    if payload.party_id:
+        parties.append(payload.party_id)
+    for party in parties:
+        supplier_ids.extend(await _supplier_ids_for_party(db, party))
+    supplier_ids = list(dict.fromkeys(supplier_ids))
+    if parties and not supplier_ids:
+        return CatalogSearchResponse(page=payload.page, page_size=payload.page_size)
+    catalog_ids = list(payload.catalog_document_ids or [])
+    if payload.catalog_document_id:
+        catalog_ids.append(payload.catalog_document_id)
 
     query_text = (payload.query or "").strip()
     diagnostics: dict = {"branches": {}}
@@ -761,7 +900,7 @@ async def search_catalog(
                 tool_type=payload.tool_type,
                 supplier_id=str(supplier_ids[0]) if len(supplier_ids) == 1 else None,
                 catalog_document_id=(
-                    str(payload.catalog_document_id) if payload.catalog_document_id else None
+                    str(catalog_ids[0]) if len(catalog_ids) == 1 else None
                 ),
                 has_image=payload.has_image,
                 limit=200,
@@ -817,7 +956,58 @@ async def search_catalog(
         page_size=payload.page_size,
         facets=facets,
         diagnostics=diagnostics,
+        report=_entries_report(f"Найдено по запросу «{query_text}»", items),
+        message=(
+            f"Найдено позиций: {total_available}. У каждой указан каталог и страница; "
+            "image_kind=\"page\" означает превью страницы, а не фото товара."
+            if total_available
+            else "По этому запросу в каталогах поставщиков ничего не найдено."
+        ),
     )
+
+
+def _entries_report(title: str, items: list[CatalogEntryOut]) -> dict:
+    """A publishable table: article, name, price, catalog and a link to the page."""
+    return {
+        "title": title,
+        "columns": [
+            {"key": "part_number", "header": "Артикул", "type": "text"},
+            {"key": "name", "header": "Наименование", "type": "text"},
+            {"key": "price", "header": "Цена", "type": "text"},
+            {"key": "catalog", "header": "Каталог", "type": "text"},
+            {"key": "page", "header": "Страница", "type": "link"},
+            {"key": "image", "header": "Картинка", "type": "text"},
+        ],
+        "rows": [
+            {
+                "part_number": item.part_number or "—",
+                "name": item.name,
+                "price": (
+                    f"{item.price_value:,.2f} {item.price_currency}".replace(",", " ")
+                    if item.price_value
+                    else "не указана"
+                ),
+                "catalog": item.catalog_name or "без привязки",
+                "page": (
+                    {
+                        "href": (
+                            f"/catalogs/{item.catalog_document_id}"
+                            f"?page={item.page_number}&entry={item.id}"
+                        ),
+                        "label": f"стр. {item.page_number}",
+                    }
+                    if item.catalog_document_id and item.page_number
+                    else {"href": "", "label": "—"}
+                ),
+                "image": (
+                    "товар"
+                    if item.image_kind == "crop"
+                    else ("страница" if item.image_kind == "page" else "нет")
+                ),
+            }
+            for item in items
+        ],
+    }
 
 
 async def _decorate(
@@ -933,4 +1123,128 @@ async def _facets(
         ],
         with_price=with_price,
         with_image=with_image,
+    )
+
+
+@router.post(
+    "/similar",
+    response_model=CatalogSimilarResponse,
+    summary="Skill: catalog.similar — Analogues of a position across catalogs.",
+)
+async def find_similar_positions(
+    payload: CatalogSimilarRequest,
+    db: AsyncSession = Depends(get_db),
+) -> CatalogSimilarResponse:
+    """"Чем это заменить" — the question procurement actually asks.
+
+    Runs on the position's own embedding (or a free-text description), so a
+    replacement is found by meaning rather than by a matching article number,
+    which by definition differs between manufacturers. Optionally excludes the
+    same supplier — that is the whole point when looking for an alternative.
+    """
+    from app.ai.embeddings import embed_text
+    from app.vector.qdrant_store import search_tool_catalog
+
+    source: ToolCatalogEntry | None = None
+    text = (payload.query or "").strip()
+    if payload.entry_id:
+        source = await db.get(ToolCatalogEntry, payload.entry_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="Позиция не найдена")
+        text = text or " ".join(
+            filter(
+                None,
+                [
+                    source.tool_type.value if hasattr(source.tool_type, "value") else None,
+                    source.name,
+                    f"Ø{source.diameter_mm}мм" if source.diameter_mm else None,
+                    source.material,
+                    source.coating,
+                ],
+            )
+        )
+    if not text:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_code": "similar_query_required",
+                "message": "Передайте entry_id или query — по чему искать аналоги.",
+            },
+        )
+
+    # An analogue of a drill is a drill. Without this the vector branch happily
+    # returned a thread micrometer for "сверло спиральное D5" — technically the
+    # nearest neighbour, useless as a replacement.
+    tool_type = None
+    if source is not None:
+        raw_type = (
+            source.tool_type.value
+            if hasattr(source.tool_type, "value")
+            else str(source.tool_type)
+        )
+        tool_type = raw_type if raw_type != "other" else None
+
+    try:
+        vector = await embed_text(text, task_type="query")
+        hits = (
+            await asyncio.to_thread(
+                search_tool_catalog,
+                vector,
+                tool_type=tool_type,
+                limit=payload.limit * 4,
+            )
+            if vector
+            else []
+        )
+        if len(hits) < 3 and tool_type:
+            # Too few of that kind — widen rather than answer "ничего нет".
+            hits = await asyncio.to_thread(
+                search_tool_catalog, vector, limit=payload.limit * 4
+            )
+            tool_type = None
+    except Exception as exc:  # noqa: BLE001 — say why, do not pretend there are none
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "vector_search_unavailable",
+                "message": f"Векторный поиск недоступен: {str(exc)[:150]}",
+            },
+        ) from exc
+
+    ids = [uuid.UUID(hit["entry_id"]) for hit in hits if hit.get("entry_id")]
+    ids = [entry_id for entry_id in ids if not source or entry_id != source.id]
+    if not ids:
+        return CatalogSimilarResponse(
+            source=_entry_out(source) if source else None,
+            message="Похожих позиций в каталогах не нашлось.",
+        )
+
+    query = select(ToolCatalogEntry).where(
+        ToolCatalogEntry.id.in_(ids), ToolCatalogEntry.is_active.is_(True)
+    )
+    if payload.exclude_same_supplier and source and source.supplier_id:
+        query = query.where(ToolCatalogEntry.supplier_id != source.supplier_id)
+    rows = (await db.execute(query)).scalars().all()
+
+    order = {entry_id: index for index, entry_id in enumerate(ids)}
+    rows.sort(key=lambda entry: order.get(entry.id, 999))
+    rows = rows[: payload.limit]
+
+    items = await _decorate(db, rows, {})
+    return CatalogSimilarResponse(
+        source=_entry_out(source) if source else None,
+        items=items,
+        report=_entries_report(
+            f"Аналоги: {source.name if source else text}"[:120], items
+        ),
+        message=(
+            f"Похожих позиций: {len(items)}"
+            + (" (у других поставщиков)" if payload.exclude_same_supplier else "")
+            + (
+                f", тот же тип инструмента ({tool_type})"
+                if tool_type
+                else ", тип инструмента не ограничивался"
+            )
+            + ". Подбор по смыслу — обязательно сверьте размеры и исполнение."
+        ),
     )

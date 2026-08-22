@@ -87,7 +87,14 @@ capabilities:
         каждой позиции каталог, номер страницы и ссылку на картинку
         (image_kind="crop" — картинка товара, "page" — превью страницы; так и
         пиши в ответе, не выдавай превью за фото товара). Фильтры: party_id,
-        supplier_id, catalog_document_id, tool_type, has_price, has_image.
+        supplier_id, catalog_document_id, tool_type, has_price, has_image;
+        для нескольких — catalog_document_ids, supplier_ids, party_ids (списки).
+        В ответе есть готовый блок report — публикуй его через workspace.general
+        как есть, ссылки на страницы каталога кликабельные (type=link).
+      - similar_positions — аналоги позиции («чем заменить»): по entry_id или
+        по описанию, exclude_same_supplier=true — искать у ДРУГИХ поставщиков.
+        Подбор по смыслу: в ответе прямо сказано, что размеры и исполнение надо
+        сверить — так и передавай человеку, не выдавай аналог за замену.
       - list_catalogs — какие каталоги есть у поставщика (party_id или
         supplier_id): число страниц, позиций, доля с картинками и прогресс
         разбора «страница N из M».
@@ -126,7 +133,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "discover_catalogs | attach_web_catalog | crawl_site | search_positions | list_catalogs | catalog_pages | pause_parsing | ingest_status | resolve_supplier | list_entries | list_uploads | reingest_upload | refresh | create_supplier | ingest_web_source | approve"
+          description: "discover_catalogs | attach_web_catalog | crawl_site | search_positions | similar_positions | list_catalogs | catalog_pages | pause_parsing | ingest_status | resolve_supplier | list_entries | list_uploads | reingest_upload | refresh | create_supplier | ingest_web_source | approve"
         supplier_name:
           type: string
           description: "Название поставщика как в счетах («ООО Мир Станочника») — для attach_web_catalog/resolve_supplier"

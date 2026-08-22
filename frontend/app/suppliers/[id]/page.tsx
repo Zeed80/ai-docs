@@ -116,7 +116,6 @@ interface CatalogCandidate {
   snippet?: string | null;
 }
 
-
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function StarRating({
@@ -280,6 +279,12 @@ function CatalogTab({
   const [uploads, setUploads] = useState<CatalogUpload[]>([]);
   const [view, setView] = useState<"catalogs" | "entries">("catalogs");
   const [catalogs, setCatalogs] = useState<CatalogSummary[]>([]);
+  // Empty = search everywhere; a selection narrows the "Позиции" tab to those
+  // catalogs. "Искать в этих двух каталогах" is a normal question that a
+  // single-value filter could not express.
+  const [selectedCatalogs, setSelectedCatalogs] = useState<Set<string>>(
+    new Set(),
+  );
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
   const [candidates, setCandidates] = useState<CatalogCandidate[] | null>(null);
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(
@@ -298,6 +303,9 @@ function CatalogTab({
         party_id: partyId,
         query: search || undefined,
         tool_type: toolType || undefined,
+        catalog_document_ids: selectedCatalogs.size
+          ? Array.from(selectedCatalogs)
+          : undefined,
         page,
         page_size: PAGE_SIZE,
         include_facets: false,
@@ -334,7 +342,7 @@ function CatalogTab({
     } finally {
       setLoading(false);
     }
-  }, [partyId, page, search, toolType]);
+  }, [partyId, page, search, toolType, selectedCatalogs]);
 
   useEffect(() => {
     loadEntries();
@@ -789,7 +797,29 @@ function CatalogTab({
                   }
                   onDelete={
                     item.document_id
-                      ? () => handleDeleteUpload(item.document_id as string)
+                      ? async (mode: "data" | "file" | "all") => {
+                          try {
+                            const result = await catalogsApi.remove(
+                              item.document_id as string,
+                              mode,
+                            );
+                            setUploadSuccess(result.message);
+                            setSelectedCatalogs((prev) => {
+                              const next = new Set(prev);
+                              next.delete(item.document_id as string);
+                              return next;
+                            });
+                            loadCatalogs();
+                            loadUploads();
+                            loadEntries();
+                          } catch (e: unknown) {
+                            setUploadError(
+                              e instanceof Error
+                                ? e.message
+                                : "Не удалось удалить каталог",
+                            );
+                          }
+                        }
                       : undefined
                   }
                   onPauseToggle={
@@ -970,6 +1000,51 @@ function CatalogTab({
 
       {view === "entries" && (
         <>
+          {catalogs.filter((c) => c.document_id).length > 1 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-slate-500">Искать в каталогах:</span>
+              <button
+                onClick={() => setSelectedCatalogs(new Set())}
+                className={`rounded-full px-3 py-1 text-xs transition-colors ${
+                  selectedCatalogs.size === 0
+                    ? "bg-blue-600 text-white"
+                    : "bg-slate-700 text-slate-300 hover:text-white"
+                }`}
+              >
+                во всех
+              </button>
+              {catalogs
+                .filter((c) => c.document_id)
+                .map((c) => {
+                  const id = c.document_id as string;
+                  const on = selectedCatalogs.has(id);
+                  return (
+                    <button
+                      key={id}
+                      onClick={() =>
+                        setSelectedCatalogs((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(id)) next.delete(id);
+                          else next.add(id);
+                          return next;
+                        })
+                      }
+                      title={`${c.entries_count.toLocaleString("ru")} позиций`}
+                      className={`rounded-full px-3 py-1 text-xs transition-colors ${
+                        on
+                          ? "bg-blue-600 text-white"
+                          : "bg-slate-700 text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      {c.file_name.length > 26
+                        ? `${c.file_name.slice(0, 26)}…`
+                        : c.file_name}
+                    </button>
+                  );
+                })}
+            </div>
+          )}
+
           {/* Filters + actions row */}
           <div className="flex items-center gap-3 flex-wrap">
             <input

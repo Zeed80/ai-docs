@@ -357,3 +357,109 @@ class _FakePdf:
 
     def __exit__(self, *exc):
         return False
+
+
+@pytest.mark.asyncio
+async def test_delete_data_keeps_the_file_for_a_re_parse(
+    client: AsyncClient, db_session, supplier_with_catalogs
+):
+    """Three honest options instead of one all-or-nothing button: "данные" frees
+    the catalog for a clean re-parse without losing the file."""
+    from unittest.mock import patch
+
+    doc = supplier_with_catalogs["first"]
+    with (
+        patch("app.storage.delete_prefix", lambda *a, **k: 0),
+        patch("app.vector.qdrant_store.delete_tool_catalog_entry", lambda *a, **k: None),
+    ):
+        resp = await client.request("DELETE", f"/api/catalogs/{doc.id}?mode=data")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["entries"] == 1
+    assert body["pages"] == 3
+    assert "Файл сохранён" in body["message"]
+
+    assert await db_session.get(Document, doc.id) is not None, "the file record stays"
+    left = (
+        await db_session.execute(
+            select(CatalogPage).where(CatalogPage.document_id == doc.id)
+        )
+    ).scalars().all()
+    assert left == [], "the page registry is cleared with the data"
+
+
+@pytest.mark.asyncio
+async def test_delete_file_keeps_positions(
+    client: AsyncClient, db_session, supplier_with_catalogs
+):
+    """Reclaiming storage must not cost the prices already extracted."""
+    from unittest.mock import patch
+
+    doc = supplier_with_catalogs["first"]
+    with patch("app.storage.delete_prefix", lambda *a, **k: 7):
+        resp = await client.request("DELETE", f"/api/catalogs/{doc.id}?mode=file")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["images"] == 7
+
+    entries = (
+        await db_session.execute(
+            select(ToolCatalogEntry).where(ToolCatalogEntry.source_document_id == doc.id)
+        )
+    ).scalars().all()
+    assert len(entries) == 1, "positions survive"
+    await db_session.refresh(doc)
+    assert (doc.metadata_ or {}).get("file_removed") is True, "and the card says so"
+
+
+@pytest.mark.asyncio
+async def test_delete_all_removes_pages_too(
+    client: AsyncClient, db_session, supplier_with_catalogs
+):
+    """Page rows carry a foreign key on the document — without deleting them the
+    whole delete failed once page-wise parsing landed."""
+    from unittest.mock import patch
+
+    doc = supplier_with_catalogs["second"]
+    with (
+        patch("app.storage.delete_prefix", lambda *a, **k: 3),
+        patch("app.vector.qdrant_store.delete_tool_catalog_entry", lambda *a, **k: None),
+    ):
+        resp = await client.request("DELETE", f"/api/catalogs/{doc.id}?mode=all")
+    assert resp.status_code == 200, resp.text
+    assert await db_session.get(Document, doc.id) is None
+
+
+@pytest.mark.asyncio
+async def test_search_across_several_selected_catalogs(
+    client: AsyncClient, supplier_with_catalogs
+):
+    """"Искать в этих двух каталогах" — a one-at-a-time filter could not say it."""
+    first = supplier_with_catalogs["first"]
+    second = supplier_with_catalogs["second"]
+
+    both = await client.post(
+        "/api/catalogs/search",
+        json={"catalog_document_ids": [str(first.id), str(second.id)]},
+    )
+    assert both.status_code == 200, both.text
+    assert both.json()["total"] == 2
+
+    one = await client.post(
+        "/api/catalogs/search", json={"catalog_document_ids": [str(second.id)]}
+    )
+    assert [item["name"] for item in one.json()["items"]] == ["Сверло спиральное Ø6.5"]
+
+
+@pytest.mark.asyncio
+async def test_search_returns_a_publishable_report(client: AsyncClient, supplier_with_catalogs):
+    """The agent must not re-derive a table from prose."""
+    party = supplier_with_catalogs["party"]
+    resp = await client.post(
+        "/api/catalogs/search", json={"query": "фреза", "party_id": str(party.id)}
+    )
+    assert resp.status_code == 200, resp.text
+    report = resp.json()["report"]
+    assert report["rows"], report
+    page_column = next(c for c in report["columns"] if c["key"] == "page")
+    assert page_column["type"] == "link", "the page reference must be clickable"
+    assert any(row["image"] in {"товар", "страница"} for row in report["rows"])

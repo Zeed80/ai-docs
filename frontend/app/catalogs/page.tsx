@@ -64,7 +64,7 @@ export default function CatalogsPage() {
   );
   const [itemLoading, setItemLoading] = useState(false);
   const [itemError, setItemError] = useState<string | null>(null);
-  const [catalogFilter, setCatalogFilter] = useState<string | null>(null);
+  const [catalogFilter, setCatalogFilter] = useState<Set<string>>(new Set());
   const [onlyWithImage, setOnlyWithImage] = useState(false);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [search, setSearch] = useState("");
@@ -120,7 +120,9 @@ export default function CatalogsPage() {
       try {
         const result = await catalogsApi.search({
           query: itemQuery || undefined,
-          catalog_document_id: catalogFilter ?? undefined,
+          catalog_document_ids: catalogFilter.size
+            ? Array.from(catalogFilter)
+            : undefined,
           has_image: onlyWithImage ? true : undefined,
           page_size: 40,
         });
@@ -206,9 +208,9 @@ export default function CatalogsPage() {
             itemResult.facets.catalogs.length > 1 && (
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
-                  onClick={() => setCatalogFilter(null)}
+                  onClick={() => setCatalogFilter(new Set())}
                   className={`rounded-full px-3 py-1 text-xs ${
-                    catalogFilter === null
+                    catalogFilter.size === 0
                       ? "bg-blue-600 text-white"
                       : "bg-zinc-800 text-white/60 hover:text-white"
                   }`}
@@ -218,9 +220,18 @@ export default function CatalogsPage() {
                 {itemResult.facets.catalogs.map((facet) => (
                   <button
                     key={facet.key}
-                    onClick={() => setCatalogFilter(facet.key)}
+                    onClick={() =>
+                      setCatalogFilter((prev) => {
+                        // Multi-select: narrowing to two catalogs is as normal
+                        // a question as narrowing to one.
+                        const next = new Set(prev);
+                        if (next.has(facet.key)) next.delete(facet.key);
+                        else next.add(facet.key);
+                        return next;
+                      })
+                    }
                     className={`rounded-full px-3 py-1 text-xs ${
-                      catalogFilter === facet.key
+                      catalogFilter.has(facet.key)
                         ? "bg-blue-600 text-white"
                         : "bg-zinc-800 text-white/60 hover:text-white"
                     }`}
