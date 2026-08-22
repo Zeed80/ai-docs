@@ -1047,3 +1047,87 @@ async def _purge_inactive_async(older_than_days: int, dry_run: bool) -> dict:
 
     logger.info("catalog_purged", deleted=deleted, older_than_days=older_than_days)
     return {"dry_run": False, "deleted": deleted}
+
+
+@celery_app.task(
+    bind=True,
+    name="catalog.cleanup_anomalies",
+    max_retries=1,
+    soft_time_limit=1800,
+    time_limit=1860,
+)
+def cleanup_catalog_anomalies(self, dry_run: bool = True) -> dict:
+    """Close catalog "duplicate" cards that the current rule would never raise.
+
+    The old rule flagged any name difference or a 1 % price gap, so one article
+    printed on several pages of the SAME catalog produced a card each time —
+    469 open cards nobody could act on. Each card is re-judged individually
+    (same source? material price gap?) rather than closed wholesale, so a real
+    price conflict is not swept away with the noise.
+    """
+    return _run_async(_cleanup_anomalies_async(dry_run))
+
+
+async def _cleanup_anomalies_async(dry_run: bool) -> dict:
+    from datetime import UTC, datetime
+
+    from app.db.models import AnomalyCard, AnomalyStatus, ToolCatalogEntry
+    from app.tasks.drawing_analysis import _PRICE_CONFLICT_THRESHOLD
+
+    factory = await _session()
+    closed = 0
+    kept = 0
+
+    async with factory() as db:
+        cards = (
+            await db.execute(
+                select(AnomalyCard).where(
+                    AnomalyCard.entity_type == "tool_catalog_entry",
+                    AnomalyCard.status == AnomalyStatus.open,
+                )
+            )
+        ).scalars().all()
+
+        for card in cards:
+            details = card.details or {}
+            new_entry = await db.get(ToolCatalogEntry, uuid.UUID(details["new_entry_id"])) if details.get("new_entry_id") else None
+            old_entry = await db.get(ToolCatalogEntry, uuid.UUID(details["existing_entry_id"])) if details.get("existing_entry_id") else None
+
+            still_valid = False
+            if new_entry is not None and old_entry is not None:
+                same_source = (
+                    new_entry.source_document_id is not None
+                    and new_entry.source_document_id == old_entry.source_document_id
+                )
+                gap = 0.0
+                if new_entry.price_value and old_entry.price_value:
+                    gap = abs(old_entry.price_value - new_entry.price_value) / max(
+                        old_entry.price_value, 1.0
+                    )
+                still_valid = (
+                    not same_source
+                    and gap > _PRICE_CONFLICT_THRESHOLD
+                    and new_entry.is_active
+                    and old_entry.is_active
+                )
+
+            if still_valid:
+                kept += 1
+                continue
+
+            closed += 1
+            if not dry_run:
+                card.status = AnomalyStatus.false_positive
+                card.resolved_by = "system"
+                card.resolved_at = datetime.now(UTC)
+                card.resolution_comment = (
+                    "Закрыто автоматически: правило изменено — карточка заводится "
+                    "только при существенном расхождении цены между РАЗНЫМИ "
+                    "источниками. Одна и та же позиция на нескольких страницах "
+                    "каталога больше не считается аномалией."
+                )
+        if not dry_run:
+            await db.commit()
+
+    logger.info("catalog_anomalies_cleanup", closed=closed, kept=kept, dry_run=dry_run)
+    return {"dry_run": dry_run, "closed": closed, "kept": kept}

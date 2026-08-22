@@ -2,24 +2,8 @@
 
 import { useState } from "react";
 import type { CatalogEntry } from "@/lib/catalogs-api";
+import { toolTypeLabel } from "@/lib/tool-types";
 
-const TOOL_TYPE_LABELS: Record<string, string> = {
-  drill: "Сверло",
-  endmill: "Концевая фреза",
-  milling_cutter: "Фреза",
-  insert: "Пластина",
-  holder: "Держатель",
-  tap: "Метчик",
-  reamer: "Развёртка",
-  boring_bar: "Расточная оправка",
-  thread_mill: "Резьбофреза",
-  grinder: "Шлифкруг",
-  turning_tool: "Резец",
-  countersink: "Зенковка",
-  counterbore: "Цековка",
-  saw: "Дисковая пила",
-  other: "Прочее",
-};
 
 function EntryThumb({ entry }: { entry: CatalogEntry }) {
   const [failed, setFailed] = useState(false);
@@ -105,7 +89,7 @@ export function CatalogEntryGrid({
                 : entry.name}
             </span>
             <span className="text-xs text-slate-500">
-              {TOOL_TYPE_LABELS[entry.tool_type] ?? entry.tool_type}
+              {toolTypeLabel(entry.tool_type)}
               {entry.diameter_mm ? ` · Ø${entry.diameter_mm}` : ""}
               {entry.material ? ` · ${entry.material}` : ""}
             </span>

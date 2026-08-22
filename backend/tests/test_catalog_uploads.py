@@ -216,3 +216,48 @@ def test_archive_without_usable_members_is_rejected():
     data = _zip({"photo.png": b"\x89PNG"})
     with pytest.raises(ArchiveRejected):
         extract_catalog_archive(data, "pics.zip")
+
+
+@pytest.mark.asyncio
+async def test_old_job_gains_new_pipeline_stages_as_pending(db_session, supplier):
+    """The catalog pipeline grew "pages" and "images" stages after page-wise
+    parsing landed. A job created before that must not break or lose its
+    history — the unknown keys simply appear as pending."""
+    from app.db.models import Document, DocumentProcessingJob, DocumentStatus, DocumentType
+    from app.domain import processing_jobs as pj
+    from app.domain.pipeline import CATALOG_PIPELINE_STEP_DEFINITIONS as CATALOG_STEPS
+
+    doc = Document(
+        file_name="старый-каталог.pdf",
+        file_hash="0" * 64,
+        file_size=10,
+        mime_type="application/pdf",
+        storage_path="tool-catalogs/x/старый-каталог.pdf",
+        doc_type=DocumentType.supplier_catalog,
+        status=DocumentStatus.ingested,
+    )
+    db_session.add(doc)
+    await db_session.flush()
+
+    old_job = DocumentProcessingJob(
+        document_id=doc.id,
+        status="done",
+        current_step="completed",
+        # The stage list as it was before pages/images existed.
+        pipeline_steps=[
+            {"key": "store", "label": "Файл сохранен", "status": "done"},
+            {"key": "parse", "label": "Разбор каталога", "status": "done", "rows_parsed": 42},
+            {"key": "entries", "label": "Позиции каталога", "status": "done", "created": 42},
+        ],
+    )
+    db_session.add(old_job)
+    await db_session.commit()
+
+    steps = {step["key"]: step for step in pj.ensure_step_entries(old_job, CATALOG_STEPS)}
+
+    assert steps["pages"]["status"] == "pending"
+    assert steps["images"]["status"] == "pending"
+    # …and nothing that was already recorded is lost.
+    assert steps["parse"]["status"] == "done"
+    assert steps["parse"]["rows_parsed"] == 42
+    assert steps["entries"]["created"] == 42

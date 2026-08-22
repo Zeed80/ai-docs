@@ -937,17 +937,37 @@ async def _create_catalog_entries_from_rows(
                         )
                     )
                 ).scalars().first()
-            conflict = existing is not None and (
-                existing.name != name
-                or (
-                    price_value is not None
-                    and existing.price_value is not None
-                    and abs(existing.price_value - price_value) > 0.01 * max(existing.price_value, 1.0)
+            # What deserves a person's attention is ONE thing: the same article
+            # costs materially different money in two different sources. Live
+            # result of the old rule (any name difference, or 1 % of price):
+            # 469 open cards saying "расхождение в каталоге", all of them the
+            # same article listed on several pages of the SAME catalog. Nobody
+            # can act on that, and real anomalies drown in it.
+            same_source = (
+                existing is not None
+                and source_document_id is not None
+                and existing.source_document_id == source_document_id
+            )
+            price_gap = 0.0
+            if (
+                existing is not None
+                and price_value is not None
+                and existing.price_value
+            ):
+                price_gap = abs(existing.price_value - price_value) / max(
+                    existing.price_value, 1.0
                 )
+            conflict = (
+                existing is not None
+                and not same_source
+                and price_gap > _PRICE_CONFLICT_THRESHOLD
             )
             if conflict:
                 metadata["review_status"] = "needs_review"
                 metadata["conflicts_with_entry_id"] = str(existing.id)
+            elif existing is not None and same_source:
+                # A layout artefact, not an event: recorded on the row, silent.
+                metadata["duplicate_in_catalog"] = str(existing.id)
 
             entry = ToolCatalogEntry(
                 supplier_id=supplier_uuid,
@@ -987,27 +1007,53 @@ async def _create_catalog_entries_from_rows(
 
             try:
                 if conflict:
-                    anomaly = AnomalyCard(
-                        anomaly_type=AnomalyType.duplicate,
-                        severity=AnomalySeverity.warning,
-                        status=AnomalyStatus.open,
-                        entity_type="tool_catalog_entry",
-                        entity_id=entry.id,
-                        title=f"Расхождение в каталоге: {name} ({part_number})",
-                        description=(
-                            f"Новая запись из web-источника отличается от уже существующей "
-                            f"({existing.name!r}, цена {existing.price_value}) для того же "
-                            f"поставщика и артикула."
-                        ),
-                        details={
-                            "new_entry_id": str(entry.id),
-                            "existing_entry_id": str(existing.id),
-                            "source_url": prov.get("source_url"),
-                        },
-                    )
-                    db.add(anomaly)
-                    await db.flush()
-                    anomaly_ids.append(anomaly.id)
+                    # One open card per article, not one per re-parse.
+                    already_open = (
+                        await db.execute(
+                            select(AnomalyCard.id).where(
+                                AnomalyCard.entity_type == "tool_catalog_entry",
+                                AnomalyCard.status == AnomalyStatus.open,
+                                # details is a JSON (not JSONB) column: .astext
+                                # is a JSONB-only operator and raised here, and
+                                # the surrounding try/except swallowed it — the
+                                # conflict was then silently not recorded.
+                                AnomalyCard.details["part_number"].as_string()
+                                == part_number,
+                                AnomalyCard.details["supplier_id"].as_string()
+                                == str(supplier_uuid),
+                            )
+                        )
+                    ).scalars().first()
+                    if already_open is None:
+                        anomaly = AnomalyCard(
+                            anomaly_type=AnomalyType.price_spike,
+                            severity=AnomalySeverity.warning,
+                            status=AnomalyStatus.open,
+                            entity_type="tool_catalog_entry",
+                            entity_id=entry.id,
+                            title=(
+                                f"Цена расходится на {round(price_gap * 100)}%: "
+                                f"{part_number} — {name}"
+                            ),
+                            description=(
+                                f"Было {existing.price_value} {existing.price_currency}, "
+                                f"стало {price_value} {row.get('currency', 'RUB')}. "
+                                "Источники разные — проверьте, какая цена актуальна."
+                            ),
+                            details={
+                                "new_entry_id": str(entry.id),
+                                "existing_entry_id": str(existing.id),
+                                "supplier_id": str(supplier_uuid),
+                                "part_number": part_number,
+                                "old_price": existing.price_value,
+                                "new_price": price_value,
+                                "price_gap_pct": round(price_gap * 100, 1),
+                                "source_url": prov.get("source_url"),
+                            },
+                        )
+                        db.add(anomaly)
+                        await db.flush()
+                        anomaly_ids.append(anomaly.id)
                     conflicted += 1
 
                 # Embedding is collected now and done in ONE batch after the
@@ -1075,6 +1121,9 @@ async def _create_catalog_entries_from_rows(
         "anomaly_ids": anomaly_ids,
     }
 
+
+# Below this, a price difference is rounding, VAT or a pack size — not news.
+_PRICE_CONFLICT_THRESHOLD = 0.05
 
 _CATALOG_SIGNAL_RE = re.compile(
     r"[A-ZА-Я0-9]{2,}[-–/][A-ZА-Я0-9]{2,}"          # article numbers: MT245-040G16

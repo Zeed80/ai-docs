@@ -8,6 +8,7 @@ import { mutFetch } from "@/lib/auth";
 import { PipelineSteps, type PipelineStep } from "@/components/pipeline";
 import { CatalogCard } from "@/components/catalogs/CatalogCard";
 import { catalogsApi, type CatalogSummary } from "@/lib/catalogs-api";
+import { TOOL_TYPE_LABELS, toolTypeLabel } from "@/lib/tool-types";
 
 const API = getApiBaseUrl();
 
@@ -115,17 +116,6 @@ interface CatalogCandidate {
   snippet?: string | null;
 }
 
-const TOOL_TYPE_LABELS: Record<string, string> = {
-  drill: "Сверло",
-  endmill: "Концевая фреза",
-  insert: "Пластина",
-  holder: "Держатель",
-  tap: "Метчик",
-  reamer: "Развёртка",
-  boring_bar: "Расточная оправка",
-  saw: "Дисковая пила",
-  other: "Другое",
-};
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -1181,7 +1171,7 @@ function CatalogTab({
                             {e.name}
                           </td>
                           <td className="px-3 py-2 text-slate-400 text-xs">
-                            {TOOL_TYPE_LABELS[e.tool_type] ?? e.tool_type}
+                            {toolTypeLabel(e.tool_type)}
                           </td>
                           <td className="px-3 py-2 text-right font-mono text-xs text-slate-300">
                             {e.diameter_mm != null

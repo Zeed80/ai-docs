@@ -36,6 +36,26 @@ async def supplier(db_session):
     return s
 
 
+async def _make_catalog_document(db, name: str = "каталог.pdf"):
+    """A real Document row — source_document_id carries a foreign key."""
+    import uuid as _uuid
+
+    from app.db.models import Document, DocumentStatus, DocumentType
+
+    doc = Document(
+        file_name=name,
+        file_hash=_uuid.uuid4().hex,
+        file_size=100,
+        mime_type="application/pdf",
+        storage_path=f"tool-catalogs/test/{name}",
+        doc_type=DocumentType.supplier_catalog,
+        status=DocumentStatus.ingested,
+    )
+    db.add(doc)
+    await db.flush()
+    return doc.id
+
+
 def _row(**overrides) -> dict:
     row = {
         "part_number": "DRL-8MM",
@@ -818,3 +838,129 @@ def test_report_source_name_is_readable():
     assert _readable_source_name("https://x.example/a.pdf", "Каталог фрез 2026") == (
         "Каталог фрез 2026"
     )
+
+
+# ── anomalies: only what a person can act on ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_same_article_on_several_pages_of_one_catalog_is_not_an_anomaly(
+    db_session, supplier
+):
+    """Live result of the old rule: 469 open cards, all of them one article
+    printed on several pages of the SAME catalog. Nobody could act on them and
+    real anomalies drowned in the noise."""
+    from app.db.models import AnomalyCard, ToolCatalogEntry, ToolTypeEnum
+
+    document_id = await _make_catalog_document(db_session)
+    db_session.add(
+        ToolCatalogEntry(
+            supplier_id=supplier.id,
+            source_document_id=document_id,
+            part_number="1A1-150",
+            tool_type=ToolTypeEnum.grinder,
+            name="Круг шлифовальный 150",
+            price_value=1000.0,
+        )
+    )
+    await db_session.commit()
+
+    result = await _create_catalog_entries_from_rows(
+        db_session,
+        supplier.id,
+        [{"part_number": "1A1-150", "name": "Круг шлифовальный 150 мм", "price": 1200.0}],
+        source_document_id=document_id,
+        provenance={"discovery_method": "web_discover"},
+    )
+    await db_session.commit()
+
+    assert result["anomaly_ids"] == []
+    cards = (
+        await db_session.execute(
+            select(AnomalyCard).where(AnomalyCard.entity_type == "tool_catalog_entry")
+        )
+    ).scalars().all()
+    assert cards == []
+
+
+@pytest.mark.asyncio
+async def test_material_price_gap_between_two_catalogs_is_reported_once(
+    db_session, supplier
+):
+    """A real event: the same article costs different money in two sources."""
+    from app.db.models import AnomalyCard, AnomalyType, ToolCatalogEntry, ToolTypeEnum
+
+    old_catalog = await _make_catalog_document(db_session, "старый.pdf")
+    new_catalog = await _make_catalog_document(db_session, "новый.pdf")
+    db_session.add(
+        ToolCatalogEntry(
+            supplier_id=supplier.id,
+            source_document_id=old_catalog,
+            part_number="DR-8",
+            tool_type=ToolTypeEnum.drill,
+            name="Сверло Ø8",
+            price_value=1000.0,
+        )
+    )
+    await db_session.commit()
+
+    first = await _create_catalog_entries_from_rows(
+        db_session,
+        supplier.id,
+        [{"part_number": "DR-8", "name": "Сверло Ø8", "price": 1400.0}],
+        source_document_id=new_catalog,
+        provenance={"discovery_method": "web_discover"},
+    )
+    await db_session.commit()
+    assert len(first["anomaly_ids"]) == 1
+
+    card = (
+        await db_session.execute(
+            select(AnomalyCard).where(AnomalyCard.id == first["anomaly_ids"][0])
+        )
+    ).scalar_one()
+    assert card.anomaly_type == AnomalyType.price_spike
+    assert "40%" in card.title, card.title
+    assert card.details["old_price"] == 1000.0
+    assert card.details["new_price"] == 1400.0
+
+    # Re-parsing the same catalog must not pile a second card on the same article.
+    second = await _create_catalog_entries_from_rows(
+        db_session,
+        supplier.id,
+        [{"part_number": "DR-8", "name": "Сверло Ø8", "price": 1400.0}],
+        source_document_id=new_catalog,
+        provenance={"discovery_method": "web_discover"},
+    )
+    await db_session.commit()
+    assert second["anomaly_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_rounding_sized_price_difference_is_not_an_anomaly(db_session, supplier):
+    """1 % was the old threshold — rounding, VAT and pack sizes tripped it."""
+    from app.db.models import ToolCatalogEntry, ToolTypeEnum
+
+    old_catalog = await _make_catalog_document(db_session, "прайс-старый.pdf")
+    new_catalog = await _make_catalog_document(db_session, "прайс-новый.pdf")
+    db_session.add(
+        ToolCatalogEntry(
+            supplier_id=supplier.id,
+            source_document_id=old_catalog,
+            part_number="TP-M8",
+            tool_type=ToolTypeEnum.tap,
+            name="Метчик М8",
+            price_value=1000.0,
+        )
+    )
+    await db_session.commit()
+
+    result = await _create_catalog_entries_from_rows(
+        db_session,
+        supplier.id,
+        [{"part_number": "TP-M8", "name": "Метчик М8", "price": 1020.0}],
+        source_document_id=new_catalog,
+        provenance={"discovery_method": "web_discover"},
+    )
+    await db_session.commit()
+    assert result["anomaly_ids"] == []

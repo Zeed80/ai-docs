@@ -294,3 +294,66 @@ async def test_old_search_endpoint_uses_the_same_ranking(
     assert resp.status_code == 200, resp.text
     items = resp.json()["items"]
     assert items and items[0]["part_number"] == "MT190-016C04"
+
+
+@pytest.mark.asyncio
+async def test_page_image_is_rendered_on_demand_and_cached(
+    client: AsyncClient, db_session, supplier_with_catalogs
+):
+    """Only the first pages are rendered eagerly — a 948-page catalog would cost
+    far more storage than the saved time is worth. Opening any other page must
+    render it, serve webp, and remember the result for next time."""
+    from unittest.mock import patch
+
+    doc = supplier_with_catalogs["first"]
+    page = (
+        await db_session.execute(
+            select(CatalogPage).where(
+                CatalogPage.document_id == doc.id, CatalogPage.page_number == 3
+            )
+        )
+    ).scalar_one()
+    page.image_path = None  # not rendered eagerly
+    page.thumb_path = None
+    await db_session.commit()
+
+    uploaded: list[str] = []
+    fake_png = b"fake-webp-bytes"
+
+    with (
+        patch("app.storage.download_file", lambda *a, **k: b"%PDF-1.4 fake"),
+        patch(
+            "app.tasks.catalog_pages._render_page",
+            lambda pdf, index, dpi=150: (fake_png, 1241, 1670),
+        ),
+        patch("app.storage.upload_file", lambda data, path, *a, **k: uploaded.append(path)),
+        patch("fitz.open", lambda *a, **k: _FakePdf()),
+    ):
+        resp = await client.get(f"/api/catalogs/{doc.id}/pages/3/image")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "image/webp"
+    assert resp.headers.get("etag"), "an ETag lets the browser skip re-downloading"
+    assert uploaded, "the rendered page must be cached, not re-rendered every open"
+
+    await db_session.refresh(page)
+    assert page.image_path, "the cached path is remembered on the page row"
+
+    # A repeat request with the ETag must be answered 304, not with the bytes.
+    again = await client.get(
+        f"/api/catalogs/{doc.id}/pages/3/image",
+        headers={"if-none-match": resp.headers["etag"]},
+    )
+    assert again.status_code == 304
+
+
+class _FakePdf:
+    """Minimal stand-in for a PyMuPDF document."""
+
+    page_count = 5
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
