@@ -196,6 +196,7 @@ async def list_catalogs(
                 cover_url=_page_image_url(doc.id, 1, thumb=True) if pages_total else None,
                 download_url=f"/api/documents/{doc.id}/download",
                 is_archive=bool(meta.get("is_archive")),
+                paused=bool(meta.get("catalog_paused")),
             )
         )
     # Positions that predate page-wise parsing (or came from a web page rather
@@ -324,6 +325,7 @@ async def get_catalog(document_id: uuid.UUID, db: AsyncSession = Depends(get_db)
         cover_url=_page_image_url(doc.id, 1, thumb=True) if pages_total else None,
         download_url=f"/api/documents/{doc.id}/download",
         is_archive=bool(meta.get("is_archive")),
+        paused=bool(meta.get("catalog_paused")),
     )
 
 
@@ -345,6 +347,20 @@ async def pause_catalog(
     meta = dict(doc.metadata_ or {})
     meta["catalog_paused"] = not resume
     doc.metadata_ = meta
+
+    # The job status must follow, or the UI keeps calling the run "active":
+    # the supplier card polled every 3 seconds forever and the page looked like
+    # it was refreshing in a loop (user report).
+    job = (
+        await db.execute(
+            select(DocumentProcessingJob)
+            .where(DocumentProcessingJob.document_id == document_id)
+            .order_by(DocumentProcessingJob.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if job is not None:
+        job.status = "running" if resume else "paused"
     await db.commit()
 
     if resume:

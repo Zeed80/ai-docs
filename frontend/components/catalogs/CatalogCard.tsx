@@ -28,7 +28,9 @@ export function CatalogCard({
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const legacy = catalog.legacy || !catalog.document_id;
-  const active = ["queued", "running"].includes(catalog.status);
+  // A paused run is resumable but not active: no spinner, no polling.
+  const active =
+    ["queued", "running"].includes(catalog.status) && !catalog.paused;
   // Parsing a big catalog holds the GPU for hours; a person must be able to
   // stop it from here and pick it up later at the same page.
   const unfinished =
@@ -70,6 +72,11 @@ export function CatalogCard({
         {active && (
           <span className="absolute right-2 top-2 rounded bg-blue-950/80 px-2 py-0.5 text-[11px] text-blue-200">
             обрабатывается
+          </span>
+        )}
+        {catalog.paused && (
+          <span className="absolute right-2 top-2 rounded bg-amber-950/80 px-2 py-0.5 text-[11px] text-amber-200">
+            разбор приостановлен
           </span>
         )}
       </button>

@@ -101,7 +101,9 @@ export default function CatalogViewerPage() {
     [entries, highlightId],
   );
 
-  const parsing = catalog && ["queued", "running"].includes(catalog.status);
+  const parsing =
+    catalog && ["queued", "running"].includes(catalog.status) && !catalog.paused;
+  const paused = Boolean(catalog?.paused);
 
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col gap-2 p-3">
@@ -116,6 +118,9 @@ export default function CatalogViewerPage() {
             {(catalog?.entries_count ?? 0).toLocaleString("ru")} позиций
             {parsing && catalog?.progress_total
               ? ` · разбор: страница ${catalog.progress_done} из ${catalog.progress_total}`
+              : ""}
+            {paused && catalog?.progress_total
+              ? ` · разбор приостановлен на странице ${catalog.progress_done} из ${catalog.progress_total}`
               : ""}
           </p>
         </div>

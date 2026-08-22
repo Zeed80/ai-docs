@@ -28,6 +28,7 @@ export interface CatalogSummary {
   download_url: string | null;
   is_archive: boolean;
   legacy?: boolean;
+  paused?: boolean;
 }
 
 export interface CatalogPageInfo {

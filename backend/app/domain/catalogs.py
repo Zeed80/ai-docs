@@ -54,6 +54,9 @@ class CatalogOut(BaseModel):
     download_url: str | None = None
     is_archive: bool = False
     legacy: bool = False
+    # Parsing was stopped by a person; the run is resumable but NOT active, and
+    # the UI must not poll (or show a spinner) as if it were.
+    paused: bool = False
 
 
 class CatalogListResponse(BaseModel):

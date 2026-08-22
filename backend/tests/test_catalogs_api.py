@@ -250,6 +250,54 @@ async def test_pause_stops_parsing_and_keeps_what_is_done(
 
 
 @pytest.mark.asyncio
+async def test_paused_catalog_is_not_reported_as_running(
+    client: AsyncClient, db_session, supplier_with_catalogs
+):
+    """A paused run must not look active to the UI.
+
+    It did, and the supplier card kept polling every three seconds forever —
+    the page looked like it was refreshing in a loop (user report).
+    """
+    from unittest.mock import patch
+
+    from app.db.models import DocumentProcessingJob
+
+    doc = supplier_with_catalogs["first"]
+    party = supplier_with_catalogs["party"]
+    db_session.add(
+        DocumentProcessingJob(
+            document_id=doc.id,
+            status="running",
+            pipeline_steps=[{"key": "parse", "label": "Разбор", "status": "running"}],
+            current_step="parse",
+        )
+    )
+    await db_session.commit()
+
+    resp = await client.post(f"/api/catalogs/{doc.id}/pause")
+    assert resp.status_code == 200, resp.text
+
+    listing = await client.get(f"/api/catalogs?party_id={party.id}")
+    item = next(
+        row for row in listing.json()["items"] if row["document_id"] == str(doc.id)
+    )
+    assert item["paused"] is True
+    assert item["status"] == "paused", "status must not stay 'running'"
+
+    with patch(
+        "app.tasks.catalog_pages.render_catalog_page_batch.delay", lambda *a, **k: None
+    ):
+        resumed = await client.post(f"/api/catalogs/{doc.id}/pause?resume=true")
+    assert resumed.status_code == 200
+    again = await client.get(f"/api/catalogs?party_id={party.id}")
+    item = next(
+        row for row in again.json()["items"] if row["document_id"] == str(doc.id)
+    )
+    assert item["paused"] is False
+    assert item["status"] == "running"
+
+
+@pytest.mark.asyncio
 async def test_positions_without_a_catalog_are_shown_honestly(
     client: AsyncClient, db_session, supplier_with_catalogs
 ):

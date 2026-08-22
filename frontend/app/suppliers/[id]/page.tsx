@@ -384,8 +384,11 @@ function CatalogTab({
     const active = uploads.some((u) =>
       ["queued", "running"].includes(u.status),
     );
-    const parsing = catalogs.some((item) =>
-      ["queued", "running"].includes(item.status),
+    // A paused catalog is not "in progress": treating it as one kept the page
+    // reloading every three seconds forever (user report: «циклическое
+    // обновление страницы»).
+    const parsing = catalogs.some(
+      (item) => ["queued", "running"].includes(item.status) && !item.paused,
     );
     const interval = window.setInterval(
       () => {
