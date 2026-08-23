@@ -196,6 +196,28 @@ async def persist_task_routing(db: AsyncSession, *, task: str, routing: dict[str
     )
 
 
+async def persist_routing_snapshot(db: AsyncSession, tasks: list[str]) -> None:
+    """Make the CURRENT in-memory routing of these tasks survive a restart.
+
+    ``task_routing.save_task_routing`` writes to Redis only, and startup
+    rebuilds that key from Postgres — so a slot assigned through any path other
+    than /api/providers/assignments came back to its old model on the next
+    restart, silently. Callers in an async request context pass the tasks they
+    just changed; the caller commits.
+    """
+    from app.ai.schemas import AITask
+    from app.ai.task_routing import get_routing_for
+
+    for value in tasks:
+        try:
+            task = AITask(value)
+        except ValueError:
+            continue
+        await persist_task_routing(
+            db, task=task.value, routing=get_routing_for(task).model_dump(mode="json")
+        )
+
+
 async def persist_agent_config(db: AsyncSession, *, config: dict[str, Any]) -> None:
     """Durable agent-config blob (singleton upsert). Caller commits, then hydrates."""
     await _upsert(

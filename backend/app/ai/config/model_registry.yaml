@@ -837,7 +837,10 @@ routes:
   structured_extraction:
     required_modalities: ["text"]
     local_only: true
-    fallback_chain: ["gemma4_e4b_ollama", "qwen3_5_9b_ollama"]
+    # qwen3.5:9b first, measured on this stand against the 27b it replaces:
+    # invoices — more fields found (14/22/16 vs 10/7/9) and no garbled supplier
+    # name; catalog pages — the same positions in 2.5–4x less time.
+    fallback_chain: ["qwen3_5_9b_ollama", "gemma4_e4b_ollama"]
     manual_review_fallback: true
   drawing_analysis:
     required_modalities: ["vision"]

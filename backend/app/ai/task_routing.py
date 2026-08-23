@@ -68,6 +68,11 @@ TASK_DEFAULT_THINKING: dict[AITask, bool] = {
     AITask.CAD_SPEC_READ: False,
     AITask.CAD_SPEC_DRAFT: False,
     AITask.CAD_TEXT_OCR: False,
+    # Same failure, found again on catalog parsing: qwen3.5:9b reasons by
+    # default, and the whole 4096-token budget went into ``thinking`` — every
+    # page came back with zero rows in ~57 s. Extraction is transcription, not
+    # reasoning, so this slot (invoice fields and catalog rows alike) is off.
+    AITask.STRUCTURED_EXTRACTION: False,
 }
 
 

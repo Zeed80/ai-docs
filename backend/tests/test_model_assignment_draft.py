@@ -81,6 +81,23 @@ async def test_assignment_draft_validate_does_not_apply(
     monkeypatch.setattr("app.api.providers_api._loaded_index", _loaded_index)
 
     before = tr.get_routing_for(AITask.STRUCTURED_EXTRACTION).primary
+    # A draft only shows a diff for a model the slot is NOT already on, so pin
+    # the slot to something else first instead of assuming what the default is
+    # (this test broke the day qwen3.5:9b became the default for the slot).
+    if before == "qwen3_5_9b_ollama":
+        base = tr.get_routing_for(AITask.STRUCTURED_EXTRACTION)
+        tr.save_task_routing(
+            AITask.STRUCTURED_EXTRACTION,
+            base.model_copy(
+                update={
+                    "models": [
+                        *[m for m in base.models if m != "qwen3_5_9b_ollama"],
+                        "qwen3_5_9b_ollama",
+                    ]
+                }
+            ),
+        )
+        before = tr.get_routing_for(AITask.STRUCTURED_EXTRACTION).primary
     resp = await client.post(
         "/api/providers/assignment-draft/validate",
         json={"slots": {"structured_extraction": "qwen3_5_9b_ollama"}},

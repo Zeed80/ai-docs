@@ -45,6 +45,8 @@ from app.ai.parameter_profiles import (
     set_task_profile_override,
 )
 from app.ai.schemas import AITask
+from app.db.session import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -812,8 +814,29 @@ async def get_routing() -> dict:
     return {"tasks": tasks, "catalog": _catalog_entries()}
 
 
+async def _persist_routing(db: AsyncSession, tasks: list[str]) -> None:
+    """Keep an assignment made here alive across a restart.
+
+    Startup rebuilds the Redis routing key from Postgres, so a Redis-only save
+    (which is all save_task_routing does) was silently rolled back on the next
+    restart — measured on this stand: the model chosen here was back to the old
+    one after `restart backend`, with nothing in the logs.
+    """
+    from app.ai import model_runtime_store
+
+    if not tasks:
+        return
+    try:
+        await model_runtime_store.persist_routing_snapshot(db, tasks)
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 — the Redis write already succeeded
+        logger.warning("routing_persist_failed", tasks=tasks, error=str(exc))
+
+
 @router.put("/routing/{task}")
-async def update_routing(task: str, body: RoutingUpdate) -> dict:
+async def update_routing(
+    task: str, body: RoutingUpdate, db: AsyncSession = Depends(get_db)
+) -> dict:
     from app.ai.task_routing import TaskRouting, save_task_routing
 
     try:
@@ -824,18 +847,21 @@ async def update_routing(task: str, body: RoutingUpdate) -> dict:
         saved = save_task_routing(t, TaskRouting(task=task, **body.model_dump()))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    await _persist_routing(db, [t.value])
     return saved.model_dump()
 
 
 @router.post("/routing/{task}/reset")
-async def reset_routing(task: str) -> dict:
+async def reset_routing(task: str, db: AsyncSession = Depends(get_db)) -> dict:
     from app.ai.task_routing import reset_task_routing
 
     try:
         t = AITask(task)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Unknown task: {task}")
-    return reset_task_routing(t).model_dump()
+    result = reset_task_routing(t).model_dump()
+    await _persist_routing(db, [t.value])
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1025,12 +1051,14 @@ async def list_hardware_presets() -> dict:
 
 
 @router.post("/presets/{name}/apply")
-async def apply_hardware_preset(name: str) -> dict:
+async def apply_hardware_preset(name: str, db: AsyncSession = Depends(get_db)) -> dict:
     from app.ai.presets import apply_preset
     try:
-        return apply_preset(name)
+        result = apply_preset(name)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    await _persist_routing(db, result.get("applied") or [])
+    return result
 
 
 # ---------------------------------------------------------------------------

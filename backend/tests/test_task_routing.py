@@ -144,3 +144,48 @@ def test_migration_covers_embedding_and_reranking(mem_store, monkeypatch):
     rer = tr.get_routing_for(AITask.RERANKING)
     assert rer.models[0] == "local_reranker_ollama"
     assert rer.local_only is True
+
+
+@pytest.mark.asyncio
+async def test_routing_change_survives_a_restart(mem_store, db_session, monkeypatch):
+    """A slot assigned through /routing/{task} must still be that model after a
+    restart.
+
+    Startup rebuilds the Redis routing key from Postgres
+    (``model_runtime_store.hydrate_runtime_cache``) and ``save_task_routing``
+    writes to Redis ONLY — so before this was fixed, choosing a model here and
+    restarting the backend silently brought the old model back, with nothing in
+    the logs to say so (measured on the live stand).
+    """
+    from app.ai import model_runtime_store
+
+    task = AITask.STRUCTURED_EXTRACTION
+    base = tr.get_routing_for(task)
+    # Deliberately NOT the YAML default for this task — otherwise the
+    # assertion would hold even with nothing restored at all.
+    chosen = "gemma4_e4b_ollama"
+    assert base.models[0] != chosen
+    tr.save_task_routing(
+        task,
+        base.model_copy(
+            update={"models": [chosen, *[m for m in base.models if m != chosen]]}
+        ),
+    )
+    await model_runtime_store.persist_routing_snapshot(db_session, [task.value])
+    await db_session.commit()
+
+    # Hydration writes the Redis keys directly; route the routing key into the
+    # same in-memory store the routing module reads.
+    def _fake_set_json(key, value):
+        if key == tr._REDIS_KEY:
+            mem_store.clear()
+            mem_store.update(value)
+
+    monkeypatch.setattr(model_runtime_store, "_redis_set_json", _fake_set_json)
+
+    # The restart: the Redis overlay is gone, startup restores it from Postgres.
+    mem_store.clear()
+    await model_runtime_store.hydrate_runtime_cache(db_session)
+
+    assert mem_store, "перезапуск не восстановил назначения из Postgres"
+    assert tr.get_routing_for(task).models[0] == chosen

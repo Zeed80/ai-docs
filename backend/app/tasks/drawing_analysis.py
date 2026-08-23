@@ -1203,7 +1203,9 @@ bond, angles and materials belong in name/description. For tool_type prefer one 
 holder, tap, reamer, boring_bar, thread_mill, grinder, turning_tool, milling_cutter,
 countersink, counterbore, other — and use "other" for anything that does not fit (gauges,
 machines, fixtures). NEVER return an empty list just because the products are not cutting
-tools. Omit fields you cannot find — never invent a value. Return {"rows": []} only when the
+tools. Write name and description in the LANGUAGE OF THE PAGE, copying the supplier's own
+wording — a Russian catalog must not come back translated into English, or a person searching
+for «алмазный круг» will not find the row the page plainly shows. Omit fields you cannot find — never invent a value. Return {"rows": []} only when the
 text contains no products at all (a cover page, contacts, a foreword)."""
 
     # Rank chunks by catalog density instead of taking the first N: a real PDF
