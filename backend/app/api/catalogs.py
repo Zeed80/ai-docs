@@ -23,6 +23,7 @@ from app.db.models import (
     CatalogPage,
     Document,
     DocumentLink,
+    DocumentType,
     DocumentProcessingJob,
     Party,
     ToolCatalogEntry,
@@ -37,7 +38,9 @@ from app.domain.catalogs import (
     CatalogFacetValue,
     CatalogListResponse,
     CatalogOut,
+    CatalogPageHit,
     CatalogPageOut,
+    CatalogPageSearchResponse,
     CatalogPagesResponse,
     CatalogSearchRequest,
     CatalogSearchResponse,
@@ -250,6 +253,41 @@ def _progress_from_job(job: DocumentProcessingJob | None) -> tuple[int, int]:
         if total and (done, total) > best:
             best = (done, total)
     return best
+
+
+# ВАЖНО: статические пути объявляются ДО "/{document_id}". Иначе FastAPI
+# сопоставляет их с параметрическим маршрутом и отвечает 422 «не UUID» —
+# именно так /api/catalogs/visual-status отвалился на живом стенде.
+@router.get(
+    "/visual-status",
+    summary="Готовность поиска по картинке (и прогрев модели).",
+)
+async def visual_search_status(db: AsyncSession = Depends(get_db)) -> dict:
+    """Есть ли поиск по картинке и сколько позиций им охвачено.
+
+    Побочный — и намеренный — эффект: обращение к сайдкару поднимает веса,
+    которые он выгружает после простоя. Без прогрева первый поиск человека
+    ждал 16.5 с вместо 0.1 с (замерено); страница дёргает это при открытии
+    вкладки, пока человек ещё выбирает картинку.
+    """
+    from app.ai.vl_embeddings import vl_info
+    from app.tasks.catalog_visual import INDEXED_KEY
+
+    indexed = await db.scalar(
+        select(func.count())
+        .select_from(ToolCatalogEntry)
+        .where(
+            ToolCatalogEntry.is_active.is_(True),
+            ToolCatalogEntry.metadata_[INDEXED_KEY].as_string().isnot(None),
+        )
+    )
+    info = await vl_info()
+    return {
+        "available": bool(info),
+        "model": (info or {}).get("model"),
+        "device": (info or {}).get("device"),
+        "indexed_positions": int(indexed or 0),
+    }
 
 
 @router.get(
@@ -1277,6 +1315,169 @@ async def find_similar_positions(
             )
             + ". Подбор по смыслу — обязательно сверьте размеры и исполнение."
         ),
+    )
+
+
+@router.get(
+    "/{document_id}/search-pages",
+    response_model=CatalogPageSearchResponse,
+    summary="Skill: catalog.search_pages — Найти слова на страницах каталога.",
+)
+async def search_catalog_pages(
+    document_id: uuid.UUID,
+    q: str = Query(..., min_length=2),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> CatalogPageSearchResponse:
+    """Поиск ПО САМОМУ ДОКУМЕНТУ — то, чего в каталогах не было совсем.
+
+    Ищет и в тексте страниц, и в позициях: заголовок раздела, примечание или
+    шапка таблицы никогда не станут позицией, но именно их человек и набирает,
+    листая 948 страниц. Страницы, где совпали позиции, идут первыми — они
+    полезнее, чем страница, где слово просто встретилось.
+    """
+    from app.db.text_search import immutable_fts_condition, immutable_fts_rank
+
+    document = await db.get(Document, document_id)
+    if document is None or document.doc_type != DocumentType.supplier_catalog:
+        raise HTTPException(status_code=404, detail="Каталог не найден")
+
+    page_count = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(CatalogPage)
+                .where(CatalogPage.document_id == document_id)
+            )
+        ).scalar_one()
+    )
+    with_text = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(CatalogPage)
+                .where(
+                    CatalogPage.document_id == document_id,
+                    CatalogPage.text.isnot(None),
+                    CatalogPage.text != "",
+                )
+            )
+        ).scalar_one()
+    )
+
+    needle = q.strip()
+    # Two ways to match, because they fail in opposite cases: full-text handles
+    # words and their forms, trigram/ILIKE handles an article code, which a
+    # dictionary chops into pieces and never matches whole.
+    text_condition = or_(
+        immutable_fts_condition([CatalogPage.text], needle),
+        CatalogPage.text.ilike(f"%{needle}%"),
+    )
+    rank = immutable_fts_rank([CatalogPage.text], needle)
+    text_rows = (
+        await db.execute(
+            select(CatalogPage)
+            .where(CatalogPage.document_id == document_id, text_condition)
+            .order_by(rank.desc(), CatalogPage.page_number)
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    # Pages whose POSITIONS match — the same words, but already extracted.
+    matching_entries = (
+        await db.execute(
+            select(
+                ToolCatalogEntry.catalog_page,
+                ToolCatalogEntry.part_number,
+                ToolCatalogEntry.name,
+            )
+            .where(
+                    ToolCatalogEntry.source_document_id == document_id,
+                    ToolCatalogEntry.is_active.is_(True),
+                    ToolCatalogEntry.catalog_page.isnot(None),
+                    or_(
+                        ToolCatalogEntry.part_number.ilike(f"%{needle}%"),
+                        ToolCatalogEntry.name.ilike(f"%{needle}%"),
+                        immutable_fts_condition(
+                            [
+                                ToolCatalogEntry.name,
+                                ToolCatalogEntry.part_number,
+                                ToolCatalogEntry.description,
+                            ],
+                            needle,
+                    ),
+                ),
+            )
+            .order_by(ToolCatalogEntry.catalog_page)
+        )
+    ).all()
+    entry_counts: dict[int, int] = {}
+    entry_titles: dict[int, list[str]] = {}
+    for number, part_number, name in matching_entries:
+        entry_counts[number] = entry_counts.get(number, 0) + 1
+        titles = entry_titles.setdefault(number, [])
+        if len(titles) < 3:
+            titles.append(" ".join(part for part in (part_number, name) if part))
+
+    by_number: dict[int, CatalogPage] = {row.page_number: row for row in text_rows}
+    missing = [number for number in entry_counts if number not in by_number]
+    if missing:
+        extra = (
+            await db.execute(
+                select(CatalogPage).where(
+                    CatalogPage.document_id == document_id,
+                    CatalogPage.page_number.in_(missing),
+                )
+            )
+        ).scalars().all()
+        for row in extra:
+            by_number[row.page_number] = row
+
+    def _snippet(row: CatalogPage) -> str:
+        text = row.text or ""
+        if not text.strip():
+            # No readable text layer (a PDF without a ToUnicode map — the live
+            # INSIZE catalog is exactly that). The page was found through its
+            # positions, so show those instead of an empty line.
+            titles = entry_titles.get(row.page_number) or []
+            return "; ".join(titles)[:200]
+        position = text.lower().find(needle.lower())
+        if position < 0:
+            return text.strip()[:160]
+        start = max(0, position - 60)
+        piece = text[start : position + len(needle) + 100].replace("\n", " ")
+        return ("…" if start else "") + " ".join(piece.split())
+
+    hits = [
+        CatalogPageHit(
+            page_number=number,
+            snippet=_snippet(row),
+            entries_count=row.entries_count,
+            matched_entries=int(entry_counts.get(number, 0)),
+            thumb_url=_page_image_url(document_id, number, thumb=True),
+        )
+        for number, row in by_number.items()
+    ]
+    # Pages where actual positions matched first — a person looking for an
+    # article wants the page that sells it, not the page that mentions it.
+    hits.sort(key=lambda hit: (-hit.matched_entries, hit.page_number))
+    hits = hits[:limit]
+
+    message = None
+    if not hits and with_text == 0 and page_count:
+        # Not "не собран": for a scan or a PDF without font maps there is
+        # nothing readable to collect, and promising it later would be a lie.
+        message = (
+            "У этого каталога нет читаемого текстового слоя (скан или PDF без "
+            "шрифтовых карт) — поиск идёт по извлечённым позициям."
+        )
+    return CatalogPageSearchResponse(
+        items=hits,
+        total=len(hits),
+        query=needle,
+        pages_with_text=with_text,
+        page_count=page_count,
+        message=message,
     )
 
 

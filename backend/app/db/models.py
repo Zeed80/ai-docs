@@ -3404,6 +3404,10 @@ class CatalogPage(UUIDPrimaryKey, TimestampMixin, Base):
     # "cover" | "toc" | "blank" | "no_product_signals"
     text_source: Mapped[str | None] = mapped_column(String(10))  # "text" | "ocr" | "none"
     text_chars: Mapped[int | None] = mapped_column(Integer)
+    # The page's own text, so "найди это в каталоге" can land on a page even
+    # when the words never became a position (a heading, a note, a table
+    # header). The parser read it anyway and used to discard it.
+    text: Mapped[str | None] = mapped_column(Text)
     entries_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Image candidates found on the page: [{k, bbox, path, thumb_path, w, h, ...}].
     # JSON rather than a child table because the page is the unit of idempotency:

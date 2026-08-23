@@ -536,6 +536,7 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
                             "skip_reason": verdict.skip_reason,
                             "text_source": source,
                             "text_chars": len(text),
+                            "text": text,
                             "rows": [],
                         }
                     )
@@ -595,6 +596,7 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
                         "status": "parsed",
                         "text_source": source,
                         "text_chars": len(text),
+                        "text": text,
                         "rows": rows,
                         "crops": crops,
                     }
@@ -613,6 +615,10 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
             row_obj.skip_reason = result.get("skip_reason")
             row_obj.text_source = result.get("text_source")
             row_obj.text_chars = result.get("text_chars")
+            # Capped: a page of dense text is a few thousand characters, and
+            # the tail of a pathological one adds nothing a search can use.
+            page_text = result.get("text")
+            row_obj.text = page_text[:40000] if page_text else None
             row_obj.run_id = run_id
 
             rows = result.get("rows") or []
@@ -987,6 +993,102 @@ async def _reindex_payload_async(document_id: str | None) -> dict:
 
     logger.info("catalog_payload_reindexed", updated=updated, failed=failed)
     return {"updated": updated, "failed": failed}
+
+
+@celery_app.task(
+    bind=True,
+    name="catalog.backfill_page_text",
+    max_retries=1,
+    soft_time_limit=1800,
+    time_limit=1860,
+)
+def backfill_page_text(self, document_id: str | None = None, batch: int = 200) -> dict:
+    """Fill in the page text of catalogs parsed before it was stored.
+
+    Only the PDF text layer — cheap (a whole 948-page file in seconds) and
+    honest about its limits: a scanned page has no layer, so it stays without
+    searchable text rather than holding up the batch for an 11-minute OCR pass.
+    Those pages are reachable through their positions, and a re-parse fills
+    them properly.
+    """
+    return _run_async(_backfill_page_text_async(document_id, batch))
+
+
+async def _backfill_page_text_async(document_id: str | None, batch: int) -> dict:
+    import fitz
+
+    from app.db.models import CatalogPage, Document
+    from app.storage import download_file
+    from app.tasks.drawing_analysis import _pdf_text_is_unreadable
+
+    factory = await _session()
+    filled = 0
+    empty = 0
+    documents = 0
+
+    async with factory() as db:
+        query = (
+            select(CatalogPage.document_id, func.count())
+            .where(CatalogPage.text.is_(None))
+            .group_by(CatalogPage.document_id)
+        )
+        if document_id:
+            query = query.where(CatalogPage.document_id == uuid.UUID(document_id))
+        pending = (await db.execute(query)).all()
+
+    for doc_id, _count in pending:
+        async with factory() as db:
+            doc = await db.get(Document, doc_id)
+            if doc is None or not doc.storage_path:
+                continue
+            rows = (
+                await db.execute(
+                    select(CatalogPage)
+                    .where(CatalogPage.document_id == doc_id, CatalogPage.text.is_(None))
+                    .order_by(CatalogPage.page_number)
+                    .limit(batch)
+                )
+            ).scalars().all()
+            if not rows:
+                continue
+            try:
+                blob = await __import__("asyncio").to_thread(download_file, doc.storage_path)
+            except Exception as exc:  # noqa: BLE001 — a missing file is not fatal
+                logger.warning(
+                    "catalog_text_backfill_file_missing",
+                    document=str(doc_id),
+                    error=str(exc)[:120],
+                )
+                continue
+            documents += 1
+            with fitz.open(stream=blob, filetype="pdf") as pdf:
+                for row in rows:
+                    if row.page_number > pdf.page_count:
+                        continue
+                    text = pdf.load_page(row.page_number - 1).get_text() or ""
+                    # A "text layer" is not automatically text: a PDF without a
+                    # ToUnicode map yields punctuation soup, and storing it made
+                    # the document search answer with unreadable snippets
+                    # (seen on the live INSIZE catalog). Better no text than
+                    # text that cannot be read.
+                    if text.strip() and not _pdf_text_is_unreadable(text):
+                        row.text = text[:40000]
+                        filled += 1
+                    else:
+                        # Store the empty string, not NULL: NULL means "never
+                        # looked", and re-running would re-open the PDF for the
+                        # same scanned pages forever.
+                        row.text = ""
+                        empty += 1
+            await db.commit()
+
+    logger.info(
+        "catalog_page_text_backfilled", filled=filled, without_readable_text=empty,
+        documents=documents,
+    )
+    if filled or empty:
+        backfill_page_text.apply_async(args=[document_id, batch], countdown=1)
+    return {"filled": filled, "without_readable_text": empty, "documents": documents}
 
 
 @celery_app.task(

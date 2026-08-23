@@ -168,20 +168,24 @@ export function CatalogPageViewer({
             Загрузка страницы…
           </div>
         )}
-        <div
-          className="absolute left-1/2 top-1/2"
-          style={{
-            transform: `translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-          }}
-        >
-          <div className="relative">
+        {/* Центрирование через flex, а не left-1/2: абсолютный блок с left:50%
+            получает под себя лишь ПОЛОВИНУ ширины родителя, и страница
+            съёживалась вдвое против доступного места (замерено в браузере:
+            249 px при контейнере 498 px). */}
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div
+            className="relative"
+            style={{
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            }}
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               ref={imageRef}
               src={catalogsApi.pageImageUrl(documentId, page, "full")}
               alt={`Страница ${page}`}
               onLoad={() => setLoaded(true)}
-              className="max-h-[78vh] w-auto"
+              className="max-h-[78vh] max-w-full object-contain"
               draggable={false}
             />
             {box && (

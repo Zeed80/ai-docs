@@ -7,7 +7,9 @@ import { CatalogPageViewer } from "@/components/catalogs/CatalogPageViewer";
 import {
   catalogsApi,
   type CatalogEntry,
+  type CatalogPageHit,
   type CatalogPageInfo,
+  type CatalogPageSearchResult,
   type CatalogSummary,
 } from "@/lib/catalogs-api";
 
@@ -28,6 +30,11 @@ export default function CatalogViewerPage() {
   const STRIP_WINDOW = 40;
   const [stripEnd, setStripEnd] = useState(STRIP_WINDOW);
   const highlightId = search.get("entry");
+  // Поиск ПО ЭТОМУ каталогу: по тексту страниц и по позициям. Без него
+  // открытый каталог на 948 страниц можно было только листать.
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState<CatalogPageSearchResult | null>(null);
+  const [searching, setSearching] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,6 +100,36 @@ export default function CatalogViewerPage() {
     window.history.replaceState(window.history.state, "", url.toString());
   }, [page]);
 
+  useEffect(() => {
+    const needle = query.trim();
+    if (needle.length < 2) {
+      setFound(null);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const handle = window.setTimeout(async () => {
+      try {
+        const result = await catalogsApi.searchPages(documentId, needle);
+        if (!cancelled) setFound(result);
+      } catch (e: unknown) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Поиск по каталогу не удался");
+        }
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 350);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [documentId, query]);
+
+  function openHit(hit: CatalogPageHit) {
+    setPage(hit.page_number);
+  }
+
   // Keep the current page inside the rendered window when navigating.
   useEffect(() => {
     setStripEnd((end) => (page + 10 > end ? page + 10 : end));
@@ -131,7 +168,25 @@ export default function CatalogViewerPage() {
               : ""}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-1 items-center justify-end gap-2">
+          <div className="relative w-full max-w-sm">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Поиск по каталогу: слово или артикул"
+              className="w-full rounded border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+            />
+            {query && (
+              <button
+                onClick={() => setQuery("")}
+                className="absolute right-2 top-1.5 text-sm text-slate-500 hover:text-slate-200"
+                title="Очистить поиск"
+              >
+                ✕
+              </button>
+            )}
+          </div>
           {catalog?.download_url && (
             <a
               href={catalog.download_url}
@@ -158,6 +213,60 @@ export default function CatalogViewerPage() {
       )}
 
       <div className="flex min-h-0 flex-1 gap-3">
+        {found ? (
+          <aside className="w-72 shrink-0 overflow-y-auto rounded border border-slate-700 bg-slate-800/40 p-2">
+            <h2 className="mb-2 text-sm text-slate-300">
+              Найдено страниц: {found.total}
+              {searching && <span className="ml-2 text-slate-500">…</span>}
+            </h2>
+            {found.message && (
+              <p className="mb-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
+                {found.message}
+              </p>
+            )}
+            {found.items.length === 0 && !found.message && (
+              <p className="text-xs text-slate-500">
+                Ничего не нашлось. Попробуйте часть артикула или другое слово.
+              </p>
+            )}
+            {found.items.map((hit) => (
+              <button
+                key={hit.page_number}
+                onClick={() => openHit(hit)}
+                className={`mb-2 flex w-full gap-2 rounded border p-2 text-left ${
+                  hit.page_number === page
+                    ? "border-blue-500 bg-blue-950/30"
+                    : "border-slate-700 hover:border-slate-500"
+                }`}
+              >
+                {hit.thumb_url && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={hit.thumb_url}
+                    alt={`Страница ${hit.page_number}`}
+                    loading="lazy"
+                    className="h-16 w-12 shrink-0 object-contain"
+                  />
+                )}
+                <span className="min-w-0">
+                  <span className="block text-xs text-slate-300">
+                    стр. {hit.page_number}
+                    {hit.matched_entries > 0 && (
+                      <span className="ml-1 text-slate-500">
+                        · совпало позиций: {hit.matched_entries}
+                      </span>
+                    )}
+                  </span>
+                  <span className="mt-0.5 block text-[11px] leading-snug text-slate-500">
+                    {hit.snippet.length > 120
+                      ? `${hit.snippet.slice(0, 120)}…`
+                      : hit.snippet}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </aside>
+        ) : (
         <aside className="w-28 shrink-0 overflow-y-auto rounded border border-slate-700 bg-slate-800/40 p-1">
           {visiblePages.map((item) => (
             <button
@@ -203,6 +312,7 @@ export default function CatalogViewerPage() {
             </button>
           )}
         </aside>
+        )}
 
         <main className="min-w-0 flex-1 overflow-hidden rounded border border-slate-700">
           {pages.length > 0 ? (

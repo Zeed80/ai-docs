@@ -75,6 +75,9 @@ export default function CatalogsPage() {
   const [visualResult, setVisualResult] =
     useState<CatalogVisualSearchResult | null>(null);
   const [similarTo, setSimilarTo] = useState<CatalogEntry | null>(null);
+  // null — ещё не спрашивали; false — сервис не отвечает, кнопку показывать
+  // бессмысленно и нечестно.
+  const [visualReady, setVisualReady] = useState<boolean | null>(null);
   const [onlyWithImage, setOnlyWithImage] = useState(false);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [search, setSearch] = useState("");
@@ -127,6 +130,24 @@ export default function CatalogsPage() {
     const files = await pickImage(isNative() ? "CAMERA" : "PHOTOS");
     if (files.length) await pickPhoto(files[0]);
   }
+
+  // Прогрев: при открытии вкладки просим сайдкар поднять веса, пока человек
+  // ещё выбирает картинку. Ответ нужен только чтобы знать, доступен ли поиск.
+  useEffect(() => {
+    if (mode !== "items") return;
+    let cancelled = false;
+    catalogsApi
+      .visualStatus()
+      .then((status) => {
+        if (!cancelled) setVisualReady(status.available);
+      })
+      .catch(() => {
+        if (!cancelled) setVisualReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
 
   async function pickPhoto(file: File) {
     const buffer = await file.arrayBuffer();
@@ -209,15 +230,28 @@ export default function CatalogsPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="flex items-center gap-4 px-6 py-4 bg-zinc-900 border-b border-white/10">
+      <div className="flex flex-wrap items-center gap-4 px-6 py-4 bg-zinc-900 border-b border-white/10">
         <div>
           <h1 className="text-xl font-semibold text-white">
             Каталоги инструментов
           </h1>
           <p className="text-xs text-white/40 mt-0.5">
-            Выберите поставщика для просмотра и загрузки каталогов режущего
-            инструмента
+            Поиск по позициям всех каталогов — словами, артикулом или по фото
           </p>
+        </div>
+        {/* Строка поиска прямо в шапке: раньше поиск жил во вкладке ниже, и его
+            просто не находили. Ввод сразу переключает в режим поиска. */}
+        <div className="relative ml-auto w-full max-w-md">
+          <input
+            type="text"
+            value={itemQuery}
+            onChange={(e) => {
+              setItemQuery(e.target.value);
+              if (e.target.value) setMode("items");
+            }}
+            placeholder="Найти позицию: артикул, название, размер…"
+            className="w-full rounded-lg border border-white/10 bg-zinc-800 px-4 py-2 text-sm text-white placeholder-white/30 focus:border-blue-500/50 focus:outline-none"
+          />
         </div>
       </div>
 
@@ -245,17 +279,19 @@ export default function CatalogsPage() {
       {mode === "items" && (
         <div className="flex flex-1 flex-col overflow-hidden px-6 pt-4">
           <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="text"
-              placeholder="Артикул, название, размер…"
-              value={itemQuery}
-              onChange={(e) => setItemQuery(e.target.value)}
-              className="w-full max-w-md rounded-lg border border-white/10 bg-zinc-800 px-4 py-2 text-sm text-white placeholder-white/30 focus:border-blue-500/50 focus:outline-none"
-            />
+            {visualReady === false && (
+              <span
+                className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
+                title="Сервис распознавания изображений не отвечает"
+              >
+                поиск по фото недоступен
+              </span>
+            )}
             <button
               type="button"
+              disabled={visualReady === false}
               onClick={capturePhoto}
-              className="flex items-center gap-2 rounded-lg border border-white/10 bg-zinc-800 px-3 py-2 text-sm text-white/70 hover:text-white"
+              className="flex items-center gap-2 rounded-lg border border-white/10 bg-zinc-800 px-3 py-2 text-sm text-white/70 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
               title={
                 isNative()
                   ? "Сфотографировать инструмент и найти его в каталогах"

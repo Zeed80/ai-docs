@@ -106,6 +106,23 @@ export interface CatalogSearchParams {
   include_facets?: boolean;
 }
 
+export interface CatalogPageHit {
+  page_number: number;
+  snippet: string;
+  entries_count: number;
+  matched_entries: number;
+  thumb_url: string | null;
+}
+
+export interface CatalogPageSearchResult {
+  items: CatalogPageHit[];
+  total: number;
+  query: string;
+  pages_with_text: number;
+  page_count: number;
+  message?: string | null;
+}
+
 export interface CatalogVisualSearchResult {
   items: CatalogEntry[];
   scores: Record<string, number>;
@@ -202,6 +219,38 @@ export const catalogsApi = {
       response,
       "Подбор аналогов не удался",
     );
+  },
+
+  /** Поиск ПО ДОКУМЕНТУ: по тексту страниц и по позициям этого каталога.
+   *
+   * Отвечает страницами, а не позициями: человек, листающий 948 страниц, ищет
+   * «где это в каталоге», а не «какая это строка».
+   */
+  async searchPages(documentId: string, q: string, limit = 50) {
+    const search = new URLSearchParams({ q, limit: String(limit) });
+    const response = await fetch(
+      `${API}/api/catalogs/${documentId}/search-pages?${search}`,
+      { credentials: "include" },
+    );
+    return json<CatalogPageSearchResult>(
+      response,
+      "Поиск по каталогу не удался",
+    );
+  },
+
+  /** Готов ли поиск по картинке. Заодно прогревает модель: сайдкар выгружает
+   * веса по простою, и без прогрева первый поиск ждал 16 секунд вместо 0.1.
+   */
+  async visualStatus() {
+    const response = await fetch(`${API}/api/catalogs/visual-status`, {
+      credentials: "include",
+    });
+    return json<{
+      available: boolean;
+      model: string | null;
+      device: string | null;
+      indexed_positions: number;
+    }>(response, "Не удалось проверить поиск по картинке");
   },
 
   /** Поиск по картинке: фото инструмента, фрагмент чертежа или «похожие на эту».

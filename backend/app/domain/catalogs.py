@@ -140,6 +140,31 @@ class CatalogSearchRequest(BaseModel):
     include_facets: bool = True
 
 
+class CatalogPageHit(BaseModel):
+    """Страница каталога, на которой нашлись искомые слова."""
+
+    page_number: int
+    # Фрагмент текста вокруг совпадения — чтобы человек понял, то ли это,
+    # не открывая страницу.
+    snippet: str
+    entries_count: int = 0
+    thumb_url: str | None = None
+    # Совпало в позициях этой страницы (не только в тексте) — такие страницы
+    # человеку обычно нужнее.
+    matched_entries: int = 0
+
+
+class CatalogPageSearchResponse(BaseModel):
+    items: list[CatalogPageHit] = []
+    total: int = 0
+    query: str = ""
+    # Сколько страниц каталога вообще имеют сохранённый текст. Если ноль,
+    # честнее сказать «текст страниц ещё не собран», чем «ничего не найдено».
+    pages_with_text: int = 0
+    page_count: int = 0
+    message: str | None = None
+
+
 class CatalogVisualSearchRequest(BaseModel):
     """Search the catalogs by a picture — a photo of the tool, a screenshot,
     a crop from a drawing — optionally narrowed by words.
