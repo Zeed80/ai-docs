@@ -1143,14 +1143,18 @@ async def _purge_inactive_async(older_than_days: int, dry_run: bool) -> dict:
             )
         except Exception as exc:  # noqa: BLE001 — DB rows still go
             logger.debug("catalog_purge_visual_failed", error=str(exc)[:120])
-        for entry_id, embedding_id in candidates:
-            if embedding_id:
-                try:
-                    await __import__("asyncio").to_thread(
-                        delete_tool_catalog_entry, str(entry_id)
-                    )
-                except Exception as exc:  # noqa: BLE001 — DB row still goes
-                    logger.debug("catalog_purge_vector_failed", error=str(exc)[:120])
+        for entry_id, _embedding_id in candidates:
+            # Unconditionally, NOT only when embedding_id is set: the column is
+            # filled by one indexing path and left empty by others, so a point
+            # could outlive its row. Found on the live stand after wiping every
+            # catalog — 267 vectors of positions that no longer existed, still
+            # answerable by search.
+            try:
+                await __import__("asyncio").to_thread(
+                    delete_tool_catalog_entry, str(entry_id)
+                )
+            except Exception as exc:  # noqa: BLE001 — DB row still goes
+                logger.debug("catalog_purge_vector_failed", error=str(exc)[:120])
             entry = await db.get(ToolCatalogEntry, entry_id)
             if entry is not None:
                 await db.delete(entry)
