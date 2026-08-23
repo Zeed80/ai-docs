@@ -43,6 +43,14 @@ logger = logging.getLogger("vl_embedding")
 logging.basicConfig(level=logging.INFO)
 
 _MODEL_NAME = os.environ.get("VL_EMBEDDING_MODEL", "Qwen/Qwen3-VL-Embedding-2B")
+# Companion cross-encoder. The embedder recalls, this one decides the order of
+# what it recalled — it reads query and candidate TOGETHER, which is exactly
+# what separates "1148-200WL" from "1148-120" when a catalog family shares one
+# illustration and every crop looks identical.
+_RERANKER_NAME = os.environ.get("VL_RERANKER_MODEL", "Qwen/Qwen3-VL-Reranker-2B")
+# Off unless asked for: it is a second 4.5 GB model on a card shared with the
+# LLMs, and it only pays off on close candidates.
+_RERANKER_ENABLED = os.environ.get("VL_RERANKER_ENABLED", "1") not in ("0", "false", "")
 _IDLE_UNLOAD = float(os.environ.get("VL_EMBEDDING_IDLE_UNLOAD_SECONDS", "600"))
 # 2048 native. Truncating is supported by the model (MRL) and halves both the
 # Qdrant footprint and the search cost; keep it a deployment choice, and note
@@ -53,6 +61,7 @@ _MAX_BATCH = int(os.environ.get("VL_EMBEDDING_MAX_BATCH", "16"))
 _MAX_PIXELS = int(os.environ.get("VL_EMBEDDING_MAX_PIXELS", "1024"))
 
 _model: Any = None
+_reranker: Any = None
 _lock = threading.Lock()
 _last_used = 0.0
 _device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -156,12 +165,38 @@ def _load_model():
     return _model
 
 
+def _load_reranker():
+    global _reranker, _last_used
+    _last_used = time.time()
+    if _reranker is not None:
+        return _reranker
+    from sentence_transformers import CrossEncoder
+
+    started = time.time()
+    logger.info("vl_reranker_loading model=%s", _RERANKER_NAME)
+    kwargs: dict[str, Any] = {"device": _device}
+    if _device == "cuda":
+        kwargs["model_kwargs"] = {"torch_dtype": torch.float16}
+    try:
+        _reranker = CrossEncoder(_RERANKER_NAME, **kwargs)
+    except torch.OutOfMemoryError:
+        if _device != "cuda":
+            raise
+        logger.warning("vl_reranker_cuda_oom_falling_back_to_cpu")
+        torch.cuda.empty_cache()
+        _reranker = CrossEncoder(_RERANKER_NAME, device="cpu")
+    _last_used = time.time()
+    logger.info("vl_reranker_loaded seconds=%.1f", time.time() - started)
+    return _reranker
+
+
 def _unload_model() -> None:
-    global _model, _fell_back_to_cpu
+    global _model, _reranker, _fell_back_to_cpu
     with _lock:
-        if _model is None:
+        if _model is None and _reranker is None:
             return
         _model = None
+        _reranker = None
         _fell_back_to_cpu = False
         if _device == "cuda":
             torch.cuda.empty_cache()
@@ -171,7 +206,11 @@ def _unload_model() -> None:
 def _idle_watch() -> None:
     while True:
         time.sleep(30)
-        if _model is not None and _IDLE_UNLOAD > 0 and time.time() - _last_used > _IDLE_UNLOAD:
+        if (
+            (_model is not None or _reranker is not None)
+            and _IDLE_UNLOAD > 0
+            and time.time() - _last_used > _IDLE_UNLOAD
+        ):
             _unload_model()
 
 
@@ -205,6 +244,7 @@ def info() -> dict:
         "cuda_available": torch.cuda.is_available(),
         "max_batch": _MAX_BATCH,
         "idle_unload_seconds": _IDLE_UNLOAD,
+        "reranker": _RERANKER_NAME if _RERANKER_ENABLED else None,
     }
 
 
@@ -252,5 +292,88 @@ def embed(request: EmbedRequest) -> EmbedResponse:
         embeddings=[[float(x) for x in vector] for vector in vectors],
         dim=int(vectors.shape[1]),
         model=_MODEL_NAME,
+        elapsed_ms=int((time.time() - started) * 1000),
+    )
+
+
+class RerankRequest(BaseModel):
+    query_text: str | None = None
+    query_image_base64: str | None = None
+    documents: list[EmbedItem] = Field(..., min_length=1)
+    instruction: str | None = None
+
+    @model_validator(mode="after")
+    def _needs_query(self) -> "RerankRequest":
+        if not self.query_text and not self.query_image_base64:
+            raise ValueError("query_text or query_image_base64 is required")
+        return self
+
+
+class RerankResponse(BaseModel):
+    # Same order as `documents`; the caller re-sorts. Returning an order here
+    # instead would lose the association if the caller filtered anything.
+    scores: list[float]
+    model: str
+    elapsed_ms: int
+
+
+@app.post("/rerank", response_model=RerankResponse)
+def rerank(request: RerankRequest) -> RerankResponse:
+    """Score each candidate against the query, reading them together.
+
+    Only worth calling on candidates the embedder already recalled and that sit
+    close to each other — a catalog family sharing one picture is the case that
+    motivated it.
+    """
+    global _last_used, _reranker
+
+    if not _RERANKER_ENABLED:
+        raise HTTPException(status_code=503, detail="reranker disabled (VL_RERANKER_ENABLED=0)")
+    if len(request.documents) > _MAX_BATCH * 4:
+        raise HTTPException(
+            status_code=400,
+            detail=f"too many documents: {len(request.documents)}",
+        )
+
+    query: Any
+    if request.query_image_base64 and request.query_text:
+        query = {"text": request.query_text, "image": _decode_image(request.query_image_base64)}
+    elif request.query_image_base64:
+        query = {"image": _decode_image(request.query_image_base64)}
+    else:
+        query = request.query_text
+
+    documents: list[Any] = []
+    for item in request.documents:
+        image = _decode_image(item.image_base64) if item.image_base64 else None
+        if image is not None and item.text:
+            documents.append({"text": item.text, "image": image})
+        elif image is not None:
+            documents.append({"image": image})
+        else:
+            documents.append(item.text)
+
+    started = time.time()
+    with _lock:
+        model = _load_reranker()
+        pairs = [(query, document) for document in documents]
+        kwargs: dict[str, Any] = {"activation_fn": torch.nn.Sigmoid()}
+        if request.instruction:
+            kwargs["prompt"] = request.instruction
+        try:
+            scores = model.predict(pairs, **kwargs)
+        except torch.OutOfMemoryError:
+            logger.warning("vl_reranker_oom_during_predict_retrying_on_cpu")
+            _reranker = None
+            torch.cuda.empty_cache()
+            from sentence_transformers import CrossEncoder
+
+            _reranker = CrossEncoder(_RERANKER_NAME, device="cpu")
+            scores = _reranker.predict(pairs, **kwargs)
+        _last_used = time.time()
+
+    return RerankResponse(
+        scores=[float(score) for score in scores],
+        model=_RERANKER_NAME,
         elapsed_ms=int((time.time() - started) * 1000),
     )

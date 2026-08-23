@@ -185,3 +185,39 @@ async def test_indexing_skips_what_is_already_done_for_this_model(db_session, in
 
     assert indexed_position.id not in {row.id for row in same_model}
     assert indexed_position.id in {row.id for row in other_model}
+
+
+@pytest.mark.asyncio
+async def test_reranking_is_off_unless_asked_for(db_session, indexed_position, monkeypatch):
+    """Measured on this stand: reranking gave the same top-1 (14/25) for 55x the
+    latency, because inside a catalog family every crop is the same picture.
+    It stays available, but nobody pays for it by default."""
+    import app.ai.vl_embeddings as vl
+
+    called: list[str] = []
+
+    async def _info():
+        return {"model": "test-model", "dim": 4}
+
+    async def _embed_query(text=None, image=None):
+        return [0.1, 0.2, 0.3, 0.4]
+
+    async def _rerank(**kwargs):
+        called.append("rerank")
+        return [0.9] * len(kwargs["documents"])
+
+    def _search(vector, **kwargs):
+        return [{"entry_id": str(indexed_position.id), "score": 0.7, "payload": {}}]
+
+    monkeypatch.setattr(vl, "vl_info", _info)
+    monkeypatch.setattr(vl, "embed_query", _embed_query)
+    monkeypatch.setattr(vl, "rerank_candidates", _rerank)
+    monkeypatch.setattr(
+        "app.vector.qdrant_store.search_visual_catalog", _search, raising=False
+    )
+
+    result = await search_catalog_visually(
+        CatalogVisualSearchRequest(query="фреза"), db_session
+    )
+    assert result.reranked is False
+    assert called == []

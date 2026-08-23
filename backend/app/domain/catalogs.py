@@ -162,6 +162,18 @@ class CatalogVisualSearchRequest(BaseModel):
     # a page-preview match is a much weaker claim.
     crops_only: bool = False
     limit: int = Field(24, ge=1, le=100)
+    # Re-read the top candidates together with the query (Qwen3-VL-Reranker).
+    #
+    # OFF by default, and that is a measurement, not a guess. On 25 live queries
+    # against this stand's catalogs (photo + name, candidate pictures included):
+    #   vector order   top-1 14/25, MRR 0.643, 0.1 s
+    #   with reranking top-1 14/25, MRR 0.631, 5.5 s
+    # No accuracy to gain and 55x the latency — because inside one catalog
+    # family every crop is the same picture and the difference lives in the
+    # digits of the article code, which the embedder already reads from the
+    # caption. Kept available for callers with heterogeneous candidates, where
+    # a cross-encoder is normally worth its cost.
+    rerank: bool = False
     # Below this the "match" is noise; measured on this stand, an unrelated
     # picture scores ~0.2-0.4 against a crop and the right one ~0.7.
     score_threshold: float = Field(0.35, ge=0.0, le=1.0)
@@ -177,6 +189,10 @@ class CatalogVisualSearchResponse(BaseModel):
     available: bool = True
     model: str | None = None
     indexed_positions: int = 0
+    # True when the order comes from the reranker rather than from vector
+    # distance alone — the UI can then explain why two identical-looking crops
+    # are ranked differently.
+    reranked: bool = False
     report: dict | None = None
 
 

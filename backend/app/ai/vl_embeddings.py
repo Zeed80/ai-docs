@@ -114,6 +114,59 @@ async def embed_multimodal(
     return vectors
 
 
+RERANK_INSTRUCTION = (
+    "Retrieve the catalog product that matches the query, paying attention to "
+    "the exact size and variant code."
+)
+
+
+async def rerank_candidates(
+    *,
+    query_text: str | None,
+    query_image: bytes | None,
+    documents: list[dict],
+) -> list[float] | None:
+    """Score candidates against the query, reading each pair together.
+
+    Worth it exactly where the embedder cannot help: a catalog family that
+    shares ONE illustration, where every crop is byte-identical and only the
+    size in the caption tells the variants apart. Returns None when the sidecar
+    or its reranker is unavailable — the caller then keeps the vector order,
+    which is a worse ranking, not a wrong answer.
+    """
+    if not documents:
+        return []
+    payload: dict = {
+        "documents": [
+            {
+                **({"text": doc["text"][:2000]} if doc.get("text") else {}),
+                **(
+                    {"image_base64": base64.b64encode(doc["image"]).decode("ascii")}
+                    if doc.get("image")
+                    else {}
+                ),
+            }
+            for doc in documents
+        ],
+        "instruction": RERANK_INSTRUCTION,
+    }
+    if query_text:
+        payload["query_text"] = query_text[:2000]
+    if query_image:
+        payload["query_image_base64"] = base64.b64encode(query_image).decode("ascii")
+
+    result = await _post("/rerank", payload)
+    if not result or "scores" not in result:
+        return None
+    scores = result["scores"]
+    if len(scores) != len(documents):
+        logger.warning(
+            "vl_rerank_count_mismatch", requested=len(documents), returned=len(scores)
+        )
+        return None
+    return [float(score) for score in scores]
+
+
 async def embed_query(text: str | None = None, image: bytes | None = None) -> list[float] | None:
     """Embed one search query — words, a photo, or both."""
     if not text and not image:

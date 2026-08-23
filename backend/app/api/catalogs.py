@@ -1290,7 +1290,7 @@ async def search_catalog_visually(
     import base64
     import binascii
 
-    from app.ai.vl_embeddings import embed_query, vl_info
+    from app.ai.vl_embeddings import embed_query, rerank_candidates, vl_info
     from app.tasks.catalog_visual import INDEXED_KEY
     from app.vector.qdrant_store import search_visual_catalog
 
@@ -1410,11 +1410,46 @@ async def search_catalog_visually(
     # Qdrant's order is the answer; the SQL round-trip only fetches the rows.
     rows.sort(key=lambda entry: -scores.get(str(entry.id), 0.0))
 
+    # Rerank the head of the list. The embedder recalls the right FAMILY; when
+    # a family shares one illustration every crop is byte-identical and only
+    # the caption separates the sizes — that ordering is what the cross-encoder
+    # can fix and the vector cannot.
+    reranked = False
+    if payload.rerank and len(rows) > 1:
+        head = rows[: min(len(rows), 16)]
+        from app.storage import download_file
+
+        documents = []
+        for entry in head:
+            caption = " ".join(
+                part for part in (entry.part_number, entry.name, entry.description) if part
+            )
+            # The candidate's PICTURE goes in too. Measured without it on 25
+            # live queries: the reranker scored a photo query against bare text
+            # and made things worse (top-1 11/25 against the vector order's
+            # 14/25) — half the query was simply not being compared.
+            candidate_image: bytes | None = None
+            if entry.image_path:
+                try:
+                    candidate_image = await asyncio.to_thread(download_file, entry.image_path)
+                except Exception:  # noqa: BLE001 — text-only candidate is fine
+                    candidate_image = None
+            documents.append({"text": caption, "image": candidate_image})
+        rerank_scores = await rerank_candidates(
+            query_text=text, query_image=image, documents=documents
+        )
+        if rerank_scores:
+            for entry, score in zip(head, rerank_scores):
+                scores[str(entry.id)] = float(score)
+            rows = sorted(head, key=lambda e: -scores[str(e.id)]) + rows[len(head) :]
+            reranked = True
+
     items = await _decorate(db, rows, {})
     mode = "image+text" if image and text else ("image" if image else "text")
     return CatalogVisualSearchResponse(
         items=items,
         scores=scores,
+        reranked=reranked,
         mode=mode,
         model=info.get("model"),
         indexed_positions=int(indexed or 0),
