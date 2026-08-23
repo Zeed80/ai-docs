@@ -128,6 +128,20 @@ Durable runtime реализован в `/api/work-orders` и `backend/app/domai
 
 Целевой режим автономии — `max_autonomy`: агент может сам готовить и проверять изменения в sandbox, но продакшен-код, внешние действия, права, память/аудит/approval gates и личность агента применяются только через объяснимое подтверждение.
 
+## Поиск по картинке в каталогах
+
+Картинки и текст — в одном векторном пространстве (сайдкар `infra/vl-embedding`,
+Qwen3-VL-Embedding-2B; коллекция Qdrant `tool_catalog_visual`, отдельно от
+`tool_catalog`: другая модель и другая размерность). Через Ollama это
+невозможно: её `/api/embed` принимает `images` и молча игнорирует их.
+
+- Индексация: `catalog.visual_index_batch` — партии с чекпоинтом в записи
+  (`metadata_.visual_indexed_at` + `visual_model`), смена модели = переиндексация.
+- Поиск: `POST /api/catalogs/search-visual` (фото, слова, `entry_id` —
+  «похожие по виду»), capability `tool_catalog.search_visual`.
+- Сервис недоступен → `available=false` и пустой ответ; подмена текстовым
+  поиском запрещена.
+
 ## Поддержка нескольких IMAP-ящиков
 
 Routing по ящику (закупки / бухгалтерия / общий). Экспорт — и в Excel (openpyxl), и в формат 1С (обязательно).

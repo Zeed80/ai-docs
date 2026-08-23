@@ -3,12 +3,14 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getApiBaseUrl } from "@/lib/api-base";
+import { isNative, pickImage } from "@/lib/native-bridge";
 import { mutFetch } from "@/lib/auth";
 import { CatalogEntryGrid } from "@/components/catalogs/CatalogEntryGrid";
 import {
   catalogsApi,
   type CatalogEntry,
   type CatalogSearchResult,
+  type CatalogVisualSearchResult,
 } from "@/lib/catalogs-api";
 
 const API = getApiBaseUrl();
@@ -65,6 +67,14 @@ export default function CatalogsPage() {
   const [itemLoading, setItemLoading] = useState(false);
   const [itemError, setItemError] = useState<string | null>(null);
   const [catalogFilter, setCatalogFilter] = useState<Set<string>>(new Set());
+  // Search by picture: a photo of the tool answers the question an article
+  // number cannot when nobody knows the article number.
+  const [photo, setPhoto] = useState<{ base64: string; preview: string } | null>(
+    null,
+  );
+  const [visualResult, setVisualResult] =
+    useState<CatalogVisualSearchResult | null>(null);
+  const [similarTo, setSimilarTo] = useState<CatalogEntry | null>(null);
   const [onlyWithImage, setOnlyWithImage] = useState(false);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [search, setSearch] = useState("");
@@ -112,12 +122,45 @@ export default function CatalogsPage() {
     };
   }, [suppliers]);
 
+  /** На телефоне — снять камерой, в браузере — выбрать файл. */
+  async function capturePhoto() {
+    const files = await pickImage(isNative() ? "CAMERA" : "PHOTOS");
+    if (files.length) await pickPhoto(files[0]);
+  }
+
+  async function pickPhoto(file: File) {
+    const buffer = await file.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+    const base64 = window.btoa(binary);
+    setPhoto({ base64, preview: `data:${file.type || "image/jpeg"};base64,${base64}` });
+  }
+
   useEffect(() => {
     if (mode !== "items") return;
     const handle = window.setTimeout(async () => {
       setItemLoading(true);
       setItemError(null);
       try {
+        // A picture takes over the query: the words then only narrow it.
+        if (photo) {
+          const result = await catalogsApi.searchVisual({
+            image_base64: photo.base64,
+            query: itemQuery || undefined,
+            catalog_document_id:
+              catalogFilter.size === 1
+                ? Array.from(catalogFilter)[0]
+                : undefined,
+            crops_only: onlyWithImage || undefined,
+            limit: 40,
+          });
+          setVisualResult(result);
+          setItemResult(null);
+          return;
+        }
+        if (similarTo) return; // подбор похожих держится, пока его не закроют
+        setVisualResult(null);
         const result = await catalogsApi.search({
           query: itemQuery || undefined,
           catalog_document_ids: catalogFilter.size
@@ -134,7 +177,27 @@ export default function CatalogsPage() {
       }
     }, 300);
     return () => window.clearTimeout(handle);
-  }, [mode, itemQuery, catalogFilter, onlyWithImage]);
+  }, [mode, itemQuery, catalogFilter, onlyWithImage, photo, similarTo]);
+
+  /** «Похожие по виду» на конкретную позицию — её картинка становится запросом. */
+  async function findSimilarByLook(entry: CatalogEntry) {
+    setItemLoading(true);
+    setItemError(null);
+    setPhoto(null);
+    try {
+      const result = await catalogsApi.searchVisual({
+        entry_id: entry.id,
+        limit: 40,
+      });
+      setVisualResult(result);
+      setItemResult(null);
+      setSimilarTo(entry);
+    } catch (e: unknown) {
+      setItemError(e instanceof Error ? e.message : "Подбор похожих не удался");
+    } finally {
+      setItemLoading(false);
+    }
+  }
 
   function openEntryPage(entry: CatalogEntry) {
     if (!entry.catalog_document_id) return;
@@ -189,6 +252,36 @@ export default function CatalogsPage() {
               onChange={(e) => setItemQuery(e.target.value)}
               className="w-full max-w-md rounded-lg border border-white/10 bg-zinc-800 px-4 py-2 text-sm text-white placeholder-white/30 focus:border-blue-500/50 focus:outline-none"
             />
+            <button
+              type="button"
+              onClick={capturePhoto}
+              className="flex items-center gap-2 rounded-lg border border-white/10 bg-zinc-800 px-3 py-2 text-sm text-white/70 hover:text-white"
+              title={
+                isNative()
+                  ? "Сфотографировать инструмент и найти его в каталогах"
+                  : "Выбрать изображение и найти похожее в каталогах"
+              }
+            >
+              {isNative() ? "Сфотографировать" : "Найти по фото"}
+            </button>
+            {photo && (
+              <span className="flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-950/30 px-2 py-1">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={photo.preview}
+                  alt="Запрос"
+                  className="h-8 w-8 rounded object-cover"
+                />
+                <span className="text-xs text-blue-200">поиск по картинке</span>
+                <button
+                  onClick={() => setPhoto(null)}
+                  className="text-xs text-white/50 hover:text-white"
+                  title="Убрать картинку"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
             <label className="flex items-center gap-2 text-sm text-white/60">
               <input
                 type="checkbox"
@@ -197,9 +290,31 @@ export default function CatalogsPage() {
               />
               только с картинкой товара
             </label>
-            {itemResult && (
+            {itemResult && !photo && (
               <span className="text-xs text-white/40">
                 найдено: {itemResult.total.toLocaleString("ru")}
+              </span>
+            )}
+            {similarTo && !photo && (
+              <span className="flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-950/30 px-2 py-1 text-xs text-blue-200">
+                похожие на «{similarTo.name.slice(0, 30)}»
+                <button
+                  onClick={() => {
+                    setSimilarTo(null);
+                    setVisualResult(null);
+                  }}
+                  className="text-white/50 hover:text-white"
+                  title="Вернуться к обычному поиску"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
+            {visualResult && (
+              <span className="text-xs text-white/40">
+                найдено похожих: {visualResult.items.length} из{" "}
+                {visualResult.indexed_positions.toLocaleString("ru")} позиций с
+                картинкой
               </span>
             )}
           </div>
@@ -246,6 +361,14 @@ export default function CatalogsPage() {
               </div>
             )}
 
+          {visualResult && !visualResult.available && (
+            <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+              Поиск по картинке сейчас недоступен — сервис распознавания
+              изображений не отвечает. Обычный поиск по словам работает: уберите
+              картинку.
+            </div>
+          )}
+
           {itemError && (
             <div className="mt-3 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
               {itemError}
@@ -257,8 +380,12 @@ export default function CatalogsPage() {
               <div className="py-12 text-sm text-white/40">Поиск…</div>
             ) : (
               <CatalogEntryGrid
-                entries={itemResult?.items ?? []}
+                entries={
+                  (photo ? visualResult?.items : itemResult?.items) ?? []
+                }
                 onOpenPage={openEntryPage}
+                scores={photo ? visualResult?.scores : undefined}
+                onFindSimilar={findSimilarByLook}
               />
             )}
           </div>

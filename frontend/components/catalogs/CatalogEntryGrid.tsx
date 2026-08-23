@@ -36,9 +36,15 @@ function EntryThumb({ entry }: { entry: CatalogEntry }) {
 export function CatalogEntryGrid({
   entries,
   onOpenPage,
+  onFindSimilar,
+  scores,
 }: {
   entries: CatalogEntry[];
   onOpenPage?: (entry: CatalogEntry) => void;
+  /** «Покажи такие же» — по виду, а не по артикулу. */
+  onFindSimilar?: (entry: CatalogEntry) => void;
+  /** Сходство из поиска по картинке: показываем, насколько это похоже. */
+  scores?: Record<string, number>;
 }) {
   if (!entries.length) {
     return (
@@ -63,6 +69,14 @@ export function CatalogEntryGrid({
                 title="Отдельной картинки товара в каталоге не нашлось — показана страница"
               >
                 страница
+              </span>
+            )}
+            {scores?.[entry.id] !== undefined && (
+              <span
+                className="absolute right-2 top-2 rounded bg-blue-950/80 px-1.5 py-0.5 text-[10px] text-blue-200"
+                title="Насколько похоже на запрос"
+              >
+                {Math.round(scores[entry.id] * 100)}%
               </span>
             )}
             {entry.page_number && (
@@ -108,6 +122,16 @@ export function CatalogEntryGrid({
                 </span>
               )}
             </div>
+            {onFindSimilar && entry.thumb_url && (
+              <button
+                type="button"
+                onClick={() => onFindSimilar(entry)}
+                className="mt-2 rounded bg-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-600"
+                title="Найти похожие по виду во всех каталогах"
+              >
+                Похожие по виду
+              </button>
+            )}
           </div>
         </div>
       ))}

@@ -106,6 +106,16 @@ export interface CatalogSearchParams {
   include_facets?: boolean;
 }
 
+export interface CatalogVisualSearchResult {
+  items: CatalogEntry[];
+  scores: Record<string, number>;
+  mode: "image" | "text" | "image+text";
+  available: boolean;
+  model?: string | null;
+  indexed_positions: number;
+  report?: { title?: string; message?: string } | null;
+}
+
 async function json<T>(response: Response, what: string): Promise<T> {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -191,6 +201,33 @@ export const catalogsApi = {
     return json<{ items: CatalogEntry[]; message: string }>(
       response,
       "Подбор аналогов не удался",
+    );
+  },
+
+  /** Поиск по картинке: фото инструмента, фрагмент чертежа или «похожие на эту».
+   *
+   * Картинки и слова лежат в одном векторном пространстве, поэтому фото можно
+   * уточнить словами. Если сервис распознавания недоступен, ответ придёт с
+   * available=false — интерфейс обязан сказать об этом, а не показать обычный
+   * текстовый поиск под кнопкой поиска по фото.
+   */
+  async searchVisual(params: {
+    image_base64?: string;
+    query?: string;
+    entry_id?: string;
+    supplier_id?: string;
+    catalog_document_id?: string;
+    crops_only?: boolean;
+    limit?: number;
+  }) {
+    const response = await mutFetch(`${API}/api/catalogs/search-visual`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    return json<CatalogVisualSearchResult>(
+      response,
+      "Поиск по картинке не удался",
     );
   },
 
