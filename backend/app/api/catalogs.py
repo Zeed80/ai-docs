@@ -513,6 +513,21 @@ async def delete_catalog(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("entry_graph_cleanup_failed", error=str(exc)[:120])
             await db.delete(entry)
+        # Запись «загружено» живёт неделю и после удаления выглядела бы
+        # актуальной — агент повторил бы её как факт.
+        source_url = (document.metadata_ or {}).get("source_url") if isinstance(
+            document.metadata_, dict
+        ) else None
+        supplier_key = (
+            (document.metadata_ or {}).get("tool_supplier_id")
+            if isinstance(document.metadata_, dict)
+            else None
+        )
+        if source_url and supplier_key:
+            from app.domain.catalog_ingest_status import forget_source_status
+
+            forget_source_status(str(supplier_key), str(source_url))
+
         removed["entries"] = len(entries)
         await db.flush()
 

@@ -85,6 +85,24 @@ def list_source_statuses(supplier_id: str) -> list[dict[str, Any]]:
     return sorted(records, key=lambda r: str(r.get("updated_at") or ""), reverse=True)
 
 
+def forget_source_status(supplier_id: str, url: str) -> None:
+    """Забыть запись об одном источнике.
+
+    Вызывается при удалении каталога: иначе запись «загружено, 312 позиций»
+    живёт ещё неделю (TTL) и выглядит актуальной, хотя позиций уже нет —
+    агент, спросив ingest_status, отчитается о том, чего в системе не осталось.
+    """
+    key = f"{_KEY_PREFIX}{supplier_id}"
+    client = _redis()
+    if client is not None:
+        try:
+            client.hdel(key, url)
+            return
+        except Exception as exc:  # noqa: BLE001 — статус не данные
+            logger.warning("catalog_ingest_status_forget_failed: %s", exc)
+    _FALLBACK.get(supplier_id, {}).pop(url, None)
+
+
 def clear_source_statuses(supplier_id: str) -> None:
     client = _redis()
     if client is not None:

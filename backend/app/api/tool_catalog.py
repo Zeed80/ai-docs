@@ -9,11 +9,16 @@ from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import (
+    CatalogPage,
+    Document,
+    DocumentType,
     DrawingFeature,
     FeatureDimension,
     FeatureSurface,
@@ -2245,6 +2250,144 @@ async def catalog_ingest_status(
         )
 
     records = list_source_statuses(str(supplier.id))
+
+    # Сверяем с реальностью: записи живут неделю, а каталоги за это время могли
+    # удалить — и «загружено: 312 позиций» превращается в ложь, которую агент
+    # повторит как факт (найдено на стенде после полной очистки каталогов).
+    #
+    # Условие намеренно узкое: у поставщика НЕТ ни одного каталога, и запись
+    # старше двух часов. Свежая запись законно опережает появление документа
+    # (загрузка идёт), а сверять каждую по её URL нельзя — краул пишет статус
+    # на корень сайта, документов с таким адресом не бывает вовсе.
+    # Только "attached": оно означает конкретный прикреплённый файл, и его
+    # можно сверить с документом. "done" пишет краул на корень сайта —
+    # документа с таким адресом не бывает вовсе, сверять нечего.
+    catalog_docs = (
+        await db.execute(
+            select(Document).where(Document.doc_type == DocumentType.supplier_catalog)
+        )
+    ).scalars().all()
+    by_url = {
+        str((doc.metadata_ or {}).get("source_url")): doc
+        for doc in catalog_docs
+        if isinstance(doc.metadata_, dict) and (doc.metadata_ or {}).get("source_url")
+    }
+    known_urls = set(by_url)
+
+    # Реальный прогресс вместо «поставлен в очередь». Постраничный разбор ведёт
+    # свой учёт и статус источника не трогает, поэтому агент на вопрос «как там
+    # каталоги» видел «queued, 0 позиций», пока в базе уже лежали сотни.
+    for record in records:
+        doc = by_url.get(str(record.get("url") or ""))
+        if doc is None:
+            continue
+        entries_now = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(ToolCatalogEntry)
+                    .where(
+                        ToolCatalogEntry.source_document_id == doc.id,
+                        ToolCatalogEntry.is_active.is_(True),
+                    )
+                )
+            ).scalar_one()
+        )
+        pages_total = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(CatalogPage)
+                    .where(CatalogPage.document_id == doc.id)
+                )
+            ).scalar_one()
+        )
+        pages_done = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(CatalogPage)
+                    .where(
+                        CatalogPage.document_id == doc.id,
+                        CatalogPage.status.in_(("parsed", "skipped")),
+                    )
+                )
+            ).scalar_one()
+        )
+        record["title"] = record.get("title") or doc.file_name
+        record["entries_created"] = entries_now
+        if pages_total and pages_done < pages_total:
+            record["status"] = "running"
+            record["message"] = (
+                f"Разбор идёт: страница {pages_done} из {pages_total}, "
+                f"позиций уже {entries_now}."
+            )
+        else:
+            record["status"] = "attached"
+            record["message"] = (
+                f"Разобран полностью: страниц {pages_total}, позиций {entries_now}."
+                if pages_total
+                else f"Позиций: {entries_now}."
+            )
+    async def _entries_around(moment: datetime) -> int:
+        """Сколько позиций поставщика появилось в окне вокруг записи.
+
+        Краул ("done") пишет статус на корень сайта — сверить его с документом
+        нельзя. Зато его позиции создавались тогда же: если их не осталось,
+        запись описывает данные, которых больше нет. Проверять «есть ли вообще
+        свежие позиции» нельзя — их мог создать совсем другой источник, и
+        позавчерашняя запись выглядела бы подтверждённой.
+        """
+        naive = moment.replace(tzinfo=None)
+        return int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(ToolCatalogEntry)
+                    .where(
+                        ToolCatalogEntry.supplier_id == supplier.id,
+                        ToolCatalogEntry.is_active.is_(True),
+                        ToolCatalogEntry.created_at >= naive - timedelta(hours=1),
+                        ToolCatalogEntry.created_at <= naive + timedelta(hours=6),
+                    )
+                )
+            ).scalar_one()
+        )
+
+    now = datetime.now(UTC)
+    for record in records:
+        status_value = str(record.get("status") or "")
+        if status_value == "done":
+            try:
+                written = datetime.fromisoformat(str(record.get("updated_at") or ""))
+            except ValueError:
+                continue
+            if now - written < timedelta(hours=2):
+                continue
+            if await _entries_around(written):
+                continue
+            record["status"] = "stale"
+            record["entries_created"] = 0
+            record["message"] = "Позиций того обхода уже нет — запись устарела."
+            continue
+        if status_value != "attached":
+            continue
+        if str(record.get("url") or "") in known_urls:
+            continue
+        try:
+            # Свежая запись законно опережает появление документа: загрузка
+            # ещё идёт. Устаревает лишь то, что давно должно было стать
+            # каталогом и не стало (или каталог потом удалили).
+            if now - datetime.fromisoformat(str(record.get("updated_at") or "")) < timedelta(
+                hours=2
+            ):
+                continue
+        except ValueError:
+            continue
+        record["status"] = "stale"
+        record["entries_created"] = 0
+        record["message"] = "Каталога больше нет — запись о загрузке устарела."
+
     sources = [
         AttachedSourceResult(
             url=str(record.get("url") or ""),
@@ -2260,6 +2403,8 @@ async def catalog_ingest_status(
     created = sum(item.entries_created for item in sources)
     conflicted = sum(item.entries_conflicted for item in sources)
     pending = [item for item in sources if item.status in ("queued", "running")]
+
+    stale = [item for item in sources if item.status == "stale"]
 
     if not sources:
         message = (
@@ -2277,6 +2422,10 @@ async def catalog_ingest_status(
             f"{len(sources)}, добавлено позиций: {created}"
             + (f", на проверку: {conflicted}" if conflicted else "")
             + "."
+        )
+    if stale:
+        message += (
+            f" Записей о ранее загруженных каталогах, которых больше нет: {len(stale)}."
         )
 
     return CatalogIngestStatusResult(

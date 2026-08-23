@@ -964,3 +964,73 @@ async def test_rounding_sized_price_difference_is_not_an_anomaly(db_session, sup
     )
     await db_session.commit()
     assert result["anomaly_ids"] == []
+
+
+def _age_status(supplier_id: str, url: str, *, hours: int) -> None:
+    """Отодвинуть отметку времени записи назад — как будто она давняя."""
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    from app.domain.catalog_ingest_status import _FALLBACK, _KEY_PREFIX, _redis
+
+    older = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+    client = _redis()
+    if client is not None:
+        raw = client.hget(f"{_KEY_PREFIX}{supplier_id}", url)
+        if raw:
+            record = json.loads(raw)
+            record["updated_at"] = older
+            client.hset(f"{_KEY_PREFIX}{supplier_id}", url, json.dumps(record, ensure_ascii=False))
+            return
+    record = _FALLBACK.get(supplier_id, {}).get(url)
+    if record:
+        record["updated_at"] = older
+
+
+@pytest.mark.asyncio
+async def test_ingest_status_does_not_report_catalogs_that_were_deleted(
+    client: AsyncClient, db_session
+):
+    """«Загружено: 312 позиций» про удалённый каталог — ложь, которую агент
+    повторит как факт.
+
+    Записи о загрузке живут неделю, а каталог могли удалить за это время.
+    Найдено на живом стенде: после полной очистки каталогов ingest_status
+    по-прежнему рапортовал о позавчерашних загрузках.
+    """
+    from app.db.models import Party, ToolSupplier
+    from app.domain.catalog_ingest_status import clear_source_statuses, record_source_status
+
+    party = Party(name="ООО Устаревший Статус", inn="7700000123")
+    db_session.add(party)
+    await db_session.flush()
+    supplier = ToolSupplier(
+        name="ООО Устаревший Статус", is_active=True, main_supplier_id=party.id
+    )
+    db_session.add(supplier)
+    await db_session.commit()
+
+    clear_source_statuses(str(supplier.id))
+    record_source_status(
+        str(supplier.id),
+        "https://example.test/catalog-which-is-gone.pdf",
+        status="attached",
+        entries_created=312,
+        message="Добавлено позиций: 312",
+    )
+    # Состариваем запись: свежая законно опережает появление документа, и
+    # правило её не трогает — устаревает только то, что давно должно было
+    # материализоваться в каталог.
+    _age_status(str(supplier.id), "https://example.test/catalog-which-is-gone.pdf", hours=5)
+    try:
+        response = await client.post(
+            "/api/tool-catalog/ingest-status", json={"supplier_name": supplier.name}
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+
+        assert data["entries_created"] == 0, "позиции удалённого каталога не считаются"
+        assert data["sources"][0]["status"] == "stale"
+        assert "устарела" in data["sources"][0]["message"]
+    finally:
+        clear_source_statuses(str(supplier.id))
