@@ -140,6 +140,46 @@ class CatalogSearchRequest(BaseModel):
     include_facets: bool = True
 
 
+class CatalogVisualSearchRequest(BaseModel):
+    """Search the catalogs by a picture — a photo of the tool, a screenshot,
+    a crop from a drawing — optionally narrowed by words.
+
+    Image and text live in ONE vector space (infra/vl-embedding), so both may
+    be given together: the photo says what it looks like, the words say what
+    matters about it ("такой же, но 12 мм").
+    """
+
+    # base64, with or without a data: prefix. The API takes bytes, never a URL:
+    # fetching a caller-supplied address would make the backend a proxy.
+    image_base64: str | None = None
+    query: str | None = None
+    # "Покажи похожие на эту" — take the picture from a position we already
+    # have instead of making the caller download and re-upload it.
+    entry_id: uuid.UUID | None = None
+    supplier_id: uuid.UUID | None = None
+    catalog_document_id: uuid.UUID | None = None
+    # Only positions whose own product picture was cropped from the page —
+    # a page-preview match is a much weaker claim.
+    crops_only: bool = False
+    limit: int = Field(24, ge=1, le=100)
+    # Below this the "match" is noise; measured on this stand, an unrelated
+    # picture scores ~0.2-0.4 against a crop and the right one ~0.7.
+    score_threshold: float = Field(0.35, ge=0.0, le=1.0)
+
+
+class CatalogVisualSearchResponse(BaseModel):
+    items: list[CatalogEntryOut] = []
+    scores: dict[str, float] = {}
+    # What was actually searched — "по картинке", "по словам", "по обоим".
+    mode: str = "image"
+    # None when the sidecar is down: the UI says visual search is unavailable
+    # instead of quietly showing a text search under a photo-search button.
+    available: bool = True
+    model: str | None = None
+    indexed_positions: int = 0
+    report: dict | None = None
+
+
 class CatalogSearchResponse(BaseModel):
     items: list[CatalogEntryOut] = []
     total: int = 0

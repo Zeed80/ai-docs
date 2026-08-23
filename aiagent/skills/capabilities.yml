@@ -95,6 +95,12 @@ capabilities:
         по описанию, exclude_same_supplier=true — искать у ДРУГИХ поставщиков.
         Подбор по смыслу: в ответе прямо сказано, что размеры и исполнение надо
         сверить — так и передавай человеку, не выдавай аналог за замену.
+      - search_visual — поиск ПО КАРТИНКЕ: image_base64 (фото инструмента,
+        снимок с чертежа) и/или query словами, либо entry_id — «покажи похожие
+        на эту позицию». Картинки и слова в одном векторном пространстве, так
+        что фото можно уточнить словами («такой же, но 12 мм»). Если сервис
+        распознавания недоступен, ответ придёт с available=false — так и скажи
+        человеку, не подменяй молча обычным поиском.
       - list_catalogs — какие каталоги есть у поставщика (party_id или
         supplier_id): число страниц, позиций, доля с картинками и прогресс
         разбора «страница N из M».
@@ -133,7 +139,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "discover_catalogs | attach_web_catalog | crawl_site | search_positions | similar_positions | list_catalogs | catalog_pages | pause_parsing | ingest_status | resolve_supplier | list_entries | list_uploads | reingest_upload | refresh | create_supplier | ingest_web_source | approve"
+          description: "discover_catalogs | attach_web_catalog | crawl_site | search_positions | similar_positions | search_visual | list_catalogs | catalog_pages | pause_parsing | ingest_status | resolve_supplier | list_entries | list_uploads | reingest_upload | refresh | create_supplier | ingest_web_source | approve"
         supplier_name:
           type: string
           description: "Название поставщика как в счетах («ООО Мир Станочника») — для attach_web_catalog/resolve_supplier"
@@ -151,7 +157,10 @@ capabilities:
           description: "ID поставщика каталога (ToolSupplier) — для ingest_web_source"
         entry_id:
           type: string
-          description: "ID записи каталога (для approve)"
+          description: "ID записи каталога (для approve/similar_positions/search_visual)"
+        image_base64:
+          type: string
+          description: "Для search_visual: картинка в base64 (фото инструмента, фрагмент чертежа). Можно вместе с query — слова уточняют картинку"
         name:
           type: string
           description: "Для create_supplier: название поставщика"

@@ -41,6 +41,8 @@ from app.domain.catalogs import (
     CatalogPagesResponse,
     CatalogSearchRequest,
     CatalogSearchResponse,
+    CatalogVisualSearchRequest,
+    CatalogVisualSearchResponse,
 )
 
 router = APIRouter()
@@ -1262,5 +1264,162 @@ async def find_similar_positions(
                 else ", тип инструмента не ограничивался"
             )
             + ". Подбор по смыслу — обязательно сверьте размеры и исполнение."
+        ),
+    )
+
+
+@router.post(
+    "/search-visual",
+    response_model=CatalogVisualSearchResponse,
+    summary="Skill: catalog.search_visual — Find catalog positions by a picture.",
+)
+async def search_catalog_visually(
+    payload: CatalogVisualSearchRequest,
+    db: AsyncSession = Depends(get_db),
+) -> CatalogVisualSearchResponse:
+    """«Вот такое нужно» — a photo of the tool instead of an article number.
+
+    The picture and the catalog crops share one vector space, so words and
+    images are the same query here: a photo alone, words alone, or a photo
+    narrowed by words ("такой же, но 12 мм").
+
+    When the sidecar is unavailable this returns available=false and NO items,
+    rather than quietly answering from the text index — a photo search that
+    silently becomes a word search is worse than one that says it is off.
+    """
+    import base64
+    import binascii
+
+    from app.ai.vl_embeddings import embed_query, vl_info
+    from app.tasks.catalog_visual import INDEXED_KEY
+    from app.vector.qdrant_store import search_visual_catalog
+
+    text = (payload.query or "").strip() or None
+    image: bytes | None = None
+    if payload.image_base64:
+        raw = payload.image_base64
+        raw = raw.split(",", 1)[1] if raw.startswith("data:") else raw
+        try:
+            image = base64.b64decode(raw, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error_code": "image_not_base64",
+                    "message": "Картинку нужно передать в base64.",
+                },
+            )
+    source: ToolCatalogEntry | None = None
+    if payload.entry_id and not image:
+        source = await db.get(ToolCatalogEntry, payload.entry_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="Позиция не найдена")
+        if source.image_path:
+            from app.storage import download_file
+
+            try:
+                image = await asyncio.to_thread(download_file, source.image_path)
+            except Exception as exc:  # noqa: BLE001 — fall back to its words
+                logger.warning(
+                    "catalog_visual_source_image_missing",
+                    entry=str(source.id),
+                    error=str(exc)[:120],
+                )
+        text = text or " ".join(
+            part for part in (source.part_number, source.name) if part
+        )
+
+    if not image and not text:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_code": "visual_query_required",
+                "message": "Передайте картинку, текст, entry_id или их сочетание.",
+            },
+        )
+
+    indexed = await db.scalar(
+        select(func.count())
+        .select_from(ToolCatalogEntry)
+        .where(
+            ToolCatalogEntry.is_active.is_(True),
+            ToolCatalogEntry.metadata_[INDEXED_KEY].as_string().isnot(None),
+        )
+    )
+
+    info = await vl_info()
+    if not info:
+        return CatalogVisualSearchResponse(
+            available=False,
+            mode="image" if image else "text",
+            indexed_positions=int(indexed or 0),
+            report={
+                "title": "Поиск по картинке недоступен",
+                "message": (
+                    "Сервис распознавания изображений не отвечает. "
+                    "Обычный поиск по каталогу работает."
+                ),
+            },
+        )
+
+    vector = await embed_query(text=text, image=image)
+    if not vector:
+        return CatalogVisualSearchResponse(
+            available=False,
+            mode="image" if image else "text",
+            model=info.get("model"),
+            indexed_positions=int(indexed or 0),
+        )
+
+    hits = await asyncio.to_thread(
+        search_visual_catalog,
+        vector,
+        supplier_id=str(payload.supplier_id) if payload.supplier_id else None,
+        catalog_document_id=(
+            str(payload.catalog_document_id) if payload.catalog_document_id else None
+        ),
+        image_kind="crop" if payload.crops_only else None,
+        exclude_entry_id=str(payload.entry_id) if payload.entry_id else None,
+        limit=payload.limit,
+        score_threshold=payload.score_threshold,
+    )
+
+    scores = {hit["entry_id"]: float(hit["score"]) for hit in hits if hit.get("entry_id")}
+    if not scores:
+        return CatalogVisualSearchResponse(
+            mode=("image+text" if image and text else "image" if image else "text"),
+            model=info.get("model"),
+            indexed_positions=int(indexed or 0),
+            report={
+                "title": "Похожего в каталогах не нашлось",
+                "message": (
+                    f"Просмотрено позиций с картинкой: {int(indexed or 0)}. "
+                    "Попробуйте снимок крупнее или добавьте пару слов к запросу."
+                ),
+            },
+        )
+
+    ids = [uuid.UUID(entry_id) for entry_id in scores]
+    rows = (
+        await db.execute(
+            select(ToolCatalogEntry).where(
+                ToolCatalogEntry.id.in_(ids), ToolCatalogEntry.is_active.is_(True)
+            )
+        )
+    ).scalars().all()
+    # Qdrant's order is the answer; the SQL round-trip only fetches the rows.
+    rows.sort(key=lambda entry: -scores.get(str(entry.id), 0.0))
+
+    items = await _decorate(db, rows, {})
+    mode = "image+text" if image and text else ("image" if image else "text")
+    return CatalogVisualSearchResponse(
+        items=items,
+        scores=scores,
+        mode=mode,
+        model=info.get("model"),
+        indexed_positions=int(indexed or 0),
+        report=_entries_report(
+            "Найдено по картинке" if image else f"Найдено по запросу: {text}"[:120],
+            items,
         ),
     )

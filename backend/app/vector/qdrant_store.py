@@ -26,6 +26,12 @@ COLLECTION = "documents"
 COLLECTION_DRAWINGS = "drawings"
 COLLECTION_DRAWING_FEATURES = "drawing_features"
 COLLECTION_TOOL_CATALOG = "tool_catalog"
+# Visual/multimodal vectors of catalog positions (infra/vl-embedding). Kept
+# apart from COLLECTION_TOOL_CATALOG on purpose: a different model and a
+# different dimension, and one collection holding both would silently compare
+# vectors that are not comparable. Its size comes from the running sidecar
+# (`/info`), never from a constant here.
+COLLECTION_TOOL_CATALOG_VISUAL = "tool_catalog_visual"
 # Legacy default, kept only as a last-resort fallback. The real dimension comes
 # from the ACTIVE embedding profile — hardcoding it meant that switching the
 # embedding model left the fixed-name collections (drawings, drawing_features,
@@ -173,6 +179,122 @@ def ensure_drawing_collections(
                 )
             except Exception:
                 pass
+
+
+def ensure_visual_catalog_collection(vector_size: int, *, recreate_on_mismatch: bool = False) -> None:
+    """Collection for multimodal (image+text) catalog vectors.
+
+    ``vector_size`` is the sidecar's reported dimension — pass what /info says,
+    because a collection created with the wrong size rejects every later upsert.
+    """
+    ensure_collection(
+        collection_name=COLLECTION_TOOL_CATALOG_VISUAL,
+        vector_size=vector_size,
+        recreate_on_mismatch=recreate_on_mismatch,
+    )
+    client = get_client()
+    for field in ("supplier_id", "catalog_document_id", "is_active", "image_kind", "tool_type"):
+        try:
+            client.create_payload_index(
+                collection_name=COLLECTION_TOOL_CATALOG_VISUAL,
+                field_name=field,
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+        except Exception:
+            pass
+
+
+def upsert_visual_catalog_entries(points: list[dict]) -> None:
+    """Batch-upsert visual vectors. Each dict: entry_id, vector, payload fields."""
+    if not points:
+        return
+    client = get_client()
+    client.upsert(
+        collection_name=COLLECTION_TOOL_CATALOG_VISUAL,
+        points=[
+            PointStruct(
+                id=_stable_point_uuid(f"tool_catalog_visual:{item['entry_id']}"),
+                vector=item["vector"],
+                payload={
+                    "entry_id": item["entry_id"],
+                    "name": item.get("name") or "",
+                    "part_number": item.get("part_number") or "",
+                    "supplier_id": item.get("supplier_id") or "",
+                    "catalog_document_id": item.get("catalog_document_id") or "",
+                    "catalog_page": item.get("catalog_page"),
+                    "tool_type": item.get("tool_type") or "",
+                    # "crop" is the product's own picture, "page" is the page it
+                    # sits on — a page-level match is a much weaker claim, and
+                    # the UI says so rather than presenting them as equal.
+                    "image_kind": item.get("image_kind") or "",
+                    "is_active": str(item.get("is_active", True)).lower(),
+                    "embedding_model": item.get("embedding_model") or "",
+                },
+            )
+            for item in points
+        ],
+    )
+
+
+def search_visual_catalog(
+    query_vector: list[float],
+    *,
+    supplier_id: str | None = None,
+    catalog_document_id: str | None = None,
+    image_kind: str | None = None,
+    exclude_entry_id: str | None = None,
+    limit: int = 20,
+    score_threshold: float = 0.0,
+) -> list[dict]:
+    """Nearest catalog positions in the shared image+text space."""
+    client = get_client()
+    must: list = [FieldCondition(key="is_active", match=MatchValue(value="true"))]
+    if supplier_id:
+        must.append(FieldCondition(key="supplier_id", match=MatchValue(value=supplier_id)))
+    if catalog_document_id:
+        must.append(
+            FieldCondition(key="catalog_document_id", match=MatchValue(value=catalog_document_id))
+        )
+    if image_kind:
+        must.append(FieldCondition(key="image_kind", match=MatchValue(value=image_kind)))
+    must_not: list = []
+    if exclude_entry_id:
+        # "Similar to this one" must not answer with the position itself.
+        must_not.append(FieldCondition(key="entry_id", match=MatchValue(value=exclude_entry_id)))
+    response = client.query_points(
+        collection_name=COLLECTION_TOOL_CATALOG_VISUAL,
+        query=query_vector,
+        query_filter=Filter(must=must, must_not=must_not or None),
+        limit=limit,
+        score_threshold=score_threshold,
+    )
+    return [
+        {
+            "entry_id": hit.payload.get("entry_id", ""),
+            "name": hit.payload.get("name", ""),
+            "part_number": hit.payload.get("part_number", ""),
+            "image_kind": hit.payload.get("image_kind", ""),
+            "score": hit.score,
+            "payload": hit.payload or {},
+        }
+        for hit in response.points
+    ]
+
+
+def delete_visual_catalog_entries(entry_ids: list[str]) -> None:
+    """Remove visual vectors — used when a catalog or its positions are deleted."""
+    if not entry_ids:
+        return
+    client = get_client()
+    try:
+        client.delete(
+            collection_name=COLLECTION_TOOL_CATALOG_VISUAL,
+            points_selector=[
+                _stable_point_uuid(f"tool_catalog_visual:{entry_id}") for entry_id in entry_ids
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001 — a missing collection is not an error here
+        logger.warning("qdrant_visual_delete_failed", error=str(exc), count=len(entry_ids))
 
 
 def upsert_drawing(

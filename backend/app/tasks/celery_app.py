@@ -229,6 +229,7 @@ from app.tasks import catalog_ingest as _catalog_ingest  # noqa: F401
 from app.tasks import catalog_archive as _catalog_archive  # noqa: F401
 from app.tasks import catalog_crawl as _catalog_crawl  # noqa: F401
 from app.tasks import catalog_pages as _catalog_pages  # noqa: F401
+from app.tasks import catalog_visual as _catalog_visual  # noqa: F401
 from app.tasks import approval_escalation as _approval_escalation  # noqa: F401
 from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
 from app.tasks import proactive as _proactive  # noqa: F401

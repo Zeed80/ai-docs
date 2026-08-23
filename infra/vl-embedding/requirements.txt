@@ -1,0 +1,9 @@
+# Pins follow the model card's own requirements (transformers>=4.57, torch 2.8):
+# Qwen3-VL is a new architecture, and an older transformers cannot load it at all.
+transformers>=4.57.0
+sentence-transformers>=5.0.0
+qwen-vl-utils>=0.0.14
+accelerate>=1.0.0
+pillow
+fastapi
+uvicorn[standard]

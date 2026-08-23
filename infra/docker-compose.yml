@@ -346,6 +346,42 @@ services:
     networks:
       - app
 
+  # === Multimodal embedding (image + text in one vector space) ===
+  # Lets a person find a catalog position by a PHOTO of the tool. Ollama cannot
+  # do this: its embedding API accepts `images` and ignores them (measured), so
+  # the model that can runs here with its own torch/CUDA stack.
+  # Weights (~4.5 GB) download once into the volume; the model unloads itself
+  # after 10 min idle so it does not hold VRAM the LLMs need.
+  vl-embedding:
+    build:
+      context: ./vl-embedding
+      dockerfile: Dockerfile
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      VL_EMBEDDING_MODEL: ${VL_EMBEDDING_MODEL:-Qwen/Qwen3-VL-Embedding-2B}
+      # Native 2048. Changing this invalidates the existing Qdrant collection
+      # (the dimension is part of its schema) — it means a re-index, not a restart.
+      VL_EMBEDDING_DIM: ${VL_EMBEDDING_DIM:-1024}
+      VL_EMBEDDING_IDLE_UNLOAD_SECONDS: ${VL_EMBEDDING_IDLE_UNLOAD_SECONDS:-600}
+      HF_HOME: /models
+    volumes:
+      - vl_embedding_models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8093/health', timeout=3).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - app
+
   # === Headless engineering CAD kernel ===
   # FreeCAD/OpenCascade compiles only human-confirmed feature trees. It has no
   # credentials, DB, MinIO, Docker socket, or published host port.
@@ -1073,6 +1109,7 @@ volumes:
   vllm_hf_cache:
   comfyui_models:
   comfyui_output:
+  vl_embedding_models:
   technical_vectorizer_models:
   traefik_acme:
   authentik_db_data:

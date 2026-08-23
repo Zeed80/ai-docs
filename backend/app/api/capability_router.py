@@ -71,6 +71,11 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         # "Чем заменить эту позицию" — by meaning, since a replacement's article
         # number differs by definition between manufacturers.
         "similar_positions": ("POST", "/api/catalogs/similar", []),
+        # By PICTURE: a photo of the tool, a crop from a drawing, or "покажи
+        # похожие на эту позицию" (entry_id). Images and words share one vector
+        # space, so this also answers a plain text query — and it says openly
+        # when the visual index is unavailable instead of pretending.
+        "search_visual": ("POST", "/api/catalogs/search-visual", []),
         "list_uploads": (
             "GET", "/api/tool-catalog/by-supplier/{party_id}/uploads", ["party_id"]
         ),

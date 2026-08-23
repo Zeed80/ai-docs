@@ -163,6 +163,16 @@ class Settings(BaseSettings):
     # Headless FreeCAD/OpenCascade service. The backend sends only a
     # human-confirmed feature tree; the kernel has no DB or object-storage access.
     cad_kernel_url: str = "http://cad-kernel:8092"
+    # Multimodal embedding sidecar (Qwen3-VL-Embedding): pictures and text in
+    # ONE vector space, which is what makes "find this tool by its photo" work.
+    # Ollama cannot serve this — its embedding API takes `images` and ignores
+    # them (measured on this stand), so the vector described the text alone.
+    vl_embedding_url: str = "http://vl-embedding:8093"
+    vl_embedding_timeout_seconds: float = 180.0
+    # Qdrant collection for those vectors. Separate from `tool_catalog` on
+    # purpose: a different model and a different dimension, and mixing them
+    # would make every search silently compare incomparable vectors.
+    vl_embedding_collection: str = "tool_catalog_visual"
     # EMG rollout: legacy drawing/spec APIs remain derived views until this
     # flag is enabled for the adaptive reader pipeline.
     emg_pipeline_enabled: bool = False
