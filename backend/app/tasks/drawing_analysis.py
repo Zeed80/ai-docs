@@ -1194,7 +1194,12 @@ consumables — any goods a supplier sells) from this page text into JSON rows.
 Return JSON only: {"rows": [{"part_number","name","tool_type","description","diameter_mm",
 "length_mm","material","coating","currency","price","catalog_page"}]}.
 name and part_number matter most — extract a row whenever you can see an article code or a
-product name, even if there is no price. For tool_type prefer one of: drill, endmill, insert,
+product name, even if there is no price.
+part_number is the code AS PRINTED for THIS variant, and it must be unique per row: if the
+page shows one shape code (e.g. "11V9") and a table of sizes, build the row's code the way the
+supplier orders it — shape plus the size cells, e.g. "11V9-100x3x10-JY1D". Never repeat the
+same part_number on several rows, and never put a description into part_number: dimensions,
+bond, angles and materials belong in name/description. For tool_type prefer one of: drill, endmill, insert,
 holder, tap, reamer, boring_bar, thread_mill, grinder, turning_tool, milling_cutter,
 countersink, counterbore, other — and use "other" for anything that does not fit (gauges,
 machines, fixtures). NEVER return an empty list just because the products are not cutting
