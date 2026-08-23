@@ -1031,6 +1031,16 @@ async def _purge_inactive_async(older_than_days: int, dry_run: bool) -> dict:
             return {"dry_run": True, "candidates": len(candidates)}
 
         deleted = 0
+        # Visual vectors are in a separate collection and would otherwise
+        # survive the purge and keep matching photo searches.
+        try:
+            from app.vector.qdrant_store import delete_visual_catalog_entries
+
+            await __import__("asyncio").to_thread(
+                delete_visual_catalog_entries, [str(entry_id) for entry_id, _ in candidates]
+            )
+        except Exception as exc:  # noqa: BLE001 — DB rows still go
+            logger.debug("catalog_purge_visual_failed", error=str(exc)[:120])
         for entry_id, embedding_id in candidates:
             if embedding_id:
                 try:

@@ -221,3 +221,45 @@ async def test_reranking_is_off_unless_asked_for(db_session, indexed_position, m
     )
     assert result.reranked is False
     assert called == []
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_catalog_also_drops_its_visual_vectors(
+    db_session, indexed_position, monkeypatch
+):
+    """The visual vectors live in their OWN Qdrant collection, so deleting the
+    text ones is half the job: a deleted catalog went on answering photo
+    searches with positions that no longer existed."""
+    from app.db.models import Document, DocumentStatus, DocumentType
+
+    doc = Document(
+        file_name="Каталог-картинки.pdf",
+        file_hash=uuid.uuid4().hex,
+        file_size=1024,
+        mime_type="application/pdf",
+        storage_path="tool-catalogs/x/ab/abcd/Каталог-картинки.pdf",
+        doc_type=DocumentType.supplier_catalog,
+        status=DocumentStatus.ingested,
+    )
+    db_session.add(doc)
+    await db_session.flush()
+    indexed_position.source_document_id = doc.id
+    await db_session.commit()
+
+    dropped: list[list[str]] = []
+
+    def _drop(entry_ids):
+        dropped.append(list(entry_ids))
+
+    monkeypatch.setattr(
+        "app.vector.qdrant_store.delete_visual_catalog_entries", _drop, raising=False
+    )
+    monkeypatch.setattr(
+        "app.vector.qdrant_store.delete_tool_catalog_entry", lambda _id: None, raising=False
+    )
+
+    from app.api.catalogs import delete_catalog
+
+    await delete_catalog(doc.id, mode="data", db=db_session)
+
+    assert dropped and str(indexed_position.id) in dropped[0]

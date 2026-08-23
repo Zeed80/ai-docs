@@ -449,6 +449,18 @@ async def delete_catalog(
                 )
             )
         ).scalars().all()
+        # The VISUAL vectors live in their own collection, so deleting the text
+        # ones is only half the cleanup — without this a deleted catalog kept
+        # answering photo searches with positions that no longer exist.
+        if entries:
+            try:
+                from app.vector.qdrant_store import delete_visual_catalog_entries
+
+                await asyncio.to_thread(
+                    delete_visual_catalog_entries, [str(entry.id) for entry in entries]
+                )
+            except Exception as exc:  # noqa: BLE001 — best effort, like the rest
+                logger.warning("entry_visual_cleanup_failed", error=str(exc)[:120])
         for entry in entries:
             try:
                 from app.vector.qdrant_store import delete_tool_catalog_entry
