@@ -480,7 +480,7 @@ services:
       # on also requires AGENT_SERVICE_KEY to be a real key, not the default.
       FAN_CONTROL_ENABLED: ${FAN_CONTROL_ENABLED:-0}
       # Motherboard fans additionally need a driver that publishes writable
-      # pwmN + pwmN_enable — see docs/cooling-nct6687d.md.
+      # pwmN + pwmN_enable — see docs/cooling-motherboard-fans.md.
       FAN_CONTROL_ALLOW_HWMON: ${FAN_CONTROL_ALLOW_HWMON:-0}
     volumes:
       # Saved power limit and fan configuration — re-applied on every start

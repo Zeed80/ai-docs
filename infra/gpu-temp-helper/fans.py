@@ -417,7 +417,7 @@ class HwmonFanBackend(FanBackend):
             if prefix.startswith("nct66"):
                 return False, (
                     "штатный драйвер nct6683 отдаёт pwm только на чтение; "
-                    "нужен DKMS-модуль nct6687d — см. docs/cooling-nct6687d.md"
+                    "нужен DKMS-модуль nct6687d — см. docs/cooling-motherboard-fans.md"
                 )
             return False, f"{prefix}: pwm доступен только на чтение"
         if not has_enable:
