@@ -166,6 +166,9 @@ export default function CatalogViewerPage() {
             {paused && catalog?.progress_total
               ? ` · разбор приостановлен на странице ${catalog.progress_done} из ${catalog.progress_total}`
               : ""}
+            {!paused && catalog?.waiting_for_gpu
+              ? " · ждёт свободную видеокарту (агент или студия заняли её) — продолжится сам"
+              : ""}
           </p>
         </div>
         <div className="flex flex-1 items-center justify-end gap-2">

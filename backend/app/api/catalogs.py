@@ -202,6 +202,7 @@ async def list_catalogs(
                 download_url=f"/api/documents/{doc.id}/download",
                 is_archive=bool(meta.get("is_archive")),
                 paused=bool(meta.get("catalog_paused")),
+                waiting_for_gpu=_waiting_for_gpu(doc.id),
             )
         )
     # Positions that predate page-wise parsing (or came from a web page rather
@@ -240,19 +241,34 @@ async def list_catalogs(
     return CatalogListResponse(items=items, total=len(items))
 
 
+def _waiting_for_gpu(document_id: uuid.UUID) -> bool:
+    """Разбор уступил карту и ждёт — это не пауза и не поломка."""
+    from app.tasks.gpu_courtesy import is_yielded
+
+    return is_yielded(str(document_id))
+
+
 def _progress_from_job(job: DocumentProcessingJob | None) -> tuple[int, int]:
-    """The furthest-along stage counter, so the card shows «страница N из M»."""
+    """Счётчик СТАДИИ, которая идёт сейчас, — «страница N из M».
+
+    Не «самый продвинутый»: рендер обгоняет разбор на сотни страниц, и карточка
+    показывала «488 из 488», когда разобрано было 228. Человек читал это как
+    «готово» и ждал позиций, которых ещё нет.
+    """
     if job is None:
         return (0, 0)
-    best = (0, 0)
-    for step in job.pipeline_steps or []:
-        if not isinstance(step, dict):
-            continue
+    steps = [step for step in (job.pipeline_steps or []) if isinstance(step, dict)]
+    last_with_total = (0, 0)
+    for step in steps:
         progress = step.get("progress") or {}
         done, total = int(progress.get("done") or 0), int(progress.get("total") or 0)
-        if total and (done, total) > best:
-            best = (done, total)
-    return best
+        if not total:
+            continue
+        last_with_total = (done, total)
+        if done < total:
+            return (done, total)
+    # Все стадии со счётчиком завершены — показываем последнюю.
+    return last_with_total
 
 
 # ВАЖНО: статические пути объявляются ДО "/{document_id}". Иначе FastAPI
@@ -366,6 +382,7 @@ async def get_catalog(document_id: uuid.UUID, db: AsyncSession = Depends(get_db)
         download_url=f"/api/documents/{doc.id}/download",
         is_archive=bool(meta.get("is_archive")),
         paused=bool(meta.get("catalog_paused")),
+        waiting_for_gpu=_waiting_for_gpu(document_id),
     )
 
 
@@ -515,14 +532,9 @@ async def delete_catalog(
             await db.delete(entry)
         # Запись «загружено» живёт неделю и после удаления выглядела бы
         # актуальной — агент повторил бы её как факт.
-        source_url = (document.metadata_ or {}).get("source_url") if isinstance(
-            document.metadata_, dict
-        ) else None
-        supplier_key = (
-            (document.metadata_ or {}).get("tool_supplier_id")
-            if isinstance(document.metadata_, dict)
-            else None
-        )
+        meta_now = doc.metadata_ if isinstance(doc.metadata_, dict) else {}
+        source_url = meta_now.get("source_url")
+        supplier_key = meta_now.get("tool_supplier_id")
         if source_url and supplier_key:
             from app.domain.catalog_ingest_status import forget_source_status
 

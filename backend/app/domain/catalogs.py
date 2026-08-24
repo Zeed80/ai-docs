@@ -57,6 +57,10 @@ class CatalogOut(BaseModel):
     # Parsing was stopped by a person; the run is resumable but NOT active, and
     # the UI must not poll (or show a spinner) as if it were.
     paused: bool = False
+    # Разбор сам уступил карту агенту или студии и ждёт, когда она освободится.
+    # Отдельно от paused: человек ничего не останавливал, и возобновлять руками
+    # не нужно — иначе замерший прогресс выглядит поломкой.
+    waiting_for_gpu: bool = False
 
 
 class CatalogListResponse(BaseModel):

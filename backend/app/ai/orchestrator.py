@@ -341,6 +341,15 @@ class AgentOrchestrator:
         workspace_context: dict[str, Any] | None = None,
     ) -> None:
         self._workspace_context = workspace_context if isinstance(workspace_context, dict) else {}
+        # Человек ждёт ответа — фоновая работа (разбор каталогов) на это время
+        # уступает видеокарту. По состоянию памяти этого не понять: модель
+        # агента закреплена в ней навсегда ради мгновенного первого ответа.
+        try:
+            from app.tasks.gpu_courtesy import mark_interactive
+
+            mark_interactive()
+        except Exception:  # noqa: BLE001 — приоритет не должен ломать ход
+            pass
         config = get_builtin_agent_config()
         if not config.department_enabled:
             # No department planning → clear any stale per-turn overrides.

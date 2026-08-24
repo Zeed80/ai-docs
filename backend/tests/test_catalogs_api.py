@@ -511,3 +511,34 @@ async def test_search_returns_a_publishable_report(client: AsyncClient, supplier
     page_column = next(c for c in report["columns"] if c["key"] == "page")
     assert page_column["type"] == "link", "the page reference must be clickable"
     assert any(row["image"] in {"товар", "страница"} for row in report["rows"])
+
+
+@pytest.mark.asyncio
+async def test_progress_shows_the_stage_that_is_actually_running():
+    """Карточка обязана показывать разбор, а не обогнавший его рендер.
+
+    На стенде рендер уходил на сотни страниц вперёд, и карточка писала
+    «488 из 488», когда разобрано было 228: человек читал это как «готово».
+    """
+    from app.api.catalogs import _progress_from_job
+
+    class _Job:
+        pipeline_steps = [
+            {"key": "pages", "progress": {"done": 488, "total": 488}},
+            {"key": "parse", "progress": {"done": 228, "total": 488}},
+        ]
+
+    assert _progress_from_job(_Job()) == (228, 488)
+
+
+@pytest.mark.asyncio
+async def test_progress_falls_back_to_the_last_finished_stage():
+    from app.api.catalogs import _progress_from_job
+
+    class _Job:
+        pipeline_steps = [
+            {"key": "pages", "progress": {"done": 11, "total": 11}},
+            {"key": "parse", "progress": {"done": 11, "total": 11}},
+        ]
+
+    assert _progress_from_job(_Job()) == (11, 11)

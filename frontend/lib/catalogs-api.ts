@@ -29,6 +29,8 @@ export interface CatalogSummary {
   is_archive: boolean;
   legacy?: boolean;
   paused?: boolean;
+  /** Разбор сам уступил карту агенту или студии и ждёт — это не пауза. */
+  waiting_for_gpu?: boolean;
 }
 
 export interface CatalogPageInfo {

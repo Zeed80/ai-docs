@@ -472,6 +472,45 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
             return {"error": "document not found"}
         if await _is_paused(db, doc_uuid):
             return {"document_id": document_id, "status": "paused"}
+
+        # Уступаем карту тому, ради кого стенд и стоит: агенту и студии.
+        # Проверка ДО того, как страницы взяты в работу, — иначе они остались
+        # бы в "parsing" на всё время ожидания, и возобновление считало бы их
+        # зависшими.
+        from app.ai.model_resolver import get_verify_model
+        from app.tasks.gpu_courtesy import (
+            YIELD_MINUTES,
+            gpu_yield_reason,
+            mark_yielded,
+            yields_exhausted,
+        )
+
+        reason = await gpu_yield_reason(get_verify_model().model)
+        if reason and yields_exhausted(document_id):
+            # Ждали полчаса — дальше уступать значит не сделать работу вовсе.
+            logger.info(
+                "catalog_parse_proceeds_after_waiting", document=document_id, reason=reason
+            )
+            reason = None
+        if reason:
+            mark_yielded(document_id)
+            parse_catalog_page_batch.apply_async(
+                args=[document_id, run_id], countdown=YIELD_MINUTES * 60
+            )
+            logger.info(
+                "catalog_parse_yielded_gpu",
+                document=document_id,
+                reason=reason,
+                retry_in_minutes=YIELD_MINUTES,
+            )
+            return {"document_id": document_id, "status": "waiting_gpu", "reason": reason}
+
+        # Карта свободна — отметка об ожидании больше не нужна, иначе
+        # возобновление продолжало бы обходить этот каталог стороной.
+        from app.tasks.gpu_courtesy import clear_yield
+
+        clear_yield(document_id)
+
         storage_path = doc.storage_path
         supplier_id = (doc.metadata_ or {}).get("tool_supplier_id")
         claimed = await _claim_pages(db, doc_uuid, "rendered", "parsing", PARSE_BATCH)
@@ -935,7 +974,13 @@ async def _resume_stalled_async() -> dict:
         for key in paused:
             resumed.pop(key, None)
 
+    from app.tasks.gpu_courtesy import is_yielded
+
     for document_id in resumed:
+        if is_yielded(document_id):
+            # По документу уже стоит отложенная партия — вторая цепочка
+            # означала бы две партии на один каталог.
+            continue
         render_catalog_page_batch.delay(document_id, None)
 
     if resumed:

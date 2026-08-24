@@ -79,6 +79,14 @@ export function CatalogCard({
             разбор приостановлен
           </span>
         )}
+        {!catalog.paused && catalog.waiting_for_gpu && (
+          <span
+            className="absolute right-2 top-2 rounded bg-sky-950/80 px-2 py-0.5 text-[11px] text-sky-200"
+            title="Видеокарта занята агентом или студией. Разбор продолжится сам, ничего нажимать не нужно"
+          >
+            ждёт свободную видеокарту
+          </span>
+        )}
       </button>
 
       <div className="flex flex-1 flex-col gap-2 p-3">
