@@ -230,12 +230,20 @@ export default function CoolingSettingsPage() {
 
   async function applyPreset(name: string) {
     const out = await call(`/presets/${encodeURIComponent(name)}/apply`);
-    if (out) setMsg(`Пресет «${name}» применён.`);
+    // Drop the manual drafts: the preset owns the speed now, and a leftover
+    // draft would keep the slider showing a number nothing is driving.
+    if (out) {
+      setManualDraft({});
+      setMsg(`Пресет «${name}» применён.`);
+    }
   }
 
   async function revertAll() {
     const out = await call("/fans/mode", { scope: "all" });
-    if (out) setMsg("Все каналы возвращены под управление прошивки.");
+    if (out) {
+      setManualDraft({});
+      setMsg("Все каналы возвращены под управление прошивки.");
+    }
   }
 
   async function runPreview() {
@@ -265,7 +273,10 @@ export default function CoolingSettingsPage() {
             };
     }
     const out = await call("/fans/config", { enabled: true, preset: "custom", channels });
-    if (out) setMsg("Кривая применена.");
+    if (out) {
+      setManualDraft({});
+      setMsg("Кривая применена.");
+    }
   }
 
   async function savePreset() {

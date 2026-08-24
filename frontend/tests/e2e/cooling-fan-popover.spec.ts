@@ -42,30 +42,37 @@ function fans(overrides: Record<string, unknown> = {}) {
       {
         id: "gpu:0:fan0", label: "RTX 3090 · вентилятор 1", kind: "gpu",
         controllable: true, control_reason: null, min_pct: 30, max_pct: 100,
-        pwm_pct: 62, rpm: null, mode: "auto",
+        pwm_pct: 62, target_pct: null, rpm: null, mode: "auto",
       },
       {
         id: "gpu:0:fan1", label: "RTX 3090 · вентилятор 2", kind: "gpu",
         controllable: true, control_reason: null, min_pct: 30, max_pct: 100,
-        pwm_pct: 62, rpm: null, mode: "auto",
+        pwm_pct: 62, target_pct: null, rpm: null, mode: "auto",
       },
       {
         id: "hwmon:nct6687:pwm1", label: "NCT6687 · канал 1", kind: "mobo",
         controllable: false,
         control_reason: "штатный драйвер nct6683 отдаёт pwm только на чтение; нужен DKMS-модуль nct6687d",
-        min_pct: 25, max_pct: 100, pwm_pct: 61, rpm: 1044, mode: "auto",
+        min_pct: 25, max_pct: 100, pwm_pct: 61, target_pct: null, rpm: 1044, mode: "auto",
       },
     ],
     ...overrides,
   };
 }
 
-async function mockAll(page: Page, seen: string[], fansBody: Record<string, unknown>) {
+async function mockAll(
+  page: Page,
+  seen: string[],
+  fansBody: Record<string, unknown>,
+  afterPreset?: Record<string, unknown>,
+) {
+  let applied = false;
   await page.route("**/api/**", async (route: Route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
     const p = url.pathname;
     if (p.startsWith("/api/cooling")) seen.push(`${method} ${p}`);
+    if (p.includes("/presets/") && p.endsWith("/apply")) applied = true;
 
     if (p === "/api/auth/me") {
       return route.fulfill({
@@ -73,7 +80,8 @@ async function mockAll(page: Page, seen: string[], fansBody: Record<string, unkn
       });
     }
     if (p === "/api/local-models/gpu-telemetry") return route.fulfill({ json: TELEMETRY });
-    if (p === "/api/cooling/fans") return route.fulfill({ json: fansBody });
+    if (p === "/api/cooling/fans")
+      return route.fulfill({ json: applied && afterPreset ? afterPreset : fansBody });
     if (p.startsWith("/api/cooling/")) return route.fulfill({ json: { ok: true, applied_pct: 45, reverted: [] } });
     // The assistant shell reads several list endpoints; an object would crash it.
     return route.fulfill({ json: [] });
@@ -129,6 +137,36 @@ test.describe("Всплывающее окно вентиляторов", () => 
     await expect
       .poll(() => seen.filter((c) => c === "POST /api/cooling/fans/manual").length)
       .toBe(2); // one call per controllable GPU fan
+  });
+
+  test("ползунок догоняет пресет, даже пока вентилятор ещё раскручивается", async ({
+    page,
+    context,
+  }) => {
+    await setAuthCookie(context);
+    const seen: string[] = [];
+    // The loop was told 100%, but the fan is still measured at its old 62%.
+    const spinningUp = fans({
+      config: { enabled: true, preset: "max" },
+      channels: [
+        {
+          id: "gpu:0:fan0", label: "RTX 3090 · вентилятор 1", kind: "gpu",
+          controllable: true, control_reason: null, min_pct: 30, max_pct: 100,
+          pwm_pct: 62, target_pct: 100, rpm: null, mode: "manual",
+        },
+        {
+          id: "gpu:0:fan1", label: "RTX 3090 · вентилятор 2", kind: "gpu",
+          controllable: true, control_reason: null, min_pct: 30, max_pct: 100,
+          pwm_pct: 62, target_pct: 100, rpm: null, mode: "manual",
+        },
+      ],
+    });
+    await mockAll(page, seen, fans(), spinningUp);
+    await openFanPopover(page);
+
+    await expect(page.getByRole("slider")).toHaveValue("62");
+    await page.getByRole("button", { name: "Максимум", exact: true }).click();
+    await expect(page.getByRole("slider")).toHaveValue("100");
   });
 
   test("при выключенном управлении объясняет причину вместо ползунка", async ({ page, context }) => {

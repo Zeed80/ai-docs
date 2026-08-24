@@ -440,6 +440,7 @@ interface FanChannelBrief {
   min_pct: number;
   max_pct: number;
   pwm_pct: number | null;
+  target_pct: number | null;
   rpm: number | null;
   mode: string;
 }
@@ -499,6 +500,10 @@ function FanPopover({
 
   useEffect(() => {
     void load();
+    // While a curve is running the speed keeps changing with temperature, so
+    // the open panel refreshes instead of showing the value it opened with.
+    const id = setInterval(() => void load(), 2500);
+    return () => clearInterval(id);
   }, [load]);
 
   useEffect(() => {
@@ -513,9 +518,14 @@ function FanPopover({
   // all of them: the highest floor and the lowest ceiling win.
   const min = managed.length ? Math.max(...managed.map((c) => c.min_pct)) : 30;
   const max = managed.length ? Math.min(...managed.map((c) => c.max_pct)) : 100;
+  // Prefer the commanded speed over the measured one: a fan needs seconds to
+  // reach a new duty, so reading pwm_pct straight after applying a preset shows
+  // the *old* speed and the slider looks stuck.
   const current =
     target ??
-    (managed.find((c) => c.pwm_pct != null)?.pwm_pct ?? min);
+    managed.find((c) => c.target_pct != null)?.target_pct ??
+    managed.find((c) => c.pwm_pct != null)?.pwm_pct ??
+    min;
 
   const clamp = useCallback(
     (p: number) => Math.min(max, Math.max(min, Math.round(p))),
