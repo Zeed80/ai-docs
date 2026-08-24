@@ -429,6 +429,327 @@ function PowerLimitPopover({
   );
 }
 
+// ── Fan popover (presets + quick slider) ────────────────────────────────────
+
+interface FanChannelBrief {
+  id: string;
+  label: string;
+  kind: "gpu" | "mobo";
+  controllable: boolean;
+  control_reason: string | null;
+  min_pct: number;
+  max_pct: number;
+  pwm_pct: number | null;
+  rpm: number | null;
+  mode: string;
+}
+
+interface FansBrief {
+  control_enabled: boolean;
+  config: { preset?: string; enabled?: boolean };
+  presets: Record<string, { label: string }>;
+  custom_presets: Record<string, { label: string }>;
+  channels: FanChannelBrief[];
+}
+
+function FanPopover({
+  variant,
+  kind,
+  onApplied,
+  onClose,
+}: {
+  variant: "dark" | "light";
+  kind: "gpu" | "mobo";
+  onApplied: () => void;
+  onClose: () => void;
+}) {
+  const [fans, setFans] = useState<FansBrief | null>(null);
+  const [target, setTarget] = useState<number | null>(null);
+  const [status, setStatus] = useState<
+    | { kind: "loading" }
+    | { kind: "idle" }
+    | { kind: "applying" }
+    | { kind: "ok"; text: string }
+    | { kind: "error"; message: string }
+  >({ kind: "loading" });
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useCloseOnOutside(rootRef, onClose);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await mutFetch("/api/cooling/fans", { method: "GET" });
+      if (!r.ok) {
+        const detail = (await r.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail || `HTTP ${r.status}`);
+      }
+      const body = (await r.json()) as FansBrief;
+      setFans(body);
+      setStatus((prev) => (prev.kind === "loading" ? { kind: "idle" } : prev));
+      return body;
+    } catch (e) {
+      setStatus({
+        kind: "error",
+        message: e instanceof Error ? e.message : "не удалось загрузить",
+      });
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  const mine = (fans?.channels || []).filter((c) => c.kind === kind);
+  const managed = mine.filter((c) => c.controllable);
+  // One slider drives every fan of this kind, so its range must be safe for
+  // all of them: the highest floor and the lowest ceiling win.
+  const min = managed.length ? Math.max(...managed.map((c) => c.min_pct)) : 30;
+  const max = managed.length ? Math.min(...managed.map((c) => c.max_pct)) : 100;
+  const current =
+    target ??
+    (managed.find((c) => c.pwm_pct != null)?.pwm_pct ?? min);
+
+  const clamp = useCallback(
+    (p: number) => Math.min(max, Math.max(min, Math.round(p))),
+    [min, max],
+  );
+
+  const applyManual = useCallback(
+    async (pct: number) => {
+      setStatus({ kind: "applying" });
+      try {
+        for (const c of managed) {
+          const r = await mutFetch("/api/cooling/fans/manual", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ channel_id: c.id, pct }),
+          });
+          if (!r.ok) {
+            const detail = (await r.json().catch(() => null)) as { detail?: string } | null;
+            throw new Error(detail?.detail || `HTTP ${r.status}`);
+          }
+        }
+        setStatus({ kind: "ok", text: `${Math.round(pct)}%` });
+        await load();
+        onApplied();
+      } catch (e) {
+        setStatus({
+          kind: "error",
+          message: e instanceof Error ? e.message : "не удалось применить",
+        });
+      }
+    },
+    [managed, load, onApplied],
+  );
+
+  const setAndApply = useCallback(
+    (pct: number) => {
+      const p = clamp(pct);
+      setTarget(p);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => void applyManual(p), APPLY_DEBOUNCE_MS);
+    },
+    [clamp, applyManual],
+  );
+
+  const applyPreset = useCallback(
+    async (name: string) => {
+      setStatus({ kind: "applying" });
+      try {
+        const r = await mutFetch(
+          `/api/cooling/presets/${encodeURIComponent(name)}/apply`,
+          { method: "POST" },
+        );
+        if (!r.ok) {
+          const detail = (await r.json().catch(() => null)) as { detail?: string } | null;
+          throw new Error(detail?.detail || `HTTP ${r.status}`);
+        }
+        setTarget(null); // the curve owns the speed now, not the slider
+        setStatus({ kind: "ok", text: name });
+        await load();
+        onApplied();
+      } catch (e) {
+        setStatus({
+          kind: "error",
+          message: e instanceof Error ? e.message : "не удалось применить",
+        });
+      }
+    },
+    [load, onApplied],
+  );
+
+  const revertAuto = useCallback(async () => {
+    setStatus({ kind: "applying" });
+    try {
+      for (const c of managed) {
+        const r = await mutFetch("/api/cooling/fans/mode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scope: c.id }),
+        });
+        if (!r.ok) {
+          const detail = (await r.json().catch(() => null)) as { detail?: string } | null;
+          throw new Error(detail?.detail || `HTTP ${r.status}`);
+        }
+      }
+      setTarget(null);
+      setStatus({ kind: "ok", text: "прошивка" });
+      await load();
+      onApplied();
+    } catch (e) {
+      setStatus({
+        kind: "error",
+        message: e instanceof Error ? e.message : "не удалось вернуть",
+      });
+    }
+  }, [managed, load, onApplied]);
+
+  const { panel, chipBase, chipActive, inputCls, muted } = popoverTheme(variant);
+  const title = kind === "gpu" ? "Вентиляторы GPU" : "Вентиляторы CPU и корпуса";
+  const activePreset = fans?.config?.preset;
+  const allAuto = managed.length > 0 && managed.every((c) => c.mode === "auto");
+  const blocked = !fans?.control_enabled || managed.length === 0;
+
+  return (
+    <div
+      ref={rootRef}
+      className={`absolute right-2 top-full mt-1 z-50 w-72 rounded-lg border p-3 text-xs font-sans whitespace-normal cursor-default ${panel}`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between mb-2">
+        <span className="font-semibold">{title}</span>
+        <button
+          onClick={onClose}
+          className={`${muted} hover:opacity-70 text-base leading-none`}
+          title="Закрыть"
+        >
+          ×
+        </button>
+      </div>
+
+      {status.kind === "loading" && <div className={muted}>загрузка…</div>}
+
+      {fans && blocked && (
+        <div className={`mb-2 ${muted}`}>
+          {!fans.control_enabled
+            ? "Управление выключено (FAN_CONTROL_ENABLED=0)."
+            : mine.find((c) => c.control_reason)?.control_reason ||
+              "Управляемых каналов нет."}
+        </div>
+      )}
+
+      {fans && !blocked && (
+        <>
+          {/* Presets */}
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {Object.entries(fans.presets).map(([name, p]) => (
+              <button
+                key={name}
+                onClick={() => void applyPreset(name)}
+                className={`px-2 py-1 rounded border transition-colors ${
+                  activePreset === name && !allAuto ? chipActive : chipBase
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+            {Object.entries(fans.custom_presets || {}).map(([name, p]) => (
+              <button
+                key={name}
+                onClick={() => void applyPreset(name)}
+                className={`px-2 py-1 rounded border border-dashed transition-colors ${
+                  activePreset === name && !allAuto ? chipActive : chipBase
+                }`}
+              >
+                {p.label || name}
+              </button>
+            ))}
+            <button
+              onClick={() => void revertAuto()}
+              className={`px-2 py-1 rounded border transition-colors ${
+                allAuto ? chipActive : chipBase
+              }`}
+              title="Отдать вентиляторы кривой прошивки"
+            >
+              Авто
+            </button>
+          </div>
+
+          {/* Slider + numeric input (applies immediately, debounced) */}
+          <div className="flex items-center gap-2 mb-1">
+            <input
+              type="range"
+              min={min}
+              max={max}
+              step={1}
+              value={current}
+              onChange={(e) => setAndApply(Number(e.target.value))}
+              className="flex-1 accent-blue-500"
+            />
+            <input
+              type="number"
+              min={min}
+              max={max}
+              value={Math.round(current)}
+              onChange={(e) => {
+                const p = Number(e.target.value);
+                if (Number.isFinite(p)) setAndApply(p);
+              }}
+              className={`w-14 px-1.5 py-0.5 rounded border text-right font-mono ${inputCls}`}
+            />
+            <span className={muted}>%</span>
+          </div>
+          <div className={`flex justify-between mb-2 ${muted}`}>
+            <span>мин {Math.round(min)}</span>
+            <span>
+              {managed
+                .map((c) =>
+                  c.rpm != null
+                    ? `${c.rpm} об/мин`
+                    : c.pwm_pct != null
+                      ? `${Math.round(c.pwm_pct)}%`
+                      : "—",
+                )
+                .join(" · ")}
+            </span>
+            <span>макс {Math.round(max)}</span>
+          </div>
+        </>
+      )}
+
+      {/* Status line */}
+      <div className="h-4">
+        {status.kind === "applying" && (
+          <span className="text-blue-400 animate-pulse">применяю…</span>
+        )}
+        {status.kind === "ok" && (
+          <span className="text-green-500">✓ {status.text}</span>
+        )}
+        {status.kind === "error" && (
+          <span className="text-red-400" title={status.message}>
+            ошибка: {status.message}
+          </span>
+        )}
+      </div>
+
+      <a
+        href="/settings/cooling"
+        className={`mt-1 inline-block px-2 py-1 rounded border ${chipBase}`}
+      >
+        Настройки охлаждения →
+      </a>
+    </div>
+  );
+}
+
 // ── CPU frequency limit popover ─────────────────────────────────────────────
 
 function CpuLimitPopover({
@@ -721,6 +1042,8 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
   const [hidden, setHidden] = useState(false);
   const [gpuLimitOpen, setGpuLimitOpen] = useState(false);
   const [cpuLimitOpen, setCpuLimitOpen] = useState(false);
+  const [gpuFanOpen, setGpuFanOpen] = useState(false);
+  const [cpuFanOpen, setCpuFanOpen] = useState(false);
 
   // Toggle state: localStorage + cross-tab "storage" + same-tab custom event.
   useEffect(() => {
@@ -871,6 +1194,8 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
             key="power"
             onClick={() => {
               setCpuLimitOpen(false);
+              setGpuFanOpen(false);
+              setCpuFanOpen(false);
               setGpuLimitOpen((v) => !v);
             }}
             className={`${cls[powerLevel(gpu.power_draw_w, gpu.power_limit_w)]} underline decoration-dotted underline-offset-2 hover:opacity-75 transition-opacity`}
@@ -890,9 +1215,19 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
     }
     if (gpu.fan_pct != null) {
       nodes.push(
-        <span key="fan" className={cls.ok} title="Вентилятор GPU">
+        <button
+          key="fan"
+          onClick={() => {
+            setGpuLimitOpen(false);
+            setCpuLimitOpen(false);
+            setCpuFanOpen(false);
+            setGpuFanOpen((v) => !v);
+          }}
+          className={`${cls.ok} underline decoration-dotted underline-offset-2 hover:opacity-75 transition-opacity`}
+          title="Вентилятор GPU — нажмите для управления"
+        >
           F {Math.round(gpu.fan_pct)}%
-        </span>,
+        </button>,
       );
     }
     if (nodes.length > 0) {
@@ -905,6 +1240,13 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
   }
 
   // ── CPU row ───────────────────────────────────────────────────────────────
+  const openCpuFanPopover = () => {
+    setGpuLimitOpen(false);
+    setCpuLimitOpen(false);
+    setGpuFanOpen(false);
+    setCpuFanOpen((v) => !v);
+  };
+
   let cpuRow: React.ReactNode = null;
   if (cpu) {
     const canManageCpu =
@@ -971,19 +1313,25 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
     }
     if (cpu.fan_pct != null) {
       nodes.push(
-        <span
+        <button
           key="fan"
-          className={cls.ok}
-          title={`Вентилятор CPU${cpu.fan_rpm != null ? ` · ${cpu.fan_rpm} об/мин` : ""}`}
+          onClick={openCpuFanPopover}
+          className={`${cls.ok} underline decoration-dotted underline-offset-2 hover:opacity-75 transition-opacity`}
+          title={`Вентилятор CPU${cpu.fan_rpm != null ? ` · ${cpu.fan_rpm} об/мин` : ""} — нажмите для управления`}
         >
           F {Math.round(cpu.fan_pct)}%
-        </span>,
+        </button>,
       );
     } else if (cpu.fan_rpm != null) {
       nodes.push(
-        <span key="fan" className={cls.ok} title="Вентилятор CPU (об/мин)">
+        <button
+          key="fan"
+          onClick={openCpuFanPopover}
+          className={`${cls.ok} underline decoration-dotted underline-offset-2 hover:opacity-75 transition-opacity`}
+          title="Вентилятор CPU (об/мин) — нажмите для управления"
+        >
           F {cpu.fan_rpm}
-        </span>,
+        </button>,
       );
     }
     if (nodes.length > 0) {
@@ -1020,6 +1368,22 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
           cpu={cpu}
           onApplied={() => void fetchTelemetry()}
           onClose={() => setCpuLimitOpen(false)}
+        />
+      )}
+      {gpuFanOpen && (
+        <FanPopover
+          variant={variant}
+          kind="gpu"
+          onApplied={() => void fetchTelemetry()}
+          onClose={() => setGpuFanOpen(false)}
+        />
+      )}
+      {cpuFanOpen && (
+        <FanPopover
+          variant={variant}
+          kind="mobo"
+          onApplied={() => void fetchTelemetry()}
+          onClose={() => setCpuFanOpen(false)}
         />
       )}
     </div>

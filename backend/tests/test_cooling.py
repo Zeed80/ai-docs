@@ -1,0 +1,296 @@
+"""Safety-layer tests for the fan controller.
+
+Everything here is a pure function from `infra/gpu-temp-helper/fans.py` — the
+module is imported by path because the sidecar is not part of the backend
+package.  No hardware is touched.
+"""
+
+import importlib.util
+import sys
+from pathlib import Path
+
+import pytest
+
+_FANS_PATH = (
+    Path(__file__).resolve().parents[2] / "infra" / "gpu-temp-helper" / "fans.py"
+)
+
+
+def _load_fans():
+    spec = importlib.util.spec_from_file_location("sidecar_fans", _FANS_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["sidecar_fans"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+fans = _load_fans()
+
+
+# --- curve interpolation --------------------------------------------------
+def test_curve_interpolates_between_points():
+    curve = [{"t": 40, "pct": 30}, {"t": 80, "pct": 100}]
+    assert fans.evaluate_curve(curve, 40) == 30
+    assert fans.evaluate_curve(curve, 80) == 100
+    assert fans.evaluate_curve(curve, 60) == pytest.approx(65)
+
+
+def test_curve_holds_endpoints_outside_range():
+    curve = [{"t": 40, "pct": 30}, {"t": 80, "pct": 100}]
+    assert fans.evaluate_curve(curve, 5) == 30
+    assert fans.evaluate_curve(curve, 200) == 100
+
+
+def test_curve_is_order_independent():
+    shuffled = [{"t": 80, "pct": 100}, {"t": 40, "pct": 30}, {"t": 60, "pct": 65}]
+    assert fans.evaluate_curve(shuffled, 60) == pytest.approx(65)
+
+
+def test_empty_curve_means_full_speed_not_stopped():
+    # A broken configuration must fail loud and cold, never quiet and hot.
+    assert fans.evaluate_curve([], 50) == 100.0
+
+
+def test_duplicate_temperature_takes_the_higher_speed():
+    curve = [{"t": 60, "pct": 40}, {"t": 60, "pct": 90}]
+    assert fans.evaluate_curve(curve, 60) == 90
+
+
+# --- S1: floor clamping ---------------------------------------------------
+def test_clamp_enforces_hard_floor_over_configuration():
+    assert fans.clamp_pct(0, ch_min=0, ch_max=100) == fans.HARD_FLOOR_PCT
+    assert fans.clamp_pct(5, ch_min=1, ch_max=100) == fans.HARD_FLOOR_PCT
+
+
+def test_clamp_respects_channel_floor_above_hard_floor():
+    # An RTX 3090 reports a 30% minimum through NVML.
+    assert fans.clamp_pct(10, ch_min=30, ch_max=100) == 30
+
+
+def test_clamp_caps_at_channel_max():
+    assert fans.clamp_pct(150, ch_min=30, ch_max=100) == 100
+
+
+def test_stop_requires_explicit_opt_in_and_a_known_cold_temperature():
+    assert fans.clamp_pct(0, 25, 100, allow_stop=True, temp=35, stop_below_c=40) == 0.0
+    # too hot to stop
+    assert fans.clamp_pct(0, 25, 100, allow_stop=True, temp=55, stop_below_c=40) == 25
+    # S4: unknown temperature never stops a fan
+    assert fans.clamp_pct(0, 25, 100, allow_stop=True, temp=None, stop_below_c=40) == 25
+    # not opted in
+    assert fans.clamp_pct(0, 25, 100, allow_stop=False, temp=10, stop_below_c=40) == 25
+
+
+# --- S6: hysteresis and slew ---------------------------------------------
+def test_hysteresis_answers_heating_immediately():
+    assert fans.hysteresis_temp(60.0, 61.0, band=3.0) == 61.0
+
+
+def test_hysteresis_ignores_cooling_inside_the_band():
+    assert fans.hysteresis_temp(60.0, 58.0, band=3.0) == 60.0
+
+
+def test_hysteresis_follows_cooling_past_the_band():
+    assert fans.hysteresis_temp(60.0, 56.0, band=3.0) == 56.0
+
+
+def test_first_reading_is_taken_as_is():
+    assert fans.hysteresis_temp(None, 42.0, band=3.0) == 42.0
+
+
+def test_slew_limits_only_the_way_down():
+    assert fans.limit_slew(80.0, 30.0, max_step_down=8.0) == 72.0
+    assert fans.limit_slew(30.0, 100.0, max_step_down=8.0) == 100.0
+    assert fans.limit_slew(None, 45.0, max_step_down=8.0) == 45.0
+
+
+def test_slew_does_not_overshoot_the_target_downwards():
+    assert fans.limit_slew(40.0, 38.0, max_step_down=8.0) == 38.0
+
+
+# --- presets --------------------------------------------------------------
+def test_builtin_presets_never_go_below_the_hard_floor():
+    for name, preset in fans.BUILTIN_PRESETS.items():
+        for kind, curve in preset["curves"].items():
+            for point in curve:
+                assert point["pct"] >= fans.HARD_FLOOR_PCT, (name, kind, point)
+
+
+def test_max_preset_is_full_speed_at_any_temperature():
+    curve = fans.BUILTIN_PRESETS["max"]["curves"]["gpu"]
+    assert fans.evaluate_curve(curve, 20) == 100
+    assert fans.evaluate_curve(curve, 90) == 100
+
+
+# --- controller-level safety (fake hardware) ------------------------------
+class FakeBackend(fans.FanBackend):
+    """In-memory fan: records every command and can pretend to be stuck."""
+
+    name = "fake"
+
+    def __init__(self, channels, temps=None, stuck=False):
+        self._channels = channels
+        self._temps = temps or {}
+        self.stuck = stuck
+        self.written: list[tuple[str, float]] = []
+        self.auto_calls: list[str] = []
+        self.speed: dict[str, float] = {}
+
+    def enumerate(self):
+        return self._channels
+
+    def read(self, channel_id):
+        pct = self.speed.get(channel_id)
+        rpm = 0 if self.stuck else int((pct or 0) * 20)
+        return rpm, pct
+
+    def set_manual(self, channel_id, pct):
+        self.written.append((channel_id, pct))
+        self.speed[channel_id] = pct
+
+    def set_auto(self, channel_id):
+        self.auto_calls.append(channel_id)
+        self.speed.pop(channel_id, None)
+
+    def temperatures(self):
+        return dict(self._temps)
+
+
+def _controller(temps, stuck=False, has_tach=True, kind="mobo"):
+    channel = fans.FanChannel(
+        id="fake:1", label="Fake", kind=kind, controllable=True,
+        min_pct=25.0, max_pct=100.0, has_tach=has_tach,
+        default_sensor="cpu" if kind == "mobo" else "gpu",
+    )
+    backend = FakeBackend([channel], temps, stuck=stuck)
+    controller = fans.FanController()
+    controller._backends = [backend]
+    controller._channels = {channel.id: channel}
+    controller._owner = {channel.id: backend}
+    controller._rt = {channel.id: fans._Runtime()}
+    controller._config = {
+        "enabled": True,
+        "preset": "test",
+        "channels": {
+            channel.id: {
+                "mode": "curve", "sensor": channel.default_sensor,
+                "curve": [{"t": 40, "pct": 30}, {"t": 80, "pct": 100}],
+                "min_pct": 25.0, "allow_stop": False, "stop_below_c": None,
+            }
+        },
+    }
+    return controller, backend, channel
+
+
+@pytest.fixture(autouse=True)
+def _enable_control(monkeypatch):
+    monkeypatch.setattr(fans, "CONTROL_ENABLED", True)
+
+
+def test_curve_drives_the_fan_from_temperature():
+    controller, backend, _ = _controller({"cpu": 60.0})
+    controller.tick()
+    assert backend.written == [("fake:1", 65.0)]
+
+
+def test_emergency_overrides_the_curve_and_latches():
+    controller, backend, _ = _controller({"cpu": 95.0})
+    controller.tick()
+    assert backend.written[-1] == ("fake:1", 100.0)
+    # The latch keeps full speed even once the sensor reports a safe value.
+    backend._temps = {"cpu": 45.0}
+    controller.tick()
+    assert backend.speed["fake:1"] == 100.0
+    events = [e["code"] for e in controller.events()]
+    assert "emergency" in events
+
+
+def test_emergency_releases_after_the_hold_expires():
+    controller, backend, _ = _controller({"cpu": 95.0})
+    controller._config["emergency_hold_s"] = 0.0
+    controller.tick()
+    assert backend.speed["fake:1"] == 100.0
+    backend._temps = {"cpu": 45.0}
+    controller.tick()
+    assert backend.speed["fake:1"] < 100.0
+
+
+def test_stalled_fan_is_failed_and_handed_back_to_firmware():
+    controller, backend, channel = _controller({"cpu": 60.0}, stuck=True)
+    for _ in range(fans.STALL_TICKS + 1):
+        controller.tick()
+    assert channel.mode == "failed"
+    assert "fake:1" in backend.auto_calls
+    assert any(e["code"] == "channel_failed" for e in controller.events())
+
+
+def test_failed_channel_is_not_driven_again():
+    controller, backend, _ = _controller({"cpu": 60.0}, stuck=True)
+    for _ in range(fans.STALL_TICKS + 1):
+        controller.tick()
+    writes_after_failure = len(backend.written)
+    controller.tick()
+    controller.tick()
+    assert len(backend.written) == writes_after_failure
+
+
+def test_sensor_loss_reverts_the_channel_to_automatic():
+    controller, backend, channel = _controller({"cpu": 60.0})
+    controller.tick()
+    assert channel.mode == "manual"
+    backend._temps = {}                       # thermometer disappears
+    for _ in range(fans.SENSOR_TIMEOUT_TICKS + 1):
+        controller.tick()
+    assert channel.mode == "auto"
+    assert "fake:1" in backend.auto_calls
+
+
+def test_identical_target_is_not_rewritten_every_tick():
+    controller, backend, _ = _controller({"cpu": 60.0})
+    controller.tick()
+    controller.tick()
+    controller.tick()
+    assert len(backend.written) == 1
+
+
+def test_disabled_configuration_hands_everything_back():
+    controller, backend, channel = _controller({"cpu": 60.0})
+    controller.tick()
+    assert channel.mode == "manual"
+    controller._config["enabled"] = False
+    controller.tick()
+    assert channel.mode == "auto"
+    assert "fake:1" in backend.auto_calls
+
+
+def test_shutdown_reverts_only_channels_this_process_commanded():
+    controller, backend, _ = _controller({"cpu": 60.0})
+    controller.restore_all_auto(reason="never commanded")
+    assert backend.auto_calls == []
+    controller.tick()
+    controller.restore_all_auto(reason="after commanding")
+    assert backend.auto_calls == ["fake:1"]
+
+
+def test_sanitize_rejects_floors_below_the_hardware_minimum():
+    controller, _, _ = _controller({"cpu": 60.0})
+    cleaned = controller._sanitize_channels({
+        "fake:1": {"mode": "curve", "min_pct": 1,
+                   "curve": [{"t": 30, "pct": 0}, {"t": 90, "pct": 100}]},
+    })
+    assert cleaned["fake:1"]["min_pct"] == 25.0
+    assert cleaned["fake:1"]["curve"][0]["pct"] == 25.0
+
+
+def test_sanitize_drops_channels_that_cannot_be_controlled():
+    controller, _, channel = _controller({"cpu": 60.0})
+    channel.controllable = False
+    assert controller._sanitize_channels({"fake:1": {"mode": "manual", "pct": 50}}) == {}
+
+
+def test_preview_writes_nothing():
+    controller, backend, _ = _controller({"cpu": 60.0})
+    result = controller.preview({"channels": controller._config["channels"],
+                                 "temps": [40, 60, 80]})
+    assert backend.written == []
+    assert [p["pct"] for p in result["preview"]["fake:1"]] == [30.0, 65.0, 100.0]

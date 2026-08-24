@@ -31,6 +31,10 @@ PROTECTED_SETTINGS = {
     # Data-flow boundary: quality checks may only go to cloud after an
     # explicit human decision (Dual AI principle).
     "auditor_allow_cloud",
+    # Physical hardware: fan curves and presets are a human-only decision.
+    # A wrong value here overheats the machine, so the agent may not even
+    # propose one — see backend/app/api/cooling_api.py.
+    "cooling",
 }
 
 # Ф7 (AGENT_AUTONOMY_ROADMAP.md): agent_tone (BuiltinAgentConfig) is

@@ -8,6 +8,13 @@ Serves GPU telemetry as JSON on an internal-only HTTP port:
   POST /cpu-limit   — cap CPU frequency / toggle boost via cpufreq sysfs
                       (desktop Ryzen has no userspace PPT limit; frequency
                       capping is the standard way to bound its power draw)
+  GET  /fans        — fan channels, capabilities, curves, loop health
+  GET  /fans/events — audit ring buffer (emergency, stall, revert)
+  POST /fans/mode   — hand a channel (or all) back to firmware/NVML control
+  POST /fans/manual — pin one channel to a fixed speed
+  POST /fans/config — apply a preset / per-channel temperature curves
+  POST /fans/preview— dry-run a curve, writes nothing
+                      (fan control lives in fans.py; see the safety notes there)
 
 Two data sources, each optional (partial responses are valid):
   1. NVML (nvidia-ml-py) — everything nvidia-smi shows.
@@ -19,13 +26,17 @@ Two data sources, each optional (partial responses are valid):
 
 from __future__ import annotations
 
+import atexit
 import json
 import mmap
 import os
+import signal
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+
+import fans
 
 try:
     import pynvml
@@ -41,6 +52,9 @@ STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
 # any container on the docker network can reach this port, but only the
 # backend (which knows the key) may change the GPU power limit.
 POWER_LIMIT_TOKEN = os.environ.get("POWER_LIMIT_TOKEN", "")
+# The compose default is a placeholder; backend/app/config.py already flags it.
+_WEAK_TOKENS = {"", "agent-internal-key-2026"}
+_TOKEN_IS_WEAK = POWER_LIMIT_TOKEN in _WEAK_TOKENS
 
 # PCI device id -> BAR0 register offset of the VRAM junction temperature.
 # Table from gddr6.c (github.com/olealgoritme/gddr6).
@@ -268,11 +282,17 @@ def collect_telemetry() -> dict[str, Any]:
     except Exception as exc:
         errors["cpu"] = str(exc)
 
+    try:
+        fan_channels = fans.get_controller().snapshot()["channels"]
+    except Exception as exc:
+        fan_channels = []
+        errors["fans"] = str(exc)
     return {
         "ok": bool(gpus) or cpu is not None,
         "ts": time.time(),
         "gpus": gpus,
         "cpu": cpu,
+        "fans": fan_channels,
         "errors": errors,
     }
 
@@ -526,23 +546,30 @@ def set_cpu_limit(
     }
 
 
+# Both the fan control loop and the power/cpu limit endpoints read-modify-write
+# this file, so the pair has to be serialised or one of them loses its key.
+_state_lock = threading.RLock()
+
+
 def _load_state() -> dict[str, Any]:
-    try:
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
+    with _state_lock:
+        try:
+            with open(STATE_FILE) as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return {}
 
 
 def _save_state(state: dict[str, Any]) -> None:
-    try:
-        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-        tmp = STATE_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(state, f)
-        os.replace(tmp, STATE_FILE)
-    except OSError as exc:
-        print(f"state save failed: {exc}", flush=True)
+    with _state_lock:
+        try:
+            os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+            tmp = STATE_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(state, f)
+            os.replace(tmp, STATE_FILE)
+        except OSError as exc:
+            print(f"state save failed: {exc}", flush=True)
 
 
 def set_power_limit(index: int, watts: float, persist: bool = True) -> dict[str, Any]:
@@ -648,21 +675,44 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, get_telemetry_cached())
             except Exception as exc:
                 self._send(500, {"ok": False, "error": str(exc)})
+        elif self.path == "/fans":
+            try:
+                self._send(200, fans.get_controller().snapshot())
+            except Exception as exc:
+                self._send(500, {"ok": False, "error": str(exc)})
+        elif self.path == "/fans/events":
+            try:
+                self._send(200, {"ok": True, "events": fans.get_controller().events()})
+            except Exception as exc:
+                self._send(500, {"ok": False, "error": str(exc)})
         else:
             self._send(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802 - http.server API
-        if self.path not in ("/power-limit", "/cpu-limit"):
+        fan_paths = ("/fans/mode", "/fans/manual", "/fans/config", "/fans/preview")
+        if self.path not in ("/power-limit", "/cpu-limit") + fan_paths:
             self._send(404, {"error": "not found"})
             return
         if POWER_LIMIT_TOKEN and self.headers.get("X-Power-Limit-Token") != POWER_LIMIT_TOKEN:
             self._send(401, {"ok": False, "error": "invalid or missing X-Power-Limit-Token"})
+            return
+        # S9: fan writes touch cooling directly, so they refuse to run behind
+        # the shipped placeholder key. Telemetry stays open either way.
+        if self.path in fan_paths and _TOKEN_IS_WEAK:
+            self._send(403, {
+                "ok": False,
+                "error": "fan control requires a non-default AGENT_SERVICE_KEY",
+            })
             return
         try:
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, json.JSONDecodeError) as exc:
             self._send(400, {"ok": False, "error": f"bad request: {exc}"})
+            return
+
+        if self.path in fan_paths:
+            self._handle_fans(self.path, body)
             return
 
         if self.path == "/power-limit":
@@ -696,6 +746,35 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send(500, {"ok": False, "error": str(exc)})
 
+    def _handle_fans(self, path: str, body: dict[str, Any]) -> None:
+        controller = fans.get_controller()
+        try:
+            if path == "/fans/mode":
+                if (body.get("mode") or "auto") != "auto":
+                    raise ValueError("only mode=auto is accepted here; use /fans/manual or /fans/config")
+                result = controller.set_mode_auto(str(body.get("scope") or "all"))
+            elif path == "/fans/manual":
+                result = controller.set_manual(str(body["channel_id"]), float(body["pct"]))
+            elif path == "/fans/config":
+                result = controller.apply_config(body)
+            else:  # /fans/preview — never writes
+                result = controller.preview(body)
+        except KeyError as exc:
+            self._send(400, {"ok": False, "error": f"missing field: {exc}"})
+            return
+        except (ValueError, TypeError) as exc:
+            self._send(400, {"ok": False, "error": str(exc)})
+            return
+        except RuntimeError as exc:
+            self._send(409, {"ok": False, "error": str(exc)})
+            return
+        except Exception as exc:
+            self._send(500, {"ok": False, "error": str(exc)})
+            return
+        if path != "/fans/preview":
+            _invalidate_cache()
+        self._send(200, result)
+
     def _send(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload).encode()
         self.send_response(status)
@@ -708,8 +787,45 @@ class Handler(BaseHTTPRequestHandler):
         pass  # keep container logs quiet on the 5s polling
 
 
+def _start_fan_control() -> None:
+    """Bring the fan subsystem up, safest step first.
+
+    Order matters: recovery hands the hardware back to firmware *before* any
+    saved configuration is applied, so a crash never leaves fans pinned.
+    """
+    controller = fans.get_controller()
+    fans.bind_host(_load_state, _save_state, _cpu_temp_c)
+    controller.discover()
+    controller.recover_after_unclean_shutdown()
+    controller.load_config()
+
+    def _revert(*_args: Any) -> None:
+        try:
+            controller.shutdown()
+        finally:
+            os._exit(0)
+
+    # S5 dead-man: every exit path returns the hardware to automatic control.
+    atexit.register(controller.shutdown)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _revert)
+        except (ValueError, OSError):
+            pass
+
+    if fans.CONTROL_ENABLED:
+        controller.start()
+        print("fan control loop started", flush=True)
+    else:
+        print("fan control disabled (FAN_CONTROL_ENABLED=0) — telemetry only", flush=True)
+
+
 if __name__ == "__main__":
     threading.Thread(target=restore_saved_limits, daemon=True).start()
+    try:
+        _start_fan_control()
+    except Exception as exc:
+        print(f"fan control init failed: {exc}", flush=True)
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"gpu-temp-helper listening on :{PORT}", flush=True)
     server.serve_forever()

@@ -476,8 +476,15 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: utility
       # Same key the backend uses; gates POST /power-limit on the shared network.
       POWER_LIMIT_TOKEN: ${AGENT_SERVICE_KEY:-agent-internal-key-2026}
+      # Fan control ships disabled: enumeration and telemetry only. Turning it
+      # on also requires AGENT_SERVICE_KEY to be a real key, not the default.
+      FAN_CONTROL_ENABLED: ${FAN_CONTROL_ENABLED:-0}
+      # Motherboard fans additionally need a driver that publishes writable
+      # pwmN + pwmN_enable — see docs/cooling-nct6687d.md.
+      FAN_CONTROL_ALLOW_HWMON: ${FAN_CONTROL_ALLOW_HWMON:-0}
     volumes:
-      # Saved power limit — re-applied on every start (NVML resets on reboot).
+      # Saved power limit and fan configuration — re-applied on every start
+      # (NVML resets both on reboot).
       - gpu_temp_state:/data
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9966/health', timeout=3).status==200 else 1)\""]

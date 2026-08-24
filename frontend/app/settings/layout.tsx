@@ -16,6 +16,7 @@ const TABS = [
   { href: "/settings/models", label: "Модели" },
   { href: "/settings/web-search", label: "Веб-поиск" },
   { href: "/settings/comfyui", label: "ComfyUI" },
+  { href: "/settings/cooling", label: "Охлаждение" },
   { href: "/settings/mobile-app", label: "Приложение" },
 ] as const;
 

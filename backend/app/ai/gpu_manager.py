@@ -311,6 +311,7 @@ async def _query_sidecar_telemetry() -> tuple[GPUTelemetry | None, CPUTelemetry 
         logger.debug("gpu_temp_helper_unreachable", error=str(exc))
         return None, None
     cpu = _parse_sidecar_cpu(data)
+    _update_fan_prometheus(data.get("fans") or [])
     gpus = data.get("gpus") or []
     if not gpus:
         return None, cpu
@@ -360,6 +361,30 @@ def _update_gpu_prometheus(t: GPUTelemetry) -> None:
         if t.fan_pct is not None:
             metrics.gpu_fan_percent.set(t.fan_pct)
     except Exception:
+        pass
+
+
+def _update_fan_prometheus(channels: list[dict]) -> None:
+    """Mirror the sidecar's fan view into Prometheus.
+
+    Labelled per channel id, so a stalled fan or a channel silently handed back
+    to firmware is visible in monitoring and not only in the UI.
+    """
+    try:
+        from app.core import metrics
+
+        for ch in channels:
+            cid = ch.get("id")
+            if not cid:
+                continue
+            if ch.get("rpm") is not None:
+                metrics.fan_rpm.labels(channel=cid).set(ch["rpm"])
+            if ch.get("pwm_pct") is not None:
+                metrics.fan_percent.labels(channel=cid).set(ch["pwm_pct"])
+            mode = ch.get("mode")
+            metrics.fan_managed.labels(channel=cid).set(1 if mode == "manual" else 0)
+            metrics.fan_failed.labels(channel=cid).set(1 if mode == "failed" else 0)
+    except Exception:  # pragma: no cover - metrics must never break telemetry
         pass
 
 
@@ -430,6 +455,32 @@ def _run_nvidia_smi_local_raw(cmd: list[str]) -> str | None:
         return None
 
 
+def _helper_headers() -> dict[str, str]:
+    from app.config import settings
+
+    return (
+        {"X-Power-Limit-Token": settings.agent_service_key}
+        if settings.agent_service_key
+        else {}
+    )
+
+
+async def _helper_request(method: str, path: str, payload: dict | None = None) -> dict:
+    """Call the gpu-temp-helper sidecar and unwrap its {ok, ...} envelope."""
+    if not GPU_TEMP_HELPER_URL:
+        raise RuntimeError("GPU_TEMP_HELPER_URL is not configured")
+    url = f"{GPU_TEMP_HELPER_URL.rstrip('/')}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.request(method, url, json=payload, headers=_helper_headers())
+            data = r.json()
+    except Exception as exc:
+        raise RuntimeError(f"gpu-temp-helper unreachable: {exc}") from exc
+    if r.status_code != 200 or not data.get("ok"):
+        raise RuntimeError(str(data.get("error") or f"helper returned {r.status_code}"))
+    return data
+
+
 async def set_gpu_power_limit(watts: float) -> dict:
     """Set the GPU power limit via the gpu-temp-helper sidecar.
 
@@ -437,27 +488,7 @@ async def set_gpu_power_limit(watts: float) -> dict:
     Raises RuntimeError when the sidecar is unavailable or refuses.
     """
     global _telemetry_cache
-    if not GPU_TEMP_HELPER_URL:
-        raise RuntimeError("GPU_TEMP_HELPER_URL is not configured")
-    from app.config import settings
-
-    headers = (
-        {"X-Power-Limit-Token": settings.agent_service_key}
-        if settings.agent_service_key
-        else {}
-    )
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.post(
-                f"{GPU_TEMP_HELPER_URL.rstrip('/')}/power-limit",
-                json={"watts": watts},
-                headers=headers,
-            )
-            data = r.json()
-    except Exception as exc:
-        raise RuntimeError(f"gpu-temp-helper unreachable: {exc}") from exc
-    if r.status_code != 200 or not data.get("ok"):
-        raise RuntimeError(str(data.get("error") or f"helper returned {r.status_code}"))
+    data = await _helper_request("POST", "/power-limit", {"watts": watts})
     logger.info(
         "gpu_power_limit_set",
         requested_w=watts,
@@ -477,32 +508,12 @@ async def set_cpu_limit(max_freq_mhz: float | None, boost: bool | None) -> dict:
     ({ok, max_freq_mhz, boost, clamped, hw_min_mhz, hw_max_mhz}).
     """
     global _telemetry_cache
-    if not GPU_TEMP_HELPER_URL:
-        raise RuntimeError("GPU_TEMP_HELPER_URL is not configured")
-    from app.config import settings
-
-    headers = (
-        {"X-Power-Limit-Token": settings.agent_service_key}
-        if settings.agent_service_key
-        else {}
-    )
     payload: dict = {}
     if max_freq_mhz is not None:
         payload["max_freq_mhz"] = max_freq_mhz
     if boost is not None:
         payload["boost"] = boost
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.post(
-                f"{GPU_TEMP_HELPER_URL.rstrip('/')}/cpu-limit",
-                json=payload,
-                headers=headers,
-            )
-            data = r.json()
-    except Exception as exc:
-        raise RuntimeError(f"gpu-temp-helper unreachable: {exc}") from exc
-    if r.status_code != 200 or not data.get("ok"):
-        raise RuntimeError(str(data.get("error") or f"helper returned {r.status_code}"))
+    data = await _helper_request("POST", "/cpu-limit", payload)
     logger.info(
         "cpu_limit_set",
         requested_mhz=max_freq_mhz,
@@ -513,6 +524,70 @@ async def set_cpu_limit(max_freq_mhz: float | None, boost: bool | None) -> dict:
     async with _telemetry_lock:
         _telemetry_cache = None  # force fresh telemetry with the new limit
     return data
+
+
+# ---------------------------------------------------------------------------
+# Fan control (gpu-temp-helper sidecar owns the control loop and every safety
+# layer; the backend is only a typed, admin-gated proxy over it)
+# ---------------------------------------------------------------------------
+async def get_fans() -> dict:
+    """Fan channels, capabilities, active configuration and loop health."""
+    return await _helper_request("GET", "/fans")
+
+
+async def get_fan_events() -> list[dict]:
+    """Recent fan audit events (emergency, stall, revert)."""
+    data = await _helper_request("GET", "/fans/events")
+    return list(data.get("events") or [])
+
+
+async def set_fan_auto(scope: str = "all") -> dict:
+    """Hand a channel — or every channel — back to firmware/NVML control."""
+    global _telemetry_cache
+    data = await _helper_request("POST", "/fans/mode", {"scope": scope, "mode": "auto"})
+    logger.info("fan_mode_auto", scope=scope, reverted=data.get("reverted"))
+    async with _telemetry_lock:
+        _telemetry_cache = None
+    return data
+
+
+async def set_fan_manual(channel_id: str, pct: float) -> dict:
+    """Pin one channel to a fixed speed. The sidecar clamps to the safe range."""
+    global _telemetry_cache
+    data = await _helper_request(
+        "POST", "/fans/manual", {"channel_id": channel_id, "pct": pct}
+    )
+    logger.info(
+        "fan_manual_set",
+        channel=channel_id,
+        requested_pct=pct,
+        applied_pct=data.get("applied_pct"),
+        clamped=data.get("clamped"),
+    )
+    async with _telemetry_lock:
+        _telemetry_cache = None
+    return data
+
+
+async def apply_fan_config(payload: dict) -> dict:
+    """Apply a preset / per-channel curves. The sidecar re-validates every bound."""
+    global _telemetry_cache
+    data = await _helper_request("POST", "/fans/config", payload)
+    config = data.get("config") or {}
+    logger.info(
+        "fan_config_applied",
+        preset=config.get("preset"),
+        enabled=config.get("enabled"),
+        channels=len(config.get("channels") or {}),
+    )
+    async with _telemetry_lock:
+        _telemetry_cache = None
+    return data
+
+
+async def preview_fan_config(payload: dict) -> dict:
+    """Dry-run a curve. Writes nothing to hardware."""
+    return await _helper_request("POST", "/fans/preview", payload)
 
 
 # ---------------------------------------------------------------------------

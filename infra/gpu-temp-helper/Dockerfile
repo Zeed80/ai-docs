@@ -3,7 +3,7 @@ FROM python:3.12-slim
 # NVML bindings; libnvidia-ml.so is injected by the NVIDIA container runtime.
 RUN pip install --no-cache-dir nvidia-ml-py
 
-COPY server.py /app/server.py
+COPY server.py fans.py /app/
 
 EXPOSE 9966
 

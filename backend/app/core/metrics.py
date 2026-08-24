@@ -155,6 +155,28 @@ if _PROMETHEUS_AVAILABLE:
         ["kind"],  # current | limit
     )
 
+    # Fan control (sidecar gpu-temp-helper owns the loop; these mirror it)
+    fan_rpm = Gauge(
+        "aiworkspace_fan_rpm",
+        "Fan speed in RPM per channel",
+        ["channel"],
+    )
+    fan_percent = Gauge(
+        "aiworkspace_fan_percent",
+        "Fan duty cycle percent per channel",
+        ["channel"],
+    )
+    fan_managed = Gauge(
+        "aiworkspace_fan_managed",
+        "1 when the channel is driven by the control loop, 0 when firmware-controlled",
+        ["channel"],
+    )
+    fan_failed = Gauge(
+        "aiworkspace_fan_failed",
+        "1 when a channel was taken out of control (stall or write failure)",
+        ["channel"],
+    )
+
     # Agent step counter
     agent_steps_total = Counter(
         "aiworkspace_agent_steps_total",
@@ -284,6 +306,10 @@ else:
     cpu_temperature_celsius = _noop
     cpu_power_watts = _noop
     cpu_frequency_mhz = _noop
+    fan_rpm = _noop
+    fan_percent = _noop
+    fan_managed = _noop
+    fan_failed = _noop
     agent_steps_total = _noop
     llm_tokens_total = _noop
     llm_request_duration_seconds = _noop
