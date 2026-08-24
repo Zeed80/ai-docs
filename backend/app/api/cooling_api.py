@@ -17,6 +17,7 @@ one person's browser.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -74,6 +75,13 @@ class FanPreviewRequest(BaseModel):
     preset: str | None = None
     channels: dict[str, FanChannelConfig] | None = None
     temps: list[float] | None = None
+
+
+class FanControlUpdate(BaseModel):
+    """At least one field must be set; omitted fields are left alone."""
+
+    enabled: bool | None = None
+    allow_hwmon: bool | None = None
 
 
 class FanPresetSave(BaseModel):
@@ -142,10 +150,44 @@ async def list_presets() -> dict:
     return {"builtin": builtin, "custom": _custom_presets()}
 
 
+@router.get("/setup-guide")
+async def get_setup_guide() -> dict:
+    """The motherboard-fan instruction, served so the GUI can show it in place.
+
+    Single source of truth: the same file the repository ships. The docs
+    directory is mounted read-only into the container; when it is missing the
+    UI falls back to a short summary rather than showing a broken link.
+    """
+    for candidate in (Path("/app/docs"), Path(__file__).resolve().parents[3] / "docs"):
+        path = candidate / "cooling-motherboard-fans.md"
+        if path.is_file():
+            try:
+                return {"available": True, "markdown": path.read_text(encoding="utf-8")}
+            except OSError as exc:
+                logger.warning("cooling_guide_unreadable", path=str(path), error=str(exc))
+                break
+    return {"available": False, "markdown": ""}
+
+
 # ---------------------------------------------------------------------------
 # Write (admin only — fan control is not delegated to the agent)
 # ---------------------------------------------------------------------------
 _admin = [Depends(require_role(UserRole.admin))]
+
+
+@router.post("/control", dependencies=_admin)
+async def set_fan_control(payload: FanControlUpdate) -> dict:
+    """Turn fan control (and board fans) on or off. Replaces editing .env.
+
+    Switching control off is a safety operation, not just a flag: the sidecar
+    hands every channel it was driving back to firmware before the flag flips.
+    """
+    if payload.enabled is None and payload.allow_hwmon is None:
+        raise HTTPException(status_code=422, detail="нужно указать enabled или allow_hwmon")
+    try:
+        return await gpu_manager.set_fan_control(payload.enabled, payload.allow_hwmon)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.post("/fans/mode", dependencies=_admin)

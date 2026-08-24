@@ -14,6 +14,7 @@ Serves GPU telemetry as JSON on an internal-only HTTP port:
   POST /fans/manual — pin one channel to a fixed speed
   POST /fans/config — apply a preset / per-channel temperature curves
   POST /fans/preview— dry-run a curve, writes nothing
+  POST /fans/control— switch fan control (and board fans) on or off at runtime
                       (fan control lives in fans.py; see the safety notes there)
 
 Two data sources, each optional (partial responses are valid):
@@ -689,7 +690,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802 - http.server API
-        fan_paths = ("/fans/mode", "/fans/manual", "/fans/config", "/fans/preview")
+        fan_paths = (
+            "/fans/mode", "/fans/manual", "/fans/config", "/fans/preview",
+            "/fans/control",
+        )
         if self.path not in ("/power-limit", "/cpu-limit") + fan_paths:
             self._send(404, {"error": "not found"})
             return
@@ -757,6 +761,11 @@ class Handler(BaseHTTPRequestHandler):
                 result = controller.set_manual(str(body["channel_id"]), float(body["pct"]))
             elif path == "/fans/config":
                 result = controller.apply_config(body)
+            elif path == "/fans/control":
+                result = controller.set_control(
+                    enabled=body.get("enabled"),
+                    allow_hwmon=body.get("allow_hwmon"),
+                )
             else:  # /fans/preview — never writes
                 result = controller.preview(body)
         except KeyError as exc:
@@ -795,9 +804,12 @@ def _start_fan_control() -> None:
     """
     controller = fans.get_controller()
     fans.bind_host(_load_state, _save_state, _cpu_temp_c)
+    # Order matters: the persisted flags decide which channels are even
+    # controllable, recovery hands the hardware back before anything is
+    # applied, and only then is the saved configuration honoured.
+    controller.load_config()
     controller.discover()
     controller.recover_after_unclean_shutdown()
-    controller.load_config()
 
     def _revert(*_args: Any) -> None:
         try:
@@ -813,11 +825,15 @@ def _start_fan_control() -> None:
         except (ValueError, OSError):
             pass
 
-    if fans.CONTROL_ENABLED:
-        controller.start()
-        print("fan control loop started", flush=True)
-    else:
-        print("fan control disabled (FAN_CONTROL_ENABLED=0) — telemetry only", flush=True)
+    # The loop runs regardless of the flag: it is what hands a channel back to
+    # firmware when control is switched off from the GUI, and it no-ops while
+    # control is disabled.
+    controller.start()
+    print(
+        "fan control loop started "
+        f"(управление={controller.control_enabled}, плата={controller.allow_hwmon})",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

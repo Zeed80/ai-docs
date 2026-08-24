@@ -216,3 +216,50 @@ def test_every_mutating_route_requires_admin():
     for route in mutating:
         rendered = [repr(d) for d in route.dependencies]
         assert any("require_role" in text for text in rendered), route.path
+
+
+# --- runtime switch + setup guide -----------------------------------------
+@pytest.mark.asyncio
+async def test_control_requires_at_least_one_field(sidecar, presets):
+    with pytest.raises(cooling_api.HTTPException) as exc:
+        await cooling_api.set_fan_control(cooling_api.FanControlUpdate())
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_control_is_proxied(monkeypatch, presets):
+    seen: list = []
+
+    async def set_fan_control(enabled, allow_hwmon):
+        seen.append((enabled, allow_hwmon))
+        return {"ok": True, "control_enabled": enabled, "hwmon_allowed": allow_hwmon}
+
+    monkeypatch.setattr(cooling_api.gpu_manager, "set_fan_control", set_fan_control)
+    await cooling_api.set_fan_control(cooling_api.FanControlUpdate(enabled=True))
+    assert seen == [(True, None)]   # an untouched switch stays untouched
+
+
+@pytest.mark.asyncio
+async def test_control_outage_becomes_503(monkeypatch, presets):
+    async def boom(*_args):
+        raise RuntimeError("gpu-temp-helper unreachable")
+
+    monkeypatch.setattr(cooling_api.gpu_manager, "set_fan_control", boom)
+    with pytest.raises(cooling_api.HTTPException) as exc:
+        await cooling_api.set_fan_control(cooling_api.FanControlUpdate(enabled=False))
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_setup_guide_serves_the_repository_document():
+    out = await cooling_api.get_setup_guide()
+    assert out["available"] is True
+    assert "NCT6687D" in out["markdown"]
+    assert "FAN_CONTROL_ENABLED" in out["markdown"]
+
+
+@pytest.mark.asyncio
+async def test_setup_guide_reports_absence_instead_of_failing(monkeypatch):
+    monkeypatch.setattr(cooling_api.Path, "is_file", lambda self: False)
+    out = await cooling_api.get_setup_guide()
+    assert out == {"available": False, "markdown": ""}

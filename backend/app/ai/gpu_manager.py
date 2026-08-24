@@ -585,6 +585,27 @@ async def apply_fan_config(payload: dict) -> dict:
     return data
 
 
+async def set_fan_control(
+    enabled: bool | None = None, allow_hwmon: bool | None = None
+) -> dict:
+    """Switch fan control on or off at runtime (GUI setting, not an env var)."""
+    global _telemetry_cache
+    payload: dict = {}
+    if enabled is not None:
+        payload["enabled"] = enabled
+    if allow_hwmon is not None:
+        payload["allow_hwmon"] = allow_hwmon
+    data = await _helper_request("POST", "/fans/control", payload)
+    logger.info(
+        "fan_control_changed",
+        control_enabled=data.get("control_enabled"),
+        hwmon_allowed=data.get("hwmon_allowed"),
+    )
+    async with _telemetry_lock:
+        _telemetry_cache = None
+    return data
+
+
 async def preview_fan_config(payload: dict) -> dict:
     """Dry-run a curve. Writes nothing to hardware."""
     return await _helper_request("POST", "/fans/preview", payload)

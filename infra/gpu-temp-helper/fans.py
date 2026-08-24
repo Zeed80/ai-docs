@@ -43,8 +43,11 @@ def _env_flag(name: str, default: str = "0") -> bool:
     return (os.environ.get(name, default) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-CONTROL_ENABLED = _env_flag("FAN_CONTROL_ENABLED")
-ALLOW_HWMON = _env_flag("FAN_CONTROL_ALLOW_HWMON")
+# These are only the *initial* values. The live setting lives in the persisted
+# state and is changed from the GUI, so switching fan control on does not mean
+# editing .env and recreating the container.
+DEFAULT_CONTROL_ENABLED = _env_flag("FAN_CONTROL_ENABLED")
+DEFAULT_ALLOW_HWMON = _env_flag("FAN_CONTROL_ALLOW_HWMON")
 
 TICK_S = float(os.environ.get("FAN_TICK_S", "2.0"))
 
@@ -326,8 +329,10 @@ class HwmonFanBackend(FanBackend):
 
     name = "hwmon"
 
-    def __init__(self) -> None:
+    def __init__(self, allow: bool = False) -> None:
         self._paths: dict[str, dict[str, str]] = {}
+        # Re-read on every enumeration: the operator can flip this at runtime.
+        self.allow = allow
 
     def enumerate(self) -> list[FanChannel]:
         channels: list[FanChannel] = []
@@ -377,7 +382,9 @@ class HwmonFanBackend(FanBackend):
             if not has_pwm and not has_tach:
                 continue
 
-            controllable, reason = self._writability(prefix, has_pwm, has_enable, pwm_path)
+            controllable, reason = self._writability(
+                prefix, has_pwm, has_enable, pwm_path, self.allow
+            )
             label = _read_str(os.path.join(base, f"fan{n}_label")) or (
                 f"{prefix.upper()} · канал {n}"
             )
@@ -404,7 +411,7 @@ class HwmonFanBackend(FanBackend):
 
     @staticmethod
     def _writability(
-        prefix: str, has_pwm: bool, has_enable: bool, pwm_path: str
+        prefix: str, has_pwm: bool, has_enable: bool, pwm_path: str, allow: bool
     ) -> tuple[bool, str | None]:
         """Report the *hardware* reason first — a kill switch is the least
         informative answer, and the operator needs to know whether flipping it
@@ -424,10 +431,10 @@ class HwmonFanBackend(FanBackend):
             return False, (
                 f"{prefix}: нет pwm_enable — вернуть вентилятор прошивке будет нечем"
             )
-        if not ALLOW_HWMON:
+        if not allow:
             return False, (
-                "железо позволяет, но управление платой выключено "
-                "(FAN_CONTROL_ALLOW_HWMON=0)"
+                "железо позволяет, но управление вентиляторами платы выключено "
+                "в настройках охлаждения"
             )
         return True, None
 
@@ -623,16 +630,26 @@ class FanController:
         self._config: dict[str, Any] = {}
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self.control_enabled = DEFAULT_CONTROL_ENABLED
+        self.allow_hwmon = DEFAULT_ALLOW_HWMON
+        self._hwmon: HwmonFanBackend | None = None
         self._last_tick_ts: float | None = None
         self._last_error: str | None = None
 
     # -- setup ------------------------------------------------------------
     def discover(self) -> None:
+        """(Re)enumerate channels.
+
+        Backends are created once and reused: re-running this after an
+        `allow_hwmon` change must not re-initialise NVML or drop the runtime
+        state of channels that were already being driven.
+        """
         with self._lock:
-            self._backends = []
-            nvml_backend = NvmlFanBackend()
-            self._backends.append(nvml_backend)
-            self._backends.append(HwmonFanBackend())
+            if not self._backends:
+                self._hwmon = HwmonFanBackend(self.allow_hwmon)
+                self._backends = [NvmlFanBackend(), self._hwmon]
+            if self._hwmon is not None:
+                self._hwmon.allow = self.allow_hwmon
             self._channels.clear()
             self._owner.clear()
             for backend in self._backends:
@@ -653,6 +670,16 @@ class FanController:
                 "preset": "balanced",
                 "channels": {},
             }
+            control = state.get("fan_control") or {}
+            # An absent key means "never set from the GUI" — fall back to the
+            # environment default rather than to False, so an operator who
+            # configured it through .env keeps that behaviour.
+            if "enabled" in control:
+                self.control_enabled = bool(control["enabled"])
+            if "allow_hwmon" in control:
+                self.allow_hwmon = bool(control["allow_hwmon"])
+            if self._hwmon is not None and self._hwmon.allow != self.allow_hwmon:
+                self.discover()
 
     def _persist_config(self) -> None:
         state = _load_state()
@@ -687,6 +714,51 @@ class FanController:
         state = _load_state()
         state["fans_clean_shutdown"] = True
         _save_state(state)
+
+    def set_control(
+        self, enabled: bool | None = None, allow_hwmon: bool | None = None
+    ) -> dict[str, Any]:
+        """Switch fan control on or off at runtime.
+
+        Every change that *removes* permission gives the affected hardware back
+        to firmware first: a channel we may no longer drive must not be left
+        pinned at whatever speed we last commanded.
+        """
+        with self._lock:
+            was_enabled = self.control_enabled
+            was_hwmon = self.allow_hwmon
+            if enabled is not None:
+                self.control_enabled = bool(enabled)
+            if allow_hwmon is not None:
+                self.allow_hwmon = bool(allow_hwmon)
+
+            if was_enabled and not self.control_enabled:
+                self.restore_all_auto(reason="управление выключено оператором")
+                self._config["enabled"] = False
+            elif was_hwmon and not self.allow_hwmon:
+                for cid, ch in list(self._channels.items()):
+                    if ch.kind != "mobo":
+                        continue
+                    rt = self._rt.setdefault(cid, _Runtime())
+                    self._ensure_auto(cid, ch, rt)
+
+            if allow_hwmon is not None and allow_hwmon != was_hwmon:
+                self.discover()   # controllability of board channels changed
+
+            state = _load_state()
+            state["fan_control"] = {
+                "enabled": self.control_enabled,
+                "allow_hwmon": self.allow_hwmon,
+            }
+            state["fans"] = self._config
+            _save_state(state)
+            self._log("info", None, "control_changed",
+                      f"управление={self.control_enabled}, плата={self.allow_hwmon}")
+            return {
+                "ok": True,
+                "control_enabled": self.control_enabled,
+                "hwmon_allowed": self.allow_hwmon,
+            }
 
     def restore_all_auto(self, reason: str = "", force: bool = False) -> list[str]:
         """Hand channels back to firmware/NVML.
@@ -757,7 +829,7 @@ class FanController:
             self._update_emergency(temps, now)
             self._refresh_readings()
 
-            active = CONTROL_ENABLED and bool(self._config.get("enabled"))
+            active = self.control_enabled and bool(self._config.get("enabled"))
             for cid, ch in self._channels.items():
                 if not ch.controllable:
                     continue
@@ -945,8 +1017,12 @@ class FanController:
                 channels.append(item)
             return {
                 "ok": True,
-                "control_enabled": CONTROL_ENABLED,
-                "hwmon_allowed": ALLOW_HWMON,
+                "control_enabled": self.control_enabled,
+                "hwmon_allowed": self.allow_hwmon,
+                "env_defaults": {
+                    "control_enabled": DEFAULT_CONTROL_ENABLED,
+                    "allow_hwmon": DEFAULT_ALLOW_HWMON,
+                },
                 "config": self._config,
                 "presets": {
                     k: {"label": v["label"], "curves": v["curves"]}
@@ -1005,8 +1081,8 @@ class FanController:
             return {"ok": True, "reverted": [scope]}
 
     def set_manual(self, cid: str, pct: float) -> dict[str, Any]:
-        if not CONTROL_ENABLED:
-            raise RuntimeError("управление вентиляторами выключено (FAN_CONTROL_ENABLED=0)")
+        if not self.control_enabled:
+            raise RuntimeError("управление вентиляторами выключено в настройках охлаждения")
         with self._lock:
             ch = self._require_controllable(cid)
             rt = self._rt.setdefault(cid, _Runtime())
@@ -1033,8 +1109,8 @@ class FanController:
             }
 
     def apply_config(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if not CONTROL_ENABLED:
-            raise RuntimeError("управление вентиляторами выключено (FAN_CONTROL_ENABLED=0)")
+        if not self.control_enabled:
+            raise RuntimeError("управление вентиляторами выключено в настройках охлаждения")
         with self._lock:
             preset = payload.get("preset")
             channels_cfg = payload.get("channels")

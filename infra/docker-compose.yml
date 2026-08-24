@@ -476,15 +476,17 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: utility
       # Same key the backend uses; gates POST /power-limit on the shared network.
       POWER_LIMIT_TOKEN: ${AGENT_SERVICE_KEY:-agent-internal-key-2026}
-      # Fan control ships disabled: enumeration and telemetry only. Turning it
-      # on also requires AGENT_SERVICE_KEY to be a real key, not the default.
+      # INITIAL value only — fan control is switched on in the GUI
+      # (Настройки → Охлаждение) and the choice is persisted in gpu_temp_state.
+      # These are what a fresh install starts with: off, telemetry only.
+      # Writes additionally require AGENT_SERVICE_KEY to be a real key.
       FAN_CONTROL_ENABLED: ${FAN_CONTROL_ENABLED:-0}
       # Motherboard fans additionally need a driver that publishes writable
       # pwmN + pwmN_enable — see docs/cooling-motherboard-fans.md.
       FAN_CONTROL_ALLOW_HWMON: ${FAN_CONTROL_ALLOW_HWMON:-0}
     volumes:
-      # Saved power limit and fan configuration — re-applied on every start
-      # (NVML resets both on reboot).
+      # Saved power limit, fan configuration and the on/off switch itself —
+      # re-applied on every start (NVML resets the hardware on reboot).
       - gpu_temp_state:/data
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9966/health', timeout=3).status==200 else 1)\""]
@@ -728,6 +730,9 @@ services:
       VLLM_MODELS_DIR: /vllm-models
     volumes:
       - ../aiagent:/aiagent:ro
+      # The cooling setup instruction is shown inside the GUI, so the API needs
+      # to read the very file the repository ships — one source, no drift.
+      - ../docs:/app/docs:ro
       - llamacpp_models:/llamacpp-models
       - vllm_models:/vllm-models
       # LoRA uploads/datasets shared with worker+trainer (upload API writes here);

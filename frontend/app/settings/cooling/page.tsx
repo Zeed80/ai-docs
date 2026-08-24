@@ -5,6 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { apiFetch, mutFetch } from "@/lib/auth";
 
+import { SetupGuide } from "./setup-guide";
+
 const API = getApiBaseUrl();
 const BASE = `${API}/api/cooling`;
 const POLL_MS = 5000;
@@ -45,6 +47,7 @@ interface FanChannel {
 interface FansResponse {
   control_enabled: boolean;
   hwmon_allowed: boolean;
+  env_defaults?: { control_enabled: boolean; allow_hwmon: boolean };
   config: { enabled?: boolean; preset?: string; channels?: Record<string, ChannelConfig> };
   presets: Record<string, { label: string; curves: Record<string, CurvePoint[]> }>;
   custom_presets: Record<string, { label: string; config: unknown }>;
@@ -228,6 +231,18 @@ export default function CoolingSettingsPage() {
     }, 400);
   }
 
+  async function setControl(patch: { enabled?: boolean; allow_hwmon?: boolean }) {
+    const out = await call("/control", patch);
+    if (out) {
+      setManualDraft({});
+      setMsg(
+        patch.enabled === false
+          ? "Управление выключено, вентиляторы возвращены прошивке."
+          : "Настройка сохранена.",
+      );
+    }
+  }
+
   async function applyPreset(name: string) {
     const out = await call(`/presets/${encodeURIComponent(name)}/apply`);
     // Drop the manual drafts: the preset owns the speed now, and a leftover
@@ -324,13 +339,48 @@ export default function CoolingSettingsPage() {
         </div>
       )}
 
-      {!data?.control_enabled && (
-        <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-600">
-          Управление выключено (<code>FAN_CONTROL_ENABLED=0</code>) — показываются только обороты.
-          Чтобы включить, задайте переменную у сервиса <code>gpu-temp-helper</code> и
-          настоящий <code>AGENT_SERVICE_KEY</code> вместо значения по умолчанию.
-        </div>
-      )}
+      {/* --- Switches ---------------------------------------------------- */}
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold">Управление</h3>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={!!data?.control_enabled}
+            disabled={busy}
+            onChange={(e) => void setControl({ enabled: e.target.checked })}
+            className="mt-0.5 accent-blue-500"
+          />
+          <span>
+            Разрешить управление оборотами
+            <span className="block text-xs text-muted-foreground">
+              Выключено — обороты только показываются. При выключении все каналы,
+              которыми мы распоряжались, немедленно возвращаются прошивке.
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={!!data?.hwmon_allowed}
+            disabled={busy}
+            onChange={(e) => void setControl({ allow_hwmon: e.target.checked })}
+            className="mt-0.5 accent-blue-500"
+          />
+          <span>
+            Разрешить вентиляторы материнской платы
+            <span className="block text-xs text-muted-foreground">
+              Нужен драйвер, отдающий pwm на запись. Если его нет, каналы всё равно
+              останутся только для чтения — см. инструкцию ниже.
+            </span>
+          </span>
+        </label>
+        {!data?.control_enabled && (
+          <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-600">
+            Управление выключено — показываются только обороты.
+          </div>
+        )}
+      </section>
+
 
       {/* --- Channels --------------------------------------------------- */}
       <section className="space-y-2">
@@ -581,6 +631,8 @@ export default function CoolingSettingsPage() {
           </div>
         </div>
       </section>
+
+      <SetupGuide />
 
       <section className="space-y-2">
         <h3 className="text-sm font-semibold">Журнал</h3>

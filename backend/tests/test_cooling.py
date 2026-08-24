@@ -164,6 +164,7 @@ def _controller(temps, stuck=False, has_tach=True, kind="mobo"):
     )
     backend = FakeBackend([channel], temps, stuck=stuck)
     controller = fans.FanController()
+    controller.control_enabled = True   # the switch is per-controller state now
     controller._backends = [backend]
     controller._channels = {channel.id: channel}
     controller._owner = {channel.id: backend}
@@ -180,11 +181,6 @@ def _controller(temps, stuck=False, has_tach=True, kind="mobo"):
         },
     }
     return controller, backend, channel
-
-
-@pytest.fixture(autouse=True)
-def _enable_control(monkeypatch):
-    monkeypatch.setattr(fans, "CONTROL_ENABLED", True)
 
 
 def test_curve_drives_the_fan_from_temperature():
@@ -294,3 +290,96 @@ def test_preview_writes_nothing():
                                  "temps": [40, 60, 80]})
     assert backend.written == []
     assert [p["pct"] for p in result["preview"]["fake:1"]] == [30.0, 65.0, 100.0]
+
+
+# --- runtime on/off switch (replaces editing .env) ------------------------
+def test_control_starts_from_the_environment_default(monkeypatch):
+    monkeypatch.setattr(fans, "DEFAULT_CONTROL_ENABLED", True)
+    monkeypatch.setattr(fans, "DEFAULT_ALLOW_HWMON", False)
+    controller = fans.FanController()
+    assert controller.control_enabled is True
+    assert controller.allow_hwmon is False
+
+
+def test_disabling_control_hands_the_hardware_back(monkeypatch):
+    controller, backend, channel = _controller({"cpu": 60.0})
+    controller.control_enabled = True
+    state: dict = {}
+    monkeypatch.setattr(fans, "_load_state", lambda: state)
+    monkeypatch.setattr(fans, "_save_state", lambda s: state.update(s))
+
+    controller.tick()
+    assert channel.mode == "manual"
+
+    controller.set_control(enabled=False)
+    assert channel.mode == "auto"
+    assert "fake:1" in backend.auto_calls
+    assert controller.control_enabled is False
+    assert state["fan_control"] == {"enabled": False, "allow_hwmon": False}
+
+
+def test_disabling_board_fans_reverts_only_board_channels(monkeypatch):
+    controller, backend, channel = _controller({"cpu": 60.0}, kind="mobo")
+    controller.control_enabled = True
+    controller.allow_hwmon = True
+    state: dict = {}
+    monkeypatch.setattr(fans, "_load_state", lambda: state)
+    monkeypatch.setattr(fans, "_save_state", lambda s: state.update(s))
+
+    controller.tick()
+    assert channel.mode == "manual"
+
+    controller.set_control(allow_hwmon=False)
+    assert channel.mode == "auto"
+    assert controller.control_enabled is True   # the other switch is untouched
+
+
+def test_writes_are_refused_while_control_is_off():
+    controller, _, _ = _controller({"cpu": 60.0})
+    controller.control_enabled = False
+    with pytest.raises(RuntimeError, match="выключено"):
+        controller.set_manual("fake:1", 50)
+    with pytest.raises(RuntimeError, match="выключено"):
+        controller.apply_config({"preset": "silent"})
+
+
+def test_saved_switch_beats_the_environment_default(monkeypatch):
+    monkeypatch.setattr(fans, "DEFAULT_CONTROL_ENABLED", False)
+    monkeypatch.setattr(fans, "DEFAULT_ALLOW_HWMON", False)
+    state = {"fan_control": {"enabled": True, "allow_hwmon": True}}
+    monkeypatch.setattr(fans, "_load_state", lambda: state)
+    monkeypatch.setattr(fans, "_save_state", lambda s: None)
+
+    controller = fans.FanController()
+    controller.load_config()
+    assert controller.control_enabled is True
+    assert controller.allow_hwmon is True
+
+
+def test_absent_switch_falls_back_to_the_environment(monkeypatch):
+    monkeypatch.setattr(fans, "DEFAULT_CONTROL_ENABLED", True)
+    monkeypatch.setattr(fans, "DEFAULT_ALLOW_HWMON", True)
+    monkeypatch.setattr(fans, "_load_state", lambda: {})
+    monkeypatch.setattr(fans, "_save_state", lambda s: None)
+
+    controller = fans.FanController()
+    controller.load_config()
+    assert controller.control_enabled is True
+    assert controller.allow_hwmon is True
+
+
+def test_board_channel_is_read_only_without_the_permission():
+    controllable, reason = fans.HwmonFanBackend._writability(
+        "nct6687", has_pwm=True, has_enable=True, pwm_path="/dev/null", allow=False
+    )
+    assert controllable is False
+    assert "настройках охлаждения" in (reason or "")
+
+
+def test_driver_limitation_outranks_the_permission():
+    # /proc/version is readable-but-not-writable for everyone, including root.
+    controllable, reason = fans.HwmonFanBackend._writability(
+        "nct6687", has_pwm=True, has_enable=True, pwm_path="/proc/version", allow=True
+    )
+    assert controllable is False
+    assert "nct6687d" in (reason or "")
