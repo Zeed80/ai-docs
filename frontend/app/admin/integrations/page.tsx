@@ -535,6 +535,269 @@ function MailServerSection() {
   );
 }
 
+interface OAuthApp {
+  provider: string;
+  client_id: string | null;
+  client_secret_set: boolean;
+  client_secret_hint: string;
+  redirect_uri: string | null;
+  configured: boolean;
+}
+
+const OAUTH_PROVIDER_LABEL: Record<string, string> = {
+  google: "Google (Gmail)",
+  microsoft: "Microsoft (Outlook / Microsoft 365)",
+};
+
+const OAUTH_PROVIDER_CONSOLE: Record<string, { url: string; label: string }> = {
+  google: {
+    url: "https://console.cloud.google.com/apis/credentials",
+    label: "Google Cloud Console → Credentials",
+  },
+  microsoft: {
+    url: "https://portal.azure.com",
+    label: "Azure Portal → App registrations",
+  },
+};
+
+/** One Client ID/Secret per provider (google, microsoft) — registered once
+ * here, then every mailbox's own OAuth2 consent (Настройки → Почтовые
+ * ящики) runs against it. See app/api/oauth.py + app/domain/oauth_mail.py. */
+function OAuthAppsSection() {
+  const [apps, setApps] = useState<OAuthApp[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [forms, setForms] = useState<
+    Record<
+      string,
+      { client_id: string; client_secret: string; redirect_uri: string }
+    >
+  >({});
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  function load() {
+    setLoading(true);
+    fetch(`${API}/api/admin/integrations/oauth-apps`, {
+      credentials: "include",
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((list: OAuthApp[]) => {
+        setApps(list);
+        setForms((prev) => {
+          const next = { ...prev };
+          for (const a of list) {
+            if (!next[a.provider]) {
+              next[a.provider] = {
+                client_id: a.client_id ?? "",
+                client_secret: "",
+                redirect_uri:
+                  a.redirect_uri ?? `${API}/api/oauth/callback/${a.provider}`,
+              };
+            }
+          }
+          return next;
+        });
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function save(provider: string) {
+    setSaving(provider);
+    setSaved(null);
+    setError(null);
+    try {
+      const f = forms[provider];
+      const body: Record<string, string> = {
+        client_id: f.client_id.trim(),
+        redirect_uri: f.redirect_uri.trim(),
+      };
+      if (f.client_secret.trim()) body.client_secret = f.client_secret.trim();
+      const res = await fetch(
+        `${API}/api/admin/integrations/oauth-apps/${provider}`,
+        {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", ...csrfHeaders() },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail ?? `HTTP ${res.status}`);
+      }
+      const updated: OAuthApp = await res.json();
+      setApps((prev) =>
+        prev.map((a) => (a.provider === provider ? updated : a)),
+      );
+      setForms((prev) => ({
+        ...prev,
+        [provider]: { ...prev[provider], client_secret: "" },
+      }));
+      setSaved(provider);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  if (loading)
+    return <p className="text-sm text-muted-foreground">Загрузка...</p>;
+
+  return (
+    <div className="rounded-lg border border-border p-4 space-y-4">
+      <h2 className="text-base font-semibold">
+        OAuth2 для почты (Gmail / Microsoft 365)
+      </h2>
+      <p className="text-xs text-muted-foreground">
+        Обычный пароль аккаунта больше не работает для входящих/исходящих у
+        Gmail и, в большинстве организаций, у Microsoft 365 — единственная
+        надёжная замена (кроме разового пароля приложения) — OAuth2. Заведите
+        здесь Client ID/Secret приложения (один раз на провайдера), а каждый
+        сотрудник подключает свой ящик кнопкой «Войти через Google/Microsoft» в
+        Настройки → Почтовые ящики.
+      </p>
+
+      {error && <p className="text-xs text-destructive">Ошибка: {error}</p>}
+
+      {["google", "microsoft"].map((provider) => {
+        const app = apps.find((a) => a.provider === provider);
+        const form = forms[provider] ?? {
+          client_id: "",
+          client_secret: "",
+          redirect_uri: "",
+        };
+        const console_ = OAUTH_PROVIDER_CONSOLE[provider];
+        return (
+          <div
+            key={provider}
+            className="rounded border border-border p-3 space-y-2"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium">
+                {OAUTH_PROVIDER_LABEL[provider]}
+              </h3>
+              <span
+                className={`text-xs ${app?.configured ? "text-green-600" : "text-muted-foreground"}`}
+              >
+                {app?.configured ? "✓ настроено" : "не настроено"}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Создайте OAuth-приложение в{" "}
+              <a
+                href={console_.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                {console_.label} ↗
+              </a>
+              , добавьте redirect URI ниже в список разрешённых и вставьте
+              Client ID/Secret сюда.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">
+                  Client ID
+                </label>
+                <input
+                  type="text"
+                  value={form.client_id}
+                  onChange={(e) =>
+                    setForms((p) => ({
+                      ...p,
+                      [provider]: { ...p[provider], client_id: e.target.value },
+                    }))
+                  }
+                  className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">
+                  Client Secret{" "}
+                  {app?.client_secret_set ? (
+                    <span className="text-green-600">
+                      (задан: {app.client_secret_hint})
+                    </span>
+                  ) : (
+                    <span className="text-red-500">(не задан)</span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  value={form.client_secret}
+                  onChange={(e) =>
+                    setForms((p) => ({
+                      ...p,
+                      [provider]: {
+                        ...p[provider],
+                        client_secret: e.target.value,
+                      },
+                    }))
+                  }
+                  placeholder={
+                    app?.client_secret_set
+                      ? "Оставьте пустым, чтобы не менять"
+                      : "Вставьте secret"
+                  }
+                  className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background font-mono"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">
+                Redirect URI
+              </label>
+              <input
+                type="text"
+                value={form.redirect_uri}
+                onChange={(e) =>
+                  setForms((p) => ({
+                    ...p,
+                    [provider]: {
+                      ...p[provider],
+                      redirect_uri: e.target.value,
+                    },
+                  }))
+                }
+                className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background font-mono"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Должен байт-в-байт совпадать со значением, зарегистрированным у
+                провайдера.
+              </p>
+            </div>
+            {saved === provider && (
+              <p className="text-xs text-green-600">Сохранено</p>
+            )}
+            <button
+              onClick={() => save(provider)}
+              disabled={
+                saving === provider ||
+                !form.client_id.trim() ||
+                !form.redirect_uri.trim()
+              }
+              className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm disabled:opacity-50"
+            >
+              {saving === provider ? "Сохранение..." : "Сохранить"}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function IntegrationsContent() {
   const [data, setData] = useState<AuthentikIntegration | null>(null);
   const [loading, setLoading] = useState(true);
@@ -630,6 +893,7 @@ function IntegrationsContent() {
     <div className="max-w-xl space-y-5">
       <MailcowDeploySection onDeployed={() => window.location.reload()} />
       <MailServerSection />
+      <OAuthAppsSection />
 
       <div className="rounded-lg border border-border p-4 space-y-3">
         <h2 className="text-base font-semibold">Authentik (SSO)</h2>

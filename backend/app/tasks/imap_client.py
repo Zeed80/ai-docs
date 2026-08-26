@@ -38,6 +38,10 @@ class MailboxConfig:
     mailbox_type: str = "shared"
     owner_sub: str | None = None
     last_seen_uid: int | None = None
+    # "password" (config.password is usable as-is) or "oauth2" — Gmail/Microsoft
+    # 365 mailboxes connected via app/api/oauth.py have no usable password at
+    # all, fetch_unseen_from_mailbox() re-derives an access token instead.
+    auth_method: str = "password"
 
     @property
     def is_personal(self) -> bool:
@@ -95,6 +99,7 @@ def get_mailbox_configs() -> list[MailboxConfig]:
                     mailbox_type=row.mailbox_type or "shared",
                     owner_sub=row.owner_sub,
                     last_seen_uid=row.last_seen_uid,
+                    auth_method=row.auth_method or "password",
                 )
                 for row in rows
             ]
@@ -238,7 +243,22 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
         else:
             conn = imaplib.IMAP4(config.host, config.port)
 
-        conn.login(config.user, config.password)
+        if config.auth_method == "oauth2":
+            from app.db.sync_session import sync_session
+            from app.db.models import MailboxConfig as MailboxConfigDB
+            from app.domain.oauth_mail import get_valid_access_token_sync, imap_xoauth2_authobject
+            from sqlalchemy import select as sa_select
+
+            with sync_session() as oauth_db:
+                row = oauth_db.execute(
+                    sa_select(MailboxConfigDB).where(MailboxConfigDB.name == config.name)
+                ).scalar_one_or_none()
+                if not row:
+                    raise RuntimeError(f"Mailbox '{config.name}' disappeared before OAuth login")
+                access_token = get_valid_access_token_sync(oauth_db, row)
+            conn.authenticate("XOAUTH2", imap_xoauth2_authobject(config.user, access_token))
+        else:
+            conn.login(config.user, config.password)
         conn.select(config.folder)
 
         personal = config.is_personal

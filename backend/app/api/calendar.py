@@ -318,17 +318,17 @@ async def generate_followup_draft(
         f"С уважением,\nСистема документооборота"
     )
 
-    from app.db.models import DraftEmail
-    draft = DraftEmail(
+    from app.domain.email_send import create_reply_draft
+    draft = await create_reply_draft(
+        db,
+        to_addresses=[],
         subject=draft_subject,
         body_text=draft_body,
-        to_addresses=[],
-        related_entity_type=reminder.entity_type if reminder.entity_type else None,
-        related_entity_id=reminder.entity_id if reminder.entity_id else None,
-        status="draft",
-        generated_by="system",
+        context={
+            "entity_type": reminder.entity_type,
+            "entity_id": str(reminder.entity_id) if reminder.entity_id else None,
+        },
     )
-    db.add(draft)
     await db.commit()
     await db.refresh(draft)
 

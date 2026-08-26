@@ -174,23 +174,23 @@ async def create_draft(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.draft — Create email draft."""
-    draft = DraftAction(
-        action_type="email.send",
-        entity_type="email",
-        draft_data={
-            "to_addresses": payload.to_addresses,
-            "cc_addresses": payload.cc_addresses,
-            "subject": payload.subject,
-            "body_html": payload.body_html,
-            "body_text": payload.body_text,
-            "thread_id": str(payload.thread_id) if payload.thread_id else None,
-            "supplier_id": str(payload.supplier_id) if payload.supplier_id else None,
-            "context": payload.context,
-            "status": "draft",
-            "risk_flags": [],
-        },
+    from app.domain.email_send import create_reply_draft
+
+    # Which mailbox this reply is SENT from: explicit override, else the
+    # thread's own mailbox — a reply in the "procurement" thread must go out
+    # through procurement's SMTP, not whatever is in .env (see email_sender.py).
+    draft = await create_reply_draft(
+        db,
+        to_addresses=payload.to_addresses,
+        cc_addresses=payload.cc_addresses,
+        subject=payload.subject,
+        body_html=payload.body_html,
+        body_text=payload.body_text,
+        thread_id=payload.thread_id,
+        supplier_id=payload.supplier_id,
+        context=payload.context,
+        mailbox=payload.mailbox,
     )
-    db.add(draft)
     await db.commit()
     await db.refresh(draft)
 
@@ -237,6 +237,7 @@ def _draft_to_out(draft: DraftAction) -> EmailDraftOut:
         body_html=data.get("body_html"),
         body_text=data.get("body_text"),
         thread_id=uuid.UUID(data["thread_id"]) if data.get("thread_id") else None,
+        mailbox=data.get("mailbox"),
         status=data.get("status", "draft"),
         risk_flags=data.get("risk_flags", []),
         created_at=draft.created_at,

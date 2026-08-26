@@ -18,7 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
-from app.db.models import PurchaseRequest, SupplierContract, Party, DraftEmail
+from app.db.models import PurchaseRequest, SupplierContract, Party
+from app.domain.email_send import create_reply_draft
 from app.audit.service import log_action, add_timeline_event
 
 router = APIRouter()
@@ -245,17 +246,15 @@ async def send_rfq(
             f"Срок подачи предложения: {deadline_str}\n\n"
             f"С уважением"
         )
-        draft = DraftEmail(
-            related_entity_type="purchase_request",
-            related_entity_id=req.id,
+        draft = await create_reply_draft(
+            db,
             to_addresses=[supplier.contact_email] if supplier.contact_email else [],
             subject=subject,
             body_text=body,
-            status="draft",
-            generated_by="sveta",
+            body_html=body,
+            supplier_id=supplier.id,
+            context={"purchase_request_id": str(req.id)},
         )
-        db.add(draft)
-        await db.flush()
         draft_ids.append(str(draft.id))
 
     req.status = "rfq_sent"

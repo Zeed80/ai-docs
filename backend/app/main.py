@@ -66,6 +66,7 @@ from app.api import (
     memory,
     normalization,
     ntd,
+    oauth,
     payments,
     procurement,
     quarantine,
@@ -414,6 +415,7 @@ def create_app() -> FastAPI:
     app.include_router(spec_tables.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
     app.include_router(sheets.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
     app.include_router(mailbox.router, prefix="/api/mailbox", tags=["mailbox"], dependencies=_auth)
+    app.include_router(oauth.router, prefix="/api/oauth", tags=["oauth"], dependencies=_auth)
     app.include_router(
         email_templates.router,
         prefix="/api/email-templates",

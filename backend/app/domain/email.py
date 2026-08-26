@@ -78,6 +78,11 @@ class EmailDraftCreate(BaseModel):
     thread_id: uuid.UUID | None = None
     supplier_id: uuid.UUID | None = None
     context: dict | None = None  # invoice_id, document_id, etc.
+    # Which configured mailbox (MailboxConfig.name) this should be SENT from —
+    # its SMTP credentials/from-address are used instead of the global .env
+    # fallback. Explicit override; when omitted and thread_id is given, the
+    # thread's own mailbox is used instead (see create_draft).
+    mailbox: str | None = None
 
 
 class EmailDraftOut(BaseModel):
@@ -88,6 +93,7 @@ class EmailDraftOut(BaseModel):
     body_html: str | None
     body_text: str | None
     thread_id: uuid.UUID | None
+    mailbox: str | None = None
     status: str  # draft, risk_checked, approved, sent
     risk_flags: list[dict] = []
     created_at: datetime

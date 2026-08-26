@@ -3545,6 +3545,39 @@ class MailboxConfig(UUIDPrimaryKey, TimestampMixin, Base):
     last_seen_uid: Mapped[int | None] = mapped_column(Integer)
     quota_mb: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)
 
+    # Auth method for both IMAP and SMTP on this mailbox: "password" (plain or
+    # provider app-password, stored in *_password_encrypted above) or "oauth2"
+    # (Gmail/Microsoft 365 no longer accept the account password for IMAP/SMTP
+    # in most setups — see app/domain/oauth_mail.py + app/domain/mailbox_presets.py).
+    auth_method: Mapped[str] = mapped_column(String(20), default="password", nullable=False)
+    oauth_provider: Mapped[str | None] = mapped_column(String(20))  # "google" | "microsoft"
+    oauth_refresh_token_encrypted: Mapped[str | None] = mapped_column(Text)
+    oauth_access_token_encrypted: Mapped[str | None] = mapped_column(Text)
+    oauth_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    oauth_scope: Mapped[str | None] = mapped_column(String(500))
+    # The address Google/Microsoft reported during consent — shown in the UI
+    # even before imap_user/smtp_user are filled in from it.
+    oauth_email: Mapped[str | None] = mapped_column(String(500))
+
+
+class OAuthAppConfig(UUIDPrimaryKey, TimestampMixin, Base):
+    """One row per OAuth provider ("google", "microsoft") — the app-level
+
+    Client ID/Secret an admin registers once in that provider's developer
+    console (see /admin/integrations). Individual mailboxes then each run
+    their own consent flow against this app to get their own refresh token —
+    the app credentials are shared, the resulting tokens are not.
+    """
+
+    __tablename__ = "oauth_app_configs"
+
+    provider: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    client_id: Mapped[str | None] = mapped_column(String(500))
+    client_secret_encrypted: Mapped[str | None] = mapped_column(Text)
+    # Must match, byte-for-byte, the redirect URI registered with the provider.
+    redirect_uri: Mapped[str | None] = mapped_column(String(500))
+    updated_by: Mapped[str | None] = mapped_column(String(100))
+
 
 class MailServerConfig(UUIDPrimaryKey, TimestampMixin, Base):
     """Singleton connection config for the self-hosted mail server (Mailcow admin API).

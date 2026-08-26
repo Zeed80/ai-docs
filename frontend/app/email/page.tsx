@@ -57,7 +57,11 @@ function EmailPageInner() {
   const [mailboxFilter, setMailboxFilter] = useState(
     () => searchParams.get("mailbox") ?? "",
   );
-  const [panelMode, setPanelMode] = useState<PanelMode>("threads");
+  // Deep-link to the "Черновики" tab (e.g. from a just-generated RFQ/follow-up
+  // draft in Закупки/Календарь) via ?panel=draft.
+  const [panelMode, setPanelMode] = useState<PanelMode>(() =>
+    searchParams.get("panel") === "draft" ? "draft" : "threads",
+  );
   const [drafts, setDrafts] = useState<EmailDraft[]>([]);
   const [composing, setComposing] = useState(false);
   const [draftForm, setDraftForm] = useState({

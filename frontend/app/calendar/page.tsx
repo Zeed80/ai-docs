@@ -99,8 +99,9 @@ export default function CalendarPage() {
       { method: "POST" },
     );
     if (res.ok) {
-      const data = await res.json();
-      window.open(`/email/drafts/${data.draft_id}`, "_blank");
+      // Нет отдельной страницы черновика — он появляется во вкладке
+      // «Черновики» на /email (тот же конвейер, что и обычные ответы на письма).
+      window.open(`/email?panel=draft`, "_blank");
     }
   };
 

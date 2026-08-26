@@ -140,6 +140,27 @@ class IntegrationMailServerSaved(IntegrationMailServerOut):
     verify_detail: str | None = None
 
 
+# ── OAuth apps (Gmail / Microsoft 365 mailbox auth) ─────────────────────────
+# One Client ID/Secret per provider, registered once by an admin; individual
+# mailboxes then each run their own consent flow against it (app/api/oauth.py).
+
+
+class OAuthAppOut(BaseModel):
+    provider: str
+    client_id: str | None = None
+    client_secret_set: bool
+    client_secret_hint: str  # masked — never the full secret
+    redirect_uri: str | None = None
+    configured: bool
+
+
+class OAuthAppUpdate(BaseModel):
+    # Provide client_secret to set it; empty string clears. Omit to leave unchanged.
+    client_id: str | None = None
+    client_secret: str | None = None
+    redirect_uri: str | None = None
+
+
 class UserMailboxOut(BaseModel):
     address: str | None = None
     is_active: bool | None = None

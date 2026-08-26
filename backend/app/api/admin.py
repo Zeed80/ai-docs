@@ -34,6 +34,8 @@ from app.domain.admin import (
     IntegrationMailServerSaved,
     IntegrationMailServerUpdate,
     IntegrationTestResult,
+    OAuthAppOut,
+    OAuthAppUpdate,
     PermissionMatrixOut,
     SetPasswordRequest,
     SystemStatusOut,
@@ -311,7 +313,12 @@ async def provision_user_mailbox(
         smtp_port=mail_cfg.smtp_port,
         smtp_user=full_address,
         smtp_password_encrypted=encrypt_password(password),
-        smtp_use_tls=True,
+        # 465 is the implicit-TLS/SMTPS submission port (SMTP_SSL from the
+        # first byte) — STARTTLS must not be attempted there, or every send
+        # fails with a handshake error. 587 (and anything else) is submission
+        # with STARTTLS. The mail-server integration page only exposes a port,
+        # not a TLS-mode toggle, so this has to be derived, not hardcoded.
+        smtp_use_tls=mail_cfg.smtp_port != 465,
         smtp_from_address=full_address,
         smtp_from_name=user.name,
         is_active=True,
@@ -1068,6 +1075,76 @@ async def test_mail_server_integration(
 
     ok, detail = await mailcow_api.test_connection()
     return IntegrationTestResult(ok=ok, detail=detail)
+
+
+# ── OAuth apps (Gmail / Microsoft 365 mailbox auth) ──────────────────────────
+# Registered once per provider here; each mailbox then runs its own consent
+# flow against it (app/api/oauth.py) to get its own refresh token — see
+# app/domain/oauth_mail.py for why plain passwords stopped working at all.
+
+_OAUTH_PROVIDERS = ("google", "microsoft")
+
+
+def _oauth_app_out(provider: str, row) -> OAuthAppOut:
+    from app.ai.secret_box import decrypt, mask
+
+    secret = decrypt(row.client_secret_encrypted) if row else ""
+    return OAuthAppOut(
+        provider=provider,
+        client_id=row.client_id if row else None,
+        client_secret_set=bool(secret),
+        client_secret_hint=mask(secret),
+        redirect_uri=row.redirect_uri if row else None,
+        configured=bool(row and row.client_id and secret and row.redirect_uri),
+    )
+
+
+@router.get("/integrations/oauth-apps", response_model=list[OAuthAppOut])
+async def list_oauth_apps(
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> list[OAuthAppOut]:
+    from app.db.models import OAuthAppConfig
+
+    rows = {
+        row.provider: row
+        for row in (await db.execute(select(OAuthAppConfig))).scalars().all()
+    }
+    return [_oauth_app_out(p, rows.get(p)) for p in _OAUTH_PROVIDERS]
+
+
+@router.put("/integrations/oauth-apps/{provider}", response_model=OAuthAppOut)
+async def update_oauth_app(
+    provider: str,
+    payload: OAuthAppUpdate,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> OAuthAppOut:
+    from app.ai.secret_box import encrypt
+    from app.db.models import OAuthAppConfig
+
+    if provider not in _OAUTH_PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"Unknown OAuth provider: {provider}")
+
+    row = (
+        await db.execute(select(OAuthAppConfig).where(OAuthAppConfig.provider == provider))
+    ).scalar_one_or_none()
+    if row is None:
+        row = OAuthAppConfig(provider=provider)
+        db.add(row)
+
+    fields = payload.model_fields_set
+    if "client_id" in fields:
+        row.client_id = (payload.client_id or "").strip() or None
+    if "client_secret" in fields:
+        row.client_secret_encrypted = encrypt(payload.client_secret.strip()) if payload.client_secret else None
+    if "redirect_uri" in fields:
+        row.redirect_uri = (payload.redirect_uri or "").strip().rstrip("/") or None
+    row.updated_by = admin.sub
+
+    await db.commit()
+    logger.info("admin_update_oauth_app", admin=admin.sub, provider=provider)
+    return _oauth_app_out(provider, row)
 
 
 # ── Permission matrix ─────────────────────────────────────────────────────────
