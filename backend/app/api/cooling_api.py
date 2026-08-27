@@ -55,6 +55,9 @@ class FanChannelConfig(BaseModel):
 class FanConfigUpdate(BaseModel):
     enabled: bool = True
     preset: str | None = None
+    # Which hardware the preset applies to: GPU fans and board fans are tuned
+    # separately, so applying one must not overwrite the other's curves.
+    scope: str = Field("all", pattern="^(all|gpu|mobo)$")
     channels: dict[str, FanChannelConfig] | None = None
     emergency_c: dict[str, float] | None = None
     emergency_hold_s: float | None = Field(None, ge=0, le=600)
@@ -73,6 +76,7 @@ class FanModeUpdate(BaseModel):
 
 class FanPreviewRequest(BaseModel):
     preset: str | None = None
+    scope: str = Field("all", pattern="^(all|gpu|mobo)$")
     channels: dict[str, FanChannelConfig] | None = None
     temps: list[float] | None = None
 
@@ -262,11 +266,21 @@ async def delete_preset(name: str) -> dict:
     return {"ok": True, "presets": presets}
 
 
+class FanPresetApply(BaseModel):
+    scope: str = Field("all", pattern="^(all|gpu|mobo)$")
+
+
 @router.post("/presets/{name}/apply", dependencies=_admin)
-async def apply_preset(name: str) -> dict:
-    """Apply a builtin preset by name, or a stored custom one."""
+async def apply_preset(name: str, payload_in: FanPresetApply | None = None) -> dict:
+    """Apply a builtin preset by name, or a stored custom one.
+
+    Scoped by default to everything; the status-bar popovers pass their own
+    domain so tuning the card does not disturb the case fans.
+    """
+    scope = (payload_in or FanPresetApply()).scope
     custom = _custom_presets().get(name)
     payload = dict(custom["config"]) if custom else {"preset": name}
+    payload["scope"] = scope
     payload.setdefault("enabled", True)
     try:
         return await gpu_manager.apply_fan_config(payload)

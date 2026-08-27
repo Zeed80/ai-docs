@@ -60,7 +60,7 @@ function fansPayload(overrides: Record<string, unknown> = {}) {
     ok: true,
     control_enabled: true,
     hwmon_allowed: false,
-    config: { enabled: false, preset: "balanced", channels: {} },
+    config: { enabled: false, presets: { gpu: "balanced", mobo: "balanced" }, channels: {} },
     presets: {
       silent: {
         label: "Тихий",
@@ -181,7 +181,52 @@ async function mockCooling(
   });
 }
 
+const BOTH_CONTROLLABLE = [
+  { ...CHANNELS[0] },
+  {
+    ...CHANNELS[1],
+    controllable: true,
+    control_reason: null,
+    role: "case",
+  },
+];
+
 test.describe("Настройки → Охлаждение", () => {
+  test("пресеты выбираются отдельно для видеокарты и для платы", async ({
+    page,
+    context,
+  }) => {
+    await setAuthCookie(context);
+    const seen: string[] = [];
+    const bodies: Record<string, unknown>[] = [];
+    await mockCooling(
+      page,
+      fansPayload({ hwmon_allowed: true, channels: BOTH_CONTROLLABLE }),
+      seen,
+    );
+    page.on("request", (r) => {
+      if (r.url().includes("/presets/") && r.method() === "POST") {
+        bodies.push(r.postDataJSON() as Record<string, unknown>);
+      }
+    });
+    await page.goto("/settings/cooling");
+
+    const gpuRow = page.locator("div", { hasText: /^видеокарта · 1 кан\./ }).last();
+    const boardRow = page
+      .locator("div", { hasText: /^процессор и корпус · 1 кан\./ })
+      .last();
+    await expect(gpuRow).toBeVisible();
+    await expect(boardRow).toBeVisible();
+
+    await boardRow.getByRole("button", { name: "Тихий" }).click();
+    await expect.poll(() => bodies.length).toBe(1);
+    expect(bodies[0]).toEqual({ scope: "mobo" });
+
+    await gpuRow.getByRole("button", { name: "Максимум" }).click();
+    await expect.poll(() => bodies.length).toBe(2);
+    expect(bodies[1]).toEqual({ scope: "gpu" });
+  });
+
   test("показывает каналы и объясняет, почему плата не управляется", async ({
     page,
     context,

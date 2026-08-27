@@ -35,7 +35,7 @@ const TELEMETRY = {
 function fans(overrides: Record<string, unknown> = {}) {
   return {
     control_enabled: true,
-    config: { enabled: true, preset: "balanced" },
+    config: { enabled: true, presets: { gpu: "balanced", mobo: "balanced" } },
     presets: { silent: { label: "Тихий" }, balanced: { label: "Баланс" }, max: { label: "Максимум" } },
     custom_presets: {},
     channels: [
@@ -127,6 +127,27 @@ test.describe("Всплывающее окно вентиляторов", () => 
       .toBe(true);
   });
 
+  test("пресет из окна применяется только к своему домену", async ({
+    page,
+    context,
+  }) => {
+    await setAuthCookie(context);
+    const seen: string[] = [];
+    const bodies: Record<string, unknown>[] = [];
+    await mockAll(page, seen, fans());
+    page.on("request", (r) => {
+      if (r.url().includes("/presets/") && r.method() === "POST") {
+        bodies.push(r.postDataJSON() as Record<string, unknown>);
+      }
+    });
+    await openFanPopover(page);
+
+    await page.getByRole("button", { name: "Тихий", exact: true }).click();
+    await expect.poll(() => bodies.length).toBe(1);
+    // The GPU chip opened this panel, so the board fans must be left alone.
+    expect(bodies[0]).toEqual({ scope: "gpu" });
+  });
+
   test("ползунок задаёт обороты каждому вентилятору GPU", async ({ page, context }) => {
     await setAuthCookie(context);
     const seen: string[] = [];
@@ -147,7 +168,7 @@ test.describe("Всплывающее окно вентиляторов", () => 
     const seen: string[] = [];
     // The loop was told 100%, but the fan is still measured at its old 62%.
     const spinningUp = fans({
-      config: { enabled: true, preset: "max" },
+      config: { enabled: true, presets: { gpu: "max", mobo: "max" } },
       channels: [
         {
           id: "gpu:0:fan0", label: "RTX 3090 · вентилятор 1", kind: "gpu",

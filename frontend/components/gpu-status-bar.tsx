@@ -447,7 +447,7 @@ interface FanChannelBrief {
 
 interface FansBrief {
   control_enabled: boolean;
-  config: { preset?: string; enabled?: boolean };
+  config: { presets?: Record<string, string>; enabled?: boolean };
   presets: Record<string, { label: string }>;
   custom_presets: Record<string, { label: string }>;
   channels: FanChannelBrief[];
@@ -576,7 +576,11 @@ function FanPopover({
       try {
         const r = await mutFetch(
           `/api/cooling/presets/${encodeURIComponent(name)}/apply`,
-          { method: "POST" },
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ scope: kind }),
+          },
         );
         if (!r.ok) {
           const detail = (await r.json().catch(() => null)) as { detail?: string } | null;
@@ -593,7 +597,7 @@ function FanPopover({
         });
       }
     },
-    [load, onApplied],
+    [kind, load, onApplied],
   );
 
   const revertAuto = useCallback(async () => {
@@ -624,7 +628,7 @@ function FanPopover({
 
   const { panel, chipBase, chipActive, inputCls, muted } = popoverTheme(variant);
   const title = kind === "gpu" ? "Вентиляторы GPU" : "Вентиляторы CPU и корпуса";
-  const activePreset = fans?.config?.preset;
+  const activePreset = fans?.config?.presets?.[kind];
   const allAuto = managed.length > 0 && managed.every((c) => c.mode === "auto");
   const blocked = !fans?.control_enabled || managed.length === 0;
 

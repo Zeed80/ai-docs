@@ -522,3 +522,95 @@ def test_an_unknown_chip_gets_a_neutral_name_and_the_safe_role():
     label, role = fans._header_of("it8686", 3)
     assert "канал 3" in label
     assert role == "case"      # never guess that something is the CPU cooler
+
+
+# --- presets are chosen per hardware domain -------------------------------
+def _two_domain_controller(monkeypatch):
+    """A GPU fan and a board fan on one controller."""
+    gpu = fans.FanChannel(
+        id="gpu:0:fan0", label="GPU", kind="gpu", role="gpu", controllable=True,
+        min_pct=30.0, max_pct=100.0, has_tach=False, default_sensor="gpu",
+    )
+    mobo = fans.FanChannel(
+        id="hwmon:x:pwm1", label="SYS", kind="mobo", role="case", controllable=True,
+        min_pct=25.0, max_pct=100.0, has_tach=True, default_sensor="cpu",
+    )
+    backend = FakeBackend([gpu, mobo], {"gpu": 50.0, "cpu": 50.0})
+    controller = fans.FanController()
+    controller.control_enabled = True
+    controller._backends = [backend]
+    controller._channels = {gpu.id: gpu, mobo.id: mobo}
+    controller._owner = {gpu.id: backend, mobo.id: backend}
+    controller._rt = {gpu.id: fans._Runtime(), mobo.id: fans._Runtime()}
+    controller._config = {"enabled": True, "presets": {}, "channels": {}}
+    monkeypatch.setattr(fans, "_load_state", lambda: {})
+    monkeypatch.setattr(fans, "_save_state", lambda s: None)
+    return controller, backend
+
+
+def test_preset_config_can_target_one_domain():
+    gpu = fans.FanChannel(
+        id="g", label="G", kind="gpu", role="gpu", controllable=True,
+        min_pct=30, max_pct=100, has_tach=False, default_sensor="gpu",
+    )
+    mobo = fans.FanChannel(
+        id="m", label="M", kind="mobo", role="case", controllable=True,
+        min_pct=25, max_pct=100, has_tach=True, default_sensor="cpu",
+    )
+    assert set(fans.preset_config("silent", [gpu, mobo], "gpu")) == {"g"}
+    assert set(fans.preset_config("silent", [gpu, mobo], "mobo")) == {"m"}
+    assert set(fans.preset_config("silent", [gpu, mobo], "all")) == {"g", "m"}
+
+
+def test_applying_to_one_domain_keeps_the_other_curve(monkeypatch):
+    controller, _ = _two_domain_controller(monkeypatch)
+    controller.apply_config({"preset": "silent", "scope": "all"})
+    board_before = controller._config["channels"]["hwmon:x:pwm1"]["curve"]
+
+    controller.apply_config({"preset": "max", "scope": "gpu"})
+    cfg = controller._config["channels"]
+    assert cfg["gpu:0:fan0"]["curve"] == [{"t": 0.0, "pct": 100.0}]
+    assert cfg["hwmon:x:pwm1"]["curve"] == board_before   # untouched
+
+
+def test_each_domain_remembers_its_own_preset(monkeypatch):
+    controller, _ = _two_domain_controller(monkeypatch)
+    controller.apply_config({"preset": "silent", "scope": "mobo"})
+    controller.apply_config({"preset": "max", "scope": "gpu"})
+    assert controller._config["presets"] == {"mobo": "silent", "gpu": "max"}
+
+
+def test_applying_to_all_sets_both_domains(monkeypatch):
+    controller, _ = _two_domain_controller(monkeypatch)
+    controller.apply_config({"preset": "balanced", "scope": "all"})
+    assert controller._config["presets"] == {"gpu": "balanced", "mobo": "balanced"}
+
+
+def test_scoped_apply_does_not_drop_channels_from_the_other_domain(monkeypatch):
+    controller, _ = _two_domain_controller(monkeypatch)
+    controller.apply_config({"preset": "balanced", "scope": "all"})
+    controller.apply_config({"preset": "silent", "scope": "gpu"})
+    assert set(controller._config["channels"]) == {"gpu:0:fan0", "hwmon:x:pwm1"}
+
+
+def test_an_unknown_scope_is_refused(monkeypatch):
+    controller, _ = _two_domain_controller(monkeypatch)
+    with pytest.raises(ValueError, match="область"):
+        controller.apply_config({"preset": "silent", "scope": "psu"})
+
+
+def test_preview_honours_the_scope(monkeypatch):
+    controller, backend = _two_domain_controller(monkeypatch)
+    out = controller.preview({"preset": "max", "scope": "gpu"})
+    assert set(out["preview"]) == {"gpu:0:fan0"}
+    assert backend.written == []
+
+
+def test_state_written_before_scoping_is_read_as_both_domains(monkeypatch):
+    state = {"fans": {"enabled": True, "preset": "silent", "channels": {}}}
+    monkeypatch.setattr(fans, "_load_state", lambda: state)
+    monkeypatch.setattr(fans, "_save_state", lambda s: None)
+    controller = fans.FanController()
+    controller.load_config()
+    assert controller._config["presets"] == {"gpu": "silent", "mobo": "silent"}
+    assert "preset" not in controller._config

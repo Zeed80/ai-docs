@@ -194,7 +194,20 @@ async def test_deleting_a_missing_preset_is_404(sidecar, presets):
 async def test_unknown_preset_name_is_passed_to_the_sidecar_as_builtin(sidecar, presets):
     await cooling_api.apply_preset("balanced")
     sent = _sent(sidecar, "apply_fan_config")
-    assert sent == {"preset": "balanced", "enabled": True}
+    assert sent == {"preset": "balanced", "scope": "all", "enabled": True}
+
+
+@pytest.mark.asyncio
+async def test_a_preset_can_be_applied_to_one_domain_only(sidecar, presets):
+    await cooling_api.apply_preset("silent", cooling_api.FanPresetApply(scope="gpu"))
+    assert _sent(sidecar, "apply_fan_config")["scope"] == "gpu"
+
+
+def test_scope_is_validated():
+    with pytest.raises(ValueError):
+        cooling_api.FanPresetApply(scope="psu")
+    with pytest.raises(ValueError):
+        cooling_api.FanConfigUpdate(scope="everything")
 
 
 # --- policy ---------------------------------------------------------------

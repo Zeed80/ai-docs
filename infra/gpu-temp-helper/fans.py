@@ -638,12 +638,25 @@ BUILTIN_PRESETS: dict[str, dict[str, Any]] = {
 }
 
 
-def preset_config(preset: str, channels: Iterable[FanChannel]) -> dict[str, Any]:
-    """Materialise a builtin preset into a per-channel configuration."""
+#: Which channels a preset may be applied to. GPU fans and board fans are
+#: tuned independently — a quiet card and a quiet case are separate decisions.
+SCOPES = ("all", "gpu", "mobo")
+
+
+def preset_config(
+    preset: str, channels: Iterable[FanChannel], scope: str = "all"
+) -> dict[str, Any]:
+    """Materialise a builtin preset into a per-channel configuration.
+
+    `scope` limits it to one hardware domain, leaving the other one's curves
+    exactly as they were.
+    """
     spec = BUILTIN_PRESETS.get(preset) or BUILTIN_PRESETS["balanced"]
     out: dict[str, Any] = {}
     for ch in channels:
         if not ch.controllable:
+            continue
+        if scope != "all" and ch.kind != scope:
             continue
         curve = spec["curves"].get(ch.role) or spec["curves"].get(ch.kind) \
             or spec["curves"]["case"]
@@ -722,9 +735,14 @@ class FanController:
             state = _load_state()
             self._config = state.get("fans") or {
                 "enabled": False,
-                "preset": "balanced",
+                "presets": {"gpu": "balanced", "mobo": "balanced"},
                 "channels": {},
             }
+            # State written before presets became per-domain carries a single
+            # `preset`; read it as "both domains are on this one".
+            legacy = self._config.pop("preset", None)
+            if legacy and not self._config.get("presets"):
+                self._config["presets"] = {"gpu": legacy, "mobo": legacy}
             control = state.get("fan_control") or {}
             # An absent key means "never set from the GUI" — fall back to the
             # environment default rather than to False, so an operator who
@@ -1196,13 +1214,31 @@ class FanController:
             raise RuntimeError("управление вентиляторами выключено в настройках охлаждения")
         with self._lock:
             preset = payload.get("preset")
+            scope = str(payload.get("scope") or "all")
+            if scope not in SCOPES:
+                raise ValueError(f"неизвестная область применения: {scope}")
             channels_cfg = payload.get("channels")
             if channels_cfg is None and preset:
-                channels_cfg = preset_config(str(preset), self._channels.values())
+                channels_cfg = preset_config(
+                    str(preset), self._channels.values(), scope
+                )
             channels_cfg = self._sanitize_channels(channels_cfg or {})
+            if scope != "all":
+                # Keep the other domain's curves: this call was about one of
+                # them, and silently resetting the rest is the kind of thing
+                # that makes a settings page untrustworthy.
+                merged = dict(self._config.get("channels") or {})
+                merged.update(channels_cfg)
+                channels_cfg = merged
+            presets = dict(self._config.get("presets") or {})
+            if preset:
+                if scope == "all":
+                    presets = {"gpu": str(preset), "mobo": str(preset)}
+                else:
+                    presets[scope] = str(preset)
             self._config = {
                 "enabled": bool(payload.get("enabled", True)),
-                "preset": preset or self._config.get("preset") or "custom",
+                "presets": presets,
                 "channels": channels_cfg,
                 "emergency_c": {**DEFAULT_EMERGENCY_C,
                                 **(payload.get("emergency_c") or {})},
@@ -1221,7 +1257,8 @@ class FanController:
                 # plug a fan in, and re-testing it would re-log the same notice.
             self._persist_config()
             self._log("info", None, "config_applied",
-                      f"пресет {self._config['preset']}, каналов {len(channels_cfg)}, "
+                      f"пресет {preset or 'свой'} ({scope}), "
+                      f"каналов {len(channels_cfg)}, "
                       f"enabled={self._config['enabled']}")
             if not self._config["enabled"]:
                 self.restore_all_auto(reason="конфигурация выключена")
@@ -1274,7 +1311,10 @@ class FanController:
         with self._lock:
             channels_cfg = payload.get("channels")
             if channels_cfg is None and payload.get("preset"):
-                channels_cfg = preset_config(str(payload["preset"]), self._channels.values())
+                channels_cfg = preset_config(
+                    str(payload["preset"]), self._channels.values(),
+                    str(payload.get("scope") or "all"),
+                )
             channels_cfg = self._sanitize_channels(channels_cfg or {})
             sweep = payload.get("temps") or list(range(30, 101, 5))
             result: dict[str, Any] = {}

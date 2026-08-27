@@ -50,7 +50,11 @@ interface FansResponse {
   control_enabled: boolean;
   hwmon_allowed: boolean;
   env_defaults?: { control_enabled: boolean; allow_hwmon: boolean };
-  config: { enabled?: boolean; preset?: string; channels?: Record<string, ChannelConfig> };
+  config: {
+    enabled?: boolean;
+    presets?: Record<string, string>;
+    channels?: Record<string, ChannelConfig>;
+  };
   presets: Record<string, { label: string; curves: Record<string, CurvePoint[]> }>;
   custom_presets: Record<string, { label: string; config: unknown }>;
   channels: FanChannel[];
@@ -85,6 +89,11 @@ const MODE_LABELS: Record<string, string> = {
   manual: "под управлением",
   failed: "авария",
   no_fan: "разъём пуст",
+};
+
+const SCOPE_LABELS: Record<string, string> = {
+  gpu: "видеокарта",
+  mobo: "процессор и корпус",
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -255,13 +264,13 @@ export default function CoolingSettingsPage() {
     }
   }
 
-  async function applyPreset(name: string) {
-    const out = await call(`/presets/${encodeURIComponent(name)}/apply`);
+  async function applyPreset(name: string, scope: "gpu" | "mobo") {
+    const out = await call(`/presets/${encodeURIComponent(name)}/apply`, { scope });
     // Drop the manual drafts: the preset owns the speed now, and a leftover
     // draft would keep the slider showing a number nothing is driving.
     if (out) {
       setManualDraft({});
-      setMsg(`Пресет «${name}» применён.`);
+      setMsg(`Пресет «${name}» применён: ${SCOPE_LABELS[scope]}.`);
     }
   }
 
@@ -318,13 +327,23 @@ export default function CoolingSettingsPage() {
     const out = await call("/presets", {
       name: presetName.trim(),
       label: presetName.trim(),
-      config: { enabled: true, preset: presetName.trim(), channels },
+      config: { enabled: true, preset: presetName.trim(), scope: "all", channels },
     });
     if (out) {
       setPresetName("");
       setMsg("Пресет сохранён.");
     }
   }
+
+  // A stopped fan reads 0%, which is below the channel floor — the label must
+  // not claim a value the slider cannot even represent.
+  const sliderMin = (c: FanChannel) =>
+    Math.round(Math.max(data?.safety.hard_floor_pct ?? 20, c.min_pct));
+  const sliderValue = (c: FanChannel) =>
+    Math.max(
+      sliderMin(c),
+      Math.round(manualDraft[c.id] ?? c.target_pct ?? c.pwm_pct ?? c.min_pct),
+    );
 
   if (loading) return <div className="text-sm text-muted-foreground">Загрузка…</div>;
 
@@ -439,25 +458,17 @@ export default function CoolingSettingsPage() {
                       <div className="flex items-center gap-2">
                         <input
                           type="range"
-                          min={Math.round(Math.max(data?.safety.hard_floor_pct ?? 20, c.min_pct))}
+                          min={sliderMin(c)}
                           max={Math.round(c.max_pct)}
                           step={1}
                           disabled={busy || !data?.control_enabled}
-                          value={Math.round(
-                            manualDraft[c.id] ??
-                              c.target_pct ??
-                              c.pwm_pct ??
-                              c.min_pct,
-                          )}
+                          value={sliderValue(c)}
                           onChange={(e) => setManual(c.id, Number(e.target.value))}
                           className="w-28 accent-blue-500 disabled:opacity-40"
                           aria-label={`Обороты: ${c.label}`}
                         />
                         <span className="tabular-nums w-9 text-right">
-                          {Math.round(
-                            manualDraft[c.id] ?? c.target_pct ?? c.pwm_pct ?? c.min_pct,
-                          )}
-                          %
+                          {sliderValue(c)}%
                         </span>
                       </div>
                     ) : (
@@ -497,29 +508,43 @@ export default function CoolingSettingsPage() {
       {/* --- Presets ---------------------------------------------------- */}
       <section className="space-y-2">
         <h3 className="text-sm font-semibold">Пресеты</h3>
-        <div className="flex flex-wrap gap-2">
-          {Object.entries(data?.presets || {}).map(([name, p]) => (
-            <button
-              key={name}
-              disabled={busy || !data?.control_enabled || controllable.length === 0}
-              onClick={() => applyPreset(name)}
-              className={`rounded border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50 ${
-                data?.config?.preset === name ? "border-blue-500 bg-blue-500/10 text-blue-500" : ""
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
-          {Object.entries(data?.custom_presets || {}).map(([name, p]) => (
-            <button
-              key={name}
-              disabled={busy || !data?.control_enabled}
-              onClick={() => applyPreset(name)}
-              className="rounded border border-dashed px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
-            >
-              {p.label || name}
-            </button>
-          ))}
+        {(["gpu", "mobo"] as const).map((scope) => {
+          const mine = controllable.filter((c) => c.kind === scope);
+          if (mine.length === 0) return null;
+          const active = data?.config?.presets?.[scope];
+          return (
+            <div key={scope} className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground w-40 shrink-0">
+                {SCOPE_LABELS[scope]} · {mine.length} кан.
+              </span>
+              {Object.entries(data?.presets || {}).map(([name, p]) => (
+                <button
+                  key={name}
+                  disabled={busy || !data?.control_enabled}
+                  onClick={() => applyPreset(name, scope)}
+                  className={`rounded border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50 ${
+                    active === name ? "border-blue-500 bg-blue-500/10 text-blue-500" : ""
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+              {Object.entries(data?.custom_presets || {}).map(([name, p]) => (
+                <button
+                  key={name}
+                  disabled={busy || !data?.control_enabled}
+                  onClick={() => applyPreset(name, scope)}
+                  className={`rounded border border-dashed px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50 ${
+                    active === name ? "border-blue-500 bg-blue-500/10 text-blue-500" : ""
+                  }`}
+                >
+                  {p.label || name}
+                </button>
+              ))}
+            </div>
+          );
+        })}
+        <div className="flex flex-wrap gap-2 pt-1">
           <button
             disabled={busy}
             onClick={revertAll}

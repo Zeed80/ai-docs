@@ -576,7 +576,8 @@ async def apply_fan_config(payload: dict) -> dict:
     config = data.get("config") or {}
     logger.info(
         "fan_config_applied",
-        preset=config.get("preset"),
+        scope=payload.get("scope", "all"),
+        presets=config.get("presets"),
         enabled=config.get("enabled"),
         channels=len(config.get("channels") or {}),
     )
