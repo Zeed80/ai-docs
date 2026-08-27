@@ -30,6 +30,8 @@ interface FanChannel {
   id: string;
   label: string;
   kind: "gpu" | "mobo";
+  role: string;
+  no_fan?: boolean;
   controllable: boolean;
   control_reason: string | null;
   min_pct: number;
@@ -82,6 +84,14 @@ const MODE_LABELS: Record<string, string> = {
   auto: "прошивка",
   manual: "под управлением",
   failed: "авария",
+  no_fan: "разъём пуст",
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  gpu: "видеокарта",
+  cpu: "процессор",
+  pump: "помпа",
+  case: "корпус",
 };
 
 function levelClass(level: string): string {
@@ -191,7 +201,9 @@ export default function CoolingSettingsPage() {
     if (curve?.length) {
       setDraft(curve.map((p) => ({ ...p })));
     } else {
-      const preset = data?.presets?.balanced?.curves?.[channel.kind];
+      const preset =
+        data?.presets?.balanced?.curves?.[channel.role] ??
+        data?.presets?.balanced?.curves?.[channel.kind];
       setDraft((preset || []).map((p) => ({ ...p })));
     }
     setPreview(null);
@@ -284,7 +296,10 @@ export default function CoolingSettingsPage() {
           : (c.config as ChannelConfig) || {
               mode: "curve",
               sensor: c.default_sensor,
-              curve: data.presets?.balanced?.curves?.[c.kind] || [],
+              curve:
+                data.presets?.balanced?.curves?.[c.role] ||
+                data.presets?.balanced?.curves?.[c.kind] ||
+                [],
             };
     }
     const out = await call("/fans/config", { enabled: true, preset: "custom", channels });
@@ -408,7 +423,10 @@ export default function CoolingSettingsPage() {
                 >
                   <td className="py-1.5 pr-3">
                     <div>{c.label}</div>
-                    <div className="text-[11px] text-muted-foreground font-mono">{c.id}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {ROLE_LABELS[c.role] || c.role}
+                      <span className="font-mono"> · {c.id}</span>
+                    </div>
                   </td>
                   <td className="py-1.5 pr-3 tabular-nums">{c.rpm === null ? "—" : `${c.rpm} об/мин`}</td>
                   <td className="py-1.5 pr-3 tabular-nums">
@@ -449,8 +467,14 @@ export default function CoolingSettingsPage() {
                   <td className="py-1.5 text-xs">
                     {c.failed_reason ? (
                       <span className="text-red-600">{c.failed_reason}</span>
+                    ) : c.no_fan ? (
+                      <span className="text-muted-foreground">
+                        вентилятор не подключён — разъём свободен
+                      </span>
                     ) : c.controllable ? (
-                      <span className="text-green-700">управляем ({Math.round(c.min_pct)}–{Math.round(c.max_pct)}%)</span>
+                      <span className="text-green-700">
+                        управляем ({Math.round(c.min_pct)}–{Math.round(c.max_pct)}%)
+                      </span>
                     ) : (
                       <span className="text-muted-foreground">{c.control_reason}</span>
                     )}

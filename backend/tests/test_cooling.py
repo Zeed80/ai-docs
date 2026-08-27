@@ -156,9 +156,11 @@ class FakeBackend(fans.FanBackend):
         return dict(self._temps)
 
 
-def _controller(temps, stuck=False, has_tach=True, kind="mobo"):
+def _controller(temps, stuck=False, has_tach=True, kind="mobo", role=None):
     channel = fans.FanChannel(
-        id="fake:1", label="Fake", kind=kind, controllable=True,
+        id="fake:1", label="Fake", kind=kind,
+        role=role or ("case" if kind == "mobo" else "gpu"),
+        controllable=True,
         min_pct=25.0, max_pct=100.0, has_tach=has_tach,
         default_sensor="cpu" if kind == "mobo" else "gpu",
     )
@@ -211,23 +213,49 @@ def test_emergency_releases_after_the_hold_expires():
     assert backend.speed["fake:1"] < 100.0
 
 
-def test_stalled_fan_is_failed_and_handed_back_to_firmware():
+def test_header_without_a_fan_is_reported_once_not_as_a_fault():
     controller, backend, channel = _controller({"cpu": 60.0}, stuck=True)
     for _ in range(fans.STALL_TICKS + 1):
         controller.tick()
-    assert channel.mode == "failed"
+    assert channel.mode == "no_fan"
     assert "fake:1" in backend.auto_calls
-    assert any(e["code"] == "channel_failed" for e in controller.events())
+    notices = [e for e in controller.events() if e["code"] == "no_fan"]
+    assert len(notices) == 1
+    assert notices[0]["level"] == "info"          # not an error
+    assert not any(e["code"] == "channel_failed" for e in controller.events())
 
 
-def test_failed_channel_is_not_driven_again():
+def test_empty_header_is_not_driven_again():
     controller, backend, _ = _controller({"cpu": 60.0}, stuck=True)
     for _ in range(fans.STALL_TICKS + 1):
         controller.tick()
-    writes_after_failure = len(backend.written)
+    writes_after = len(backend.written)
     controller.tick()
     controller.tick()
-    assert len(backend.written) == writes_after_failure
+    assert len(backend.written) == writes_after
+
+
+def test_applying_a_preset_does_not_re_announce_an_empty_header(monkeypatch):
+    controller, _, _ = _controller({"cpu": 60.0}, stuck=True)
+    monkeypatch.setattr(fans, "_load_state", lambda: {})
+    monkeypatch.setattr(fans, "_save_state", lambda s: None)
+    for _ in range(fans.STALL_TICKS + 1):
+        controller.tick()
+    controller.apply_config({"preset": "silent", "enabled": True})
+    for _ in range(fans.STALL_TICKS + 2):
+        controller.tick()
+    assert len([e for e in controller.events() if e["code"] == "no_fan"]) == 1
+
+
+def test_an_explicit_command_re_tests_an_empty_header(monkeypatch):
+    controller, backend, _ = _controller({"cpu": 60.0}, stuck=True)
+    monkeypatch.setattr(fans, "_load_state", lambda: {})
+    monkeypatch.setattr(fans, "_save_state", lambda s: None)
+    for _ in range(fans.STALL_TICKS + 1):
+        controller.tick()
+    controller.set_manual("fake:1", 60)
+    assert controller._rt["fake:1"].no_fan is False
+    assert ("fake:1", 60.0) in backend.written
 
 
 def test_sensor_loss_reverts_the_channel_to_automatic():
@@ -383,3 +411,114 @@ def test_driver_limitation_outranks_the_permission():
     )
     assert controllable is False
     assert "nct6687d" in (reason or "")
+
+
+# --- transient write failures (the NCT6687 EC refuses a write now and then) ---
+class FlakyBackend(FakeBackend):
+    """Fails `fail_times` consecutive writes, then behaves."""
+
+    def __init__(self, channels, temps=None, fail_times=1):
+        super().__init__(channels, temps)
+        self.remaining_failures = fail_times
+
+    def set_manual(self, channel_id, pct):
+        if self.remaining_failures > 0:
+            self.remaining_failures -= 1
+            raise OSError(5, "Input/output error")
+        super().set_manual(channel_id, pct)
+
+
+def _flaky(temps, fail_times):
+    channel = fans.FanChannel(
+        id="fake:1", label="Fake", kind="mobo", role="case", controllable=True,
+        min_pct=25.0, max_pct=100.0, has_tach=True, default_sensor="cpu",
+    )
+    backend = FlakyBackend([channel], temps, fail_times=fail_times)
+    controller = fans.FanController()
+    controller.control_enabled = True
+    controller._backends = [backend]
+    controller._channels = {channel.id: channel}
+    controller._owner = {channel.id: backend}
+    controller._rt = {channel.id: fans._Runtime()}
+    controller._config = {
+        "enabled": True,
+        "channels": {
+            channel.id: {
+                "mode": "manual", "pct": 60.0, "sensor": "cpu",
+                "min_pct": 25.0, "allow_stop": False, "stop_below_c": None,
+            }
+        },
+    }
+    return controller, backend, channel
+
+
+def test_a_single_write_failure_is_retried_not_fatal():
+    controller, backend, channel = _flaky({"cpu": 60.0}, fail_times=1)
+    controller.tick()
+    assert channel.mode != "failed"
+    assert backend.written == []          # first attempt was refused
+    controller.tick()
+    assert ("fake:1", 60.0) in backend.written   # second attempt got through
+    assert controller._rt["fake:1"].write_failures == 0
+
+
+def test_persistent_write_failures_do_fail_the_channel():
+    controller, _, channel = _flaky({"cpu": 60.0}, fail_times=99)
+    for _ in range(fans.WRITE_FAILURES_BEFORE_GIVING_UP):
+        controller.tick()
+    assert channel.mode == "failed"
+    assert "не удалась" in (controller._rt["fake:1"].failed_reason or "")
+
+
+def test_a_refused_write_does_not_count_as_applied():
+    # Otherwise the dedup would skip the retry and the fan would silently keep
+    # the old speed while the UI showed the new one.
+    controller, backend, _ = _flaky({"cpu": 60.0}, fail_times=1)
+    controller.tick()
+    assert controller._rt["fake:1"].last_written is None
+
+
+# --- role-based curves ----------------------------------------------------
+def test_presets_cover_every_role():
+    for name, preset in fans.BUILTIN_PRESETS.items():
+        assert set(preset["curves"]) >= {"gpu", "cpu", "pump", "case"}, name
+
+
+def test_a_pump_keeps_a_higher_floor_than_a_case_fan():
+    curves = fans.BUILTIN_PRESETS["silent"]["curves"]
+    assert fans.evaluate_curve(curves["pump"], 40) > fans.evaluate_curve(curves["case"], 40)
+
+
+def test_preset_picks_the_curve_by_role_not_by_kind():
+    cpu_ch = fans.FanChannel(
+        id="c", label="CPU", kind="mobo", role="cpu", controllable=True,
+        min_pct=25, max_pct=100, has_tach=True, default_sensor="cpu",
+    )
+    case_ch = fans.FanChannel(
+        id="s", label="SYS", kind="mobo", role="case", controllable=True,
+        min_pct=25, max_pct=100, has_tach=True, default_sensor="cpu",
+    )
+    cfg = fans.preset_config("balanced", [cpu_ch, case_ch])
+    assert cfg["c"]["curve"] != cfg["s"]["curve"]
+
+
+def test_unknown_role_falls_back_to_the_gentle_case_curve():
+    odd = fans.FanChannel(
+        id="x", label="X", kind="mobo", role="mystery", controllable=True,
+        min_pct=25, max_pct=100, has_tach=True, default_sensor="cpu",
+    )
+    cfg = fans.preset_config("balanced", [odd])
+    assert cfg["x"]["curve"] == fans.BUILTIN_PRESETS["balanced"]["curves"]["case"]
+
+
+# --- header naming --------------------------------------------------------
+def test_nct6687_headers_are_named_after_the_board_layout():
+    assert fans._header_of("nct6687", 1) == ("NCT6687 · CPU_FAN", "cpu")
+    assert fans._header_of("nct6687", 2) == ("NCT6687 · PUMP_FAN", "pump")
+    assert fans._header_of("nct6687", 5)[1] == "case"
+
+
+def test_an_unknown_chip_gets_a_neutral_name_and_the_safe_role():
+    label, role = fans._header_of("it8686", 3)
+    assert "канал 3" in label
+    assert role == "case"      # never guess that something is the CPU cooler

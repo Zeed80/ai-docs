@@ -21,6 +21,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DRIVER_REPO="https://github.com/Fred78290/nct6687d"
 BLACKLIST_FILE="/etc/modprobe.d/blacklist-nct6683.conf"
 AUTOLOAD_FILE="/etc/modules-load.d/nct6687.conf"
+OPTIONS_FILE="/etc/modprobe.d/nct6687.conf"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 # Overridable so the classification can be exercised against fixture trees for
 # boards this machine does not have.
@@ -74,6 +75,17 @@ chip_channels() {
   ls "$base" 2>/dev/null \
     | sed -n 's/^\(fan\|pwm\)\([0-9]\+\).*/\2/p' \
     | sort -n -u
+}
+
+# `cmd | grep -q` is a trap under `set -o pipefail`: grep exits at the first
+# match, the writer gets SIGPIPE, and the pipeline reports failure even though
+# the pattern matched. These read the whole input instead.
+module_loaded() {
+  lsmod | grep '^nct6687' > /dev/null
+}
+
+dkms_registered() {
+  dkms status 2>/dev/null | grep '^nct6687' > /dev/null
 }
 
 confirm() {
@@ -198,10 +210,14 @@ print_verdict() {
   case "$verdict" in
     already-writable)
       ok "  Драйвер уже отдаёт ${WRITABLE_PWM} PWM-канал(ов) на запись."
-      echo "  Ставить ничего не нужно. Включите управление в infra/.env:"
-      echo "      FAN_CONTROL_ENABLED=1"
-      echo "      FAN_CONTROL_ALLOW_HWMON=1"
-      echo "  и перезапустите сервис: docker compose up -d gpu-temp-helper"
+      echo "  Ставить ничего не нужно — включите управление в интерфейсе:"
+      echo "  Настройки → Охлаждение, две галочки в разделе «Управление»."
+      if module_loaded && ! grep -qs 'msi_fan_brute_force=1' "$OPTIONS_FILE"; then
+        echo
+        warn "  ВНИМАНИЕ: модуль nct6687 без параметра msi_fan_brute_force=1."
+        echo "  На платах MSI 800-й серии системные вентиляторы при этом принимают"
+        echo "  запись, но не подчиняются ей. Проверьте: sudo bash $0 --verify"
+      fi
       ;;
     nct6687d)
       warn "  Чип Nuvoton NCT6687D под штатным драйвером nct6683: pwm только на чтение."
@@ -259,6 +275,7 @@ do_install() {
   echo "  2. сборка и установка модуля nct6687d из ${DRIVER_REPO} (через DKMS)"
   echo "  3. запись ${BLACKLIST_FILE}  — вытеснить штатный nct6683"
   echo "  4. запись ${AUTOLOAD_FILE}   — загружать nct6687 при старте"
+  echo "  5. запись ${OPTIONS_FILE}   — msi_fan_brute_force=1 (см. ниже)"
   echo "  Существующие файлы сохраняются с суффиксом .bak-${STAMP}."
   echo "  Отменить всё: sudo bash $0 --uninstall"
   echo
@@ -289,7 +306,7 @@ do_install() {
   fi
 
   bold "== 2/4 Модуль =="
-  if dkms status 2>/dev/null | grep -q '^nct6687'; then
+  if dkms_registered; then
     ok "  модуль уже зарегистрирован в DKMS, сборку пропускаю"
   else
     local build_dir
@@ -306,10 +323,21 @@ do_install() {
   echo 'blacklist nct6683' > "$BLACKLIST_FILE"
   ok "  записан $BLACKLIST_FILE"
 
-  bold "== 4/4 Автозагрузка =="
+  bold "== 4/5 Автозагрузка =="
   backup_file "$AUTOLOAD_FILE"
   echo 'nct6687' > "$AUTOLOAD_FILE"
   ok "  записан $AUTOLOAD_FILE"
+
+  bold "== 5/5 Параметр драйвера =="
+  # Measured on an MSI MAG B850M MORTAR: without this, CPU_FAN and PUMP_FAN
+  # obey while SYS_FAN1-4 silently ignore every write — the value reads back
+  # as whatever the board firmware wants, and writes intermittently fail with
+  # EIO. With it, all channels converge on the commanded duty.
+  backup_file "$OPTIONS_FILE"
+  echo 'options nct6687 msi_fan_brute_force=1' > "$OPTIONS_FILE"
+  ok "  записан $OPTIONS_FILE (msi_fan_brute_force=1)"
+  echo "  Без этого параметра на платах MSI 800-й серии слушаются только"
+  echo "  CPU_FAN и PUMP_FAN, а системные вентиляторы молча игнорируют запись."
 
   echo
   bold "== Дальше — руками =="
@@ -327,7 +355,7 @@ do_install() {
 do_uninstall() {
   require_root
   bold "== Откат =="
-  if dkms status 2>/dev/null | grep -q '^nct6687'; then
+  if dkms_registered; then
     local ver
     ver="$(dkms status | sed -n 's/^nct6687[,/ ]\+\([^,: ]*\).*/\1/p' | head -1)"
     echo "  удаляю модуль из DKMS (версия ${ver:-?})"
@@ -337,7 +365,7 @@ do_uninstall() {
     echo "  модуля в DKMS нет"
   fi
   local f
-  for f in "$BLACKLIST_FILE" "$AUTOLOAD_FILE"; do
+  for f in "$BLACKLIST_FILE" "$AUTOLOAD_FILE" "$OPTIONS_FILE"; do
     if [ -e "$f" ]; then
       backup_file "$f"
       rm -f "$f"
@@ -354,15 +382,24 @@ do_verify() {
   scan_hwmon
   print_diagnosis
   bold "== Итог проверки =="
-  if lsmod | grep -q '^nct6687'; then
+  if module_loaded; then
     ok "  модуль nct6687 загружен"
   else
     err "  модуль nct6687 НЕ загружен"
     echo "  Смотрите: dkms status ; modprobe nct6687 ; dmesg | grep -i nct"
   fi
+  if grep -qs 'msi_fan_brute_force=1' "$OPTIONS_FILE"; then
+    ok "  параметр msi_fan_brute_force=1 задан"
+  else
+    warn "  параметр msi_fan_brute_force=1 НЕ задан"
+    echo "  На платах MSI 800-й серии без него системные вентиляторы принимают"
+    echo "  запись, но не подчиняются ей. Лечится файлом ${OPTIONS_FILE}:"
+    echo "      echo 'options nct6687 msi_fan_brute_force=1' | sudo tee ${OPTIONS_FILE}"
+    echo "      sudo modprobe -r nct6687 && sudo modprobe nct6687"
+  fi
   if [ "$WRITABLE_PWM" -gt 0 ]; then
     ok "  PWM-каналов на запись: ${WRITABLE_PWM} — управление возможно"
-    echo "  Осталось включить FAN_CONTROL_ENABLED=1 и FAN_CONTROL_ALLOW_HWMON=1."
+    echo "  Осталось включить управление в интерфейсе: Настройки → Охлаждение."
   else
     err "  ни одного записываемого PWM-канала"
     echo "  Частая причина — не выключен Smart Fan Mode в BIOS."

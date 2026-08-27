@@ -66,10 +66,29 @@ EMERGENCY_HOLD_S = 60.0
 TEMP_HYSTERESIS_C = 3.0
 MAX_STEP_DOWN_PCT = 8.0
 
+# The NCT6687 EC intermittently refuses a write with EIO while its firmware is
+# touching the same register. One refusal means nothing; several in a row mean
+# the channel is genuinely not writable.
+WRITE_FAILURES_BEFORE_GIVING_UP = 4
+
 STALL_TICKS = 3           # S3: ticks of 0 rpm at a commanded speed before failing
 SENSOR_TIMEOUT_TICKS = 5  # S4: ticks without a temperature before reverting
 
 _HWMON_ROOT = "/sys/class/hwmon"
+
+# Header layout of the Nuvoton NCT6687D as wired by MSI. Without this a channel
+# is just "канал 3", and the operator cannot tell the CPU cooler from a case fan
+# — which is exactly what a fan curve needs to know.
+_NCT6687_HEADERS: dict[int, tuple[str, str]] = {
+    1: ("CPU_FAN", "cpu"),
+    2: ("PUMP_FAN", "pump"),
+    3: ("SYS_FAN1", "case"),
+    4: ("SYS_FAN2", "case"),
+    5: ("SYS_FAN3", "case"),
+    6: ("SYS_FAN4", "case"),
+    7: ("SYS_FAN5", "case"),
+    8: ("SYS_FAN6", "case"),
+}
 # Thermal-only drivers: they never carry fans, skip them while enumerating.
 _HWMON_SKIP = frozenset({"k10temp", "coretemp", "zenpower", "nvme", "amdgpu", "nouveau"})
 
@@ -112,6 +131,7 @@ class FanChannel:
     id: str
     label: str
     kind: str                       # "gpu" | "mobo"
+    role: str                       # "gpu" | "cpu" | "pump" | "case" — picks the curve
     controllable: bool
     control_reason: str | None = None
     min_pct: float = HARD_FLOOR_PCT
@@ -127,6 +147,7 @@ class FanChannel:
             "id": self.id,
             "label": self.label,
             "kind": self.kind,
+            "role": self.role,
             "controllable": self.controllable,
             "control_reason": self.control_reason,
             "min_pct": self.min_pct,
@@ -224,6 +245,7 @@ class NvmlFanBackend(FanBackend):
                         id=cid,
                         label=f"{gpu_name} · вентилятор {fan + 1}",
                         kind="gpu",
+                        role="gpu",
                         controllable=controllable,
                         control_reason=reason,
                         min_pct=max(lo_pct, HARD_FLOOR_PCT),
@@ -318,6 +340,19 @@ def _is_writable(path: str) -> bool:
         return False
 
 
+def _header_of(prefix: str, index: int) -> tuple[str, str]:
+    """Human name and role for a board channel.
+
+    Only the NCT6687 layout is known for certain; anything else gets a neutral
+    name and the gentler "case" curve, because guessing that some header is the
+    CPU cooler and then under-cooling it is the expensive kind of wrong.
+    """
+    if prefix.startswith("nct6687") or prefix.startswith("nct6683"):
+        header, role = _NCT6687_HEADERS.get(index, (f"FAN{index}", "case"))
+        return f"{prefix.upper()} · {header}", role
+    return f"{prefix.upper()} · канал {index}", "case"
+
+
 class HwmonFanBackend(FanBackend):
     """Motherboard fans via sysfs.
 
@@ -385,9 +420,8 @@ class HwmonFanBackend(FanBackend):
             controllable, reason = self._writability(
                 prefix, has_pwm, has_enable, pwm_path, self.allow
             )
-            label = _read_str(os.path.join(base, f"fan{n}_label")) or (
-                f"{prefix.upper()} · канал {n}"
-            )
+            header, role = _header_of(prefix, n)
+            label = _read_str(os.path.join(base, f"fan{n}_label")) or header
             cid = f"hwmon:{prefix}:pwm{n}" if has_pwm else f"hwmon:{prefix}:fan{n}"
             self._paths[cid] = {
                 "pwm": pwm_path if has_pwm else "",
@@ -399,6 +433,7 @@ class HwmonFanBackend(FanBackend):
                     id=cid,
                     label=label,
                     kind="mobo",
+                    role=role,
                     controllable=controllable,
                     control_reason=reason,
                     min_pct=DEFAULT_MOBO_MIN_PCT,
@@ -452,7 +487,11 @@ class HwmonFanBackend(FanBackend):
         if not paths or not paths["pwm"]:
             raise RuntimeError(f"unknown channel {channel_id}")
         target = max(HARD_FLOOR_PCT, min(100.0, pct))
-        if paths["enable"]:
+        # Only switch the mode when it is not already manual: every write goes
+        # to the Super-I/O EC over port I/O, and the fewer of them there are,
+        # the fewer collisions with the board firmware touching the same
+        # registers (those surface as EIO).
+        if paths["enable"] and _read_int(paths["enable"]) != 1:
             _write_int(paths["enable"], 1)      # 1 = manual
         _write_int(paths["pwm"], int(round(target * 255 / 100)))
 
@@ -564,8 +603,14 @@ BUILTIN_PRESETS: dict[str, dict[str, Any]] = {
         "curves": {
             "gpu": [{"t": 40, "pct": 30}, {"t": 60, "pct": 40},
                     {"t": 75, "pct": 65}, {"t": 83, "pct": 100}],
-            "mobo": [{"t": 40, "pct": 25}, {"t": 60, "pct": 40},
-                     {"t": 75, "pct": 70}, {"t": 85, "pct": 100}],
+            "cpu": [{"t": 40, "pct": 30}, {"t": 55, "pct": 40},
+                    {"t": 70, "pct": 65}, {"t": 85, "pct": 100}],
+            # A pump is not a fan: throttling it starves the loop, so it keeps
+            # a high floor and only ramps at the top.
+            "pump": [{"t": 40, "pct": 45}, {"t": 65, "pct": 60},
+                     {"t": 80, "pct": 100}],
+            "case": [{"t": 40, "pct": 25}, {"t": 60, "pct": 35},
+                     {"t": 75, "pct": 60}, {"t": 85, "pct": 100}],
         },
     },
     "balanced": {
@@ -573,15 +618,21 @@ BUILTIN_PRESETS: dict[str, dict[str, Any]] = {
         "curves": {
             "gpu": [{"t": 35, "pct": 30}, {"t": 55, "pct": 45},
                     {"t": 70, "pct": 75}, {"t": 80, "pct": 100}],
-            "mobo": [{"t": 35, "pct": 30}, {"t": 55, "pct": 50},
-                     {"t": 70, "pct": 80}, {"t": 82, "pct": 100}],
+            "cpu": [{"t": 35, "pct": 30}, {"t": 50, "pct": 45},
+                    {"t": 65, "pct": 75}, {"t": 80, "pct": 100}],
+            "pump": [{"t": 35, "pct": 50}, {"t": 60, "pct": 70},
+                     {"t": 80, "pct": 100}],
+            "case": [{"t": 35, "pct": 30}, {"t": 55, "pct": 45},
+                     {"t": 70, "pct": 70}, {"t": 82, "pct": 100}],
         },
     },
     "max": {
         "label": "Максимум",
         "curves": {
             "gpu": [{"t": 0, "pct": 100}],
-            "mobo": [{"t": 0, "pct": 100}],
+            "cpu": [{"t": 0, "pct": 100}],
+            "pump": [{"t": 0, "pct": 100}],
+            "case": [{"t": 0, "pct": 100}],
         },
     },
 }
@@ -594,10 +645,12 @@ def preset_config(preset: str, channels: Iterable[FanChannel]) -> dict[str, Any]
     for ch in channels:
         if not ch.controllable:
             continue
+        curve = spec["curves"].get(ch.role) or spec["curves"].get(ch.kind) \
+            or spec["curves"]["case"]
         out[ch.id] = {
             "mode": "curve",
             "sensor": ch.default_sensor,
-            "curve": [dict(p) for p in spec["curves"].get(ch.kind, spec["curves"]["gpu"])],
+            "curve": [dict(p) for p in curve],
             "min_pct": max(HARD_FLOOR_PCT, ch.min_pct),
             "allow_stop": False,
             "stop_below_c": None,
@@ -614,6 +667,8 @@ class _Runtime:
     last_temp_used: float | None = None
     no_temp_ticks: int = 0
     zero_rpm_ticks: int = 0
+    write_failures: int = 0   # consecutive write errors, reset by any success
+    no_fan: bool = False      # header with nothing plugged into it
     failed_reason: str | None = None
     commanded: bool = False   # did *we* put this channel into manual mode?
 
@@ -834,7 +889,7 @@ class FanController:
                 if not ch.controllable:
                     continue
                 rt = self._rt.setdefault(cid, _Runtime())
-                if rt.failed_reason:
+                if rt.failed_reason or rt.no_fan:
                     continue
                 cfg = (self._config.get("channels") or {}).get(cid)
                 emergency = self._emergency_active(ch, now)
@@ -942,8 +997,16 @@ class FanController:
         try:
             self._owner[cid].set_manual(cid, target)
         except Exception as exc:
-            self._fail(cid, ch, rt, f"запись оборотов не удалась: {exc}")
+            rt.write_failures += 1
+            if rt.write_failures >= WRITE_FAILURES_BEFORE_GIVING_UP:
+                self._fail(cid, ch, rt, f"запись оборотов не удалась: {exc}")
+            else:
+                # Leave last_written alone so the next tick retries this target.
+                self._log("warn", cid, "write_retry",
+                          f"{exc} — попытка {rt.write_failures} из "
+                          f"{WRITE_FAILURES_BEFORE_GIVING_UP}")
             return
+        rt.write_failures = 0
         rt.last_written = target
         rt.commanded = True
         ch.mode = "manual"
@@ -964,7 +1027,14 @@ class FanController:
 
     # -- S3: stall detection ---------------------------------------------
     def _check_stall(self, cid: str, ch: FanChannel, rt: _Runtime, target: float) -> None:
-        if not ch.has_tach or target <= 0:
+        """Zero rpm at a commanded speed means the header has nothing on it.
+
+        A board exposes every header it has, wired or not, so "no tachometer
+        reading" is the normal state of an empty connector — not a fault worth
+        an error every time a preset is applied. It is reported once, the
+        channel is handed back to firmware, and it stays quiet after that.
+        """
+        if not ch.has_tach or target <= 0 or rt.no_fan:
             return
         if ch.rpm is None:
             return
@@ -973,8 +1043,15 @@ class FanController:
             return
         rt.zero_rpm_ticks += 1
         if rt.zero_rpm_ticks >= STALL_TICKS:
-            self._fail(cid, ch, rt,
-                       f"вентилятор не крутится при {target:.0f}% — канал отключён от управления")
+            rt.no_fan = True
+            ch.mode = "no_fan"
+            self._log("info", cid, "no_fan",
+                      "нет оборотов при заданной скорости — считаю разъём пустым")
+            try:
+                self._owner[cid].set_auto(cid)
+                rt.commanded = False
+            except Exception as exc:
+                self._log("error", cid, "revert_failed", str(exc))
 
     def _fail(self, cid: str, ch: FanChannel, rt: _Runtime, message: str) -> None:
         rt.failed_reason = message
@@ -1012,6 +1089,7 @@ class FanController:
                 item = ch.to_dict()
                 rt = self._rt.get(cid)
                 item["failed_reason"] = rt.failed_reason if rt else None
+                item["no_fan"] = bool(rt.no_fan) if rt else False
                 item["target_pct"] = rt.last_written if rt else None
                 item["config"] = (self._config.get("channels") or {}).get(cid)
                 channels.append(item)
@@ -1086,7 +1164,12 @@ class FanController:
         with self._lock:
             ch = self._require_controllable(cid)
             rt = self._rt.setdefault(cid, _Runtime())
+            # A person asking for a speed is a reason to reconsider both
+            # verdicts: they may have plugged a fan in or fixed the wiring.
             rt.failed_reason = None
+            rt.no_fan = False
+            rt.write_failures = 0
+            rt.zero_rpm_ticks = 0
             requested = float(pct)
             applied = clamp_pct(requested, ch.min_pct, ch.max_pct)
             self._owner[cid].set_manual(cid, applied)
@@ -1132,7 +1215,10 @@ class FanController:
             }
             for rt in self._rt.values():
                 rt.failed_reason = None
+                rt.write_failures = 0
                 rt.last_temp_used = None
+                # rt.no_fan is deliberately kept: re-applying a preset does not
+                # plug a fan in, and re-testing it would re-log the same notice.
             self._persist_config()
             self._log("info", None, "config_applied",
                       f"пресет {self._config['preset']}, каналов {len(channels_cfg)}, "
