@@ -116,19 +116,26 @@ export const emailApi = {
     }).then((r) => j<{ id: string; filename: string; size: number | null }>(r));
   },
 
-  composeAssist: (body: Record<string, unknown>) =>
+  startComposeAssist: (body: Record<string, unknown>) =>
     mutFetch(`${API}/api/email/compose/assist`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    }).then((r) =>
+    }).then((r) => j<{ task_id: string }>(r)),
+
+  pollComposeAssist: (taskId: string) =>
+    apiFetch(`${API}/api/email/compose/assist/${taskId}`).then((r) =>
       j<{
-        subject: string;
-        body_html: string;
-        body_text: string;
-        diff: { op: string; text: string }[];
-        notes: string[];
-        tone: string;
+        status: "pending" | "done" | "error";
+        error?: string;
+        result?: {
+          subject: string;
+          body_html: string;
+          body_text: string;
+          diff: { op: string; text: string }[];
+          notes: string[];
+          tone: string;
+        };
       }>(r),
     ),
 

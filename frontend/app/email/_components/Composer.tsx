@@ -97,12 +97,13 @@ export function Composer({
   const [attachments, setAttachments] = useState<{ id: string; filename: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiElapsed, setAiElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [draftId, setDraftId] = useState<string | null>(
     mode.kind === "draft" ? mode.draft.id : null,
   );
-  const [suggest, setSuggest] = useState<Awaited<
-    ReturnType<typeof emailApi.composeAssist>
+  const [suggest, setSuggest] = useState<NonNullable<
+    Awaited<ReturnType<typeof emailApi.pollComposeAssist>>["result"]
   > | null>(null);
   const [aiInstruction, setAiInstruction] = useState("");
   const [contacts, setContacts] = useState<string[]>([]);
@@ -212,18 +213,40 @@ export function Composer({
 
   async function handleAiHelp(instruction: string) {
     setAiBusy(true);
+    setAiElapsed(0);
     setError(null);
+    const started = Date.now();
+    const tick = setInterval(
+      () => setAiElapsed(Math.round((Date.now() - started) / 1000)),
+      1000,
+    );
     try {
-      const res = await emailApi.composeAssist({
+      const { task_id } = await emailApi.startComposeAssist({
         subject,
         body: htmlToText(body),
-        instruction: instruction || aiInstruction || "Улучши формулировки, сохрани смысл",
+        instruction:
+          instruction || aiInstruction || "Улучши формулировки, сохрани смысл",
+        thread_id: mode.kind === "reply" || mode.kind === "forward" ? mode.message.thread_id : undefined,
         mailbox,
       });
-      setSuggest(res);
+      // Poll up to ~5 min.
+      for (let i = 0; i < 100; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const p = await emailApi.pollComposeAssist(task_id);
+        if (p.status === "done" && p.result) {
+          setSuggest(p.result);
+          return;
+        }
+        if (p.status === "error") {
+          setError(p.error || "Агент не смог доработать письмо");
+          return;
+        }
+      }
+      setError("Агент не успел ответить, попробуйте ещё раз");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      clearInterval(tick);
       setAiBusy(false);
     }
   }
@@ -351,7 +374,7 @@ export function Composer({
               disabled={aiBusy}
               className="text-xs px-3 py-1.5 rounded bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-50 shrink-0"
             >
-              {aiBusy ? "…" : t("actions.aiHelp")}
+              {aiBusy ? `Агент работает… ${aiElapsed} с` : t("actions.aiHelp")}
             </button>
           </div>
         </div>
@@ -400,7 +423,7 @@ export function Composer({
             </div>
             {suggest.notes?.length > 0 && (
               <ul className="mt-2 text-xs text-slate-400 list-disc pl-4">
-                {suggest.notes.map((n, i) => (
+                {suggest.notes.map((n: string, i: number) => (
                   <li key={i}>{n}</li>
                 ))}
               </ul>

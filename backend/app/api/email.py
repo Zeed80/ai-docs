@@ -899,44 +899,76 @@ async def analyze_style(
 # ── email.compose (AI help + agent generation) ────────────────────────────
 
 
-@router.post("/compose/assist", response_model=ComposeAssistResponse)
+class ComposeAssistStart(BaseModel):
+    task_id: str
+
+
+class ComposeAssistPoll(BaseModel):
+    status: str  # pending | done | error
+    result: ComposeAssistResponse | None = None
+    error: str | None = None
+
+
+@router.post("/compose/assist", response_model=ComposeAssistStart)
 async def compose_assist(
     payload: ComposeAssistRequest,
     user: UserInfo = Depends(get_effective_user),
-    db: AsyncSession = Depends(get_db),
 ):
-    """Skill: email.compose_assist — Rewrite a draft per a free-text instruction.
+    """Skill: email.compose_assist — start an agentic "improve this draft" turn.
 
-    Not gated: nothing is sent, this only produces suggested text for the
-    composer's preview. The human still edits and sends.
+    Runs as a real headless agent turn (looks things up with tools — invoice
+    line items, stock, supplier data) on the model configured for email
+    drafting. Async because that can take minutes; poll GET
+    /compose/assist/{task_id}. Not gated — nothing is sent.
     """
-    from app.domain.email_compose import ComposeContext, assist_compose
+    from app.tasks.email_compose_task import compose_assist_task
 
-    res = await assist_compose(
-        db,
-        draft_subject=payload.subject,
-        draft_body=payload.body,
-        instruction=payload.instruction,
-        context=ComposeContext(
-            thread_id=payload.thread_id,
-            supplier_id=payload.supplier_id,
-            invoice_id=payload.invoice_id,
-            mailbox=payload.mailbox,
+    task = compose_assist_task.delay({
+        "subject": payload.subject,
+        "body": payload.body,
+        "instruction": payload.instruction,
+        "thread_id": str(payload.thread_id) if payload.thread_id else None,
+        "supplier_id": str(payload.supplier_id) if payload.supplier_id else None,
+        "invoice_id": str(payload.invoice_id) if payload.invoice_id else None,
+        "mailbox": payload.mailbox,
+        "acting_user_sub": user.sub,
+    })
+    return ComposeAssistStart(task_id=task.id)
+
+
+@router.get("/compose/assist/{task_id}", response_model=ComposeAssistPoll)
+async def compose_assist_poll(task_id: str):
+    """Poll an email.compose_assist turn."""
+    from celery.result import AsyncResult
+
+    from app.tasks.celery_app import celery_app
+
+    r = AsyncResult(task_id, app=celery_app)
+    if not r.ready():
+        return ComposeAssistPoll(status="pending")
+    try:
+        data = r.get(timeout=1)
+    except Exception as exc:  # noqa: BLE001
+        return ComposeAssistPoll(status="error", error=str(exc))
+    if isinstance(data, dict) and data.get("error"):
+        return ComposeAssistPoll(status="error", error=data["error"])
+    return ComposeAssistPoll(
+        status="done",
+        result=ComposeAssistResponse(
+            subject=data.get("subject", ""),
+            body_html=data.get("body_html", ""),
+            body_text=data.get("body_text", ""),
+            diff=data.get("diff", []),
+            notes=data.get("notes", []),
+            tone=data.get("tone", "formal"),
         ),
-    )
-    return ComposeAssistResponse(
-        subject=res.subject,
-        body_html=res.body_html,
-        body_text=res.body_text,
-        diff=res.diff,
-        notes=res.notes,
-        tone=res.tone,
     )
 
 
 @router.post("/compose/generate", response_model=EmailDraftOut)
 async def agent_generate_draft(
     payload: AgentComposeRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.compose — Generate a draft from an intent + context.
@@ -957,6 +989,7 @@ async def agent_generate_draft(
             mailbox=payload.mailbox,
         ),
         tone_override=payload.tone,
+        acting_user_sub=(request.headers.get("x-acting-user") or "").strip() or None,
     )
     draft = await create_reply_draft(
         db,
@@ -1462,6 +1495,7 @@ async def recognize_attachment(
 async def agent_reply_draft(
     thread_id: uuid.UUID,
     payload: AgentComposeRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.reply — Draft a reply into an existing thread (correct
@@ -1487,6 +1521,7 @@ async def agent_reply_draft(
         context=ComposeContext(thread_id=thread_id, supplier_id=payload.supplier_id,
                                invoice_id=payload.invoice_id, mailbox=thread.mailbox),
         tone_override=payload.tone,
+        acting_user_sub=(request.headers.get("x-acting-user") or "").strip() or None,
     )
     to = payload.to_addresses or ([last_inbound.from_address] if last_inbound else [])
     subject = res.subject or (

@@ -225,6 +225,7 @@ from app.tasks import catalog_crawl as _catalog_crawl  # noqa: F401
 from app.tasks import catalog_pages as _catalog_pages  # noqa: F401
 from app.tasks import catalog_visual as _catalog_visual  # noqa: F401
 from app.tasks import approval_escalation as _approval_escalation  # noqa: F401
+from app.tasks import email_compose_task as _email_compose_task  # noqa: F401
 from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
 from app.tasks import proactive as _proactive  # noqa: F401
 from app.tasks import saved_query_alerts as _saved_query_alerts  # noqa: F401
