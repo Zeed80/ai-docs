@@ -1170,6 +1170,8 @@ class EmailRule(UUIDPrimaryKey, TimestampMixin, Base):
     actions: Mapped[list] = mapped_column(JSON, nullable=False)
     run_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # auto_reply_template: send without a human (needs MailServerConfig.auto_send_enabled)
+    auto_send: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class EmailRuleLog(UUIDPrimaryKey, Base):
@@ -1212,6 +1214,45 @@ class EmailAttachment(UUIDPrimaryKey, TimestampMixin, Base):
     sha256: Mapped[str | None] = mapped_column(String(64), index=True)
 
     message: Mapped["EmailMessage"] = relationship(back_populates="attachments")
+
+
+class EmailContact(UUIDPrimaryKey, TimestampMixin, Base):
+    """Address book entry. ``owner_sub`` None = shared org contact; otherwise the
+    user's personal contact. Merged with Party emails + message history in the
+    /api/email/contacts autocomplete."""
+
+    __tablename__ = "email_contacts"
+
+    name: Mapped[str | None] = mapped_column(String(300))
+    email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    organization: Mapped[str | None] = mapped_column(String(300))
+    phone: Mapped[str | None] = mapped_column(String(50))
+    notes: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[list | None] = mapped_column(JSON)
+    owner_sub: Mapped[str | None] = mapped_column(String(255), index=True)
+    party_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("parties.id", ondelete="SET NULL"))
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    source: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)  # manual|auto|party
+    use_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("email", "owner_sub", name="uq_email_contact_email_owner"),
+    )
+
+
+class EmailSignature(UUIDPrimaryKey, TimestampMixin, Base):
+    """Signature block appended to composed emails. ``owner_sub`` None + ``mailbox``
+    set = the shared mailbox's default signature; ``owner_sub`` set = a user's
+    personal signature."""
+
+    __tablename__ = "email_signatures"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    body_html: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_sub: Mapped[str | None] = mapped_column(String(255), index=True)
+    mailbox: Mapped[str | None] = mapped_column(String(100), index=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 # ── Audit ────────────────────────────────────────────────────────────────────
@@ -3701,6 +3742,10 @@ class MailServerConfig(UUIDPrimaryKey, TimestampMixin, Base):
     imap_port: Mapped[int] = mapped_column(Integer, default=993, nullable=False)
     smtp_host: Mapped[str | None] = mapped_column(String(255))
     smtp_port: Mapped[int] = mapped_column(Integer, default=465, nullable=False)
+    # Protected policy: may email filter rules send without a human? (admin-only)
+    auto_send_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    auto_send_max_per_day: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
+    attachment_retention_days: Mapped[int] = mapped_column(Integer, default=180, nullable=False)
     # Default quota for newly provisioned personal mailboxes (admin-editable,
     # per-mailbox override at provisioning time).
     default_quota_mb: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)

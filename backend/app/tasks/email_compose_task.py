@@ -28,6 +28,19 @@ def compose_assist_task(self, payload: dict) -> dict:
         def _uid(v):
             return _uuid.UUID(v) if v else None
 
+        task_id = self.request.id
+
+        def _progress(label: str) -> None:
+            try:
+                from app.utils.redis_client import get_sync_redis
+
+                r = get_sync_redis()
+                key = f"email:compose_progress:{task_id}"
+                r.rpush(key, label)
+                r.expire(key, 600)
+            except Exception:  # noqa: BLE001
+                pass
+
         async with _get_session_factory()() as db:
             res = await assist_compose(
                 db,
@@ -41,6 +54,7 @@ def compose_assist_task(self, payload: dict) -> dict:
                     mailbox=payload.get("mailbox"),
                 ),
                 acting_user_sub=payload.get("acting_user_sub"),
+                progress_cb=_progress,
             )
         return {
             "subject": res.subject,

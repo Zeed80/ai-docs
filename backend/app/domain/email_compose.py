@@ -240,9 +240,21 @@ def _email_model_override() -> str | None:
     return None
 
 
-async def _run_agent_email_turn(prompt: str, *, acting_user_sub: str | None) -> str:
+_TOOL_LABELS = {
+    "invoices": "смотрю счета", "suppliers": "смотрю поставщиков",
+    "procurement": "смотрю закупки", "documents": "ищу документы",
+    "warehouse": "проверяю склад", "email": "смотрю переписку",
+    "analytics": "считаю данные", "tool_catalog": "ищу в каталоге",
+    "search": "ищу", "memory": "вспоминаю",
+}
+
+
+async def _run_agent_email_turn(
+    prompt: str, *, acting_user_sub: str | None, progress_cb=None
+) -> str:
     """One headless agent turn, scoped to the email/procurement role, on the
-    configured email model. Returns the agent's final text ('' on failure)."""
+    configured email model. Returns the agent's final text ('' on failure).
+    ``progress_cb(str)`` is called with a short human label per tool call."""
     from app.ai.actor_context import get_acting_user, set_acting_user
     from app.ai.agent_loop import AgentSession
 
@@ -255,6 +267,15 @@ async def _run_agent_email_turn(prompt: str, *, acting_user_sub: str | None) -> 
             chunks.append(str(event.get("content") or ""))
         elif etype == "error":
             errors.append(str(event.get("content") or ""))
+        elif etype == "tool_call" and progress_cb:
+            tool = str(event.get("tool") or "").replace("__", ".").split(".")[0]
+            action = ""
+            try:
+                action = str((event.get("args") or {}).get("action") or "")
+            except Exception:  # noqa: BLE001
+                pass
+            label = _TOOL_LABELS.get(tool, f"{tool}")
+            progress_cb(f"{label}{(': ' + action) if action else ''}")
 
     token = None
     prev = get_acting_user()
@@ -334,6 +355,7 @@ async def assist_compose(
     instruction: str,
     context: ComposeContext,
     acting_user_sub: str | None = None,
+    progress_cb=None,
 ) -> ComposeResult:
     """Improve an existing draft per ``instruction`` (composer 'AI help')."""
     ctx_text, tone = await _gather_context(db, context)
@@ -352,7 +374,9 @@ async def assist_compose(
         f"{_JSON_TAIL}"
     )
 
-    agent_text = await _run_agent_email_turn(prompt, acting_user_sub=acting_user_sub)
+    agent_text = await _run_agent_email_turn(
+        prompt, acting_user_sub=acting_user_sub, progress_cb=progress_cb
+    )
     if agent_text:
         parsed = _extract_result(agent_text, fallback_subject=draft_subject or "")
     else:

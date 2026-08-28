@@ -67,11 +67,14 @@ async def record_outbound_message(
 
     thread = await db.get(EmailThread, thread_id) if thread_id else None
     if thread is None:
+        # A thread we START by sending belongs in "Отправленные", not the inbox.
+        # If a reply ever comes back, the IMAP ingest path flips it to "inbox".
         thread = EmailThread(
             subject=subject.removeprefix("Re: ").removeprefix("RE: "),
             mailbox=mailbox,
             message_count=0,
-            folder="inbox",
+            folder="sent",
+            is_read=True,
         )
         db.add(thread)
         await db.flush()

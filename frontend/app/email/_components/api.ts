@@ -71,8 +71,18 @@ export const emailApi = {
 
   contacts: (q: string) =>
     apiFetch(`${API}/api/email/contacts?q=${encodeURIComponent(q)}`).then((r) =>
-      j<{ email: string; name: string | null }[]>(r),
+      j<{ email: string; name: string | null; organization?: string | null; source?: string }[]>(r),
     ),
+
+  folderCounts: (mailbox?: string) =>
+    apiFetch(
+      `${API}/api/email/folder-counts${mailbox ? `?mailbox=${encodeURIComponent(mailbox)}` : ""}`,
+    ).then((r) => j<{ folder: string; total: number; unread: number }[]>(r)),
+
+  resolveSignature: (mailbox?: string) =>
+    apiFetch(
+      `${API}/api/email/signatures/resolve${mailbox ? `?mailbox=${encodeURIComponent(mailbox)}` : ""}`,
+    ).then(async (r) => (r.ok ? ((await r.json()) as { body_html: string } | null) : null)),
 
   drafts: () => apiFetch(`${API}/api/email/drafts`).then((r) => j<EmailDraft[]>(r)),
 
@@ -128,6 +138,7 @@ export const emailApi = {
       j<{
         status: "pending" | "done" | "error";
         error?: string;
+        progress?: string[];
         result?: {
           subject: string;
           body_html: string;

@@ -233,3 +233,44 @@ def apply_rule_to_backlog(self, rule_id: str, limit: int = 500) -> dict:
             except Exception:  # noqa: BLE001
                 db.rollback()
     return {"status": "ok", "applied": applied}
+
+
+@celery_app.task(name="app.tasks.email_triage.prune_attachments", bind=True)
+def prune_attachments(self) -> dict:
+    """Delete stored bytes of email attachments older than the retention window
+    (MailServerConfig.attachment_retention_days) that are NOT linked to a kept
+    Document. The EmailAttachment row stays (filename/size for the thread view);
+    only storage_path is cleared and the object removed."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.db.models import EmailAttachment, MailServerConfig
+    from app.db.sync_session import sync_session
+
+    removed = 0
+    with sync_session() as db:
+        cfg = db.execute(select(MailServerConfig)).scalars().first()
+        days = (cfg.attachment_retention_days if cfg else 180) or 180
+        if days <= 0:
+            return {"status": "disabled"}
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        rows = db.execute(
+            select(EmailAttachment).where(
+                EmailAttachment.created_at < cutoff,
+                EmailAttachment.storage_path.isnot(None),
+                EmailAttachment.document_id.is_(None),
+            ).limit(2000)
+        ).scalars().all()
+        for att in rows:
+            try:
+                from app.storage import delete_file
+
+                delete_file(att.storage_path)
+            except Exception:  # noqa: BLE001
+                pass
+            att.storage_path = None
+            removed += 1
+        db.commit()
+    logger.info("email_attachments_pruned", removed=removed, retention_days=days)
+    return {"status": "ok", "removed": removed}

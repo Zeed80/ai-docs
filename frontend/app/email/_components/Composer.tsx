@@ -93,11 +93,13 @@ export function Composer({
   const [showCc, setShowCc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
   const [subject, setSubject] = useState(initial.subject);
   const [body, setBody] = useState(initial.body);
+  const [sigApplied, setSigApplied] = useState(false);
   const [mailbox, setMailbox] = useState(initial.mailbox);
   const [attachments, setAttachments] = useState<{ id: string; filename: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiElapsed, setAiElapsed] = useState(0);
+  const [aiStep, setAiStep] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [draftId, setDraftId] = useState<string | null>(
     mode.kind === "draft" ? mode.draft.id : null,
@@ -112,6 +114,18 @@ export function Composer({
     const m = s.match(/<([^>]+)>/);
     return (m ? m[1] : s).trim();
   };
+  // Prefill the applicable signature once, at the bottom of the draft.
+  useEffect(() => {
+    if (sigApplied || mode.kind === "draft") return;
+    setSigApplied(true);
+    emailApi.resolveSignature(mailbox).then((sig) => {
+      if (sig?.body_html) {
+        setBody((b) => `${b}<br/><br/>${sig.body_html}`);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mailbox]);
+
   const parseAddrs = (s: string) =>
     s
       .split(/[,;]/)
@@ -233,6 +247,7 @@ export function Composer({
       for (let i = 0; i < 100; i++) {
         await new Promise((r) => setTimeout(r, 3000));
         const p = await emailApi.pollComposeAssist(task_id);
+        if (p.progress?.length) setAiStep(p.progress[p.progress.length - 1]);
         if (p.status === "done" && p.result) {
           setSuggest(p.result);
           return;
@@ -374,7 +389,9 @@ export function Composer({
               disabled={aiBusy}
               className="text-xs px-3 py-1.5 rounded bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-50 shrink-0"
             >
-              {aiBusy ? `Агент работает… ${aiElapsed} с` : t("actions.aiHelp")}
+              {aiBusy
+                ? `${aiStep || "Агент работает"}… ${aiElapsed} с`
+                : t("actions.aiHelp")}
             </button>
           </div>
         </div>

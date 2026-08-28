@@ -207,6 +207,11 @@ celery_app.conf.beat_schedule = {
         "task": "agent.idle_reflection",
         "schedule": 1_200.0,
     },
+    # Email attachment retention — daily.
+    "email-prune-attachments": {
+        "task": "app.tasks.email_triage.prune_attachments",
+        "schedule": 86_400.0,
+    },
 }
 
 celery_app.autodiscover_tasks([

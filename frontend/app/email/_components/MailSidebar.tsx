@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { emailApi } from "./api";
 import type { EmailLabel, MailboxChip } from "./types";
@@ -40,6 +40,18 @@ export function MailSidebar({
 }) {
   const t = useTranslations("email");
   const [newLabel, setNewLabel] = useState("");
+  const [fcounts, setFcounts] = useState<Record<string, { total: number; unread: number }>>({});
+
+  useEffect(() => {
+    emailApi
+      .folderCounts(activeMailbox || undefined)
+      .then((rows) => {
+        const m: Record<string, { total: number; unread: number }> = {};
+        for (const r of rows) m[r.folder] = { total: r.total, unread: r.unread };
+        setFcounts(m);
+      })
+      .catch(() => setFcounts({}));
+  }, [activeMailbox, mailboxes]);
 
   const totalUnread = mailboxes.reduce((n, m) => n + (m.unread_count || 0), 0);
   const activeChip = mailboxes.find((m) => m.name === activeMailbox) ?? null;
@@ -115,6 +127,11 @@ export function MailSidebar({
             onClick={() => onSelectFolder(f)}
           >
             <span>{t(`folders.${f}`)}</span>
+            {fcounts[f]?.unread > 0 ? (
+              <span className="text-xs text-blue-300">{fcounts[f].unread}</span>
+            ) : fcounts[f]?.total > 0 && f !== "trash" ? (
+              <span className="text-xs text-slate-600">{fcounts[f].total}</span>
+            ) : null}
           </div>
         ))}
 

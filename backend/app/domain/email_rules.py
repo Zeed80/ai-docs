@@ -213,14 +213,17 @@ def apply_rules(db, msg, mailbox: str) -> list[dict]:
 
                             process_document.delay(str(att.document_id), force=True)
                 elif kind == "auto_reply_template" and action.get("template_id"):
-                    # Deliberately DRAFT-only: an email rule never sends without a
-                    # human. The draft lands in /email drafts + a notification.
                     tpl = db.get(EmailTemplateDB, uuid.UUID(str(action["template_id"])))
                     if tpl is not None:
                         subj = tpl.subject or f"Re: {msg.subject or ''}"
                         if not subj.lower().startswith("re:"):
                             subj = f"Re: {subj}"
-                        db.add(DraftAction(
+                        # auto_send: only if the rule opts in AND an admin enabled
+                        # the org-wide policy AND the per-recipient daily rate
+                        # limit is not exhausted AND the incoming mail is not
+                        # itself auto-generated / already answered by a human.
+                        do_send = bool(rule.auto_send) and _auto_send_allowed(db, msg)
+                        draft = DraftAction(
                             action_type="email.send",
                             entity_type="email",
                             draft_data={
@@ -233,12 +236,27 @@ def apply_rules(db, msg, mailbox: str) -> list[dict]:
                                 "mailbox": mailbox,
                                 "in_reply_to_message_id": str(msg.id),
                                 "attachment_ids": [],
-                                "status": "draft",
+                                "status": "approved" if do_send else "draft",
                                 "risk_flags": [],
                                 "created_by": f"rule:{rule.id}",
+                                "sent_by": f"rule:{rule.id}" if do_send else None,
                             },
-                        ))
-                        _notify_rule_draft(msg, rule)
+                        )
+                        db.add(draft)
+                        db.flush()
+                        if do_send:
+                            try:
+                                from app.tasks.email_sender import send_email_draft
+
+                                draft.draft_data = {**draft.draft_data, "status": "queued"}
+                                send_email_draft.delay(str(draft.id))
+                                logger.info("email_rule_auto_sent", rule_id=str(rule.id),
+                                            to=_bare_addr(msg.from_address))
+                            except Exception as exc:  # noqa: BLE001
+                                logger.error("email_rule_auto_send_failed", error=str(exc))
+                                _notify_rule_draft(msg, rule)
+                        else:
+                            _notify_rule_draft(msg, rule)
                 elif kind == "forward_to_agent" or kind == "create_task":
                     _enqueue_agent_task(msg, action.get("prompt"))
                 elif kind == "stop":
@@ -262,6 +280,46 @@ def apply_rules(db, msg, mailbox: str) -> list[dict]:
 def _bare_addr(addr: str) -> str:
     m = re.search(r"<([^>]+)>", addr or "")
     return (m.group(1) if m else (addr or "")).strip()
+
+
+def _auto_send_allowed(db, msg) -> bool:
+    """Guardrails for a rule that auto-sends without a human."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import String as _S, cast as _cast, func as _f, select as _sel
+
+    from app.db.models import DraftAction, EmailMessage as _EM, MailServerConfig
+
+    cfg = db.execute(_sel(MailServerConfig)).scalars().first()
+    if not cfg or not cfg.auto_send_enabled:
+        return False
+    # never auto-reply to auto-generated / bulk mail
+    body = f"{msg.subject or ''}\n{(msg.body_text or '')[:2000]}".lower()
+    if any(k in body for k in ("auto-submitted", "no-reply", "noreply", "do not reply",
+                               "не отвечайте на это письмо", "автоматическое уведомление")):
+        return False
+    # not if a human already replied in this thread
+    if msg.thread_id:
+        human_reply = db.execute(
+            _sel(_EM.id).where(
+                _EM.thread_id == msg.thread_id, _EM.is_inbound == False,  # noqa: E712
+            ).limit(1)
+        ).first()
+        if human_reply:
+            return False
+    # daily rate limit per recipient
+    since = datetime.now(timezone.utc) - timedelta(days=1)
+    to = _bare_addr(msg.from_address).lower()
+    sent_today = db.execute(
+        _sel(_f.count(DraftAction.id)).where(
+            DraftAction.action_type == "email.send",
+            DraftAction.created_at >= since,
+            _cast(DraftAction.draft_data, _S).like('%"sent_by": "rule:%'),
+        )
+    ).scalar() or 0
+    if sent_today >= (cfg.auto_send_max_per_day or 20):
+        return False
+    return True
 
 
 def _notify_rule_draft(msg, rule) -> None:

@@ -26,6 +26,7 @@ interface Rule {
   is_active: boolean;
   priority: number;
   stop_processing: boolean;
+  auto_send?: boolean;
   conditions: { match: "all" | "any"; rules: Cond[] };
   actions: Action[];
   run_count: number;
@@ -102,6 +103,7 @@ export function EmailRulesSection() {
     is_active: true,
     priority: 100,
     stop_processing: false,
+    auto_send: false,
     conditions: { match: "all", rules: [{ field: "from", op: "contains", value: "" }] },
     actions: [{ type: "add_label" }],
     run_count: 0,
@@ -117,6 +119,7 @@ export function EmailRulesSection() {
       priority: editing.priority,
       stop_processing: editing.stop_processing,
       is_active: editing.is_active,
+      auto_send: !!editing.auto_send,
     };
     const res = editing.id
       ? await mutFetch(`${API}/api/email/rules/${editing.id}`, {
@@ -388,7 +391,7 @@ export function EmailRulesSection() {
               + действие
             </button>
 
-            <label className="mb-3 flex items-center gap-2 text-xs text-slate-300">
+            <label className="mb-2 flex items-center gap-2 text-xs text-slate-300">
               <input
                 type="checkbox"
                 checked={editing.stop_processing}
@@ -396,6 +399,17 @@ export function EmailRulesSection() {
               />
               не применять следующие правила
             </label>
+            {editing.actions.some((a) => a.type === "auto_reply_template") && (
+              <label className="mb-3 flex items-center gap-2 text-xs text-amber-300">
+                <input
+                  type="checkbox"
+                  checked={!!editing.auto_send}
+                  onChange={(e) => setEditing({ ...editing, auto_send: e.target.checked })}
+                />
+                отправлять автоответ без подтверждения (нужно включить «Авто-отправка» в
+                Политике почты)
+              </label>
+            )}
 
             <div className="flex gap-2">
               <button

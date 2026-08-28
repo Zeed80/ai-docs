@@ -43,7 +43,6 @@ from app.domain.email import (
     ComposeAssistRequest,
     ComposeAssistResponse,
     ComposeSendRequest,
-    ContactOut,
     EmailAttachmentOut,
     EmailDraftCreate,
     EmailDraftOut,
@@ -125,8 +124,16 @@ async def search_emails(
                 + func.coalesce(EmailMessage.body_text, ""),
             )
             tsq = func.websearch_to_tsquery("russian", payload.query)
+            like = f"%{payload.query}%"
+            # FTS for natural-language RU, trigram-accelerated ILIKE for article
+            # numbers / latin / substrings the tsvector lexer would miss.
             query = query.where(
-                or_(tsv.op("@@")(tsq), EmailMessage.from_address.ilike(f"%{payload.query}%"))
+                or_(
+                    tsv.op("@@")(tsq),
+                    EmailMessage.subject.ilike(like),
+                    EmailMessage.body_text.ilike(like),
+                    EmailMessage.from_address.ilike(like),
+                )
             )
             rank = func.ts_rank(tsv, tsq)
         else:
@@ -273,6 +280,41 @@ async def list_email_mailboxes(
     ]
 
 
+class FolderCounts(BaseModel):
+    folder: str
+    total: int
+    unread: int
+
+
+@router.get("/folder-counts", response_model=list[FolderCounts])
+async def folder_counts(
+    request: Request,
+    mailbox: str | None = None,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-folder thread counts for the sidebar."""
+    base = select(
+        EmailThread.folder,
+        func.count(EmailThread.id),
+        func.count(EmailThread.id).filter(EmailThread.is_read == False),  # noqa: E712
+    )
+    scope = await mailbox_filter(
+        db, user, mailbox_col=EmailThread.mailbox, for_agent=request_is_agent(request)
+    )
+    if scope is not None:
+        base = base.where(scope)
+    if mailbox:
+        base = base.where(EmailThread.mailbox == mailbox)
+    rows = (await db.execute(base.group_by(EmailThread.folder))).all()
+    out = {f: FolderCounts(folder=f, total=0, unread=0) for f in _SYSTEM_FOLDERS}
+    for folder, total, unread in rows:
+        out[folder or "inbox"] = FolderCounts(
+            folder=folder or "inbox", total=int(total or 0), unread=int(unread or 0)
+        )
+    return list(out.values())
+
+
 # ── Thread viewer ──────────────────────────────────────────────────────────
 
 _SYSTEM_FOLDERS = ("inbox", "sent", "drafts", "archive", "trash", "spam")
@@ -350,7 +392,20 @@ async def list_threads(
             query = query.where(scope)
 
     # Default thread view = the inbox; other folders are opt-in via ?folder=.
-    query = query.where(EmailThread.folder == (folder or "inbox"))
+    if folder == "sent":
+        # "Отправленные" = any non-trashed thread with an outbound message (a
+        # reply you sent in an inbox thread counts too), plus threads you started.
+        query = query.where(
+            EmailThread.folder.notin_(("trash", "spam")),
+            or_(
+                EmailThread.folder == "sent",
+                EmailThread.id.in_(
+                    select(EmailMessage.thread_id).where(EmailMessage.is_inbound == False)  # noqa: E712
+                ),
+            ),
+        )
+    else:
+        query = query.where(EmailThread.folder == (folder or "inbox"))
     if label_id is not None:
         query = query.where(
             EmailThread.id.in_(
@@ -540,45 +595,232 @@ async def delete_label(
     await db.commit()
 
 
-# ── Contacts autocomplete ──────────────────────────────────────────────────
+# ── Email policy (admin: auto-send, attachment retention) ──────────────────
 
 
-@router.get("/contacts", response_model=list[ContactOut])
-async def list_contacts(
-    q: str = "",
-    limit: int = 10,
+class EmailPolicyOut(BaseModel):
+    auto_send_enabled: bool = False
+    auto_send_max_per_day: int = 20
+    attachment_retention_days: int = 180
+
+
+class EmailPolicyUpdate(BaseModel):
+    auto_send_enabled: bool | None = None
+    auto_send_max_per_day: int | None = None
+    attachment_retention_days: int | None = None
+
+
+@router.get("/policy", response_model=EmailPolicyOut)
+async def get_email_policy(
     user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: email.contacts — Address autocomplete from suppliers + history."""
-    q = (q or "").strip()
-    seen: dict[str, ContactOut] = {}
-    if q:
-        parties = (
+    from app.db.models import MailServerConfig
+
+    row = (await db.execute(select(MailServerConfig))).scalars().first()
+    if not row:
+        return EmailPolicyOut()
+    return EmailPolicyOut(
+        auto_send_enabled=row.auto_send_enabled,
+        auto_send_max_per_day=row.auto_send_max_per_day,
+        attachment_retention_days=row.attachment_retention_days,
+    )
+
+
+@router.put("/policy", response_model=EmailPolicyOut)
+async def update_email_policy(
+    payload: EmailPolicyUpdate,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Protected: only admins. Turning on auto_send lets email filter rules send
+    templated replies without a human — with the guardrails in email_rules."""
+    from app.auth.models import UserRole
+    from app.db.models import MailServerConfig
+
+    if UserRole.admin not in (user.roles or []):
+        raise HTTPException(403, "Только администратор")
+    row = (await db.execute(select(MailServerConfig))).scalars().first()
+    if not row:
+        row = MailServerConfig(singleton_key="default")
+        db.add(row)
+    data = payload.model_dump(exclude_none=True)
+    for k, v in data.items():
+        setattr(row, k, v)
+    await db.commit()
+    await log_action(
+        db, action="email.policy_update", entity_type="email_policy", entity_id=row.id,
+        details={**data, "by": user.sub},
+    )
+    logger.info("email_policy_updated", by=user.sub, **data)
+    return EmailPolicyOut(
+        auto_send_enabled=row.auto_send_enabled,
+        auto_send_max_per_day=row.auto_send_max_per_day,
+        attachment_retention_days=row.attachment_retention_days,
+    )
+
+
+# ── Signatures ─────────────────────────────────────────────────────────────
+
+
+class SignatureOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    body_html: str
+    mailbox: str | None
+    owner_sub: str | None
+    is_default: bool
+
+    model_config = {"from_attributes": True}
+
+
+class SignatureCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    body_html: str
+    mailbox: str | None = None
+    is_default: bool = False
+    shared: bool = False
+
+
+class SignatureUpdate(BaseModel):
+    name: str | None = None
+    body_html: str | None = None
+    mailbox: str | None = None
+    is_default: bool | None = None
+
+
+@router.get("/signatures", response_model=list[SignatureOut])
+async def list_signatures(
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: email.signatures_list — Signatures the caller can use."""
+    from app.db.models import EmailSignature
+
+    rows = (
+        await db.execute(
+            select(EmailSignature).where(
+                or_(EmailSignature.owner_sub.is_(None), EmailSignature.owner_sub == user.sub)
+            ).order_by(EmailSignature.is_default.desc(), EmailSignature.name)
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@router.get("/signatures/resolve", response_model=SignatureOut | None)
+async def resolve_signature(
+    mailbox: str | None = None,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The signature to prefill for a compose from ``mailbox``: mailbox-specific
+    default > user's personal default > None."""
+    sig = await _resolve_signature(db, user.sub, mailbox)
+    return sig
+
+
+async def _resolve_signature(db: AsyncSession, user_sub: str | None, mailbox: str | None):
+    from app.db.models import EmailSignature
+
+    if mailbox:
+        row = (
             await db.execute(
-                select(Party).where(
-                    Party.contact_email.isnot(None),
-                    or_(Party.contact_email.ilike(f"%{q}%"), Party.name.ilike(f"%{q}%")),
-                ).limit(limit)
+                select(EmailSignature)
+                .where(EmailSignature.mailbox == mailbox, EmailSignature.owner_sub.is_(None))
+                .order_by(EmailSignature.is_default.desc())
             )
-        ).scalars().all()
-        for p in parties:
-            if p.contact_email:
-                seen[p.contact_email.lower()] = ContactOut(email=p.contact_email, name=p.name)
-    if len(seen) < limit:
-        scope = await mailbox_filter(db, user, mailbox_col=EmailMessage.mailbox)
-        mq = select(EmailMessage.from_address).where(EmailMessage.is_inbound == True)  # noqa: E712
-        if scope is not None:
-            mq = mq.where(scope)
-        if q:
-            mq = mq.where(EmailMessage.from_address.ilike(f"%{q}%"))
-        for (addr,) in (await db.execute(mq.order_by(EmailMessage.received_at.desc()).limit(50))).all():
-            key = (addr or "").lower()
-            if key and key not in seen:
-                seen[key] = ContactOut(email=addr)
-            if len(seen) >= limit:
-                break
-    return list(seen.values())[:limit]
+        ).scalars().first()
+        if row:
+            return row
+    if user_sub:
+        row = (
+            await db.execute(
+                select(EmailSignature)
+                .where(EmailSignature.owner_sub == user_sub)
+                .order_by(EmailSignature.is_default.desc())
+            )
+        ).scalars().first()
+        if row:
+            return row
+    return None
+
+
+@router.post("/signatures", response_model=SignatureOut, status_code=201)
+async def create_signature(
+    payload: SignatureCreate,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.auth.models import UserRole
+    from app.db.models import EmailSignature
+
+    is_shared = (payload.shared or payload.mailbox) and UserRole.admin in (user.roles or [])
+    owner = None if is_shared else user.sub
+    sig = EmailSignature(
+        name=payload.name, body_html=payload.body_html,
+        mailbox=payload.mailbox if is_shared else None,
+        owner_sub=owner, is_default=payload.is_default,
+    )
+    if payload.is_default:
+        await _clear_default_signatures(db, owner, sig.mailbox)
+    db.add(sig)
+    await db.commit()
+    await db.refresh(sig)
+    return sig
+
+
+@router.patch("/signatures/{sig_id}", response_model=SignatureOut)
+async def update_signature(
+    sig_id: uuid.UUID,
+    payload: SignatureUpdate,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.auth.models import UserRole
+    from app.db.models import EmailSignature
+
+    sig = await db.get(EmailSignature, sig_id)
+    if not sig:
+        raise HTTPException(404, "Signature not found")
+    if sig.owner_sub not in (None, user.sub) or (sig.owner_sub is None and UserRole.admin not in (user.roles or [])):
+        raise HTTPException(403, "Нет прав на эту подпись")
+    data = payload.model_dump(exclude_none=True)
+    if data.get("is_default"):
+        await _clear_default_signatures(db, sig.owner_sub, data.get("mailbox", sig.mailbox))
+    for k, v in data.items():
+        setattr(sig, k, v)
+    await db.commit()
+    await db.refresh(sig)
+    return sig
+
+
+@router.delete("/signatures/{sig_id}", status_code=204)
+async def delete_signature(
+    sig_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    from app.auth.models import UserRole
+    from app.db.models import EmailSignature
+
+    sig = await db.get(EmailSignature, sig_id)
+    if not sig:
+        raise HTTPException(404, "Signature not found")
+    if sig.owner_sub not in (None, user.sub) or (sig.owner_sub is None and UserRole.admin not in (user.roles or [])):
+        raise HTTPException(403, "Нет прав на эту подпись")
+    await db.delete(sig)
+    await db.commit()
+
+
+async def _clear_default_signatures(db: AsyncSession, owner_sub, mailbox):
+    from app.db.models import EmailSignature
+
+    q = select(EmailSignature).where(EmailSignature.is_default == True)  # noqa: E712
+    q = q.where(EmailSignature.owner_sub == owner_sub) if owner_sub else q.where(EmailSignature.owner_sub.is_(None))
+    if mailbox:
+        q = q.where(EmailSignature.mailbox == mailbox)
+    for row in (await db.execute(q)).scalars().all():
+        row.is_default = False
 
 
 # ── Compose attachments ────────────────────────────────────────────────────
@@ -811,6 +1053,16 @@ async def compose_and_send(
         db, action="email.send", entity_type="email", entity_id=draft.id,
         details={"to": payload.to_addresses, "subject": payload.subject, "by": user.sub},
     )
+    try:
+        from app.api.email_contacts import remember_recipients
+
+        await remember_recipients(
+            db, owner_sub=user.sub,
+            addresses=list(payload.to_addresses) + list(payload.cc_addresses),
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        pass
     logger.info("email_user_send_queued", draft_id=str(draft.id), user=user.sub)
     return EmailSendResult(task_id=task.id, draft_id=draft.id, status="queued")
 
@@ -907,6 +1159,7 @@ class ComposeAssistPoll(BaseModel):
     status: str  # pending | done | error
     result: ComposeAssistResponse | None = None
     error: str | None = None
+    progress: list[str] = []
 
 
 @router.post("/compose/assist", response_model=ComposeAssistStart)
@@ -943,9 +1196,21 @@ async def compose_assist_poll(task_id: str):
 
     from app.tasks.celery_app import celery_app
 
+    def _progress() -> list[str]:
+        try:
+            from app.utils.redis_client import get_async_redis  # noqa: F401
+            from app.utils.redis_client import get_sync_redis
+
+            return [
+                x.decode() if isinstance(x, bytes) else str(x)
+                for x in get_sync_redis().lrange(f"email:compose_progress:{task_id}", 0, -1)
+            ]
+        except Exception:  # noqa: BLE001
+            return []
+
     r = AsyncResult(task_id, app=celery_app)
     if not r.ready():
-        return ComposeAssistPoll(status="pending")
+        return ComposeAssistPoll(status="pending", progress=_progress())
     try:
         data = r.get(timeout=1)
     except Exception as exc:  # noqa: BLE001
