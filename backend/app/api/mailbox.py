@@ -8,13 +8,13 @@ from datetime import datetime
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.acting import get_effective_user
 from app.auth.jwt import require_role
 from app.auth.models import UserInfo, UserRole
-from app.db.models import AuditLog, MailboxConfig, OAuthAppConfig
+from app.db.models import AuditLog, EmailMessage, MailboxConfig, OAuthAppConfig
 from app.db.session import get_db
 from app.domain.admin import UserMailboxOut, UserMailboxSweepUpdate
 from app.domain.mailbox_presets import PRESETS
@@ -106,6 +106,8 @@ class MailboxConfigOut(BaseModel):
     oauth_provider: str | None
     oauth_email: str | None
     oauth_connected: bool
+    message_count: int = 0
+    last_message_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -116,6 +118,29 @@ class MailboxTestResult(BaseModel):
     imap_error: str | None = None
     smtp_error: str | None = None
     message_count: int | None = None
+
+
+class MailboxSyncResult(BaseModel):
+    task_id: str
+    mailbox: str
+
+
+async def _mailbox_stats(db: AsyncSession, names: list[str]) -> dict[str, tuple[int, datetime | None]]:
+    """COUNT(*) and MAX(received_at) of EmailMessage per mailbox name."""
+    if not names:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                EmailMessage.mailbox,
+                func.count(EmailMessage.id),
+                func.max(EmailMessage.received_at),
+            )
+            .where(EmailMessage.mailbox.in_(names))
+            .group_by(EmailMessage.mailbox)
+        )
+    ).all()
+    return {r[0]: (int(r[1] or 0), r[2]) for r in rows}
 
 
 class MailboxPresetOut(BaseModel):
@@ -135,8 +160,10 @@ class MailboxPresetOut(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _to_out(cfg: MailboxConfig) -> MailboxConfigOut:
+def _to_out(cfg: MailboxConfig, stats: tuple[int, datetime | None] | None = None) -> MailboxConfigOut:
     return MailboxConfigOut(
+        message_count=(stats or (0, None))[0],
+        last_message_at=(stats or (0, None))[1],
         id=cfg.id,
         name=cfg.name,
         display_name=cfg.display_name,
@@ -266,6 +293,22 @@ async def set_my_mailbox_sweep(
     return await _mailbox_out(cfg)
 
 
+@router.post("/me/sync", response_model=MailboxSyncResult)
+async def sync_my_mailbox(
+    current_user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+) -> MailboxSyncResult:
+    """Owner-triggered immediate poll of their own personal mailbox."""
+    cfg = await _my_personal_mailbox(db, current_user.sub)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="У вас нет личного почтового ящика")
+    from app.tasks.ingest import poll_imap_mailbox
+
+    task = poll_imap_mailbox.delay(cfg.name)
+    logger.info("mailbox_sync_triggered_self", name=cfg.name, user=current_user.sub, task_id=task.id)
+    return MailboxSyncResult(task_id=task.id, mailbox=cfg.name)
+
+
 async def _my_personal_mailbox(db: AsyncSession, sub: str) -> MailboxConfig | None:
     return (
         await db.execute(
@@ -348,7 +391,9 @@ async def list_mailboxes(
     if active_only:
         q = q.where(MailboxConfig.is_active == True)  # noqa: E712
     result = await db.execute(q)
-    return [_to_out(cfg) for cfg in result.scalars().all()]
+    cfgs = list(result.scalars().all())
+    stats = await _mailbox_stats(db, [c.name for c in cfgs])
+    return [_to_out(cfg, stats.get(cfg.name)) for cfg in cfgs]
 
 
 @router.get("/configs/{mailbox_id}", response_model=MailboxConfigOut)
@@ -361,7 +406,25 @@ async def get_mailbox(
     cfg = await db.get(MailboxConfig, mailbox_id)
     if not cfg:
         raise HTTPException(status_code=404, detail="Mailbox not found")
-    return _to_out(cfg)
+    stats = await _mailbox_stats(db, [cfg.name])
+    return _to_out(cfg, stats.get(cfg.name))
+
+
+@router.post("/configs/{mailbox_id}/sync", response_model=MailboxSyncResult)
+async def sync_mailbox(
+    mailbox_id: uuid.UUID,
+    _admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> MailboxSyncResult:
+    """Skill: mailbox.sync — Trigger an immediate IMAP poll for this mailbox."""
+    cfg = await db.get(MailboxConfig, mailbox_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Mailbox not found")
+    from app.tasks.ingest import poll_imap_mailbox
+
+    task = poll_imap_mailbox.delay(cfg.name)
+    logger.info("mailbox_sync_triggered", name=cfg.name, task_id=task.id)
+    return MailboxSyncResult(task_id=task.id, mailbox=cfg.name)
 
 
 @router.patch("/configs/{mailbox_id}", response_model=MailboxConfigOut)

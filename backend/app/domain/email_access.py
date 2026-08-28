@@ -29,29 +29,66 @@ from app.auth.models import UserInfo
 from app.db.models import MailboxConfig
 
 
-async def hidden_mailbox_names(db: AsyncSession, user: UserInfo | None) -> list[str]:
-    """Personal mailbox addresses `user` may NOT read (all but their own)."""
+async def hidden_mailbox_names(
+    db: AsyncSession, user: UserInfo | None, *, for_agent: bool = False
+) -> list[str]:
+    """Personal mailbox addresses `user` may NOT read (all but their own).
+
+    ``for_agent=True`` additionally hides the user's *own* personal mailbox when
+    they have not switched on ``sweep_enabled`` — the consent gate for AI
+    reading a private inbox is independent of the human's own access to it.
+    """
     rows = (
         await db.execute(
-            select(MailboxConfig.name, MailboxConfig.owner_sub).where(
-                MailboxConfig.mailbox_type == "personal"
-            )
+            select(
+                MailboxConfig.name, MailboxConfig.owner_sub, MailboxConfig.sweep_enabled
+            ).where(MailboxConfig.mailbox_type == "personal")
         )
     ).all()
     sub = user.sub if user else None
-    return [name for name, owner_sub in rows if owner_sub != sub or sub is None]
+    hidden: list[str] = []
+    for name, owner_sub, sweep_enabled in rows:
+        if owner_sub != sub or sub is None:
+            hidden.append(name)
+        elif for_agent and not sweep_enabled:
+            hidden.append(name)
+    return hidden
 
 
 async def mailbox_filter(
-    db: AsyncSession, user: UserInfo | None, *, mailbox_col: ColumnElement
+    db: AsyncSession, user: UserInfo | None, *, mailbox_col: ColumnElement, for_agent: bool = False
 ) -> ColumnElement | None:
     """WHERE clause hiding other people's personal mailboxes (None = no filter)."""
-    hidden = await hidden_mailbox_names(db, user)
+    hidden = await hidden_mailbox_names(db, user, for_agent=for_agent)
     if not hidden:
         return None
     return mailbox_col.notin_(hidden)
 
 
-async def may_read_mailbox(db: AsyncSession, user: UserInfo | None, mailbox: str) -> bool:
+async def may_read_mailbox(
+    db: AsyncSession, user: UserInfo | None, mailbox: str, *, for_agent: bool = False
+) -> bool:
     """True when `user` may read messages of `mailbox` (by name/address)."""
-    return mailbox not in await hidden_mailbox_names(db, user)
+    return mailbox not in await hidden_mailbox_names(db, user, for_agent=for_agent)
+
+
+async def may_write_mailbox(db: AsyncSession, user: UserInfo | None, mailbox: str) -> bool:
+    """True when `user` may SEND from `mailbox`.
+
+    Shared mailboxes: any authenticated user (same rule as reading). Personal
+    mailboxes: only the owner. The agent-service account (no acting user) owns
+    no personal mailbox and may only send from shared ones.
+    """
+    row = (
+        await db.execute(
+            select(MailboxConfig.mailbox_type, MailboxConfig.owner_sub).where(
+                MailboxConfig.name == mailbox
+            )
+        )
+    ).first()
+    if row is None:
+        return False
+    mailbox_type, owner_sub = row
+    if mailbox_type != "personal":
+        return True
+    return bool(user) and owner_sub == user.sub

@@ -82,20 +82,14 @@ celery_app.conf.update(
 _imap_cron = crontab(minute=f"*/{settings.imap_poll_interval_minutes}")
 
 celery_app.conf.beat_schedule = {
-    "poll-email-procurement": {
-        "task": "app.tasks.ingest.poll_imap_mailbox",
+    # DB-driven mailbox polling: one dispatcher fans out poll_imap_mailbox for
+    # every active MailboxConfig row. Replaces the old hard-coded
+    # procurement/accounting/general entries — a mailbox added through the UI
+    # with any other name was never polled, which is why the client kept
+    # reporting "IMAP not configured".
+    "dispatch-mailbox-polls": {
+        "task": "app.tasks.email_triage.dispatch_mailbox_polls",
         "schedule": _imap_cron,
-        "args": ("procurement",),
-    },
-    "poll-email-accounting": {
-        "task": "app.tasks.ingest.poll_imap_mailbox",
-        "schedule": _imap_cron,
-        "args": ("accounting",),
-    },
-    "poll-email-general": {
-        "task": "app.tasks.ingest.poll_imap_mailbox",
-        "schedule": _imap_cron,
-        "args": ("general",),
     },
     "escalate-expired-approvals": {
         "task": "approval.escalate_expired",

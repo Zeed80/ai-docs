@@ -257,10 +257,16 @@ export function MailboxSection() {
       assigned_role: mb.assigned_role || "",
       is_active: mb.is_active,
     });
-    // We don't record which preset a mailbox was created from — default to
-    // "custom" (no autofill) and let the person re-pick one if they want the
-    // hint/autofill again. The auth method reflects what's actually stored.
-    setPresetId("custom");
+    // Restore the provider preset so the OAuth controls (reconnect / refresh
+    // token) render on edit: match by stored oauth_provider first, then by IMAP
+    // host, else "custom". Without this an OAuth mailbox could only be viewed,
+    // never re-authorised, from the edit form.
+    const matched =
+      (mb.oauth_provider &&
+        presets.find((p) => p.oauth_provider === mb.oauth_provider)) ||
+      presets.find((p) => p.imap_host && p.imap_host === mb.imap_host) ||
+      null;
+    setPresetId(matched?.id ?? "custom");
     setAuthMethod(mb.auth_method === "oauth2" ? "oauth2" : "password");
     setOauthSession(null);
     setOauthEmail(mb.oauth_email);

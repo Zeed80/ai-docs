@@ -5,8 +5,10 @@ import smtplib
 import ssl
 import uuid
 from datetime import datetime, timezone
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import getaddresses, make_msgid
 
 import structlog
 
@@ -45,10 +47,15 @@ def send_email_draft(self, draft_id: str) -> dict:
                 return {"status": "already_sent"}
 
             data = draft.draft_data or {}
-            to_addresses: list[str] = data.get("to_addresses", [])
+
+            def _bare(addrs: list[str]) -> list[str]:
+                return [a for _, a in getaddresses(addrs or []) if a and "@" in a]
+
+            to_addresses: list[str] = _bare(data.get("to_addresses", []))
+            cc_addresses: list[str] = _bare(data.get("cc_addresses") or [])
             subject: str = data.get("subject", "(без темы)")
             body_html: str = data.get("body_html", "")
-            body_text: str = data.get("body_text", body_html)
+            body_text: str = data.get("body_text") or body_html
 
             if not to_addresses:
                 logger.error("email_no_recipients", draft_id=draft_id)
@@ -124,14 +131,66 @@ def send_email_draft(self, draft_id: str) -> dict:
                 await db.commit()
                 return {"status": "sent_mock", "note": "SMTP not configured"}
 
+            # Threading headers so the reply threads in the recipient's client.
+            from app.db.models import EmailAttachment, EmailMessage
+            from app.domain.email_thread import resolve_threading_headers, record_outbound_message
+
+            parent = None
+            raw_parent = data.get("in_reply_to_message_id")
+            if raw_parent:
+                parent = (
+                    await db.execute(
+                        select(EmailMessage).where(EmailMessage.id == uuid.UUID(str(raw_parent)))
+                    )
+                ).scalar_one_or_none()
+            in_reply_to, references = resolve_threading_headers(parent)
+
+            smtp_message_id = make_msgid(domain=(from_address.split("@")[-1] or "localhost"))
+
+            att_rows = []
+            att_ids = data.get("attachment_ids") or []
+            if att_ids:
+                att_rows = (
+                    await db.execute(
+                        select(EmailAttachment).where(
+                            EmailAttachment.id.in_([uuid.UUID(str(a)) for a in att_ids])
+                        )
+                    )
+                ).scalars().all()
+
             try:
-                msg = MIMEMultipart("alternative")
+                alt = MIMEMultipart("alternative")
+                alt.attach(MIMEText(body_text, "plain", "utf-8"))
+                if body_html:
+                    alt.attach(MIMEText(body_html, "html", "utf-8"))
+
+                if att_rows:
+                    msg = MIMEMultipart("mixed")
+                    msg.attach(alt)
+                    from app.storage import download_file
+
+                    for a in att_rows:
+                        try:
+                            payload_bytes = download_file(a.storage_path)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("email_attachment_download_failed", name=a.filename, error=str(exc))
+                            continue
+                        part = MIMEApplication(payload_bytes, _subtype="octet-stream")
+                        part.add_header("Content-Disposition", "attachment", filename=a.filename)
+                        msg.attach(part)
+                else:
+                    msg = alt
+
                 msg["Subject"] = subject
                 msg["From"] = f"{from_name} <{from_address}>" if from_name else from_address
                 msg["To"] = ", ".join(to_addresses)
-                msg.attach(MIMEText(body_text, "plain", "utf-8"))
-                if body_html:
-                    msg.attach(MIMEText(body_html, "html", "utf-8"))
+                if cc_addresses:
+                    msg["Cc"] = ", ".join(cc_addresses)
+                msg["Message-ID"] = smtp_message_id
+                if in_reply_to:
+                    msg["In-Reply-To"] = in_reply_to
+                if references:
+                    msg["References"] = references
 
                 def _authenticate(server: smtplib.SMTP) -> None:
                     if oauth_access_token:
@@ -144,22 +203,46 @@ def send_email_draft(self, draft_id: str) -> dict:
                     elif smtp_user:
                         server.login(smtp_user, smtp_password)
 
+                recipients = list(to_addresses) + list(cc_addresses) + _bare(data.get("bcc_addresses") or [])
                 context = ssl.create_default_context()
                 if not smtp_use_tls:
                     with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context) as server:
                         _authenticate(server)
-                        server.sendmail(from_address, to_addresses, msg.as_string())
+                        server.sendmail(from_address, recipients, msg.as_string())
                 else:
                     with smtplib.SMTP(smtp_host, smtp_port) as server:
                         server.ehlo()
                         server.starttls(context=context)
                         _authenticate(server)
-                        server.sendmail(from_address, to_addresses, msg.as_string())
+                        server.sendmail(from_address, recipients, msg.as_string())
 
                 draft.executed = True
                 draft.executed_at = datetime.now(timezone.utc)
                 data["status"] = "sent"
+                data["smtp_message_id"] = smtp_message_id
                 draft.draft_data = data
+                from sqlalchemy.orm.attributes import flag_modified as _fm
+                _fm(draft, "draft_data")
+
+                # Reflect the sent message into our own thread view + search.
+                try:
+                    await record_outbound_message(
+                        db,
+                        mailbox=mailbox_name or "",
+                        draft_data=data,
+                        smtp_message_id=smtp_message_id,
+                        from_address=from_address,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("email_outbound_record_failed", draft_id=draft_id, error=str(exc))
+
+                try:
+                    from app.core.chat_bus import chat_bus
+
+                    await chat_bus.publish({"type": "email.sent", "mailbox": mailbox_name,
+                                            "to": to_addresses, "subject": subject})
+                except Exception:  # noqa: BLE001
+                    pass
 
                 await log_action(
                     db,

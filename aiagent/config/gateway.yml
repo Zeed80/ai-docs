@@ -117,6 +117,13 @@ skills:
   - email.risk_check
   - email.style_match
   - email.suggest_template
+  - email.compose
+  - email.compose_assist
+  - email.reply
+  - email.label
+  - email.mailboxes
+  - email.recognize_attachment
+  - email.get_attachment
   - email.templates.list
   - email.templates.get
   - email.templates.render
@@ -332,7 +339,7 @@ prompts:
   roles:
     invoice_specialist:
       prompt: ./prompts/role-invoice-specialist.md
-      capabilities: [invoices, documents, suppliers, payments, anomalies, normalization, analytics, tool_catalog]
+      capabilities: [invoices, documents, suppliers, payments, anomalies, normalization, analytics, tool_catalog, email]
       default_canvases: ["agent:invoices", "agent:invoice-items"]
     data_analyst:
       prompt: ./prompts/role-data-analyst.md
@@ -345,7 +352,7 @@ prompts:
       capabilities: [procurement, suppliers, invoices, email, documents, analytics, tool_catalog]
     accountant:
       prompt: ./prompts/role-accountant.md
-      capabilities: [invoices, payments, documents, suppliers, normalization, analytics]
+      capabilities: [invoices, payments, documents, suppliers, normalization, analytics, email]
     engineer:
       prompt: ./prompts/role-engineer.md
       capabilities: [documents, tech, analytics, image_studio, tool_catalog]

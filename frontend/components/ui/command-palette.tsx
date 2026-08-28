@@ -167,6 +167,8 @@ interface SearchResult {
   status: string;
   doc_type: string | null;
   entity_type?: string;
+  kind?: "document" | "email";
+  thread_id?: string;
 }
 
 interface NLResult {
@@ -221,16 +223,38 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       const timer = setTimeout(async () => {
         setLoading(true);
         try {
-          const res = await mutFetch(`${API_BASE}/api/search/hybrid`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query, limit: 10 }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            const items = Array.isArray(data) ? data : (data.results ?? []);
-            setSearchResults(items);
+          const [docRes, mailRes] = await Promise.all([
+            mutFetch(`${API_BASE}/api/search/hybrid`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ query, limit: 8 }),
+            }),
+            mutFetch(`${API_BASE}/api/email/search`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ query, limit: 5 }),
+            }).catch(() => null),
+          ]);
+          const items: SearchResult[] = [];
+          if (docRes.ok) {
+            const data = await docRes.json();
+            const docs = Array.isArray(data) ? data : (data.results ?? []);
+            items.push(...docs.map((d: SearchResult) => ({ ...d, kind: "document" as const })));
           }
+          if (mailRes && mailRes.ok) {
+            const data = await mailRes.json();
+            for (const m of data.results ?? []) {
+              items.push({
+                id: m.id,
+                file_name: m.subject || "(без темы)",
+                status: m.from_address || "",
+                doc_type: "письмо",
+                kind: "email",
+                thread_id: m.thread_id ?? m.id,
+              });
+            }
+          }
+          setSearchResults(items);
         } catch {
           // ignore
         } finally {
@@ -301,7 +325,10 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       if (item) navigateTo(item);
     } else {
       const item = currentItems[index] as SearchResult;
-      if (item?.id) {
+      if (item?.kind === "email" && item.thread_id) {
+        router.push(`/email/${item.thread_id}`);
+        onClose();
+      } else if (item?.id) {
         router.push(`/documents/${item.id}/review`);
         onClose();
       }

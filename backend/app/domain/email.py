@@ -2,8 +2,21 @@
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class EmailAttachmentOut(BaseModel):
+    id: uuid.UUID
+    filename: str
+    content_type: str | None = None
+    size: int | None = None
+    is_inline: bool = False
+    content_id: str | None = None
+    document_id: uuid.UUID | None = None
+
+    model_config = {"from_attributes": True}
 
 
 class EmailMessageOut(BaseModel):
@@ -16,12 +29,20 @@ class EmailMessageOut(BaseModel):
     cc_addresses: list[str] | None
     subject: str | None
     body_text: str | None
+    body_html: str | None = None
+    body_html_sanitized: str | None = None
     sent_at: datetime | None
     received_at: datetime | None
     has_attachments: bool
     attachment_count: int
     attachments_meta: list | None
+    attachments: list[EmailAttachmentOut] = []
     is_inbound: bool
+    is_read: bool = False
+    is_starred: bool = False
+    folder: str = "inbox"
+    snippet: str | None = None
+    references: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -50,6 +71,31 @@ class EmailFetchResponse(BaseModel):
     task_id: str | None = None
 
 
+# ── Labels ─────────────────────────────────────────────────────────────────
+
+
+class EmailLabelOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    color: str | None = None
+    mailbox: str | None = None
+    is_system: bool = False
+    thread_count: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class EmailLabelCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    color: str | None = None
+    mailbox: str | None = None
+
+
+class EmailLabelUpdate(BaseModel):
+    name: str | None = None
+    color: str | None = None
+
+
 # ── Thread ─────────────────────────────────────────────────────────────────
 
 
@@ -62,8 +108,38 @@ class EmailThreadOut(BaseModel):
     last_message_at: datetime | None
     messages: list[EmailMessageOut] = []
     created_at: datetime
+    is_read: bool = False
+    is_starred: bool = False
+    has_attachments: bool = False
+    folder: str = "inbox"
+    last_snippet: str | None = None
+    unread_count: int = 0
+    labels: list[EmailLabelOut] = []
+    # Derived-for-list fields (filled by list endpoints, not the ORM):
+    sender: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class ThreadListResponse(BaseModel):
+    items: list[EmailThreadOut]
+    total: int
+    next_cursor: str | None = None
+
+
+class BulkThreadAction(BaseModel):
+    thread_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=500)
+    action: Literal[
+        "read", "unread", "star", "unstar",
+        "archive", "trash", "spam", "inbox", "move",
+        "add_label", "remove_label",
+    ]
+    folder: str | None = None
+    label_id: uuid.UUID | None = None
+
+
+class BulkActionResult(BaseModel):
+    updated: int
 
 
 # ── Draft ──────────────────────────────────────────────────────────────────
@@ -72,12 +148,16 @@ class EmailThreadOut(BaseModel):
 class EmailDraftCreate(BaseModel):
     to_addresses: list[str]
     cc_addresses: list[str] = []
+    bcc_addresses: list[str] = []
     subject: str
     body_html: str
     body_text: str | None = None
     thread_id: uuid.UUID | None = None
     supplier_id: uuid.UUID | None = None
     context: dict | None = None  # invoice_id, document_id, etc.
+    in_reply_to_message_id: uuid.UUID | None = None
+    forward_of_message_id: uuid.UUID | None = None
+    attachment_ids: list[uuid.UUID] = []
     # Which configured mailbox (MailboxConfig.name) this should be SENT from —
     # its SMTP credentials/from-address are used instead of the global .env
     # fallback. Explicit override; when omitted and thread_id is given, the
@@ -85,10 +165,22 @@ class EmailDraftCreate(BaseModel):
     mailbox: str | None = None
 
 
+class EmailDraftUpdate(BaseModel):
+    to_addresses: list[str] | None = None
+    cc_addresses: list[str] | None = None
+    bcc_addresses: list[str] | None = None
+    subject: str | None = None
+    body_html: str | None = None
+    body_text: str | None = None
+    attachment_ids: list[uuid.UUID] | None = None
+    mailbox: str | None = None
+
+
 class EmailDraftOut(BaseModel):
     id: uuid.UUID
     to_addresses: list[str]
     cc_addresses: list[str] | None
+    bcc_addresses: list[str] | None = None
     subject: str
     body_html: str | None
     body_text: str | None
@@ -96,9 +188,38 @@ class EmailDraftOut(BaseModel):
     mailbox: str | None = None
     status: str  # draft, risk_checked, approved, sent
     risk_flags: list[dict] = []
+    attachment_ids: list[uuid.UUID] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── Compose + send (human) ─────────────────────────────────────────────────
+
+
+class ComposeSendRequest(BaseModel):
+    mailbox: str
+    to_addresses: list[str] = Field(..., min_length=1)
+    cc_addresses: list[str] = []
+    bcc_addresses: list[str] = []
+    subject: str = ""
+    body_html: str = ""
+    body_text: str | None = None
+    in_reply_to_message_id: uuid.UUID | None = None
+    forward_of_message_id: uuid.UUID | None = None
+    attachment_ids: list[uuid.UUID] = []
+    draft_id: uuid.UUID | None = None
+
+
+class EmailSendResult(BaseModel):
+    task_id: str | None = None
+    draft_id: uuid.UUID
+    status: str
+
+
+class ContactOut(BaseModel):
+    email: str
+    name: str | None = None
 
 
 # ── Style Match ────────────────────────────────────────────────────────────
@@ -120,6 +241,60 @@ class StyleAnalyzeResponse(BaseModel):
     sample_count: int = 0
 
 
+# ── Compose assist / generate (agent + human "help") ───────────────────────
+
+
+class ComposeAssistRequest(BaseModel):
+    subject: str = ""
+    body: str
+    instruction: str = "Улучши формулировки, сохрани смысл"
+    thread_id: uuid.UUID | None = None
+    supplier_id: uuid.UUID | None = None
+    invoice_id: uuid.UUID | None = None
+    mailbox: str | None = None
+
+
+class ComposeAssistResponse(BaseModel):
+    subject: str
+    body_html: str
+    body_text: str
+    diff: list[dict] = []
+    notes: list[str] = []
+    tone: str = "formal"
+
+
+class AgentComposeRequest(BaseModel):
+    mailbox: str
+    to_addresses: list[str] = Field(..., min_length=1)
+    intent: str
+    thread_id: uuid.UUID | None = None
+    supplier_id: uuid.UUID | None = None
+    invoice_id: uuid.UUID | None = None
+    attachment_ids: list[uuid.UUID] = []
+    tone: str | None = None
+
+
+# ── Attachment recognition (agent) ─────────────────────────────────────────
+
+
+class AttachmentRecognizeRequest(BaseModel):
+    filename: str | None = None
+    mode: Literal["ocr", "classify", "extract", "full"] = "full"
+
+
+class AttachmentRecognitionResult(BaseModel):
+    filename: str
+    doc_type: str | None = None
+    text: str | None = None
+    fields: dict | None = None
+    confidence: float | None = None
+    document_id: uuid.UUID | None = None
+
+
+class AttachmentRecognizeResponse(BaseModel):
+    results: list[AttachmentRecognitionResult] = []
+
+
 # ── Risk Check ─────────────────────────────────────────────────────────────
 
 
@@ -130,8 +305,13 @@ class RiskFlag(BaseModel):
     can_override: bool = True
 
 
+class RiskCheckRequest(BaseModel):
+    body: str | None = None
+    subject: str | None = None
+
+
 class RiskCheckResponse(BaseModel):
-    draft_id: uuid.UUID
+    draft_id: uuid.UUID | None = None
     is_safe: bool
     flags: list[RiskFlag] = []
 
@@ -167,9 +347,21 @@ class EmailSearchRequest(BaseModel):
     supplier_id: uuid.UUID | None = None
     email_address: str | None = None
     mailbox: str | None = None
-    limit: int = 20
+    folder: str | None = None
+    label_ids: list[uuid.UUID] = []
+    is_unread: bool | None = None
+    is_starred: bool | None = None
+    has_attachments: bool | None = None
+    date_from: datetime | None = None
+    date_to: datetime | None = None
+    from_addr: str | None = None
+    to_addr: str | None = None
+    sort: Literal["date_desc", "date_asc", "relevance"] = "date_desc"
+    cursor: str | None = None
+    limit: int = 50
 
 
 class EmailSearchResponse(BaseModel):
     results: list[EmailMessageOut]
     total: int
+    next_cursor: str | None = None

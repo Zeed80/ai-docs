@@ -54,6 +54,7 @@ from app.api import (
     documents,
     drawings,
     email,
+    email_rules,
     email_templates,
     engineering,
     engineering_graphs,
@@ -350,6 +351,9 @@ def create_app() -> FastAPI:
     # ── Protected routers ──────────────────────────────────────────────────────
     app.include_router(documents.router, prefix="/api/documents", tags=["documents"], dependencies=_auth)
     app.include_router(invoices.router, prefix="/api/invoices", tags=["invoices"], dependencies=_auth)
+    # rules router BEFORE email.router: email.router has a catch-all
+    # GET /api/email/{email_id} that would otherwise shadow /api/email/rules.
+    app.include_router(email_rules.router, prefix="/api/email/rules", tags=["email"], dependencies=_auth)
     app.include_router(email.router, prefix="/api/email", tags=["email"], dependencies=_auth)
     app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"], dependencies=_auth)
     app.include_router(audit.router, prefix="/api/audit", tags=["audit"], dependencies=_auth)

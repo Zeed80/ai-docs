@@ -95,6 +95,21 @@ class ChatBus:
 
 # ── Redis helpers ─────────────────────────────────────────────────────────────
 
+def publish_sync(event: dict, *, user_sub: str | None = None) -> None:
+    """Fire-and-forget publish from synchronous code (Celery tasks).
+
+    Used by the IMAP poller to push ``email.new`` to the client WebSocket
+    without an event loop. Best-effort — never raise into the caller.
+    """
+    channel = f"{_PREFIX}:user:{user_sub}" if user_sub else f"{_PREFIX}:global"
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        get_sync_redis().publish(channel, json.dumps(event, default=str))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chat_bus_sync_publish_failed", channel=channel, error=str(exc))
+
+
 async def _redis_publish(channel: str, event: dict) -> None:
     """Publish event to Redis channel. Falls back to local dispatch on error."""
     try:

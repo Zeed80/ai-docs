@@ -1055,7 +1055,19 @@ class EmailThread(UUIDPrimaryKey, TimestampMixin, Base):
     message_count: Mapped[int] = mapped_column(Integer, default=0)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # App-level client state (distinct from IMAP flags: shared mailboxes are
+    # marked \Seen by triage on ingest, so we cannot derive "unread" from IMAP).
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_starred: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_attachments: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    folder: Mapped[str] = mapped_column(String(20), default="inbox", nullable=False, index=True)
+    last_snippet: Mapped[str | None] = mapped_column(String(300))
+    unread_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     messages: Mapped[list["EmailMessage"]] = relationship(back_populates="thread")
+    labels: Mapped[list["EmailLabel"]] = relationship(
+        secondary="email_thread_labels", back_populates="threads", viewonly=True
+    )
 
 
 class EmailMessage(UUIDPrimaryKey, TimestampMixin, Base):
@@ -1084,7 +1096,122 @@ class EmailMessage(UUIDPrimaryKey, TimestampMixin, Base):
 
     is_inbound: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # RFC 5322 References chain — needed so agent/human replies actually thread
+    # in the recipient's client (In-Reply-To alone is not enough).
+    references: Mapped[str | None] = mapped_column(String(2000))
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    is_starred: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    folder: Mapped[str] = mapped_column(String(20), default="inbox", nullable=False)
+    snippet: Mapped[str | None] = mapped_column(String(300))
+    body_html_sanitized: Mapped[str | None] = mapped_column(Text)
+
     thread: Mapped["EmailThread | None"] = relationship(back_populates="messages")
+    attachments: Mapped[list["EmailAttachment"]] = relationship(
+        back_populates="message", cascade="all, delete-orphan"
+    )
+
+
+class EmailLabel(UUIDPrimaryKey, TimestampMixin, Base):
+    """User- or agent-applied label on an email thread (Gmail-style).
+
+    App-level only — not synced to IMAP folders (two-way folder sync fights the
+    \\Seen / UID-watermark handling). ``mailbox``/``owner_sub`` scope a label:
+    both None = workspace-wide shared label.
+    """
+
+    __tablename__ = "email_labels"
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    color: Mapped[str | None] = mapped_column(String(20))
+    mailbox: Mapped[str | None] = mapped_column(String(100), index=True)
+    owner_sub: Mapped[str | None] = mapped_column(String(255), index=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    threads: Mapped[list["EmailThread"]] = relationship(
+        secondary="email_thread_labels", back_populates="labels", viewonly=True
+    )
+
+
+class EmailThreadLabel(Base):
+    __tablename__ = "email_thread_labels"
+
+    thread_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("email_threads.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    label_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("email_labels.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    # "user" | "sveta" | "rule:<uuid>" — who attached it, for audit.
+    added_by: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class EmailRule(UUIDPrimaryKey, TimestampMixin, Base):
+    """Server-side filter: conditions on an inbound message -> actions.
+
+    Evaluated in app.tasks.ingest.poll_imap_mailbox right after the EmailMessage
+    is created, before attachment processing. Shared rules (owner_sub is None)
+    are admin-managed; a personal rule belongs to the mailbox owner.
+    """
+
+    __tablename__ = "email_rules"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    mailbox: Mapped[str | None] = mapped_column(String(100), index=True)
+    owner_sub: Mapped[str | None] = mapped_column(String(255), index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    stop_processing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # {"match": "all"|"any", "rules": [{"field","op","value"}, ...]}
+    conditions: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # [{"type": "add_label", "label_id": "..."}, {"type": "move_to_folder", "folder": "..."}, ...]
+    actions: Mapped[list] = mapped_column(JSON, nullable=False)
+    run_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EmailRuleLog(UUIDPrimaryKey, Base):
+    __tablename__ = "email_rule_logs"
+
+    rule_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("email_rules.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("email_messages.id", ondelete="SET NULL")
+    )
+    actions_applied: Mapped[list] = mapped_column(JSON, nullable=False)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class EmailAttachment(UUIDPrimaryKey, TimestampMixin, Base):
+    """Normalised attachment row (was a JSON blob on EmailMessage).
+
+    Needed so the agent can fetch raw bytes / run recognition on demand, and so
+    outbound mail can carry files. ``storage_path`` is the object-store key;
+    ``document_id`` links to the Document created for recognisable types.
+    """
+
+    __tablename__ = "email_attachments"
+
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("email_messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(200))
+    size: Mapped[int | None] = mapped_column(Integer)
+    content_id: Mapped[str | None] = mapped_column(String(200))
+    is_inline: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    storage_path: Mapped[str | None] = mapped_column(String(1000))
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("documents.id", ondelete="SET NULL"), index=True
+    )
+    sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+
+    message: Mapped["EmailMessage"] = relationship(back_populates="attachments")
 
 
 # ── Audit ────────────────────────────────────────────────────────────────────

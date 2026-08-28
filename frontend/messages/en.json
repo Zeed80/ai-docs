@@ -1185,5 +1185,83 @@
     "reading_kept_note": "The part could not be built from this reading. What is above is what you can rely on: fix what is missing and rebuild.",
     "blocked_solid_input": "What would be sent to the 3D model",
     "kernel_payload_json": "Full CAD-kernel request JSON"
+  },
+  "email": {
+    "title": "Mail",
+    "compose": "Compose",
+    "search": "Search mail",
+    "syncNow": "Sync now",
+    "syncing": "Syncing…",
+    "syncedAgo": "Synced {ago}",
+    "syncError": "Error: {error}",
+    "noMailboxes": "No mailboxes configured",
+    "configure": "Configure a mailbox",
+    "emptyInbox": "Inbox is empty",
+    "emptyAfterSync": "New mail appears after a sync",
+    "retry": "Retry",
+    "noThreadSelected": "Pick a message or compose a new one",
+    "folders": {
+      "inbox": "Inbox",
+      "sent": "Sent",
+      "drafts": "Drafts",
+      "archive": "Archive",
+      "trash": "Trash",
+      "spam": "Spam",
+      "starred": "Starred"
+    },
+    "labels": "Labels",
+    "newLabel": "New label",
+    "actions": {
+      "reply": "Reply",
+      "replyAll": "Reply all",
+      "forward": "Forward",
+      "archive": "Archive",
+      "trash": "Delete",
+      "markRead": "Mark read",
+      "markUnread": "Mark unread",
+      "star": "Star",
+      "unstar": "Unstar",
+      "label": "Label",
+      "send": "Send",
+      "saveDraft": "Save draft",
+      "aiHelp": "AI help",
+      "cancel": "Cancel",
+      "selectAll": "Select all"
+    },
+    "composer": {
+      "to": "To",
+      "cc": "Cc",
+      "bcc": "Bcc",
+      "subject": "Subject",
+      "from": "From",
+      "attach": "Attach file",
+      "body": "Message…",
+      "template": "Template",
+      "sending": "Sending…",
+      "sent": "Sent",
+      "aiInstruction": "What should be improved?",
+      "aiPresets": [
+        "More polite",
+        "Shorter",
+        "More formal",
+        "Add a deadline",
+        "Fix mistakes"
+      ],
+      "aiAccept": "Accept",
+      "aiAcceptEdit": "Accept & edit",
+      "aiReject": "Reject",
+      "aiPreviewTitle": "AI suggestion"
+    },
+    "bulk": {
+      "selected": "{n} selected",
+      "clear": "Clear"
+    },
+    "attachmentTo": {
+      "document": "To documents",
+      "drawing": "To drawing",
+      "download": "Download"
+    },
+    "unread": "{n} new",
+    "keysHint": "c compose · r reply · e archive · / search · ? all keys"
   }
 }

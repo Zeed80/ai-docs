@@ -105,8 +105,11 @@ def get_mailbox_configs() -> list[MailboxConfig]:
             ]
         return configs
     except Exception as e:
-        logger.warning("mailbox_configs_load_failed", error=str(e))
-        return []
+        # A DB failure here is a real outage — returning [] pretended "no
+        # mailboxes are configured" and turned it into a silently successful,
+        # no-op poll. Let the task fail and retry instead.
+        logger.error("mailbox_configs_load_failed", error=str(e))
+        raise
 
 
 def decode_mime_header(value: str | None) -> str:
@@ -314,5 +317,13 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
         return emails
 
     except Exception as e:
+        # Do NOT swallow into []: a login failure, an expired OAuth token or an
+        # unreachable host must surface as sync_error on the mailbox, not look
+        # like "the inbox is empty". An empty result is a legitimate return
+        # above (imap_no_new_messages / imap_error-free); an exception is not.
         logger.error("imap_error", mailbox=config.name, error=str(e))
-        return []
+        try:
+            conn.logout()
+        except Exception:
+            pass
+        raise

@@ -172,6 +172,24 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         # acts for (app.auth.acting) — read-only, no provisioning from the agent.
         "my_mailbox":        ("GET",   "/api/mailbox/me",                              []),
         "process_attachment": ("POST", "/api/email/messages/{message_id}/attachments/process", ["message_id"]),
+        # Email client v2 additions:
+        "list_threads":      ("GET",   "/api/email/threads",                           []),
+        "get_thread":        ("GET",   "/api/email/threads/{thread_id}",               ["thread_id"]),
+        "read":              ("GET",   "/api/email/{email_id}",                        ["email_id"]),
+        "list_drafts":       ("GET",   "/api/email/drafts",                            []),
+        "mailboxes":         ("GET",   "/api/email/mailboxes",                         []),
+        "labels":            ("GET",   "/api/email/labels",                            []),
+        "label":             ("POST",  "/api/email/threads/actions",                   []),
+        "compose":           ("POST",  "/api/email/compose/generate",                  []),
+        "compose_assist":    ("POST",  "/api/email/compose/assist",                    []),
+        "reply":             ("POST",  "/api/email/threads/{thread_id}/reply-draft",   ["thread_id"]),
+        "get_attachment":    ("GET",   "/api/email/messages/{message_id}/attachments/{filename}/content", ["message_id", "filename"]),
+        "recognize_attachment": ("POST", "/api/email/messages/{message_id}/attachments/recognize", ["message_id"]),
+        # Canonical template action names (aliases kept above for back-compat).
+        "templates.list":    ("GET",   "/api/email-templates/",                        []),
+        "templates.get":     ("GET",   "/api/email-templates/{template_id}",           ["template_id"]),
+        "templates.render":  ("POST",  "/api/email-templates/{template_id}/render",    ["template_id"]),
+        "templates.delete":  ("DELETE", "/api/email-templates/{template_id}",          ["template_id"]),
     },
     "procurement": {
         "list_requests":   ("GET",   "/api/purchase-requests",                        []),
