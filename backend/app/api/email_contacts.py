@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +54,11 @@ class ContactBookItem(BaseModel):
     owner_sub: str | None
 
     model_config = {"from_attributes": True}
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _tags_not_none(cls, v):
+        return v or []
 
 
 class ContactCreate(BaseModel):
