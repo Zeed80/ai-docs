@@ -82,15 +82,17 @@ PRESETS: list[MailboxPreset] = [
         smtp_host="smtp.yandex.ru",
         smtp_port=587,
         smtp_use_tls=True,
-        auth_methods=("app_password",),
-        oauth_provider=None,
+        auth_methods=("oauth2", "app_password"),
+        oauth_provider="yandex",
         hint=(
             "Сначала включите доступ по IMAP: Настройки почты → Все "
             "настройки → Почтовые программы → «Разрешить доступ к почтовому "
             "ящику через IMAP». Если на аккаунте включена двухфакторная "
             "аутентификация — обычный пароль не подойдёт, создайте пароль "
             "приложения на id.yandex.ru → Пароли и авторизация → Пароли "
-            "приложений (тип «Почта»)."
+            "приложений (тип «Почта»). Либо подключитесь через OAuth2 "
+            "(кнопка «Войти через Yandex»), если администратор настроил "
+            "приложение в oauth.yandex.ru с правами на почту."
         ),
     ),
     MailboxPreset(
@@ -102,15 +104,17 @@ PRESETS: list[MailboxPreset] = [
         smtp_host="smtp.mail.ru",
         smtp_port=465,
         smtp_use_tls=False,  # Mail.ru's 465 is implicit TLS, not STARTTLS
-        auth_methods=("app_password",),
-        oauth_provider=None,
+        auth_methods=("oauth2", "app_password"),
+        oauth_provider="mailru",
         hint=(
             "Сначала включите IMAP-доступ: Настройки → Все настройки → "
             "Почтовые клиенты → «Разрешить доступ». Обычный пароль от "
             "почты Mail.ru для сторонних приложений уже не принимается — "
             "создайте «пароль для внешних приложений» в настройках "
             "безопасности аккаунта (id.mail.ru → Пароль и безопасность) и "
-            "используйте его вместо обычного пароля."
+            "используйте его вместо обычного пароля. Либо подключитесь через "
+            "OAuth2 (кнопка «Войти через Mail.ru»), если администратор "
+            "настроил приложение на oauth.mail.ru."
         ),
     ),
     MailboxPreset(

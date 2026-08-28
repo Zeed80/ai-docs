@@ -48,6 +48,8 @@ interface MailboxPreset {
 const OAUTH_PROVIDER_LABEL: Record<string, string> = {
   google: "Google",
   microsoft: "Microsoft",
+  yandex: "Yandex",
+  mailru: "Mail.ru",
 };
 
 interface MailboxForm {

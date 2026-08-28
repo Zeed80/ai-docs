@@ -21,6 +21,9 @@ from __future__ import annotations
 
 import base64
 import json
+import uuid
+from collections.abc import Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
@@ -36,6 +39,7 @@ PROVIDERS: dict[str, dict] = {
         "token_url": "https://oauth2.googleapis.com/token",
         "userinfo_url": "https://openidconnect.googleapis.com/v1/userinfo",
         "scope": "https://mail.google.com/ openid email",
+        "revoke_url": "https://oauth2.googleapis.com/revoke",
         # access_type=offline is what makes Google issue a refresh_token at
         # all; prompt=consent forces it even on a second connect from the same
         # account (Google otherwise silently omits it after the first grant).
@@ -49,7 +53,29 @@ PROVIDERS: dict[str, dict] = {
             "https://outlook.office365.com/IMAP.AccessAsUser.All "
             "https://outlook.office365.com/SMTP.Send offline_access openid email"
         ),
+        # Microsoft has no OAuth2 token-revocation endpoint: consent is
+        # withdrawn per-app in the account portal, not by an API call, so
+        # there is nothing to hit here (revoke_tokens() no-ops for it).
+        "revoke_url": None,
         "extra_authorize_params": {"prompt": "select_account"},
+    },
+    "yandex": {
+        "authorize_url": "https://oauth.yandex.ru/authorize",
+        "token_url": "https://oauth.yandex.ru/token",
+        "userinfo_url": "https://login.yandex.ru/info?format=json",
+        # Yandex grants IMAP/SMTP access through mail:smtp + mail:imap; the
+        # app must also have "Почта" permissions enabled in oauth.yandex.ru.
+        "scope": "login:email mail:smtp mail:imap",
+        "revoke_url": "https://oauth.yandex.ru/revoke_token",
+        "extra_authorize_params": {"force_confirm": "yes"},
+    },
+    "mailru": {
+        "authorize_url": "https://oauth.mail.ru/login",
+        "token_url": "https://oauth.mail.ru/token",
+        "userinfo_url": "https://oauth.mail.ru/userinfo",
+        "scope": "userinfo mail.imap",
+        "revoke_url": None,
+        "extra_authorize_params": {},
     },
 }
 
@@ -125,7 +151,10 @@ async def exchange_code(
                 cfg["userinfo_url"], headers={"Authorization": f"Bearer {body['access_token']}"}
             )
             if r.status_code == 200:
-                email = r.json().get("email")
+                info = r.json()
+                # Each provider names it differently: Google/Mail.ru "email",
+                # Yandex "default_email".
+                email = info.get("email") or info.get("default_email")
         elif body.get("id_token"):
             email = _email_from_id_token(body["id_token"])
 
@@ -201,6 +230,136 @@ def imap_xoauth2_authobject(user: str, access_token: str):
     return _cb
 
 
+async def revoke_tokens(db, mailbox) -> str | None:
+    """Best-effort: tell the provider to invalidate this mailbox's grant.
+
+    Deleting the row locally only forgets our copy — the refresh token stays
+    valid on Google's side until someone revokes it in the account settings,
+    which is not something a person deleting a mailbox in our UI would think
+    to do. Returns None on success, else a short reason (never raises: losing
+    the remote revocation must not block the local delete).
+    """
+    if mailbox.auth_method != "oauth2" or not mailbox.oauth_refresh_token_encrypted:
+        return None
+    cfg = PROVIDERS.get(mailbox.oauth_provider or "", {})
+    revoke_url = cfg.get("revoke_url")
+    if not revoke_url:
+        return "provider has no revocation endpoint"
+
+    from app.utils.crypto import decrypt_password
+
+    token = decrypt_password(mailbox.oauth_refresh_token_encrypted)
+    if not token:
+        return "stored token could not be decrypted"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(revoke_url, data={"token": token})
+        if resp.status_code >= 400:
+            return f"HTTP {resp.status_code}"
+    except Exception as exc:  # noqa: BLE001 — reported, never fatal
+        return str(exc)
+    return None
+
+
+# ── Single-flight token refresh ──────────────────────────────────────────────
+# The IMAP poll task and an SMTP send for the same mailbox can decide the access
+# token is stale at the same moment and both refresh. Google tolerates that (its
+# refresh token does not rotate), but Microsoft may rotate it — and then the
+# refresh token one of them just persisted is already dead. Same shape as
+# app/tasks/gpu_lock.py: best-effort, Redis down → proceed unserialised.
+_REFRESH_LOCK_KEY = "mailbox:oauth_refresh:{mailbox_id}"
+_REFRESH_LOCK_TTL = 30  # a token call is a single HTTP round trip
+_REFRESH_WAIT_SECONDS = 15
+_REFRESH_POLL = 0.2
+
+
+@contextmanager
+def _refresh_lock_sync(mailbox_id) -> Iterator[bool]:
+    """Yield True if we hold the lock (caller must re-check freshness first)."""
+    import time as _time
+
+    key = _REFRESH_LOCK_KEY.format(mailbox_id=mailbox_id)
+    token = uuid.uuid4().hex
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        r = get_sync_redis()
+    except Exception:
+        yield False
+        return
+
+    deadline = _time.monotonic() + _REFRESH_WAIT_SECONDS
+    acquired = False
+    try:
+        while True:
+            try:
+                acquired = bool(r.set(key, token, nx=True, ex=_REFRESH_LOCK_TTL))
+            except Exception:
+                yield False
+                return
+            if acquired or _time.monotonic() >= deadline:
+                break
+            _time.sleep(_REFRESH_POLL)
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                if r.get(key) == token:
+                    r.delete(key)
+            except Exception:
+                pass
+
+
+@asynccontextmanager
+async def _refresh_lock_async(mailbox_id):
+    import asyncio as _asyncio
+    import time as _time
+
+    key = _REFRESH_LOCK_KEY.format(mailbox_id=mailbox_id)
+    token = uuid.uuid4().hex
+    try:
+        from app.utils.redis_client import get_async_redis
+
+        r = get_async_redis()
+    except Exception:
+        yield False
+        return
+
+    deadline = _time.monotonic() + _REFRESH_WAIT_SECONDS
+    acquired = False
+    try:
+        while True:
+            try:
+                acquired = bool(await r.set(key, token, nx=True, ex=_REFRESH_LOCK_TTL))
+            except Exception:
+                yield False
+                return
+            if acquired or _time.monotonic() >= deadline:
+                break
+            await _asyncio.sleep(_REFRESH_POLL)
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                if await r.get(key) == token:
+                    await r.delete(key)
+            except Exception:
+                pass
+
+
+def _cached_token_if_fresh(mailbox) -> str | None:
+    """The stored access token, if it still has comfortable life left."""
+    from app.utils.crypto import decrypt_password
+
+    if (
+        mailbox.oauth_access_token_encrypted
+        and mailbox.oauth_token_expires_at
+        and mailbox.oauth_token_expires_at > datetime.now(timezone.utc) + timedelta(seconds=60)
+    ):
+        return decrypt_password(mailbox.oauth_access_token_encrypted)
+    return None
+
+
 class MailboxNotOAuthConnected(RuntimeError):
     pass
 
@@ -220,34 +379,39 @@ async def get_valid_access_token(db, mailbox) -> str:
     if mailbox.auth_method != "oauth2" or not mailbox.oauth_refresh_token_encrypted:
         raise MailboxNotOAuthConnected(f"Ящик «{mailbox.name}» не подключён через OAuth2")
 
-    now = datetime.now(timezone.utc)
-    if (
-        mailbox.oauth_access_token_encrypted
-        and mailbox.oauth_token_expires_at
-        and mailbox.oauth_token_expires_at > now + timedelta(seconds=60)
-    ):
-        return decrypt_password(mailbox.oauth_access_token_encrypted)
+    cached = _cached_token_if_fresh(mailbox)
+    if cached:
+        return cached
 
-    app_cfg = (
-        await db.execute(select(OAuthAppConfig).where(OAuthAppConfig.provider == mailbox.oauth_provider))
-    ).scalar_one_or_none()
-    if not app_cfg or not app_cfg.client_id or not app_cfg.client_secret_encrypted:
-        raise OAuthAppNotConfigured(
-            f"OAuth-приложение «{mailbox.oauth_provider}» не настроено (см. /admin/integrations)"
+    async with _refresh_lock_async(mailbox.id) as holding_lock:
+        if holding_lock:
+            # Someone may have refreshed while we queued for the lock — take
+            # their fresh token instead of burning a second refresh call.
+            await db.refresh(mailbox)
+            cached = _cached_token_if_fresh(mailbox)
+            if cached:
+                return cached
+
+        app_cfg = (
+            await db.execute(select(OAuthAppConfig).where(OAuthAppConfig.provider == mailbox.oauth_provider))
+        ).scalar_one_or_none()
+        if not app_cfg or not app_cfg.client_id or not app_cfg.client_secret_encrypted:
+            raise OAuthAppNotConfigured(
+                f"OAuth-приложение «{mailbox.oauth_provider}» не настроено (см. /admin/integrations)"
+            )
+
+        result = await refresh_access_token_async(
+            mailbox.oauth_provider,
+            app_cfg.client_id,
+            decrypt_client_secret(app_cfg.client_secret_encrypted),
+            decrypt_password(mailbox.oauth_refresh_token_encrypted),
         )
-
-    result = await refresh_access_token_async(
-        mailbox.oauth_provider,
-        app_cfg.client_id,
-        decrypt_client_secret(app_cfg.client_secret_encrypted),
-        decrypt_password(mailbox.oauth_refresh_token_encrypted),
-    )
-    mailbox.oauth_access_token_encrypted = encrypt_password(result.access_token)
-    mailbox.oauth_token_expires_at = result.expires_at
-    if result.refresh_token:
-        mailbox.oauth_refresh_token_encrypted = encrypt_password(result.refresh_token)
-    await db.commit()
-    return result.access_token
+        mailbox.oauth_access_token_encrypted = encrypt_password(result.access_token)
+        mailbox.oauth_token_expires_at = result.expires_at
+        if result.refresh_token:
+            mailbox.oauth_refresh_token_encrypted = encrypt_password(result.refresh_token)
+        await db.commit()
+        return result.access_token
 
 
 def get_valid_access_token_sync(db, mailbox) -> str:
@@ -261,31 +425,34 @@ def get_valid_access_token_sync(db, mailbox) -> str:
     if mailbox.auth_method != "oauth2" or not mailbox.oauth_refresh_token_encrypted:
         raise MailboxNotOAuthConnected(f"Ящик «{mailbox.name}» не подключён через OAuth2")
 
-    now = datetime.now(timezone.utc)
-    if (
-        mailbox.oauth_access_token_encrypted
-        and mailbox.oauth_token_expires_at
-        and mailbox.oauth_token_expires_at > now + timedelta(seconds=60)
-    ):
-        return decrypt_password(mailbox.oauth_access_token_encrypted)
+    cached = _cached_token_if_fresh(mailbox)
+    if cached:
+        return cached
 
-    app_cfg = db.execute(
-        select(OAuthAppConfig).where(OAuthAppConfig.provider == mailbox.oauth_provider)
-    ).scalar_one_or_none()
-    if not app_cfg or not app_cfg.client_id or not app_cfg.client_secret_encrypted:
-        raise OAuthAppNotConfigured(
-            f"OAuth-приложение «{mailbox.oauth_provider}» не настроено (см. /admin/integrations)"
+    with _refresh_lock_sync(mailbox.id) as holding_lock:
+        if holding_lock:
+            db.refresh(mailbox)
+            cached = _cached_token_if_fresh(mailbox)
+            if cached:
+                return cached
+
+        app_cfg = db.execute(
+            select(OAuthAppConfig).where(OAuthAppConfig.provider == mailbox.oauth_provider)
+        ).scalar_one_or_none()
+        if not app_cfg or not app_cfg.client_id or not app_cfg.client_secret_encrypted:
+            raise OAuthAppNotConfigured(
+                f"OAuth-приложение «{mailbox.oauth_provider}» не настроено (см. /admin/integrations)"
+            )
+
+        result = refresh_access_token_sync(
+            mailbox.oauth_provider,
+            app_cfg.client_id,
+            decrypt_client_secret(app_cfg.client_secret_encrypted),
+            decrypt_password(mailbox.oauth_refresh_token_encrypted),
         )
-
-    result = refresh_access_token_sync(
-        mailbox.oauth_provider,
-        app_cfg.client_id,
-        decrypt_client_secret(app_cfg.client_secret_encrypted),
-        decrypt_password(mailbox.oauth_refresh_token_encrypted),
-    )
-    mailbox.oauth_access_token_encrypted = encrypt_password(result.access_token)
-    mailbox.oauth_token_expires_at = result.expires_at
-    if result.refresh_token:
-        mailbox.oauth_refresh_token_encrypted = encrypt_password(result.refresh_token)
-    db.commit()
-    return result.access_token
+        mailbox.oauth_access_token_encrypted = encrypt_password(result.access_token)
+        mailbox.oauth_token_expires_at = result.expires_at
+        if result.refresh_token:
+            mailbox.oauth_refresh_token_encrypted = encrypt_password(result.refresh_token)
+        db.commit()
+        return result.access_token

@@ -20,8 +20,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.acting import get_effective_user
-from app.auth.models import UserInfo
+from app.auth.models import UserInfo, UserRole
 from app.db.models import MailboxConfig, OAuthAppConfig
+from app.config import settings
 from app.db.session import get_db
 from app.domain import oauth_mail
 from app.utils.crypto import encrypt_password
@@ -47,6 +48,15 @@ class OAuthStartResponse(BaseModel):
 class OAuthPendingOut(BaseModel):
     provider: str
     email: str | None
+
+
+def _require_mailbox_authority(user: UserInfo, mb: MailboxConfig) -> None:
+    """Admins manage any mailbox; a personal one is also its owner's to connect."""
+    if UserRole.admin in user.roles:
+        return
+    if mb.mailbox_type == "personal" and mb.owner_sub == user.sub:
+        return
+    raise HTTPException(status_code=403, detail="Нет прав на этот почтовый ящик")
 
 
 async def _app_config(db: AsyncSession, provider: str) -> OAuthAppConfig:
@@ -81,6 +91,14 @@ async def start_oauth(
         mb = await db.get(MailboxConfig, payload.mailbox_id)
         if not mb:
             raise HTTPException(status_code=404, detail="Mailbox not found")
+        # Finishing this flow rewrites whose account the mailbox authenticates
+        # as, so it needs the same authority as editing the mailbox itself:
+        # admin for shared mailboxes, the owner for their own personal one.
+        _require_mailbox_authority(_user, mb)
+    elif UserRole.admin not in _user.roles:
+        # No mailbox_id → the result is attached to a mailbox created right
+        # after (POST /api/mailbox/configs), which is admin-only anyway.
+        raise HTTPException(status_code=403, detail="Требуется роль admin")
 
     state = secrets.token_urlsafe(24)
     r = get_async_redis()
@@ -99,18 +117,20 @@ async def start_oauth(
 def _popup_page(payload: dict) -> HTMLResponse:
     """A self-closing page that hands `payload` to window.opener and exits.
 
-    postMessage's target origin is "*": the payload never carries a secret
-    (just a session id, provider name, and — for the connect-existing-mailbox
-    case — a mailbox id the opener already knows), only a one-time pointer
-    the opener uses to fetch/attach the real result server-side.
+    The payload carries no secret — a one-time session id the opener trades
+    for the real result server-side, plus a provider/mailbox id it already
+    knows — but it is still scoped to our own frontend origin rather than
+    "*", so a page that manages to open this URL in a popup cannot read even
+    that much. Falls back to "*" only if no origin is configured.
     """
     data = json.dumps(payload)
+    origin = json.dumps(settings.frontend_url.rstrip("/") or "*")
     html = f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Подключение почты</title></head>
 <body style="font-family:system-ui,sans-serif;padding:2rem;color:#334">
 <p>Готово, можно закрыть эту вкладку.</p>
 <script>
-  try {{ window.opener && window.opener.postMessage({data}, "*"); }} catch (e) {{}}
+  try {{ window.opener && window.opener.postMessage({data}, {origin}); }} catch (e) {{}}
   window.close();
 </script>
 </body></html>"""

@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders, mutFetch } from "@/lib/auth";
+import { useCurrentUser } from "@/lib/auth-context";
+import { hasRole } from "@/lib/rbac";
 import { MailboxSection } from "@/components/email/mailbox-settings";
 import { EmailTemplatesSection } from "@/components/email/email-templates";
 import { PersonalMailboxCard } from "@/components/email/personal-mailbox-card";
@@ -519,6 +521,8 @@ const TAB_IDS: TabId[] = ["agent", "memory", "data", "system", "email"];
 
 export default function SettingsPage() {
   const agentName = useAgentName();
+  const currentUser = useCurrentUser();
+  const isAdmin = !!currentUser && hasRole(currentUser.roles, "admin");
   const [activeTab, setActiveTab] = useState<TabId>("agent");
 
   useEffect(() => {
@@ -3862,7 +3866,11 @@ export default function SettingsPage() {
       {activeTab === "email" && (
         <div className="space-y-6">
           <PersonalMailboxCard />
-          <MailboxSection />
+          {/* Общие ящики отдела — инфраструктура организации; API отдаёт их
+              только админам (app/api/mailbox.py), поэтому и в UI показываем
+              секцию тем, кто действительно может её применить, а не пустой
+              блок с 403. Свой личный ящик выше виден каждому. */}
+          {isAdmin && <MailboxSection />}
           <EmailTemplatesSection />
         </div>
       )}

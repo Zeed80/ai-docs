@@ -12,7 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.acting import get_effective_user
-from app.auth.models import UserInfo
+from app.auth.jwt import require_role
+from app.auth.models import UserInfo, UserRole
 from app.db.models import AuditLog, MailboxConfig, OAuthAppConfig
 from app.db.session import get_db
 from app.domain.admin import UserMailboxOut, UserMailboxSweepUpdate
@@ -21,6 +22,13 @@ from app.utils.crypto import decrypt_password, encrypt_password
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+# Shared mailboxes (procurement/accounting/general) are org infrastructure: their
+# credentials decide which address the company sends from and whose inbox the
+# agent reads. The router is mounted with authentication only, so without this
+# every logged-in user — viewer included — could repoint the procurement mailbox
+# at their own account. Personal mailboxes stay self-service through /me below.
+_admin_dep = Depends(require_role(UserRole.admin))
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
@@ -290,6 +298,7 @@ async def _mailbox_out(cfg: MailboxConfig) -> UserMailboxOut:
 @router.post("/configs", response_model=MailboxConfigOut, status_code=201)
 async def create_mailbox(
     payload: MailboxConfigCreate,
+    _admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> MailboxConfigOut:
     """Skill: mailbox.create — Add a new IMAP/SMTP mailbox configuration."""
@@ -331,6 +340,7 @@ async def create_mailbox(
 @router.get("/configs", response_model=list[MailboxConfigOut])
 async def list_mailboxes(
     active_only: bool = False,
+    _admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> list[MailboxConfigOut]:
     """Skill: mailbox.list — List all configured mailboxes."""
@@ -344,6 +354,7 @@ async def list_mailboxes(
 @router.get("/configs/{mailbox_id}", response_model=MailboxConfigOut)
 async def get_mailbox(
     mailbox_id: uuid.UUID,
+    _admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> MailboxConfigOut:
     """Skill: mailbox.get — Get a mailbox configuration by ID."""
@@ -357,6 +368,7 @@ async def get_mailbox(
 async def update_mailbox(
     mailbox_id: uuid.UUID,
     payload: MailboxConfigUpdate,
+    _admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> MailboxConfigOut:
     """Skill: mailbox.update — Update mailbox settings."""
@@ -392,12 +404,27 @@ async def update_mailbox(
 @router.delete("/configs/{mailbox_id}", status_code=204)
 async def delete_mailbox(
     mailbox_id: uuid.UUID,
+    _admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Skill: mailbox.delete — Remove a mailbox configuration."""
+    from app.domain.oauth_mail import revoke_tokens
+
     cfg = await db.get(MailboxConfig, mailbox_id)
     if not cfg:
         raise HTTPException(status_code=404, detail="Mailbox not found")
+
+    # Ask the provider to invalidate the grant before we forget it: dropping
+    # the row alone leaves a working refresh token on Google's side that
+    # nobody can revoke any more, because we just deleted the only record of
+    # it. Failure is logged, never fatal — the local delete must still happen.
+    reason = await revoke_tokens(db, cfg)
+    if reason:
+        logger.warning(
+            "mailbox_oauth_revoke_failed",
+            name=cfg.name, provider=cfg.oauth_provider, reason=reason,
+        )
+
     await db.delete(cfg)
     await db.commit()
 
@@ -405,6 +432,7 @@ async def delete_mailbox(
 @router.post("/configs/{mailbox_id}/test", response_model=MailboxTestResult)
 async def test_mailbox(
     mailbox_id: uuid.UUID,
+    _admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> MailboxTestResult:
     """Skill: mailbox.test — Test IMAP and SMTP connectivity."""

@@ -547,6 +547,8 @@ interface OAuthApp {
 const OAUTH_PROVIDER_LABEL: Record<string, string> = {
   google: "Google (Gmail)",
   microsoft: "Microsoft (Outlook / Microsoft 365)",
+  yandex: "Яндекс.Почта",
+  mailru: "Mail.ru",
 };
 
 const OAUTH_PROVIDER_CONSOLE: Record<string, { url: string; label: string }> = {
@@ -669,7 +671,7 @@ function OAuthAppsSection() {
 
       {error && <p className="text-xs text-destructive">Ошибка: {error}</p>}
 
-      {["google", "microsoft"].map((provider) => {
+      {["google", "microsoft", "yandex", "mailru"].map((provider) => {
         const app = apps.find((a) => a.provider === provider);
         const form = forms[provider] ?? {
           client_id: "",

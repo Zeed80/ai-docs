@@ -1082,7 +1082,9 @@ async def test_mail_server_integration(
 # flow against it (app/api/oauth.py) to get its own refresh token — see
 # app/domain/oauth_mail.py for why plain passwords stopped working at all.
 
-_OAUTH_PROVIDERS = ("google", "microsoft")
+# Kept in sync with app/domain/oauth_mail.py's PROVIDERS — that module owns the
+# endpoints/scopes, this list only decides which cards the admin UI renders.
+_OAUTH_PROVIDERS = ("google", "microsoft", "yandex", "mailru")
 
 
 def _oauth_app_out(provider: str, row) -> OAuthAppOut:
