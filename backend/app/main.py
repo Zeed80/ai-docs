@@ -52,7 +52,6 @@ from app.api import (
     computer_use,
     dashboard,
     documents,
-    draft_email,
     drawings,
     email,
     email_templates,
@@ -389,7 +388,6 @@ def create_app() -> FastAPI:
     app.include_router(providers_api.router, prefix="/api/providers", tags=["providers"], dependencies=_auth)
     app.include_router(agent_actions.router, prefix="/api/agent-actions", tags=["agent"], dependencies=_auth)
     app.include_router(export.router, prefix="/api", tags=["export"], dependencies=_auth)
-    app.include_router(draft_email.router, prefix="/api/draft-emails", tags=["email"], dependencies=_auth)
     app.include_router(quarantine.router, prefix="/api/quarantine", tags=["quarantine"], dependencies=_auth)
     app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"], dependencies=_auth)
     app.include_router(warehouse.router, prefix="/api/warehouse", tags=["warehouse"], dependencies=_auth)

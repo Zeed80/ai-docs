@@ -23,7 +23,6 @@ from app.db.models import (
     DocumentLink,
     DocumentProcessingJob,
     DocumentVersion,
-    DraftEmail,
     Drawing,
     DrawingAssemblyBOM,
     DrawingFeature,
@@ -632,7 +631,7 @@ async def _delete_cross_entity_records(
     # here (export_jobs, draft_emails, purchase_requests, draft_actions), so the
     # subsequent approval delete does not violate those constraints.
     if all_approval_ids:
-        for model in (ExportJob, DraftEmail, PurchaseRequest, DraftAction):
+        for model in (ExportJob, PurchaseRequest, DraftAction):
             await db.execute(
                 model.__table__.update()  # type: ignore[attr-defined]
                 .where(model.approval_id.in_(all_approval_ids))
@@ -659,15 +658,6 @@ async def _delete_cross_entity_records(
         counts[ExportJob.__tablename__] = int(
             counts.get(ExportJob.__tablename__, 0) or 0
         ) + int(export_result.rowcount or 0)
-        email_result = await db.execute(
-            delete(DraftEmail).where(
-                DraftEmail.related_entity_type == entity_type,
-                DraftEmail.related_entity_id == entity_id,
-            )
-        )
-        counts[DraftEmail.__tablename__] = int(
-            counts.get(DraftEmail.__tablename__, 0) or 0
-        ) + int(email_result.rowcount or 0)
 
     for entity_type, entity_id in entity_pairs:
         for model in (CollectionItem, AnomalyCard, Approval, DraftAction, AuditLog, AuditTimelineEvent):

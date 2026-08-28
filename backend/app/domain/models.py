@@ -501,9 +501,6 @@ class EmailThread(Base):
     messages: Mapped[list[EmailMessage]] = relationship(
         back_populates="thread", cascade="all, delete-orphan"
     )
-    draft_emails: Mapped[list[DraftEmail]] = relationship(
-        back_populates="thread", cascade="all, delete-orphan"
-    )
 
 
 class EmailMessage(Base):
@@ -540,27 +537,6 @@ class EmailAttachment(Base):
 
     message: Mapped[EmailMessage] = relationship(back_populates="attachments")
     document: Mapped[Document | None] = relationship()
-
-
-class DraftEmail(Base):
-    __tablename__ = "draft_emails"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    thread_id: Mapped[str | None] = mapped_column(ForeignKey("email_threads.id"), nullable=True)
-    case_id: Mapped[str | None] = mapped_column(ForeignKey("manufacturing_cases.id"), nullable=True)
-    to_json: Mapped[str] = mapped_column(Text, nullable=False)
-    cc_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    subject: Mapped[str] = mapped_column(String(500), nullable=False)
-    body_text: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(50), default="draft", nullable=False)
-    risk_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    approval_required: Mapped[str] = mapped_column(String(10), default="true", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=now_utc, onupdate=now_utc
-    )
-
-    thread: Mapped[EmailThread | None] = relationship(back_populates="draft_emails")
 
 
 class AgentAction(Base):

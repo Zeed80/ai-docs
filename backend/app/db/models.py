@@ -2153,31 +2153,6 @@ class ExportJob(UUIDPrimaryKey, TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text)
 
 
-# ── Draft Emails ────────────────────────────────────────────────────────────
-
-
-class DraftEmail(UUIDPrimaryKey, TimestampMixin, Base):
-    __tablename__ = "draft_emails"
-
-    thread_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("email_threads.id")
-    )
-    related_entity_type: Mapped[str | None] = mapped_column(String(50))
-    related_entity_id: Mapped[uuid.UUID | None] = mapped_column(GUID())
-    to_addresses: Mapped[list] = mapped_column(JSON, nullable=False)
-    cc_addresses: Mapped[list | None] = mapped_column(JSON)
-    subject: Mapped[str] = mapped_column(String(1000), nullable=False)
-    body_text: Mapped[str] = mapped_column(Text, nullable=False)
-    body_html: Mapped[str | None] = mapped_column(Text)
-    risk_flags: Mapped[list | None] = mapped_column(JSON)
-    # [{severity: "warning"|"critical", message: "..."}]
-    approval_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("approvals.id"))
-    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
-    # "draft" | "pending_approval" | "approved" | "sent" | "cancelled"
-    generated_by: Mapped[str] = mapped_column(String(50), default="sveta")
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
 # ── Calendar & Reminders ───────────────────────────────────────────────────
 
 

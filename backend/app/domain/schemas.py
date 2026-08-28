@@ -423,39 +423,6 @@ class EmailThreadRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class DraftEmailCreate(BaseModel):
-    thread_id: str | None = None
-    case_id: str | None = None
-    to: list[str] = Field(default_factory=list)
-    cc: list[str] = Field(default_factory=list)
-    subject: str = Field(min_length=1)
-    body_text: str = Field(min_length=1)
-
-
-class DraftEmailRead(BaseModel):
-    id: str
-    thread_id: str | None
-    case_id: str | None
-    to: list[str]
-    cc: list[str]
-    subject: str
-    body_text: str
-    status: str
-    risk: dict[str, Any] = Field(default_factory=dict)
-    approval_required: bool = True
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class EmailSendAttemptRead(BaseModel):
-    draft: DraftEmailRead
-    status: str = "blocked_for_approval"
-    approval_required: bool = True
-    reason: str
-
-
 class ImapPollRead(BaseModel):
     status: str = "placeholder"
     imported_count: int = 0

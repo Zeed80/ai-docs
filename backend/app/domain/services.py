@@ -19,7 +19,6 @@ from app.domain.models import (
     DocumentVersion,
     Drawing,
     DrawingFeature,
-    DraftEmail,
     EmailMessage,
     EmailThread,
     Invoice,
@@ -35,7 +34,6 @@ from app.domain.models import (
 from app.domain.schemas import (
     CaseCreate,
     CaseUpdate,
-    DraftEmailCreate,
     DrawingAnalysisResult,
     EmailThreadCreate,
     InvoiceAnomalyCard,
@@ -171,9 +169,6 @@ def get_invoice(db: Session, invoice_id: str) -> Invoice | None:
 def get_email_thread(db: Session, thread_id: str) -> EmailThread | None:
     return db.get(EmailThread, thread_id)
 
-
-def get_draft_email(db: Session, draft_id: str) -> DraftEmail | None:
-    return db.get(DraftEmail, draft_id)
 
 
 def get_task_job(db: Session, task_id: str) -> TaskJob | None:
@@ -676,53 +671,6 @@ def create_email_thread(
     return thread
 
 
-def create_draft_email(
-    db: Session,
-    payload: DraftEmailCreate,
-    actor: str = "ai",
-) -> DraftEmail:
-    risk = _email_risk(payload)
-    draft = DraftEmail(
-        thread_id=payload.thread_id,
-        case_id=payload.case_id,
-        to_json=json.dumps(payload.to, ensure_ascii=False),
-        cc_json=json.dumps(payload.cc, ensure_ascii=False),
-        subject=payload.subject,
-        body_text=payload.body_text,
-        status="needs_approval",
-        risk_json=json.dumps(risk, ensure_ascii=False),
-        approval_required="true",
-    )
-    db.add(draft)
-    add_audit_event(
-        db,
-        event_type=AuditEventType.EMAIL_DRAFT_CREATED.value,
-        message=f"Created draft email: {draft.subject}",
-        actor=actor,
-        case_id=payload.case_id,
-        payload={"draft_id": draft.id, "risk": risk, "approval_required": True},
-    )
-    db.commit()
-    db.refresh(draft)
-    return draft
-
-
-def block_email_send_for_approval(
-    db: Session,
-    draft: DraftEmail,
-    actor: str = "system",
-) -> None:
-    draft.status = "blocked_for_approval"
-    add_audit_event(
-        db,
-        event_type=AuditEventType.EMAIL_SEND_BLOCKED_FOR_APPROVAL.value,
-        message=f"Blocked email send pending approval: {draft.subject}",
-        actor=actor,
-        case_id=draft.case_id,
-        payload={"draft_id": draft.id, "approval_required": True},
-    )
-    db.commit()
-    db.refresh(draft)
 
 
 def add_imap_placeholder_audit(
@@ -1102,23 +1050,6 @@ def add_signed_file_url_audit(
     )
     db.commit()
 
-
-def _email_risk(payload: DraftEmailCreate) -> dict:
-    signals: list[str] = []
-    if not payload.to:
-        signals.append("missing_recipient")
-    body_lower = payload.body_text.lower()
-    risky_terms = ["оплат", "payment", "bank", "счет", "счёт", "реквизит"]
-    if any(term in body_lower for term in risky_terms):
-        signals.append("contains_financial_or_requisites_terms")
-    if len(payload.body_text) > 5000:
-        signals.append("long_email_body")
-    severity = "medium" if signals else "low"
-    return {
-        "severity": severity,
-        "signals": signals,
-        "approval_required": True,
-    }
 
 
 def _get_or_create_supplier(db: Session, extraction: InvoiceExtractionResult) -> tuple[Supplier, list[str]]:
