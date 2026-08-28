@@ -85,7 +85,7 @@ export interface EmailDraft {
 }
 
 export type ComposeMode =
-  | { kind: "new" }
+  | { kind: "new"; to?: string[] }
   | { kind: "reply"; message: EmailMessage; all?: boolean }
   | { kind: "forward"; message: EmailMessage }
   | { kind: "draft"; draft: EmailDraft };

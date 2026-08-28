@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { emailApi } from "./api";
 import { RichTextEditor } from "./RichTextEditor";
+import { RecipientInput } from "./RecipientInput";
 import type { ComposeMode, EmailMessage, MailboxChip } from "./types";
 
 function htmlToText(html: string): string {
@@ -77,7 +78,7 @@ export function Composer({
       };
     }
     return {
-      to: [] as string[],
+      to: (mode.kind === "new" && mode.to) || ([] as string[]),
       cc: [] as string[],
       bcc: [] as string[],
       subject: "",
@@ -87,9 +88,14 @@ export function Composer({
     };
   }, [mode, defaultMailbox]);
 
-  const [to, setTo] = useState(initial.to.join(", "));
-  const [cc, setCc] = useState(initial.cc.join(", "));
-  const [bcc, setBcc] = useState(initial.bcc.join(", "));
+  const bareEmail = (s: string) => {
+    const m = s.match(/<([^>]+)>/);
+    return (m ? m[1] : s).trim();
+  };
+
+  const [to, setTo] = useState<string[]>(initial.to.map((x) => bareEmail(x).toLowerCase()));
+  const [cc, setCc] = useState<string[]>(initial.cc.map((x) => bareEmail(x).toLowerCase()));
+  const [bcc, setBcc] = useState<string[]>(initial.bcc.map((x) => bareEmail(x).toLowerCase()));
   const [showCc, setShowCc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
   const [subject, setSubject] = useState(initial.subject);
   const [body, setBody] = useState(initial.body);
@@ -108,12 +114,7 @@ export function Composer({
     Awaited<ReturnType<typeof emailApi.pollComposeAssist>>["result"]
   > | null>(null);
   const [aiInstruction, setAiInstruction] = useState("");
-  const [contacts, setContacts] = useState<string[]>([]);
 
-  const bareEmail = (s: string) => {
-    const m = s.match(/<([^>]+)>/);
-    return (m ? m[1] : s).trim();
-  };
   // Prefill the applicable signature once, at the bottom of the draft.
   useEffect(() => {
     if (sigApplied || mode.kind === "draft") return;
@@ -126,34 +127,12 @@ export function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mailbox]);
 
-  const parseAddrs = (s: string) =>
-    s
-      .split(/[,;]/)
-      .map((x) => bareEmail(x.trim()))
-      .filter((x) => x.includes("@"));
-
-  // Contact autocomplete for the To field.
-  const toRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    const last = to.split(/[,;]/).pop()?.trim() ?? "";
-    if (last.length < 2) {
-      setContacts([]);
-      return;
-    }
-    const h = setTimeout(() => {
-      emailApi
-        .contacts(last)
-        .then((cs) => setContacts(cs.map((c) => c.email)))
-        .catch(() => setContacts([]));
-    }, 250);
-    return () => clearTimeout(h);
-  }, [to]);
 
   async function persistDraft(): Promise<string> {
     const payload = {
-      to_addresses: parseAddrs(to),
-      cc_addresses: parseAddrs(cc),
-      bcc_addresses: parseAddrs(bcc),
+      to_addresses: to,
+      cc_addresses: cc,
+      bcc_addresses: bcc,
       subject,
       body_html: body,
       body_text: htmlToText(body),
@@ -185,7 +164,7 @@ export function Composer({
   }
 
   async function handleSend() {
-    if (!parseAddrs(to).length) {
+    if (!to.length) {
       setError("Укажите получателя");
       return;
     }
@@ -194,9 +173,9 @@ export function Composer({
     try {
       await emailApi.send({
         mailbox,
-        to_addresses: parseAddrs(to),
-        cc_addresses: parseAddrs(cc),
-        bcc_addresses: parseAddrs(bcc),
+        to_addresses: to,
+        cc_addresses: cc,
+        bcc_addresses: bcc,
         subject,
         body_html: body,
         body_text: htmlToText(body),
@@ -301,25 +280,12 @@ export function Composer({
             </select>
           </div>
         )}
-        <div className="flex items-center gap-2">
-          <span className="text-slate-400 w-10 text-xs">{tc("to")}</span>
-          <input
-            ref={toRef}
-            list="email-contacts"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            placeholder="name@example.com"
-            className={input}
-          />
-          <datalist id="email-contacts">
-            {contacts.map((c) => (
-              <option key={c} value={c} />
-            ))}
-          </datalist>
+        <div className="flex items-start gap-2">
+          <RecipientInput label={tc("to")} value={to} onChange={setTo} autoFocus />
           {!showCc && (
             <button
               onClick={() => setShowCc(true)}
-              className="text-xs text-slate-400 hover:text-slate-200 shrink-0"
+              className="mt-1 shrink-0 text-xs text-slate-400 hover:text-slate-200"
             >
               Cc/Bcc
             </button>
@@ -327,14 +293,8 @@ export function Composer({
         </div>
         {showCc && (
           <>
-            <div className="flex items-center gap-2">
-              <span className="text-slate-400 w-10 text-xs">{tc("cc")}</span>
-              <input value={cc} onChange={(e) => setCc(e.target.value)} className={input} />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-slate-400 w-10 text-xs">{tc("bcc")}</span>
-              <input value={bcc} onChange={(e) => setBcc(e.target.value)} className={input} />
-            </div>
+            <RecipientInput label={tc("cc")} value={cc} onChange={setCc} />
+            <RecipientInput label={tc("bcc")} value={bcc} onChange={setBcc} />
           </>
         )}
         <div className="flex items-center gap-2">

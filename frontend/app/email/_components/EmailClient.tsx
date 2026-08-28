@@ -8,6 +8,7 @@ import { MailSidebar } from "./MailSidebar";
 import { ThreadList } from "./ThreadList";
 import { ThreadView } from "./ThreadView";
 import { Composer } from "./Composer";
+import { ContactsPanel } from "./ContactsPanel";
 import type { ComposeMode, EmailLabel, EmailThread, MailboxChip } from "./types";
 
 export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
@@ -30,6 +31,7 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
   const [cursor, setCursor] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [compose, setCompose] = useState<ComposeMode | null>(null);
+  const [view, setView] = useState<"mail" | "contacts">("mail");
   const [showKeys, setShowKeys] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -236,6 +238,8 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
       {sidebarOpen && (
       <MailSidebar
         onCollapse={() => setSidebarOpen(false)}
+        view={view}
+        onSelectContacts={() => setView("contacts")}
         mailboxes={mailboxes}
         labels={labels}
         activeMailbox={activeMailbox}
@@ -243,17 +247,20 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
         activeLabel={activeLabel}
         starredOnly={starredOnly}
         onSelectMailbox={(n) => {
+          setView("mail");
           setActiveMailbox(n);
           setActiveFolder("inbox");
           setActiveLabel(null);
           setStarredOnly(false);
         }}
         onSelectFolder={(f) => {
+          setView("mail");
           setActiveFolder(f);
           setActiveLabel(null);
           setStarredOnly(false);
         }}
         onSelectLabel={(id) => {
+          setView("mail");
           setActiveLabel(id);
           setStarredOnly(false);
         }}
@@ -267,6 +274,15 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
       />
       )}
 
+      {view === "contacts" ? (
+        <ContactsPanel
+          onCompose={(email) => {
+            setView("mail");
+            setCompose({ kind: "new", to: [email] });
+          }}
+        />
+      ) : (
+      <>
       <div className="flex w-72 shrink-0 flex-col border-r border-slate-700 bg-slate-800/40">
         <div className="border-b border-slate-700 p-2">
           <div className="mb-1.5 flex items-center gap-1.5">
@@ -388,6 +404,8 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
           </div>
         )}
       </div>
+      </>
+      )}
 
       {showKeys && (
         <div

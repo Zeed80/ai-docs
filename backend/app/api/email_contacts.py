@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy import String, cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.acting import get_effective_user
@@ -81,11 +81,20 @@ class ContactUpdate(BaseModel):
     is_favorite: bool | None = None
 
 
+def _split(addr: str) -> tuple[str, str]:
+    """('Иван Петров <ivan@x.ru>') -> ('Иван Петров', 'ivan@x.ru')."""
+    from email.utils import parseaddr
+
+    name, email = parseaddr(addr or "")
+    return name.strip(), (email or addr or "").strip()
+
+
 def _bare(addr: str) -> str:
-    m = addr and addr.split("<")
-    if m and len(m) > 1 and ">" in m[1]:
-        return m[1].split(">")[0].strip()
-    return (addr or "").strip()
+    return _split(addr)[1]
+
+
+def _norm(s: str) -> str:
+    return (s or "").lower().replace("ё", "е")
 
 
 @router.get("", response_model=list[ContactOut])
@@ -95,8 +104,12 @@ async def autocomplete(
     user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: email.contacts — Address autocomplete (book + suppliers + history)."""
+    """Skill: email.contacts — Address autocomplete (book + suppliers + history).
+
+    Empty ``q`` returns favourites + most-used contacts so a freshly-focused
+    field already shows suggestions (Gmail-style)."""
     q = (q or "").strip()
+    like = f"%{q}%"
     seen: dict[str, ContactOut] = {}
 
     # 1. saved contacts (personal + shared)
@@ -104,10 +117,13 @@ async def autocomplete(
         or_(EmailContact.owner_sub.is_(None), EmailContact.owner_sub == user.sub)
     )
     if q:
-        like = f"%{q}%"
         cq = cq.where(or_(EmailContact.email.ilike(like), EmailContact.name.ilike(like),
                           EmailContact.organization.ilike(like)))
-    cq = cq.order_by(EmailContact.is_favorite.desc(), EmailContact.use_count.desc()).limit(limit)
+    cq = cq.order_by(
+        EmailContact.is_favorite.desc(),
+        EmailContact.use_count.desc(),
+        EmailContact.last_used_at.desc().nullslast(),
+    ).limit(limit)
     for c in (await db.execute(cq)).scalars().all():
         seen[c.email.lower()] = ContactOut(
             email=c.email, name=c.name, organization=c.organization,
@@ -118,7 +134,7 @@ async def autocomplete(
     if len(seen) < limit and q:
         pq = select(Party).where(
             Party.contact_email.isnot(None),
-            or_(Party.contact_email.ilike(f"%{q}%"), Party.name.ilike(f"%{q}%")),
+            or_(Party.contact_email.ilike(like), Party.name.ilike(like)),
         ).limit(limit)
         for p in (await db.execute(pq)).scalars().all():
             key = (p.contact_email or "").lower()
@@ -126,22 +142,37 @@ async def autocomplete(
                 seen[key] = ContactOut(email=p.contact_email, name=p.name,
                                        organization=p.name, source="party")
 
-    # 3. recent senders
+    # 3. history — everyone we have corresponded with, keeping the display name.
+    # Filter in Python (ё/е-insensitive) over the recent window rather than in
+    # SQL, so "петр" also matches "Пётр".
     if len(seen) < limit:
         scope = await mailbox_filter(db, user, mailbox_col=EmailMessage.mailbox)
-        mq = select(EmailMessage.from_address).where(EmailMessage.is_inbound == True)  # noqa: E712
+        mq = select(EmailMessage.from_address, EmailMessage.to_addresses).where(
+            EmailMessage.from_address.isnot(None)
+        )
         if scope is not None:
             mq = mq.where(scope)
-        if q:
-            mq = mq.where(EmailMessage.from_address.ilike(f"%{q}%"))
-        for (addr,) in (await db.execute(mq.order_by(EmailMessage.received_at.desc()).limit(40))).all():
-            key = _bare(addr).lower()
-            if key and key not in seen:
-                seen[key] = ContactOut(email=_bare(addr), source="history")
+        rows = (await db.execute(mq.order_by(EmailMessage.received_at.desc()).limit(300))).all()
+        nq = _norm(q)
+        for from_addr, to_addrs in rows:
+            for raw in [from_addr, *(to_addrs or [])]:
+                name, email = _split(str(raw))
+                key = email.lower()
+                if not key or "@" not in key or key in seen:
+                    continue
+                if nq and nq not in _norm(key) and nq not in _norm(name):
+                    continue
+                seen[key] = ContactOut(email=email, name=name or None, source="history")
+                if len(seen) >= limit:
+                    break
             if len(seen) >= limit:
                 break
 
-    return list(seen.values())[:limit]
+    ordered = sorted(
+        seen.values(),
+        key=lambda c: (not c.is_favorite, {"book": 0, "party": 1, "history": 2}.get(c.source, 3)),
+    )
+    return ordered[:limit]
 
 
 @router.get("/book", response_model=list[ContactBookItem])
@@ -238,11 +269,124 @@ async def delete_contact(
     await db.commit()
 
 
+@router.get("/tags", response_model=list[str])
+async def list_tags(
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (
+        await db.execute(
+            select(EmailContact.tags).where(
+                or_(EmailContact.owner_sub.is_(None), EmailContact.owner_sub == user.sub),
+                EmailContact.tags.isnot(None),
+            )
+        )
+    ).scalars().all()
+    tags: set[str] = set()
+    for t in rows:
+        for x in (t or []):
+            if x:
+                tags.add(str(x))
+    return sorted(tags)
+
+
+@router.get("/export")
+async def export_contacts(
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """CSV export of the caller's address book."""
+    import csv
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    rows = (
+        await db.execute(
+            select(EmailContact).where(
+                or_(EmailContact.owner_sub.is_(None), EmailContact.owner_sub == user.sub)
+            ).order_by(EmailContact.name.nullslast(), EmailContact.email)
+        )
+    ).scalars().all()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["name", "email", "organization", "phone", "tags", "notes", "favorite"])
+    for c in rows:
+        w.writerow([c.name or "", c.email, c.organization or "", c.phone or "",
+                    ";".join(c.tags or []), (c.notes or "").replace("\n", " "),
+                    "1" if c.is_favorite else ""])
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="contacts.csv"'},
+    )
+
+
+class ImportResult(BaseModel):
+    added: int
+    updated: int
+    skipped: int
+
+
+@router.post("/import", response_model=ImportResult)
+async def import_contacts(
+    payload: dict,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import contacts from CSV text (payload {'csv': '...'}). Columns are
+    matched by header name; 'email' is required. Upserts by email."""
+    import csv
+    import io
+
+    text = str(payload.get("csv") or "")
+    if not text.strip():
+        raise HTTPException(422, "Пустой CSV")
+    reader = csv.DictReader(io.StringIO(text))
+    added = updated = skipped = 0
+    for raw in reader:
+        row = {(k or "").strip().lower(): (v or "").strip() for k, v in raw.items()}
+        _, email = _split(row.get("email") or row.get("e-mail") or row.get("адрес") or "")
+        email = email.lower()
+        if not email or "@" not in email:
+            skipped += 1
+            continue
+        existing = (
+            await db.execute(
+                select(EmailContact).where(
+                    EmailContact.email == email, EmailContact.owner_sub == user.sub
+                )
+            )
+        ).scalar_one_or_none()
+        name = row.get("name") or row.get("имя") or row.get("фио") or None
+        org = row.get("organization") or row.get("company") or row.get("организация") or None
+        phone = row.get("phone") or row.get("телефон") or None
+        tags = [t.strip() for t in (row.get("tags") or "").replace(",", ";").split(";") if t.strip()]
+        if existing:
+            existing.name = existing.name or name
+            existing.organization = existing.organization or org
+            existing.phone = existing.phone or phone
+            if tags:
+                existing.tags = sorted(set((existing.tags or []) + tags))
+            updated += 1
+        else:
+            db.add(EmailContact(
+                email=email, name=name, organization=org, phone=phone,
+                tags=tags or None, notes=row.get("notes") or row.get("заметки") or None,
+                is_favorite=row.get("favorite") in ("1", "true", "yes", "да"),
+                owner_sub=user.sub, source="manual",
+            ))
+            added += 1
+    await db.commit()
+    return ImportResult(added=added, updated=updated, skipped=skipped)
+
+
 async def remember_recipients(db: AsyncSession, *, owner_sub: str | None, addresses: list[str]) -> None:
     """Upsert 'auto' contacts for freshly-used recipient addresses. Best-effort."""
     try:
         for raw in addresses or []:
-            email = _bare(raw).lower()
+            name, email = _split(str(raw))
+            email = email.lower()
             if not email or "@" not in email:
                 continue
             existing = (
@@ -256,9 +400,11 @@ async def remember_recipients(db: AsyncSession, *, owner_sub: str | None, addres
             if existing:
                 existing.use_count = (existing.use_count or 0) + 1
                 existing.last_used_at = datetime.now(timezone.utc)
+                if name and not existing.name:
+                    existing.name = name
             else:
                 db.add(EmailContact(
-                    email=email, owner_sub=owner_sub, source="auto",
+                    email=email, name=name or None, owner_sub=owner_sub, source="auto",
                     use_count=1, last_used_at=datetime.now(timezone.utc),
                 ))
         await db.flush()

@@ -177,3 +177,45 @@ def test_auto_send_blocked_unless_policy_enabled(sync_db):
         d = db.query(DraftAction).one()
         assert d.draft_data["status"] == "draft"   # policy off → draft, not sent
         assert d.executed is False
+
+
+async def test_autocomplete_keeps_display_name_from_history(client: AsyncClient, db_session):
+    db_session.add(_shared())
+    th = EmailThread(subject="Переписка", mailbox="procurement", message_count=1,
+                     last_message_at=datetime.now(timezone.utc))
+    db_session.add(th)
+    await db_session.flush()
+    db_session.add(EmailMessage(
+        thread_id=th.id, mailbox="procurement",
+        from_address='"Пётр Смирнов" <petr@zavod.ru>', subject="Переписка",
+        body_text="t", is_inbound=True, received_at=datetime.now(timezone.utc),
+        message_id_header=f"<{uuid.uuid4()}@z.ru>",
+    ))
+    await db_session.commit()
+
+    r = await client.get("/api/email/contacts?q=смирнов")
+    hit = next((c for c in r.json() if c["email"] == "petr@zavod.ru"), None)
+    assert hit is not None and hit["name"] == "Пётр Смирнов"
+
+
+async def test_autocomplete_empty_query_returns_favorites(client: AsyncClient, db_session):
+    db_session.add(EmailContact(email="fav@x.ru", name="Любимый", owner_sub="dev-user",
+                                is_favorite=True, source="manual", use_count=9))
+    db_session.add(EmailContact(email="rare@x.ru", name="Редкий", owner_sub="dev-user",
+                                source="manual", use_count=0))
+    await db_session.commit()
+
+    r = await client.get("/api/email/contacts")  # no q
+    emails = [c["email"] for c in r.json()]
+    assert emails and emails[0] == "fav@x.ru"
+
+
+async def test_contacts_csv_import_export(client: AsyncClient, db_session):
+    r = await client.post("/api/email/contacts/import", json={
+        "csv": "name,email,organization\nАнна,anna@buyer.ru,Байер ООО\n,bad-line,\n",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["added"] == 1 and r.json()["skipped"] == 1
+
+    r = await client.get("/api/email/contacts/export")
+    assert r.status_code == 200 and "anna@buyer.ru" in r.text

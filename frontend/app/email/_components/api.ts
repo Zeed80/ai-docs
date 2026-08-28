@@ -69,10 +69,69 @@ export const emailApi = {
       body: JSON.stringify({ thread_ids, action, ...extra }),
     }).then((r) => j<{ updated: number }>(r)),
 
-  contacts: (q: string) =>
-    apiFetch(`${API}/api/email/contacts?q=${encodeURIComponent(q)}`).then((r) =>
-      j<{ email: string; name: string | null; organization?: string | null; source?: string }[]>(r),
+  contacts: (q: string, limit = 8) =>
+    apiFetch(`${API}/api/email/contacts?q=${encodeURIComponent(q)}&limit=${limit}`).then((r) =>
+      j<{
+        email: string;
+        name: string | null;
+        organization?: string | null;
+        source?: string;
+        is_favorite?: boolean;
+        id?: string | null;
+      }[]>(r),
     ),
+
+  contactBook: (params: { q?: string; favorites?: boolean; tag?: string }) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set("q", params.q);
+    if (params.favorites) qs.set("favorites", "1");
+    if (params.tag) qs.set("tag", params.tag);
+    return apiFetch(`${API}/api/email/contacts/book?${qs}`).then((r) =>
+      j<
+        {
+          id: string;
+          email: string;
+          name: string | null;
+          organization: string | null;
+          phone: string | null;
+          notes: string | null;
+          tags: string[];
+          is_favorite: boolean;
+          source: string;
+          use_count: number;
+        }[]
+      >(r),
+    );
+  },
+
+  contactTags: () =>
+    apiFetch(`${API}/api/email/contacts/tags`).then((r) => j<string[]>(r)),
+
+  createContact: (body: Record<string, unknown>) =>
+    mutFetch(`${API}/api/email/contacts/book`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => j<{ id: string }>(r)),
+
+  updateContact: (id: string, body: Record<string, unknown>) =>
+    mutFetch(`${API}/api/email/contacts/book/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => j<unknown>(r)),
+
+  deleteContact: (id: string) =>
+    mutFetch(`${API}/api/email/contacts/book/${id}`, { method: "DELETE" }),
+
+  importContacts: (csv: string) =>
+    mutFetch(`${API}/api/email/contacts/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ csv }),
+    }).then((r) => j<{ added: number; updated: number; skipped: number }>(r)),
+
+  exportContactsUrl: () => `${API}/api/email/contacts/export`,
 
   folderCounts: (mailbox?: string) =>
     apiFetch(

@@ -9,6 +9,8 @@ const FOLDERS = ["inbox", "sent", "archive", "spam", "trash"] as const;
 
 export function MailSidebar({
   onCollapse,
+  view,
+  onSelectContacts,
   mailboxes,
   labels,
   activeMailbox,
@@ -24,6 +26,8 @@ export function MailSidebar({
   onSync,
 }: {
   onCollapse: () => void;
+  view: "mail" | "contacts";
+  onSelectContacts: () => void;
   mailboxes: MailboxChip[];
   labels: EmailLabel[];
   activeMailbox: string;
@@ -184,6 +188,13 @@ export function MailSidebar({
             className="w-full rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 placeholder-slate-600"
           />
         </form>
+
+        <p className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wide text-slate-500">
+          Ещё
+        </p>
+        <div className={rowCls(view === "contacts")} onClick={onSelectContacts}>
+          <span>👤 Контакты</span>
+        </div>
       </div>
     </div>
   );
