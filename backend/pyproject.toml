@@ -56,6 +56,13 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
+    # Tests already carry @pytest.mark.timeout(...) markers, but without this
+    # plugin pytest only warns "Unknown pytest.mark.timeout" and the markers do
+    # nothing — one hung async test then holds the whole suite open forever
+    # (observed 2026-08-27: the run sat in epoll for 8 minutes before it was
+    # killed by hand). Use --timeout-method=signal: the "thread" method kills
+    # the entire pytest process instead of failing just the offending test.
+    "pytest-timeout>=2.3",
     "httpx>=0.28",
     "testcontainers[postgres]>=4.8",
     "ruff>=0.8",

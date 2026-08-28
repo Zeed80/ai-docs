@@ -88,7 +88,13 @@ async def test_role_capability_dispatch(role_case, monkeypatch):
     # Record real dispatches (capability, action) routed through execute_skill.
     dispatched: list[list[str]] = []
 
-    async def fake_execute_skill(skill, args, config):  # noqa: A002
+    # Mirror execute_skill's real signature loosely: it grew a keyword-only
+    # `approval_granted` in 8f230b3 and this mock kept the old three-arg form,
+    # so every dispatch died as a TypeError the agent swallowed as
+    # `agent_loop_error` — the assert below then compared [] to the expected
+    # sequence and this test was red (and testing nothing) for two months.
+    # **kwargs keeps it working the next time the real signature grows.
+    async def fake_execute_skill(skill, args, config, **kwargs):  # noqa: A002
         dispatched.append([skill["name"], args.get("action")])
         return {"status": "ok"}
 
