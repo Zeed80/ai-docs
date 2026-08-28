@@ -10,7 +10,8 @@ Fields:  from, to, cc, subject, body, has_attachment, attachment_name,
 Ops:     contains, not_contains, equals, starts_with, ends_with, matches_regex,
          in_list, is_true
 Actions: add_label, remove_label, move_to_folder, mark_read, star, forward_to,
-         forward_to_agent, create_task, run_extraction, assign_role, stop
+         forward_to_agent, create_task, run_extraction, assign_role,
+         auto_reply_template (DRAFT only — never auto-sends), stop
 """
 
 from __future__ import annotations
@@ -145,9 +146,11 @@ def apply_rules(db, msg, mailbox: str) -> list[dict]:
     from sqlalchemy import select
 
     from app.db.models import (
+        DraftAction,
         EmailAttachment,
         EmailRule,
         EmailRuleLog,
+        EmailTemplateDB,
         EmailThread,
         EmailThreadLabel,
     )
@@ -209,6 +212,33 @@ def apply_rules(db, msg, mailbox: str) -> list[dict]:
                             from app.tasks.extraction import process_document
 
                             process_document.delay(str(att.document_id), force=True)
+                elif kind == "auto_reply_template" and action.get("template_id"):
+                    # Deliberately DRAFT-only: an email rule never sends without a
+                    # human. The draft lands in /email drafts + a notification.
+                    tpl = db.get(EmailTemplateDB, uuid.UUID(str(action["template_id"])))
+                    if tpl is not None:
+                        subj = tpl.subject or f"Re: {msg.subject or ''}"
+                        if not subj.lower().startswith("re:"):
+                            subj = f"Re: {subj}"
+                        db.add(DraftAction(
+                            action_type="email.send",
+                            entity_type="email",
+                            draft_data={
+                                "to_addresses": [_bare_addr(msg.from_address)],
+                                "cc_addresses": [],
+                                "subject": subj,
+                                "body_html": tpl.body_html or "",
+                                "body_text": tpl.body_text,
+                                "thread_id": str(msg.thread_id) if msg.thread_id else None,
+                                "mailbox": mailbox,
+                                "in_reply_to_message_id": str(msg.id),
+                                "attachment_ids": [],
+                                "status": "draft",
+                                "risk_flags": [],
+                                "created_by": f"rule:{rule.id}",
+                            },
+                        ))
+                        _notify_rule_draft(msg, rule)
                 elif kind == "forward_to_agent" or kind == "create_task":
                     _enqueue_agent_task(msg, action.get("prompt"))
                 elif kind == "stop":
@@ -227,6 +257,45 @@ def apply_rules(db, msg, mailbox: str) -> list[dict]:
             break
 
     return all_applied
+
+
+def _bare_addr(addr: str) -> str:
+    m = re.search(r"<([^>]+)>", addr or "")
+    return (m.group(1) if m else (addr or "")).strip()
+
+
+def _notify_rule_draft(msg, rule) -> None:
+    try:
+        from app.db.models import MailboxConfig, NotificationType, User
+        from app.db.sync_session import sync_session
+        from app.services.notifications import create_notification_sync
+        from sqlalchemy import select as _sel
+
+        with sync_session() as ndb:
+            row = ndb.execute(
+                _sel(MailboxConfig.assigned_role, MailboxConfig.owner_sub, MailboxConfig.mailbox_type)
+                .where(MailboxConfig.name == msg.mailbox)
+            ).first()
+            subs: list[str] = []
+            if row and row[2] == "personal" and row[1]:
+                subs = [row[1]]
+            elif row and row[0]:
+                subs = list(ndb.execute(
+                    _sel(User.sub).where(User.role == row[0], User.is_active == True)  # noqa: E712
+                ).scalars().all())
+            if not subs:
+                subs = list(ndb.execute(
+                    _sel(User.sub).where(User.role == "admin", User.is_active == True)  # noqa: E712
+                ).scalars().all())
+            for sub in subs:
+                create_notification_sync(
+                    ndb, user_sub=sub, type=NotificationType.email_received,
+                    title=f"Правило «{rule.name}»: подготовлен черновик ответа",
+                    body=f"На письмо от {msg.from_address}: {(msg.subject or '')[:120]}",
+                    entity_type="email", entity_id=msg.id, action_url="/email?panel=draft",
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("email_rule_draft_notify_failed", error=str(exc))
 
 
 def _enqueue_agent_task(msg, prompt: str | None) -> None:

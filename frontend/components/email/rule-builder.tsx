@@ -14,6 +14,7 @@ interface Cond {
 interface Action {
   type: string;
   label_id?: string;
+  template_id?: string;
   folder?: string;
   address?: string;
   prompt?: string;
@@ -30,6 +31,10 @@ interface Rule {
   run_count: number;
 }
 interface LabelOpt {
+  id: string;
+  name: string;
+}
+interface TemplateOpt {
   id: string;
   name: string;
 }
@@ -63,12 +68,14 @@ const ACTION_TYPES = [
   "star",
   "run_extraction",
   "forward_to_agent",
+  "auto_reply_template",
   "stop",
 ];
 
 export function EmailRulesSection() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [labels, setLabels] = useState<LabelOpt[]>([]);
+  const [templates, setTemplates] = useState<TemplateOpt[]>([]);
   const [editing, setEditing] = useState<Rule | null>(null);
   const [testResult, setTestResult] = useState<Record<string, string>>({});
 
@@ -80,6 +87,10 @@ export function EmailRulesSection() {
     apiFetch(`${API}/api/email/labels`)
       .then((r) => r.json())
       .then((d) => setLabels(Array.isArray(d) ? d : []))
+      .catch(() => {});
+    apiFetch(`${API}/api/email-templates/`)
+      .then((r) => r.json())
+      .then((d) => setTemplates(Array.isArray(d) ? d : (d.items ?? [])))
       .catch(() => {});
   };
   useEffect(load, []);
@@ -312,6 +323,24 @@ export function EmailRulesSection() {
                     {labels.map((l) => (
                       <option key={l.id} value={l.id}>
                         {l.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {a.type === "auto_reply_template" && (
+                  <select
+                    value={a.template_id ?? ""}
+                    onChange={(e) => {
+                      const actions = [...editing.actions];
+                      actions[i] = { ...a, template_id: e.target.value };
+                      setEditing({ ...editing, actions });
+                    }}
+                    className={inp}
+                  >
+                    <option value="">— шаблон (черновик) —</option>
+                    {templates.map((tpl) => (
+                      <option key={tpl.id} value={tpl.id}>
+                        {tpl.name}
                       </option>
                     ))}
                   </select>

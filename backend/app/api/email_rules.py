@@ -40,6 +40,7 @@ class RuleGroup(BaseModel):
 class RuleAction(BaseModel):
     type: str
     label_id: uuid.UUID | None = None
+    template_id: uuid.UUID | None = None
     folder: str | None = None
     role: str | None = None
     address: str | None = None

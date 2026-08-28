@@ -9,11 +9,13 @@ from sqlalchemy import create_engine, delete
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    DraftAction,
     EmailAttachment,
     EmailLabel,
     EmailMessage,
     EmailRule,
     EmailRuleLog,
+    EmailTemplateDB,
     EmailThread,
     EmailThreadLabel,
     MailboxConfig,
@@ -61,7 +63,7 @@ def sync_db(test_engine, monkeypatch):
 
     monkeypatch.setattr(m, "sync_session", lambda: Session(engine))
     tables = (EmailRuleLog, EmailThreadLabel, EmailRule, EmailLabel, EmailAttachment,
-              EmailMessage, EmailThread, MailboxConfig)
+              DraftAction, EmailMessage, EmailThread, EmailTemplateDB, MailboxConfig)
 
     def _wipe():
         with Session(engine) as db:
@@ -154,3 +156,42 @@ async def test_rules_crud_and_dry_run(client: AsyncClient, db_session):
 
     r = await client.delete(f"/api/email/rules/{rid}")
     assert r.status_code == 204
+
+
+def test_auto_reply_template_creates_draft_never_sends(sync_db):
+    from app.domain.email_rules import apply_rules
+
+    with Session(sync_db) as db:
+        tpl = EmailTemplateDB(
+            name="Автоответ", slug=f"auto-{uuid.uuid4().hex[:8]}",
+            subject="Ваше обращение получено", body_html="<p>Спасибо, мы свяжемся с вами.</p>",
+            body_text="Спасибо.", is_builtin=False,
+        )
+        db.add(tpl)
+        th = EmailThread(subject="Вопрос по поставке", mailbox="procurement", message_count=1,
+                         last_message_at=datetime.now(timezone.utc))
+        db.add(th)
+        db.flush()
+        msg = EmailMessage(
+            thread_id=th.id, mailbox="procurement", from_address="client@buyer.ru",
+            subject="Вопрос по поставке", body_text="когда отгрузка?", is_inbound=True,
+            received_at=datetime.now(timezone.utc), message_id_header=f"<{uuid.uuid4()}@b.ru>",
+        )
+        db.add(msg)
+        db.add(EmailRule(
+            name="Автоответ на вопросы", mailbox=None, owner_sub=None, is_active=True, priority=5,
+            conditions={"match": "all", "rules": [{"field": "subject", "op": "contains", "value": "вопрос"}]},
+            actions=[{"type": "auto_reply_template", "template_id": str(tpl.id)}],
+        ))
+        db.commit()
+
+        apply_rules(db, msg, "procurement")
+        db.commit()
+
+        drafts = db.query(DraftAction).filter_by(action_type="email.send").all()
+        assert len(drafts) == 1
+        d = drafts[0].draft_data
+        assert d["status"] == "draft"            # NEVER auto-sent
+        assert drafts[0].executed is False
+        assert d["to_addresses"] == ["client@buyer.ru"]
+        assert d["created_by"].startswith("rule:")
