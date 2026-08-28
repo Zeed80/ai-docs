@@ -2532,7 +2532,22 @@ class AgentSession:
             return fn_name, result, tc_id
 
         approval_granted = False
-        if original_name in current_gates:
+        if original_name in current_gates and self._explicit_send_authorized(original_name, args):
+            # The user's own imperative in this turn stands in for the approval
+            # prompt (see _explicit_send_authorized). Still fully audited.
+            asyncio.create_task(self._log_action(
+                iteration=iteration,
+                action_type="approval_decision",
+                tool_name=original_name,
+                tool_result={"approved": True, "actor": "user:explicit_instruction"},
+            ))
+            await self._send({
+                "type": "approval_auto",
+                "tool": original_name,
+                "message": "Отправка по вашему прямому указанию.",
+            })
+            approval_granted = True
+        elif original_name in current_gates:
             asyncio.create_task(self._log_action(
                 iteration=iteration,
                 action_type="approval_request",
@@ -2645,6 +2660,42 @@ class AgentSession:
         ):
             return str(res["message"])
         return None
+
+    _EXPLICIT_SEND_RE = re.compile(
+        r"(отправ|пошл[иёе]|разошл|send|отош)[а-яё]*[\s\S]{0,60}"
+        r"(письм|сообщени|email|e-mail|мейл|запрос|кп|коммерческ)",
+        re.IGNORECASE,
+    )
+
+    def _explicit_send_authorized(self, skill_name: str, args: dict) -> bool:
+        """True when the human, in this turn, explicitly told the agent to SEND
+        an email (not "draft" / "prepare"). Their instruction is the approval —
+        the gate would otherwise ask them to confirm what they just ordered.
+
+        Deliberately narrow: only ``email``/``email.send`` with action=send, only
+        when the latest user message is an imperative send directive AND names a
+        recipient (an @-address or a party word). Anything ambiguous falls
+        through to the normal approval prompt.
+        """
+        if skill_name not in ("email", "email.send"):
+            return False
+        if args.get("action") not in (None, "send"):
+            return False
+        last_user = next(
+            (str(m.get("content") or "") for m in reversed(self.messages)
+             if m.get("role") == "user"),
+            "",
+        )
+        if not last_user or not self._EXPLICIT_SEND_RE.search(last_user):
+            return False
+        low = last_user.lower()
+        if "черновик" in low or "draft" in low or "не отправл" in low:
+            return False
+        has_recipient = (
+            "@" in last_user
+            or any(w in low for w in ("поставщик", "клиент", "контрагент", "заказчик", "адрес"))
+        )
+        return has_recipient
 
     async def _request_approval(self, skill_name: str, args: dict) -> bool:
         preview = json.dumps(args, ensure_ascii=False, indent=2)

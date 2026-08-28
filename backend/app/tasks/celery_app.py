@@ -82,20 +82,14 @@ celery_app.conf.update(
 _imap_cron = crontab(minute=f"*/{settings.imap_poll_interval_minutes}")
 
 celery_app.conf.beat_schedule = {
-    "poll-email-procurement": {
-        "task": "app.tasks.ingest.poll_imap_mailbox",
+    # DB-driven mailbox polling: one dispatcher fans out poll_imap_mailbox for
+    # every active MailboxConfig row. Replaces the old hard-coded
+    # procurement/accounting/general entries — a mailbox added through the UI
+    # with any other name was never polled, which is why the client kept
+    # reporting "IMAP not configured".
+    "dispatch-mailbox-polls": {
+        "task": "app.tasks.email_triage.dispatch_mailbox_polls",
         "schedule": _imap_cron,
-        "args": ("procurement",),
-    },
-    "poll-email-accounting": {
-        "task": "app.tasks.ingest.poll_imap_mailbox",
-        "schedule": _imap_cron,
-        "args": ("accounting",),
-    },
-    "poll-email-general": {
-        "task": "app.tasks.ingest.poll_imap_mailbox",
-        "schedule": _imap_cron,
-        "args": ("general",),
     },
     "escalate-expired-approvals": {
         "task": "approval.escalate_expired",
@@ -213,6 +207,11 @@ celery_app.conf.beat_schedule = {
         "task": "agent.idle_reflection",
         "schedule": 1_200.0,
     },
+    # Email attachment retention — daily.
+    "email-prune-attachments": {
+        "task": "app.tasks.email_triage.prune_attachments",
+        "schedule": 86_400.0,
+    },
 }
 
 celery_app.autodiscover_tasks([
@@ -231,6 +230,7 @@ from app.tasks import catalog_crawl as _catalog_crawl  # noqa: F401
 from app.tasks import catalog_pages as _catalog_pages  # noqa: F401
 from app.tasks import catalog_visual as _catalog_visual  # noqa: F401
 from app.tasks import approval_escalation as _approval_escalation  # noqa: F401
+from app.tasks import email_compose_task as _email_compose_task  # noqa: F401
 from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
 from app.tasks import proactive as _proactive  # noqa: F401
 from app.tasks import saved_query_alerts as _saved_query_alerts  # noqa: F401

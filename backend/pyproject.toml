@@ -29,6 +29,7 @@ dependencies = [
     "passlib[bcrypt]>=1.7",
     "psycopg2-binary>=2.9",
     "lxml>=5.0",
+    "nh3>=0.2.18",  # HTML sanitiser for inbound email bodies (email client v2)
     "anthropic>=0.39.0,<1",
     "python-telegram-bot>=22.6,<23",
     "ezdxf>=1.3",

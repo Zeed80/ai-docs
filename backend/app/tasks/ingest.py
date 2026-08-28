@@ -15,6 +15,7 @@ from app.db.models import (
     Document,
     DocumentLink,
     DocumentStatus,
+    EmailAttachment,
     EmailMessage,
     EmailThread,
     FileExtensionAllowlist,
@@ -25,18 +26,81 @@ from app.tasks.celery_app import celery_app
 logger = structlog.get_logger()
 
 
+def _mk_snippet(text: str | None) -> str:
+    return " ".join((text or "").split())[:300]
+
+
+def _sanitize_html(html: str | None) -> str | None:
+    try:
+        from app.domain.email_html import sanitize_email_html
+
+        return sanitize_email_html(html)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _get_sync_session() -> Session:
     """Get a synchronous DB session for Celery tasks."""
     engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
     return Session(engine)
 
 
+def _record_sync_result(mailbox_name: str, error: str | None) -> None:
+    """Persist the outcome of a poll onto MailboxConfig so the UI can show it.
+
+    Success clears the error and stamps last_sync_at; failure records the error
+    text and leaves last_sync_at untouched (last *successful* sync). Never let a
+    bookkeeping failure mask the real poll result.
+    """
+    from app.db.models import MailboxConfig as MailboxConfigDB
+
+    try:
+        with _get_sync_session() as db:
+            row = db.execute(
+                select(MailboxConfigDB).where(MailboxConfigDB.name == mailbox_name)
+            ).scalar_one_or_none()
+            if row is None:
+                return
+            if error is None:
+                row.last_sync_at = datetime.now(timezone.utc)
+                row.sync_error = None
+            else:
+                row.sync_error = error[:2000]
+            db.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("imap_sync_result_save_failed", mailbox=mailbox_name, error=str(e))
+
+
+def _poll_agent_instructions(mailbox: str, emails) -> dict:
+    """Turn each fetched message into a WorkOrder (app.domain.work_email_ingress)."""
+    from app.tasks.async_runner import run_async
+
+    async def _go() -> dict:
+        from app.db.session import _get_session_factory
+        from app.domain.work_email_ingress import create_work_order_from_email
+
+        created = 0
+        async with _get_session_factory()() as db:
+            for parsed in emails:
+                try:
+                    await create_work_order_from_email(db, parsed)
+                    await db.commit()
+                    created += 1
+                except Exception as exc:  # noqa: BLE001
+                    await db.rollback()
+                    logger.error("agent_ingress_work_order_failed", error=str(exc))
+        return {"mailbox": mailbox, "fetched": len(emails), "work_orders": created, "documents": []}
+
+    return run_async(_go())
+
+
 @celery_app.task(name="app.tasks.ingest.poll_imap_mailbox", bind=True, max_retries=3)
 def poll_imap_mailbox(self, mailbox: str) -> dict:
     """Poll a single IMAP mailbox for new messages.
 
-    Mailboxes: procurement, accounting, general.
-    Each has separate credentials from settings.
+    The mailbox name is a MailboxConfig.name row; credentials (and OAuth tokens)
+    come from that row. Records last_sync_at / sync_error on the row so the
+    client can surface connection problems instead of showing an empty inbox.
     """
     from app.tasks.imap_client import get_mailbox_configs, fetch_unseen_from_mailbox
 
@@ -46,18 +110,27 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
     config = next((c for c in configs if c.name == mailbox), None)
     if not config:
         logger.warning("imap_mailbox_not_configured", mailbox=mailbox)
-        return {"mailbox": mailbox, "fetched": 0, "errors": ["Mailbox not configured"]}
+        _record_sync_result(mailbox, "Ящик не найден среди активных конфигураций")
+        return {"mailbox": mailbox, "fetched": 0, "documents": [], "errors": ["Mailbox not configured"]}
 
     try:
         emails = fetch_unseen_from_mailbox(config)
     except Exception as e:
         logger.error("imap_fetch_failed", mailbox=mailbox, error=str(e))
-        self.retry(countdown=60, exc=e)
-        return {"mailbox": mailbox, "fetched": 0, "errors": [str(e)]}
+        _record_sync_result(mailbox, f"IMAP: {e}")
+        raise self.retry(countdown=60, exc=e)
 
     errors: list[str] = []
-    created_docs = 0
+    created_doc_ids: list[str] = []
     mailbox_owner: str | None = None
+
+    # A mailbox (or IMAP subfolder) dedicated to agent instructions: every
+    # message becomes a WorkOrder instead of going through invoice triage. Set
+    # up by an admin as a separate MailboxConfig row with a dedicated folder so
+    # it never races the invoice poller for the same unseen messages.
+    if (config.assigned_role or "") == "agent_ingress":
+        _record_sync_result(mailbox, None)
+        return _poll_agent_instructions(mailbox, emails)
 
     with _get_sync_session() as db:
         # Resolved once per poll: attachments of a personal mailbox inherit its
@@ -102,15 +175,42 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
                         for a in parsed.attachments
                     ],
                     is_inbound=True,
+                    is_read=False,
+                    folder="inbox",
+                    snippet=_mk_snippet(parsed.body_text),
+                    body_html_sanitized=_sanitize_html(parsed.body_html),
                 )
                 db.add(email_msg)
                 db.flush()
 
-                # Process attachments → Documents
+                # Process attachments: always a normalised EmailAttachment row
+                # (raw-byte access for the agent, outbound reuse); Documents are
+                # still created only for recognisable types inside _store_attachment.
                 for att in parsed.attachments:
                     doc = _store_attachment(db, att, email_msg.id, mailbox, owner_sub=mailbox_owner)
                     if doc:
-                        created_docs += 1
+                        created_doc_ids.append(str(doc.id))
+
+                # Roll thread-level client state forward.
+                thread = db.get(EmailThread, email_msg.thread_id) if email_msg.thread_id else None
+                if thread is not None:
+                    thread.is_read = False
+                    thread.unread_count = (thread.unread_count or 0) + 1
+                    thread.last_snippet = email_msg.snippet
+                    thread.folder = "inbox"
+                    if parsed.attachments:
+                        thread.has_attachments = True
+                db.flush()
+
+                # Server-side filter rules (labels / move / run extraction /
+                # forward to the agent). Runs after attachments exist so an
+                # attachment-condition or run_extraction action can see them.
+                try:
+                    from app.domain.email_rules import apply_rules
+
+                    apply_rules(db, email_msg, mailbox)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("email_rules_failed", mailbox=mailbox, error=str(exc))
 
                 _notify_new_email(db, mailbox, email_msg)
 
@@ -125,10 +225,14 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
         "imap_poll_complete",
         mailbox=mailbox,
         emails=len(emails),
-        documents=created_docs,
+        documents=len(created_doc_ids),
         errors=len(errors),
     )
-    return {"mailbox": mailbox, "fetched": len(emails), "documents": created_docs, "errors": errors}
+    # A per-message processing error is not a connection failure — the mailbox
+    # is reachable, so record a successful sync but keep the errors in the
+    # result for the triage aggregator / caller.
+    _record_sync_result(mailbox, None)
+    return {"mailbox": mailbox, "fetched": len(emails), "documents": created_doc_ids, "errors": errors}
 
 
 def _mailbox_recipients(db: Session, mailbox: str) -> list[str]:
@@ -176,8 +280,10 @@ def _notify_new_email(db: Session, mailbox: str, email_msg) -> None:
     subject = (email_msg.subject or "(без темы)").strip()
     title = f"Новое письмо · {mailbox}"
     body = f"{sender}: {subject}"[:480]
+    recipients: list[str] = []
     try:
-        for sub in _mailbox_recipients(db, mailbox):
+        recipients = _mailbox_recipients(db, mailbox)
+        for sub in recipients:
             create_notification_sync(
                 db,
                 user_sub=sub,
@@ -186,10 +292,27 @@ def _notify_new_email(db: Session, mailbox: str, email_msg) -> None:
                 body=body,
                 entity_type="email",
                 entity_id=email_msg.id,
-                action_url="/inbox",
+                action_url="/email",
             )
     except Exception as e:  # never block ingestion on notification errors
         logger.warning("email_notify_failed", mailbox=mailbox, error=str(e))
+
+    # Real-time nudge for the mail client (best-effort, never blocks ingest).
+    try:
+        from app.core.chat_bus import publish_sync
+
+        event = {
+            "type": "email.new",
+            "mailbox": mailbox,
+            "thread_id": str(email_msg.thread_id) if email_msg.thread_id else None,
+            "subject": subject,
+            "from": sender,
+            "snippet": (email_msg.body_text or "")[:200],
+        }
+        for sub in recipients:
+            publish_sync(event, user_sub=sub)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("email_realtime_publish_failed", mailbox=mailbox, error=str(e))
 
 
 def _find_or_create_thread(
@@ -273,6 +396,25 @@ def _store_attachment(
     storage_path = f"documents/{file_hash[:2]}/{file_hash[2:4]}/{file_hash}"
     is_allowed = _is_extension_allowed(db, att.filename)
 
+    # Always keep a normalised attachment row + raw bytes: the agent needs
+    # on-demand access (email.get_attachment / recognize_attachment) and
+    # outbound mail reuses stored files. Bytes go to the shared documents/
+    # object-store path (same key a Document would use) so no duplication.
+    email_att = EmailAttachment(
+        message_id=email_message_id,
+        filename=att.filename,
+        content_type=att.content_type,
+        size=att.size,
+        storage_path=storage_path,
+        sha256=file_hash,
+    )
+    db.add(email_att)
+    try:
+        from app.storage import upload_file as _upload_att
+        _upload_att(att.content, storage_path, att.content_type)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("minio_attachment_upload_failed", error=str(e))
+
     # Dedup check. Deliberately scoped: a private attachment must never be
     # de-duplicated into a shared document (that would hand a colleague's file to
     # everyone), and a shared document must not be narrowed to one owner. Only
@@ -285,7 +427,7 @@ def _store_attachment(
     ).scalars().first()
     if existing:
         logger.info("attachment_duplicate", filename=att.filename, hash=file_hash)
-        # Still link to this email
+        email_att.document_id = existing.id
         link = DocumentLink(
             document_id=existing.id,
             linked_entity_type="email_message",
@@ -295,15 +437,7 @@ def _store_attachment(
         db.add(link)
         return None
 
-    # Upload to MinIO
-    try:
-        from app.storage import upload_file
-        upload_file(att.content, storage_path, att.content_type)
-    except Exception as e:
-        logger.warning("minio_attachment_upload_failed", error=str(e))
-        # Continue without upload — file can be re-uploaded later
-
-    # Create Document
+    # Create Document (bytes already uploaded above)
     doc = Document(
         file_name=att.filename,
         file_hash=file_hash,
@@ -320,6 +454,7 @@ def _store_attachment(
     )
     db.add(doc)
     db.flush()
+    email_att.document_id = doc.id
 
     if not is_allowed:
         db.add(

@@ -8,6 +8,8 @@ import { useCurrentUser } from "@/lib/auth-context";
 import { hasRole } from "@/lib/rbac";
 import { MailboxSection } from "@/components/email/mailbox-settings";
 import { EmailTemplatesSection } from "@/components/email/email-templates";
+import { EmailRulesSection } from "@/components/email/rule-builder";
+import { AddressBookSection, SignaturesSection, EmailPolicySection } from "@/components/email/address-book";
 import { PersonalMailboxCard } from "@/components/email/personal-mailbox-card";
 import { isGpuBarEnabled, setGpuBarEnabled } from "@/components/gpu-status-bar";
 import { useAgentName, broadcastAgentName } from "@/lib/agent-name";
@@ -3871,6 +3873,10 @@ export default function SettingsPage() {
               секцию тем, кто действительно может её применить, а не пустой
               блок с 403. Свой личный ящик выше виден каждому. */}
           {isAdmin && <MailboxSection />}
+          <AddressBookSection />
+          <SignaturesSection />
+          <EmailRulesSection />
+          {isAdmin && <EmailPolicySection />}
           <EmailTemplatesSection />
         </div>
       )}

@@ -1,0 +1,261 @@
+"""Email address book — EmailContact CRUD + the composer autocomplete.
+
+Autocomplete (``GET /api/email/contacts``) merges three sources: saved
+EmailContacts, Party.contact_email, and recent inbound senders. The address-book
+UI uses the /book, POST, PATCH, DELETE routes.
+
+Mounted BEFORE email.router (app/main.py) — email.router has a catch-all
+GET /api/email/{email_id} that would otherwise shadow these.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.acting import get_effective_user
+from app.auth.models import UserInfo
+from app.db.models import EmailContact, EmailMessage, Party
+from app.db.session import get_db
+from app.domain.email_access import mailbox_filter
+
+router = APIRouter()
+logger = structlog.get_logger()
+
+_LOCAL = ("ollama", "llamacpp", "vllm")  # unused; kept import minimal
+
+
+class ContactOut(BaseModel):
+    email: str
+    name: str | None = None
+    organization: str | None = None
+    id: uuid.UUID | None = None
+    is_favorite: bool = False
+    source: str = "history"
+
+
+class ContactBookItem(BaseModel):
+    id: uuid.UUID
+    email: str
+    name: str | None
+    organization: str | None
+    phone: str | None
+    notes: str | None
+    tags: list = []
+    is_favorite: bool
+    source: str
+    use_count: int
+    owner_sub: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class ContactCreate(BaseModel):
+    email: str = Field(..., min_length=3, max_length=320)
+    name: str | None = None
+    organization: str | None = None
+    phone: str | None = None
+    notes: str | None = None
+    tags: list[str] = []
+    is_favorite: bool = False
+    shared: bool = False  # admins can create org-wide contacts
+
+
+class ContactUpdate(BaseModel):
+    name: str | None = None
+    organization: str | None = None
+    phone: str | None = None
+    notes: str | None = None
+    tags: list[str] | None = None
+    is_favorite: bool | None = None
+
+
+def _bare(addr: str) -> str:
+    m = addr and addr.split("<")
+    if m and len(m) > 1 and ">" in m[1]:
+        return m[1].split(">")[0].strip()
+    return (addr or "").strip()
+
+
+@router.get("", response_model=list[ContactOut])
+async def autocomplete(
+    q: str = "",
+    limit: int = 10,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: email.contacts — Address autocomplete (book + suppliers + history)."""
+    q = (q or "").strip()
+    seen: dict[str, ContactOut] = {}
+
+    # 1. saved contacts (personal + shared)
+    cq = select(EmailContact).where(
+        or_(EmailContact.owner_sub.is_(None), EmailContact.owner_sub == user.sub)
+    )
+    if q:
+        like = f"%{q}%"
+        cq = cq.where(or_(EmailContact.email.ilike(like), EmailContact.name.ilike(like),
+                          EmailContact.organization.ilike(like)))
+    cq = cq.order_by(EmailContact.is_favorite.desc(), EmailContact.use_count.desc()).limit(limit)
+    for c in (await db.execute(cq)).scalars().all():
+        seen[c.email.lower()] = ContactOut(
+            email=c.email, name=c.name, organization=c.organization,
+            id=c.id, is_favorite=c.is_favorite, source="book",
+        )
+
+    # 2. suppliers
+    if len(seen) < limit and q:
+        pq = select(Party).where(
+            Party.contact_email.isnot(None),
+            or_(Party.contact_email.ilike(f"%{q}%"), Party.name.ilike(f"%{q}%")),
+        ).limit(limit)
+        for p in (await db.execute(pq)).scalars().all():
+            key = (p.contact_email or "").lower()
+            if key and key not in seen:
+                seen[key] = ContactOut(email=p.contact_email, name=p.name,
+                                       organization=p.name, source="party")
+
+    # 3. recent senders
+    if len(seen) < limit:
+        scope = await mailbox_filter(db, user, mailbox_col=EmailMessage.mailbox)
+        mq = select(EmailMessage.from_address).where(EmailMessage.is_inbound == True)  # noqa: E712
+        if scope is not None:
+            mq = mq.where(scope)
+        if q:
+            mq = mq.where(EmailMessage.from_address.ilike(f"%{q}%"))
+        for (addr,) in (await db.execute(mq.order_by(EmailMessage.received_at.desc()).limit(40))).all():
+            key = _bare(addr).lower()
+            if key and key not in seen:
+                seen[key] = ContactOut(email=_bare(addr), source="history")
+            if len(seen) >= limit:
+                break
+
+    return list(seen.values())[:limit]
+
+
+@router.get("/book", response_model=list[ContactBookItem])
+async def list_book(
+    q: str = "",
+    favorites: bool = False,
+    tag: str | None = None,
+    limit: int = Query(200, le=1000),
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Full address book (saved contacts only)."""
+    query = select(EmailContact).where(
+        or_(EmailContact.owner_sub.is_(None), EmailContact.owner_sub == user.sub)
+    )
+    if q:
+        like = f"%{q}%"
+        query = query.where(or_(
+            EmailContact.email.ilike(like), EmailContact.name.ilike(like),
+            EmailContact.organization.ilike(like), EmailContact.phone.ilike(like),
+        ))
+    if favorites:
+        query = query.where(EmailContact.is_favorite == True)  # noqa: E712
+    if tag:
+        query = query.where(cast(EmailContact.tags, String).ilike(f'%"{tag}"%'))
+    query = query.order_by(EmailContact.is_favorite.desc(), EmailContact.name.nullslast(),
+                           EmailContact.email).limit(limit)
+    return list((await db.execute(query)).scalars().all())
+
+
+@router.post("/book", response_model=ContactBookItem, status_code=201)
+async def create_contact(
+    payload: ContactCreate,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.auth.models import UserRole
+
+    email = _bare(payload.email).lower()
+    owner = None if (payload.shared and UserRole.admin in (user.roles or [])) else user.sub
+    existing = (
+        await db.execute(
+            select(EmailContact).where(EmailContact.email == email, EmailContact.owner_sub == owner)
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, "Контакт с таким адресом уже есть")
+    c = EmailContact(
+        email=email, name=payload.name, organization=payload.organization,
+        phone=payload.phone, notes=payload.notes, tags=payload.tags or [],
+        is_favorite=payload.is_favorite, owner_sub=owner, source="manual",
+    )
+    db.add(c)
+    await db.commit()
+    await db.refresh(c)
+    return c
+
+
+@router.patch("/book/{contact_id}", response_model=ContactBookItem)
+async def update_contact(
+    contact_id: uuid.UUID,
+    payload: ContactUpdate,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.auth.models import UserRole
+
+    c = await db.get(EmailContact, contact_id)
+    if not c:
+        raise HTTPException(404, "Contact not found")
+    if c.owner_sub not in (None, user.sub) or (c.owner_sub is None and UserRole.admin not in (user.roles or [])):
+        raise HTTPException(403, "Нет прав на этот контакт")
+    for k, v in payload.model_dump(exclude_none=True).items():
+        setattr(c, k, v)
+    await db.commit()
+    await db.refresh(c)
+    return c
+
+
+@router.delete("/book/{contact_id}", status_code=204)
+async def delete_contact(
+    contact_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    from app.auth.models import UserRole
+
+    c = await db.get(EmailContact, contact_id)
+    if not c:
+        raise HTTPException(404, "Contact not found")
+    if c.owner_sub not in (None, user.sub) or (c.owner_sub is None and UserRole.admin not in (user.roles or [])):
+        raise HTTPException(403, "Нет прав на этот контакт")
+    await db.delete(c)
+    await db.commit()
+
+
+async def remember_recipients(db: AsyncSession, *, owner_sub: str | None, addresses: list[str]) -> None:
+    """Upsert 'auto' contacts for freshly-used recipient addresses. Best-effort."""
+    try:
+        for raw in addresses or []:
+            email = _bare(raw).lower()
+            if not email or "@" not in email:
+                continue
+            existing = (
+                await db.execute(
+                    select(EmailContact).where(
+                        EmailContact.email == email,
+                        or_(EmailContact.owner_sub == owner_sub, EmailContact.owner_sub.is_(None)),
+                    )
+                )
+            ).scalars().first()
+            if existing:
+                existing.use_count = (existing.use_count or 0) + 1
+                existing.last_used_at = datetime.now(timezone.utc)
+            else:
+                db.add(EmailContact(
+                    email=email, owner_sub=owner_sub, source="auto",
+                    use_count=1, last_used_at=datetime.now(timezone.utc),
+                ))
+        await db.flush()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("remember_recipients_failed", error=str(exc))

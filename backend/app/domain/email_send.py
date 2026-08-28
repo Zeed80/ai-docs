@@ -27,10 +27,15 @@ async def create_reply_draft(
     body_html: str = "",
     body_text: str | None = None,
     cc_addresses: list[str] | None = None,
+    bcc_addresses: list[str] | None = None,
     thread_id: uuid.UUID | None = None,
     supplier_id: uuid.UUID | None = None,
     context: dict | None = None,
     mailbox: str | None = None,
+    in_reply_to_message_id: uuid.UUID | None = None,
+    forward_of_message_id: uuid.UUID | None = None,
+    attachment_ids: list[uuid.UUID] | None = None,
+    status: str = "draft",
 ) -> DraftAction:
     """Create a DraftAction queued for email.risk_check → email.send.
 
@@ -50,6 +55,7 @@ async def create_reply_draft(
         draft_data={
             "to_addresses": to_addresses,
             "cc_addresses": cc_addresses or [],
+            "bcc_addresses": bcc_addresses or [],
             "subject": subject,
             "body_html": body_html,
             "body_text": body_text,
@@ -57,7 +63,10 @@ async def create_reply_draft(
             "supplier_id": str(supplier_id) if supplier_id else None,
             "context": context,
             "mailbox": mailbox_name,
-            "status": "draft",
+            "in_reply_to_message_id": str(in_reply_to_message_id) if in_reply_to_message_id else None,
+            "forward_of_message_id": str(forward_of_message_id) if forward_of_message_id else None,
+            "attachment_ids": [str(a) for a in (attachment_ids or [])],
+            "status": status,
             "risk_flags": [],
         },
     )

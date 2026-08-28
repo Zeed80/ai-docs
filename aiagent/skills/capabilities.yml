@@ -325,6 +325,13 @@ capabilities:
       и в выдачу list/search не попадают — не обещай пользователю доступ к ним.
       action=process_attachment отправляет уже полученное вложение письма на
       распознавание (target="document") или в оцифровку чертежа (target="drawing").
+      action=recognize_attachment сразу возвращает текст и поля вложения (счёт: №,
+      сумма, срок); action=get_attachment отдаёт байты файла.
+      action=compose генерирует черновик письма из intent+контекста (счёт/поставщик/
+      тред) и возвращает draft_id — дальше как обычно risk_check → send [GATE].
+      action=reply — черновик ответа в тред с корректными заголовками.
+      action=label — пометить/переместить/навесить метку на треды (body:
+      {thread_ids:[...], action:"read"|"archive"|"star"|"add_label", label_id?}).
     path: /api/agent/cap/email
     method: POST
     gate_actions: [send, delete_template]
@@ -333,7 +340,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "list | search | get | draft | send | fetch_new | risk_check | list_templates | get_template | render_template | suggest_template | style_match | my_mailbox | process_attachment"
+          description: "list | search | get | read | draft | compose | compose_assist | reply | send [GATE] | fetch_new | risk_check | label | mailboxes | labels | list_drafts | list_templates | get_template | render_template | suggest_template | style_match | my_mailbox | process_attachment | get_attachment | recognize_attachment"
         thread_id:
           type: string
           description: "ID треда/письма (для get)"

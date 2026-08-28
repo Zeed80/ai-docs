@@ -39,10 +39,14 @@ const securityHeaders = [
 // outright (confirmed live: the iframe never even attempted a network
 // request, browser silently enforced CSP client-side). Scoped to this one
 // route only; every other page keeps the strict no-framing default.
-const studioCsp = csp.replace("frame-src 'none'", "frame-src 'self'");
+const relaxedFrameCsp = csp.replace("frame-src 'none'", "frame-src 'self'");
 const studioHeaders = securityHeaders.map((h) =>
-  h.key === "Content-Security-Policy" ? { ...h, value: studioCsp } : h,
+  h.key === "Content-Security-Policy" ? { ...h, value: relaxedFrameCsp } : h,
 );
+// /email renders inbound HTML mail in a sandboxed <iframe srcdoc> as defence in
+// depth (bodies are already nh3-sanitised server-side). Same scoped relaxation
+// as /studio — every other route keeps `frame-src 'none'`.
+const emailHeaders = studioHeaders;
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -57,6 +61,8 @@ const nextConfig: NextConfig = {
     return [
       { source: "/(.*)", headers: securityHeaders },
       { source: "/studio", headers: studioHeaders },
+      { source: "/email", headers: emailHeaders },
+      { source: "/email/:path*", headers: emailHeaders },
     ];
   },
   // /api/* is handled by the Route Handler (runtime BACKEND_URL).
