@@ -173,10 +173,10 @@ def rule_create_work_order(self, email_message_id: str, prompt: str) -> dict:
         from sqlalchemy import select
 
         from app.db.models import EmailMessage
-        from app.db.session import AsyncSessionLocal
+        from app.db.session import _get_session_factory
         from app.domain.work_orders import create_work_order, create_work_plan
 
-        async with AsyncSessionLocal() as db:
+        async with _get_session_factory()() as db:
             msg = (
                 await db.execute(select(EmailMessage).where(EmailMessage.id == email_message_id))
             ).scalar_one_or_none()

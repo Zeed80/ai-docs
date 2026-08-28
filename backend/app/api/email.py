@@ -798,7 +798,8 @@ async def compose_and_send(
     from app.tasks.email_sender import send_email_draft
 
     task = send_email_draft.delay(str(draft.id))
-    draft.executed = True
+    # Do NOT set executed here — the Celery task sets it after the SMTP send
+    # actually succeeds; setting it now makes the task bail with "already_sent".
     d = dict(draft.draft_data or {})
     d["status"] = "queued"
     d["task_id"] = task.id
@@ -1111,8 +1112,9 @@ async def send_email(
     try:
         from app.tasks.email_sender import send_email_draft
         task = send_email_draft.delay(str(draft_id))
-        # Mark as executed so the endpoint is idempotent
-        draft.executed = True
+        # Idempotency is enforced by the 400 above (draft.executed) and by the
+        # task itself; do NOT pre-set executed here or the task returns
+        # "already_sent" without sending anything.
         from sqlalchemy.orm.attributes import flag_modified
         draft.draft_data = {**(data), "status": "queued", "task_id": task.id}
         flag_modified(draft, "draft_data")

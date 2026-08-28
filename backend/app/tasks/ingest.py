@@ -76,11 +76,11 @@ def _poll_agent_instructions(mailbox: str, emails) -> dict:
     from app.tasks.async_runner import run_async
 
     async def _go() -> dict:
-        from app.db.session import AsyncSessionLocal
+        from app.db.session import _get_session_factory
         from app.domain.work_email_ingress import create_work_order_from_email
 
         created = 0
-        async with AsyncSessionLocal() as db:
+        async with _get_session_factory()() as db:
             for parsed in emails:
                 try:
                     await create_work_order_from_email(db, parsed)

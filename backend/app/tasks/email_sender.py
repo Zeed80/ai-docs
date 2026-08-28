@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import getaddresses, make_msgid
+from email.utils import formataddr, formatdate, getaddresses, make_msgid
+from email.header import Header
 
 import structlog
 
@@ -26,24 +27,31 @@ logger = structlog.get_logger()
 )
 def send_email_draft(self, draft_id: str) -> dict:
     """Send an email draft via SMTP. Called after approval gate is passed."""
-    import asyncio
     from sqlalchemy import select
 
+    from app.tasks.async_runner import run_async
+
     async def _run() -> dict:
-        from app.db.session import AsyncSessionLocal
+        from app.db.session import _get_session_factory
         from app.db.models import DraftAction, MailboxConfig
         from app.config import settings
         from app.audit.service import log_action
         from app.utils.crypto import decrypt_password
 
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(DraftAction).where(DraftAction.id == uuid.UUID(draft_id)))
+        async with _get_session_factory()() as db:
+            # Row lock: serialises concurrent send tasks for the same draft so a
+            # double-dispatch cannot send the email twice.
+            result = await db.execute(
+                select(DraftAction)
+                .where(DraftAction.id == uuid.UUID(draft_id))
+                .with_for_update()
+            )
             draft = result.scalar_one_or_none()
             if not draft:
                 logger.error("email_draft_not_found", draft_id=draft_id)
                 return {"status": "error", "reason": "draft_not_found"}
 
-            if draft.executed:
+            if draft.executed or (draft.draft_data or {}).get("status") in ("sent", "sent_mock"):
                 return {"status": "already_sent"}
 
             data = draft.draft_data or {}
@@ -181,12 +189,14 @@ def send_email_draft(self, draft_id: str) -> dict:
                 else:
                     msg = alt
 
-                msg["Subject"] = subject
-                msg["From"] = f"{from_name} <{from_address}>" if from_name else from_address
+                msg["Subject"] = Header(subject, "utf-8")
+                msg["From"] = formataddr((str(Header(from_name, "utf-8")) if from_name else "", from_address))
                 msg["To"] = ", ".join(to_addresses)
                 if cc_addresses:
                     msg["Cc"] = ", ".join(cc_addresses)
+                msg["Date"] = formatdate(localtime=True)
                 msg["Message-ID"] = smtp_message_id
+                msg["MIME-Version"] = "1.0"
                 if in_reply_to:
                     msg["In-Reply-To"] = in_reply_to
                 if references:
@@ -260,8 +270,4 @@ def send_email_draft(self, draft_id: str) -> dict:
                 logger.error("smtp_error", draft_id=draft_id, error=str(exc))
                 raise self.retry(exc=exc)
 
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(_run())
-    finally:
-        loop.close()
+    return run_async(_run())
