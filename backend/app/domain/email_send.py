@@ -112,3 +112,45 @@ async def create_reply_draft(
     db.add(draft)
     await db.flush()
     return draft
+
+
+def resolve_default_mailbox_sync(db) -> str | None:
+    """Ящик, из которого отправлять, когда его не указали явно.
+
+    Черновик без ящика не имел SMTP-аккаунта, и отправка сваливалась в
+    глобальный .env, которого здесь нет, — письмо уходило в мнимую отправку.
+    Правило намеренно осторожное: если SMTP настроен ровно у ОДНОГО активного
+    ящика, он и есть ответ; если их несколько — не выбираем, потому что
+    отправить от чужого имени хуже, чем не отправить, и вызывающий обязан
+    указать ящик сам.
+    """
+    from sqlalchemy import select as _sel
+
+    from app.db.models import MailboxConfig
+
+    rows = db.execute(
+        _sel(MailboxConfig.name).where(
+            MailboxConfig.is_active == True,  # noqa: E712
+            MailboxConfig.smtp_host.isnot(None),
+            MailboxConfig.smtp_host != "",
+        )
+    ).scalars().all()
+    return rows[0] if len(rows) == 1 else None
+
+
+async def resolve_default_mailbox(db) -> str | None:
+    """Async-вариант :func:`resolve_default_mailbox_sync`."""
+    from sqlalchemy import select as _sel
+
+    from app.db.models import MailboxConfig
+
+    rows = (
+        await db.execute(
+            _sel(MailboxConfig.name).where(
+                MailboxConfig.is_active == True,  # noqa: E712
+                MailboxConfig.smtp_host.isnot(None),
+                MailboxConfig.smtp_host != "",
+            )
+        )
+    ).scalars().all()
+    return rows[0] if len(rows) == 1 else None

@@ -1589,6 +1589,10 @@ class AgentSession:
         self._send = send
         self.messages: list[dict] = []
         self._approval_future: asyncio.Future[bool] | None = None
+        # Что человек уже одобрил в этом ходе (см. _approval_key). Очищается
+        # при каждом новом сообщении пользователя: одобрение действует на ход,
+        # а не навсегда.
+        self._granted_approvals: set[str] = set()
         self._session_id = str(uuid.uuid4())
         self._iteration = 0
         # Role-specific system prompt fragment, set per turn by the orchestrator.
@@ -1923,6 +1927,9 @@ class AgentSession:
     async def on_user_message(self, content: str) -> None:
         self._refresh_runtime_config()
         await self._init_mcp()
+        # Одобрение действует на ход, а не навсегда: новое сообщение человека
+        # начинает новый ход, и прошлое «да» его не покрывает.
+        self._granted_approvals.clear()
         self.messages.append({"role": "user", "content": content})
         self._trim_history()
         await self._run()
@@ -2547,6 +2554,18 @@ class AgentSession:
                 "message": "Отправка по вашему прямому указанию.",
             })
             approval_granted = True
+        elif original_name in current_gates and self._approval_key(
+            original_name, args
+        ) in self._granted_approvals:
+            # Это же действие человек уже одобрил в этом ходе — повторный
+            # запрос был бы вопросом о том, на что уже ответили.
+            asyncio.create_task(self._log_action(
+                iteration=iteration,
+                action_type="approval_decision",
+                tool_name=original_name,
+                tool_result={"approved": True, "actor": "user:already_approved_this_turn"},
+            ))
+            approval_granted = True
         elif original_name in current_gates:
             asyncio.create_task(self._log_action(
                 iteration=iteration,
@@ -2565,6 +2584,7 @@ class AgentSession:
                 result: dict = {"status": "rejected", "message": "Отклонено пользователем"}
                 await self._send({"type": "tool_result", "tool": fn_name, "result": result})
                 return fn_name, result, tc_id
+            self._granted_approvals.add(self._approval_key(original_name, args))
             approval_granted = True
 
         if skill:
@@ -2666,6 +2686,37 @@ class AgentSession:
         r"(письм|сообщени|email|e-mail|мейл|запрос|кп|коммерческ)",
         re.IGNORECASE,
     )
+
+    @staticmethod
+    def _approval_key(skill_name: str, args: dict) -> str:
+        """Что именно человек одобрил — чтобы не спрашивать об этом дважды.
+
+        Ключ описывает ПРЕДМЕТ действия, а не форму вызова. Модель, не поверив
+        успешному ответу, переспрашивала отправку одного и того же черновика
+        шестью разными наборами аргументов — человек шесть раз нажимал
+        «Утверждено» на одно и то же письмо.
+
+        Безопасность не слабеет: изменится черновик или получатель — изменится
+        и ключ, и разрешение спросят заново. А подмену содержимого уже
+        одобренного черновика ловит content_digest на стороне API.
+        """
+        ident = args.get("draft_id") or args.get("id")
+        if not ident:
+            body = args.get("body")
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except Exception:
+                    body = {}
+            payload = body if isinstance(body, dict) else {}
+            ident = json.dumps(
+                {
+                    "to": payload.get("to_addresses") or args.get("to_addresses"),
+                    "subject": payload.get("subject") or args.get("subject"),
+                },
+                ensure_ascii=False, sort_keys=True,
+            )
+        return f"{skill_name}:{args.get('action') or ''}:{ident}"
 
     def _explicit_send_authorized(self, skill_name: str, args: dict) -> bool:
         """True when the human, in this turn, explicitly told the agent to SEND

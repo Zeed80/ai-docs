@@ -1352,6 +1352,15 @@ async def create_draft(
         raise HTTPException(403, "Нет доступа для отправки из этого ящика")
     await _assert_attachments_usable(db, user, payload.attachment_ids)
 
+    # Черновик без ящика не имеет SMTP-аккаунта: отправка сваливалась в
+    # глобальный .env, а когда его нет — в мнимую отправку, о которой человеку
+    # сообщали как об успешной. Агент ящик обычно не указывает.
+    mailbox = payload.mailbox
+    if not mailbox:
+        from app.domain.email_send import resolve_default_mailbox
+
+        mailbox = await resolve_default_mailbox(db)
+
     draft = await create_reply_draft(
         db,
         to_addresses=payload.to_addresses,
@@ -1363,7 +1372,7 @@ async def create_draft(
         thread_id=payload.thread_id,
         supplier_id=payload.supplier_id,
         context=payload.context,
-        mailbox=payload.mailbox,
+        mailbox=mailbox,
         in_reply_to_message_id=payload.in_reply_to_message_id,
         forward_of_message_id=payload.forward_of_message_id,
         attachment_ids=payload.attachment_ids,

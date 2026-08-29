@@ -97,6 +97,21 @@ def send_email_draft(self, draft_id: str) -> dict:
             oauth_access_token: str | None = None
 
             mailbox_name = data.get("mailbox")
+            if not mailbox_name:
+                # Черновик мог быть создан без ящика (агент его обычно не
+                # указывает). Разрешаем здесь же, а не падаем в глобальный
+                # .env: иначе письмо уходит «в никуда».
+                from app.domain.email_send import resolve_default_mailbox_sync
+
+                mailbox_name = await db.run_sync(
+                    lambda sync_db: resolve_default_mailbox_sync(sync_db)
+                )
+                if mailbox_name:
+                    data["mailbox"] = mailbox_name
+                    logger.info(
+                        "email_default_mailbox_resolved",
+                        draft_id=draft_id, mailbox=mailbox_name,
+                    )
             if mailbox_name:
                 mb = (
                     await db.execute(
@@ -143,8 +158,38 @@ def send_email_draft(self, draft_id: str) -> dict:
                 smtp_use_tls = settings.smtp_port != 465
 
             if not smtp_host:
+                # Мнимая отправка допустима только вне продакшена. В проде она
+                # означала бы, что человеку сказали «письмо отправлено», а его
+                # никто не отправлял: черновик помечался executed, задача
+                # завершалась успехом, и узнать об этом было неоткуда.
+                if settings.app_env == "production":
+                    from app.core.metrics import email_sent_total
+
+                    email_sent_total.labels(outcome="error").inc()
+                    logger.error(
+                        "smtp_not_configured", draft_id=draft_id, mailbox=mailbox_name,
+                    )
+                    from sqlalchemy.orm.attributes import flag_modified as _fm_smtp
+
+                    data["status"] = "error"
+                    data["error"] = (
+                        "SMTP не настроен: укажите ящик для отправки в настройках "
+                        "почты или задайте отправляющий аккаунт."
+                    )
+                    draft.draft_data = data
+                    _fm_smtp(draft, "draft_data")
+                    await db.commit()
+                    await _notify_send_failure(
+                        db, draft, to_addresses, subject, data["error"]
+                    )
+                    return {
+                        "status": "error",
+                        "reason": "smtp_not_configured",
+                        "message": data["error"],
+                    }
+
                 logger.warning("smtp_not_configured", draft_id=draft_id, mailbox=mailbox_name)
-                # Mark as sent in dev/demo mode (no SMTP configured anywhere)
+                # Dev/demo: no SMTP anywhere — record the attempt honestly.
                 draft.executed = True
                 draft.executed_at = datetime.now(timezone.utc)
                 data["status"] = "sent_mock"
