@@ -29,11 +29,14 @@ CV exactly like the model this replaces.
 
 from __future__ import annotations
 
+import gc
 import io
 import logging
 import os
 import pathlib
 import sys
+import threading
+import time
 from itertools import product
 from typing import List
 
@@ -54,6 +57,14 @@ app = FastAPI(title="technical-vectorizer")
 logger = logging.getLogger("technical_vectorizer")
 
 _MODEL = None
+_MODEL_LOCK = threading.Lock()
+_LAST_USED = 0.0
+# Модель нужна только в момент оцифровки чертежа, а держалась в видеопамяти с
+# запуска контейнера и не выгружалась никогда: 1.4 ГБ занято сутками при
+# последней векторизации позавчера. Приём тот же, что уже применён в соседнем
+# сайдкаре infra/vl-embedding: ленивая загрузка + выгрузка по простою.
+# 0 отключает выгрузку (например когда идёт пакетная оцифровка).
+_IDLE_UNLOAD = float(os.environ.get("TECHNICAL_VECTORIZER_IDLE_UNLOAD", "600"))
 _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _CHECKPOINT = pathlib.Path(os.environ.get("TECHNICAL_VECTORIZER_CHECKPOINT", "/models/model_lines.weights"))
 _SPEC = str(
@@ -94,37 +105,92 @@ def _serialize_state_dict(checkpoint: dict) -> dict:
 
 
 def _load_model():
+    """Загрузить модель по требованию. Под замком: обработчики FastAPI без
+    async выполняются в пуле потоков, и две одновременные векторизации иначе
+    загрузили бы веса дважды."""
+    global _MODEL, _LAST_USED
+    with _MODEL_LOCK:
+        _LAST_USED = time.time()
+        if _MODEL is not None:
+            return _MODEL
+        started = time.time()
+        model = load_model(_SPEC).to(_DEVICE)
+        if _CHECKPOINT.exists():
+            # map_location="cpu", а не на устройство: load_state_dict копирует
+            # веса в уже размещённые на GPU параметры, поэтому загрузка прямо
+            # в видеопамять создавала вторую копию весов на время загрузки —
+            # лишний пик и фрагментация без единой выгоды.
+            checkpoint = _serialize_state_dict(torch.load(_CHECKPOINT, map_location="cpu"))
+            model.load_state_dict(checkpoint["model_state_dict"])
+            app.state.checkpoint_loaded = True
+        else:
+            app.state.checkpoint_loaded = False
+            logger.warning("technical_vectorizer_checkpoint_missing", extra={"path": str(_CHECKPOINT)})
+        model.eval()
+        _MODEL = model
+        logger.info(
+            "technical_vectorizer_loaded seconds=%.1f device=%s",
+            time.time() - started, _DEVICE,
+        )
+        return model
+
+
+def _unload_model() -> None:
     global _MODEL
-    if _MODEL is not None:
-        return _MODEL
-    model = load_model(_SPEC).to(_DEVICE)
-    if _CHECKPOINT.exists():
-        checkpoint = _serialize_state_dict(torch.load(_CHECKPOINT, map_location=_DEVICE))
-        model.load_state_dict(checkpoint["model_state_dict"])
-        app.state.checkpoint_loaded = True
-    else:
-        app.state.checkpoint_loaded = False
-        logger.warning("technical_vectorizer_checkpoint_missing", extra={"path": str(_CHECKPOINT)})
-    model.eval()
-    _MODEL = model
-    return model
+    with _MODEL_LOCK:
+        if _MODEL is None:
+            return
+        _MODEL = None
+        # gc до empty_cache: nn.Module держит ссылочные циклы, и без сборки
+        # тензоры остаются живыми — кэш аллокатора освобождать нечего, и
+        # «выгрузка» освобождает заметно меньше, чем занимала загрузка.
+        gc.collect()
+        if _DEVICE.type == "cuda":
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        logger.info("technical_vectorizer_unloaded reason=idle")
 
 
-@app.on_event("startup")
-def _startup() -> None:
-    _load_model()
+def _idle_watch() -> None:
+    # Тик заметно короче окна простоя: при окне 35 с и тике 30 с выгрузка
+    # ждала бы до двух тиков, и «не сработало» выглядело бы точно так же, как
+    # «сломано». Проверять чаще ничего не стоит — это спящий поток.
+    while True:
+        time.sleep(5)
+        try:
+            if _MODEL is not None and _IDLE_UNLOAD > 0 and time.time() - _LAST_USED > _IDLE_UNLOAD:
+                _unload_model()
+        except Exception:
+            # Умерший сторож означал бы, что память держится вечно и никто об
+            # этом не узнает: логируем и продолжаем, а не выходим из цикла.
+            logger.exception("technical_vectorizer_idle_watch_failed")
+
+
+_IDLE_THREAD = threading.Thread(target=_idle_watch, daemon=True)
+_IDLE_THREAD.start()
 
 
 @app.get("/health")
 def health() -> dict:
-    loaded = getattr(app.state, "checkpoint_loaded", False)
-    if not loaded:
-        raise HTTPException(503, f"model checkpoint not loaded: {_CHECKPOINT}")
+    """Liveness only — намеренно НЕ загружает модель.
+
+    Healthcheck ходит каждые 30 с; загрузка весов здесь держала бы 1.4 ГБ
+    видеопамяти вечно и сводила бы выгрузку по простою на нет. Готовность
+    развёртывания проверяется наличием файла чекпоинта, а не тем, лежит ли он
+    сейчас в памяти.
+    """
+    if not _CHECKPOINT.exists():
+        raise HTTPException(503, f"model checkpoint missing: {_CHECKPOINT}")
     return {
         "ok": True,
         "device": str(_DEVICE),
         "checkpoint": str(_CHECKPOINT),
-        "checkpoint_loaded": loaded,
+        "checkpoint_loaded": _CHECKPOINT.exists(),
+        "loaded": _MODEL is not None,
+        "idle_unload_seconds": _IDLE_UNLOAD,
+        "idle_seconds": round(time.time() - _LAST_USED, 1) if _LAST_USED else None,
+        # Без этого «модель висит» и «сторож умер» неотличимы снаружи.
+        "idle_watcher_alive": _IDLE_THREAD.is_alive(),
     }
 
 
@@ -183,7 +249,7 @@ async def vectorize(file: UploadFile = File(...)) -> VectorizeResponse:
 
     model = _load_model()
     if not getattr(app.state, "checkpoint_loaded", False):
-        raise HTTPException(503, "model checkpoint not loaded")
+        raise HTTPException(503, f"model checkpoint not loaded: {_CHECKPOINT}")
 
     try:
         patches_rgb, offsets = _split_to_patches(padded, _PATCH_SIZE)

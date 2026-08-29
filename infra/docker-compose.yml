@@ -35,7 +35,7 @@ x-backend-env: &backend-env
   WEB_SEARCH_FALLBACK_API_KEY: ${WEB_SEARCH_FALLBACK_API_KEY:-}
   WEB_BROWSER_URL: ${WEB_BROWSER_URL:-http://web-browser:8093}
   OLLAMA_MODEL_REASONING: ${OLLAMA_MODEL_REASONING:-qwen3.5:9b}
-  OLLAMA_MODEL_OCR: ${OLLAMA_MODEL_OCR:-gemma4:e4b}
+  OLLAMA_MODEL_OCR: ${OLLAMA_MODEL_OCR:-qwen3.5:9b}
   APP_ENV: ${APP_ENV:-development}
   APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-secret-key}
   APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
@@ -329,6 +329,9 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       TECHNICAL_VECTORIZER_CHECKPOINT: /models/model_lines.weights
+      # Модель нужна только в момент оцифровки чертежа. Раньше она грузилась
+      # при старте и висела в видеопамяти (1.4 ГБ) сутками. 0 = не выгружать.
+      TECHNICAL_VECTORIZER_IDLE_UNLOAD: ${TECHNICAL_VECTORIZER_IDLE_UNLOAD:-600}
     volumes:
       - technical_vectorizer_models:/models:ro
     deploy:
