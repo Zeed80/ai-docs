@@ -6,10 +6,13 @@ import ssl
 import uuid
 from datetime import datetime, timezone
 from email.mime.application import MIMEApplication
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr, formatdate, getaddresses, make_msgid
 from email.header import Header
+
+import re
 
 import structlog
 
@@ -55,6 +58,16 @@ def send_email_draft(self, draft_id: str) -> dict:
                 return {"status": "already_sent"}
 
             data = draft.draft_data or {}
+
+            # Ф4 — "Отменить". Checked inside the row lock taken above, so the
+            # cancel either lands before the send or loses cleanly; a Celery
+            # revoke would race the worker instead.
+            if data.get("cancelled"):
+                from app.core.metrics import email_sent_total
+
+                email_sent_total.labels(outcome="cancelled").inc()
+                logger.info("email_send_cancelled_before_dispatch", draft_id=draft_id)
+                return {"status": "cancelled"}
 
             def _bare(addrs: list[str]) -> list[str]:
                 return [a for _, a in getaddresses(addrs or []) if a and "@" in a]
@@ -166,18 +179,123 @@ def send_email_draft(self, draft_id: str) -> dict:
                     )
                 ).scalars().all()
 
+                # Defence in depth (Ф0.1). The API already refuses to put an
+                # attachment the author cannot reach into a draft; re-check here
+                # because this worker is the thing that actually puts bytes on
+                # the wire, and a draft row can be written by other code paths.
+                # A failed check aborts the send: quietly dropping the file
+                # would deliver a mail that says "во вложении" with nothing
+                # attached, which is worse than not sending at all.
+                owner = data.get("created_by_sub")
+                foreign = []
+                for a in att_rows:
+                    if a.uploaded_by_sub is not None and a.uploaded_by_sub == owner:
+                        continue
+                    if a.message_id is not None:
+                        src = (
+                            await db.execute(
+                                select(EmailMessage.mailbox).where(EmailMessage.id == a.message_id)
+                            )
+                        ).scalar_one_or_none()
+                        if src is not None and src == mailbox_name:
+                            continue
+                    foreign.append(a.filename)
+                # Total-size guard: per-file limits do not stop ten files that
+                # together exceed what the relay accepts. Refusing here (with a
+                # visible status) beats an opaque SMTP rejection after retries.
+                from app.db.models import MailServerConfig as _MSC
+
+                cfg_row = (await db.execute(select(_MSC))).scalars().first()
+                # Ф9 — a mailbox whose relay accepts less (or more) than the
+                # company default says so on its own row; NULL = inherit.
+                from app.db.models import MailboxConfig as _MBC
+
+                box_limit = (await db.execute(
+                    select(_MBC.max_attachment_mb).where(_MBC.name == mailbox_name)
+                )).scalar_one_or_none()
+                limit_mb = box_limit if box_limit is not None else (
+                    (cfg_row.max_attachment_mb if cfg_row else 25) or 25
+                )
+                max_total = limit_mb * 1024 * 1024
+                total_size = sum(int(a.size or 0) for a in att_rows)
+                if total_size > max_total:
+                    logger.error(
+                        "email_attachments_too_large", draft_id=draft_id,
+                        total=total_size, limit=max_total,
+                    )
+                    data["status"] = "error"
+                    data["error"] = (
+                        f"Вложения весят {total_size // (1024 * 1024)} МБ — "
+                        f"больше лимита {max_total // (1024 * 1024)} МБ"
+                    )
+                    draft.draft_data = data
+                    from sqlalchemy.orm.attributes import flag_modified as _fm1
+                    _fm1(draft, "draft_data")
+                    await db.commit()
+                    return {"status": "error", "reason": "attachments_too_large"}
+
+                if foreign:
+                    logger.error(
+                        "email_attachment_not_owned", draft_id=draft_id,
+                        mailbox=mailbox_name, filenames=foreign,
+                    )
+                    data["status"] = "error"
+                    data["error"] = f"Вложение недоступно: {', '.join(foreign)}"
+                    draft.draft_data = data
+                    from sqlalchemy.orm.attributes import flag_modified as _fm0
+                    _fm0(draft, "draft_data")
+                    await db.commit()
+                    return {"status": "error", "reason": "attachment_not_owned"}
+
             try:
+                from app.storage import download_file
+
+                # Ф5.2 — картинка, вставленная в тело письма, должна прийти
+                # получателю картинкой, а не ссылкой на наш сервер: ссылка
+                # снаружи не открывается, а у получателя в письме дыра.
+                # Разделяем по признаку: на что ссылается тело — то inline
+                # (multipart/related, cid:), остальное — обычные вложения.
+                from app.domain.email_inline import (
+                    cid_for, rewrite_to_cid, split_inline,
+                )
+
+                inline_rows, file_rows = split_inline(body_html, list(att_rows))
+                cid_by_id = {str(a.id): cid_for(a.id) for a in inline_rows}
+                for a in inline_rows:
+                    body_html = rewrite_to_cid(body_html, a.id)
+
                 alt = MIMEMultipart("alternative")
                 alt.attach(MIMEText(body_text, "plain", "utf-8"))
                 if body_html:
                     alt.attach(MIMEText(body_html, "html", "utf-8"))
 
-                if att_rows:
-                    msg = MIMEMultipart("mixed")
-                    msg.attach(alt)
-                    from app.storage import download_file
+                body_part = alt
+                if inline_rows:
+                    related = MIMEMultipart("related")
+                    related.attach(alt)
+                    for a in inline_rows:
+                        try:
+                            payload_bytes = download_file(a.storage_path)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "email_inline_download_failed",
+                                name=a.filename, error=str(exc),
+                            )
+                            continue
+                        subtype = (a.content_type or "image/png").split("/")[-1]
+                        part = MIMEImage(payload_bytes, _subtype=subtype)
+                        part.add_header("Content-ID", f"<{cid_by_id[str(a.id)]}>")
+                        part.add_header(
+                            "Content-Disposition", "inline", filename=a.filename
+                        )
+                        related.attach(part)
+                    body_part = related
 
-                    for a in att_rows:
+                if file_rows:
+                    msg = MIMEMultipart("mixed")
+                    msg.attach(body_part)
+
+                    for a in file_rows:
                         try:
                             payload_bytes = download_file(a.storage_path)
                         except Exception as exc:  # noqa: BLE001
@@ -187,7 +305,7 @@ def send_email_draft(self, draft_id: str) -> dict:
                         part.add_header("Content-Disposition", "attachment", filename=a.filename)
                         msg.attach(part)
                 else:
-                    msg = alt
+                    msg = body_part
 
                 msg["Subject"] = Header(subject, "utf-8")
                 msg["From"] = formataddr((str(Header(from_name, "utf-8")) if from_name else "", from_address))
@@ -215,12 +333,16 @@ def send_email_draft(self, draft_id: str) -> dict:
 
                 recipients = list(to_addresses) + list(cc_addresses) + _bare(data.get("bcc_addresses") or [])
                 context = ssl.create_default_context()
+                # Without a timeout a silent relay pins this worker forever.
+                timeout = settings.smtp_timeout_seconds
                 if not smtp_use_tls:
-                    with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context) as server:
+                    with smtplib.SMTP_SSL(
+                        smtp_host, smtp_port, context=context, timeout=timeout
+                    ) as server:
                         _authenticate(server)
                         server.sendmail(from_address, recipients, msg.as_string())
                 else:
-                    with smtplib.SMTP(smtp_host, smtp_port) as server:
+                    with smtplib.SMTP(smtp_host, smtp_port, timeout=timeout) as server:
                         server.ehlo()
                         server.starttls(context=context)
                         _authenticate(server)
@@ -234,6 +356,37 @@ def send_email_draft(self, draft_id: str) -> dict:
                 from sqlalchemy.orm.attributes import flag_modified as _fm
                 _fm(draft, "draft_data")
 
+                # Commit "this went out" BEFORE any side effect. Everything
+                # below (Sent copy, thread mirror, bus event, audit) is
+                # bookkeeping; if one of them raises and rolls the transaction
+                # back, `executed` reverts to False and the retry sends the
+                # very same letter a SECOND time. Found exactly that way — an
+                # un-awaited coroutine aborted the flush after a successful
+                # delivery, leaving a delivered message marked unsent.
+                await db.commit()
+
+                # Ф2.4 — put a copy in the server's own Sent folder, so the
+                # person's real mail client shows what this system sent. Not
+                # fatal: the message HAS gone out, and failing the task here
+                # would retry the SMTP send and deliver it twice.
+                appended_uid = None
+                try:
+                    appended_uid = await _append_to_sent(
+                        db, mailbox_name, msg.as_bytes(),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "email_append_to_sent_failed",
+                        draft_id=draft_id, mailbox=mailbox_name, error=str(exc),
+                    )
+                    await db.rollback()
+                    data["sent_folder_error"] = str(exc)[:300]
+                    draft = await db.get(DraftAction, uuid.UUID(draft_id))
+                    if draft is not None:
+                        draft.draft_data = data
+                        _fm(draft, "draft_data")
+                        await db.commit()
+
                 # Reflect the sent message into our own thread view + search.
                 try:
                     await record_outbound_message(
@@ -242,9 +395,27 @@ def send_email_draft(self, draft_id: str) -> dict:
                         draft_data=data,
                         smtp_message_id=smtp_message_id,
                         from_address=from_address,
+                        imap_uid=appended_uid,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("email_outbound_record_failed", draft_id=draft_id, error=str(exc))
+                    # The letter HAS gone out; we simply failed to mirror it
+                    # into our own Sent view. Previously a warning and nothing
+                    # else, so the message was invisible to its author forever.
+                    # Flag it on the draft and tell them, instead of pretending.
+                    logger.error(
+                        "email_outbound_record_failed", draft_id=draft_id, error=str(exc)
+                    )
+                    await db.rollback()
+                    data["outbound_record_error"] = str(exc)[:300]
+                    draft = await db.get(DraftAction, uuid.UUID(draft_id))
+                    if draft is not None:
+                        draft.draft_data = data
+                        _fm(draft, "draft_data")
+                    await _notify_send_failure(
+                        db, draft, to_addresses, subject,
+                        "письмо отправлено, но не попало в «Отправленные» — "
+                        f"сообщите администратору: {exc}",
+                    )
 
                 try:
                     from app.core.chat_bus import chat_bus
@@ -263,11 +434,111 @@ def send_email_draft(self, draft_id: str) -> dict:
                 )
                 await db.commit()
 
+                from app.core.metrics import email_sent_total
+
+                email_sent_total.labels(outcome="sent").inc()
                 logger.info("email_sent_smtp", draft_id=draft_id, to=to_addresses)
                 return {"status": "sent"}
 
             except smtplib.SMTPException as exc:
                 logger.error("smtp_error", draft_id=draft_id, error=str(exc))
+                # Ф4 — a send that runs out of retries used to end in the log
+                # and nowhere else: the composer said "queued" forever and the
+                # author never learned the letter had not gone out.
+                if self.request.retries >= self.max_retries:
+                    data["status"] = "error"
+                    data["error"] = str(exc)[:500]
+                    draft.draft_data = data
+                    from sqlalchemy.orm.attributes import flag_modified as _fm2
+
+                    _fm2(draft, "draft_data")
+                    await db.commit()
+                    await _notify_send_failure(db, draft, to_addresses, subject, str(exc))
+                    from app.core.metrics import email_sent_total
+
+                    email_sent_total.labels(outcome="error").inc()
+                    return {"status": "error", "reason": "smtp_failed",
+                            "detail": str(exc)[:200]}
                 raise self.retry(exc=exc)
 
     return run_async(_run())
+
+
+async def _notify_send_failure(db, draft, to_addresses, subject, error: str) -> None:
+    """Tell the author their message did not go out, with a way back to it."""
+    from app.db.models import NotificationType
+    from app.services.notifications import create_notification
+
+    owner = (draft.draft_data or {}).get("created_by_sub")
+    if not owner:
+        return
+    try:
+        await create_notification(
+            db,
+            user_sub=owner,
+            type=NotificationType.system,
+            title="Письмо не отправлено",
+            body=f"«{subject}» для {', '.join(to_addresses)[:120]}: {error[:200]}",
+            entity_type="email_draft",
+            entity_id=draft.id,
+            action_url="/email?folder=drafts",
+        )
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("email_send_failure_notify_failed", error=str(exc))
+
+
+async def _append_to_sent(db, mailbox_name: str | None, raw: bytes) -> int | None:
+    """APPEND a just-sent message to the mailbox's Sent folder on the server.
+
+    Returns the new UID when the server reports APPENDUID, so our own copy of
+    the message becomes addressable for later flag sync — otherwise the letter
+    would be the one thing in the mailbox we could never tell the server
+    anything about.
+    """
+    if not mailbox_name:
+        return None
+
+    from sqlalchemy import select as _select
+
+    from app.db.models import MailboxConfig, MailboxFolder
+    from app.domain.imap_sync import append_to_folder
+
+    folder = (
+        await db.execute(
+            _select(MailboxFolder.remote_name).where(
+                MailboxFolder.mailbox == mailbox_name,
+                MailboxFolder.local_folder == "sent",
+            )
+        )
+    ).scalar_one_or_none()
+    if not folder:
+        # No Sent folder discovered yet — silently skipping is right here: the
+        # message is delivered, and the folder map fills in on the next
+        # email.discover_folders run.
+        logger.info("email_sent_folder_unknown", mailbox=mailbox_name)
+        return None
+
+    config = (
+        await db.execute(
+            _select(MailboxConfig).where(MailboxConfig.name == mailbox_name)
+        )
+    ).scalar_one_or_none()
+    if config is None or not config.imap_host:
+        return None
+
+    import asyncio as _asyncio
+
+    from app.tasks.email_sync import _connect
+
+    def _do() -> int | None:
+        conn = _connect(config)
+        try:
+            return append_to_folder(conn, folder, raw)
+        finally:
+            try:
+                conn.logout()
+            except Exception:  # noqa: BLE001
+                pass
+
+    return await _asyncio.to_thread(_do)

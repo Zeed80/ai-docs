@@ -11,19 +11,20 @@ import {
   getAppVersion,
 } from "@/lib/native-bridge";
 import AppLockSettings from "@/components/mobile/AppLockSettings";
+import { getApiBaseUrl } from "@/lib/api-base";
+import { apiFetch, mutFetch } from "@/lib/auth";
 
-const STORAGE_KEY = "notification_prefs";
-
+// Ф0.8: these settings used to live only in localStorage, so the server pushed
+// every category regardless of what was switched off here. Keys are now the
+// backend's NotificationType values (GET/PUT /api/notifications/preferences).
 const PREF_LABELS = [
-  {
-    key: "notify_approval_assigned",
-    label: "Новое согласование назначено мне",
-  },
-  { key: "notify_approval_decided", label: "Решение по моему согласованию" },
-  { key: "notify_document_ready", label: "Документ распознан" },
-  { key: "notify_email_received", label: "Новое письмо в ящике" },
-  { key: "notify_mention", label: "Упоминание в чате" },
-  { key: "notify_handover", label: "Документ передан мне" },
+  { key: "approval_assigned", label: "Новое согласование назначено мне" },
+  { key: "approval_decided", label: "Решение по моему согласованию" },
+  { key: "document_ready", label: "Документ распознан" },
+  { key: "email_received", label: "Новое письмо в ящике" },
+  { key: "anomaly_detected", label: "Обнаружена аномалия" },
+  { key: "mention", label: "Упоминание в чате" },
+  { key: "handover", label: "Документ передан мне" },
 ];
 
 interface DeviceOut {
@@ -34,20 +35,26 @@ interface DeviceOut {
   created_at: string;
 }
 
-type Prefs = Record<string, boolean>;
+interface PrefOut {
+  type: string;
+  in_app: boolean;
+  push: boolean;
+  private_preview: boolean;
+}
 
-function loadPrefs(): Prefs {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as Prefs;
-  } catch {}
-  return Object.fromEntries(PREF_LABELS.map((p) => [p.key, true]));
+type Prefs = Record<string, PrefOut>;
+
+function defaultPrefs(): Prefs {
+  return Object.fromEntries(
+    PREF_LABELS.map((p) => [
+      p.key,
+      { type: p.key, in_app: true, push: true, private_preview: false },
+    ]),
+  );
 }
 
 export default function NotificationsSettingsPage() {
-  const [prefs, setPrefs] = useState<Prefs>(() =>
-    Object.fromEntries(PREF_LABELS.map((p) => [p.key, true])),
-  );
+  const [prefs, setPrefs] = useState<Prefs>(defaultPrefs);
   const [saved, setSaved] = useState(false);
   const [native, setNative] = useState(false);
   const [devices, setDevices] = useState<DeviceOut[]>([]);
@@ -69,7 +76,17 @@ export default function NotificationsSettingsPage() {
   }
 
   useEffect(() => {
-    setPrefs(loadPrefs());
+    apiFetch(`${getApiBaseUrl()}/api/notifications/preferences`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: PrefOut[]) => {
+        if (!Array.isArray(rows) || !rows.length) return;
+        setPrefs((prev) => {
+          const next = { ...prev };
+          for (const row of rows) if (next[row.type]) next[row.type] = row;
+          return next;
+        });
+      })
+      .catch(() => {});
     setNative(isNative());
     void loadDevices();
     void getServerConfig().then(setServerUrl);
@@ -120,13 +137,24 @@ export default function NotificationsSettingsPage() {
     }
   }
 
-  function toggle(key: string) {
-    setPrefs((prev) => ({ ...prev, [key]: !prev[key] }));
+  function toggle(key: string, field: "push" | "private_preview") {
+    setPrefs((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], [field]: !prev[key][field] },
+    }));
     setSaved(false);
   }
 
-  function save() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+  async function save() {
+    await Promise.all(
+      Object.values(prefs).map((p) =>
+        mutFetch(`${getApiBaseUrl()}/api/notifications/preferences`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(p),
+        }).catch(() => {}),
+      ),
+    );
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   }
@@ -147,21 +175,37 @@ export default function NotificationsSettingsPage() {
             <span className="text-sm">{label}</span>
             <button
               role="switch"
-              aria-checked={prefs[key]}
-              onClick={() => toggle(key)}
+              aria-checked={prefs[key]?.push ?? true}
+              onClick={() => toggle(key, "push")}
               className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                prefs[key] ? "bg-primary" : "bg-muted"
+                prefs[key]?.push ? "bg-primary" : "bg-muted"
               }`}
             >
               <span
                 className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow transform transition-transform ${
-                  prefs[key] ? "translate-x-4" : "translate-x-0"
+                  prefs[key]?.push ? "translate-x-4" : "translate-x-0"
                 }`}
               />
             </button>
           </label>
         ))}
       </div>
+
+      <label className="mt-4 flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={prefs["email_received"]?.private_preview ?? false}
+          onChange={() => toggle("email_received", "private_preview")}
+          className="mt-0.5 rounded"
+        />
+        <span className="text-sm">
+          Скрывать отправителя и тему письма на экране блокировки
+          <span className="block text-xs text-muted-foreground">
+            В приложении текст виден полностью. Для личного ящика скрытие
+            включено по умолчанию, пока вы не выберете иное.
+          </span>
+        </span>
+      </label>
 
       <div className="mt-4 flex items-center gap-3">
         <button

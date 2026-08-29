@@ -1,282 +1,186 @@
 "use client";
 
-import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getApiBaseUrl, getWebSocketBaseUrl } from "@/lib/api-base";
-import { mutFetch } from "@/lib/auth";
+import { apiFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
-interface DocumentItem {
+/**
+ * Ф7.1 — one feed of things waiting for a person.
+ *
+ * Mail used to live on a separate screen the mobile app did not even link to,
+ * so checking "нужно ли от меня что-то" meant visiting two places. The merge
+ * happens server-side (/api/inbox): only the server can order three sources by
+ * time and apply personal-mailbox visibility while doing it.
+ */
+interface FeedItem {
   id: string;
-  file_name: string;
-  status: string;
-  doc_type: string | null;
-  source_channel: string | null;
-  created_at: string;
-}
-
-interface AnomalyItem {
-  id: string;
+  kind: "email" | "document" | "anomaly";
   title: string;
-  anomaly_type: string;
-  severity: string;
-  entity_id: string;
-  created_at: string;
+  subtitle: string | null;
+  at: string | null;
+  url: string;
+  unread: boolean;
+  severity: string | null;
+  badge: string | null;
 }
 
-const ANOMALY_TYPE_LABELS: Record<string, string> = {
-  duplicate: "Дубликат",
-  new_supplier: "Новый поставщик",
-  requisite_change: "Смена реквизитов",
-  price_spike: "Скачок цены",
-  unknown_item: "Неизвестная позиция",
+const KIND_FILTERS = [
+  { key: "all", label: "Всё" },
+  { key: "email", label: "Письма" },
+  { key: "document", label: "Документы" },
+  { key: "anomaly", label: "Аномалии" },
+] as const;
+
+const KIND_ICON: Record<FeedItem["kind"], string> = {
+  email: "✉",
+  document: "📄",
+  anomaly: "⚠",
 };
 
+function relTime(iso: string | null): string {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "только что";
+  if (minutes < 60) return `${minutes} мин`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ч`;
+  return new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+}
+
 export default function InboxPage() {
-  const t = useTranslations("inbox");
-  const tDoc = useTranslations("document");
-  const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [items, setItems] = useState<FeedItem[]>([]);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [kind, setKind] = useState<(typeof KIND_FILTERS)[number]["key"]>("all");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [filter, setFilter] = useState("all");
-  const [criticalAnomalies, setCriticalAnomalies] = useState<AnomalyItem[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const fetchDocuments = useCallback(() => {
-    const params = new URLSearchParams({ limit: "50" });
-    if (filter === "needs_review") params.set("status", "needs_review");
+  const load = useCallback(() => {
+    const kinds = kind === "all" ? "email,document,anomaly" : kind;
+    setLoading(true);
+    apiFetch(`${API}/api/inbox?kinds=${kinds}&limit=80`)
+      .then((r) => (r.ok ? r.json() : { items: [], counts: {} }))
+      .then((data) => {
+        setItems(data.items ?? []);
+        setCounts(data.counts ?? {});
+      })
+      .catch(() => setItems([]))
+      .finally(() => setLoading(false));
+  }, [kind]);
 
-    fetch(`${API}/api/documents?${params}`)
-      .then((r) => r.json())
-      .then((data) => setDocuments(data.items ?? []))
-      .catch(() => setDocuments([]));
-  }, [filter]);
+  useEffect(load, [load]);
 
-  // Keyboard navigation
+  // Keyboard navigation stays what it was on the desktop: j/k/Enter.
   useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
+    function onKey(e: KeyboardEvent) {
       if (
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement
       )
         return;
-
-      switch (e.key) {
-        case "j":
-          setSelectedIndex((i) => Math.min(i + 1, documents.length - 1));
-          break;
-        case "k":
-          setSelectedIndex((i) => Math.max(i - 1, 0));
-          break;
-        case "Enter": {
-          const selected = documents[selectedIndex];
-          if (selected) {
-            window.location.href =
-              selected.status === "needs_review"
-                ? `/documents/${selected.id}/review`
-                : `/documents/${selected.id}`;
-          }
-          break;
-        }
-        case "r": {
-          const sel = documents[selectedIndex];
-          if (sel?.status === "needs_review") {
-            window.location.href = `/documents/${sel.id}/review`;
-          }
-          break;
-        }
-        case "?":
-          break;
+      if (e.key === "j") setSelectedIndex((i) => Math.min(i + 1, items.length - 1));
+      else if (e.key === "k") setSelectedIndex((i) => Math.max(i - 1, 0));
+      else if (e.key === "Enter") {
+        const sel = items[selectedIndex];
+        if (sel) window.location.href = sel.url;
       }
     }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [items, selectedIndex]);
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [documents, selectedIndex]);
-
+  // Live updates, coalesced: a busy shared mailbox otherwise reloads the feed
+  // on every single event.
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    fetchDocuments();
-  }, [fetchDocuments]);
-
-  // Load critical open anomalies
-  useEffect(() => {
-    fetch(`${API}/api/anomalies?status=open&severity=critical&limit=5`, {
-      credentials: "include",
-    })
-      .then((r) => r.json())
-      .then((d) => setCriticalAnomalies(d.items ?? d ?? []))
-      .catch(() => {});
-  }, []);
-
-  // Real-time: re-fetch when any notification arrives (document_ready, approval, etc.)
-  const wsRef = useRef<WebSocket | null>(null);
-  useEffect(() => {
-    const WS = getWebSocketBaseUrl();
-    const ws = new WebSocket(`${WS}/api/notifications/ws`);
-    wsRef.current = ws;
-    ws.onmessage = () => fetchDocuments();
+    const ws = new WebSocket(`${getWebSocketBaseUrl()}/api/notifications/ws`);
+    ws.onmessage = () => {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(load, 800);
+    };
     ws.onerror = () => {};
     return () => ws.close();
-  }, [fetchDocuments]);
-
-  const filters = ["all", "needs_review", "approved", "rejected"] as const;
+  }, [load]);
 
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">{t("title")}</h1>
-        <div className="flex gap-2">
-          {filters.map((f) => (
+    <div className="p-4 md:p-6">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <h1 className="mr-2 text-xl font-bold md:text-2xl">Входящие</h1>
+        {KIND_FILTERS.map((f) => {
+          const n = f.key === "all"
+            ? Object.values(counts).reduce((a, b) => a + b, 0)
+            : counts[f.key] ?? 0;
+          return (
             <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                filter === f
+              key={f.key}
+              onClick={() => setKind(f.key)}
+              className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
+                kind === f.key
                   ? "bg-blue-500 text-white"
-                  : "bg-slate-700 text-slate-300 hover:bg-slate-600 border border-slate-600"
+                  : "border border-slate-600 bg-slate-700 text-slate-300 hover:bg-slate-600"
               }`}
             >
-              {t(`filters.${f}`)}
+              {f.label}
+              {n > 0 && <span className="ml-1.5 opacity-70">{n}</span>}
             </button>
-          ))}
-          <button
-            onClick={() => {
-              window.location.href = "/documents";
-            }}
-            className="px-3 py-1.5 text-sm bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50 flex items-center gap-1.5"
-          >
-            Открыть документы
-          </button>
-        </div>
+          );
+        })}
       </div>
 
-      {/* Critical anomalies */}
-      {criticalAnomalies.length > 0 && (
-        <div className="mb-4">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-red-400 mb-2">
-            ⚠ Критические аномалии ({criticalAnomalies.length})
-          </h2>
-          <div className="space-y-1.5">
-            {criticalAnomalies.map((a) => (
-              <a
-                key={a.id}
-                href={`/anomalies`}
-                className="flex items-center gap-3 px-4 py-2.5 bg-red-950/30 border border-red-700/40 rounded-lg hover:bg-red-950/50 transition-colors"
-              >
-                <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-red-300 truncate">
-                    {a.title}
-                  </p>
-                  <p className="text-xs text-red-500">
-                    {ANOMALY_TYPE_LABELS[a.anomaly_type] ?? a.anomaly_type} ·{" "}
-                    {new Date(a.created_at).toLocaleString("ru-RU")}
-                  </p>
-                </div>
-                <span className="text-xs text-red-400 shrink-0">
-                  Требует решения →
-                </span>
-              </a>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Document list */}
-      {documents.length === 0 ? (
-        <div className="text-center py-20 text-slate-400">
-          <p className="text-lg">{t("empty")}</p>
-          <p className="text-sm mt-2">
-            <kbd className="px-1.5 py-0.5 bg-slate-700 rounded border border-slate-600 text-xs">
-              j
-            </kbd>{" "}
-            /{" "}
-            <kbd className="px-1.5 py-0.5 bg-slate-700 rounded border border-slate-600 text-xs">
-              k
-            </kbd>{" "}
-            navigate
-          </p>
-        </div>
+      {loading && items.length === 0 ? (
+        <p className="py-10 text-center text-sm text-slate-400">…</p>
+      ) : items.length === 0 ? (
+        <p className="py-10 text-center text-sm text-slate-400">
+          Ничего не ждёт вашего внимания.
+        </p>
       ) : (
-        <div className="bg-slate-800 rounded-lg border border-slate-700 divide-y divide-slate-700">
-          {documents.map((doc, index) => (
-            <div
-              key={doc.id}
-              className={`flex items-center gap-4 px-4 py-3 cursor-pointer transition-colors ${
-                index === selectedIndex
-                  ? "bg-blue-900/30 border-l-2 border-l-blue-500"
-                  : "hover:bg-slate-700/50"
-              }`}
-              onClick={() => {
-                setSelectedIndex(index);
-                window.location.href =
-                  doc.status === "needs_review"
-                    ? `/documents/${doc.id}/review`
-                    : `/documents/${doc.id}`;
-              }}
-            >
-              {/* Status badge */}
-              <span
-                className={`px-2 py-0.5 text-xs font-medium rounded-full ${
-                  doc.status === "needs_review"
-                    ? "bg-amber-900/40 text-amber-400"
-                    : doc.status === "approved"
-                      ? "bg-green-900/40 text-green-400"
-                      : doc.status === "rejected"
-                        ? "bg-red-900/40 text-red-400"
-                        : "bg-slate-700 text-slate-400"
+        <ul className="divide-y divide-slate-800 overflow-hidden rounded-lg border border-slate-700">
+          {items.map((item, i) => (
+            <li key={`${item.kind}:${item.id}`}>
+              <a
+                href={item.url}
+                onMouseEnter={() => setSelectedIndex(i)}
+                className={`flex items-start gap-3 px-3 py-3 transition-colors md:px-4 ${
+                  i === selectedIndex ? "bg-slate-800" : "hover:bg-slate-800/60"
                 }`}
               >
-                {tDoc(`status.${doc.status}`)}
-              </span>
-
-              {/* File info */}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{doc.file_name}</p>
-                <p className="text-xs text-slate-400">
-                  {doc.doc_type ? tDoc(`type.${doc.doc_type}`) : ""} &middot;{" "}
-                  {new Date(doc.created_at).toLocaleString("ru-RU")}
-                </p>
-              </div>
-
-              {/* Source */}
-              {doc.source_channel && (
-                <span className="text-xs text-slate-400">
-                  {doc.source_channel}
+                <span
+                  className={`mt-0.5 text-base ${
+                    item.kind === "anomaly" && item.severity === "critical"
+                      ? "text-red-400"
+                      : "text-slate-400"
+                  }`}
+                >
+                  {KIND_ICON[item.kind]}
                 </span>
-              )}
-
-              {/* Quick action */}
-              {doc.status === "needs_review" && (
-                <span className="text-xs font-medium text-amber-400 shrink-0">
-                  → Проверить
+                <span className="min-w-0 flex-1">
+                  <span
+                    className={`block truncate text-sm ${
+                      item.unread ? "font-semibold text-slate-100" : "text-slate-200"
+                    }`}
+                  >
+                    {item.title}
+                  </span>
+                  {item.subtitle && (
+                    <span className="mt-0.5 block truncate text-xs text-slate-500">
+                      {item.subtitle}
+                    </span>
+                  )}
+                  {item.badge && (
+                    <span className="mt-1 inline-block rounded bg-slate-700 px-1.5 py-0.5 text-[10px] text-slate-300">
+                      {item.badge}
+                    </span>
+                  )}
                 </span>
-              )}
-
-              {/* Snooze button */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const until = new Date(
-                    Date.now() + 24 * 60 * 60 * 1000,
-                  ).toISOString();
-                  mutFetch(`${API}/api/documents/${doc.id}/snooze`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      until,
-                      reason: "Отложено из Inbox",
-                    }),
-                  }).then(() => fetchDocuments());
-                }}
-                title="Отложить на 24 часа"
-                className="text-slate-600 hover:text-slate-400 shrink-0 text-xs px-1 rounded hover:bg-slate-700 transition-colors"
-              >
-                💤
-              </button>
-            </div>
+                <span className="shrink-0 text-[11px] text-slate-500">
+                  {relTime(item.at)}
+                </span>
+              </a>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
     </div>
   );

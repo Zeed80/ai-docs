@@ -17,6 +17,8 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.auth.acting import get_effective_user
+from app.auth.models import UserInfo
 from app.db.session import get_db
 from app.db.models import PurchaseRequest, SupplierContract, Party
 from app.domain.email_send import create_reply_draft
@@ -214,6 +216,7 @@ async def cancel_purchase_request(
 async def send_rfq(
     req_id: uuid.UUID,
     supplier_ids: list[uuid.UUID],
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: procurement.send_rfq — Generate RFQ draft emails to suppliers (approval gate)."""
@@ -254,6 +257,7 @@ async def send_rfq(
             body_html=body,
             supplier_id=supplier.id,
             context={"purchase_request_id": str(req.id)},
+            owner_sub=user.sub,
         )
         draft_ids.append(str(draft.id))
 

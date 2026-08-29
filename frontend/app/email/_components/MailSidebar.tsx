@@ -5,7 +5,10 @@ import { useTranslations } from "next-intl";
 import { emailApi } from "./api";
 import type { EmailLabel, MailboxChip } from "./types";
 
-const FOLDERS = ["inbox", "sent", "archive", "spam", "trash"] as const;
+// Ф5.1 — "drafts" and "outbox" were missing entirely: a saved draft vanished
+// (emailApi.drafts() existed and was called from nowhere), and a delayed send
+// had no home either.
+const FOLDERS = ["inbox", "drafts", "outbox", "sent", "archive", "spam", "trash"] as const;
 
 export function MailSidebar({
   onCollapse,

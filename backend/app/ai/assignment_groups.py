@@ -133,8 +133,50 @@ def get_groups() -> dict:
 # Write
 # ---------------------------------------------------------------------------
 
+def prune_dead_keys(keys: list[str]) -> tuple[list[str], list[str]]:
+    """(kept, dropped) — выбросить из цепочки то, чего заведомо нет.
+
+    Хвост фолбэков накапливался вечно: `_set_primary` ставил новую модель в
+    голову и сохранял прежний хвост целиком, а GUI показывает только голову.
+    Поэтому после перехода gemma4 → qwen3.8 ссылки на gemma4 остались в
+    цепочках у большинства задач — невидимо, пока голова жива, и с 404 на
+    каждой попытке фолбэка, как только она недоступна.
+
+    Выбрасываем только то, в чём уверены: ключа нет в каталоге, либо узлы
+    провайдера ответили и модели у них нет. Молчащий узел значит «неизвестно»
+    — по нему не чистим, иначе одна сетевая заминка сотрёт рабочую настройку.
+    """
+    from app.ai.provider_registry import Availability, model_availability
+
+    try:
+        from app.ai.model_registry import ModelRegistry
+
+        catalog = ModelRegistry.from_yaml(
+            "backend/app/ai/config/model_registry.yaml"
+        ).models
+    except Exception as exc:  # noqa: BLE001
+        # Без каталога судить не о чем — ничего не трогаем.
+        logger.warning("prune_catalog_unavailable", error=str(exc))
+        return list(keys), []
+
+    kept, dropped = [], []
+    for key in keys:
+        cap = catalog.get(key)
+        if cap is None:
+            dropped.append(key)
+            continue
+        try:
+            state = model_availability(cap.provider, cap.provider_model)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("prune_probe_failed", key=key, error=str(exc))
+            kept.append(key)
+            continue
+        (dropped if state is Availability.MISSING else kept).append(key)
+    return kept, dropped
+
+
 def _set_primary(task: AITask, model_key: str) -> None:
-    """Make ``model_key`` the primary for ``task``, preserving the fallback tail.
+    """Make ``model_key`` the primary for ``task``, dropping dead fallbacks.
 
     Reuses :func:`task_routing.save_task_routing`, so confidentiality and catalog
     validation are enforced and the lifecycle cache is invalidated.
@@ -145,6 +187,12 @@ def _set_primary(task: AITask, model_key: str) -> None:
     # still list cloud fallbacks, so drop non-local keys from the preserved tail.
     if task in CONFIDENTIAL_TASKS:
         tail = [m for m in tail if _is_local_key(m)]
+    tail, dropped = prune_dead_keys(tail)
+    if dropped:
+        logger.info(
+            "task_routing_dead_fallbacks_pruned",
+            task=str(task), dropped=dropped,
+        )
     routing = current.model_copy(update={"models": [model_key, *tail]})
     save_task_routing(task, routing)
 
@@ -205,6 +253,59 @@ def _mirror_ai_config(group: DocumentGroup) -> None:
         changed = True
     if changed:
         save_ai_config(cfg)
+
+
+def reconcile_ai_config() -> dict:
+    """Пересчитать легаси-store ``ai_config`` из текущих назначений.
+
+    ``_mirror_ai_config`` срабатывает только когда человек сохраняет группу в
+    GUI. Поэтому значение, записанное туда однажды, живёт вечно: в
+    ``model_reasoning`` месяцами лежала `gemma4:e4b`, хотя модель давно
+    заменили, — а старые модули (OCR-извлечение, reasoning-провайдер, память)
+    читают именно этот store, минуя каталог.
+
+    Вызывается на старте: настройки моделей остаются единственным источником
+    правды, а зеркало пересчитывается, а не запоминается.
+    """
+    before = {}
+    try:
+        from app.api.ai_settings import get_ai_config
+
+        before = dict(get_ai_config())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ai_config_reconcile_read_failed", error=str(exc))
+        return {"changed": {}}
+
+    _mirror_ai_config(get_document_group())
+
+    # ``model_agent`` зеркалится отдельным обработчиком API и точно так же
+    # застревало: в store лежал `qwen3.6:35b`, хотя агенту назначена другая
+    # модель. Для agent_loop это лишь запасной путь, но запасной путь,
+    # ведущий в несуществующую модель, хуже отсутствующего.
+    try:
+        from app.api.ai_settings import _sync_ai_model_agent
+
+        agent_model = get_agent_group().agent_model
+        if agent_model:
+            _sync_ai_model_agent(agent_model)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ai_config_reconcile_agent_failed", error=str(exc))
+
+    try:
+        from app.api.ai_settings import get_ai_config
+
+        after = get_ai_config()
+    except Exception:  # noqa: BLE001
+        return {"changed": {}}
+
+    changed = {
+        k: [before.get(k), after.get(k)]
+        for k in set(before) | set(after)
+        if before.get(k) != after.get(k)
+    }
+    if changed:
+        logger.info("ai_config_reconciled", changed=changed)
+    return {"changed": changed}
 
 
 def set_document_group(group: DocumentGroup) -> DocumentGroup:

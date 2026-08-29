@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
-import { mutFetch } from "@/lib/auth";
+import { apiFetch, mutFetch } from "@/lib/auth";
 
 interface MailboxOut {
   id: string;
@@ -21,6 +21,14 @@ interface MailboxOut {
   smtp_from_name: string | null;
   default_doc_type: string | null;
   assigned_role: string | null;
+  ingress_allowed_senders: string[] | null;
+  auto_process_attachments: boolean;
+  auto_approve_invoices: boolean;
+  agent_triage_mode: string;
+  body_retention_days: number;
+  auto_send_enabled: boolean | null;
+  auto_send_max_per_day: number | null;
+  max_attachment_mb: number | null;
   is_active: boolean;
   last_sync_at: string | null;
   sync_error: string | null;
@@ -70,6 +78,14 @@ interface MailboxForm {
   smtp_from_name: string;
   default_doc_type: string;
   assigned_role: string;
+  ingress_allowed_senders: string;
+  auto_process_attachments: boolean;
+  auto_approve_invoices: boolean;
+  agent_triage_mode: string;
+  body_retention_days: string;
+  auto_send_enabled: string;
+  auto_send_max_per_day: string;
+  max_attachment_mb: string;
   is_active: boolean;
 }
 
@@ -91,8 +107,44 @@ const EMPTY_FORM: MailboxForm = {
   smtp_from_name: "",
   default_doc_type: "",
   assigned_role: "",
+  ingress_allowed_senders: "",
+  auto_process_attachments: true,
+  auto_approve_invoices: false,
+  body_retention_days: "0",
+  auto_send_enabled: "",
+  auto_send_max_per_day: "",
+  max_attachment_mb: "",
+  agent_triage_mode: "classify",
   is_active: true,
 };
+
+// Mirrors ALLOWED_ASSIGNED_ROLES in backend/app/api/mailbox.py. The field was
+// in the form state and was posted to the API, but had no control at all — an
+// admin could not route a mailbox to a role, nor mark one as the agent's
+// instruction channel, without calling the API by hand.
+const ASSIGNED_ROLES: { value: string; label: string }[] = [
+  { value: "", label: "— не задано (уведомлять администраторов) —" },
+  { value: "accountant", label: "Бухгалтерия" },
+  { value: "buyer", label: "Закупки" },
+  { value: "manager", label: "Руководитель" },
+  { value: "engineer", label: "Конструкторы" },
+  { value: "technologist", label: "Технологи" },
+  { value: "normcontroller", label: "Нормоконтроль" },
+  { value: "calculator", label: "Расчётчики" },
+  { value: "admin", label: "Администраторы" },
+  { value: "viewer", label: "Наблюдатели" },
+  { value: "agent_ingress", label: "Поручения агенту (особый режим)" },
+];
+
+const DOC_TYPES: { value: string; label: string }[] = [
+  { value: "", label: "— определять автоматически —" },
+  { value: "invoice", label: "Счёт" },
+  { value: "contract", label: "Договор" },
+  { value: "act", label: "Акт" },
+  { value: "waybill", label: "Накладная" },
+  { value: "commercial_offer", label: "КП" },
+  { value: "drawing", label: "Чертёж" },
+];
 
 const inputCls =
   "w-full rounded border border-slate-600 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500";
@@ -115,6 +167,9 @@ export function MailboxSection() {
     imap_error?: string;
     smtp_error?: string;
     message_count?: number;
+    test_send_ok?: boolean | null;
+    test_send_error?: string | null;
+    test_send_to?: string | null;
   } | null>(null);
   const [testing, setTesting] = useState(false);
 
@@ -133,7 +188,7 @@ export function MailboxSection() {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch(`${base}/api/mailbox/configs`);
+      const res = await apiFetch(`${base}/api/mailbox/configs`);
       if (res.ok) setMailboxes(await res.json());
     } finally {
       setLoading(false);
@@ -142,7 +197,7 @@ export function MailboxSection() {
 
   useEffect(() => {
     load();
-    fetch(`${base}/api/mailbox/presets`)
+    apiFetch(`${base}/api/mailbox/presets`)
       .then((r) => (r.ok ? r.json() : []))
       .then(setPresets)
       .catch(() => {});
@@ -161,7 +216,7 @@ export function MailboxSection() {
           // mailbox's row — refresh the list, and if its edit form happens
           // to be open right now, update its connected-state badge too
           // instead of leaving it stuck on "не подключено" until reopened.
-          fetch(`${base}/api/mailbox/configs/${d.mailbox_id}`)
+          apiFetch(`${base}/api/mailbox/configs/${d.mailbox_id}`)
             .then((r) => (r.ok ? r.json() : null))
             .then((mb) => {
               if (!mb) return;
@@ -173,7 +228,7 @@ export function MailboxSection() {
             .catch(() => {});
         } else if (d.session) {
           setOauthSession(d.session);
-          fetch(`${base}/api/oauth/pending/${d.session}`)
+          apiFetch(`${base}/api/oauth/pending/${d.session}`)
             .then((r) => (r.ok ? r.json() : null))
             .then((p) => p && setOauthEmail(p.email))
             .catch(() => {});
@@ -255,6 +310,17 @@ export function MailboxSection() {
       smtp_from_name: mb.smtp_from_name || "",
       default_doc_type: mb.default_doc_type || "",
       assigned_role: mb.assigned_role || "",
+      ingress_allowed_senders: (mb.ingress_allowed_senders || []).join("\n"),
+      auto_process_attachments: mb.auto_process_attachments ?? true,
+      auto_approve_invoices: mb.auto_approve_invoices ?? false,
+      body_retention_days: String(mb.body_retention_days ?? 0),
+      auto_send_enabled:
+        mb.auto_send_enabled == null ? "" : mb.auto_send_enabled ? "on" : "off",
+      auto_send_max_per_day:
+        mb.auto_send_max_per_day == null ? "" : String(mb.auto_send_max_per_day),
+      max_attachment_mb:
+        mb.max_attachment_mb == null ? "" : String(mb.max_attachment_mb),
+      agent_triage_mode: mb.agent_triage_mode ?? "classify",
       is_active: mb.is_active,
     });
     // Restore the provider preset so the OAuth controls (reconnect / refresh
@@ -321,6 +387,28 @@ export function MailboxSection() {
         display_name: form.display_name || undefined,
         default_doc_type: form.default_doc_type || undefined,
         assigned_role: form.assigned_role || undefined,
+        auto_process_attachments: form.auto_process_attachments,
+        auto_approve_invoices: form.auto_approve_invoices,
+        body_retention_days: Number(form.body_retention_days) || 0,
+        // "" = наследовать общую политику; null здесь — значение, а не «не менять».
+        auto_send_enabled:
+          form.auto_send_enabled === "" ? null : form.auto_send_enabled === "on",
+        auto_send_max_per_day:
+          form.auto_send_max_per_day === ""
+            ? null
+            : Number(form.auto_send_max_per_day) || null,
+        max_attachment_mb:
+          form.max_attachment_mb === ""
+            ? null
+            : Number(form.max_attachment_mb) || null,
+        agent_triage_mode: form.agent_triage_mode,
+        ingress_allowed_senders:
+          form.assigned_role === "agent_ingress"
+            ? form.ingress_allowed_senders
+                .split(/[\n,;]+/)
+                .map((x) => x.trim())
+                .filter(Boolean)
+            : undefined,
       };
       if (!editing) {
         // New mailbox: OAuth tokens (if any) travel via the one-time session
@@ -358,11 +446,12 @@ export function MailboxSection() {
     await load();
   }
 
-  async function testConnection(id: string) {
+  async function testConnection(id: string, sendTo?: string) {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await mutFetch(`${base}/api/mailbox/configs/${id}/test`, {
+      const qs = sendTo ? `?send_test_to=${encodeURIComponent(sendTo)}` : "";
+      const res = await mutFetch(`${base}/api/mailbox/configs/${id}/test${qs}`, {
         method: "POST",
       });
       if (res.ok) setTestResult(await res.json());
@@ -454,6 +543,26 @@ export function MailboxSection() {
                 >
                   Тест
                 </button>
+                {/* Ф9 — вход по паролю проходит и у ящика, письма которого
+                    релей отвергает. Проверяет только реальная отправка. */}
+                <button
+                  onClick={() => {
+                    const to = window.prompt(
+                      "Кому отправить тестовое письмо?",
+                      mb.smtp_from_address || mb.imap_user,
+                    );
+                    if (to) testConnection(mb.id, to);
+                  }}
+                  disabled={testing || !mb.smtp_host}
+                  title={
+                    mb.smtp_host
+                      ? "Отправить реальное тестовое письмо"
+                      : "SMTP не настроен"
+                  }
+                  className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded disabled:opacity-40"
+                >
+                  Письмо
+                </button>
                 <button
                   onClick={() => openEdit(mb)}
                   className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded"
@@ -491,6 +600,17 @@ export function MailboxSection() {
             >
               SMTP: {testResult.smtp_ok ? "✓ ОК" : "✗ ошибка"}
               {testResult.smtp_error && ` — ${testResult.smtp_error}`}
+            </div>
+          )}
+          {testResult.test_send_ok != null && (
+            <div
+              className={
+                testResult.test_send_ok ? "text-emerald-400" : "text-red-400"
+              }
+            >
+              Тестовое письмо на {testResult.test_send_to}:{" "}
+              {testResult.test_send_ok ? "✓ принято сервером" : "✗ не отправлено"}
+              {testResult.test_send_error && ` — ${testResult.test_send_error}`}
             </div>
           )}
         </div>
@@ -782,6 +902,184 @@ export function MailboxSection() {
               </div>
             </div>
           </details>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">
+                Кого уведомлять о письмах
+              </label>
+              <select
+                className={inputCls}
+                value={form.assigned_role}
+                onChange={(e) => f("assigned_role", e.target.value)}
+              >
+                {ASSIGNED_ROLES.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">
+                Тип документов по умолчанию
+              </label>
+              <select
+                className={inputCls}
+                value={form.default_doc_type}
+                onChange={(e) => f("default_doc_type", e.target.value)}
+              >
+                {DOC_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-3 space-y-2">
+            <p className="text-xs font-medium text-slate-300">Что делать с вложениями</p>
+            <label className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.auto_process_attachments}
+                onChange={(e) => f("auto_process_attachments", e.target.checked)}
+                className="mt-0.5 rounded"
+              />
+              <span>
+                Распознавать вложения автоматически
+                <span className="block text-[11px] text-slate-500">
+                  Счёт из письма попадает в раздел «Счета» со статусом «на
+                  проверке». Для личного ящика работает только при включённом
+                  разборе почты ассистентом.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.auto_approve_invoices}
+                disabled={!form.auto_process_attachments}
+                onChange={(e) => f("auto_approve_invoices", e.target.checked)}
+                className="mt-0.5 rounded disabled:opacity-40"
+              />
+              <span className={form.auto_process_attachments ? "" : "opacity-40"}>
+                Утверждать счета без человека при высокой уверенности
+                <span className="block text-[11px] text-slate-500">
+                  По умолчанию выключено: письмо доводится до «на проверке», а
+                  утверждает человек. Включайте только для доверенного ящика.
+                </span>
+              </span>
+            </label>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">
+                Разбор писем ассистентом
+              </label>
+              <select
+                className={inputCls}
+                value={form.agent_triage_mode}
+                onChange={(e) => f("agent_triage_mode", e.target.value)}
+              >
+                <option value="off">Выключен</option>
+                <option value="classify">Только распознавать тип письма</option>
+                <option value="full">Полный: метки, привязки, черновики ответов</option>
+              </select>
+              <p className="mt-1 text-[11px] text-slate-500">
+                Даже в полном режиме письма наружу не уходят: ответ готовится
+                черновиком и требует подтверждения.
+              </p>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">
+                Хранить содержимое писем, дней
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={3650}
+                className={inputCls}
+                value={form.body_retention_days}
+                onChange={(e) => f("body_retention_days", e.target.value)}
+              />
+              <p className="mt-1 text-[11px] text-slate-500">
+                0 — хранить бессрочно (по умолчанию). При заданном сроке у старых
+                писем стирается текст, а отправитель, тема, дата и связи со
+                счетами остаются: письмо не пропадает, пропадает его содержимое.
+              </p>
+            </div>
+            {/* Ф9 — переопределения общей политики почты. Пусто = наследовать. */}
+            <div className="border-t border-slate-700 pt-3 space-y-3">
+              <p className="text-xs text-slate-400">
+                Политика этого ящика. Пустое поле — наследовать общую настройку
+                почты.
+              </p>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">
+                  Автоматическая отправка ответов
+                </label>
+                <select
+                  className={inputCls}
+                  value={form.auto_send_enabled}
+                  onChange={(e) => f("auto_send_enabled", e.target.value)}
+                >
+                  <option value="">Как в общей политике</option>
+                  <option value="on">Разрешена для этого ящика</option>
+                  <option value="off">Запрещена для этого ящика</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Лимит автоответов в сутки
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    className={inputCls}
+                    placeholder="общий"
+                    value={form.auto_send_max_per_day}
+                    onChange={(e) => f("auto_send_max_per_day", e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Максимум вложений, МБ
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    className={inputCls}
+                    placeholder="общий"
+                    value={form.max_attachment_mb}
+                    onChange={(e) => f("max_attachment_mb", e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {form.assigned_role === "agent_ingress" && (
+            <div className="rounded-lg border border-amber-800/60 bg-amber-950/20 p-3">
+              <p className="text-xs text-amber-300">
+                Письма в этот ящик становятся поручениями агенту. Выполняются
+                только письма с темой, начинающейся на «Поручение:», и только от
+                разрешённых отправителей.
+              </p>
+              <label className="mt-2 block text-xs text-slate-400 mb-1">
+                Кому разрешено давать поручения (по одному в строке; можно домен)
+              </label>
+              <textarea
+                className={`${inputCls} h-20 font-mono`}
+                value={form.ingress_allowed_senders}
+                onChange={(e) => f("ingress_allowed_senders", e.target.value)}
+                placeholder={"ivanov@example.com\nexample.com"}
+              />
+              <p className="mt-1 text-[11px] text-slate-500">
+                Пусто — разрешены адреса всех активных пользователей системы.
+              </p>
+            </div>
+          )}
 
           <div className="flex items-center gap-2 pt-2">
             <button

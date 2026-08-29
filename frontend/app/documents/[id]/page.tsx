@@ -34,6 +34,8 @@ interface DocumentDetail {
   doc_type_confidence: number | null;
   status: string;
   source_channel: string | null;
+  // Ф6.3 — which letter this document arrived in, when it came by mail.
+  source_email_id: string | null;
   created_at: string;
   updated_at: string;
   extractions: Array<{
@@ -279,8 +281,19 @@ export default function DocumentPage() {
                 <dd className="font-mono text-xs truncate">{doc.file_hash}</dd>
               </div>
               <div>
-                <dt className="text-slate-400">Source</dt>
-                <dd>{doc.source_channel ?? "—"}</dd>
+                <dt className="text-slate-400">Источник</dt>
+                <dd>
+                  {doc.source_channel === "email" && doc.source_email_id ? (
+                    <a
+                      href={`/email?message=${doc.source_email_id}`}
+                      className="text-blue-400 hover:underline"
+                    >
+                      Пришёл письмом — открыть переписку
+                    </a>
+                  ) : (
+                    (doc.source_channel ?? "—")
+                  )}
+                </dd>
               </div>
               <div>
                 <dt className="text-slate-400">Created</dt>

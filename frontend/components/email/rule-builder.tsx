@@ -17,7 +17,14 @@ interface Action {
   template_id?: string;
   folder?: string;
   address?: string;
+  role?: string;
   prompt?: string;
+}
+interface LogEntry {
+  at: string;
+  message_subject: string | null;
+  message_from: string | null;
+  actions_applied: { type: string }[];
 }
 interface Rule {
   id: string;
@@ -62,15 +69,37 @@ const OPS = [
   "in_list",
   "is_true",
 ];
+// Ф3: forward_to and assign_role were listed in the engine's docstring and had
+// neither an implementation nor a control here.
 const ACTION_TYPES = [
   "add_label",
   "move_to_folder",
   "mark_read",
   "star",
+  "assign_role",
+  "forward_to",
   "run_extraction",
   "forward_to_agent",
   "auto_reply_template",
   "stop",
+];
+
+const ACTION_LABELS: Record<string, string> = {
+  add_label: "Навесить метку",
+  move_to_folder: "Переместить в папку",
+  mark_read: "Пометить прочитанным",
+  star: "Пометить звёздочкой",
+  assign_role: "Назначить ответственного (по роли)",
+  forward_to: "Переслать на адрес",
+  run_extraction: "Отправить вложения на распознавание",
+  forward_to_agent: "Передать агенту как поручение",
+  auto_reply_template: "Ответить по шаблону",
+  stop: "Остановить обработку правил",
+};
+
+const ASSIGN_ROLES = [
+  "accountant", "buyer", "manager", "engineer",
+  "technologist", "normcontroller", "calculator",
 ];
 
 export function EmailRulesSection() {
@@ -79,6 +108,17 @@ export function EmailRulesSection() {
   const [templates, setTemplates] = useState<TemplateOpt[]>([]);
   const [editing, setEditing] = useState<Rule | null>(null);
   const [testResult, setTestResult] = useState<Record<string, string>>({});
+  // Ф3: EmailRuleLog was written on every application and shown nowhere, so
+  // "правило работает?" had no answer short of reading the database.
+  const [log, setLog] = useState<Record<string, LogEntry[]>>({});
+
+  const loadLog = (id: string) =>
+    apiFetch(`${API}/api/email/rules/${id}/log?limit=10`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: LogEntry[]) =>
+        setLog((prev) => ({ ...prev, [id]: Array.isArray(rows) ? rows : [] })),
+      )
+      .catch(() => {});
 
   const load = () => {
     apiFetch(`${API}/api/email/rules`)
@@ -175,8 +215,9 @@ export function EmailRulesSection() {
         {rules.map((r) => (
           <div
             key={r.id}
-            className="flex items-center gap-2 rounded border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs"
+            className="rounded border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs"
           >
+          <div className="flex items-center gap-2">
             <span className={`h-2 w-2 rounded-full ${r.is_active ? "bg-green-500" : "bg-slate-600"}`} />
             <span className="font-medium text-slate-200">{r.name}</span>
             <span className="text-slate-500">
@@ -187,6 +228,16 @@ export function EmailRulesSection() {
               {testResult[r.id] && <span className="text-slate-400">{testResult[r.id]}</span>}
               <button onClick={() => dryRun(r)} className="text-slate-400 hover:text-slate-200">
                 Проверить
+              </button>
+              <button
+                onClick={() => (log[r.id] ? setLog((p) => {
+                  const n = { ...p };
+                  delete n[r.id];
+                  return n;
+                }) : loadLog(r.id))}
+                className="text-slate-400 hover:text-slate-200"
+              >
+                Журнал
               </button>
               <button onClick={() => setEditing(r)} className="text-slate-400 hover:text-slate-200">
                 Изм.
@@ -200,6 +251,32 @@ export function EmailRulesSection() {
                 ✕
               </button>
             </span>
+          </div>
+
+          {log[r.id] && (
+            <div className="mt-2 border-t border-slate-800 pt-2">
+              {log[r.id].length === 0 ? (
+                <p className="text-slate-500">
+                  Правило ещё ни разу не срабатывало на реальных письмах.
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {log[r.id].map((entry, idx) => (
+                    <li key={idx} className="text-slate-400">
+                      <span className="text-slate-500">
+                        {new Date(entry.at).toLocaleString("ru-RU")}
+                      </span>{" "}
+                      · {entry.message_from ?? "—"} ·{" "}
+                      {entry.message_subject ?? "(без темы)"} →{" "}
+                      {entry.actions_applied
+                        .map((a) => ACTION_LABELS[a.type] ?? a.type)
+                        .join(", ")}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
           </div>
         ))}
       </div>
@@ -309,7 +386,9 @@ export function EmailRulesSection() {
                   className={inp}
                 >
                   {ACTION_TYPES.map((x) => (
-                    <option key={x}>{x}</option>
+                    <option key={x} value={x}>
+                      {ACTION_LABELS[x] ?? x}
+                    </option>
                   ))}
                 </select>
                 {a.type === "add_label" && (
@@ -358,6 +437,36 @@ export function EmailRulesSection() {
                       setEditing({ ...editing, actions });
                     }}
                     className={inp}
+                  />
+                )}
+                {a.type === "assign_role" && (
+                  <select
+                    value={a.role ?? ""}
+                    onChange={(e) => {
+                      const actions = [...editing.actions];
+                      actions[i] = { ...a, role: e.target.value };
+                      setEditing({ ...editing, actions });
+                    }}
+                    className={inp}
+                  >
+                    <option value="">— выберите роль —</option>
+                    {ASSIGN_ROLES.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {a.type === "forward_to" && (
+                  <input
+                    value={a.address ?? ""}
+                    placeholder="адрес получателя"
+                    onChange={(e) => {
+                      const actions = [...editing.actions];
+                      actions[i] = { ...a, address: e.target.value };
+                      setEditing({ ...editing, actions });
+                    }}
+                    className={`${inp} flex-1`}
                   />
                 )}
                 {a.type === "forward_to_agent" && (

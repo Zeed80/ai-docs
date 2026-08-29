@@ -266,6 +266,58 @@ if _PROMETHEUS_AVAILABLE:
         ["scenario"],
         buckets=[1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0],
     )
+    # ── E-mail (Ф8) ───────────────────────────────────────────────────────
+    #
+    # Until now nothing about the mail subsystem was observable: whether the
+    # poller was keeping up, whether write-back was stuck, how often the agent
+    # guessed a letter's category wrongly. Every one of those failures is
+    # silent by nature — mail simply stops arriving, or arrives unclassified.
+    email_messages_ingested_total = Counter(
+        "aiworkspace_email_messages_ingested_total",
+        "Inbound e-mail messages stored",
+        ["mailbox"],
+    )
+    email_sent_total = Counter(
+        "aiworkspace_email_sent_total",
+        "Outbound e-mail attempts by outcome",
+        ["outcome"],          # sent | error | cancelled | sent_mock
+    )
+    email_sync_ops_pending = Gauge(
+        "aiworkspace_email_sync_ops_pending",
+        "Write-back operations waiting to reach the IMAP server",
+    )
+    email_sync_ops_total = Counter(
+        "aiworkspace_email_sync_ops_total",
+        "Write-back operations by outcome",
+        ["op", "outcome"],
+    )
+    email_imap_errors_total = Counter(
+        "aiworkspace_email_imap_errors_total",
+        "IMAP failures by mailbox and stage",
+        ["mailbox", "stage"], # poll | flags | push | discover | idle
+    )
+    email_poll_duration_seconds = Histogram(
+        "aiworkspace_email_poll_duration_seconds",
+        "One mailbox poll, end to end",
+        buckets=[0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0],
+    )
+    email_triage_total = Counter(
+        "aiworkspace_email_triage_total",
+        "Agent letter triage by category",
+        ["category"],
+    )
+    # The honest quality signal: how often a human disagreed with the agent.
+    email_triage_corrections_total = Counter(
+        "aiworkspace_email_triage_corrections_total",
+        "Triage categories corrected by a human",
+        ["was", "now"],
+    )
+    email_rule_actions_total = Counter(
+        "aiworkspace_email_rule_actions_total",
+        "Filter-rule actions actually applied",
+        ["action"],
+    )
+
 else:
     # Stubs when prometheus_client not available
     class _Noop:
@@ -326,3 +378,12 @@ else:
     scenario_runs_total = _noop
     scenario_errors_total = _noop
     scenario_duration_seconds = _noop
+    email_messages_ingested_total = _noop
+    email_sent_total = _noop
+    email_sync_ops_pending = _noop
+    email_sync_ops_total = _noop
+    email_imap_errors_total = _noop
+    email_poll_duration_seconds = _noop
+    email_triage_total = _noop
+    email_triage_corrections_total = _noop
+    email_rule_actions_total = _noop

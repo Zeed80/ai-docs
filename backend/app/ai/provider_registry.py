@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from enum import Enum
 from dataclasses import dataclass, field
 
 import httpx
@@ -251,6 +252,61 @@ def _models_on_node(node: ResolvedProvider) -> set[str]:
         return set()
     _availability_cache[cache_key] = (now, names)
     return names
+
+
+# Local kinds we can actually enumerate. Everything else (cloud gateways) has
+# no cheap "is this model here" answer, so it is never called missing.
+_ENUMERABLE_KINDS = {
+    ProviderKind.OLLAMA,
+    ProviderKind.LLAMACPP,
+    ProviderKind.VLLM,
+    ProviderKind.OPENAI_COMPATIBLE,
+    ProviderKind.LMSTUDIO,
+}
+
+
+class Availability(str, Enum):
+    """Is a catalog model actually servable right now?
+
+    Three states, not two, and the third one is the important one: a node that
+    does not answer means we do NOT know whether the model is there. Treating
+    "unknown" as "missing" would let one network blip erase a working
+    assignment — the exact silent loss this module is meant to prevent.
+    """
+
+    AVAILABLE = "available"
+    MISSING = "missing"
+    UNKNOWN = "unknown"
+
+
+def model_availability(kind: ProviderKind, provider_model: str) -> Availability:
+    """Whether ``provider_model`` is served by any enabled node of ``kind``."""
+    if kind not in _ENUMERABLE_KINDS:
+        return Availability.UNKNOWN
+    instances = list_instances(kind)
+    if not instances:
+        return Availability.UNKNOWN
+    answered = False
+    for node in instances:
+        names = _models_on_node(node)
+        if not names:
+            continue  # unreachable, or genuinely empty — cannot tell them apart
+        answered = True
+        if provider_model in names or provider_model.split(":")[0] in names:
+            return Availability.AVAILABLE
+    return Availability.MISSING if answered else Availability.UNKNOWN
+
+
+def catalog_availability(models: dict) -> dict[str, Availability]:
+    """{catalog key: availability} for a ``ModelRegistry.models`` mapping."""
+    out: dict[str, Availability] = {}
+    for key, cap in models.items():
+        try:
+            out[key] = model_availability(cap.provider, cap.provider_model)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("availability_probe_failed", key=key, error=str(exc))
+            out[key] = Availability.UNKNOWN
+    return out
 
 
 def select_instance(

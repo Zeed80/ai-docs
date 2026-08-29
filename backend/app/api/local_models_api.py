@@ -762,7 +762,6 @@ TASK_LABELS: dict[str, str] = {
     "classification": "Классификация",
     "long_context_summarization": "Суммаризация",
     "tool_calling": "Tool calling",
-    "speech": "Речь",
     "orchestrator_planning": "Планирование агента",
     "code_generation": "Генерация кода",
 }

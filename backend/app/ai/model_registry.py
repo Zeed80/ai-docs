@@ -158,6 +158,14 @@ class ModelRegistry:
         registry_path = Path(path)
         if not registry_path.exists() and str(registry_path).startswith("backend/"):
             registry_path = Path(str(registry_path).removeprefix("backend/"))
+        if not registry_path.exists():
+            # Путь передают относительным, поэтому он зависел от рабочего
+            # каталога процесса: под одним CWD каталог моделей читается, под
+            # другим — FileNotFoundError, и вызывающий код молча решает, что
+            # моделей нет. Последнее средство — найти файл рядом с модулем.
+            beside = Path(__file__).resolve().parent / "config" / registry_path.name
+            if beside.exists():
+                registry_path = beside
         raw = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
         providers = {
             ProviderKind(key): ProviderConfig(kind=ProviderKind(key), **value)

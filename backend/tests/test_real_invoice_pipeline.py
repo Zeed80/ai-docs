@@ -212,8 +212,6 @@ class TestInferenceParamInjection:
                 return AIResponse(task=request.task, provider=self.kind, model=model, embedding=[0.1])
             async def rerank(self, request, model):
                 return AIResponse(task=request.task, provider=self.kind, model=model, scores=[0.5])
-            async def speech(self, request, model):
-                return AIResponse(task=request.task, provider=self.kind, model=model, text="")
             async def tool_calling(self, request, model):
                 return await self.chat(request, model)
             async def structured_extract(self, request, model):

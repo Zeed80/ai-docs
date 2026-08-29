@@ -139,38 +139,8 @@ def _quick_detect_doc_type(
 
 from app.domain.pipeline import PIPELINE_STEP_DEFINITIONS  # noqa: E402
 
-DEFAULT_ALLOWED_EXTENSIONS = {
-    ".bmp",
-    ".csv",
-    ".doc",
-    ".docx",
-    ".dwg",
-    ".dxf",
-    ".eml",
-    ".gif",
-    ".iges",
-    ".igs",
-    ".jpeg",
-    ".jpg",
-    ".json",
-    ".log",
-    ".md",
-    ".msg",
-    ".odt",
-    ".pdf",
-    ".png",
-    ".step",
-    ".stp",
-    ".svg",
-    ".tif",
-    ".tiff",
-    ".txt",
-    ".webp",
-    ".xls",
-    ".xlsx",
-    ".xlsm",
-    ".xml",
-}
+# Moved to app.domain.file_types so the e-mail ingest path shares it.
+from app.domain.file_types import DEFAULT_ALLOWED_EXTENSIONS  # noqa: E402
 
 
 def _delete_result_payload(result: dict) -> DocumentDeleteResult:

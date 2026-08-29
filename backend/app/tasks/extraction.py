@@ -1730,7 +1730,12 @@ def auto_verify_document(self, document_id: str) -> dict:
                 if not agree:
                     return _hold_for_review("verify_model_disagreement", consensus=consensus)
             else:
+                # Настроенная, но не отработавшая проверка — это НЕ пройденная
+                # проверка. Раньше здесь писался варнинг и документ уходил в
+                # approved: страховочная сетка исчезала молча, а именно так
+                # (модель удалили, провайдер не поднят) она и исчезает.
                 logger.warning("auto_verify_model_empty", model=verify_model_1)
+                return _hold_for_review("verify_model_unavailable", consensus=0.0)
 
         # ── Approve ──────────────────────────────────────────────────────────
         doc.status = DocumentStatus.approved
@@ -2064,7 +2069,31 @@ def process_approved_document(self, document_id: str) -> dict:
         from app.tasks.embedding import embed_document
         embed_document.delay(document_id)
         if invoice is not None:
-            check_invoice_anomalies.delay(str(invoice.id))
+            # Ф6.2 — supplier resolution as a fallback for what the document
+            # itself could not tell us. _upsert_party above works from the
+            # extracted name/INN; when a scan carries neither (or OCR mangled
+            # them) the invoice was simply left without a supplier. This task
+            # has a full matching ladder — including, since Ф6.2, the address
+            # the letter came from — and was written but called from nowhere.
+            if invoice.supplier_id is None:
+                # Chained, not parallel: _detect_new_supplier reads
+                # invoice.supplier_id, so running the anomaly check alongside
+                # the matcher would inspect an invoice that has no supplier yet
+                # and quietly find nothing. auto_supplier_task dispatches the
+                # anomaly check itself once the supplier is known.
+                auto_supplier_task.delay(document_id)
+            else:
+                check_invoice_anomalies.delay(str(invoice.id))
+            # Ф6.5 — scenarios declaring `trigger: {type: event, event:
+            # invoice.approved}` (warehouse_receipt) were never reachable:
+            # nothing dispatched domain events to the scenario runner.
+            try:
+                from app.tasks.scenario_cron import dispatch_event
+
+                dispatch_event("invoice.approved", {"invoice_id": str(invoice.id),
+                                                    "document_id": document_id})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("scenario_event_dispatch_failed", error=str(exc))
 
         logger.info(
             "post_approve_done",
@@ -2158,6 +2187,21 @@ def _llm_match_supplier_name(new_name: str, existing_parties: list) -> "uuid.UUI
     return None
 
 
+def _document_sender_address(db: Session, doc) -> str | None:
+    """Bare e-mail address the document arrived from, if it came by mail."""
+    from email.utils import parseaddr
+
+    from app.db.models import EmailMessage
+
+    if getattr(doc, "source_channel", None) != "email" or not getattr(doc, "source_email_id", None):
+        return None
+    raw = db.execute(
+        select(EmailMessage.from_address).where(EmailMessage.id == doc.source_email_id)
+    ).scalar_one_or_none()
+    addr = (parseaddr(raw or "")[1] or "").strip().lower()
+    return addr or None
+
+
 @celery_app.task(name="app.tasks.extraction.auto_supplier_task", bind=True, max_retries=1)
 def auto_supplier_task(self, document_id: str) -> dict:
     """After document approval: match or create supplier Party.
@@ -2208,15 +2252,46 @@ def auto_supplier_task(self, document_id: str) -> dict:
         supplier_inn = supplier_data.get("inn")
 
         party_id = invoice.supplier_id
+        matched_by: str | None = "already_linked" if party_id else None
 
         if not party_id:
+            # 0. Ф6.2 — who sent the letter this document came in.
+            #
+            # The whole ladder below reads the DOCUMENT; for an emailed invoice
+            # the envelope is often the stronger signal (a scan with no INN, an
+            # OCR-mangled name), and it was not consulted at all. Exact address
+            # first, then the sender's domain, because a supplier writes from
+            # many mailboxes on one domain.
+            sender = _document_sender_address(db, doc)
+            if sender:
+                existing = db.execute(
+                    select(Party).where(Party.contact_email.ilike(sender))
+                    .order_by(Party.created_at.asc())
+                ).scalars().first()
+                if existing:
+                    party_id, matched_by = existing.id, "email_sender_exact"
+                else:
+                    domain = sender.split("@")[-1]
+                    if domain:
+                        by_domain = db.execute(
+                            select(Party).where(
+                                Party.contact_email.ilike(f"%@{domain}"),
+                                Party.role.in_(["supplier", "both"]),
+                            ).order_by(Party.created_at.asc())
+                        ).scalars().all()
+                        # Only when the domain identifies ONE supplier: a shared
+                        # domain (mail.ru, gmail.com) must never bind an invoice
+                        # to whoever happens to be first.
+                        if len(by_domain) == 1:
+                            party_id, matched_by = by_domain[0].id, "email_sender_domain"
+
             # 1. INN exact match
             if supplier_inn:
                 existing = db.execute(
                     select(Party).where(Party.inn == supplier_inn)
                 ).scalar_one_or_none()
                 if existing:
-                    party_id = existing.id
+                    party_id, matched_by = existing.id, "inn"
 
             # 2. Email match + similar name
             supplier_email = supplier_data.get("email")
@@ -2228,7 +2303,7 @@ def auto_supplier_task(self, document_id: str) -> dict:
                     supplier_name.lower() in existing.name.lower()
                     or existing.name.lower() in supplier_name.lower()
                 ):
-                    party_id = existing.id
+                    party_id, matched_by = existing.id, "document_email"
 
             # 3. Phone match + similar name
             supplier_phone = supplier_data.get("phone")
@@ -2246,7 +2321,7 @@ def auto_supplier_task(self, document_id: str) -> dict:
                     if cp.contact_phone and _norm(cp.contact_phone) == norm_phone:
                         if (supplier_name.lower() in cp.name.lower()
                                 or cp.name.lower() in supplier_name.lower()):
-                            party_id = cp.id
+                            party_id, matched_by = cp.id, "phone"
                             break
 
             # 4. LLM name match
@@ -2255,6 +2330,8 @@ def auto_supplier_task(self, document_id: str) -> dict:
                     select(Party).where(Party.role.in_(["supplier", "both"])).limit(50)
                 ).scalars().all()
                 party_id = _llm_match_supplier_name(supplier_name, list(candidates))
+                if party_id:
+                    matched_by = "llm_name"
 
             # 5. Create new Party
             if not party_id and (supplier_name or supplier_inn):
@@ -2274,6 +2351,7 @@ def auto_supplier_task(self, document_id: str) -> dict:
                 db.add(new_party)
                 db.flush()
                 party_id = new_party.id
+                matched_by = "created"
                 logger.info("auto_supplier_created", party_id=str(party_id), name=supplier_name)
 
             if party_id:
@@ -2296,11 +2374,26 @@ def auto_supplier_task(self, document_id: str) -> dict:
         # SupplierProfile stats are updated exclusively by process_approved_document.
         # auto_supplier_task only handles party matching/creation.
         if party_id:
+            # Provenance: autonomy without an explanation does not get accepted.
+            # The reviewer must be able to see WHY this supplier was chosen.
+            meta = dict(invoice.metadata_ or {}) if hasattr(invoice, "metadata_") else {}
+            if hasattr(invoice, "metadata_"):
+                meta["supplier_matched_by"] = matched_by
+                invoice.metadata_ = meta
+                from sqlalchemy.orm.attributes import flag_modified as _fm
+                _fm(invoice, "metadata_")
             db.commit()
-            logger.info("auto_supplier_done", document_id=document_id, party_id=str(party_id))
-            return {"party_id": str(party_id)}
+            logger.info(
+                "auto_supplier_done", document_id=document_id,
+                party_id=str(party_id), matched_by=matched_by,
+            )
+            check_invoice_anomalies.delay(str(invoice.id))
+            return {"party_id": str(party_id), "matched_by": matched_by}
 
         logger.warning("auto_supplier_no_data", document_id=document_id)
+        # Still worth checking: an invoice nobody could attribute is itself
+        # something a human should look at.
+        check_invoice_anomalies.delay(str(invoice.id))
         return {"error": "no_supplier_data"}
 
 

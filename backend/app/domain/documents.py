@@ -173,10 +173,29 @@ class DocumentSummary(BaseModel):
     doc_type_confidence: float | None = None
     status: DocumentStatus
     source_channel: str | None = None
+    source_email_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class EmailSourceOut(BaseModel):
+    """Where a document came from, when it arrived by mail (Ф6.3).
+
+    ``Document.source_email_id`` existed and was returned by no endpoint at
+    all, so nothing downstream — not the invoice screen, not the agent — could
+    say which letter an invoice came out of. The chain was only recoverable by
+    reading the database by hand.
+    """
+
+    message_id: uuid.UUID
+    thread_id: uuid.UUID | None = None
+    mailbox: str
+    from_address: str
+    subject: str | None = None
+    received_at: datetime | None = None
+    spf_dkim_ok: bool | None = None
 
 
 class DocumentOut(DocumentSummary):

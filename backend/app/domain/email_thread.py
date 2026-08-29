@@ -49,8 +49,14 @@ async def record_outbound_message(
     smtp_message_id: str,
     from_address: str,
     sent_at: datetime | None = None,
+    imap_uid: int | None = None,
 ) -> EmailMessage:
-    """Persist a just-sent email as an outbound EmailMessage in its thread."""
+    """Persist a just-sent email as an outbound EmailMessage in its thread.
+
+    ``imap_uid`` is the UID the server assigned when we APPENDed the copy to
+    its Sent folder (Ф2.4). Without it our own outbound mail would be the one
+    thing in the mailbox we could never tell the server anything about.
+    """
     sent_at = sent_at or datetime.now(timezone.utc)
     to_addresses = draft_data.get("to_addresses") or []
     subject = draft_data.get("subject") or "(без темы)"
@@ -100,7 +106,22 @@ async def record_outbound_message(
         is_read=True,
         folder="sent",
         snippet=snippet,
+        imap_uid=imap_uid,
     )
+    if imap_uid is not None:
+        from sqlalchemy import select as _select
+
+        from app.db.models import MailboxFolder
+
+        msg.imap_folder = (
+            await db.execute(
+                _select(MailboxFolder.remote_name).where(
+                    MailboxFolder.mailbox == mailbox,
+                    MailboxFolder.local_folder == "sent",
+                )
+            )
+        ).scalar_one_or_none()
+
     db.add(msg)
     await db.flush()
 

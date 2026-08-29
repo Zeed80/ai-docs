@@ -49,6 +49,7 @@ class ContactBookItem(BaseModel):
     notes: str | None
     tags: list = []
     is_favorite: bool
+    trust_images: bool = False
     source: str
     use_count: int
     owner_sub: str | None
@@ -69,6 +70,7 @@ class ContactCreate(BaseModel):
     notes: str | None = None
     tags: list[str] = []
     is_favorite: bool = False
+    trust_images: bool = False
     shared: bool = False  # admins can create org-wide contacts
 
 
@@ -79,6 +81,7 @@ class ContactUpdate(BaseModel):
     notes: str | None = None
     tags: list[str] | None = None
     is_favorite: bool | None = None
+    trust_images: bool | None = None
 
 
 def _split(addr: str) -> tuple[str, str]:
@@ -223,9 +226,50 @@ async def create_contact(
     c = EmailContact(
         email=email, name=payload.name, organization=payload.organization,
         phone=payload.phone, notes=payload.notes, tags=payload.tags or [],
-        is_favorite=payload.is_favorite, owner_sub=owner, source="manual",
+        is_favorite=payload.is_favorite, trust_images=payload.trust_images,
+        owner_sub=owner, source="manual",
     )
     db.add(c)
+    await db.commit()
+    await db.refresh(c)
+    return c
+
+
+class TrustImagesRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=320)
+    name: str | None = None
+    trust: bool = True
+
+
+@router.post("/trust-images", response_model=ContactBookItem)
+async def set_sender_image_trust(
+    payload: TrustImagesRequest,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ф1.4 — «показывать картинки этого отправителя всегда».
+
+    Идемпотентно: у отправителя может ещё не быть карточки в книге, и человек,
+    нажимающий «доверять», не заводит контакт — он снимает раздражитель. 409
+    здесь был бы ответом на вопрос, которого он не задавал.
+    """
+    email = _bare(payload.email).lower()
+    if not email:
+        raise HTTPException(422, "Пустой адрес")
+    c = (
+        await db.execute(
+            select(EmailContact).where(
+                EmailContact.email == email, EmailContact.owner_sub == user.sub
+            )
+        )
+    ).scalar_one_or_none()
+    if c is None:
+        c = EmailContact(
+            email=email, name=payload.name, owner_sub=user.sub, source="auto",
+            tags=[],
+        )
+        db.add(c)
+    c.trust_images = payload.trust
     await db.commit()
     await db.refresh(c)
     return c

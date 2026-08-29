@@ -1,6 +1,7 @@
 """Celery application configuration."""
 
 import os
+from datetime import timedelta
 
 from celery import Celery
 from celery.schedules import crontab
@@ -79,7 +80,9 @@ celery_app.conf.update(
     },
 )
 
-_imap_cron = crontab(minute=f"*/{settings.imap_poll_interval_minutes}")
+# timedelta, not crontab("*/N"): an interval that does not divide 60 (7, 8, 45)
+# produces uneven gaps at the top of every hour.
+_imap_cron = timedelta(minutes=max(1, settings.imap_poll_interval_minutes))
 
 celery_app.conf.beat_schedule = {
     # DB-driven mailbox polling: one dispatcher fans out poll_imap_mailbox for
@@ -90,6 +93,33 @@ celery_app.conf.beat_schedule = {
     "dispatch-mailbox-polls": {
         "task": "app.tasks.email_triage.dispatch_mailbox_polls",
         "schedule": _imap_cron,
+    },
+    # Ф2 — the other half of the loop. Push first (our changes are the ones a
+    # person is waiting to see land), then read back what changed on the server.
+    "email-push-sync-ops": {
+        "task": "email.push_ops",
+        "schedule": timedelta(minutes=1),
+    },
+    "email-sync-flags": {
+        "task": "email.sync_flags_all",
+        "schedule": timedelta(minutes=10),
+    },
+    # Ф2.3 — keep an IDLE watcher alive per mailbox. A no-op when imapclient
+    # is unavailable; polling above stays the safety net either way.
+    "email-idle-dispatch": {
+        "task": "email.idle_dispatch",
+        "schedule": timedelta(minutes=5),
+    },
+    "email-discover-folders": {
+        "task": "email.discover_folders_all",
+        "schedule": timedelta(hours=6),
+    },
+    # Ф6.5 — scenarios declared `trigger: {type: schedule}` in gateway.yml and
+    # nothing ever read it, so low_stock_alert and memory_maintenance had never
+    # run once. Ticks every minute; the task itself decides what is due.
+    "scenario-cron-dispatch": {
+        "task": "scenario.cron_dispatch",
+        "schedule": timedelta(minutes=1),
     },
     "escalate-expired-approvals": {
         "task": "approval.escalate_expired",
@@ -212,12 +242,21 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.email_triage.prune_attachments",
         "schedule": 86_400.0,
     },
+    # Ф8 — message-body retention, per mailbox. A no-op unless a mailbox has a
+    # window configured (default 0 = keep forever).
+    "email-prune-bodies": {
+        "task": "app.tasks.email_triage.prune_message_bodies",
+        "schedule": 86_400.0,
+    },
 }
 
 celery_app.autodiscover_tasks([
     "app.tasks.extraction",
     "app.tasks.ingest",
     "app.tasks.email_triage",
+    "app.tasks.email_sync",
+    "app.tasks.email_idle",
+    "app.tasks.scenario_cron",
     "app.tasks.embedding",
     "app.tasks.email_sender",
 ])

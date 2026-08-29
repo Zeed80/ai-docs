@@ -65,9 +65,12 @@ async def test_capability_dispatch_audits_reason(client, monkeypatch):
 
     real_proxy = cr._proxy
 
-    async def spy_proxy(method, path_tpl, path_params, body, base_url):
+    async def spy_proxy(method, path_tpl, path_params, body, base_url, **kwargs):
+        # **kwargs: _proxy has grown acting_user / idempotency_key since this
+        # spy was written, and a positional-only signature made the test fail
+        # with a TypeError that looked like a dispatcher bug.
         proxied.append(dict(body))
-        return await real_proxy(method, path_tpl, path_params, body, base_url)
+        return await real_proxy(method, path_tpl, path_params, body, base_url, **kwargs)
 
     monkeypatch.setattr(cr, "_audit_tool_call", fake_audit)
     monkeypatch.setattr(cr, "_proxy", spy_proxy)

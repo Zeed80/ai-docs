@@ -625,8 +625,37 @@ routes:
   # procurement / accountant / invoice_specialist — маршрут приводит запрос к
   # нужной роли. Чужие личные ящики не видны на уровне API
   # (app/domain/email_access.py, sweep_enabled) — маршрут ничего не расширяет.
-  - intent: email_triage
+  # Ф6.9 — раньше ОБА почтовых интента вели в procurement_specialist, и личную
+  # переписку разбирал персонаж снабженца: на «ответь на письмо» он предлагал
+  # запросить коммерческое предложение. Более узкие маршруты стоят выше:
+  # совпадает первый подходящий.
+  - intent: email_triage_supplier
     role: procurement_specialist
+    keywords:
+      - "письма от поставщик"
+      - "письмо от поставщик"
+      - "почта от поставщик"
+      - "переписка с поставщик"
+      - "кп в почте"
+      - "предложения в почте"
+    workspace_required: false
+    skills: ["email.list_threads", "email.search", "email.read", "email.recognize_attachment"]
+
+  - intent: email_triage_accounting
+    role: accountant
+    keywords:
+      - "счета в почте"
+      - "счет в почте"
+      - "счета из почты"
+      - "акты в почте"
+      - "акт сверки в почте"
+      - "бухгалтерская почта"
+      - "почта бухгалтерии"
+    workspace_required: false
+    skills: ["email.list_threads", "email.search", "email.read", "email.recognize_attachment"]
+
+  - intent: email_triage
+    role: mail_assistant
     keywords:
       - "моя почта"
       - "мою почту"
@@ -647,22 +676,38 @@ routes:
     skills: ["email.list_threads", "email.search", "email.read", "email.recognize_attachment"]
 
   # Написание/доработка письма агентом.
-  - intent: email_compose
+  # Закупочная переписка — снабженцу; всё остальное письмо пишет почтовый
+  # ассистент, который не подменяет ответ на письмо запросом КП.
+  - intent: email_compose_procurement
     role: procurement_specialist
     keywords:
-      - "напиши письмо"
-      - "составь письмо"
       - "напиши поставщику"
-      - "ответь на письмо"
-      - "подготовь ответ"
-      - "черновик письма"
       - "письмо поставщику"
       - "запрос кп"
       - "запрос коммерческого предложения"
+      - "запроси кп"
+    workspace_required: false
+    skills: ["email.style_match", "email.compose", "email.reply", "email.risk_check", "email.send"]
+
+  - intent: email_compose_accounting
+    role: accountant
+    keywords:
       - "напомни об оплате"
       - "напоминание об оплате"
-      - "запроси документы"
       - "запроси акт сверки"
+      - "запроси закрывающие"
+    workspace_required: false
+    skills: ["email.style_match", "email.compose", "email.reply", "email.risk_check", "email.send"]
+
+  - intent: email_compose
+    role: mail_assistant
+    keywords:
+      - "напиши письмо"
+      - "составь письмо"
+      - "ответь на письмо"
+      - "подготовь ответ"
+      - "черновик письма"
+      - "запроси документы"
     workspace_required: false
     skills: ["email.style_match", "email.compose", "email.reply", "email.risk_check", "email.send"]
 

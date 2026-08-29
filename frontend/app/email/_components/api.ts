@@ -40,12 +40,15 @@ export const emailApi = {
     is_unread?: boolean;
     is_starred?: boolean;
     limit?: number;
+    cursor?: string;
   }) => {
     const q = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => {
       if (v !== undefined && v !== "" && v !== null) q.set(k, String(v));
     });
-    return apiFetch(`${API}/api/email/threads?${q}`).then((r) => j<EmailThread[]>(r));
+    return apiFetch(`${API}/api/email/threads?${q}`).then((r) =>
+      j<{ items: EmailThread[]; total: number; next_cursor: string | null }>(r),
+    );
   },
 
   thread: (id: string) =>
@@ -56,7 +59,9 @@ export const emailApi = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    }).then((r) => j<{ results: EmailMessage[]; total: number }>(r)),
+    }).then((r) =>
+      j<{ results: EmailMessage[]; total: number; next_cursor: string | null }>(r),
+    ),
 
   bulkAction: (
     thread_ids: string[],
@@ -164,7 +169,20 @@ export const emailApi = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    }).then((r) => j<{ draft_id: string; status: string }>(r)),
+    }).then((r) =>
+      j<{
+        draft_id: string;
+        status: "queued" | "blocked";
+        blocked_by: { code: string; message: string }[];
+        warnings: { code: string; message: string }[];
+        undo_seconds: number;
+      }>(r),
+    ),
+
+  cancelSend: (draftId: string) =>
+    mutFetch(`${API}/api/email/drafts/${draftId}/cancel-send`, { method: "POST" }).then(
+      (r) => j<{ status: string }>(r),
+    ),
 
   sendDraft: (id: string) =>
     mutFetch(`${API}/api/email/drafts/${id}/send`, { method: "POST" }).then((r) =>
@@ -209,6 +227,12 @@ export const emailApi = {
       }>(r),
     ),
 
+  /** Real task state, so "синхронизирую" stops when the sync actually does. */
+  taskStatus: (taskId: string) =>
+    apiFetch(`${API}/api/tasks/${taskId}`).then((r) =>
+      j<{ status: string; result?: unknown }>(r),
+    ),
+
   syncMailbox: (mailbox: string | null) =>
     mutFetch(`${API}/api/email/fetch`, {
       method: "POST",
@@ -222,6 +246,42 @@ export const emailApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filename, target }),
     }).then((r) => j<{ document_id: string; task_id: string | null }>(r)),
+
+  /** Ф5.3 — "показать оригинал": the raw RFC822 source of one message. */
+  /** Ф6.4/6.8 — a human disagreeing with the classification is the training signal. */
+  correctTriage: (messageId: string, category: string) =>
+    mutFetch(`${API}/api/email/messages/${messageId}/triage/correct`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category }),
+    }).then((r) => j<NonNullable<EmailMessage["triage"]>>(r)),
+
+  rawUrl: (messageId: string) => `${API}/api/email/messages/${messageId}/raw`,
+
+  /** Ф1.4 — настройки чтения почты этого пользователя. */
+  preferences: () =>
+    apiFetch(`${API}/api/email/preferences`).then((r) =>
+      j<{ always_show_images: boolean }>(r),
+    ),
+
+  setPreferences: (body: { always_show_images: boolean }) =>
+    mutFetch(`${API}/api/email/preferences`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => j<{ always_show_images: boolean }>(r)),
+
+  /** Ф1.4 — «всегда показывать картинки этого отправителя». */
+  trustSenderImages: (email: string, name: string | null, trust = true) =>
+    mutFetch(`${API}/api/email/contacts/trust-images`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, name, trust }),
+    }).then((r) => j<{ id: string; email: string }>(r)),
+
+  /** Ф5.3 — все вложения письма одним архивом. */
+  attachmentsArchiveUrl: (messageId: string) =>
+    `${API}/api/email/messages/${messageId}/attachments/archive`,
 
   attachmentUrl: (messageId: string, filename: string) =>
     `${API}/api/email/messages/${messageId}/attachments/${encodeURIComponent(filename)}/content`,

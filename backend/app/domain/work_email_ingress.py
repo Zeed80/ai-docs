@@ -11,18 +11,15 @@ existing draft/send split (capabilities.yml: gate_actions: [send, ...]) —
 the reply goes through the same approval gate email.send already enforces
 for every other agent-composed email, not a shortcut around it.
 
-Not wired to a live Celery beat poll in this pass: the obvious source,
-imap_client.get_mailbox_configs(), is the same mailbox list email_triage.py
-polls for invoices. fetch_unseen_from_mailbox marks fetched messages seen
-(shared mailboxes) or advances a UID watermark (personal ones) — sharing
-that source between two independent consumers means whichever task's beat
-tick fires first "steals" every unseen message, not just the ones it
-understands, silently breaking the other pipeline. A real second channel
-needs its own dedicated mailbox or IMAP folder (MailboxConfig.folder
-already supports a subfolder), which doesn't exist in this deployment yet
-— wiring polling against the shared source would be actively harmful, not
-merely undertested, so the ingress logic below is implemented and tested
-standalone, ready to be called once a dedicated source exists.
+Live since ``MailboxConfig.assigned_role == "agent_ingress"`` (a dedicated
+mailbox or IMAP subfolder, so it never races the invoice poller for the same
+unseen messages): app.tasks.ingest.poll_imap_mailbox ingests such a mailbox
+like any other and additionally calls this module for messages that pass two
+checks — the subject marker (``is_agent_instruction_email``) and the sender
+allowlist (``MailboxConfig.ingress_allowed_senders``). Both are the caller's
+responsibility and both are enforced there; until Ф0.6 neither was, so every
+message that landed in the ingress mailbox — spam included, from any sender —
+became a task executed with the agent's own permissions.
 """
 
 from __future__ import annotations
@@ -65,10 +62,23 @@ def _objective_from_email(parsed: Any) -> str:
     return body[:200] if body else "Поручение из письма"
 
 
-async def create_work_order_from_email(db: AsyncSession, parsed: Any) -> WorkOrder:
+async def create_work_order_from_email(
+    db: AsyncSession,
+    parsed: Any,
+    *,
+    mailbox: str | None = None,
+    email_message_pk: Any = None,
+) -> WorkOrder:
     """Create the WorkOrder + 3-step plan (answer -> draft_reply -> send_reply)
     for one agent-instruction email. Caller is responsible for having already
-    confirmed is_agent_instruction_email(parsed) and for the commit."""
+    confirmed is_agent_instruction_email(parsed), for checking the sender, and
+    for the commit.
+
+    ``mailbox`` is the ingress mailbox the instruction arrived in — the reply
+    must go out from that same address, not from whatever single account the
+    .env fallback names. ``email_message_pk`` is our stored EmailMessage id, so
+    the order can be traced back to a letter a human can actually open.
+    """
     prompt = str(parsed.body_text or parsed.subject or "").strip()
     order = await create_work_order(
         db,
@@ -78,8 +88,10 @@ async def create_work_order_from_email(db: AsyncSession, parsed: Any) -> WorkOrd
         source="email",
         metadata={
             "email_message_id": parsed.message_id,
+            "email_message_pk": str(email_message_pk) if email_message_pk else None,
             "email_from": parsed.from_address,
             "email_subject": parsed.subject,
+            "mailbox": mailbox,
         },
     )
     reply_subject = str(parsed.subject or "").strip()
@@ -107,6 +119,12 @@ async def create_work_order_from_email(db: AsyncSession, parsed: Any) -> WorkOrd
                     "subject": reply_subject,
                     "body_html": "${steps.answer.output.text}",
                     "body_text": "${steps.answer.output.text}",
+                    # Reply from the ingress mailbox itself; without this the
+                    # send falls back to the global .env account.
+                    "mailbox": mailbox,
+                    "in_reply_to_message_id": (
+                        str(email_message_pk) if email_message_pk else None
+                    ),
                 },
                 "depends_on": ["answer"],
             },
@@ -125,7 +143,13 @@ async def create_work_order_from_email(db: AsyncSession, parsed: Any) -> WorkOrd
                 "kind": "capability",
                 "capability": "email",
                 "action": "send",
-                "input": {"draft_id": "${steps.draft_reply.output.id}"},
+                # expected_digest binds the approval to this exact letter
+                # (Ф0.2): it flows into work_planning.tool_call_digest, so a
+                # decision cannot be spent on content rewritten afterwards.
+                "input": {
+                    "draft_id": "${steps.draft_reply.output.id}",
+                    "expected_digest": "${steps.draft_reply.output.content_digest}",
+                },
                 "depends_on": ["draft_reply"],
                 "risk_level": "high",
             },

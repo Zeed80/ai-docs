@@ -6,6 +6,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -1063,6 +1064,9 @@ class EmailThread(UUIDPrimaryKey, TimestampMixin, Base):
     folder: Mapped[str] = mapped_column(String(20), default="inbox", nullable=False, index=True)
     last_snippet: Mapped[str | None] = mapped_column(String(300))
     unread_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Ф3 — who is responsible for this conversation. The `assign_role` rule
+    # action claimed to do this and was literally `msg.mailbox = msg.mailbox`.
+    assigned_to_sub: Mapped[str | None] = mapped_column(String(255), index=True)
 
     messages: Mapped[list["EmailMessage"]] = relationship(back_populates="thread")
     labels: Mapped[list["EmailLabel"]] = relationship(
@@ -1099,11 +1103,34 @@ class EmailMessage(UUIDPrimaryKey, TimestampMixin, Base):
     # RFC 5322 References chain — needed so agent/human replies actually thread
     # in the recipient's client (In-Reply-To alone is not enough).
     references: Mapped[str | None] = mapped_column(String(2000))
+    # Where a reply should actually go. Suppliers routinely send from a
+    # no-reply address with Reply-To pointing at the sales desk; answering the
+    # From address means answering nobody.
+    reply_to: Mapped[str | None] = mapped_column(String(500))
+    # Headers worth keeping but not worth a column each: Auto-Submitted,
+    # Precedence, List-Id, List-Unsubscribe (loop protection + an unsubscribe
+    # button) and the SPF/DKIM/DMARC verdicts, which the agent must see before
+    # it creates an invoice from a letter claiming to be from a supplier.
+    headers_meta: Mapped[dict | None] = mapped_column(JSON)
+    # True when body_text was derived from body_html because the sender sent no
+    # text/plain part — so the UI and the agent can tell a generated rendering
+    # from what the sender actually wrote.
+    body_text_derived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Ф2.1 — where this message lives on the server. Without the UID there is
+    # no way to tell the server anything about it, which is why every action
+    # used to stop at our own database.
+    imap_uid: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    imap_folder: Mapped[str | None] = mapped_column(String(500))
+    flags_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     is_starred: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     folder: Mapped[str] = mapped_column(String(20), default="inbox", nullable=False)
     snippet: Mapped[str | None] = mapped_column(String(300))
     body_html_sanitized: Mapped[str | None] = mapped_column(Text)
+    # Ф8 — set when retention removed the body. Without it an emptied letter is
+    # indistinguishable from a parser failure, and someone re-syncs the mailbox
+    # trying to "fix" it.
+    body_pruned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     thread: Mapped["EmailThread | None"] = relationship(back_populates="messages")
     attachments: Mapped[list["EmailAttachment"]] = relationship(
@@ -1174,6 +1201,143 @@ class EmailRule(UUIDPrimaryKey, TimestampMixin, Base):
     auto_send: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
+class MailboxFolder(UUIDPrimaryKey, TimestampMixin, Base):
+    """Per-folder IMAP sync state — Ф2.1.
+
+    The poller used to read exactly one folder (``MailboxConfig.imap_folder``)
+    and track progress with a single UID watermark. Everything else on the
+    server was invisible: Sent, Archive, and — as the live stand showed —
+    mail.ru's own ``INBOX/ToMyself``, where a letter to yourself lands.
+
+    ``uid_validity`` is not decoration: when the server reissues it (a folder
+    recreated), previously stored UIDs point at completely different messages,
+    so the folder must be reindexed rather than quietly continued.
+    """
+
+    __tablename__ = "mailbox_folders"
+    __table_args__ = (
+        UniqueConstraint("mailbox", "remote_name", name="uq_mailbox_folder"),
+    )
+
+    mailbox: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    remote_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Our folder this maps onto: inbox/sent/archive/trash/spam/drafts, or None
+    # for a server folder we sync but do not present as a system folder.
+    local_folder: Mapped[str | None] = mapped_column(String(30), index=True)
+    # \Sent, \Drafts, \Trash, \Junk, \Archive (RFC 6154), when advertised.
+    special_use: Mapped[str | None] = mapped_column(String(40))
+    uid_validity: Mapped[int | None] = mapped_column(BigInteger)
+    uid_next: Mapped[int | None] = mapped_column(BigInteger)
+    last_seen_uid: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    highest_modseq: Mapped[int | None] = mapped_column(BigInteger)
+    is_selectable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_error: Mapped[str | None] = mapped_column(Text)
+
+
+class EmailSyncOp(UUIDPrimaryKey, TimestampMixin, Base):
+    """One pending change to push back to the IMAP server — Ф2.2.
+
+    Archiving, reading, starring and deleting were applied to Postgres only, so
+    our client and the person's real mail client drifted apart from the first
+    action: a letter archived here stayed unread in Outlook forever.
+
+    A queue rather than a synchronous call because the server may be down, slow
+    or rate-limited, and because a failed push must be visible and retryable
+    instead of silently lost.
+    """
+
+    __tablename__ = "email_sync_ops"
+
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("email_messages.id", ondelete="CASCADE"), index=True
+    )
+    mailbox: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # "seen" | "unseen" | "flagged" | "unflagged" | "move" | "delete"
+    op: Mapped[str] = mapped_column(String(20), nullable=False)
+    payload: Mapped[dict | None] = mapped_column(JSON)
+    state: Mapped[str] = mapped_column(
+        String(20), default="pending", nullable=False, index=True
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EmailTriageResult(UUIDPrimaryKey, TimestampMixin, Base):
+    """What the agent understood about one incoming letter, and what it did.
+
+    Ф6.4. Two reasons this is a table rather than a log line:
+
+    * the reader has to be able to see WHY something was created from their
+      mail — autonomy without an explanation does not get accepted, and the
+      thread view renders this row as the "что сделала Света" panel;
+    * a correction (the human changes the category or the supplier) is the
+      training signal for Ф6.8, and you cannot learn from a log line.
+
+    ``performed`` lists what actually happened; ``proposed`` what the agent
+    suggested and did not do on its own. Keeping them apart is what stops the
+    panel from claiming work it never did.
+    """
+
+    __tablename__ = "email_triage_results"
+
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("email_messages.id", ondelete="CASCADE"),
+        nullable=False, index=True, unique=True,
+    )
+    mailbox: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    summary: Mapped[str | None] = mapped_column(Text)
+    entities: Mapped[dict | None] = mapped_column(JSON)
+    proposed: Mapped[list | None] = mapped_column(JSON)
+    performed: Mapped[list | None] = mapped_column(JSON)
+    model_name: Mapped[str | None] = mapped_column(String(120))
+    work_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="SET NULL")
+    )
+    status: Mapped[str] = mapped_column(String(20), default="done", nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    # Ф6.8 — set when a human disagreed with the classification.
+    corrected_category: Mapped[str | None] = mapped_column(String(40))
+    corrected_by: Mapped[str | None] = mapped_column(String(255))
+
+
+class EmailAutoReply(UUIDPrimaryKey, Base):
+    """One automatic reply actually SENT by a filter rule (Ф3).
+
+    The daily cap used to be counted with
+    ``cast(draft_data, String) LIKE '%"sent_by": "rule:%'`` over DraftAction:
+    it depended on JSON text formatting, counted drafts that were merely
+    CREATED (a rejected send still consumed quota), and — despite the comment
+    promising "per recipient" — had no recipient filter at all, so the limit
+    was one global counter for the whole company.
+
+    A row here means a message left the building, which is what a rate limit
+    should be counting. It also gives the rule screen something honest to show.
+    """
+
+    __tablename__ = "email_auto_replies"
+
+    rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("email_rules.id", ondelete="SET NULL"), index=True
+    )
+    draft_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("draft_actions.id", ondelete="SET NULL")
+    )
+    in_reply_to_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("email_messages.id", ondelete="SET NULL")
+    )
+    mailbox: Mapped[str | None] = mapped_column(String(255), index=True)
+    recipient: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    thread_root: Mapped[str | None] = mapped_column(String(500), index=True)
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+
 class EmailRuleLog(UUIDPrimaryKey, Base):
     __tablename__ = "email_rule_logs"
 
@@ -1199,12 +1363,17 @@ class EmailAttachment(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "email_attachments"
 
-    message_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("email_messages.id", ondelete="CASCADE"), nullable=False, index=True
+    # Nullable: a compose attachment is staged by POST /attachments/upload
+    # before any message exists, and only later referenced by a draft.
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("email_messages.id", ondelete="CASCADE"), nullable=True, index=True
     )
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
     content_type: Mapped[str | None] = mapped_column(String(200))
     size: Mapped[int | None] = mapped_column(Integer)
+    # Who staged this file — an outbound draft may only reference attachments
+    # its author uploaded, or files already in a mailbox they may read.
+    uploaded_by_sub: Mapped[str | None] = mapped_column(String(255), index=True)
     content_id: Mapped[str | None] = mapped_column(String(200))
     is_inline: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     storage_path: Mapped[str | None] = mapped_column(String(1000))
@@ -1235,6 +1404,13 @@ class EmailContact(UUIDPrimaryKey, TimestampMixin, Base):
     source: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)  # manual|auto|party
     use_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Ф1.4 — «этому отправителю картинки показывать сразу». Блокировка по
+    # умолчанию защищает от трекинг-пикселя, но нажимать «Показать» на каждом
+    # письме от своего же поставщика — это причина, по которой блокировку
+    # выключают целиком.
+    trust_images: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
 
     __table_args__ = (
         UniqueConstraint("email", "owner_sub", name="uq_email_contact_email_owner"),
@@ -3670,6 +3846,49 @@ class MailboxConfig(UUIDPrimaryKey, TimestampMixin, Base):
     # Routing
     default_doc_type: Mapped[str | None] = mapped_column(String(50))
     assigned_role: Mapped[str | None] = mapped_column(String(50))
+    # Only for assigned_role="agent_ingress": who may command the agent by mail.
+    # Empty/None = every active user of this system (matched by their address);
+    # entries may be a full address or a bare domain. Without this, knowing the
+    # address was enough to give the agent instructions.
+    ingress_allowed_senders: Mapped[list | None] = mapped_column(JSON)
+    # Ф6.1 — the mailbox's own automation policy.
+    #
+    # auto_process_attachments: send attachments of this mailbox straight to
+    # recognition. This is what makes "счёт пришёл письмом → он в системе" work
+    # at all; before Ф6.1 nothing queued extraction from the IMAP path, so an
+    # invoice sat as an un-parsed Document forever unless a filter rule
+    # happened to say run_extraction.
+    #
+    # auto_approve_invoices: let a confidently extracted invoice go all the way
+    # to approved without a human. Deliberately OFF by default — the product
+    # decision for mail is "auto up to Needs Review". Manual uploads keep using
+    # the global auto_verify setting; this only overrides for e-mail.
+    auto_process_attachments: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    auto_approve_invoices: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Ф6.4 — how much the agent may do with this mailbox's mail:
+    #   "off"      — nothing (default for a personal mailbox without consent);
+    #   "classify" — understand and label, no side effects;
+    #   "full"     — also prepare drafts, link invoices, notify the responsible.
+    # Never sends anything: outbound stays behind the approval gate.
+    agent_triage_mode: Mapped[str] = mapped_column(
+        String(20), default="classify", nullable=False
+    )
+
+    # Ф9 — per-mailbox overrides of the global mail policy. NULL = inherit
+    # MailServerConfig, so a mailbox that never had an opinion keeps behaving
+    # exactly as before. A single global switch made "автоответы для ящика
+    # рекламаций" and "никаких автоответов из личной почты" the same setting.
+    auto_send_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    auto_send_max_per_day: Mapped[int | None] = mapped_column(Integer)
+    max_attachment_mb: Mapped[int | None] = mapped_column(Integer)
+
+    # Ф8 — retention for the LETTERS themselves, not just attachment bytes.
+    # 0 = keep forever, which stays the default: silently deleting a company's
+    # correspondence is worse than storing it. Turning it on for a personal
+    # mailbox is the owner's call; for a shared one, an admin's.
+    body_retention_days: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default="0"
+    )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -3746,10 +3965,38 @@ class MailServerConfig(UUIDPrimaryKey, TimestampMixin, Base):
     auto_send_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     auto_send_max_per_day: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
     attachment_retention_days: Mapped[int] = mapped_column(Integer, default=180, nullable=False)
+    # Per-file cap for outbound attachments, MB. Enforced while streaming the
+    # upload (never after buffering the whole file) and again on the total size
+    # of one message before it is handed to SMTP.
+    max_attachment_mb: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
     # Default quota for newly provisioned personal mailboxes (admin-editable,
     # per-mailbox override at provisioning time).
     default_quota_mb: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)
     updated_by: Mapped[str | None] = mapped_column(String(100))
+
+
+class UserNotificationPref(UUIDPrimaryKey, TimestampMixin, Base):
+    """Per-user, per-type notification preferences.
+
+    These used to live only in the browser's localStorage
+    (frontend/app/settings/notifications/page.tsx), so the server never knew
+    about them: a user who switched a category off still got a phone push for
+    it, and there was no way to keep private mail off a lock screen at all.
+
+    ``private_preview`` hides sender and subject from the PUSH payload only —
+    the in-app notification, which is behind the session, keeps them.
+    """
+
+    __tablename__ = "user_notification_prefs"
+    __table_args__ = (
+        UniqueConstraint("user_sub", "type", name="uq_user_notification_pref"),
+    )
+
+    user_sub: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String(50), nullable=False)
+    in_app: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    push: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    private_preview: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class EmailTemplateCategory(str, enum.Enum):

@@ -38,6 +38,37 @@ export interface EmailMessage {
   body_text: string | null;
   body_html: string | null;
   body_html_sanitized: string | null;
+  // Ф1.2 — headers the parser used to discard.
+  reply_to?: string | null;
+  body_text_derived?: boolean;
+  // Ф6.4 — what the agent understood about this letter and what it did.
+  triage?: {
+    category: string;
+    category_label: string;
+    confidence: number | null;
+    summary: string | null;
+    entities: Record<string, unknown>;
+    performed: { type: string; [k: string]: unknown }[];
+    proposed: { type: string; hint?: string; [k: string]: unknown }[];
+    model_name: string | null;
+    corrected_category: string | null;
+    status: string;
+  } | null;
+  derived_invoices?: {
+    invoice_id: string;
+    document_id: string;
+    invoice_number: string | null;
+    total_amount: number | null;
+    currency: string | null;
+    status: string;
+    supplier_name: string | null;
+    supplier_matched_by: string | null;
+  }[];
+  headers_meta?: {
+    auth?: { spf?: string; dkim?: string; dmarc?: string };
+    list_unsubscribe?: string;
+    list_id?: string;
+  } | null;
   sent_at: string | null;
   received_at: string | null;
   has_attachments: boolean;
@@ -48,6 +79,8 @@ export interface EmailMessage {
   is_starred: boolean;
   folder: string;
   snippet: string | null;
+  /** Ф1.4 — картинки этого отправителя разрешено показать сразу. */
+  images_trusted?: boolean;
 }
 
 export interface EmailThread {
@@ -85,7 +118,9 @@ export interface EmailDraft {
 }
 
 export type ComposeMode =
-  | { kind: "new"; to?: string[] }
-  | { kind: "reply"; message: EmailMessage; all?: boolean }
+  // attachmentIds: files already staged elsewhere (mobile "Поделиться" flow).
+  | { kind: "new"; to?: string[]; attachmentIds?: string[] }
+  // assist: сразу попросить агента подготовить ответ («Света, ответь»).
+  | { kind: "reply"; message: EmailMessage; all?: boolean; assist?: string }
   | { kind: "forward"; message: EmailMessage }
   | { kind: "draft"; draft: EmailDraft };

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { takePendingShare } from "@/lib/mobile-share-store";
 import { documents } from "@/lib/api-client";
+import { emailApi } from "@/app/email/_components/api";
 
 const DOC_TYPES = [
   { value: "", label: "Определить автоматически" },
@@ -24,6 +25,10 @@ export default function SharePage() {
   const [docType, setDocType] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Ф7.3 — sharing a file into the app always meant "загрузить как документ".
+  // Attaching it to a letter is just as common on a phone (a photo of a signed
+  // act going straight back to the supplier) and had no path at all.
+  const [target, setTarget] = useState<"document" | "email">("document");
 
   useEffect(() => {
     const shared = takePendingShare();
@@ -34,8 +39,32 @@ export default function SharePage() {
     setFiles(shared.files);
   }, [router]);
 
+  async function attachToEmail() {
+    setBusy(true);
+    setError(null);
+    try {
+      const ids: string[] = [];
+      for (const f of files) {
+        const staged = await emailApi.uploadAttachment(f);
+        ids.push(staged.id);
+      }
+      // The composer reads these on mount; sessionStorage because the payload
+      // is per-tab and must not outlive the flow.
+      sessionStorage.setItem("email:pending-attachments", JSON.stringify(ids));
+      router.replace("/email?compose=1");
+    } catch (e) {
+      console.error(e);
+      setError("Не удалось приложить к письму. Попробуйте ещё раз.");
+      setBusy(false);
+    }
+  }
+
   async function submit() {
     if (busy || !files.length) return;
+    if (target === "email") {
+      await attachToEmail();
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -77,6 +106,29 @@ export default function SharePage() {
         )}
       </ul>
 
+      <div className="flex gap-2">
+        {(
+          [
+            ["document", "Загрузить как документ"],
+            ["email", "Приложить к письму"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setTarget(value)}
+            className={`flex-1 rounded-lg border px-3 py-2 text-sm ${
+              target === value
+                ? "border-blue-500 bg-blue-600/20 text-blue-200"
+                : "border-slate-700 bg-slate-800 text-slate-300"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {target === "document" && (
       <label className="text-sm text-slate-300">
         Тип документа
         <select
@@ -91,6 +143,7 @@ export default function SharePage() {
           ))}
         </select>
       </label>
+      )}
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 

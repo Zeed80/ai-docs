@@ -29,8 +29,5 @@ class AIProvider(ABC):
     async def rerank(self, request: AIRequest, model: str) -> AIResponse:
         raise NotImplementedError(f"{self.kind} does not implement rerank")
 
-    async def speech(self, request: AIRequest, model: str) -> AIResponse:
-        raise NotImplementedError(f"{self.kind} does not implement speech")
-
     async def tool_calling(self, request: AIRequest, model: str) -> AIResponse:
         return await self.chat(request, model)

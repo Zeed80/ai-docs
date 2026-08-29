@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class EmailAttachmentOut(BaseModel):
@@ -19,6 +19,44 @@ class EmailAttachmentOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TriageResultOut(BaseModel):
+    """Ф6.4 — the "что сделала Света" panel, as data.
+
+    ``performed`` is what actually happened; ``proposed`` is what she suggests
+    and did not do. Keeping them apart is what stops the panel from claiming
+    work it never did.
+    """
+
+    category: str
+    category_label: str
+    confidence: float | None = None
+    summary: str | None = None
+    entities: dict = {}
+    performed: list = []
+    proposed: list = []
+    model_name: str | None = None
+    corrected_category: str | None = None
+    status: str = "done"
+
+
+class DerivedInvoiceOut(BaseModel):
+    """What the agent made out of this letter (Ф6.3).
+
+    The link existed only one way — Document.source_email_id pointed at the
+    message — so a person reading the thread had no idea that an invoice had
+    been created from it, and no way to jump to it.
+    """
+
+    invoice_id: uuid.UUID
+    document_id: uuid.UUID
+    invoice_number: str | None = None
+    total_amount: float | None = None
+    currency: str | None = None
+    status: str
+    supplier_name: str | None = None
+    supplier_matched_by: str | None = None
+
+
 class EmailMessageOut(BaseModel):
     id: uuid.UUID
     thread_id: uuid.UUID | None
@@ -29,6 +67,7 @@ class EmailMessageOut(BaseModel):
     cc_addresses: list[str] | None
     subject: str | None
     body_text: str | None
+    body_text_derived: bool = False
     body_html: str | None = None
     body_html_sanitized: str | None = None
     sent_at: datetime | None
@@ -43,9 +82,26 @@ class EmailMessageOut(BaseModel):
     folder: str = "inbox"
     snippet: str | None = None
     references: str | None = None
+    reply_to: str | None = None
+    headers_meta: dict | None = None
+    # Filled by the thread endpoint, not the ORM.
+    # Ф1.4 — можно ли показать удалённые картинки этого письма сразу: либо
+    # пользователь включил это для себя, либо доверяет этому отправителю.
+    images_trusted: bool = False
+    derived_invoices: list[DerivedInvoiceOut] = []
+    triage: "TriageResultOut | None" = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("attachments", mode="after")
+    @classmethod
+    def _hide_inline_parts(cls, value: list[EmailAttachmentOut]) -> list[EmailAttachmentOut]:
+        """Inline parts (cid: logos, embedded screenshots) are rendered inside
+        the body, not attached by the sender — listing them buries the real
+        attachments under signature images. They stay reachable through the
+        cid endpoint."""
+        return [a for a in value if not a.is_inline]
 
 
 class AttachmentProcessRequest(BaseModel):
@@ -189,6 +245,9 @@ class EmailDraftOut(BaseModel):
     status: str  # draft, risk_checked, approved, sent
     risk_flags: list[dict] = []
     attachment_ids: list[uuid.UUID] = []
+    # sha256 of the letter itself — pass it back as ``expected_digest`` when
+    # sending, so an approval cannot be spent on rewritten content.
+    content_digest: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -198,6 +257,9 @@ class EmailDraftOut(BaseModel):
 
 
 class ComposeSendRequest(BaseModel):
+    """Ф4: ``acknowledged_risks`` carries the codes the person chose to send
+    anyway, and ``delay_seconds`` is the undo window."""
+
     mailbox: str
     to_addresses: list[str] = Field(..., min_length=1)
     cc_addresses: list[str] = []
@@ -209,12 +271,20 @@ class ComposeSendRequest(BaseModel):
     forward_of_message_id: uuid.UUID | None = None
     attachment_ids: list[uuid.UUID] = []
     draft_id: uuid.UUID | None = None
+    acknowledged_risks: list[str] = []
+    delay_seconds: int | None = None
+    send_at: datetime | None = None
 
 
 class EmailSendResult(BaseModel):
     task_id: str | None = None
     draft_id: uuid.UUID
     status: str
+    # Present when the send was refused: the person must look and confirm.
+    blocked_by: list[dict] = []
+    warnings: list[dict] = []
+    # When the message can still be recalled (seconds from now).
+    undo_seconds: int = 0
 
 
 class ContactOut(BaseModel):

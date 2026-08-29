@@ -487,8 +487,6 @@ class AIRouter:
             return await provider.embedding(request, provider_model)
         if request.task == AITask.RERANKING:
             return await provider.rerank(request, provider_model)
-        if request.task == AITask.SPEECH:
-            return await provider.speech(request, provider_model)
         if request.task == AITask.TOOL_CALLING:
             return await provider.tool_calling(request, provider_model)
         # Vision only when images are actually supplied — a model having the

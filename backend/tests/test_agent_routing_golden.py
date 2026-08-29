@@ -29,7 +29,7 @@ from app.api.capability_router import capability_action_map
 from app.ai.capability_manifest import load_capability_manifest
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-ROUTER_MODEL = os.environ.get("ROUTER_TEST_MODEL", "gemma4:e2b")
+ROUTER_MODEL = os.environ.get("ROUTER_TEST_MODEL", "qwen3.5:9b")
 # Allowed accuracy floor — local fast models are not perfect; we assert the
 # router is decisively better than the old substring cascade, not flawless.
 PASS_THRESHOLD = float(os.environ.get("ROUTER_TEST_THRESHOLD", "0.80"))
@@ -100,6 +100,10 @@ def _route_once(content: str, has_open_table: bool, system: str, schema: dict) -
         ],
         "format": schema,
         "stream": False,
+        # Маршрутизация — быстрый путь: в проде оркестратор ходит без
+        # размышления. У qwen3.5 оно включено по умолчанию и съедает и время,
+        # и бюджет токенов, поэтому тест мерил бы не то, что измеряет.
+        "think": False,
         "options": {"temperature": 0},
     }
     req = urllib.request.Request(

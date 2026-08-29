@@ -74,9 +74,11 @@ async def test_email_search(client: AsyncClient, email_thread):
 async def test_list_threads(client: AsyncClient, email_thread):
     resp = await client.get("/api/email/threads")
     assert resp.status_code == 200
-    threads = resp.json()
+    body = resp.json()
+    threads = body["items"]
     assert len(threads) >= 1
     assert threads[0]["subject"] == "Счёт №123"
+    assert "next_cursor" in body
 
 
 @pytest.mark.asyncio

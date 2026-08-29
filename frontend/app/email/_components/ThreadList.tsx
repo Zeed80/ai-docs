@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
+import { useTranslations } from "next-intl";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { EmailThread } from "./types";
 
@@ -24,6 +25,9 @@ export function ThreadList({
   onToggleSelect,
   onStar,
   emptyState,
+  onLoadMore,
+  loadingMore = false,
+  hasMore = false,
 }: {
   threads: EmailThread[];
   loading: boolean;
@@ -33,7 +37,12 @@ export function ThreadList({
   onToggleSelect: (id: string) => void;
   onStar: (t: EmailThread) => void;
   emptyState: React.ReactNode;
+  /** Ф5.1 — infinite scroll; absent when there is nothing more to fetch. */
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
+  hasMore?: boolean;
 }) {
+  const t = useTranslations("email");
   const parentRef = useRef<HTMLDivElement>(null);
   const rows = useVirtualizer({
     count: threads.length,
@@ -41,6 +50,17 @@ export function ThreadList({
     estimateSize: () => 82,
     overscan: 8,
   });
+
+  // Ф5.1 — fetch the next page as the last rows come into view. The list was
+  // already virtualized, but nothing ever asked the server for more, so it was
+  // a fast window onto a single page.
+  const items = rows.getVirtualItems();
+  const lastIndex = items.length ? items[items.length - 1].index : 0;
+  useEffect(() => {
+    if (hasMore && !loadingMore && onLoadMore && lastIndex >= threads.length - 5) {
+      onLoadMore();
+    }
+  }, [lastIndex, threads.length, hasMore, loadingMore, onLoadMore]);
 
   if (loading)
     return <div className="py-8 text-center text-sm text-slate-400">…</div>;
@@ -50,7 +70,7 @@ export function ThreadList({
   return (
     <div ref={parentRef} className="h-full overflow-auto">
       <div style={{ height: rows.getTotalSize(), position: "relative" }}>
-        {rows.getVirtualItems().map((vi) => {
+        {items.map((vi) => {
           const th = threads[vi.index];
           const unread = !th.is_read;
           return (
@@ -93,7 +113,7 @@ export function ThreadList({
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className={`truncate text-xs ${unread ? "text-slate-200" : "text-slate-400"}`}>
-                    {th.subject || "(без темы)"}
+                    {th.subject || t("noSubject")}
                   </span>
                   {th.message_count > 1 && (
                     <span className="text-[10px] text-slate-500">{th.message_count}</span>
@@ -121,6 +141,12 @@ export function ThreadList({
           );
         })}
       </div>
+      {loadingMore && (
+        <p className="py-3 text-center text-xs text-slate-500">{t("loadingMore")}</p>
+      )}
+      {!hasMore && threads.length > 20 && (
+        <p className="py-3 text-center text-xs text-slate-600">{t("allLoaded")}</p>
+      )}
     </div>
   );
 }

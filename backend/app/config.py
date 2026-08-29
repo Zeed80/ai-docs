@@ -50,9 +50,12 @@ class Settings(BaseSettings):
 
     # Ollama
     ollama_url: str = "http://localhost:11434"
-    ollama_model_ocr: str = "gemma4:e4b"
-    ollama_model_reasoning: str = "gemma4:26b"
-    ollama_model_vlm: str = "gemma4:e4b"  # Vision LM for drawing analysis
+    # Дефолты — только реально используемые модели. gemma4 держалась здесь
+    # ещё долго после перехода на qwen3.8: значения читают старые модули
+    # напрямую, минуя каталог, поэтому мёртвый дефолт тут — не косметика.
+    ollama_model_ocr: str = "qwen3.5:9b"
+    ollama_model_reasoning: str = "qwen3.8:27b-131072"
+    ollama_model_vlm: str = "qwen3.5:9b"  # Vision LM for drawing analysis
 
     # AI reasoning backend
     ai_reasoning_backend: str = "ollama"  # ollama | anthropic | openrouter
@@ -203,6 +206,17 @@ class Settings(BaseSettings):
 
     # Celery beat schedules (intervals in seconds or minutes)
     imap_poll_interval_minutes: int = 5
+    # A silent server used to hang an ingest worker forever: imaplib/smtplib
+    # default to no timeout at all.
+    imap_timeout_seconds: int = 30
+    smtp_timeout_seconds: int = 30
+    # Messages larger than this are fetched as headers only and marked
+    # oversized; the body is pulled on demand. Without a cap one 60 MB letter
+    # goes straight into the worker's memory.
+    imap_max_message_mb: int = 50
+    # Per-poll ceiling, so the first sync of a large mailbox cannot monopolise
+    # the queue; the remainder is picked up on the next tick.
+    imap_max_messages_per_poll: int = 200
     approval_escalation_interval_seconds: int = 900  # 15 minutes
 
     model_config = {"env_prefix": "", "case_sensitive": False}

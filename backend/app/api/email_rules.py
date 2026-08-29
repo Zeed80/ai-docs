@@ -18,8 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.acting import get_effective_user
 from app.auth.models import UserInfo, UserRole
-from app.db.models import EmailMessage, EmailRule
+from app.db.models import EmailAttachment, EmailMessage, EmailRule, EmailRuleLog
 from app.db.session import get_db
+from app.domain.email_access import mailbox_filter, may_write_mailbox
 from app.domain.email_rules import evaluate_conditions, known_domains
 
 router = APIRouter()
@@ -130,9 +131,16 @@ async def create_rule(
     user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: email.rules_create — Create a filter rule."""
-    shared = payload.mailbox is None or _shared_mailbox_intent(payload)
-    owner_sub = None if (shared and _is_admin(user)) else user.sub
+    """Skill: email.rules_create — Create a filter rule.
+
+    Ф0.5. ``mailbox=None`` means "every mailbox in the company" and is an
+    admin-only privilege: the engine matches rules by mailbox, so before this
+    check any employee could create an all-mailbox rule that ran against
+    colleagues' private mail — labelling it, marking it read, drafting replies
+    from it, or forwarding it to the agent.
+    """
+    await _assert_may_target(db, user, payload.mailbox)
+    owner_sub = None if _is_admin(user) else user.sub
     rule = EmailRule(
         name=payload.name,
         mailbox=payload.mailbox,
@@ -149,8 +157,18 @@ async def create_rule(
     return rule
 
 
-def _shared_mailbox_intent(payload: EmailRuleCreate) -> bool:
-    return True  # policy: default to owner-scoped unless admin; kept explicit
+async def _assert_may_target(db: AsyncSession, user: UserInfo, mailbox: str | None) -> None:
+    """A rule may only target a mailbox its author may actually act in."""
+    if mailbox is None:
+        if not _is_admin(user):
+            raise HTTPException(
+                403,
+                "Правило без указания ящика применяется ко всем ящикам компании — "
+                "это может сделать только администратор. Укажите свой ящик.",
+            )
+        return
+    if not await may_write_mailbox(db, user, mailbox):
+        raise HTTPException(403, "Нет доступа к этому ящику")
 
 
 @router.patch("/{rule_id}", response_model=EmailRuleOut)
@@ -161,6 +179,8 @@ async def update_rule(
     db: AsyncSession = Depends(get_db),
 ):
     rule = await _owned(db, rule_id, user)
+    if "mailbox" in payload.model_fields_set:
+        await _assert_may_target(db, user, payload.mailbox)
     data = payload.model_dump(exclude_none=True)
     if "conditions" in data:
         rule.conditions = payload.conditions.model_dump()
@@ -193,25 +213,90 @@ async def test_rule(
     user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Dry-run: how many of the last N messages would this rule match?"""
+    """Dry-run: how many of the last N messages would this rule match?
+
+    Two things this got wrong before Ф0.5 and both made the preview lie:
+    it scanned every mailbox (returning subject lines out of colleagues'
+    private mail in ``sample_subjects``), and it passed an empty attachment
+    list, so every attachment-based condition — the ones this product exists
+    for — evaluated false here and true in production.
+    """
     rule = await _owned(db, rule_id, user)
     q = select(EmailMessage).where(EmailMessage.is_inbound == True)  # noqa: E712
     if rule.mailbox:
         q = q.where(EmailMessage.mailbox == rule.mailbox)
+    scope = await mailbox_filter(db, user, mailbox_col=EmailMessage.mailbox)
+    if scope is not None:
+        q = q.where(scope)
     msgs = (
         await db.execute(q.order_by(EmailMessage.received_at.desc()).limit(payload.last_n))
     ).scalars().all()
     ksd = await known_domains(db)
+    attachments: dict = {}
+    if msgs:
+        rows = (
+            await db.execute(
+                select(EmailAttachment).where(
+                    EmailAttachment.message_id.in_([m.id for m in msgs])
+                )
+            )
+        ).scalars().all()
+        for att in rows:
+            attachments.setdefault(att.message_id, []).append(att)
     matched = [
         m
         for m in msgs
-        if evaluate_conditions(m, [], rule.conditions, known_supplier_domains=ksd)
+        if evaluate_conditions(
+            m, attachments.get(m.id, []), rule.conditions, known_supplier_domains=ksd
+        )
     ]
     return RuleTestResult(
         matched=len(matched),
         total=len(msgs),
         sample_subjects=[m.subject or "" for m in matched[:5]],
     )
+
+
+class RuleLogEntry(BaseModel):
+    at: datetime
+    message_subject: str | None = None
+    message_from: str | None = None
+    actions_applied: list = []
+
+
+@router.get("/{rule_id}/log", response_model=list[RuleLogEntry])
+async def rule_log(
+    rule_id: uuid.UUID,
+    limit: int = 20,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """What this rule actually did, most recent first.
+
+    ``EmailRuleLog`` has been written on every application since the feature
+    shipped and surfaced nowhere, so "работает ли правило?" could only be
+    answered by reading the database — and a no-op action (``assign_role``
+    before Ф3) looked exactly like a working one.
+    """
+    rule = await _owned(db, rule_id, user)
+    rows = (
+        await db.execute(
+            select(EmailRuleLog, EmailMessage.subject, EmailMessage.from_address)
+            .outerjoin(EmailMessage, EmailRuleLog.message_id == EmailMessage.id)
+            .where(EmailRuleLog.rule_id == rule.id)
+            .order_by(EmailRuleLog.at.desc())
+            .limit(min(limit, 100))
+        )
+    ).all()
+    return [
+        RuleLogEntry(
+            at=log.at,
+            message_subject=subject,
+            message_from=from_address,
+            actions_applied=log.actions_applied or [],
+        )
+        for log, subject, from_address in rows
+    ]
 
 
 @router.post("/{rule_id}/run")

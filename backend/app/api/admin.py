@@ -435,20 +435,71 @@ async def set_user_mailbox_sweep(
     admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> UserMailboxOut:
-    """Turn AI triage of a personal mailbox on/off (admin side of the consent)."""
+    """Turn AI triage of a personal mailbox OFF, or ask its owner to turn it on.
+
+    Ф0.7. Provisioning a mailbox is an admin action; letting an AI read the
+    correspondence inside it is the owner's decision, and the contract in
+    app/domain/email_access.py says so explicitly. This endpoint used to set the
+    flag either way, so an admin could switch on AI reading of a colleague's
+    private mail without the colleague ever knowing.
+
+    Switching it OFF stays available to admins — revoking access needs no
+    consent. Switching it ON only sends the owner a request; the flag itself is
+    theirs to set (PATCH /api/mailbox/me/sweep).
+    """
     cfg = await _personal_mailbox(db, user_sub)
     if cfg is None:
         raise HTTPException(status_code=404, detail="У пользователя нет активного личного ящика")
 
-    cfg.sweep_enabled = payload.sweep_enabled
-    db.add(AuditLog(
-        user_id=admin.sub, action="admin.mailbox_sweep", entity_type="user",
-        details={"target_sub": user_sub, "address": cfg.name, "sweep_enabled": payload.sweep_enabled},
-    ))
-    await db.commit()
-    logger.info(
-        "admin_mailbox_sweep", admin=admin.sub, target=user_sub, enabled=payload.sweep_enabled
-    )
+    from app.db.models import NotificationType
+    from app.services.notifications import create_notification
+
+    if payload.sweep_enabled and not cfg.sweep_enabled:
+        db.add(AuditLog(
+            user_id=admin.sub, action="admin.mailbox_sweep_requested", entity_type="user",
+            details={"target_sub": user_sub, "address": cfg.name},
+        ))
+        await create_notification(
+            db,
+            user_sub=user_sub,
+            type=NotificationType.system,
+            title="Запрос: разрешить «Свете» читать вашу почту",
+            body=(
+                f"Администратор просит включить разбор писем ящика {cfg.name} "
+                "ассистентом. Решение за вами — включить можно в настройках почты."
+            ),
+            entity_type="mailbox",
+            entity_id=cfg.id,
+            action_url="/settings?tab=email",
+        )
+        await db.commit()
+        logger.info("admin_mailbox_sweep_requested", admin=admin.sub, target=user_sub)
+    else:
+        was_enabled = cfg.sweep_enabled
+        cfg.sweep_enabled = payload.sweep_enabled
+        db.add(AuditLog(
+            user_id=admin.sub, action="admin.mailbox_sweep", entity_type="user",
+            details={
+                "target_sub": user_sub, "address": cfg.name,
+                "sweep_enabled": payload.sweep_enabled,
+            },
+        ))
+        if was_enabled != payload.sweep_enabled:
+            await create_notification(
+                db,
+                user_sub=user_sub,
+                type=NotificationType.system,
+                title="Разбор вашей почты ассистентом выключен",
+                body=f"Администратор отключил разбор писем ящика {cfg.name}.",
+                entity_type="mailbox",
+                entity_id=cfg.id,
+                action_url="/settings?tab=email",
+            )
+        await db.commit()
+        logger.info(
+            "admin_mailbox_sweep", admin=admin.sub, target=user_sub,
+            enabled=payload.sweep_enabled,
+        )
     from app.services.integration_config import get_mail_server_config
 
     mail_cfg = await get_mail_server_config()

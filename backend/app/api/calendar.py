@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.acting import get_effective_user
+from app.auth.models import UserInfo
 from app.db.session import get_db
 from app.db.models import CalendarEvent, Invoice, Reminder, SupplierProfile, Document
 from app.domain.calendar import (
@@ -301,6 +303,7 @@ async def list_reminders(
 @router.post("/reminders/{reminder_id}/generate-followup")
 async def generate_followup_draft(
     reminder_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: calendar.generate_followup — Create a follow-up draft email for an invoice reminder."""
@@ -328,6 +331,7 @@ async def generate_followup_draft(
             "entity_type": reminder.entity_type,
             "entity_id": str(reminder.entity_id) if reminder.entity_id else None,
         },
+        owner_sub=user.sub,
     )
     await db.commit()
     await db.refresh(draft)

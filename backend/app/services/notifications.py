@@ -8,10 +8,65 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.chat_bus import chat_bus
-from app.db.models import Notification, NotificationType
+from app.db.models import Notification, NotificationType, UserNotificationPref
 from app.services import push
 
 logger = structlog.get_logger()
+
+# Ф0.8. Preferences were browser-only, so the server pushed everything to every
+# device regardless of what the user had switched off, and a personal mailbox's
+# sender+subject landed on the lock screen with no way to prevent it.
+_DEFAULT_PREF = {"in_app": True, "push": True, "private_preview": False}
+_PRIVATE_TITLE = "Новое уведомление"
+_PRIVATE_BODY = "Откройте приложение, чтобы посмотреть"
+
+
+def _pref_from_row(row) -> dict:
+    if row is None:
+        return {**_DEFAULT_PREF, "explicit": False}
+    return {
+        "in_app": row.in_app,
+        "push": row.push,
+        "private_preview": row.private_preview,
+        "explicit": True,
+    }
+
+
+def _redact(pref: dict, force_private: bool, title: str, body: str) -> tuple[str, str]:
+    """Push payload for this preference.
+
+    ``force_private`` is the caller's default for inherently sensitive content
+    (mail in a personal mailbox). An explicit preference row always wins, so a
+    user who deliberately turned previews on keeps them.
+    """
+    private = pref["private_preview"] or (force_private and not pref["explicit"])
+    return (_PRIVATE_TITLE, _PRIVATE_BODY) if private else (title, body)
+
+
+async def get_notification_pref(db: AsyncSession, user_sub: str, type_value: str) -> dict:
+    from sqlalchemy import select
+
+    row = (
+        await db.execute(
+            select(UserNotificationPref).where(
+                UserNotificationPref.user_sub == user_sub,
+                UserNotificationPref.type == type_value,
+            )
+        )
+    ).scalar_one_or_none()
+    return _pref_from_row(row)
+
+
+def get_notification_pref_sync(db: Session, user_sub: str, type_value: str) -> dict:
+    from sqlalchemy import select
+
+    row = db.execute(
+        select(UserNotificationPref).where(
+            UserNotificationPref.user_sub == user_sub,
+            UserNotificationPref.type == type_value,
+        )
+    ).scalar_one_or_none()
+    return _pref_from_row(row)
 
 
 async def create_notification(
@@ -24,8 +79,13 @@ async def create_notification(
     entity_id: uuid.UUID | None = None,
     action_url: str | None = None,
     source_task: str | None = None,
+    private_preview: bool = False,
 ) -> Notification:
     """Create a Notification record and push it via WebSocket if the user is connected.
+
+    ``private_preview`` — this content is sensitive by nature (mail in someone's
+    personal mailbox), so keep sender and subject off the phone's lock screen
+    unless the user explicitly said otherwise.
 
     ``source_task`` — the Celery task name (e.g. "proactive.check_due_dates")
     when this notification comes from a per-user proactive beat task; leave
@@ -67,14 +127,17 @@ async def create_notification(
 
     # System push to the user's mobile devices (best-effort; never blocks the caller).
     try:
-        await push.push_to_user(
-            db,
-            user_sub,
-            title,
-            body,
-            action_url=action_url,
-            notification_type=type.value,
-        )
+        pref = await get_notification_pref(db, user_sub, type.value)
+        if pref["push"]:
+            push_title, push_body = _redact(pref, private_preview, title, body)
+            await push.push_to_user(
+                db,
+                user_sub,
+                push_title,
+                push_body,
+                action_url=action_url,
+                notification_type=type.value,
+            )
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("push_dispatch_failed", user_sub=user_sub, error=str(e))
 
@@ -91,6 +154,7 @@ def create_notification_sync(
     entity_id: uuid.UUID | None = None,
     action_url: str | None = None,
     source_task: str | None = None,
+    private_preview: bool = False,
 ) -> Notification:
     """Synchronous notification creation for Celery tasks (sync Session).
 
@@ -112,14 +176,17 @@ def create_notification_sync(
     db.flush()
 
     try:
-        push.push_to_user_sync(
-            db,
-            user_sub,
-            title,
-            body,
-            action_url=action_url,
-            notification_type=type.value,
-        )
+        pref = get_notification_pref_sync(db, user_sub, type.value)
+        if pref["push"]:
+            push_title, push_body = _redact(pref, private_preview, title, body)
+            push.push_to_user_sync(
+                db,
+                user_sub,
+                push_title,
+                push_body,
+                action_url=action_url,
+                notification_type=type.value,
+            )
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("push_dispatch_failed", user_sub=user_sub, error=str(e))
 

@@ -166,3 +166,42 @@ async def test_email_mailboxes_endpoint_reports_sync_status(client: AsyncClient,
     assert "procurement" in by_name and "accounting" in by_name
     assert by_name["accounting"]["sync_error"].startswith("IMAP:")
     assert by_name["procurement"]["sync_error"] is None
+
+
+async def test_a_stricter_csp_set_by_an_endpoint_survives_the_middleware(monkeypatch):
+    """Найдено при приёмочном прогоне (Правило 0).
+
+    Выдача вложений ставит `default-src 'none'; sandbox`, а middleware
+    безопасности перезаписывал заголовок общеприложенческой политикой со
+    `script-src 'self'` — более строгая политика молча исчезала. Ослаблять то,
+    что эндпоинт ужесточил осознанно, нельзя; выставлять общую там, где своей
+    нет, — нужно.
+    """
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from app.config import settings
+    from app.middleware.security import SecurityHeadersMiddleware
+
+    monkeypatch.setattr(settings, "csp_enabled", True, raising=False)
+    mw = SecurityHeadersMiddleware(app=None)
+
+    def _request() -> Request:
+        return Request({
+            "type": "http", "method": "GET", "path": "/api/email/x",
+            "headers": [], "query_string": b"", "client": ("1.2.3.4", 0),
+        })
+
+    async def _strict(_req):
+        return Response(
+            b"", headers={"Content-Security-Policy": "default-src 'none'; sandbox"}
+        )
+
+    async def _plain(_req):
+        return Response(b"")
+
+    strict = await mw.dispatch(_request(), _strict)
+    assert strict.headers["content-security-policy"] == "default-src 'none'; sandbox"
+
+    plain = await mw.dispatch(_request(), _plain)
+    assert "script-src 'self'" in plain.headers["content-security-policy"]

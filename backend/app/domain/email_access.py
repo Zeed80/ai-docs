@@ -92,3 +92,104 @@ async def may_write_mailbox(db: AsyncSession, user: UserInfo | None, mailbox: st
     if mailbox_type != "personal":
         return True
     return bool(user) and owner_sub == user.sub
+
+
+async def may_access_draft(
+    db: AsyncSession, user: UserInfo | None, draft_data: dict | None
+) -> bool:
+    """True when `user` may read, edit or send this email draft.
+
+    Until Ф0.1 the whole ``/api/email/drafts*`` surface had no ownership check
+    at all, which made the personal-mailbox privacy above decorative: any
+    authenticated user could list, edit and send everyone else's drafts,
+    including drafts composed inside someone's private mailbox.
+
+    The rule mirrors the mailbox rules rather than inventing a second one:
+
+    * the person who created the draft always may (``created_by_sub``);
+    * otherwise it is exactly ``may_write_mailbox`` on the draft's mailbox —
+      a draft in a shared company inbox belongs to whoever may send from it,
+      a draft in a personal mailbox belongs to its owner alone;
+    * a draft with no mailbox at all falls back to the global .env sender, so
+      it belongs to nobody but its creator. Rows written before this check
+      existed carry no ``created_by_sub`` and are therefore not reachable —
+      deliberate: they are invisible in the UI anyway (there is no drafts
+      folder yet, see Ф5.1) and silently widening access is the bug we are
+      fixing, not the behaviour to preserve.
+    """
+    data = draft_data or {}
+    owner_sub = data.get("created_by_sub")
+    if owner_sub and user and owner_sub == user.sub:
+        return True
+    mailbox = data.get("mailbox")
+    if not mailbox:
+        return False
+    return await may_write_mailbox(db, user, mailbox)
+
+
+async def draft_access_filter(db: AsyncSession, user: UserInfo | None):
+    """Predicate ``(draft_data) -> bool`` with the mailbox rules resolved once.
+
+    Same decision as :func:`may_access_draft`, for listing many drafts without
+    one round-trip per row.
+    """
+    rows = (
+        await db.execute(
+            select(MailboxConfig.name, MailboxConfig.mailbox_type, MailboxConfig.owner_sub)
+        )
+    ).all()
+    sub = user.sub if user else None
+    writable = {
+        name
+        for name, mailbox_type, owner_sub in rows
+        if mailbox_type != "personal" or (sub is not None and owner_sub == sub)
+    }
+
+    def _may(draft_data: dict | None) -> bool:
+        data = draft_data or {}
+        created_by = data.get("created_by_sub")
+        if created_by and sub is not None and created_by == sub:
+            return True
+        mailbox = data.get("mailbox")
+        return bool(mailbox) and mailbox in writable
+
+    return _may
+
+
+async def usable_attachment_ids(
+    db: AsyncSession,
+    user: UserInfo | None,
+    attachment_ids: list,
+) -> list:
+    """Subset of ``attachment_ids`` this caller is allowed to send.
+
+    An outbound draft may carry only files the caller actually has: either one
+    they staged themselves through ``POST /api/email/attachments/upload``
+    (``uploaded_by_sub``), or one already attached to a message in a mailbox
+    they may read. Without this an ``attachment_id`` was a bearer token for any
+    file in the system, including attachments of a colleague's private mail.
+    """
+    from app.db.models import EmailAttachment, EmailMessage
+
+    if not attachment_ids:
+        return []
+    rows = (
+        await db.execute(
+            select(
+                EmailAttachment.id,
+                EmailAttachment.uploaded_by_sub,
+                EmailMessage.mailbox,
+            )
+            .outerjoin(EmailMessage, EmailAttachment.message_id == EmailMessage.id)
+            .where(EmailAttachment.id.in_(list(attachment_ids)))
+        )
+    ).all()
+    hidden = set(await hidden_mailbox_names(db, user))
+    sub = user.sub if user else None
+    allowed = []
+    for att_id, uploaded_by, mailbox in rows:
+        if uploaded_by is not None and sub is not None and uploaded_by == sub:
+            allowed.append(att_id)
+        elif mailbox is not None and mailbox not in hidden:
+            allowed.append(att_id)
+    return allowed

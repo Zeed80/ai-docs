@@ -6,6 +6,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.db.models import InvoiceStatus
+from app.domain.documents import EmailSourceOut
 
 
 class InvoiceLineOut(BaseModel):
@@ -77,6 +78,13 @@ class InvoiceOut(BaseModel):
     status: InvoiceStatus
     overall_confidence: float | None
     lines: list[InvoiceLineOut] = []
+    # Ф6.3 — "пришёл письмом от X". Filled by the endpoint, not the ORM: there
+    # is no FK from Invoice to EmailMessage, only Invoice → Document →
+    # source_email_id, and nothing used to walk it.
+    email_source: "EmailSourceOut | None" = None
+    # Why this supplier was chosen (app.tasks.extraction.auto_supplier_task):
+    # "inn", "email_sender_exact", "email_sender_domain", "llm_name", "created"…
+    supplier_matched_by: str | None = None
     created_at: datetime
     updated_at: datetime
 

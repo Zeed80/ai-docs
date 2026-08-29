@@ -124,7 +124,51 @@ async def get_invoice(
     invoice = result.scalar_one_or_none()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    return invoice
+    out = InvoiceOut.model_validate(invoice)
+    out.email_source = await _email_source_for_document(db, invoice.document_id)
+    out.supplier_matched_by = (invoice.metadata_ or {}).get("supplier_matched_by")
+    return out
+
+
+async def _email_source_for_document(db: AsyncSession, document_id) -> "EmailSourceOut | None":
+    """Ф6.3 — the letter an invoice came out of.
+
+    There is no FK from Invoice to EmailMessage; the only path is
+    Invoice → Document.source_email_id, which no endpoint walked, so the
+    invoice screen could not say "пришёл письмом от X" and the agent had no
+    way to answer it either.
+    """
+    from app.db.models import Document, EmailMessage
+    from app.domain.documents import EmailSourceOut
+
+    if document_id is None:
+        return None
+    source_email_id = (
+        await db.execute(
+            select(Document.source_email_id).where(Document.id == document_id)
+        )
+    ).scalar_one_or_none()
+    if source_email_id is None:
+        return None
+    msg = await db.get(EmailMessage, source_email_id)
+    if msg is None:
+        return None
+    auth = ((msg.headers_meta or {}).get("auth") or {})
+    verdicts = [auth.get("spf"), auth.get("dkim")]
+    spf_dkim_ok: bool | None
+    if not any(verdicts):
+        spf_dkim_ok = None            # headers absent → unknown, never "pass"
+    else:
+        spf_dkim_ok = all(v in (None, "pass") for v in verdicts)
+    return EmailSourceOut(
+        message_id=msg.id,
+        thread_id=msg.thread_id,
+        mailbox=msg.mailbox,
+        from_address=msg.from_address,
+        subject=msg.subject,
+        received_at=msg.received_at or msg.sent_at,
+        spf_dkim_ok=spf_dkim_ok,
+    )
 
 
 # ── invoice.extract ─────────────────────────────────────────────────────────

@@ -69,7 +69,6 @@ class AITask(str, Enum):
     CLASSIFICATION = "classification"
     LONG_CONTEXT_SUMMARIZATION = "long_context_summarization"
     TOOL_CALLING = "tool_calling"
-    SPEECH = "speech"
     ORCHESTRATOR_PLANNING = "orchestrator_planning"
     CODE_GENERATION = "code_generation"
     # CAD digitization — understanding->drafting ("two-model") path.

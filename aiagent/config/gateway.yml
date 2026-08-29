@@ -13,7 +13,7 @@ models:
       api_key: ${ANTHROPIC_API_KEY:-}
   ocr:
     provider: ollama
-    model: ${OLLAMA_MODEL_OCR:-gemma4:e4b}
+    model: ${OLLAMA_MODEL_OCR:-qwen3.5:9b}
     base_url: ${OLLAMA_URL:-http://localhost:11434}
 backend:
   base_url: ${FASTAPI_URL:-http://localhost:8000}
@@ -300,9 +300,13 @@ skills:
 scenarios:
 - name: email_triage
   path: ./scenarios/email-triage.yml
+  # Ф6.5: было `schedule: */5 * * * *`, но никогда не исполнялось — планировщика
+  # сценариев не существовало. Теперь планировщик есть (scenario.cron_dispatch),
+  # и именно поэтому расписание отсюда снято: настоящий конвейер — beat-поллинг
+  # ящиков + email.triage_message; сценарий по расписанию дублировал бы опрос
+  # IMAP каждые 5 минут. Оставлен как ручной прогон для отладки.
   trigger:
-    type: schedule
-    cron: '*/5 * * * *'
+    type: manual
 - name: assisted_review
   path: ./scenarios/assisted-review.yml
   trigger:
@@ -350,6 +354,11 @@ prompts:
     procurement_specialist:
       prompt: ./prompts/role-procurement.md
       capabilities: [procurement, suppliers, invoices, email, documents, analytics, tool_catalog]
+    mail_assistant:
+      # Ф6.9 — личную и общую переписку разбирал персонаж снабженца: на
+      # «ответь маме» он предлагал запросить коммерческое предложение.
+      prompt: ./prompts/role-mail-assistant.md
+      capabilities: [email, documents, analytics, tool_catalog]
     accountant:
       prompt: ./prompts/role-accountant.md
       capabilities: [invoices, payments, documents, suppliers, normalization, analytics, email]

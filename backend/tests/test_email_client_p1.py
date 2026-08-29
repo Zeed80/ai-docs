@@ -108,9 +108,10 @@ async def test_bulk_thread_actions(client: AsyncClient, db_session):
     assert th.folder == "archive"
 
     r = await client.get("/api/email/threads")
-    assert all(t["id"] != str(th.id) for t in r.json())  # archive hidden from default view
+    # Ф5.1 — the endpoint now paginates: {items, total, next_cursor}.
+    assert all(t["id"] != str(th.id) for t in r.json()["items"])  # archive hidden by default
     r = await client.get("/api/email/threads?folder=archive")
-    assert any(t["id"] == str(th.id) for t in r.json())
+    assert any(t["id"] == str(th.id) for t in r.json()["items"])
 
 
 # ── Labels ────────────────────────────────────────────────────────────────
@@ -134,7 +135,7 @@ async def test_label_crud_and_apply(client: AsyncClient, db_session):
     assert next(l for l in r.json() if l["id"] == label_id)["thread_count"] == 1
 
     r = await client.get(f"/api/email/threads?label_id={label_id}")
-    assert any(t["id"] == str(th.id) for t in r.json())
+    assert any(t["id"] == str(th.id) for t in r.json()["items"])
 
     r = await client.get("/api/email/threads/" + str(th.id))
     assert any(l["id"] == label_id for l in r.json()["labels"])

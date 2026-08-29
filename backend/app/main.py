@@ -57,6 +57,7 @@ from app.api import (
     email_contacts,
     email_rules,
     email_templates,
+    inbox,
     engineering,
     engineering_graphs,
     export,
@@ -218,6 +219,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("task_routing_migration_failed", error=str(exc))
 
+    # Пересчитать легаси-зеркало ai_config из текущих назначений: оно
+    # обновлялось только при сохранении в GUI и поэтому дрейфовало годами.
+    try:
+        from app.ai.assignment_groups import reconcile_ai_config
+        reconcile_ai_config()
+    except Exception as exc:
+        logger.warning("ai_config_reconcile_failed", error=str(exc))
+
     # Seed provider_instances from the YAML registry (one node per kind) on first
     # run, then refresh the Redis cache used by the AI router. Idempotent.
     try:
@@ -357,6 +366,7 @@ def create_app() -> FastAPI:
     app.include_router(email_rules.router, prefix="/api/email/rules", tags=["email"], dependencies=_auth)
     app.include_router(email_contacts.router, prefix="/api/email/contacts", tags=["email"], dependencies=_auth)
     app.include_router(email.router, prefix="/api/email", tags=["email"], dependencies=_auth)
+    app.include_router(inbox.router, prefix="/api/inbox", tags=["inbox"], dependencies=_auth)
     app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"], dependencies=_auth)
     app.include_router(audit.router, prefix="/api/audit", tags=["audit"], dependencies=_auth)
     app.include_router(auto_approval.router, prefix="/api/auto-approval-rules", tags=["auto-approval"], dependencies=_auth)

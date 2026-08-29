@@ -1207,7 +1207,8 @@
       "archive": "Archive",
       "trash": "Trash",
       "spam": "Spam",
-      "starred": "Starred"
+      "starred": "Starred",
+      "outbox": "Outbox"
     },
     "labels": "Labels",
     "newLabel": "New label",
@@ -1262,6 +1263,28 @@
       "download": "Download"
     },
     "unread": "{n} new",
-    "keysHint": "c compose · r reply · e archive · / search · ? all keys"
+    "keysHint": "c compose · r reply · e archive · / search · ? all keys",
+    "noSubject": "(no subject)",
+    "toLabel": "To",
+    "emptyBody": "Empty message",
+    "needRecipient": "Add a recipient",
+    "foldersTitle": "Folders",
+    "keysTitle": "Shortcuts",
+    "loadingMore": "Loading more…",
+    "allLoaded": "That's everything",
+    "imagesBlocked": "Images blocked",
+    "showImages": "Show",
+    "downloadEml": "download .eml",
+    "unsubscribe": "unsubscribe",
+    "authOk": "sender signature verified",
+    "authBad": "sender not verified",
+    "textRecovered": "text recovered",
+    "sendingUndo": "Sending…",
+    "undo": "Undo",
+    "sendBlocked": "Send stopped — please check:",
+    "sendAnyway": "Send anyway",
+    "fixIt": "Fix it",
+    "unsavedConfirm": "Draft not saved. Close without saving?",
+    "sendCancelled": "Send cancelled — the message is back in drafts"
   }
 }

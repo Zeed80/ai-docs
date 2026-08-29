@@ -7,6 +7,8 @@ import { csrfHeaders, mutFetch } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/auth-context";
 import { hasRole } from "@/lib/rbac";
 import { MailboxSection } from "@/components/email/mailbox-settings";
+import { MailHealthSection } from "@/components/email/mail-health";
+import { MailReadingPrefsCard } from "@/components/email/reading-prefs";
 import { EmailTemplatesSection } from "@/components/email/email-templates";
 import { EmailRulesSection } from "@/components/email/rule-builder";
 import { SignaturesSection, EmailPolicySection } from "@/components/email/address-book";
@@ -3865,20 +3867,79 @@ export default function SettingsPage() {
       )}
 
       {/* ── TAB: Почта ──────────────────────────────────────────────────────── */}
-      {activeTab === "email" && (
-        <div className="space-y-6">
+      {activeTab === "email" && <EmailSettingsTab isAdmin={isAdmin} />}
+    </div>
+  );
+}
+
+/**
+ * Вкладка «Почта»: шесть секций подряд на странице в 3900 строк просматривать
+ * невозможно. Разделы разнесены по подвкладкам; выбранная запоминается в
+ * URL-хэше, чтобы ссылка на настройку правил вела именно туда.
+ */
+const EMAIL_SUBTABS = [
+  { id: "mailboxes", label: "Ящики", adminOnly: false },
+  { id: "health", label: "Здоровье", adminOnly: true },
+  { id: "rules", label: "Правила", adminOnly: false },
+  { id: "signatures", label: "Подписи и шаблоны", adminOnly: false },
+  { id: "policy", label: "Политика", adminOnly: true },
+] as const;
+
+type EmailSubTab = (typeof EMAIL_SUBTABS)[number]["id"];
+
+function EmailSettingsTab({ isAdmin }: { isAdmin: boolean }) {
+  const [sub, setSub] = useState<EmailSubTab>("mailboxes");
+
+  useEffect(() => {
+    const h = window.location.hash.replace("#email-", "");
+    if (EMAIL_SUBTABS.some((t) => t.id === h)) setSub(h as EmailSubTab);
+  }, []);
+
+  const select = (id: EmailSubTab) => {
+    setSub(id);
+    window.history.replaceState(null, "", `#email-${id}`);
+  };
+
+  const visible = EMAIL_SUBTABS.filter((t) => !t.adminOnly || isAdmin);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap gap-1 border-b border-slate-700">
+        {visible.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => select(t.id)}
+            className={`px-3 py-2 text-sm border-b-2 -mb-px ${
+              sub === t.id
+                ? "border-blue-500 text-white"
+                : "border-transparent text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {sub === "mailboxes" && (
+        <>
           <PersonalMailboxCard />
+          <MailReadingPrefsCard />
           {/* Общие ящики отдела — инфраструктура организации; API отдаёт их
               только админам (app/api/mailbox.py), поэтому и в UI показываем
               секцию тем, кто действительно может её применить, а не пустой
               блок с 403. Свой личный ящик выше виден каждому. */}
           {isAdmin && <MailboxSection />}
-          <SignaturesSection />
-          <EmailRulesSection />
-          {isAdmin && <EmailPolicySection />}
-          <EmailTemplatesSection />
-        </div>
+        </>
       )}
+      {sub === "health" && isAdmin && <MailHealthSection />}
+      {sub === "rules" && <EmailRulesSection />}
+      {sub === "signatures" && (
+        <>
+          <SignaturesSection />
+          <EmailTemplatesSection />
+        </>
+      )}
+      {sub === "policy" && isAdmin && <EmailPolicySection />}
     </div>
   );
 }

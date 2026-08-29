@@ -190,6 +190,12 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "templates.get":     ("GET",   "/api/email-templates/{template_id}",           ["template_id"]),
         "templates.render":  ("POST",  "/api/email-templates/{template_id}/render",    ["template_id"]),
         "templates.delete":  ("DELETE", "/api/email-templates/{template_id}",          ["template_id"]),
+        # Ф6.9 — these three were in gateway.yml's allowlist and in no dispatch
+        # table, so an agent explicitly granted the right got "unknown action".
+        # The endpoints existed the whole time.
+        "templates.create":  ("POST",  "/api/email-templates/",                       []),
+        "templates.update":  ("PATCH", "/api/email-templates/{template_id}",          ["template_id"]),
+        "templates.from_message": ("POST", "/api/email-templates/from-message",       []),
     },
     "procurement": {
         "list_requests":   ("GET",   "/api/purchase-requests",                        []),
@@ -459,6 +465,41 @@ def capability_action_map() -> dict[str, list[str]]:
 
 # Capabilities handled by dedicated routes outside the generic _DISPATCH table.
 _SPECIAL_CAPABILITIES = {"vault", "mcp"}
+
+
+def validate_gateway_grants() -> list[str]:
+    """Ф6.9 — the direction nobody checked.
+
+    ``gateway.yml`` grants "capability.action" names to roles. Three e-mail
+    template actions were granted while existing in no dispatch table at all,
+    so an agent explicitly given the right got "unknown action" — indis-
+    tinguishable, from the model's side, from its own mistake.
+
+    Kept separate from validate_capability_catalog(): that one asserts
+    manifest↔dispatch and is expected to be clean, while this surfaces a
+    pre-existing backlog in other capabilities that is not this subsystem's to
+    fix. The e-mail slice of it is asserted empty by the tests.
+    """
+    problems: list[str] = []
+    try:
+        from app.ai.gateway_config import gateway_config
+
+        granted: set[str] = set(getattr(gateway_config, "exposed_skills", None) or ())
+    except Exception:  # noqa: BLE001 — gateway config is optional in some tests
+        return problems
+
+    for entry in sorted(granted):
+        if "." not in entry:
+            continue
+        cap, _, action = entry.partition(".")
+        if cap not in _DISPATCH or not action:
+            continue
+        if action not in _DISPATCH[cap]:
+            problems.append(
+                f"gateway grants '{entry}' but '{action}' is not an action of "
+                f"capability '{cap}' — the agent would get 'unknown action'"
+            )
+    return problems
 
 
 def validate_capability_catalog() -> list[str]:

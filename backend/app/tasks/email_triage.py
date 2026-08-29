@@ -82,7 +82,7 @@ def dispatch_mailbox_polls(self) -> dict:
         return {"status": "error", "error": str(exc), "dispatched": []}
 
     for name in names:
-        poll_imap_mailbox.apply_async(args=[name], queue="ingest")
+        poll_imap_mailbox.apply_async(args=[name], queue="mail")
 
     logger.info("dispatch_mailbox_polls", count=len(names), mailboxes=names)
     return {"status": "ok", "dispatched": names}
@@ -227,7 +227,8 @@ def apply_rule_to_backlog(self, rule_id: str, limit: int = 500) -> dict:
         msgs = db.execute(q.order_by(EmailMessage.received_at.desc()).limit(limit)).scalars().all()
         for m in msgs:
             try:
-                if apply_rules(db, m, m.mailbox):
+                # Only the rule the user asked to run — not the whole rule set.
+                if apply_rules(db, m, m.mailbox, only_rule_id=rule.id):
                     applied += 1
                 db.commit()
             except Exception:  # noqa: BLE001
@@ -262,15 +263,355 @@ def prune_attachments(self) -> dict:
                 EmailAttachment.document_id.is_(None),
             ).limit(2000)
         ).scalars().all()
+        failed = 0
         for att in rows:
             try:
                 from app.storage import delete_file
 
                 delete_file(att.storage_path)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # Ф8 — the old code swallowed this AND cleared storage_path, so
+                # the object stayed in MinIO forever with nothing left pointing
+                # at it: an orphan nobody could ever find again. Keep the path,
+                # let the next run try again.
+                logger.warning(
+                    "email_attachment_delete_failed",
+                    attachment_id=str(att.id), path=att.storage_path, error=str(exc),
+                )
+                failed += 1
+                continue
             att.storage_path = None
             removed += 1
         db.commit()
-    logger.info("email_attachments_pruned", removed=removed, retention_days=days)
-    return {"status": "ok", "removed": removed}
+    logger.info(
+        "email_attachments_pruned", removed=removed, failed=failed, retention_days=days,
+    )
+    return {"status": "ok", "removed": removed, "failed": failed}
+
+
+def prune_bodies_for(db) -> dict[str, int]:
+    """The body-retention pass itself, so it is testable against a session."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import or_, select
+
+    from app.db.models import EmailMessage, MailboxConfig
+
+    pruned_by_mailbox: dict[str, int] = {}
+    configs = db.execute(
+        select(MailboxConfig.name, MailboxConfig.body_retention_days).where(
+            MailboxConfig.body_retention_days > 0
+        )
+    ).all()
+    for mailbox, days in configs:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=int(days))
+        rows = db.execute(
+            select(EmailMessage).where(
+                EmailMessage.mailbox == mailbox,
+                EmailMessage.received_at < cutoff,
+                or_(
+                    EmailMessage.body_text.isnot(None),
+                    EmailMessage.body_html.isnot(None),
+                ),
+            ).limit(5000)
+        ).scalars().all()
+        for msg in rows:
+            msg.body_text = None
+            msg.body_html = None
+            msg.body_html_sanitized = None
+            # The snippet stays: a thread list of blank rows is unusable, and
+            # 300 characters is not what a retention policy is about.
+            msg.body_pruned_at = datetime.now(timezone.utc)
+        if rows:
+            pruned_by_mailbox[mailbox] = len(rows)
+    return pruned_by_mailbox
+
+
+@celery_app.task(name="app.tasks.email_triage.prune_message_bodies", bind=True)
+def prune_message_bodies(self) -> dict:
+    """Ф8 — drop the CONTENT of letters older than a mailbox's retention window.
+
+    What survives: sender, subject, date, thread structure, links to documents
+    and invoices. What goes: body_text, body_html and the sanitised copy — the
+    part that is actually private and actually large.
+
+    A mailbox with ``body_retention_days = 0`` (the default) is untouched: mail
+    is not deleted because a cron job exists.
+    """
+    from app.db.sync_session import sync_session
+
+    with sync_session() as db:
+        pruned_by_mailbox = prune_bodies_for(db)
+        db.commit()
+
+    total = sum(pruned_by_mailbox.values())
+    logger.info("email_bodies_pruned", total=total, by_mailbox=pruned_by_mailbox)
+    return {"status": "ok", "pruned": total, "by_mailbox": pruned_by_mailbox}
+
+
+@celery_app.task(name="app.tasks.email_triage.backfill_body_text", bind=True)
+def backfill_body_text(self, limit: int = 2000) -> dict:
+    """Ф1.1 — render body_text for already-stored HTML-only messages.
+
+    Everything downstream reads ``body_text``: the Russian FTS index, filter
+    rules matching on ``body``, snippets in the thread list, and what the agent
+    is handed when asked to read a letter. Messages ingested before the parser
+    learned to render HTML have that column empty and are effectively invisible
+    to all of it, so they need a one-off pass. Idempotent and batched — safe to
+    re-run until it reports ``updated: 0``.
+    """
+    from sqlalchemy import or_, select
+
+    from app.db.models import EmailMessage
+    from app.db.sync_session import sync_session
+    from app.domain.email_html import html_to_text
+
+    updated = 0
+    with sync_session() as db:
+        rows = db.execute(
+            select(EmailMessage)
+            .where(
+                or_(EmailMessage.body_text.is_(None), EmailMessage.body_text == ""),
+                EmailMessage.body_html.isnot(None),
+                EmailMessage.body_html != "",
+            )
+            .limit(limit)
+        ).scalars().all()
+        for msg in rows:
+            text = html_to_text(msg.body_html)
+            if not text:
+                continue
+            msg.body_text = text
+            msg.body_text_derived = True
+            msg.snippet = " ".join(text.split())[:300]
+            updated += 1
+        db.commit()
+
+    logger.info("email_body_text_backfilled", updated=updated, scanned=len(rows))
+    return {"status": "ok", "updated": updated, "scanned": len(rows)}
+
+
+@celery_app.task(name="email.triage_message", bind=True, max_retries=2, queue="mail")
+def triage_message(self, message_id: str) -> dict:
+    """Ф6.4 — work out what an incoming letter is, and act within policy.
+
+    Deliberately separate from attachment recognition (Ф6.1), which already
+    runs on its own: this is the layer above it. A counterparty asking for
+    documents, a supplier's quote and a newsletter are indistinguishable to a
+    pipeline that only knows how to OCR a PDF.
+
+    The result is persisted so the thread view can explain itself — autonomy
+    that cannot say what it did or why does not get used.
+    """
+    from app.tasks.async_runner import run_async
+
+    async def _go() -> dict:
+        from sqlalchemy import select
+
+        from app.db.models import (
+            EmailAttachment, EmailMessage, EmailTriageResult, MailboxConfig,
+        )
+        from app.db.session import _get_session_factory
+        from app.domain.email_triage import classify_letter, label_for, plan_actions
+
+        async with _get_session_factory()() as db:
+            msg = (
+                await db.execute(select(EmailMessage).where(EmailMessage.id == message_id))
+            ).scalar_one_or_none()
+            if msg is None:
+                return {"status": "error", "reason": "message_gone"}
+
+            mode = (
+                await db.execute(
+                    select(MailboxConfig.agent_triage_mode).where(
+                        MailboxConfig.name == msg.mailbox
+                    )
+                )
+            ).scalar_one_or_none() or "classify"
+            if mode == "off":
+                return {"status": "skipped", "reason": "triage_off"}
+
+            existing = (
+                await db.execute(
+                    select(EmailTriageResult).where(
+                        EmailTriageResult.message_id == msg.id
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                return {"status": "skipped", "reason": "already_triaged"}
+
+            attachments = (
+                await db.execute(
+                    select(EmailAttachment.filename).where(
+                        EmailAttachment.message_id == msg.id,
+                        EmailAttachment.is_inline == False,  # noqa: E712
+                    )
+                )
+            ).scalars().all()
+
+            try:
+                outcome = await classify_letter(
+                    sender=msg.from_address,
+                    subject=msg.subject or "",
+                    body=msg.body_text or "",
+                    attachments=list(attachments),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("email_triage_failed", message_id=message_id, error=str(exc))
+                db.add(EmailTriageResult(
+                    message_id=msg.id, mailbox=msg.mailbox, category="other",
+                    status="error", error=str(exc)[:500],
+                ))
+                await db.commit()
+                # Retry: a model hiccup should not permanently leave a letter
+                # unclassified, but the failure is recorded either way.
+                raise self.retry(exc=exc, countdown=120)
+
+            perform, propose = plan_actions(
+                outcome, has_attachments=bool(attachments), mode=mode,
+            )
+            done = await _apply_triage_actions(db, msg, outcome, perform)
+
+            db.add(EmailTriageResult(
+                message_id=msg.id,
+                mailbox=msg.mailbox,
+                category=outcome.category,
+                confidence=outcome.confidence,
+                summary=outcome.summary,
+                entities=outcome.entities,
+                proposed=propose,
+                performed=done,
+                model_name=outcome.model_name,
+                status="done",
+            ))
+            await db.commit()
+
+            from app.core.metrics import email_triage_total
+
+            email_triage_total.labels(category=outcome.category).inc()
+            logger.info(
+                "email_triaged", message_id=message_id, category=outcome.category,
+                confidence=outcome.confidence, performed=len(done), proposed=len(propose),
+            )
+            return {
+                "status": "ok",
+                "category": outcome.category,
+                "label": label_for(outcome.category),
+                "confidence": outcome.confidence,
+                "performed": done,
+                "proposed": propose,
+            }
+
+    return run_async(_go())
+
+
+async def _apply_triage_actions(db, msg, outcome, perform: list[dict]) -> list[dict]:
+    """Carry out the side-effect-free-ish half of the plan.
+
+    Returns only what actually happened: a panel that lists intentions as
+    achievements is worse than no panel.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import EmailLabel, EmailThread, EmailThreadLabel
+    from app.domain.email_triage import label_for
+
+    done: list[dict] = []
+    for action in perform:
+        kind = action.get("type")
+        try:
+            if kind == "label":
+                name = label_for(action["category"])
+                label = (
+                    await db.execute(
+                        select(EmailLabel).where(
+                            EmailLabel.name == name, EmailLabel.owner_sub.is_(None)
+                        )
+                    )
+                ).scalar_one_or_none()
+                if label is None:
+                    label = EmailLabel(name=name, is_system=True, owner_sub=None)
+                    db.add(label)
+                    await db.flush()
+                if msg.thread_id:
+                    exists = await db.get(EmailThreadLabel, (msg.thread_id, label.id))
+                    if exists is None:
+                        db.add(EmailThreadLabel(
+                            thread_id=msg.thread_id, label_id=label.id, added_by="sveta",
+                        ))
+                done.append({**action, "label": name})
+
+            elif kind == "notify_responsible":
+                recipients = await _triage_recipients(db, msg)
+                if not recipients:
+                    # Nobody to tell — fall back to the plain new-mail ping so
+                    # the letter is not swallowed by our own cleverness.
+                    from app.tasks.ingest import _notify_new_email_async
+
+                    await _notify_new_email_async(db, msg.mailbox, msg)
+                    continue
+                from app.db.models import NotificationType
+                from app.services.notifications import create_notification
+
+                for sub in recipients:
+                    await create_notification(
+                        db,
+                        user_sub=sub,
+                        type=NotificationType.email_received,
+                        title=f"Света разобрала письмо · {label_for(outcome.category)}",
+                        body=(outcome.summary or msg.subject or "")[:480],
+                        entity_type="email",
+                        entity_id=msg.thread_id or msg.id,
+                        action_url=f"/email/{msg.thread_id}" if msg.thread_id else "/email",
+                    )
+                done.append({**action, "notified": len(recipients)})
+
+            elif kind == "link_invoice":
+                thread = await db.get(EmailThread, msg.thread_id) if msg.thread_id else None
+                if thread is not None and outcome.entities.get("supplier_name"):
+                    from app.db.models import Party
+
+                    party = (
+                        await db.execute(
+                            select(Party).where(
+                                Party.name.ilike(f"%{outcome.entities['supplier_name']}%")
+                            ).limit(1)
+                        )
+                    ).scalar_one_or_none()
+                    if party is not None:
+                        thread.party_id = party.id
+                        done.append({**action, "party_id": str(party.id)})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("email_triage_action_failed", action=kind, error=str(exc))
+    return done
+
+
+async def _triage_recipients(db, msg) -> list[str]:
+    """Who should hear about this letter — same rule as new-mail notification."""
+    from sqlalchemy import select
+
+    from app.db.models import EmailThread, MailboxConfig, User
+
+    thread = await db.get(EmailThread, msg.thread_id) if msg.thread_id else None
+    if thread is not None and getattr(thread, "assigned_to_sub", None):
+        return [thread.assigned_to_sub]
+
+    row = (
+        await db.execute(
+            select(MailboxConfig.assigned_role, MailboxConfig.mailbox_type,
+                   MailboxConfig.owner_sub).where(MailboxConfig.name == msg.mailbox)
+        )
+    ).first()
+    if row is None:
+        return []
+    role, mailbox_type, owner_sub = row
+    if mailbox_type == "personal":
+        return [owner_sub] if owner_sub else []
+    if role and role != "agent_ingress":
+        return list(
+            (await db.execute(
+                select(User.sub).where(User.role == role, User.is_active == True)  # noqa: E712
+            )).scalars().all()
+        )
+    return []

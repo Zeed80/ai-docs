@@ -47,3 +47,39 @@ def test_image_studio_diffusion_actions_are_non_recipeable():
     image_studio = manifest.by_name["image_studio"]
     non_recipeable = set(image_studio.non_recipeable_actions)
     assert {"generate", "iterate", "accept", "accept_techdraw"} <= non_recipeable
+
+
+# ── Ф6.9: the direction nobody was checking ────────────────────────────────
+
+# Pre-existing mismatches outside the e-mail subsystem. Recorded, not fixed:
+# tech/workspace/memory are other people's capabilities and other phases' work.
+# The number must not grow — a new entry here means somebody granted an action
+# that does not exist, and the agent will be told "unknown action" while
+# believing it had the right.
+_KNOWN_BROKEN_GRANT_PREFIXES = ("tech.", "workspace.", "memory.")
+_KNOWN_BROKEN_GRANT_COUNT = 17
+
+
+def test_no_email_action_is_granted_without_a_route():
+    """Three email.templates.* actions were in gateway.yml's allowlist and in
+    no dispatch table, so an agent explicitly given the right got "unknown
+    action" — indistinguishable from its own mistake."""
+    from app.api.capability_router import validate_gateway_grants
+
+    email_problems = [p for p in validate_gateway_grants() if "'email." in p]
+    assert email_problems == [], "\n".join(email_problems)
+
+
+def test_the_backlog_of_broken_grants_does_not_grow():
+    from app.api.capability_router import validate_gateway_grants
+
+    problems = validate_gateway_grants()
+    unexpected = [
+        p for p in problems
+        if not any(f"'{prefix}" in p for prefix in _KNOWN_BROKEN_GRANT_PREFIXES)
+    ]
+    assert unexpected == [], "новые нерабочие права:\n" + "\n".join(unexpected)
+    assert len(problems) <= _KNOWN_BROKEN_GRANT_COUNT, (
+        f"было {_KNOWN_BROKEN_GRANT_COUNT}, стало {len(problems)}:\n"
+        + "\n".join(problems)
+    )

@@ -988,11 +988,6 @@ routes:
     local_only: true
     fallback_chain: ["qwen3_6_35b_apex_ollama", "qwen3_5_9b_ollama", "claude_sonnet_anthropic"]
     manual_review_fallback: true
-  speech:
-    required_modalities: ["audio"]
-    local_only: true
-    fallback_chain: ["gemma4_e4b_ollama"]
-    manual_review_fallback: true
   orchestrator_planning:
     required_modalities: ["text"]
     local_only: true

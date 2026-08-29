@@ -849,7 +849,10 @@ services:
     # The catalog queue rides on this general-purpose worker rather than the
     # single-slot GPU one: parsing a 200-page price list is CPU/IO work, and in
     # the gpu lane it blocked document recognition for its whole duration.
-    command: celery -A app.tasks.celery_app worker -l info -c 4 -Q celery,extraction,ingest,scheduler,catalog,catalog_render
+    # "mail" is its own queue (Ф1.5): IMAP polling used to share "ingest" with
+    # OCR/extraction, so a backlog of documents delayed mail delivery and vice
+    # versa. Same worker, separate lane.
+    command: celery -A app.tasks.celery_app worker -l info -c 4 -Q celery,extraction,ingest,mail,scheduler,catalog,catalog_render
     environment:
       <<: *backend-env
       SKIP_DB_MIGRATE: "1"

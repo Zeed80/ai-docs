@@ -30,6 +30,10 @@ dependencies = [
     "psycopg2-binary>=2.9",
     "lxml>=5.0",
     "nh3>=0.2.18",  # HTML sanitiser for inbound email bodies (email client v2)
+    # IMAP IDLE (Ф2.3). imaplib gained .idle() only in Python 3.15 and this
+    # image runs 3.11; the alternative was driving IDLE through imaplib's
+    # private _command/_get_response, which breaks silently on a Python bump.
+    "imapclient>=3.0",
     "anthropic>=0.39.0,<1",
     "python-telegram-bot>=22.6,<23",
     "ezdxf>=1.3",

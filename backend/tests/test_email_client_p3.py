@@ -219,3 +219,61 @@ async def test_contacts_csv_import_export(client: AsyncClient, db_session):
 
     r = await client.get("/api/email/contacts/export")
     assert r.status_code == 200 and "anna@buyer.ru" in r.text
+
+
+async def test_all_attachments_download_as_one_archive(client, db_session, monkeypatch):
+    """Ф5.3 — письмо с одиннадцатью спецификациями это одиннадцать кликов, и
+    одиннадцатый как раз пропускают. Инлайновый логотип подписи в архив не
+    попадает: вложением его никто не считает."""
+    import io
+    import uuid as _uuid
+    import zipfile
+    from datetime import datetime, timezone
+
+    from app.db.models import (
+        EmailAttachment, EmailMessage, EmailThread, MailboxConfig,
+    )
+
+    db_session.add(MailboxConfig(
+        name="zipbox", imap_host="m.example.com", imap_port=993,
+        imap_user="zipbox", imap_password_encrypted="x", imap_ssl=True,
+        is_active=True,
+    ))
+    thread = EmailThread(subject="Спецификации", mailbox="zipbox", message_count=1)
+    db_session.add(thread)
+    await db_session.flush()
+    msg = EmailMessage(
+        thread_id=thread.id, mailbox="zipbox", subject="Спецификации",
+        from_address="supplier@example.com", to_addresses=["zipbox@example.com"],
+        received_at=datetime.now(timezone.utc),
+        message_id_header=f"<{_uuid.uuid4()}@example.com>",
+        has_attachments=True, attachment_count=3,
+    )
+    db_session.add(msg)
+    await db_session.flush()
+    db_session.add_all([
+        EmailAttachment(message_id=msg.id, filename="спец-1.pdf",
+                        content_type="application/pdf", size=3,
+                        storage_path="s/1.pdf", sha256="a" * 64),
+        EmailAttachment(message_id=msg.id, filename="спец-1.pdf",
+                        content_type="application/pdf", size=3,
+                        storage_path="s/2.pdf", sha256="b" * 64),
+        EmailAttachment(message_id=msg.id, filename="logo.png",
+                        content_type="image/png", size=3, is_inline=True,
+                        storage_path="s/logo.png", sha256="c" * 64),
+    ])
+    await db_session.commit()
+
+    import app.storage as storage
+
+    monkeypatch.setattr(storage, "download_file", lambda path: path.encode())
+
+    resp = await client.get(f"/api/email/messages/{msg.id}/attachments/archive")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "application/zip"
+
+    names = zipfile.ZipFile(io.BytesIO(resp.content)).namelist()
+    assert "logo.png" not in names
+    # Both real attachments survive despite sharing a filename.
+    assert len(names) == 2
+    assert "спец-1.pdf" in names

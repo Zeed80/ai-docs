@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo
-from app.db.models import Notification
+from app.db.models import Notification, NotificationType, UserNotificationPref
 from app.db.session import get_db
 from app.domain.proactive_feedback import record_proactive_feedback
 
@@ -88,6 +88,88 @@ async def list_notifications(
         for n in notifs
     ]
     return NotificationListResponse(items=items, total=total)
+
+
+# ── Preferences (Ф0.8) ─────────────────────────────────────────────────────
+
+
+class NotificationPrefOut(BaseModel):
+    type: str
+    in_app: bool = True
+    push: bool = True
+    private_preview: bool = False
+
+
+class NotificationPrefUpdate(BaseModel):
+    type: str
+    in_app: bool | None = None
+    push: bool | None = None
+    private_preview: bool | None = None
+
+
+@router.get("/preferences", response_model=list[NotificationPrefOut])
+async def list_preferences(
+    user: UserInfo = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-type notification settings for the caller.
+
+    Until Ф0.8 these lived only in the browser's localStorage, so the server
+    kept pushing categories the user had switched off — and there was no way at
+    all to keep a private mailbox's sender/subject off a phone lock screen.
+    Every known type is returned, with defaults for the ones never customised.
+    """
+    rows = {
+        r.type: r
+        for r in (
+            await db.execute(
+                select(UserNotificationPref).where(UserNotificationPref.user_sub == user.sub)
+            )
+        ).scalars().all()
+    }
+    out = []
+    for t in NotificationType:
+        row = rows.get(t.value)
+        out.append(
+            NotificationPrefOut(
+                type=t.value,
+                in_app=row.in_app if row else True,
+                push=row.push if row else True,
+                private_preview=row.private_preview if row else False,
+            )
+        )
+    return out
+
+
+@router.put("/preferences", response_model=NotificationPrefOut)
+async def update_preference(
+    payload: NotificationPrefUpdate,
+    user: UserInfo = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set one category's settings for the caller."""
+    if payload.type not in {t.value for t in NotificationType}:
+        raise HTTPException(422, f"Неизвестный тип уведомления: {payload.type}")
+    row = (
+        await db.execute(
+            select(UserNotificationPref).where(
+                UserNotificationPref.user_sub == user.sub,
+                UserNotificationPref.type == payload.type,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = UserNotificationPref(user_sub=user.sub, type=payload.type)
+        db.add(row)
+    for field in ("in_app", "push", "private_preview"):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(row, field, value)
+    await db.commit()
+    await db.refresh(row)
+    return NotificationPrefOut(
+        type=row.type, in_app=row.in_app, push=row.push, private_preview=row.private_preview
+    )
 
 
 @router.get("/unread-count")

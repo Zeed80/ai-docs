@@ -3,7 +3,7 @@ email.draft, email.style_match, email.risk_check, email.send, email.suggest_temp
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
@@ -15,9 +15,13 @@ from sqlalchemy.orm import selectinload
 from app.auth.acting import get_effective_user
 from app.auth.models import UserInfo
 from app.db.session import get_db
+from app.domain.email_counts import invalidate_mailbox_counts, mailbox_counts
 from app.domain.email_access import (
     hidden_mailbox_names,
     mailbox_filter,
+    draft_access_filter,
+    may_access_draft,
+    usable_attachment_ids,
     may_read_mailbox,
     may_write_mailbox,
 )
@@ -65,6 +69,9 @@ from app.domain.email import (
     TemplateSuggestResponse,
     EmailTemplate,
     EmailThreadOut,
+    DerivedInvoiceOut,
+    ThreadListResponse,
+    TriageResultOut,
 )
 from app.audit.service import log_action, add_timeline_event
 
@@ -77,20 +84,67 @@ async def fetch_new_emails(
     payload: EmailFetchRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: email.fetch_new — Check for new emails via IMAP.
+    """Skill: email.fetch_new — poll IMAP now and report what arrived.
 
-    This is a stub — actual IMAP fetching is done by Celery task.
-    This endpoint triggers the task and returns results.
+    Ф6.9 — this used to dispatch the task and unconditionally return
+    ``fetched_count=0``. The agent, told it had "проверить новую почту",
+    read that as "новых писем нет" and reported it to the user. Now it waits
+    briefly for the poll it started and answers honestly; if the poll is still
+    running it says so instead of guessing.
     """
     from app.tasks.email_triage import run_triage
 
     task = run_triage.delay(payload.mailbox)
     logger.info("email_triage_triggered", mailbox=payload.mailbox, task_id=task.id)
+
+    result: dict | None = None
+    try:
+        from celery.result import AsyncResult
+
+        from app.tasks.celery_app import celery_app
+
+        async_result = AsyncResult(task.id, app=celery_app)
+        for _ in range(24):          # ~12 s: an IMAP poll is normally quicker
+            if async_result.ready():
+                raw = async_result.result
+                result = raw if isinstance(raw, dict) else None
+                break
+            await asyncio.sleep(0.5)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("email_fetch_wait_failed", task_id=task.id, error=str(exc))
+
+    if result is None:
+        return EmailFetchResponse(
+            fetched_count=0,
+            new_messages=[],
+            errors=["Проверка почты ещё идёт — результат будет через несколько секунд"],
+            task_id=task.id,
+        )
+
     return EmailFetchResponse(
-        fetched_count=0,
+        fetched_count=int(result.get("total_emails") or 0),
         new_messages=[],
-        errors=[],
+        errors=[str(e) for e in (result.get("errors") or [])][:10],
         task_id=task.id,
+    )
+
+
+def _documents_matching(like: str):
+    """Message ids whose emailed attachments were recognised as matching text.
+
+    Postgres only: the recognised content is JSON, and casting it per row is a
+    scan unless the trigram index on the cast is in place (migration
+    20260829_0003).
+    """
+    from app.db.models import Document, DocumentExtraction
+
+    return (
+        select(Document.source_email_id)
+        .join(DocumentExtraction, DocumentExtraction.document_id == Document.id)
+        .where(
+            Document.source_email_id.isnot(None),
+            cast(DocumentExtraction.structured_data, String).ilike(like),
+        )
     )
 
 
@@ -133,6 +187,23 @@ async def search_emails(
                     EmailMessage.subject.ilike(like),
                     EmailMessage.body_text.ilike(like),
                     EmailMessage.from_address.ilike(like),
+                    # Ф8 — "письмо, к которому был приложен счёт-2562.pdf" was
+                    # unanswerable: attachment filenames were not searchable at
+                    # all. Inline parts are excluded so a signature logo does
+                    # not match every letter from that sender.
+                    EmailMessage.id.in_(
+                        select(EmailAttachment.message_id).where(
+                            EmailAttachment.filename.ilike(like),
+                            EmailAttachment.is_inline == False,  # noqa: E712
+                            EmailAttachment.message_id.isnot(None),
+                        )
+                    ),
+                    # Ф8 — the CONTENTS of an attachment, not just its name:
+                    # "письмо, где был счёт на 2667 рублей". The recognised
+                    # content of a document lives in document_extractions
+                    # (structured_data), not in a text column on documents —
+                    # see "Находки по ходу".
+                    EmailMessage.id.in_(_documents_matching(like)),
                 )
             )
             rank = func.ts_rank(tsv, tsq)
@@ -150,7 +221,22 @@ async def search_emails(
     if payload.from_addr:
         query = query.where(EmailMessage.from_address.ilike(f"%{payload.from_addr}%"))
     if payload.to_addr:
-        query = query.where(cast(EmailMessage.to_addresses, String).ilike(f"%{payload.to_addr}%"))
+        # Ф8 — JSON→text cast cannot use an index and matches inside any part of
+        # the serialised array. Postgres can search the array itself.
+        if is_pg:
+            from sqlalchemy.dialects.postgresql import JSONB
+
+            query = query.where(
+                func.lower(
+                    func.jsonb_path_query_array(
+                        cast(EmailMessage.to_addresses, JSONB), "$[*]"
+                    ).cast(String)
+                ).like(f"%{payload.to_addr.lower()}%")
+            )
+        else:
+            query = query.where(
+                cast(EmailMessage.to_addresses, String).ilike(f"%{payload.to_addr}%")
+            )
     if payload.mailbox:
         query = query.where(EmailMessage.mailbox == payload.mailbox)
     if payload.folder:
@@ -190,9 +276,24 @@ async def search_emails(
     else:
         query = query.order_by(EmailMessage.received_at.desc().nullslast())
 
-    result = await db.execute(query.limit(min(payload.limit, 200)))
+    # Ф5.1 — ``cursor``/``next_cursor`` were declared in the schema and never
+    # implemented, so search could only ever return its first page. Offset here
+    # rather than keyset: relevance sorting has no stable key to seek on, and a
+    # search result set is a snapshot the user is scrolling, not a live feed.
+    page_size = max(1, min(payload.limit, 200))
+    offset = 0
+    if payload.cursor:
+        try:
+            offset = max(0, int(payload.cursor))
+        except (TypeError, ValueError):
+            offset = 0
+
+    result = await db.execute(query.offset(offset).limit(page_size))
     messages = result.scalars().all()
-    return EmailSearchResponse(results=messages, total=total)
+    next_cursor = (
+        str(offset + page_size) if offset + len(messages) < total else None
+    )
+    return EmailSearchResponse(results=messages, total=total, next_cursor=next_cursor)
 
 
 # ── email.mailboxes (client sidebar) ───────────────────────────────────────
@@ -236,43 +337,16 @@ async def list_email_mailboxes(
     cfgs = [c for c in cfgs if c.name not in hidden]
     names = [c.name for c in cfgs]
 
-    msg_rows = (
-        await db.execute(
-            select(EmailMessage.mailbox, func.count(EmailMessage.id))
-            .where(EmailMessage.mailbox.in_(names))
-            .group_by(EmailMessage.mailbox)
-        )
-    ).all() if names else []
-    thread_rows = (
-        await db.execute(
-            select(EmailThread.mailbox, func.count(EmailThread.id))
-            .where(EmailThread.mailbox.in_(names))
-            .group_by(EmailThread.mailbox)
-        )
-    ).all() if names else []
-    unread_rows = (
-        await db.execute(
-            select(EmailThread.mailbox, func.count(EmailThread.id))
-            .where(
-                EmailThread.mailbox.in_(names),
-                EmailThread.is_read == False,  # noqa: E712
-                EmailThread.folder == "inbox",
-            )
-            .group_by(EmailThread.mailbox)
-        )
-    ).all() if names else []
-    msg_counts = {m: int(n) for m, n in msg_rows}
-    thread_counts = {m: int(n) for m, n in thread_rows}
-    unread_counts = {m: int(n) for m, n in unread_rows}
+    counts = await mailbox_counts(db, names)
 
     return [
         EmailMailboxChip(
             name=c.name,
             display_name=c.display_name,
             is_personal=c.mailbox_type == "personal",
-            thread_count=thread_counts.get(c.name, 0),
-            message_count=msg_counts.get(c.name, 0),
-            unread_count=unread_counts.get(c.name, 0),
+            thread_count=counts.for_mailbox(c.name)["threads"],
+            message_count=counts.for_mailbox(c.name)["messages"],
+            unread_count=counts.for_mailbox(c.name)["unread"],
             last_sync_at=c.last_sync_at,
             sync_error=c.sync_error,
         )
@@ -347,20 +421,48 @@ def _thread_out(thread: EmailThread, *, with_messages: bool = False) -> EmailThr
     )
 
 
-async def _thread_label_counts(db: AsyncSession, label_ids: list[uuid.UUID]) -> dict:
+async def _thread_label_counts(
+    db: AsyncSession, label_ids: list[uuid.UUID], *, scope=None
+) -> dict:
+    """Ф8 — counts must match what the person can actually open.
+
+    Counting every thread carrying a label, including ones in a colleague's
+    personal mailbox, made the number next to a label disagree with the list it
+    opens — and leaked a rough size of someone else's correspondence.
+    """
     if not label_ids:
         return {}
-    rows = (
-        await db.execute(
-            select(EmailThreadLabel.label_id, func.count())
-            .where(EmailThreadLabel.label_id.in_(label_ids))
-            .group_by(EmailThreadLabel.label_id)
-        )
-    ).all()
+    query = (
+        select(EmailThreadLabel.label_id, func.count())
+        .join(EmailThread, EmailThread.id == EmailThreadLabel.thread_id)
+        .where(EmailThreadLabel.label_id.in_(label_ids))
+    )
+    if scope is not None:
+        query = query.where(scope)
+    rows = (await db.execute(query.group_by(EmailThreadLabel.label_id))).all()
     return {lid: int(n) for lid, n in rows}
 
 
-@router.get("/threads", response_model=list[EmailThreadOut])
+def _encode_cursor(last_message_at, thread_id) -> str:
+    """Opaque keyset cursor: (last_message_at, id) is the list's sort order."""
+    import base64
+
+    raw = f"{last_message_at.isoformat() if last_message_at else ''}|{thread_id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime | None, uuid.UUID] | None:
+    import base64
+
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+        stamp, _, ident = raw.partition("|")
+        return (datetime.fromisoformat(stamp) if stamp else None), uuid.UUID(ident)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@router.get("/threads", response_model=ThreadListResponse)
 async def list_threads(
     request: Request,
     mailbox: str | None = None,
@@ -370,10 +472,18 @@ async def list_threads(
     is_starred: bool | None = None,
     has_attachments: bool | None = None,
     limit: int = 50,
+    cursor: str | None = None,
     user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: email.list_threads — List email threads (with client filters)."""
+    """Skill: email.list_threads — List email threads (with client filters).
+
+    Ф5.1 — keyset pagination. The endpoint returned a bare capped list, and the
+    client had no way to ask for more, so a conversation older than the first
+    page was unreachable: on a real mailbox "письмо было в марте" simply could
+    not be opened. Keyset (not OFFSET) because new mail keeps arriving at the
+    top while a person is paging.
+    """
     for_agent = request_is_agent(request)
     query = (
         select(EmailThread)
@@ -419,9 +529,202 @@ async def list_threads(
     if has_attachments is not None:
         query = query.where(EmailThread.has_attachments == has_attachments)
 
-    query = query.order_by(EmailThread.last_message_at.desc().nullslast()).limit(min(limit, 200))
-    result = await db.execute(query)
-    return [_thread_out(t) for t in result.scalars().all()]
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        if decoded is not None:
+            last_at, last_id = decoded
+            if last_at is not None:
+                query = query.where(
+                    or_(
+                        EmailThread.last_message_at < last_at,
+                        and_(
+                            EmailThread.last_message_at == last_at,
+                            EmailThread.id < last_id,
+                        ),
+                    )
+                )
+
+    page_size = max(1, min(limit, 200))
+    query = query.order_by(
+        EmailThread.last_message_at.desc().nullslast(), EmailThread.id.desc()
+    ).limit(page_size + 1)
+    rows = list((await db.execute(query)).scalars().all())
+
+    next_cursor = None
+    if len(rows) > page_size:
+        rows = rows[:page_size]
+        last = rows[-1]
+        next_cursor = _encode_cursor(last.last_message_at, last.id)
+
+    return ThreadListResponse(
+        items=[_thread_out(t) for t in rows],
+        total=len(rows),
+        next_cursor=next_cursor,
+    )
+
+
+async def _attach_derived_invoices(db: AsyncSession, thread_out: EmailThreadOut) -> None:
+    """Fill in "из этого письма завели счёт" for every message in the thread.
+
+    Ф6.3. The pipeline linked Document → EmailMessage but nothing linked back,
+    so a person reading the thread could not tell that an invoice had been
+    created from it — the very thing the agent is supposed to have done for
+    them — and had no way to open it.
+    """
+    from app.db.models import Document, Invoice, Party
+
+    message_ids = [m.id for m in thread_out.messages]
+    if not message_ids:
+        return
+    rows = (
+        await db.execute(
+            select(Invoice, Document.source_email_id, Party.name)
+            .join(Document, Invoice.document_id == Document.id)
+            .outerjoin(Party, Invoice.supplier_id == Party.id)
+            .where(Document.source_email_id.in_(message_ids))
+        )
+    ).all()
+    by_message: dict = {}
+    for invoice, source_email_id, supplier_name in rows:
+        by_message.setdefault(source_email_id, []).append(
+            DerivedInvoiceOut(
+                invoice_id=invoice.id,
+                document_id=invoice.document_id,
+                invoice_number=invoice.invoice_number,
+                total_amount=float(invoice.total_amount) if invoice.total_amount is not None else None,
+                currency=invoice.currency,
+                status=invoice.status.value if hasattr(invoice.status, "value") else str(invoice.status),
+                supplier_name=supplier_name,
+                supplier_matched_by=(invoice.metadata_ or {}).get("supplier_matched_by"),
+            )
+        )
+    for msg in thread_out.messages:
+        msg.derived_invoices = by_message.get(msg.id, [])
+
+    # Ф6.4 — what the agent understood about each letter and what it did.
+    from app.db.models import EmailTriageResult
+    from app.domain.email_triage import label_for
+
+    triage_rows = (
+        await db.execute(
+            select(EmailTriageResult).where(
+                EmailTriageResult.message_id.in_(message_ids)
+            )
+        )
+    ).scalars().all()
+    by_msg_triage = {t.message_id: t for t in triage_rows}
+    for msg in thread_out.messages:
+        row = by_msg_triage.get(msg.id)
+        if row is None:
+            continue
+        msg.triage = TriageResultOut(
+            category=row.corrected_category or row.category,
+            category_label=label_for(row.corrected_category or row.category),
+            confidence=row.confidence,
+            summary=row.summary,
+            entities=row.entities or {},
+            performed=row.performed or [],
+            proposed=row.proposed or [],
+            model_name=row.model_name,
+            corrected_category=row.corrected_category,
+            status=row.status,
+        )
+
+
+class EmailUserPrefs(BaseModel):
+    """Ф1.4 — пользовательские настройки чтения почты. Живут в
+    ``users.preferences`` (JSON), где уже лежат прочие настройки, — отдельная
+    таблица ради одного флага была бы дороже, чем польза от неё."""
+
+    always_show_images: bool = False
+
+
+@router.get("/preferences", response_model=EmailUserPrefs)
+async def get_email_preferences(
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+) -> EmailUserPrefs:
+    """Skill: email.get_preferences — Per-user mail reading preferences."""
+    from app.db.models import User
+
+    prefs = (
+        await db.execute(select(User.preferences).where(User.sub == user.sub))
+    ).scalar_one_or_none()
+    return EmailUserPrefs(
+        always_show_images=bool((prefs or {}).get("email_always_show_images")),
+    )
+
+
+@router.patch("/preferences", response_model=EmailUserPrefs)
+async def update_email_preferences(
+    payload: EmailUserPrefs,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+) -> EmailUserPrefs:
+    """Skill: email.set_preferences — Update per-user mail reading preferences."""
+    from app.db.models import User
+
+    row = (
+        await db.execute(select(User).where(User.sub == user.sub))
+    ).scalar_one_or_none()
+    if not row:
+        raise HTTPException(404, "Пользователь не найден")
+    # Reassign rather than mutate: SQLAlchemy does not track in-place changes
+    # to a plain JSON column, so a mutation here would silently not persist.
+    row.preferences = {
+        **(row.preferences or {}),
+        "email_always_show_images": payload.always_show_images,
+    }
+    await db.commit()
+    return payload
+
+
+async def _mark_trusted_senders(db: AsyncSession, user: UserInfo, out) -> None:
+    """Ф1.4 — кому из отправителей этого треда картинки показывать сразу.
+
+    Блокировка по умолчанию защищает от трекинг-пикселя. Без исключений её
+    выключают целиком — и защита пропадает вся сразу, включая незнакомцев.
+    """
+    from email.utils import parseaddr
+
+    from app.db.models import EmailContact, User
+
+    def _bare_address(addr: str) -> str:
+        return parseaddr(addr or "")[1] or addr or ""
+
+    if not out.messages:
+        return
+
+    pref_row = (
+        await db.execute(select(User.preferences).where(User.sub == user.sub))
+    ).scalar_one_or_none()
+    if isinstance(pref_row, dict) and pref_row.get("email_always_show_images"):
+        for m in out.messages:
+            m.images_trusted = True
+        return
+
+    senders = {
+        _bare_address(m.from_address).lower() for m in out.messages if m.from_address
+    }
+    if not senders:
+        return
+    trusted = set(
+        (
+            await db.execute(
+                select(func.lower(EmailContact.email)).where(
+                    func.lower(EmailContact.email).in_(senders),
+                    EmailContact.trust_images == True,  # noqa: E712
+                    or_(
+                        EmailContact.owner_sub == user.sub,
+                        EmailContact.owner_sub.is_(None),
+                    ),
+                )
+            )
+        ).scalars().all()
+    )
+    for m in out.messages:
+        if m.from_address and _bare_address(m.from_address).lower() in trusted:
+            m.images_trusted = True
 
 
 @router.get("/threads/{thread_id}", response_model=EmailThreadOut)
@@ -447,7 +750,10 @@ async def get_thread(
     # colleague's thread is itself private.
     if not await may_read_mailbox(db, user, thread.mailbox, for_agent=request_is_agent(request)):
         raise HTTPException(404, "Thread not found")
-    return _thread_out(thread, with_messages=True)
+    out = _thread_out(thread, with_messages=True)
+    await _attach_derived_invoices(db, out)
+    await _mark_trusted_senders(db, user, out)
+    return out
 
 
 @router.post("/threads/actions", response_model=BulkActionResult)
@@ -471,6 +777,9 @@ async def bulk_thread_action(
 
     actor = "sveta" if for_agent else "user"
     updated = 0
+    # Ф2.2 — what we change here must also reach the server. Collected during
+    # the loop and queued once, so a bulk action is one push, not N.
+    sync_ops: list[tuple] = []
     for t in threads:
         if payload.action in ("read", "unread"):
             val = payload.action == "read"
@@ -478,14 +787,21 @@ async def bulk_thread_action(
             t.unread_count = 0 if val else max(t.message_count, 1)
             for m in t.messages or []:
                 m.is_read = val
+                sync_ops.append((m, "seen" if val else "unseen", None))
         elif payload.action in ("star", "unstar"):
             t.is_starred = payload.action == "star"
+            for m in t.messages or []:
+                m.is_starred = t.is_starred
+                sync_ops.append(
+                    (m, "flagged" if t.is_starred else "unflagged", None)
+                )
         elif payload.action in ("archive", "trash", "spam", "inbox"):
             t.folder = "archive" if payload.action == "archive" else (
                 "inbox" if payload.action == "inbox" else payload.action
             )
             for m in t.messages or []:
                 m.folder = t.folder
+                sync_ops.append((m, "move", t.folder))
         elif payload.action == "move" and payload.folder:
             t.folder = payload.folder
             for m in t.messages or []:
@@ -505,7 +821,22 @@ async def bulk_thread_action(
             continue
         updated += 1
 
+    if sync_ops:
+        await _queue_sync_ops(db, sync_ops)
+
     await db.commit()
+    if updated:
+        await invalidate_mailbox_counts()
+
+    if sync_ops:
+        try:
+            from app.tasks.email_sync import push_ops
+
+            push_ops.apply_async(kwargs={"mailbox": threads[0].mailbox}, queue="mail")
+        except Exception as exc:  # noqa: BLE001
+            # The op rows are already committed; the periodic push picks them up.
+            logger.warning("email_push_dispatch_failed", error=str(exc))
+
     try:
         from app.core.chat_bus import chat_bus
 
@@ -516,6 +847,117 @@ async def bulk_thread_action(
         pass
     logger.info("email_bulk_thread_action", action=payload.action, updated=updated, actor=actor)
     return BulkActionResult(updated=updated)
+
+
+class TriageCorrection(BaseModel):
+    category: str
+
+
+@router.post("/messages/{message_id}/triage/correct", response_model=TriageResultOut)
+async def correct_triage(
+    message_id: uuid.UUID,
+    payload: TriageCorrection,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A human disagrees with how the agent classified a letter.
+
+    This is the training signal (Ф6.8): a correction is the only reliable
+    evidence that the classifier was wrong, and it is worth nothing unless it
+    is captured where the classifier can later be measured against it.
+    """
+    from app.db.models import EmailTriageResult
+    from app.domain.email_triage import CATEGORIES, label_for
+
+    if payload.category not in CATEGORIES:
+        raise HTTPException(422, f"Неизвестная категория: {payload.category}")
+
+    msg = await db.get(EmailMessage, message_id)
+    if not msg or not await may_read_mailbox(db, user, msg.mailbox):
+        raise HTTPException(404, "Not found")
+
+    row = (
+        await db.execute(
+            select(EmailTriageResult).where(EmailTriageResult.message_id == message_id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "Письмо не разбиралось агентом")
+
+    row.corrected_category = payload.category
+    row.corrected_by = user.sub
+    await log_action(
+        db, action="email.triage_corrected", entity_type="email", entity_id=message_id,
+        details={"from": row.category, "to": payload.category, "by": user.sub},
+    )
+    await db.commit()
+    await db.refresh(row)
+
+    try:
+        from app.domain.email_learning import record_triage_correction
+
+        await record_triage_correction(db, row, msg, corrected_by=user.sub)
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("triage_correction_learning_failed", error=str(exc))
+
+    return TriageResultOut(
+        category=row.corrected_category,
+        category_label=label_for(row.corrected_category),
+        confidence=row.confidence,
+        summary=row.summary,
+        entities=row.entities or {},
+        performed=row.performed or [],
+        proposed=row.proposed or [],
+        model_name=row.model_name,
+        corrected_category=row.corrected_category,
+        status=row.status,
+    )
+
+
+async def _queue_sync_ops(db: AsyncSession, ops: list[tuple]) -> None:
+    """Queue write-back operations for messages that exist on a server.
+
+    A message with no ``imap_uid`` (our own outbound copy, or one ingested
+    before Ф2.1) cannot be addressed remotely; queueing an op for it would
+    guarantee a permanent failure, so it is skipped silently — the local state
+    is still correct.
+    """
+    from app.db.models import EmailSyncOp, MailboxFolder
+
+    targets = [(m, op, extra) for m, op, extra in ops if m.imap_uid and m.imap_folder]
+    if not targets:
+        return
+
+    # Resolve our folder name → the server's, once per mailbox.
+    wanted_local = {extra for _, op, extra in targets if op == "move" and extra}
+    remote_by_local: dict[tuple[str, str], str] = {}
+    if wanted_local:
+        rows = (
+            await db.execute(
+                select(MailboxFolder.mailbox, MailboxFolder.local_folder,
+                       MailboxFolder.remote_name)
+                .where(MailboxFolder.local_folder.in_(wanted_local))
+            )
+        ).all()
+        for box, local, remote in rows:
+            remote_by_local.setdefault((box, local), remote)
+
+    for msg, op, extra in targets:
+        payload = None
+        if op == "move":
+            remote = remote_by_local.get((msg.mailbox, extra))
+            if not remote:
+                # No server folder mapped for this — better to leave the letter
+                # where it is than to invent a destination.
+                logger.info(
+                    "email_move_not_mapped", mailbox=msg.mailbox, local_folder=extra,
+                )
+                continue
+            payload = {"remote_folder": remote, "local_folder": extra}
+        db.add(EmailSyncOp(
+            message_id=msg.id, mailbox=msg.mailbox, op=op, payload=payload,
+        ))
 
 
 # ── Labels ─────────────────────────────────────────────────────────────────
@@ -534,7 +976,8 @@ async def list_labels(
             ).order_by(EmailLabel.is_system.desc(), EmailLabel.name)
         )
     ).scalars().all()
-    counts = await _thread_label_counts(db, [l.id for l in rows])
+    scope = await mailbox_filter(db, user, mailbox_col=EmailThread.mailbox)
+    counts = await _thread_label_counts(db, [l.id for l in rows], scope=scope)
     out = []
     for l in rows:
         o = EmailLabelOut.model_validate(l)
@@ -832,13 +1275,32 @@ async def upload_compose_attachment(
     user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: email.attachment_upload — Stage a file for an outbound email."""
+    """Skill: email.attachment_upload — Stage a file for an outbound email.
+
+    Read in chunks with a running total: ``await file.read()`` buffered the
+    whole upload into the API worker's memory and only then compared it to the
+    limit, so the limit protected nothing — a multi-gigabyte POST was a
+    denial-of-service against the process, not a 413.
+    """
     import hashlib
 
-    content = await file.read()
-    if len(content) > 25 * 1024 * 1024:
-        raise HTTPException(413, "Вложение больше 25 МБ")
-    sha = hashlib.sha256(content).hexdigest()
+    from app.db.models import MailServerConfig
+
+    cfg = (await db.execute(select(MailServerConfig))).scalars().first()
+    limit_mb = (cfg.max_attachment_mb if cfg else 25) or 25
+    limit = limit_mb * 1024 * 1024
+
+    hasher = hashlib.sha256()
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(1024 * 1024):
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(413, f"Вложение больше {limit_mb} МБ")
+        hasher.update(chunk)
+        chunks.append(chunk)
+    content = b"".join(chunks)
+    sha = hasher.hexdigest()
     storage_path = f"email-attachments/{sha[:2]}/{sha}"
     try:
         from app.storage import upload_file
@@ -855,6 +1317,7 @@ async def upload_compose_attachment(
         size=len(content),
         storage_path=storage_path,
         sha256=sha,
+        uploaded_by_sub=user.sub,
     )
     db.add(att)
     await db.commit()
@@ -865,13 +1328,29 @@ async def upload_compose_attachment(
 # ── email.draft ────────────────────────────────────────────────────────────
 
 
+async def _assert_attachments_usable(db: AsyncSession, user: UserInfo, attachment_ids) -> None:
+    """403 unless every referenced attachment is one this caller may send."""
+    requested = list(attachment_ids or [])
+    if not requested:
+        return
+    allowed = set(await usable_attachment_ids(db, user, requested))
+    missing = [a for a in requested if a not in allowed]
+    if missing:
+        raise HTTPException(403, "Вложение недоступно")
+
+
 @router.post("/drafts", response_model=EmailDraftOut)
 async def create_draft(
     payload: EmailDraftCreate,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.draft — Create email draft."""
     from app.domain.email_send import create_reply_draft
+
+    if payload.mailbox and not await may_write_mailbox(db, user, payload.mailbox):
+        raise HTTPException(403, "Нет доступа для отправки из этого ящика")
+    await _assert_attachments_usable(db, user, payload.attachment_ids)
 
     draft = await create_reply_draft(
         db,
@@ -888,10 +1367,11 @@ async def create_draft(
         in_reply_to_message_id=payload.in_reply_to_message_id,
         forward_of_message_id=payload.forward_of_message_id,
         attachment_ids=payload.attachment_ids,
+        owner_sub=user.sub,
     )
     await db.commit()
     await db.refresh(draft)
-    logger.info("email_draft_created", draft_id=str(draft.id))
+    logger.info("email_draft_created", draft_id=str(draft.id), by=user.sub)
     return _draft_to_out(draft)
 
 
@@ -899,6 +1379,7 @@ async def create_draft(
 async def update_draft(
     draft_id: uuid.UUID,
     payload: EmailDraftUpdate,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.draft_update — Autosave / edit a draft in place."""
@@ -907,6 +1388,14 @@ async def update_draft(
     draft = await db.get(DraftAction, draft_id)
     if not draft or draft.action_type != "email.send":
         raise HTTPException(404, "Draft not found")
+    # 404, not 403: a draft the caller may not touch must not be confirmed to
+    # exist by the error code.
+    if not await may_access_draft(db, user, draft.draft_data):
+        raise HTTPException(404, "Draft not found")
+    if payload.mailbox and not await may_write_mailbox(db, user, payload.mailbox):
+        raise HTTPException(403, "Нет доступа для отправки из этого ящика")
+    if payload.attachment_ids is not None:
+        await _assert_attachments_usable(db, user, payload.attachment_ids)
     if draft.executed:
         raise HTTPException(400, "Письмо уже отправлено")
     data = dict(draft.draft_data or {})
@@ -915,6 +1404,9 @@ async def update_draft(
         patch["attachment_ids"] = [str(a) for a in patch["attachment_ids"]]
     data.update(patch)
     data["status"] = "draft"  # any edit re-opens risk check
+    from app.domain.email_send import draft_content_digest
+
+    data["content_digest"] = draft_content_digest(data)
     draft.draft_data = data
     flag_modified(draft, "draft_data")
     await db.commit()
@@ -924,21 +1416,27 @@ async def update_draft(
 
 @router.get("/drafts", response_model=list[EmailDraftOut])
 async def list_drafts(
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: email.list_drafts — List email drafts."""
+    """Skill: email.list_drafts — Drafts the caller may see (own drafts plus
+    drafts in mailboxes they may send from). Before Ф0.1 this returned every
+    draft in the system, including drafts inside colleagues' personal
+    mailboxes."""
     result = await db.execute(
         select(DraftAction)
         .where(DraftAction.action_type == "email.send", DraftAction.executed == False)
         .order_by(DraftAction.created_at.desc())
     )
     drafts = result.scalars().all()
-    return [_draft_to_out(d) for d in drafts]
+    may = await draft_access_filter(db, user)
+    return [_draft_to_out(d) for d in drafts if may(d.draft_data)]
 
 
 @router.get("/drafts/{draft_id}", response_model=EmailDraftOut)
 async def get_draft(
     draft_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get email draft."""
@@ -946,7 +1444,7 @@ async def get_draft(
         select(DraftAction).where(DraftAction.id == draft_id)
     )
     draft = result.scalar_one_or_none()
-    if not draft:
+    if not draft or not await may_access_draft(db, user, draft.draft_data):
         raise HTTPException(404, "Draft not found")
     return _draft_to_out(draft)
 
@@ -966,11 +1464,37 @@ def _draft_to_out(draft: DraftAction) -> EmailDraftOut:
         status=data.get("status", "draft"),
         risk_flags=data.get("risk_flags", []),
         attachment_ids=[uuid.UUID(a) for a in data.get("attachment_ids", [])],
+        content_digest=data.get("content_digest"),
         created_at=draft.created_at,
     )
 
 
 # ── Direct human send (no agent gate) ──────────────────────────────────────
+
+
+# Undo window in seconds. 30 is a hard ceiling for the interactive case: longer
+# and people close the tab believing the message is gone.
+_MAX_UNDO_SECONDS = 30
+# Scheduled sends are a different thing and may sit for days.
+_MAX_SCHEDULE_SECONDS = 60 * 60 * 24 * 30
+
+
+def _resolve_send_delay(payload: ComposeSendRequest) -> int:
+    """Seconds to hold the message before handing it to SMTP.
+
+    Two different intents share one mechanism: a short "Отменить" window and an
+    explicit "отправить позже". Clamped so a typo cannot park a letter for a
+    year, and never negative for a time already past.
+    """
+    if payload.send_at is not None:
+        target = payload.send_at
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        seconds = int((target - datetime.now(timezone.utc)).total_seconds())
+        return max(0, min(seconds, _MAX_SCHEDULE_SECONDS))
+    if payload.delay_seconds is None:
+        return 0
+    return max(0, min(int(payload.delay_seconds), _MAX_UNDO_SECONDS))
 
 
 @router.post("/send", response_model=EmailSendResult)
@@ -986,6 +1510,7 @@ async def compose_and_send(
 
     if not await may_write_mailbox(db, user, payload.mailbox):
         raise HTTPException(403, "Нет доступа для отправки из этого ящика")
+    await _assert_attachments_usable(db, user, payload.attachment_ids)
 
     thread_id = None
     if payload.in_reply_to_message_id:
@@ -996,6 +1521,8 @@ async def compose_and_send(
     if payload.draft_id:
         draft = await db.get(DraftAction, payload.draft_id)
         if not draft or draft.action_type != "email.send":
+            raise HTTPException(404, "Draft not found")
+        if not await may_access_draft(db, user, draft.draft_data):
             raise HTTPException(404, "Draft not found")
         data = dict(draft.draft_data or {})
         data.update(
@@ -1011,6 +1538,9 @@ async def compose_and_send(
             status="approved",
             sent_by="user",
         )
+        from app.domain.email_send import draft_content_digest
+
+        data["content_digest"] = draft_content_digest(data)
         draft.draft_data = data
         flag_modified(draft, "draft_data")
     else:
@@ -1028,6 +1558,7 @@ async def compose_and_send(
             forward_of_message_id=payload.forward_of_message_id,
             attachment_ids=payload.attachment_ids,
             status="approved",
+            owner_sub=user.sub,
         )
         d = dict(draft.draft_data or {})
         d["sent_by"] = "user"
@@ -1037,14 +1568,64 @@ async def compose_and_send(
     await db.commit()
     await db.refresh(draft)
 
+    # Ф4 — the same detectors the agent goes through. A person hitting Send used
+    # to bypass all of them: the path with the higher error rate had no checks,
+    # while the gated one had every check.
+    from app.domain.email_risk import blocking_flags, evaluate_draft
+
+    detected = await evaluate_draft(db, draft.draft_data or {})
+    acknowledged = {c.strip() for c in (payload.acknowledged_risks or [])}
+    blocking = [f for f in blocking_flags(detected) if f.code not in acknowledged]
+    if blocking:
+        d = dict(draft.draft_data or {})
+        d["status"] = "risk_checked"
+        d["risk_flags"] = [
+            {"code": f.code, "severity": f.severity, "message": f.message,
+             "can_override": f.can_override}
+            for f in detected
+        ]
+        draft.draft_data = d
+        flag_modified(draft, "draft_data")
+        await db.commit()
+        return EmailSendResult(
+            draft_id=draft.id, status="blocked",
+            blocked_by=[{"code": f.code, "message": f.message} for f in blocking],
+            warnings=[
+                {"code": f.code, "message": f.message}
+                for f in detected if not f.blocking
+            ],
+        )
+
+    if acknowledged:
+        await log_action(
+            db, action="email.risk_override", entity_type="email", entity_id=draft.id,
+            details={"codes": sorted(acknowledged), "by": user.sub},
+        )
+
     from app.tasks.email_sender import send_email_draft
 
-    task = send_email_draft.delay(str(draft.id))
+    # Undo window: the message is queued with a delay so "Отменить" is a real
+    # option rather than an apology. 0 keeps the old immediate behaviour.
+    delay = _resolve_send_delay(payload)
+    task = (
+        send_email_draft.apply_async(args=[str(draft.id)], countdown=delay)
+        if delay > 0
+        else send_email_draft.delay(str(draft.id))
+    )
     # Do NOT set executed here — the Celery task sets it after the SMTP send
     # actually succeeds; setting it now makes the task bail with "already_sent".
     d = dict(draft.draft_data or {})
     d["status"] = "queued"
     d["task_id"] = task.id
+    d["risk_flags"] = [
+        {"code": f.code, "severity": f.severity, "message": f.message,
+         "can_override": f.can_override}
+        for f in detected
+    ]
+    if delay > 0:
+        d["send_after"] = (
+            datetime.now(timezone.utc) + timedelta(seconds=delay)
+        ).isoformat()
     draft.draft_data = d
     flag_modified(draft, "draft_data")
     await db.commit()
@@ -1061,10 +1642,58 @@ async def compose_and_send(
             addresses=list(payload.to_addresses) + list(payload.cc_addresses),
         )
         await db.commit()
-    except Exception:  # noqa: BLE001
-        pass
-    logger.info("email_user_send_queued", draft_id=str(draft.id), user=user.sub)
-    return EmailSendResult(task_id=task.id, draft_id=draft.id, status="queued")
+    except Exception as exc:  # noqa: BLE001
+        # Was a bare `pass`: the address book silently stopped filling up and
+        # nothing anywhere said why.
+        logger.warning("email_remember_recipients_failed", error=str(exc))
+    logger.info(
+        "email_user_send_queued", draft_id=str(draft.id), user=user.sub, delay=delay,
+    )
+    return EmailSendResult(
+        task_id=task.id, draft_id=draft.id, status="queued",
+        warnings=[
+            {"code": f.code, "message": f.message} for f in detected if not f.blocking
+        ],
+        undo_seconds=delay,
+    )
+
+
+@router.post("/drafts/{draft_id}/cancel-send")
+async def cancel_send(
+    draft_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recall a message that is queued but not yet handed to SMTP (Ф4).
+
+    Cancellation is a flag on the draft rather than a Celery revoke: revoke is
+    best-effort and races the worker, while the send task checks this flag
+    inside the same row lock it already takes, so "отменено" and "уже ушло" can
+    never both be true.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    draft = await db.get(DraftAction, draft_id)
+    if not draft or not await may_access_draft(db, user, draft.draft_data):
+        raise HTTPException(404, "Draft not found")
+
+    data = dict(draft.draft_data or {})
+    if draft.executed or data.get("status") in ("sent", "sent_mock"):
+        raise HTTPException(409, "Письмо уже отправлено — отменить нельзя")
+
+    data["status"] = "draft"
+    data["cancelled"] = True
+    data["cancelled_by"] = user.sub
+    data.pop("send_after", None)
+    draft.draft_data = data
+    flag_modified(draft, "draft_data")
+    await log_action(
+        db, action="email.send_cancelled", entity_type="email", entity_id=draft.id,
+        details={"by": user.sub},
+    )
+    await db.commit()
+    logger.info("email_send_cancelled", draft_id=str(draft_id), by=user.sub)
+    return {"status": "cancelled", "draft_id": str(draft_id)}
 
 
 # ── email.style_match ─────────────────────────────────────────────────────
@@ -1244,6 +1873,7 @@ async def agent_generate_draft(
     from app.domain.email_compose import ComposeContext, generate_draft_body
     from app.domain.email_send import create_reply_draft
 
+    acting_sub = (request.headers.get("x-acting-user") or "").strip() or None
     res = await generate_draft_body(
         db,
         intent=payload.intent,
@@ -1254,7 +1884,7 @@ async def agent_generate_draft(
             mailbox=payload.mailbox,
         ),
         tone_override=payload.tone,
-        acting_user_sub=(request.headers.get("x-acting-user") or "").strip() or None,
+        acting_user_sub=acting_sub,
     )
     draft = await create_reply_draft(
         db,
@@ -1266,6 +1896,7 @@ async def agent_generate_draft(
         supplier_id=payload.supplier_id,
         mailbox=payload.mailbox,
         attachment_ids=payload.attachment_ids,
+        owner_sub=acting_sub,
     )
     await db.commit()
     await db.refresh(draft)
@@ -1279,6 +1910,7 @@ async def agent_generate_draft(
 @router.post("/drafts/{draft_id}/risk-check", response_model=RiskCheckResponse)
 async def risk_check(
     draft_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.risk_check — Check email draft for risks before sending."""
@@ -1286,88 +1918,36 @@ async def risk_check(
         select(DraftAction).where(DraftAction.id == draft_id)
     )
     draft = result.scalar_one_or_none()
-    if not draft:
+    if not draft or not await may_access_draft(db, user, draft.draft_data):
         raise HTTPException(404, "Draft not found")
 
     data = draft.draft_data or {}
-    flags: list[RiskFlag] = []
+    from app.domain.email_risk import blocking_flags, evaluate_draft
 
-    # Detector 1: External domain (our own mail domain + known supplier domains)
-    to_addrs = data.get("to_addresses", [])
-    from app.domain.email_rules import known_domains as _known_domains
-
-    known = await _known_domains(db)
-    for addr in to_addrs:
-        domain = addr.split("@")[-1].lower() if "@" in addr else ""
-        # When nothing is configured yet (empty `known`) we cannot confirm a
-        # domain is internal — flag it (warning, overridable) rather than stay
-        # silent. Once mailboxes/suppliers exist the check becomes precise.
-        if domain and domain not in known:
-            flags.append(RiskFlag(
-                code="external_domain",
-                severity="warning",
-                message=f"Внешний домен получателя: {domain}",
-            ))
-            break
-
-    # Detector 2: Amount mentioned without attachment context
-    body = (data.get("body_text") or data.get("body_html") or "").lower()
-    amount_words = ["оплат", "сумм", "счёт на", "перевод", "р.", "руб"]
-    if any(w in body for w in amount_words):
-        context = data.get("context") or {}
-        if not context.get("invoice_id") and not context.get("document_id"):
-            flags.append(RiskFlag(
-                code="amount_no_attachment",
-                severity="warning",
-                message="Упомянута сумма/оплата, но нет привязки к документу",
-            ))
-
-    # Detector 3: Recipient not in supplier card
-    supplier_id = data.get("supplier_id")
-    if supplier_id:
-        party_result = await db.execute(
-            select(Party).where(Party.id == uuid.UUID(supplier_id))
+    detected = await evaluate_draft(db, data)
+    flags: list[RiskFlag] = [
+        RiskFlag(
+            code=f.code, severity=f.severity, message=f.message,
+            can_override=f.can_override,
         )
-        party = party_result.scalar_one_or_none()
-        if party and party.contact_email:
-            if not any(party.contact_email.lower() in addr.lower() for addr in to_addrs):
-                flags.append(RiskFlag(
-                    code="recipient_mismatch",
-                    severity="warning",
-                    message=f"Получатель не совпадает с email поставщика ({party.contact_email})",
-                ))
+        for f in detected
+    ]
 
-    # Detector 4: Language mismatch (Russian body sent to non-RU domain)
-    has_cyrillic = any(ord(c) > 127 for c in body[:100])
-    for addr in to_addrs:
-        domain = addr.split("@")[-1] if "@" in addr else ""
-        if has_cyrillic and domain and not domain.endswith((".ru", ".рф", ".su")):
-            flags.append(RiskFlag(
-                code="language_mismatch",
-                severity="warning",
-                message=f"Русский текст отправляется на домен {domain}",
-                can_override=True,
-            ))
-            break
-
-    # Detector 5: Sensitive keywords
-    sensitive_words = ["конфиденциальн", "секрет", "не для распростран", "внутренн"]
-    for word in sensitive_words:
-        if word in body:
-            flags.append(RiskFlag(
-                code="sensitive_content",
-                severity="error",
-                message=f"Обнаружено чувствительное содержание: «{word}...»",
-                can_override=True,
-            ))
-            break
-
-    is_safe = not any(f.severity == "error" for f in flags)
+    # "Safe" now means "nothing that blocks", not "nothing of severity error":
+    # the old wording called a draft unsafe over an advisory flag and, at the
+    # same time, let the one error-level detector through (see email_risk).
+    is_safe = not blocking_flags(detected)
 
     # Update draft status
     from sqlalchemy.orm.attributes import flag_modified
+    from app.domain.email_send import draft_content_digest
+
     data["status"] = "risk_checked"
     data["risk_flags"] = [f.model_dump() for f in flags]
+    # Freeze exactly what was inspected: send refuses to go out with content
+    # that changed after the check (and therefore after any human approval).
+    data["content_digest"] = draft_content_digest(data)
+    data["risk_checked_digest"] = data["content_digest"]
     draft.draft_data = data
     flag_modified(draft, "draft_data")
     await db.commit()
@@ -1378,27 +1958,71 @@ async def risk_check(
 # ── email.send ─────────────────────────────────────────────────────────────
 
 
+class SendDraftRequest(BaseModel):
+    """``expected_digest`` is the ``content_digest`` the caller last saw.
+
+    This endpoint is the agent's approval-gated send path (the human composer
+    uses POST /api/email/send instead). Requiring the digest is what makes the
+    gate mean something: the approval machinery hashes the call arguments
+    (work_planning.tool_call_digest), so with the digest among them a decision
+    is bound to a specific letter rather than to a mutable draft id.
+    """
+
+    expected_digest: str | None = None
+
+
 @router.post("/drafts/{draft_id}/send")
 async def send_email(
     draft_id: uuid.UUID,
+    # Plain model with a default (not `| None`): the body stays optional on the
+    # wire, while the declared fields remain introspectable — an Optional[...]
+    # annotation hides them from the capability-contract check, which is exactly
+    # the "parameter no endpoint accepts" trap that test guards against.
+    payload: SendDraftRequest = SendDraftRequest(),
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: email.send — Send email draft via SMTP (approval gate)."""
+    """Skill: email.send — Send email draft via SMTP (approval gate).
+
+    Authorisation is NOT implied by the approval gate: the gate decides whether
+    the agent may perform the action at all, this check decides whether *this
+    caller* owns the draft and may send from its mailbox. Before Ф0.1 the
+    endpoint had neither — any authenticated user could send any draft,
+    including one composed inside a colleague's personal mailbox.
+    """
     result = await db.execute(
         select(DraftAction).where(DraftAction.id == draft_id)
     )
     draft = result.scalar_one_or_none()
-    if not draft:
+    if not draft or not await may_access_draft(db, user, draft.draft_data):
         raise HTTPException(404, "Draft not found")
 
     if draft.executed:
         raise HTTPException(400, "Email already sent")
 
     data = draft.draft_data or {}
+    mailbox = data.get("mailbox")
+    if mailbox and not await may_write_mailbox(db, user, mailbox):
+        raise HTTPException(403, "Нет доступа для отправки из этого ящика")
 
     # Check risk_check was done
     if data.get("status") not in ("risk_checked", "approved"):
         raise HTTPException(400, "Risk check required before sending")
+
+    # Content binding (Ф0.2): what is about to be sent must be what was
+    # checked, and what the caller thinks it is approving.
+    current_digest = data.get("content_digest")
+    expected = payload.expected_digest if payload else None
+    if expected and current_digest and expected != current_digest:
+        raise HTTPException(
+            409,
+            "Черновик изменился после подтверждения — перечитайте его и повторите отправку",
+        )
+    checked = data.get("risk_checked_digest")
+    if checked and current_digest and checked != current_digest:
+        raise HTTPException(
+            409, "Письмо изменилось после проверки рисков — повторите risk_check"
+        )
 
     # Check for blocking risks
     risk_flags = data.get("risk_flags", [])
@@ -1574,12 +2198,19 @@ async def process_email_attachment(
     """Skill: email.process_attachment — manually (re)send an already-ingested
     attachment through document extraction or CAD vectorization.
 
-    Every attachment already becomes a Document at IMAP ingest time
-    (app.tasks.ingest._store_attachment, content-based classification runs
-    automatically). This is for the cases automatic triage doesn't cover: a
+    Every attachment becomes a Document at IMAP ingest time
+    (app.tasks.ingest._store_attachment) and, since Ф6.1, is queued for
+    classification/extraction right there — provided the mailbox has
+    ``auto_process_attachments`` on (and, for a personal mailbox, its owner
+    consented via ``sweep_enabled``). Until Ф6.1 this docstring claimed the
+    automatic part while nothing in the IMAP path ever called
+    ``process_document``; an emailed invoice stayed an un-parsed Document.
+
+    This endpoint remains for what automatic triage does not cover: a
     quarantined extension, a failed/low-confidence classification the user
-    wants re-run, or turning a drawing attachment into a CAD Drawing record
-    (a separate pipeline from Document/invoice extraction).
+    wants re-run, a mailbox with automation switched off, or turning a drawing
+    attachment into a CAD Drawing record (a separate pipeline from
+    Document/invoice extraction).
     """
     from app.db.models import Document, DocumentLink
 
@@ -1640,14 +2271,51 @@ async def process_email_attachment(
 # ── Attachment bytes + on-demand recognition (agent) ──────────────────────
 
 
+def _content_disposition(kind: str, filename: str) -> str:
+    """RFC 6266 / 5987 Content-Disposition.
+
+    Filenames here are usually Cyrillic ("Счёт №123.pdf"). Interpolating them
+    straight into the header — what this endpoint did — produces a header
+    latin-1 cannot encode, and a quote in the name would let a sender inject
+    header parameters. ASCII fallback plus filename* is the correct form.
+    """
+    from urllib.parse import quote
+
+    ascii_name = (filename or "attachment").encode("ascii", "replace").decode("ascii")
+    ascii_name = ascii_name.replace('"', "_").replace("\\", "_").replace("\r", "").replace("\n", "")
+    return f'{kind}; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename or "attachment")}'
+
+
+# Types that a browser will happily execute in the origin that served them.
+# An emailed .html/.svg opened "inline" from the API origin is a stored XSS with
+# the viewer's session cookie attached, so these are always downloaded, never
+# rendered — regardless of what the sender labelled them.
+_EXECUTABLE_ATTACHMENT_TYPES = {
+    "text/html", "application/xhtml+xml", "image/svg+xml",
+    "text/xml", "application/xml", "text/xsl", "application/mathml+xml",
+}
+# The only types worth previewing in place; everything else is a download.
+_INLINE_SAFE_TYPES = {
+    "application/pdf",
+    "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp",
+    "text/plain",
+}
+
+
 @router.get("/messages/{message_id}/attachments/{filename}/content")
 async def get_attachment_content(
     message_id: uuid.UUID,
     filename: str,
+    disposition: str = "attachment",
     user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: email.get_attachment — Stream the raw bytes of one attachment."""
+    """Skill: email.get_attachment — Stream the raw bytes of one attachment.
+
+    Downloads by default. ``?disposition=inline`` is honoured only for the
+    small allowlist of types that are safe to render (PDF, raster images,
+    plain text) — never for anything the browser would execute.
+    """
     from fastapi.responses import StreamingResponse
 
     msg = await db.get(EmailMessage, message_id)
@@ -1669,10 +2337,237 @@ async def get_attachment_content(
         data = await asyncio.to_thread(download_file, att.storage_path)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Storage unavailable: {exc}")
+
+    declared = (att.content_type or "").split(";")[0].strip().lower()
+    executable = declared in _EXECUTABLE_ATTACHMENT_TYPES
+    media_type = "application/octet-stream" if executable else (
+        att.content_type or "application/octet-stream"
+    )
+    inline_ok = disposition == "inline" and not executable and declared in _INLINE_SAFE_TYPES
     return StreamingResponse(
         iter([data]),
-        media_type=att.content_type or "application/octet-stream",
-        headers={"Content-Disposition": f'inline; filename="{att.filename}"'},
+        media_type=media_type,
+        headers={
+            "Content-Disposition": _content_disposition(
+                "inline" if inline_ok else "attachment", att.filename
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@router.get("/messages/{message_id}/attachments/archive")
+async def download_all_attachments(
+    message_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ф5.3 — every attachment of one message as a single .zip.
+
+    A letter with eleven specifications is eleven clicks, and the eleventh is
+    the one people miss. Inline parts (signature logos) are left out: they are
+    not attachments in any sense a person means.
+    """
+    import io
+    import zipfile
+
+    from fastapi.responses import StreamingResponse
+
+    msg = await db.get(EmailMessage, message_id)
+    if not msg or not await may_read_mailbox(db, user, msg.mailbox):
+        raise HTTPException(404, "Not found")
+    rows = (
+        await db.execute(
+            select(EmailAttachment).where(
+                EmailAttachment.message_id == message_id,
+                EmailAttachment.is_inline == False,  # noqa: E712
+                EmailAttachment.storage_path.isnot(None),
+            )
+        )
+    ).scalars().all()
+    if not rows:
+        raise HTTPException(404, "Вложений нет")
+
+    from app.storage import download_file
+
+    buf = io.BytesIO()
+    missing: list[str] = []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        seen: dict[str, int] = {}
+        for att in rows:
+            try:
+                data = await asyncio.to_thread(download_file, att.storage_path)
+            except Exception as exc:  # noqa: BLE001
+                # One unreachable object must not cost the user the other ten.
+                logger.warning(
+                    "email_zip_attachment_missing",
+                    attachment_id=str(att.id), error=str(exc),
+                )
+                missing.append(att.filename)
+                continue
+            name = att.filename or "attachment"
+            if name in seen:
+                seen[name] += 1
+                stem, _, ext = name.rpartition(".")
+                name = f"{stem} ({seen[name]}).{ext}" if stem else f"{name} ({seen[name]})"
+            else:
+                seen[name] = 0
+            zf.writestr(name, data)
+        if missing:
+            # Silence here would look like the files never existed.
+            zf.writestr(
+                "НЕ УДАЛОСЬ ПРОЧИТАТЬ.txt",
+                "Эти вложения не удалось получить из хранилища:\n"
+                + "\n".join(missing),
+            )
+    if len(missing) == len(rows):
+        raise HTTPException(502, "Ни одно вложение не удалось получить из хранилища")
+    buf.seek(0)
+
+    stem = (msg.subject or "Вложения").strip()[:60] or "Вложения"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": _content_disposition("attachment", f"{stem}.zip"),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@router.get("/messages/{message_id}/raw")
+async def download_message_eml(
+    message_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download one message as .eml — REBUILT from what we stored.
+
+    Deliberately not called "оригинал": the raw RFC822 source is not kept
+    anywhere (the parser extracts fields and discards the bytes), so this is a
+    reconstruction — same headers we captured, same bodies, same attachments,
+    but not byte-identical to what the server delivered. Claiming otherwise
+    would make it useless for the one case people want a raw source for, which
+    is arguing about what was actually sent.
+
+    Keeping the true source is a storage decision, not a bug fix — see Ф8.
+    """
+    from email.message import EmailMessage as MimeMessage
+    from fastapi.responses import Response
+
+    msg = await db.get(EmailMessage, message_id)
+    if not msg or not await may_read_mailbox(db, user, msg.mailbox):
+        raise HTTPException(404, "Not found")
+
+    mime = MimeMessage()
+    mime["Subject"] = msg.subject or ""
+    mime["From"] = msg.from_address or ""
+    mime["To"] = ", ".join(msg.to_addresses or [])
+    if msg.cc_addresses:
+        mime["Cc"] = ", ".join(msg.cc_addresses)
+    if msg.message_id_header:
+        mime["Message-ID"] = msg.message_id_header
+    if msg.in_reply_to:
+        mime["In-Reply-To"] = msg.in_reply_to
+    if msg.references:
+        mime["References"] = msg.references
+    if msg.reply_to:
+        mime["Reply-To"] = msg.reply_to
+    if msg.sent_at:
+        from email.utils import format_datetime
+
+        mime["Date"] = format_datetime(msg.sent_at)
+    for key, value in (msg.headers_meta or {}).items():
+        if key == "auth" or not isinstance(value, str):
+            continue
+        mime[key.replace("_", "-").title()] = value
+    mime["X-AI-Docs-Reconstructed"] = "yes"
+
+    mime.set_content(msg.body_text or "")
+    if msg.body_html:
+        mime.add_alternative(msg.body_html, subtype="html")
+
+    attachments = (
+        await db.execute(
+            select(EmailAttachment).where(EmailAttachment.message_id == message_id)
+        )
+    ).scalars().all()
+    for att in attachments:
+        if not att.storage_path:
+            continue
+        try:
+            from app.storage import download_file
+
+            payload = await asyncio.to_thread(download_file, att.storage_path)
+        except Exception:  # noqa: BLE001
+            continue
+        ctype = (att.content_type or "application/octet-stream").split("/")
+        mime.add_attachment(
+            payload,
+            maintype=ctype[0] or "application",
+            subtype=ctype[1] if len(ctype) > 1 else "octet-stream",
+            filename=att.filename,
+        )
+
+    name = f"{(msg.subject or 'message')[:60]}.eml"
+    return Response(
+        content=mime.as_bytes(),
+        media_type="message/rfc822",
+        headers={
+            "Content-Disposition": _content_disposition("attachment", name),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/messages/{message_id}/attachments/cid/{content_id}/content")
+async def get_inline_part(
+    message_id: uuid.UUID,
+    content_id: str,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bytes of an inline part referenced from the HTML body by ``cid:``.
+
+    Same authorisation as any other attachment. Only image types are served,
+    and always with a restrictive CSP: this is the one attachment path whose
+    output is rendered rather than downloaded.
+    """
+    from fastapi.responses import StreamingResponse
+
+    msg = await db.get(EmailMessage, message_id)
+    if not msg or not await may_read_mailbox(db, user, msg.mailbox):
+        raise HTTPException(404, "Not found")
+    att = (
+        await db.execute(
+            select(EmailAttachment).where(
+                EmailAttachment.message_id == message_id,
+                EmailAttachment.content_id == content_id,
+            )
+        )
+    ).scalars().first()
+    if not att or not att.storage_path:
+        raise HTTPException(404, "Inline part not found")
+    declared = (att.content_type or "").split(";")[0].strip().lower()
+    if not declared.startswith("image/") or declared == "image/svg+xml":
+        raise HTTPException(415, "Только изображения")
+    try:
+        from app.storage import download_file
+
+        data = await asyncio.to_thread(download_file, att.storage_path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Storage unavailable: {exc}")
+    return StreamingResponse(
+        iter([data]),
+        media_type=declared,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Cache-Control": "private, max-age=600",
+        },
     )
 
 
@@ -1788,7 +2683,11 @@ async def agent_reply_draft(
         tone_override=payload.tone,
         acting_user_sub=(request.headers.get("x-acting-user") or "").strip() or None,
     )
-    to = payload.to_addresses or ([last_inbound.from_address] if last_inbound else [])
+    # Reply-To wins over From: suppliers routinely send from a no-reply address
+    # with Reply-To pointing at the sales desk.
+    to = payload.to_addresses or (
+        [last_inbound.reply_to or last_inbound.from_address] if last_inbound else []
+    )
     subject = res.subject or (
         f"Re: {thread.subject}" if not thread.subject.lower().startswith("re:") else thread.subject
     )
@@ -1802,6 +2701,7 @@ async def agent_reply_draft(
         mailbox=thread.mailbox,
         in_reply_to_message_id=last_inbound.id if last_inbound else None,
         attachment_ids=payload.attachment_ids,
+        owner_sub=(request.headers.get("x-acting-user") or "").strip() or None,
     )
     await db.commit()
     await db.refresh(draft)

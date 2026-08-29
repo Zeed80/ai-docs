@@ -10,9 +10,11 @@ description: |
   Автоматическая обработка входящих писем: получение → загрузка вложений →
   классификация → извлечение данных → нормализация → валидация → маршрутизация.
 trigger:
-  type: schedule
-  cron: "*/5 * * * *"
-  # Also triggered manually via: POST /api/email/fetch
+  # Ф6.5: расписание снято сознательно. Реальная обработка входящей почты —
+  # beat-поллинг ящиков (dispatch-mailbox-polls) плюс email.triage_message;
+  # этот сценарий по расписанию опрашивал бы IMAP второй раз.
+  # Ручной прогон: POST /api/scenarios/email_triage/run
+  type: manual
 
 steps:
   - id: fetch_emails

@@ -16,6 +16,7 @@ Endpoints (prefix /api/providers):
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -374,16 +375,38 @@ class CatalogModelOut(BaseModel):
     quality_score: float
     speed_score: float
     vram_gb_estimate: float | None
+    # available / missing / unknown — см. provider_registry.Availability.
+    # Каталог помечал «production» модели, которых давно нет ни на одном узле
+    # (gemma4 после перехода на qwen3.8), и они спокойно назначались из GUI.
+    availability: str = "unknown"
 
 
 @router.get("/models", response_model=list[CatalogModelOut], dependencies=_admin)
 async def list_models(
     include_disabled: bool = True,
+    check_availability: bool = True,
     db: AsyncSession = Depends(get_db),
 ) -> list[CatalogModelOut]:
     """Catalog models with status + thinking flags. The UI filters by ``status``
-    to declutter (production by default, ``include all`` reveals candidates)."""
+    to declutter (production by default, ``include all`` reveals candidates).
+
+    ``availability`` says whether the model is actually served by any enabled
+    node right now — статус в каталоге этого не знает и знать не может.
+    """
     registry = _registry()
+    avail: dict[str, str] = {}
+    if check_availability:
+        from app.ai.provider_registry import catalog_availability
+
+        try:
+            avail = {
+                k: v.value
+                for k, v in (
+                    await asyncio.to_thread(catalog_availability, registry.models)
+                ).items()
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("catalog_availability_failed", error=str(exc))
     out: list[CatalogModelOut] = []
     for key, cap in registry.models.items():
         if not include_disabled and cap.status.value == "disabled":
@@ -406,8 +429,144 @@ async def list_models(
                 quality_score=cap.quality_score,
                 speed_score=cap.speed_score,
                 vram_gb_estimate=cap.vram_gb_estimate,
+                availability=avail.get(key, "unknown"),
             )
         )
+    return out
+
+
+class RoutingChainEntry(BaseModel):
+    key: str
+    provider_model: str | None = None
+    provider: str | None = None
+    availability: str  # available | missing | unknown | not_in_catalog
+    is_primary: bool = False
+
+
+class RoutingChainOut(BaseModel):
+    task: str
+    models: list[RoutingChainEntry]
+    dead: int = 0
+
+
+@router.get("/routing-health", response_model=list[RoutingChainOut], dependencies=_admin)
+async def routing_health() -> list[RoutingChainOut]:
+    """Полная цепочка моделей каждой задачи, а не только её голова.
+
+    Экран моделей показывает по задаче одну — назначенную — модель, поэтому
+    остальная часть цепочки невидима, и мусор в ней может лежать годами. Так и
+    вышло: после перехода gemma4 → qwen3.8 менялась голова, а хвост сохранялся
+    целиком, и ссылки на несуществующие модели остались у большинства задач.
+    """
+    from app.ai.provider_registry import Availability, model_availability
+    from app.ai.task_routing import get_task_routing
+
+    registry = _registry()
+
+    def _entry(key: str, primary: bool) -> RoutingChainEntry:
+        cap = registry.models.get(key)
+        if cap is None:
+            return RoutingChainEntry(
+                key=key, availability="not_in_catalog", is_primary=primary
+            )
+        try:
+            state = model_availability(cap.provider, cap.provider_model).value
+        except Exception:  # noqa: BLE001
+            state = Availability.UNKNOWN.value
+        return RoutingChainEntry(
+            key=key, provider_model=cap.provider_model,
+            provider=cap.provider.value, availability=state, is_primary=primary,
+        )
+
+    def _build() -> list[RoutingChainOut]:
+        out: list[RoutingChainOut] = []
+        for task, cfg in get_task_routing().items():
+            entries = [
+                _entry(k, i == 0) for i, k in enumerate(cfg.models or [])
+            ]
+            out.append(RoutingChainOut(
+                task=str(task).split(".")[-1].lower(),
+                models=entries,
+                dead=sum(
+                    1 for e in entries
+                    if e.availability in ("missing", "not_in_catalog")
+                ),
+            ))
+        return sorted(out, key=lambda r: r.task)
+
+    return await asyncio.to_thread(_build)
+
+
+class RoutingPruneOut(BaseModel):
+    pruned: dict[str, list[str]] = {}
+    total: int = 0
+    skipped_head: dict[str, str] = {}
+    # Задача, чью цепочку не удалось сохранить (например в YAML-дефолте у
+    # конфиденциальной задачи прописана облачная модель). Это не наша поломка
+    # и молча её глотать нельзя — цепочка так и останется с мусором.
+    failed: dict[str, str] = {}
+
+
+@router.post("/routing-health/prune", response_model=RoutingPruneOut, dependencies=_admin)
+async def prune_routing(db: AsyncSession = Depends(get_db)) -> RoutingPruneOut:
+    """Убрать из цепочек ссылки на модели, которых заведомо нет.
+
+    Голову цепочки не трогаем никогда, даже мёртвую: это осознанное назначение
+    человека, и молча его снять — то же самое, что назначить другую модель за
+    него. Такую задачу возвращаем в ``skipped_head``, чтобы её было видно.
+    """
+    from app.ai.assignment_groups import prune_dead_keys
+    from app.ai.task_routing import get_task_routing, save_task_routing
+
+    def _run() -> RoutingPruneOut:
+        result = RoutingPruneOut()
+        for task, cfg in get_task_routing().items():
+            models = list(cfg.models or [])
+            if not models:
+                continue
+            head, tail = models[0], models[1:]
+            kept, dropped = prune_dead_keys(tail)
+            head_alive, head_dead = prune_dead_keys([head])
+            name = str(task).split(".")[-1].lower()
+            if head_dead:
+                result.skipped_head[name] = head
+            if not dropped:
+                continue
+            try:
+                save_task_routing(
+                    task, cfg.model_copy(update={"models": [head, *kept]})
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Одна невалидная цепочка не должна отменять чистку остальных.
+                result.failed[name] = str(exc)
+                continue
+            result.pruned[name] = dropped
+            result.total += len(dropped)
+        return result
+
+    out = await asyncio.to_thread(_run)
+
+    # Redis — только кэш: назначения durable лежат в Postgres и при старте
+    # оттуда же восстанавливаются поверх Redis. Без записи в Postgres чистка
+    # жила бы до первого рестарта и молча откатывалась — ровно тот случай,
+    # ради которого durable-хранилище и заводили.
+    if out.pruned:
+        from app.ai import model_runtime_store
+        from app.ai.task_routing import get_routing_for
+
+        for name in out.pruned:
+            try:
+                task = AITask(name)
+            except ValueError:
+                continue
+            await model_runtime_store.persist_task_routing(
+                db, task=task.value,
+                routing=get_routing_for(task).model_dump(mode="json"),
+            )
+        await db.commit()
+        await model_runtime_store.hydrate_runtime_cache(db)
+
+    logger.info("task_routing_pruned", total=out.total, tasks=list(out.pruned))
     return out
 
 

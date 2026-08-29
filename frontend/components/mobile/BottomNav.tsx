@@ -28,6 +28,11 @@ function I({ d }: { d: string }) {
   );
 }
 
+// Ф7.1 — "Входящие" is now the unified feed (mail + documents + anomalies).
+// That is how mail becomes reachable from a phone: the bottom nav never linked
+// to /email, and the tab row is already full. Composing a new letter still goes
+// through the side menu — reading and triage, which is what a phone is for, now
+// work from the first screen.
 const LEFT: Tab[] = [
   {
     href: "/inbox",

@@ -73,7 +73,7 @@ async def test_thread_list_hides_other_users_personal_mailbox(
 ):
     resp = await client.get("/api/email/threads?limit=100")
     assert resp.status_code == 200
-    boxes = {t["mailbox"] for t in resp.json()}
+    boxes = {t["mailbox"] for t in resp.json()["items"]}
     assert "procurement" in boxes          # shared — unchanged
     assert "me@example.com" in boxes       # own personal mailbox
     assert "colleague@example.com" not in boxes

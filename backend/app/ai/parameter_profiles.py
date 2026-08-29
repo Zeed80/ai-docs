@@ -78,7 +78,6 @@ TASK_DEFAULT_PROFILE: dict[AITask, str] = {
     AITask.LONG_CONTEXT_SUMMARIZATION: "balanced",
     AITask.EMBEDDING: "balanced",
     AITask.RERANKING: "balanced",
-    AITask.SPEECH: "balanced",
 }
 
 # Hardware-specific provider defaults for RTX 3090 24 GB

@@ -151,6 +151,7 @@ WorkerRole = Literal[
     "warehouse_specialist",
     "procurement_specialist",
     "accountant",
+    "mail_assistant",
     "engineer",
     "technologist",
     "memory_researcher",

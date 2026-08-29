@@ -51,7 +51,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         csp_exempt = any(
             request.url.path.startswith(p) for p in _CSP_EXEMPT_PATH_PREFIXES
         )
-        if settings.csp_enabled and not csp_exempt:
+        # Найдено при приёмке (Правило 0): middleware перезаписывал CSP, уже
+        # выставленный эндпоинтом, и более строгая политика выдачи вложений
+        # (`default-src 'none'; sandbox`) молча заменялась на общеприложенческую
+        # `script-src 'self'`. Ослаблять то, что эндпоинт ужесточил осознанно,
+        # нельзя: обратное — можно и нужно.
+        if (
+            settings.csp_enabled
+            and not csp_exempt
+            and "Content-Security-Policy" not in response.headers
+        ):
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
                 "script-src 'self'; "
