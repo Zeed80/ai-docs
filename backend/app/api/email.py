@@ -1930,9 +1930,24 @@ async def risk_check(
     if not draft or not await may_access_draft(db, user, draft.draft_data):
         raise HTTPException(404, "Draft not found")
 
-    data = draft.draft_data or {}
-    from app.domain.email_risk import blocking_flags, evaluate_draft
+    is_safe, flags = await _run_risk_check(db, draft)
+    return RiskCheckResponse(draft_id=draft.id, is_safe=is_safe, flags=flags)
 
+
+async def _run_risk_check(db: AsyncSession, draft) -> tuple[bool, list["RiskFlag"]]:
+    """Прогнать детекторы по черновику и заморозить результат на его содержимом.
+
+    Вынесено из эндпоинта, потому что этим же занимается ``send``, когда
+    проверки ещё не было: раньше он просто отказывал, и вызывающий узнавал о
+    порядке действий из ошибки. Проверка при этом не пропускается — она
+    выполняется, и её вердикт решает, уйдёт письмо или нет.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.domain.email_risk import blocking_flags, evaluate_draft
+    from app.domain.email_send import draft_content_digest
+
+    data = draft.draft_data or {}
     detected = await evaluate_draft(db, data)
     flags: list[RiskFlag] = [
         RiskFlag(
@@ -1947,10 +1962,6 @@ async def risk_check(
     # same time, let the one error-level detector through (see email_risk).
     is_safe = not blocking_flags(detected)
 
-    # Update draft status
-    from sqlalchemy.orm.attributes import flag_modified
-    from app.domain.email_send import draft_content_digest
-
     data["status"] = "risk_checked"
     data["risk_flags"] = [f.model_dump() for f in flags]
     # Freeze exactly what was inspected: send refuses to go out with content
@@ -1960,8 +1971,7 @@ async def risk_check(
     draft.draft_data = data
     flag_modified(draft, "draft_data")
     await db.commit()
-
-    return RiskCheckResponse(draft_id=draft.id, is_safe=is_safe, flags=flags)
+    return is_safe, flags
 
 
 # ── email.send ─────────────────────────────────────────────────────────────
@@ -1978,6 +1988,10 @@ class SendDraftRequest(BaseModel):
     """
 
     expected_digest: str | None = None
+    # Коды блокирующих флагов, которые человек увидел и осознанно принял.
+    # Без этого блокирующая проверка была бы стеной без двери: человеческий
+    # путь отправки (compose_and_send) такое подтверждение принимает давно.
+    acknowledged_risks: list[str] = []
 
 
 @router.post("/drafts/{draft_id}/send")
@@ -2014,30 +2028,90 @@ async def send_email(
     if mailbox and not await may_write_mailbox(db, user, mailbox):
         raise HTTPException(403, "Нет доступа для отправки из этого ящика")
 
-    # Check risk_check was done
-    if data.get("status") not in ("risk_checked", "approved"):
-        raise HTTPException(400, "Risk check required before sending")
+    # Уже в очереди — второй раз не ставим. Раньше это обеспечивал побочный
+    # эффект: у поставленного в очередь черновика статус переставал быть
+    # "risk_checked", и его отбивала проверка «risk_check обязателен». Защита
+    # от дубля не должна держаться на чужой ошибке: в живом инциденте на один
+    # черновик пришлось шесть задач отправки. Отмена возвращает статус в
+    # "draft", поэтому отменённое письмо отправить снова можно.
+    if data.get("status") in ("queued", "sent", "sent_mock"):
+        raise HTTPException(
+            400,
+            {
+                "error_code": "already_queued",
+                "message": "Письмо уже отправляется или отправлено",
+                "status": data.get("status"),
+            },
+        )
 
     # Content binding (Ф0.2): what is about to be sent must be what was
-    # checked, and what the caller thinks it is approving.
-    current_digest = data.get("content_digest")
+    # checked, and what the caller thinks it is approving. Проверяется ДО
+    # авто-проверки рисков: свежий прогон перезаписал бы content_digest и
+    # подтверждение, данное на другое содержимое, стало бы «совпадающим».
     expected = payload.expected_digest if payload else None
-    if expected and current_digest and expected != current_digest:
+    if expected and data.get("content_digest") and expected != data["content_digest"]:
         raise HTTPException(
             409,
             "Черновик изменился после подтверждения — перечитайте его и повторите отправку",
         )
+
+    # Проверка рисков обязательна, но добывать её отдельным вызовом вызывающий
+    # не обязан: раньше send просто отказывал, и агент узнавал о нужном порядке
+    # действий из ошибки — лишний круг на каждой отправке. Проверка не
+    # пропускается: если её не было или содержимое изменилось после неё, она
+    # выполняется здесь и её вердикт решает судьбу письма.
     checked = data.get("risk_checked_digest")
-    if checked and current_digest and checked != current_digest:
-        raise HTTPException(
-            409, "Письмо изменилось после проверки рисков — повторите risk_check"
+    needs_check = (
+        data.get("status") not in ("risk_checked", "approved")
+        or not checked
+        or checked != data.get("content_digest")
+    )
+    if needs_check:
+        is_safe, fresh_flags = await _run_risk_check(db, draft)
+        data = draft.draft_data or {}
+        logger.info(
+            "email_send_ran_risk_check_inline",
+            draft_id=str(draft_id), is_safe=is_safe,
+            flags=[f.code for f in fresh_flags],
         )
 
-    # Check for blocking risks
-    risk_flags = data.get("risk_flags", [])
-    blocking = [f for f in risk_flags if f.get("severity") == "error" and f.get("can_override") is False]
+    # Блокирующие флаги — по общей политике (email_risk.BLOCKING_CODES), той
+    # же, по которой risk_check считает черновик безопасным. Раньше здесь был
+    # свой предикат `severity == "error" and can_override is False`, под
+    # который не подходил ни один детектор: письмо с блокирующим флагом
+    # уходило, хотя проверка называла его небезопасным.
+    from app.domain.email_risk import BLOCKING_CODES
+
+    acknowledged = {c.strip() for c in (payload.acknowledged_risks if payload else [])}
+    hit = [f for f in (data.get("risk_flags") or []) if f.get("code") in BLOCKING_CODES]
+    blocking = [f for f in hit if f.get("code") not in acknowledged]
+    suppressed = sorted({f.get("code") for f in hit if f.get("code") in acknowledged})
+    if suppressed:
+        # Обход блокирующей проверки — решение человека, и оно должно быть
+        # видно в аудите, как и на человеческом пути отправки. Логируем только
+        # когда подтверждение действительно что-то сняло: иначе в журнале
+        # копились бы «переопределения», ничего не переопределившие.
+        await log_action(
+            db, action="email.risk_override", entity_type="email", entity_id=draft.id,
+            details={"codes": suppressed, "by": user.sub, "path": "agent_send"},
+        )
+        await db.commit()
+
     if blocking:
-        raise HTTPException(400, f"Blocked by risk: {blocking[0]['message']}")
+        raise HTTPException(
+            400,
+            {
+                "error_code": "blocked_by_risk",
+                "message": blocking[0]["message"],
+                "blocked_by": [f.get("code") for f in blocking],
+                "flags": blocking,
+                "hint": (
+                    "Отправка остановлена проверкой рисков. Покажите причину "
+                    "человеку; если он подтверждает — повторите с "
+                    "acknowledged_risks."
+                ),
+            },
+        )
 
     # Dispatch SMTP sending to Celery (non-blocking)
     try:
