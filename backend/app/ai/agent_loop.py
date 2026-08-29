@@ -2301,6 +2301,7 @@ class AgentSession:
                         continue
                     consecutive_empty_responses = 0
                     delivered_text = await self._deliver_final_content(full_text)
+                    self._record_assistant_reply(delivered_text)
                     # Fire-and-forget: index this turn into memory
                     self._remember_latest_turn(delivered_text)
                     break
@@ -2349,6 +2350,23 @@ class AgentSession:
                 await self._send({"type": "done"})
             except Exception:
                 pass
+
+    def _record_assistant_reply(self, text: str) -> None:
+        """Положить финальный ответ агента в историю хода.
+
+        Ответ исполнителя в историю не попадал: в неё уходило только сообщение
+        с вызовами инструментов. Из-за этого агент не помнил, что сам только
+        что сказал человеку, — а именно на это человек и отвечает «да». Путь
+        секретаря такую запись делал давно (record_external_turn), путь
+        исполнителя — нет.
+        """
+        if not text or not str(text).strip():
+            return
+        if self.messages and self.messages[-1].get("role") == "assistant" \
+                and self.messages[-1].get("content") == text:
+            return
+        self.messages.append({"role": "assistant", "content": text})
+        self._trim_history()
 
     async def _deliver_final_content(self, full_text: str) -> str:
         text = (full_text or "").strip()
@@ -2441,6 +2459,7 @@ class AgentSession:
             text = str(msg.get("content") or "").strip()
         if text:
             await self._deliver_final_content(text)
+            self._record_assistant_reply(text)
             self._remember_latest_turn(text)
         else:
             await self._send({
@@ -2539,20 +2558,31 @@ class AgentSession:
             return fn_name, result, tc_id
 
         approval_granted = False
-        if original_name in current_gates and self._explicit_send_authorized(original_name, args):
-            # The user's own imperative in this turn stands in for the approval
-            # prompt (see _explicit_send_authorized). Still fully audited.
+        _authorized_by = None
+        if original_name in current_gates:
+            if self._explicit_send_authorized(original_name, args):
+                _authorized_by = ("user:explicit_instruction",
+                                  "Отправка по вашему прямому указанию.")
+            elif self._confirms_pending_send(original_name, args):
+                # Человек только что ответил «да» на показанный черновик.
+                _authorized_by = ("user:confirmed_proposal",
+                                  "Отправляю — вы подтвердили это письмо.")
+        if _authorized_by:
+            # Согласие человека заменяет запрос подтверждения. Полностью
+            # аудируется: в журнале видно, что именно послужило разрешением.
             asyncio.create_task(self._log_action(
                 iteration=iteration,
                 action_type="approval_decision",
                 tool_name=original_name,
-                tool_result={"approved": True, "actor": "user:explicit_instruction"},
+                tool_args=args,
+                tool_result={"approved": True, "actor": _authorized_by[0]},
             ))
             await self._send({
                 "type": "approval_auto",
                 "tool": original_name,
-                "message": "Отправка по вашему прямому указанию.",
+                "message": _authorized_by[1],
             })
+            self._granted_approvals.add(self._approval_key(original_name, args))
             approval_granted = True
         elif original_name in current_gates and self._approval_key(
             original_name, args
@@ -2686,6 +2716,92 @@ class AgentSession:
         r"(письм|сообщени|email|e-mail|мейл|запрос|кп|коммерческ)",
         re.IGNORECASE,
     )
+
+    # Короткое согласие в ответ на показанный черновик. Намеренно узкий
+    # список: это ответ «да» на конкретный вопрос, а не разговорное «ладно»
+    # посреди обсуждения.
+    _CONFIRMATION_RE = re.compile(
+        r"^\W*(да|ага|угу|ок|окей|хорошо|давай(те)?|подтвержда[юе][а-яё]*|"
+        r"отправ(ляй|ь|ляйте|ьте)|поехали|верно|согласен|согласна|"
+        r"yes|ok|okay|sure|confirm(ed)?|send( it)?)\W*$",
+        re.IGNORECASE,
+    )
+    # Отрицание внутри короткого ответа отменяет согласие целиком: «да, но не
+    # отправляй» — это отказ, а не подтверждение.
+    _NEGATION_RE = re.compile(
+        r"(\bне\b|\bнет\b|погод|подожд|стоп|отмен|don'?t|no\b|wait|cancel|stop)",
+        re.IGNORECASE,
+    )
+    # Признак того, что предыдущий ход агента ЗАКОНЧИЛСЯ предложением
+    # отправить письмо: без этого «да» относилось бы неизвестно к чему.
+    _SEND_PROPOSAL_RE = re.compile(
+        r"(подтвержда[ею]те?\s+отправк|подтвердит[ье]\s+отправк|отправ[а-яё]*\s*\?|"
+        r"отправля[ею]м\?|(да|нет)\s*[/)]|черновик письма|вот что будет отправлено)",
+        re.IGNORECASE,
+    )
+
+    def _confirms_pending_send(self, skill_name: str, args: dict) -> bool:
+        """True, когда человек только что ответил «да» на показанный черновик.
+
+        Живой случай: агент показал письмо и спросил «Подтверждаю отправку?»,
+        человек ответил «да» — и получил ещё шесть запросов разрешения на то
+        же самое письмо. Ответ на вопрос и есть разрешение; спрашивать снова —
+        значит спрашивать о том, на что уже ответили.
+
+        Условия намеренно жёсткие, потому что это гейт внешнего действия:
+        предыдущий ход агента должен заканчиваться предложением отправить,
+        ответ человека должен быть коротким согласием без отрицания, а если
+        вызов несёт получателя и тему — они обязаны совпасть с тем, что было
+        показано. Иначе подтверждали бы одно письмо, а уходило бы другое.
+        """
+        if skill_name not in ("email", "email.send"):
+            return False
+        if args.get("action") not in (None, "send"):
+            return False
+
+        last_user = next(
+            (str(m.get("content") or "") for m in reversed(self.messages)
+             if m.get("role") == "user"),
+            "",
+        )
+        if not last_user.strip() or len(last_user) > 64:
+            return False
+        if self._NEGATION_RE.search(last_user):
+            return False
+        if not self._CONFIRMATION_RE.match(last_user.strip()):
+            return False
+
+        # Предложение агента ищем ДО этого сообщения человека: подтверждать
+        # можно только уже показанное.
+        proposal = ""
+        seen_user = False
+        for m in reversed(self.messages):
+            role = m.get("role")
+            if role == "user" and not seen_user:
+                seen_user = True
+                continue
+            if seen_user and role == "assistant" and m.get("content"):
+                proposal = str(m.get("content"))
+                break
+        if not proposal or not self._SEND_PROPOSAL_RE.search(proposal):
+            return False
+
+        # Привязка к содержимому: то, что видно в аргументах, должно быть в
+        # показанном тексте. Для вызова с одним draft_id подмену содержимого
+        # ловит content_digest на стороне API.
+        body = args.get("body")
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except Exception:
+                body = {}
+        payload = body if isinstance(body, dict) else {}
+        recipients = payload.get("to_addresses") or args.get("to_addresses") or []
+        low_proposal = proposal.lower()
+        for addr in recipients if isinstance(recipients, list) else [recipients]:
+            if str(addr).lower() not in low_proposal:
+                return False
+        return True
 
     @staticmethod
     def _approval_key(skill_name: str, args: dict) -> str:

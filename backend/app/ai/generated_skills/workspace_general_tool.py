@@ -9,7 +9,7 @@ from typing import Any
 SKILL_META = {
     "name": "workspace_general_tool",
     "description": "general. Причина: Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.. Запрошенный артефакт: workspace_t",
-    "created_at": "2026-08-29T12:05:25.799876+00:00",
+    "created_at": "2026-08-29T17:33:56.766911+00:00",
     "source": "agent_generated_stub",
 }
 
