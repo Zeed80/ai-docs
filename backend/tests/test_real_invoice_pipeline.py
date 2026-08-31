@@ -227,7 +227,12 @@ class TestInferenceParamInjection:
         model_cap = ModelCapability(
             name="test_model",
             provider=ProviderKind.OLLAMA,
-            provider_model="gemma4:e4b",
+            # Провайдер здесь фиктивный (base_url="http://fake"), но выбор
+            # УЗЛА идёт по настоящему инвентарю: при нескольких Ollama-узлах
+            # select_instance отказывает модели, которой ни на одном нет.
+            # Поэтому берём назначенную задаче — тогда тест не зависит ни от
+            # чьего-то удалённого тега, ни от того, сколько узлов поднято.
+            provider_model=assigned_ollama_model(AITask.INVOICE_OCR),
             modalities={Modality.TEXT},
         )
         registry.get_route.return_value = TaskRoute(
@@ -442,12 +447,54 @@ class TestDocumentPipelineIntegration:
 # ---------------------------------------------------------------------------
 
 
+def assigned_ollama_model(task, *, need_vision: bool = False) -> str:
+    """Модель, НАЗНАЧЕННАЯ этой задаче в настройках, — та же, что пойдёт в прод.
+
+    Раньше живые тесты были прибиты гвоздями к конкретному тегу (``gemma4:e4b``,
+    ``gemma4:e2b``). Модель заменили — тесты стали падать с невнятным
+    «нет соединения», и полгода никто не проверял ни OCR, ни зрение, ни
+    черновики писем. Спрашивать модель у настроек — единственный способ не
+    зависеть от того, что кто-то удалил тег или переназначил задачу.
+
+    Пропускаем (а не роняем), когда назначенного узла или модели сейчас нет:
+    «нечем проверить» — это не то же самое, что «проверка провалилась».
+    """
+    import pytest as _pytest
+
+    from app.ai.model_registry import ModelRegistry
+    from app.ai.provider_registry import Availability, model_availability
+    from app.ai.schemas import Modality, ProviderKind
+    from app.ai.task_routing import get_routing_for
+
+    registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
+    tried: list[str] = []
+    for key in get_routing_for(task).models or []:
+        cap = registry.models.get(key)
+        if cap is None or cap.provider is not ProviderKind.OLLAMA:
+            continue
+        if need_vision and Modality.VISION not in cap.modalities:
+            continue
+        tried.append(cap.provider_model)
+        if model_availability(cap.provider, cap.provider_model) is not Availability.MISSING:
+            return cap.provider_model
+
+    _pytest.skip(
+        f"для задачи {getattr(task, 'value', task)} нет доступной Ollama-модели"
+        + (" со зрением" if need_vision else "")
+        + (f" (пробовали: {', '.join(tried)})" if tried else "")
+    )
+
+
 @pytest.mark.live
 @pytest.mark.slow
 class TestRealInvoiceOllamaGemma4:
-    """Live OCR tests using gemma4:e4b on real invoice files via Ollama."""
+    """Живые тесты OCR на реальных счетах через Ollama.
 
-    OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://host-gateway:11434")
+    Модель берётся из настроек задачи, а не задаётся здесь: назначение
+    меняется, и тест обязан проверять то, что реально работает в проде.
+    """
+
+    OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
     @pytest.fixture(scope="class")
     def ollama_provider(self):
@@ -461,7 +508,7 @@ class TestRealInvoiceOllamaGemma4:
 
     @pytest.mark.asyncio
     async def test_grafite_garant_jpg_vision(self, ollama_provider):
-        """gemma4:e4b must extract key fields from Графит-Гарант JPG via vision."""
+        """Назначенная задаче VLM обязана извлечь ключевые поля из JPG."""
         if not INVOICE_JPG.exists():
             pytest.skip(f"Invoice file not found: {INVOICE_JPG}")
 
@@ -485,7 +532,9 @@ class TestRealInvoiceOllamaGemma4:
         )
 
         t0 = time.perf_counter()
-        resp = await ollama_provider.vision(req, "gemma4:e4b")
+        from app.ai.schemas import AITask as _T
+        model = assigned_ollama_model(_T.INVOICE_OCR, need_vision=True)
+        resp = await ollama_provider.vision(req, model)
         elapsed = time.perf_counter() - t0
 
         assert resp.text, "Response must not be empty"
@@ -564,7 +613,7 @@ class TestRealInvoiceOllamaGemma4:
 
     @pytest.mark.asyncio
     async def test_xoffmann_pdf_text_extraction(self, ollama_provider):
-        """gemma4:e4b must extract Xoffmann invoice data from PDF text."""
+        """Назначенная задаче модель обязана извлечь данные счёта из текста PDF."""
         if not INVOICE_PDF_XOFFMANN.exists():
             pytest.skip(f"Invoice file not found: {INVOICE_PDF_XOFFMANN}")
 
@@ -592,7 +641,9 @@ class TestRealInvoiceOllamaGemma4:
             metadata={"inference_params": params},
         )
 
-        resp = await ollama_provider.chat(req, "gemma4:e4b")
+        resp = await ollama_provider.chat(
+            req, assigned_ollama_model(AITask.STRUCTURED_EXTRACTION)
+        )
         data = _json_from_text(resp.text)
 
         # Xoffmann счёт: ПРЗ2419587. Полное юридическое имя — «Хоффманн Профессиональный Инструмент»
@@ -707,7 +758,7 @@ class TestRealInvoiceLlamaCpp:
 class TestAgentQueries:
     """Realistic agent query scenarios using Ollama."""
 
-    OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://host-gateway:11434")
+    OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
     @pytest.fixture(scope="class")
     def ollama_provider(self):
@@ -745,7 +796,9 @@ class TestAgentQueries:
         opts = _inference_options(req, default_temperature=0.5)
         assert opts["temperature"] == 0.15
 
-        resp = await ollama_provider.chat(req, "gemma4:e4b")
+        resp = await ollama_provider.chat(
+            req, assigned_ollama_model(AITask.STRUCTURED_EXTRACTION)
+        )
         assert resp.text and len(resp.text) > 50, "Response must be non-trivial"
         # Must give structured answer with at least one numbered item
         assert any(c in resp.text for c in ["1.", "1)", "•", "-"]), "Must give structured list"
@@ -775,7 +828,9 @@ class TestAgentQueries:
             metadata={"inference_params": params},
         )
 
-        resp = await ollama_provider.chat(req, "gemma4:e4b")
+        resp = await ollama_provider.chat(
+            req, assigned_ollama_model(AITask.STRUCTURED_EXTRACTION)
+        )
         text = (resp.text or "").upper()
         # Price 15 000 ruб/шт is 6-10× above market — must detect anomaly
         assert "ДА" in text or "АНОМАЛИ" in text or "ЗАВЫШ" in text or "ПРЕВЫШ" in text, \
@@ -806,7 +861,9 @@ class TestAgentQueries:
                 ],
                 metadata={"inference_params": params},
             )
-            resp = await ollama_provider.chat(req, "gemma4:e2b")
+            resp = await ollama_provider.chat(
+                req, assigned_ollama_model(AITask.EMAIL_DRAFTING)
+            )
             results.append((resp.text or "").strip())
 
         # Both responses must mention НВС and поставка
@@ -865,7 +922,7 @@ class TestAgentQueries:
 class TestProviderComparison:
     """Cross-provider comparison on the same real invoice text."""
 
-    OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://host-gateway:11434")
+    OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
     LLAMACPP_URL = os.environ.get("LLAMACPP_URL", "http://localhost:11436")
 
     # Ground truth for NVS УТ-1007 invoice
@@ -887,7 +944,7 @@ class TestProviderComparison:
             pytest.skip("pdfplumber not available")
 
     @pytest.mark.asyncio
-    async def test_ollama_qwen35_vs_gemma4_accuracy(self, nvs_text):
+    async def test_ollama_assigned_models_accuracy(self, nvs_text):
         """Both Ollama models must correctly extract the key fields from NVS invoice."""
         from app.ai.providers.ollama import OllamaProvider
         from app.ai.schemas import AIRequest, AITask, ChatMessage, ProviderConfig, ProviderKind
@@ -899,7 +956,10 @@ class TestProviderComparison:
         prompt_suffix = '{"invoice_number":"","vendor_inn":"","total_amount":0}'
 
         results: dict[str, dict] = {}
-        for model in ("gemma4:e4b", "qwen3.5:9b"):
+        for model in (
+            assigned_ollama_model(AITask.INVOICE_OCR),
+            assigned_ollama_model(AITask.STRUCTURED_EXTRACTION),
+        ):
             req = AIRequest(
                 task=AITask.INVOICE_OCR,
                 messages=[
@@ -954,7 +1014,7 @@ class TestRealInvoiceVLLM:
     Model: Qwen/Qwen2.5-1.5B-Instruct (small, 1.5B params, text-only).
 
     Key findings from testing:
-    - vLLM is 7× faster than Ollama gemma4:e4b on same PDF text (4.5s vs 33.6s)
+    - vLLM is 7× faster than Ollama (замер 2026-06 на gemma4:e4b: 4.5s vs 33.6s)
     - Text-only model: cannot process JPG/image invoices directly
     - max_tokens must be capped to fit within max_model_len (8192 for this model)
     - Supplier/buyer INN confusion on ambiguous prompts (same as larger models)
@@ -1135,7 +1195,7 @@ class TestRealInvoiceVLLM:
     async def test_vllm_vs_ollama_speed_comparison(self, vllm_provider):
         """vLLM should be faster than Ollama on same text task (different models, same task).
 
-        Expected: vLLM Qwen2.5-1.5B < Ollama gemma4:e4b for same invoice text.
+        Expected: vLLM Qwen2.5-1.5B быстрее назначенной Ollama-модели.
         Note: model sizes differ (1.5B vs 4B) so speed comparison is model-weighted.
         """
         from app.ai.providers.ollama import OllamaProvider
@@ -1164,19 +1224,20 @@ class TestRealInvoiceVLLM:
         vllm_elapsed = time.perf_counter() - t0
 
         # Ollama timing (if available)
-        ollama_url = os.environ.get("OLLAMA_URL", "http://host-gateway:11434")
+        ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
         ollama_prov = OllamaProvider(
             ProviderConfig(kind=ProviderKind.OLLAMA, base_url=ollama_url, timeout_seconds=120.0)
         )
         t1 = time.perf_counter()
         try:
-            ollama_resp = await ollama_prov.chat(req, "gemma4:e4b")
+            ollama_model = assigned_ollama_model(AITask.STRUCTURED_EXTRACTION)
+            ollama_resp = await ollama_prov.chat(req, ollama_model)
             ollama_elapsed = time.perf_counter() - t1
         except Exception:
             pytest.skip("Ollama not available for comparison")
 
         print(f"\n  vLLM Qwen2.5-1.5B:  {vllm_elapsed:.1f}s | {vllm_resp.usage.total_tokens}tok")
-        print(f"  Ollama gemma4:e4b:   {ollama_elapsed:.1f}s | {ollama_resp.usage.total_tokens}tok")
+        print(f"  Ollama {ollama_model}: {ollama_elapsed:.1f}s | {ollama_resp.usage.total_tokens}tok")
         print(f"  Speed ratio: {ollama_elapsed / vllm_elapsed:.1f}× (vLLM faster)")
 
         # Both should succeed

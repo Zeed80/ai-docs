@@ -56,7 +56,10 @@ def router(monkeypatch):
     """A real AIRouter with stub providers and a captured telemetry sink."""
     r = AIRouter()
     stub = StubProvider(ProviderKind.OLLAMA)
-    r.providers = {kind: stub for kind in r.providers}
+    # use_providers, а не присваивание: иначе роутер выбирает узел по живому
+    # инвентарю и падает на модели, которой ни на одном узле нет, — хотя
+    # запрос всё равно уходит в заглушку.
+    r.use_providers({kind: stub for kind in r.providers})
     r._stub = stub  # type: ignore[attr-defined]
 
     recorded: list[dict] = []

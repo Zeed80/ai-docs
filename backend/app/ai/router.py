@@ -178,8 +178,16 @@ class AIRouter:
         # and lets tests inject stubs by iterating ``providers``). Calls that
         # target a *named* node (multi-machine) build a fresh provider per call —
         # see _resolve_provider.
+        # Явно переданные провайдеры (тесты, встраивание) должны выигрывать
+        # ВСЕГДА. Раньше их обходил _resolve_provider, как только у провайдера
+        # появлялся второй узел: select_instance возвращал именованный узел, и
+        # роутер строил настоящего провайдера поверх подставленного. Шов для
+        # подмены исчезал молча — тест начинал ходить в живую модель и
+        # проверять не то, что заявлено.
+        self._injected_kinds: set[ProviderKind] = set()
         if providers is not None:
             self.providers = providers
+            self._injected_kinds = set(providers)
         else:
             self.providers = {}
             for kind in self.registry.providers:
@@ -189,6 +197,17 @@ class AIRouter:
                     )
                 except Exception:  # noqa: BLE001 — placeholder kinds may be unbuildable
                     pass
+
+    def use_providers(self, providers: dict[ProviderKind, AIProvider]) -> None:
+        """Подменить провайдеров после создания роутера (тесты, встраивание).
+
+        Присваивание ``router.providers = {...}`` со стороны выглядит так же,
+        но не помечает провайдеров подставленными — и роутер продолжает
+        выбирать УЗЕЛ по живому инвентарю, падая «модель не обслуживается ни
+        одним узлом» на имени, которое никуда не уходит. Шов должен быть явным.
+        """
+        self.providers = providers
+        self._injected_kinds = set(providers)
 
     def _default_resolved(self, kind: ProviderKind):
         from app.ai.provider_registry import select_instance
@@ -226,7 +245,15 @@ class AIRouter:
 
     def _resolve_provider(self, model: ModelCapability):
         """Pick the node for a model and build its provider. Returns (provider, resolved)."""
-        from app.ai.provider_registry import select_instance
+        from app.ai.provider_registry import _default_instance, select_instance
+
+        if model.provider in self._injected_kinds:
+            # Провайдер подставлен снаружи — узел выбирать не из чего и не для
+            # чего. Раньше select_instance звали всё равно, и он падал
+            # «модель не обслуживается ни одним узлом» на имени, которое
+            # никуда не уходит: тест с фиктивным провайдером зависел от того,
+            # что реально установлено на живых узлах.
+            return self.providers[model.provider], _default_instance(model.provider)
 
         resolved = select_instance(
             model.provider, model.provider_model, model.preferred_instance
@@ -235,7 +262,9 @@ class AIRouter:
         # Reuse the cached default-node provider (and any test-injected stub)
         # unless the call targets a specific named node — then build fresh so
         # the right base_url/api_key is used (multi-machine routing).
-        if cached is not None and resolved.instance_id is None:
+        if cached is not None and (
+            resolved.instance_id is None or model.provider in self._injected_kinds
+        ):
             return cached, resolved
         return self._build_provider(model.provider, resolved), resolved
 

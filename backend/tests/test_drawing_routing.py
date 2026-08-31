@@ -49,7 +49,10 @@ class RecordingProvider:
 def stub_router(monkeypatch):
     r = AIRouter()
     provider = RecordingProvider()
-    r.providers = {kind: provider for kind in r.providers}
+    # use_providers, а не присваивание: иначе роутер выбирает узел по живому
+    # инвентарю и падает на модели, которой ни на одном узле нет, — хотя
+    # запрос всё равно уходит в заглушку.
+    r.use_providers({kind: provider for kind in r.providers})
     r._provider = provider  # type: ignore[attr-defined]
 
     # Keep telemetry inert.

@@ -138,7 +138,10 @@ class _StubProvider:
 def router_with_stub(monkeypatch):
     r = AIRouter()
     stub = _StubProvider()
-    r.providers = {kind: stub for kind in r.registry.providers}
+    # use_providers, а не присваивание: иначе роутер продолжит выбирать узел по
+    # живому инвентарю и упрётся в «модель не обслуживается», хотя запрос
+    # уходит в заглушку.
+    r.use_providers({kind: stub for kind in r.registry.providers})
     return r, stub
 
 
