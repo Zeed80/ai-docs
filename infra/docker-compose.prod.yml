@@ -35,6 +35,19 @@ services:
   technical-vectorizer:
     restart: unless-stopped
 
+  # Эти три политики не имели вовсе и после остановки не возвращались: 30.08
+  # они встали и пролежали полтора суток молча — поиск по картинке в каталогах,
+  # песочница для сгенерированного кода и исполнение CAD-кода просто не
+  # работали, а стек при этом выглядел здоровым.
+  vl-embedding:
+    restart: unless-stopped
+
+  skill-runner:
+    restart: unless-stopped
+
+  cad-code-runner:
+    restart: unless-stopped
+
   cad-kernel:
     restart: unless-stopped
 

@@ -119,3 +119,76 @@ def test_the_seen_flag_is_no_longer_the_selection_criterion():
     )
     # Флаг всё ещё ставится общему ящику — он его состояние обработки.
     assert 'if not personal:' in src and '"+FLAGS"' in src
+
+
+def test_idle_watcher_survives_several_folders_mapped_to_the_inbox(sync_db):
+    """Во «Входящие» отображается несколько серверных папок — подпапки INBOX,
+    куда провайдер раскладывает почту сам. Наблюдатель IDLE выбирал папку через
+    scalar_one_or_none() и падал с MultipleResultsFound на каждом запуске,
+    сразу после того как подпапки INBOX начали отображаться во «Входящие».
+    """
+    import inspect
+
+    from app.db.models import MailboxConfig, MailboxFolder
+    from app.tasks import email_idle
+
+    sync_db.add(MailboxConfig(
+        name="wmbox", imap_host="m.example.com", imap_port=993, imap_user="wmbox",
+        imap_password_encrypted="x", imap_ssl=True, is_active=True,
+        imap_folder="INBOX",
+    ))
+    for remote in ("INBOX", "INBOX/ToMyself", "INBOX/Newsletters"):
+        sync_db.add(MailboxFolder(
+            mailbox="wmbox", remote_name=remote, local_folder="inbox",
+            sync_enabled=True,
+        ))
+    sync_db.commit()
+
+    src = inspect.getsource(email_idle.idle_watch)
+    assert "scalar_one_or_none() or config.imap_folder" not in src, (
+        "выбор одной папки из нескольких обязан быть явным, а не падать"
+    )
+
+    from sqlalchemy import select
+
+    candidates = sync_db.execute(
+        select(MailboxFolder.remote_name).where(
+            MailboxFolder.mailbox == "wmbox",
+            MailboxFolder.local_folder == "inbox",
+        )
+    ).scalars().all()
+    assert len(candidates) == 3
+    # Основная папка ящика выигрывает у автосортированных подпапок.
+    assert "INBOX" in candidates
+
+
+def test_a_crashed_idle_watcher_releases_its_lease(monkeypatch):
+    """Аренда IDLE должна отдаваться любым выходом, включая исключение.
+
+    Упавший наблюдатель оставлял ключ висеть до конца TTL, и ящик оставался
+    без IDLE ещё двадцать минут после того, как причина падения уже устранена.
+    Так и вышло: наблюдатель падал на выборе папки, а диспетчер молча
+    пропускал ящик — «стек здоров, почта не приходит».
+    """
+    from app.tasks import email_idle
+
+    released: list[str] = []
+    monkeypatch.setattr(email_idle, "_release_lease", lambda mb: released.append(mb))
+
+    def _boom(mailbox, folder=None):
+        raise RuntimeError("MultipleResultsFound")
+
+    monkeypatch.setattr(email_idle, "_idle_watch_body", _boom)
+
+    try:
+        email_idle.idle_watch.apply(args=["boxy"]).get()
+    except Exception:
+        pass
+    assert released == ["boxy"], "аренда не освобождена при падении наблюдателя"
+
+    released.clear()
+    monkeypatch.setattr(
+        email_idle, "_idle_watch_body", lambda mailbox, folder=None: {"status": "ok"}
+    )
+    email_idle.idle_watch.apply(args=["boxy"]).get()
+    assert released == ["boxy"], "аренда не освобождена при обычном завершении"

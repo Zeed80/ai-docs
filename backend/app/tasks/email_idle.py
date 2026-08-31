@@ -45,7 +45,18 @@ def idle_watch(self, mailbox: str, folder: str | None = None) -> dict:
     Returns after a bounded budget rather than looping forever; the beat
     dispatcher restarts it. That keeps a hung connection from occupying a
     worker indefinitely — the failure mode a "just loop" implementation has.
+
+    Аренда освобождается ЛЮБЫМ выходом, включая исключение до подключения:
+    наблюдатель, упавший на выборе папки, оставлял ключ висеть до конца TTL, и
+    ящик оставался без IDLE ещё двадцать минут после починки причины.
     """
+    try:
+        return _idle_watch_body(mailbox, folder)
+    finally:
+        _release_lease(mailbox)
+
+
+def _idle_watch_body(mailbox: str, folder: str | None = None) -> dict:
     if not _idle_supported():
         # Recorded, not raised: the deployment simply polls, which works.
         logger.info("imap_idle_unavailable", mailbox=mailbox)
@@ -64,12 +75,25 @@ def idle_watch(self, mailbox: str, folder: str | None = None) -> dict:
         ).scalar_one_or_none()
         if config is None:
             return {"status": "error", "reason": "mailbox_not_configured"}
-        watch_folder = folder or db.execute(
-            select(MailboxFolder.remote_name).where(
-                MailboxFolder.mailbox == mailbox,
-                MailboxFolder.local_folder == "inbox",
+        # Во «Входящие» отображается НЕСКОЛЬКО серверных папок: подпапки
+        # INBOX, куда провайдер сам раскладывает почту (INBOX/ToMyself,
+        # INBOX/Newsletters). scalar_one_or_none() на таком наборе падал с
+        # MultipleResultsFound и убивал наблюдателя на каждом запуске.
+        # Следим за основной папкой ящика: IDLE держит одно соединение, и
+        # событие в ней — самый частый повод пересинхронизироваться.
+        watch_folder = folder
+        if not watch_folder:
+            primary = (config.imap_folder or "INBOX").strip()
+            candidates = db.execute(
+                select(MailboxFolder.remote_name).where(
+                    MailboxFolder.mailbox == mailbox,
+                    MailboxFolder.local_folder == "inbox",
+                )
+            ).scalars().all()
+            watch_folder = (
+                primary if primary in candidates
+                else (candidates[0] if candidates else primary)
             )
-        ).scalar_one_or_none() or config.imap_folder or "INBOX"
         password = None
         if (config.auth_method or "password") != "oauth2":
             from app.utils.crypto import decrypt_password
@@ -123,6 +147,22 @@ def idle_watch(self, mailbox: str, folder: str | None = None) -> dict:
             pass
 
     return {"status": "ok", "events": events}
+
+
+def _release_lease(mailbox: str) -> None:
+    """Отдать аренду сразу, а не ждать истечения TTL.
+
+    Наблюдатель, упавший с исключением, оставлял ключ висеть до конца TTL —
+    и ящик оставался без IDLE ещё двадцать минут после того, как причина
+    падения уже исправлена. TTL остаётся страховкой на случай, когда процесс
+    убит и до этого кода дело не дошло.
+    """
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        get_sync_redis().delete(f"email:idle:{mailbox}")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("imap_idle_lease_release_failed", mailbox=mailbox, error=str(exc))
 
 
 def _on_activity(mailbox: str) -> None:
