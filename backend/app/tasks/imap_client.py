@@ -358,6 +358,84 @@ def _message_too_big(conn, msg_id, max_bytes: int, *, uid: bool) -> bool:
         return False
 
 
+def _known_max_uid(mailbox_name: str, remote_folder: str) -> int:
+    """Наибольший UID письма этой папки, которое у нас уже есть.
+
+    Нужно ровно один раз — при переходе общего ящика с поиска по ``UNSEEN`` на
+    водяной знак UID. Без этого знак стартовал бы с нуля и ящик переингестился
+    бы целиком: защита по message_id_header спасла бы от дублей в базе, но
+    правила автоответа успели бы отработать на всей истории.
+    """
+    from sqlalchemy import func as _f, select as sa_select
+
+    from app.db.models import EmailMessage
+    from app.db.sync_session import sync_session
+
+    try:
+        with sync_session() as db:
+            return int(db.execute(
+                sa_select(_f.max(EmailMessage.imap_uid)).where(
+                    EmailMessage.mailbox == mailbox_name,
+                    EmailMessage.imap_folder == remote_folder,
+                )
+            ).scalar() or 0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "imap_known_max_uid_failed",
+            mailbox=mailbox_name, folder=remote_folder, error=str(exc),
+        )
+        return 0
+
+
+def _folder_state(mailbox_name: str, remote_folder: str) -> tuple[int, int | None]:
+    """(водяной знак UID, сохранённый UIDVALIDITY) для папки."""
+    from sqlalchemy import select as sa_select
+
+    from app.db.models import MailboxFolder
+    from app.db.sync_session import sync_session
+
+    try:
+        with sync_session() as db:
+            row = db.execute(
+                sa_select(MailboxFolder.last_seen_uid, MailboxFolder.uid_validity).where(
+                    MailboxFolder.mailbox == mailbox_name,
+                    MailboxFolder.remote_name == remote_folder,
+                )
+            ).first()
+            return (int(row[0] or 0), row[1]) if row else (0, None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "imap_folder_state_failed",
+            mailbox=mailbox_name, folder=remote_folder, error=str(exc),
+        )
+        return 0, None
+
+
+def _save_folder_uid_validity(mailbox_name: str, remote_folder: str, validity: int) -> None:
+    from sqlalchemy import select as sa_select
+
+    from app.db.models import MailboxFolder
+    from app.db.sync_session import sync_session
+
+    try:
+        with sync_session() as db:
+            row = db.execute(
+                sa_select(MailboxFolder).where(
+                    MailboxFolder.mailbox == mailbox_name,
+                    MailboxFolder.remote_name == remote_folder,
+                )
+            ).scalar_one_or_none()
+            if row is not None and row.uid_validity != validity:
+                row.uid_validity = validity
+                row.last_seen_uid = 0
+                db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "imap_uid_validity_save_failed",
+            mailbox=mailbox_name, folder=remote_folder, error=str(exc),
+        )
+
+
 def _save_folder_last_seen_uid(mailbox_name: str, remote_name: str, uid: int) -> None:
     """Ф2 — водяной знак подпапки. См. MailboxConfig.watermark_folder."""
     from sqlalchemy import select as sa_select
@@ -373,7 +451,16 @@ def _save_folder_last_seen_uid(mailbox_name: str, remote_name: str, uid: int) ->
                     MailboxFolder.remote_name == remote_name,
                 )
             ).scalar_one_or_none()
-            if row is not None and (row.last_seen_uid or 0) < uid:
+            if row is None:
+                # Папка ещё не открыта discover_folders. Для основной папки
+                # знак дублируется на строке ящика, для остальных прогресс
+                # просто не сохранится — молчать об этом нельзя.
+                logger.warning(
+                    "imap_folder_row_missing_for_watermark",
+                    mailbox=mailbox_name, folder=remote_name,
+                )
+                return
+            if (row.last_seen_uid or 0) < uid:
                 row.last_seen_uid = uid
                 db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -442,16 +529,21 @@ def _quoted_folder(name: str) -> str:
 def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
     """Fetch new messages from a mailbox.
 
-    Shared mailboxes: IMAP UNSEEN + mark \\Seen — they are an integration inbox,
-    the flag is our processing state and nobody reads them by hand.
+    Новое ищется по водяному знаку UID для ЛЮБОГО типа ящика: UID > last_seen_uid.
+    Общий ящик раньше опрашивался поиском UNSEEN исходя из того, что в
+    интеграционный ящик руками никто не заходит. Допущение ломается двумя
+    способами, и оба воспроизведены на живом сервере: провайдер сам помечает
+    прочитанным письмо самому себе, а письмо, открытое человеком в другом
+    клиенте раньше нашего опроса, не попадает к нам никогда — без ошибки,
+    молча.
 
-    Personal mailboxes: UID > last_seen_uid + BODY.PEEK — a human reads this
-    mailbox in their own client, so the agent must leave \\Seen untouched.
-    Progress is tracked by the UID watermark instead of the flag.
+    Разница между типами осталась только в флагах: личный ящик читает человек,
+    поэтому \\Seen не трогаем (BODY.PEEK); общему письмо помечаем прочитанным —
+    это его состояние обработки, но уже не критерий отбора.
     """
     logger.info(
         "imap_connecting", mailbox=config.name, host=config.host,
-        mode="peek" if config.is_personal else "unseen",
+        mode="peek" if config.is_personal else "seen-marking",
     )
 
     try:
@@ -480,14 +572,50 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
             conn.authenticate("XOAUTH2", imap_xoauth2_authobject(config.user, access_token))
         else:
             conn.login(config.user, config.password)
-        conn.select(_quoted_folder(config.folder))
+        select_status, select_data = conn.select(_quoted_folder(config.folder))
 
         personal = config.is_personal
-        if personal:
-            since_uid = int(config.last_seen_uid or 0) + 1
-            status, message_ids = conn.uid("search", None, f"UID {since_uid}:*")
-        else:
-            status, message_ids = conn.search(None, "UNSEEN")
+
+        # Новое ищем по водяному знаку UID, а НЕ по флагу \Seen — для любого
+        # типа ящика. Общий ящик раньше опрашивался поиском UNSEEN исходя из
+        # того, что «в интеграционный ящик руками никто не заходит». Допущение
+        # ломается сразу двумя способами, и оба проверены на живом сервере:
+        # mail.ru сам помечает прочитанным письмо самому себе, а человек,
+        # открывший письмо в другом клиенте раньше нашего опроса, навсегда
+        # лишает нас этого письма — молча, без единой ошибки. Флаг \Seen для
+        # общего ящика по-прежнему ставим: это его состояние обработки, просто
+        # больше не критерий отбора.
+        from app.domain.imap_sync import parse_select_response
+
+        meta = parse_select_response(select_data, getattr(conn, "untagged_responses", None))
+        remote_folder = config.folder
+        stored_uid, stored_validity = _folder_state(config.name, remote_folder)
+        validity = meta.get("uid_validity")
+        if validity and stored_validity and validity != stored_validity:
+            # Сервер пересоздал папку: прежние UID указывают на другие письма,
+            # продолжать с них нельзя — папка переиндексируется целиком.
+            logger.warning(
+                "imap_uid_validity_changed", mailbox=config.name,
+                folder=remote_folder, was=stored_validity, now=validity,
+            )
+            stored_uid = 0
+        if validity and validity != stored_validity:
+            _save_folder_uid_validity(config.name, remote_folder, validity)
+
+        watermark = stored_uid
+        if not watermark and config.watermark_folder is None:
+            watermark = int(config.last_seen_uid or 0)
+        if not watermark:
+            # Первый проход после перехода с UNSEEN: начинаем не с нуля, а с
+            # того, что у нас уже есть, иначе ящик переингестится целиком.
+            watermark = _known_max_uid(config.name, remote_folder)
+            if watermark:
+                logger.info(
+                    "imap_watermark_seeded_from_history",
+                    mailbox=config.name, folder=remote_folder, uid=watermark,
+                )
+
+        status, message_ids = conn.uid("search", None, f"UID {watermark + 1}:*")
 
         if status != "OK" or not message_ids or not message_ids[0]:
             logger.info("imap_no_new_messages", mailbox=config.name)
@@ -501,7 +629,9 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
         max_per_poll = max(1, settings.imap_max_messages_per_poll)
         truncated = len(ids) > max_per_poll
         if truncated:
-            ids = ids[:max_per_poll] if personal else ids[-max_per_poll:]
+            # Самые старые из найденных: водяной знак двигается вперёд, и
+            # остаток заберёт следующий тик.
+            ids = ids[:max_per_poll]
         logger.info(
             "imap_found_messages", mailbox=config.name, count=len(ids),
             truncated=truncated,
@@ -510,51 +640,31 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
         max_bytes = max(1, settings.imap_max_message_mb) * 1024 * 1024
 
         emails: list[ParsedEmail] = []
-        max_uid = int(config.last_seen_uid or 0)
-        # Shared mailboxes search by sequence number, so ask for the UID too:
-        # it is what every write-back operation later addresses.
-        uid_by_seq: dict[bytes, int] = {}
-        if not personal and ids:
-            try:
-                st, uid_data = conn.fetch(b",".join(ids), "(UID)")
-                if st == "OK":
-                    import re as _re
-
-                    for entry in uid_data or []:
-                        line = entry[0] if isinstance(entry, tuple) else entry
-                        if not line:
-                            continue
-                        raw_line = line if isinstance(line, bytes) else str(line).encode()
-                        seq = _re.match(rb"\s*(\d+)\s+\(", raw_line)
-                        uid = _re.search(rb"UID\s+(\d+)", raw_line)
-                        if seq and uid:
-                            uid_by_seq[seq.group(1)] = int(uid.group(1))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("imap_uid_lookup_failed", mailbox=config.name, error=str(exc))
+        max_uid = watermark
+        # Поиск идёт по UID, поэтому отдельное сопоставление «порядковый номер
+        # → UID» больше не нужно: ids и есть UID, которыми адресуется любая
+        # последующая операция write-back.
 
         for msg_id in ids:
-            if personal:
-                # "UID n:*" always returns at least one message even when n is
-                # past the end — skip anything at or below the watermark.
-                try:
-                    uid_value = int(msg_id)
-                except (TypeError, ValueError):
-                    continue
-                if uid_value <= (config.last_seen_uid or 0):
-                    continue
-                if _message_too_big(conn, msg_id, max_bytes, uid=True):
-                    logger.warning(
-                        "imap_message_oversized", mailbox=config.name, uid=uid_value,
-                    )
-                    max_uid = max(max_uid, uid_value)
-                    continue
-                status, data = conn.uid("fetch", msg_id, "(BODY.PEEK[])")
-            else:
-                if _message_too_big(conn, msg_id, max_bytes, uid=False):
-                    logger.warning("imap_message_oversized", mailbox=config.name)
-                    conn.store(msg_id, "+FLAGS", "\\Seen")
-                    continue
-                status, data = conn.fetch(msg_id, "(RFC822)")
+            # "UID n:*" всегда возвращает хотя бы одно письмо, даже когда n уже
+            # за концом папки — всё, что не выше знака, пропускаем.
+            try:
+                uid_value = int(msg_id)
+            except (TypeError, ValueError):
+                continue
+            if uid_value <= watermark:
+                continue
+
+            if _message_too_big(conn, msg_id, max_bytes, uid=True):
+                logger.warning(
+                    "imap_message_oversized", mailbox=config.name, uid=uid_value,
+                )
+                max_uid = max(max_uid, uid_value)
+                continue
+
+            # Личный ящик человек читает сам — \Seen не трогаем (PEEK).
+            # Общему письмо помечаем прочитанным: это его состояние обработки.
+            status, data = conn.uid("fetch", msg_id, "(BODY.PEEK[])")
 
             if status != "OK" or not data or not data[0]:
                 continue
@@ -563,24 +673,27 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
             if isinstance(raw, bytes):
                 parsed = parse_email_message(raw)
                 parsed.imap_folder = config.folder
-                parsed.imap_uid = (
-                    uid_value if personal else uid_by_seq.get(msg_id)
-                )
+                parsed.imap_uid = uid_value
                 emails.append(parsed)
-
-                if personal:
-                    max_uid = max(max_uid, uid_value)
-                else:
-                    conn.store(msg_id, "+FLAGS", "\\Seen")
+                max_uid = max(max_uid, uid_value)
+                if not personal:
+                    try:
+                        conn.uid("store", msg_id, "+FLAGS", "\\Seen")
+                    except Exception as exc:  # noqa: BLE001
+                        # Флаг больше не критерий отбора, поэтому его потеря
+                        # ничего не ломает — но молчать о ней не нужно.
+                        logger.warning(
+                            "imap_seen_flag_failed",
+                            mailbox=config.name, uid=uid_value, error=str(exc),
+                        )
 
         conn.logout()
 
-        if personal and max_uid > (config.last_seen_uid or 0):
-            if config.watermark_folder:
-                _save_folder_last_seen_uid(
-                    config.name, config.watermark_folder, max_uid
-                )
-            else:
+        if max_uid > watermark:
+            _save_folder_last_seen_uid(config.name, remote_folder, max_uid)
+            if config.watermark_folder is None:
+                # Совместимость: основная папка продолжает вести знак и на
+                # строке ящика — его читают старые пути.
                 _save_last_seen_uid(config.name, max_uid)
 
         logger.info("imap_fetched", mailbox=config.name, count=len(emails))
