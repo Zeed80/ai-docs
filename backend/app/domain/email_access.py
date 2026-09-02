@@ -29,15 +29,27 @@ from app.auth.models import UserInfo
 from app.db.models import MailboxConfig
 
 
+def acting_as_agent(user: UserInfo | None, for_agent: bool = False) -> bool:
+    """Считать ли этот вызов агентским.
+
+    Признак берётся с самого пользователя (``UserInfo.via_agent``, ставится в
+    app.auth.acting) и только УСИЛИВАЕТСЯ явным ``for_agent``. Именно так, а не
+    наоборот: пропущенный аргумент раньше молча означал «это человек» и снимал
+    согласие ``sweep_enabled`` — а забыть аргумент легко, и его забывали.
+    """
+    return bool(for_agent or (user is not None and getattr(user, "via_agent", False)))
+
+
 async def hidden_mailbox_names(
     db: AsyncSession, user: UserInfo | None, *, for_agent: bool = False
 ) -> list[str]:
     """Personal mailbox addresses `user` may NOT read (all but their own).
 
-    ``for_agent=True`` additionally hides the user's *own* personal mailbox when
-    they have not switched on ``sweep_enabled`` — the consent gate for AI
-    reading a private inbox is independent of the human's own access to it.
+    Для агентского вызова дополнительно скрывается и *собственный* личный ящик
+    человека, пока он не включил ``sweep_enabled``: согласие на чтение приватной
+    почты ИИ не следует из его собственного доступа к ней.
     """
+    for_agent = acting_as_agent(user, for_agent)
     rows = (
         await db.execute(
             select(

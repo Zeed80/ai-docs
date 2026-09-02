@@ -52,13 +52,25 @@ async def _draft(client, db_session, *, to="supplier@example.com", subject="Те
     return resp.json()["id"]
 
 
+async def _send(client, draft_id, **payload):
+    """Отправка так, как её обязан делать вызывающий: с expected_digest.
+
+    Дайджест перестал быть необязательным: без него подтверждение относилось
+    бы к идентификатору черновика, а не к тексту письма (см. send_email).
+    """
+    got = await client.get(f"/api/email/drafts/{draft_id}")
+    assert got.status_code == 200, got.text
+    body = {"expected_digest": got.json()["content_digest"], **payload}
+    return await client.post(f"/api/email/drafts/{draft_id}/send", json=body)
+
+
 async def test_send_without_a_prior_risk_check_now_works(client, db_session, _no_real_send):
     """Отдельный вызов risk_check больше не обязателен для вызывающего."""
     from app.db.models import DraftAction
 
     draft_id = await _draft(client, db_session)
 
-    resp = await client.post(f"/api/email/drafts/{draft_id}/send", json={})
+    resp = await _send(client, draft_id)
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "queued"
 
@@ -79,7 +91,7 @@ async def test_a_blocking_flag_still_stops_the_send(client, db_session, _no_real
         subject="Конфиденциально",
     )
 
-    resp = await client.post(f"/api/email/drafts/{draft_id}/send", json={})
+    resp = await _send(client, draft_id)
     assert resp.status_code == 400, resp.text
     detail = resp.json()["detail"]
     assert detail["error_code"] == "blocked_by_risk"
@@ -97,12 +109,9 @@ async def test_a_human_can_override_a_block_and_it_is_audited(
         client, db_session,
         body="<p>Коммерческая тайна: не пересылать.</p>", subject="Тайна",
     )
-    assert (await client.post(f"/api/email/drafts/{draft_id}/send", json={})).status_code == 400
+    assert (await _send(client, draft_id)).status_code == 400
 
-    resp = await client.post(
-        f"/api/email/drafts/{draft_id}/send",
-        json={"acknowledged_risks": ["sensitive_content"]},
-    )
+    resp = await _send(client, draft_id, acknowledged_risks=["sensitive_content"])
     assert resp.status_code == 200, resp.text
 
     rows = (await db_session.execute(
@@ -126,7 +135,7 @@ async def test_content_changed_after_the_check_is_rechecked(client, db_session, 
     })
     assert resp.status_code == 200, resp.text
 
-    resp = await client.post(f"/api/email/drafts/{draft_id}/send", json={})
+    resp = await _send(client, draft_id)
     assert resp.status_code == 400
     assert resp.json()["detail"]["error_code"] == "blocked_by_risk"
 
@@ -160,10 +169,10 @@ async def test_a_queued_draft_is_not_queued_twice(client, db_session, _no_real_s
     """
     draft_id = await _draft(client, db_session, subject="Однократность")
 
-    first = await client.post(f"/api/email/drafts/{draft_id}/send", json={})
+    first = await _send(client, draft_id)
     assert first.status_code == 200, first.text
 
-    second = await client.post(f"/api/email/drafts/{draft_id}/send", json={})
+    second = await _send(client, draft_id)
     assert second.status_code == 400, second.text
     assert second.json()["detail"]["error_code"] == "already_queued"
 
@@ -172,10 +181,10 @@ async def test_a_cancelled_draft_can_be_sent_again(client, db_session, _no_real_
     """Отмена возвращает черновик в работу — иначе «Отменить» означало бы
     «выбросить письмо»."""
     draft_id = await _draft(client, db_session, subject="Отмена и повтор")
-    assert (await client.post(f"/api/email/drafts/{draft_id}/send", json={})).status_code == 200
+    assert (await _send(client, draft_id)).status_code == 200
 
     cancel = await client.post(f"/api/email/drafts/{draft_id}/cancel-send")
     assert cancel.status_code == 200, cancel.text
 
-    again = await client.post(f"/api/email/drafts/{draft_id}/send", json={})
+    again = await _send(client, draft_id)
     assert again.status_code == 200, again.text

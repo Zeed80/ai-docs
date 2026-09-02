@@ -114,6 +114,9 @@ export interface EmailDraft {
   status: string;
   risk_flags: { code: string; severity: string; message: string; can_override?: boolean }[];
   attachment_ids: string[];
+  // Отпечаток содержимого письма: обязателен при отправке существующего
+  // черновика — он привязывает подтверждение к тексту, а не к идентификатору.
+  content_digest: string | null;
   created_at: string;
 }
 

@@ -90,12 +90,27 @@ async def test_get_thread(client: AsyncClient, email_thread):
 
 
 @pytest.mark.asyncio
-async def test_draft_lifecycle(client: AsyncClient):
+async def test_draft_lifecycle(client: AsyncClient, db_session):
+    # Ящик-отправитель нужен уже на этапе создания: черновик без ящика
+    # отправить нельзя (иначе адрес отправителя выбирался бы после
+    # подтверждения человека — и мог оказаться личным ящиком сотрудника).
+    from app.db.models import MailboxConfig
+
+    db_session.add(MailboxConfig(
+        name="lifecycle-box", imap_host="imap.example.com", imap_port=993,
+        imap_user="lifecycle", imap_password_encrypted="x", imap_ssl=True,
+        smtp_host="smtp.example.com", smtp_port=587,
+        smtp_user="lifecycle@example.com", smtp_password_encrypted="y",
+        is_active=True,
+    ))
+    await db_session.commit()
+
     # Create draft
     resp = await client.post("/api/email/drafts", json={
         "to_addresses": ["supplier@example.com"],
         "subject": "Тестовое письмо",
         "body_html": "<p>Добрый день!</p>",
+        "mailbox": "lifecycle-box",
     })
     assert resp.status_code == 200
     draft = resp.json()
@@ -116,13 +131,21 @@ async def test_draft_lifecycle(client: AsyncClient):
     # External domain should be flagged
     assert any(f["code"] == "external_domain" for f in risk["flags"])
 
-    # Send — queues a Celery task (no worker in tests), status becomes "queued"
-    resp = await client.post(f"/api/email/drafts/{draft_id}/send")
-    assert resp.status_code == 200
+    # Send — queues a Celery task (no worker in tests), status becomes "queued".
+    # expected_digest обязателен: подтверждают текст письма, а не его id.
+    digest = risk["content_digest"] if "content_digest" in risk else (
+        (await client.get(f"/api/email/drafts/{draft_id}")).json()["content_digest"]
+    )
+    resp = await client.post(
+        f"/api/email/drafts/{draft_id}/send", json={"expected_digest": digest}
+    )
+    assert resp.status_code == 200, resp.text
     assert resp.json()["status"] in ("sent", "queued")
 
     # Cannot send again
-    resp = await client.post(f"/api/email/drafts/{draft_id}/send")
+    resp = await client.post(
+        f"/api/email/drafts/{draft_id}/send", json={"expected_digest": digest}
+    )
     assert resp.status_code == 400
 
 

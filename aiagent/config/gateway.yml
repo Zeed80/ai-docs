@@ -111,6 +111,7 @@ skills:
   - email.get_thread
   - email.send
   - email.list_drafts
+  - email.get_draft
   - email.draft
   - email.read
   - email.fetch_new

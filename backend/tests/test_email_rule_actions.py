@@ -166,6 +166,33 @@ def test_forward_to_external_address_prepares_a_draft_but_never_sends(sync_db, m
     assert sync_db.query(EmailAutoReply).count() == 0
 
 
+def test_forward_to_a_supplier_is_external_too(sync_db, monkeypatch):
+    """Домен поставщика «знакомый», но не наш. Пока «внешним» считалось всё,
+    чего нет в known_domains (а туда входят поставщики), правило само
+    пересылало корпоративную переписку контрагенту — без человека."""
+    from app.domain.email_rules import apply_rules
+
+    sent = []
+    import app.tasks.email_sender as sender
+
+    monkeypatch.setattr(sender.send_email_draft, "delay", lambda *a, **k: sent.append(a))
+    sync_db.add(MailServerConfig(singleton_key="default", mail_domain="example.com",
+                                 auto_send_enabled=True, auto_send_max_per_day=50))
+    sync_db.add(Party(name="Ромекс", role="supplier",
+                      contact_email="sales@romex.example"))
+    _, msg = _message(sync_db)
+    _rule(sync_db, [{"type": "forward_to", "address": "sales@romex.example"}],
+          auto_send=True)
+    sync_db.commit()
+
+    apply_rules(sync_db, msg, "procurement")
+    sync_db.commit()
+
+    draft = sync_db.query(DraftAction).filter_by(action_type="email.send").one()
+    assert draft.draft_data["status"] == "draft"      # ждёт человека
+    assert sent == []
+
+
 def test_forward_to_internal_address_may_be_sent_automatically(sync_db, monkeypatch):
     from app.domain.email_rules import apply_rules
 
@@ -262,4 +289,66 @@ def test_sensitive_content_blocks_an_automatic_reply(sync_db):
         draft_data={"to_addresses": ["x@example.com"],
                     "body_text": "Это конфиденциально, не пересылайте"},
     )
-    assert _rule_send_blocked(sync_db, draft) is True
+    blocked, codes = _rule_send_blocked(sync_db, draft)
+    assert blocked is True
+    assert "sensitive_content" in codes
+
+
+def test_lookalike_domain_blocks_an_automatic_reply(sync_db):
+    """Автоответ — единственный путь без человека, и раньше он был
+    единственным путём без проверки похожего домена: рукописная копия
+    детекторов её просто не содержала."""
+    from app.domain.email_rules import _rule_send_blocked
+
+    sync_db.add(MailServerConfig(singleton_key="default", mail_domain="example.com"))
+    sync_db.add(Party(name="Ромекс", role="supplier",
+                      contact_email="sales@romex.example"))
+    sync_db.commit()
+
+    draft = DraftAction(
+        action_type="email.send", entity_type="email",
+        draft_data={"to_addresses": ["sales@rornex.example"],
+                    "body_text": "Реквизиты для оплаты изменились."},
+    )
+    blocked, codes = _rule_send_blocked(sync_db, draft)
+    assert blocked is True
+    assert "lookalike_domain" in codes
+
+
+def test_one_known_recipient_no_longer_covers_an_unknown_one(sync_db):
+    """Проверка шла «если хоть один домен знаком — отправляем»: достаточно
+    было приписать к знакомому адресу чужой."""
+    from app.domain.email_rules import _rule_send_blocked
+
+    sync_db.add(MailServerConfig(singleton_key="default", mail_domain="example.com"))
+    sync_db.add(Party(name="Ромекс", role="supplier",
+                      contact_email="sales@romex.example"))
+    sync_db.commit()
+
+    draft = DraftAction(
+        action_type="email.send", entity_type="email",
+        draft_data={"to_addresses": ["sales@romex.example", "someone@unknown-2.test"],
+                    "body_text": "Добрый день!"},
+    )
+    blocked, codes = _rule_send_blocked(sync_db, draft)
+    assert blocked is True
+    assert codes == ["unknown_recipient"]
+
+
+def test_a_secretary_is_not_sensitive_content(sync_db):
+    """«секретарь» ловился подстрокой «секрет» и БЛОКИРОВАЛ отправку —
+    самое частое слово деловой переписки становилось стеной."""
+    from app.domain.email_rules import _rule_send_blocked
+
+    sync_db.add(MailServerConfig(singleton_key="default", mail_domain="example.com"))
+    sync_db.add(Party(name="Ромекс", role="supplier",
+                      contact_email="sales@romex.example"))
+    sync_db.commit()
+
+    draft = DraftAction(
+        action_type="email.send", entity_type="email",
+        draft_data={"to_addresses": ["sales@romex.example"],
+                    "body_text": "Ваш секретарь просил уточнить внутренний диаметр."},
+    )
+    blocked, codes = _rule_send_blocked(sync_db, draft)
+    assert blocked is False, codes

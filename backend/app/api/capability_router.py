@@ -177,6 +177,11 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "get_thread":        ("GET",   "/api/email/threads/{thread_id}",               ["thread_id"]),
         "read":              ("GET",   "/api/email/{email_id}",                        ["email_id"]),
         "list_drafts":       ("GET",   "/api/email/drafts",                            []),
+        # Перечитать ОДИН черновик — штатный выход из 409 «черновик изменился»
+        # и единственный способ получить свежий content_digest. Описание
+        # capability отсылало к этому шагу давно, а действия не было: агенту
+        # оставалось перебирать список.
+        "get_draft":         ("GET",   "/api/email/drafts/{draft_id}",                 ["draft_id"]),
         "mailboxes":         ("GET",   "/api/email/mailboxes",                         []),
         "labels":            ("GET",   "/api/email/labels",                            []),
         "label":             ("POST",  "/api/email/threads/actions",                   []),
@@ -538,6 +543,26 @@ def validate_capability_catalog() -> list[str]:
                 problems.append(
                     f"non_recipeable_action '{cap.name}.{action}' has no matching action in _DISPATCH"
                 )
+
+    # Направление, которого не хватало: путь маршрута требует path-параметр, а
+    # схема capability его не объявляет — модель не может его заполнить, и
+    # действие возвращает 422 missing_args, оставаясь при этом «объявленным».
+    # Так были недостижимы email.read (email_id), get_attachment (filename) и
+    # весь набор шаблонов (template_id). Ровно тот класс молчаливых потерь,
+    # что и невидимая capability: заявлено, но не вызывается.
+    for cap in manifest.capabilities:
+        if cap.name in _SPECIAL_CAPABILITIES:
+            continue
+        properties = set(((cap.parameters or {}).get("properties") or {}).keys())
+        if not properties:
+            continue
+        for action, (_m, _path, path_params) in _DISPATCH.get(cap.name, {}).items():
+            for param in path_params:
+                if param not in properties:
+                    problems.append(
+                        f"action '{cap.name}.{action}' needs path parameter "
+                        f"'{param}', which the capability schema does not declare"
+                    )
     return problems
 
 
@@ -754,17 +779,33 @@ def _capability_gate_actions(capability_name: str) -> set[str]:
     return set(capability.gate_actions or [])
 
 
-def _request_has_internal_approval(request: Request) -> bool:
+def _request_has_internal_approval(request: Request, raw_body: dict | None = None) -> bool:
     """Accept approval proof only from the internal agent transport.
 
     In production the service key is the trust boundary. The internal marker is
     kept for local/dev environments where AGENT_SERVICE_KEY may be empty.
+
+    ``X-Agent-Approval-Digest`` привязывает одобрение к аргументам вызова: без
+    него заголовок означал лишь «цикл что-то одобрил» и подходил к любому
+    другому вызову той же capability — человек подтверждал одно письмо, а уйти
+    могло другое. Заголовок обязателен для чат-пути (app.ai.agent_loop его
+    всегда ставит); долговечный путь (app.tasks.work_orders) проверяет
+    соответствие аргументов своим digest'ом до вызова и приходит без него.
     """
     if request.headers.get("X-Agent-Approval") != "granted":
         return False
     if settings.agent_service_key:
-        return request.headers.get("X-API-Key") == settings.agent_service_key
-    return request.headers.get("X-Internal-Agent") == "1"
+        if request.headers.get("X-API-Key") != settings.agent_service_key:
+            return False
+    elif request.headers.get("X-Internal-Agent") != "1":
+        return False
+
+    claimed = (request.headers.get("X-Agent-Approval-Digest") or "").strip()
+    if not claimed:
+        return True
+    from app.ai.agent_loop import capability_args_digest
+
+    return claimed == capability_args_digest(raw_body or {})
 
 
 def _enforce_capability_policy(
@@ -772,6 +813,7 @@ def _enforce_capability_policy(
     action: str,
     body: dict,
     request: Request,
+    raw_body: dict | None = None,
 ) -> None:
     """Apply the same risk/approval policy at the HTTP dispatcher boundary."""
     config = get_builtin_agent_config()
@@ -784,7 +826,7 @@ def _enforce_capability_policy(
     # MCP tool call requires approval by default rather than enumerating names.
     if action in gate_actions or "*" in gate_actions:
         approval_gates.add(capability_name)
-        if not _request_has_internal_approval(request):
+        if not _request_has_internal_approval(request, raw_body):
             raise HTTPException(
                 status_code=423,
                 detail={
@@ -864,6 +906,7 @@ async def dispatch_mcp(request: Request) -> JSONResponse:
         body: dict = await request.json()
     except Exception:
         body = {}
+    raw_body = dict(body)
 
     action = body.pop("action", None)
     if not action:
@@ -888,7 +931,7 @@ async def dispatch_mcp(request: Request) -> JSONResponse:
         reason = str(reason)
     arguments = body.pop("arguments") if isinstance(body.get("arguments"), dict) else body
 
-    _enforce_capability_policy("mcp", action, arguments, request)
+    _enforce_capability_policy("mcp", action, arguments, request, raw_body)
     await _audit_tool_call("mcp", action, reason, request)
 
     try:
@@ -930,6 +973,10 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
     except Exception:
         body = {}
 
+    # Снимок тела ДО того, как action/reason выдёргиваются, а filters/body
+    # расплющиваются: одобрение привязано именно к тому, что прислал агент.
+    raw_body = dict(body)
+
     action = body.pop("action", None)
     if not action:
         raise HTTPException(
@@ -969,7 +1016,7 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
     if "body" in body and isinstance(body["body"], dict):
         body.update(body.pop("body"))
 
-    _enforce_capability_policy(capability_name, action, body, request)
+    _enforce_capability_policy(capability_name, action, body, request, raw_body)
 
     await _audit_tool_call(capability_name, action, reason, request)
 

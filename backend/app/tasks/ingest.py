@@ -75,6 +75,27 @@ def _record_sync_result(mailbox_name: str, error: str | None) -> None:
         logger.warning("imap_sync_result_save_failed", mailbox=mailbox_name, error=str(e))
 
 
+def _ingress_sender_authenticated(headers_meta: dict | None) -> bool:
+    """Подтвердил ли принимающий сервер, что письмо действительно от этого
+    отправителя.
+
+    Заголовок ``From`` подделывается тривиально, а здесь он решал, исполнит ли
+    агент поручение своими правами. Вердикты SPF/DKIM/DMARC мы уже разбираем
+    при приёме (app.tasks.imap_client.parse_auth_results) — и до сих пор
+    использовали их только для витрины провенанса счёта.
+
+    Fail-closed: отсутствие заголовков — это «неизвестно», а не «прошло».
+    Достаточно пройденного DMARC либо DKIM: DMARC уже включает выравнивание с
+    доменом From, а один SPF проходит и на пересланном письме с чужим From.
+    """
+    auth = ((headers_meta or {}).get("auth") or {}) if isinstance(headers_meta, dict) else {}
+    if not auth:
+        return False
+    if str(auth.get("dmarc") or "").lower() == "pass":
+        return True
+    return str(auth.get("dkim") or "").lower() == "pass"
+
+
 def _ingress_sender_allowed(db: Session, mailbox: str, from_address: str) -> bool:
     """May this sender give the agent instructions by e-mail?
 
@@ -83,6 +104,10 @@ def _ingress_sender_allowed(db: Session, mailbox: str, from_address: str) -> boo
     check, knowing the ingress address was enough to make the agent work for
     you — the messages arrive from outside and are executed with the agent's
     own permissions.
+
+    Проверка подлинности отправителя — у вызывающего
+    (:func:`_ingress_sender_authenticated`): список разрешённых адресов имеет
+    смысл, только если адресу в ``From`` вообще можно верить.
     """
     from app.db.models import MailboxConfig, User
 
@@ -383,6 +408,12 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
                         logger.info(
                             "agent_ingress_skipped_no_marker",
                             mailbox=mailbox, subject=parsed.subject,
+                        )
+                    elif not _ingress_sender_authenticated(parsed.headers_meta):
+                        logger.warning(
+                            "agent_ingress_sender_unauthenticated",
+                            mailbox=mailbox, sender=parsed.from_address,
+                            auth=(parsed.headers_meta or {}).get("auth"),
                         )
                     elif not _ingress_sender_allowed(db, mailbox, parsed.from_address):
                         logger.warning(

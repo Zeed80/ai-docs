@@ -38,12 +38,67 @@ class RiskFlagData:
         return self.code in BLOCKING_CODES
 
 
-_AMOUNT_WORDS = ("оплат", "сумм", "счёт на", "счет на", "перевод", "руб", "предоплат")
-_SENSITIVE_WORDS = ("конфиденциальн", "секрет", "не для распростран", "коммерческая тайна")
 _ATTACHMENT_WORDS = (
     "во вложении", "прилагаю", "прилагаем", "в приложении", "см. вложение",
     "смотрите вложение", "attached", "attachment", "вложение:",
 )
+
+# Деньги — это ЧИСЛО с валютой, а не слово «руб» где-то в тексте. Подстрочный
+# список ("руб", "сумм", "оплат") помечал предупреждением почти каждое
+# коммерческое письмо, и предупреждения перестали читать.
+_AMOUNT_RE = re.compile(
+    r"\d[\d  .,]*\s*(?:руб|₽|rub|usd|eur|\$|€|тыс|млн)"
+    r"|(?:сумма|к оплате|итого|предоплат\w*)\D{0,20}\d",
+    re.IGNORECASE,
+)
+
+# Чувствительное содержание. Границы слов обязательны: подстрока «секрет»
+# ловила «секретарь» и «секретариат» — самые частые слова деловой переписки, а
+# срабатывание здесь БЛОКИРУЕТ отправку (см. BLOCKING_CODES).
+_SENSITIVE_RE = re.compile(
+    r"конфиденциальн\w*"
+    r"|\bсекретн\w*|\bсовершенно секретно\b|\bпод грифом\b"
+    r"|не для распростран\w*"
+    r"|коммерческ\w*\s+тайн\w*",
+    re.IGNORECASE,
+)
+
+# Начало цитируемой части письма. Дисклеймер «письмо конфиденциально» живёт в
+# подписи входящего письма и попадает в цитату КАЖДОГО ответа — детекторы
+# должны смотреть на то, что человек написал сам, а не на историю переписки.
+_QUOTE_MARKERS = (
+    "-----original message",
+    "-----исходное сообщение",
+    "________________________________",
+    "> ",
+)
+_QUOTE_LINE_RE = re.compile(
+    r"^\s*(?:>|(?:\d{1,2}[.:/ ].{0,40})?(?:написал|wrote)\s*:|"
+    r"(?:от|from|отправлено|sent)\s*:\s*.+)",
+    re.IGNORECASE,
+)
+
+
+def strip_quoted(body: str) -> str:
+    """Только новая часть письма, без процитированной переписки.
+
+    Прагматично, а не идеально: обрезаем по первому маркеру цитаты. Если
+    маркеров нет, текст возвращается целиком.
+    """
+    text = body or ""
+    lowered = text.lower()
+    cut = len(text)
+    for marker in _QUOTE_MARKERS:
+        pos = lowered.find(marker)
+        if pos != -1:
+            cut = min(cut, pos)
+    lines = text[:cut].splitlines()
+    kept: list[str] = []
+    for line in lines:
+        if _QUOTE_LINE_RE.match(line):
+            break
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def _domain(addr: str) -> str:
@@ -96,7 +151,7 @@ def detect_promised_attachment(body: str, attachment_count: int) -> RiskFlagData
     """"Во вложении счёт" with nothing attached."""
     if attachment_count:
         return None
-    lowered = (body or "").lower()
+    lowered = strip_quoted(body).lower()
     if any(word in lowered for word in _ATTACHMENT_WORDS):
         return RiskFlagData(
             code="promised_attachment_missing",
@@ -107,8 +162,7 @@ def detect_promised_attachment(body: str, attachment_count: int) -> RiskFlagData
 
 
 def detect_amount_without_context(body: str, context: dict | None) -> RiskFlagData | None:
-    lowered = (body or "").lower()
-    if not any(word in lowered for word in _AMOUNT_WORDS):
+    if not _AMOUNT_RE.search(strip_quoted(body)):
         return None
     ctx = context or {}
     if ctx.get("invoice_id") or ctx.get("document_id"):
@@ -121,15 +175,20 @@ def detect_amount_without_context(body: str, context: dict | None) -> RiskFlagDa
 
 
 def detect_sensitive_content(body: str) -> RiskFlagData | None:
-    lowered = (body or "").lower()
-    for word in _SENSITIVE_WORDS:
-        if word in lowered:
-            return RiskFlagData(
-                code="sensitive_content",
-                severity="error",
-                message=f"Обнаружено чувствительное содержание: «{word}…»",
-            )
-    return None
+    """Только по НОВОЙ части письма и только по целым словам.
+
+    Оба сужения — из-за того, что этот код блокирует отправку: по подстроке
+    «секрет» стеной становился любой ответ секретарю, а по цитате — любой
+    ответ на письмо с дисклеймером о конфиденциальности в подписи.
+    """
+    match = _SENSITIVE_RE.search(strip_quoted(body))
+    if match is None:
+        return None
+    return RiskFlagData(
+        code="sensitive_content",
+        severity="error",
+        message=f"Обнаружено чувствительное содержание: «{match.group(0)}»",
+    )
 
 
 def detect_external_domain(recipients: list[str], known: set[str]) -> RiskFlagData | None:
@@ -147,7 +206,7 @@ def detect_external_domain(recipients: list[str], known: set[str]) -> RiskFlagDa
 
 
 def detect_language_mismatch(body: str, recipients: list[str]) -> RiskFlagData | None:
-    has_cyrillic = any("а" <= ch.lower() <= "я" or ch == "ё" for ch in (body or "")[:400])
+    has_cyrillic = any("а" <= ch.lower() <= "я" or ch == "ё" for ch in strip_quoted(body)[:400])
     if not has_cyrillic:
         return None
     for addr in recipients:
@@ -192,87 +251,172 @@ def blocking_flags(flags: list[RiskFlagData]) -> list[RiskFlagData]:
     return [f for f in flags if f.blocking]
 
 
-async def evaluate_draft(db, draft_data: dict) -> list[RiskFlagData]:
-    """Every applicable detector for one outbound draft.
+@dataclass
+class DraftRiskInput:
+    """Всё, что детекторам нужно из БД, — собранное один раз.
 
-    Shared by the agent's ``email.risk_check`` and the human's ``email.send``
-    so the two cannot drift apart again.
+    Существует, чтобы список детекторов был ОДИН на все пути отправки. Раньше
+    их было три: эндпоинт агента, человеческая отправка и рукописная копия
+    внутри правил фильтрации (``email_rules._rule_send_blocked``), у которой
+    был свой список слов и не было проверки похожего домена — то есть
+    единственный путь без человека был и единственным путём без защиты от
+    подмены домена получателя.
     """
-    from sqlalchemy import func, or_, select
 
-    from app.db.models import EmailAttachment, EmailMessage, Party
-    from app.domain.email_rules import known_domains
+    known_domains: set[str] = field(default_factory=set)
+    known_correspondents: set[str] = field(default_factory=set)
+    parent_sent_at: datetime | None = None
+    supplier_email: str | None = None
 
+
+def evaluate_draft_data(draft_data: dict, ctx: DraftRiskInput) -> list[RiskFlagData]:
+    """Чистое ядро: детекторы поверх уже собранных данных, без обращений к БД."""
     data = draft_data or {}
     recipients = [a for a in (data.get("to_addresses") or []) if a]
     recipients += [a for a in (data.get("cc_addresses") or []) if a]
     body = data.get("body_text") or data.get("body_html") or ""
-    known = await known_domains(db)
-
-    attachment_ids = data.get("attachment_ids") or []
-    attachment_count = len(attachment_ids)
+    attachment_count = len(data.get("attachment_ids") or [])
 
     flags: list[RiskFlagData | None] = [
-        detect_lookalike_domain(recipients, known),
+        detect_lookalike_domain(recipients, ctx.known_domains),
         detect_sensitive_content(body),
-        detect_external_domain(recipients, known),
+        detect_external_domain(recipients, ctx.known_domains),
         detect_promised_attachment(body, attachment_count),
         detect_amount_without_context(body, data.get("context")),
         detect_language_mismatch(body, recipients),
     ]
-
-    # Have we ever corresponded with these addresses before?
     if recipients:
-        lowered = [a.strip().lower() for a in recipients]
-        seen_rows = (
+        flags.append(detect_first_time_recipient(recipients, ctx.known_correspondents))
+    if ctx.parent_sent_at is not None:
+        flags.append(detect_stale_reply(ctx.parent_sent_at))
+    if ctx.supplier_email:
+        if not any(ctx.supplier_email.lower() in a.lower() for a in recipients):
+            flags.append(RiskFlagData(
+                code="recipient_mismatch",
+                severity="warning",
+                message=(
+                    f"Получатель не совпадает с email поставщика "
+                    f"({ctx.supplier_email})"
+                ),
+            ))
+    return [f for f in flags if f is not None]
+
+
+def _recipient_addresses(data: dict) -> list[str]:
+    return [
+        a.strip().lower()
+        for a in ((data.get("to_addresses") or []) + (data.get("cc_addresses") or []))
+        if a
+    ]
+
+
+async def collect_risk_input(db, draft_data: dict) -> DraftRiskInput:
+    """Async-сбор контекста детекторов (FastAPI-путь)."""
+    import uuid as _uuid
+
+    from sqlalchemy import func, select
+
+    from app.db.models import EmailMessage, Party
+    from app.domain.email_rules import known_domains
+
+    data = draft_data or {}
+    ctx = DraftRiskInput(known_domains=await known_domains(db))
+
+    lowered = _recipient_addresses(data)
+    if lowered:
+        seen = (
             await db.execute(
                 select(func.lower(EmailMessage.from_address)).where(
                     func.lower(EmailMessage.from_address).in_(lowered)
-                ).limit(len(lowered))
+                )
             )
         ).scalars().all()
-        known_correspondents = {a for a in seen_rows if a}
-        party_rows = (
+        parties = (
             await db.execute(
                 select(func.lower(Party.contact_email)).where(
                     func.lower(Party.contact_email).in_(lowered)
                 )
             )
         ).scalars().all()
-        known_correspondents |= {a for a in party_rows if a}
-        flags.append(detect_first_time_recipient(recipients, known_correspondents))
+        ctx.known_correspondents = {a for a in [*seen, *parties] if a}
 
-    # Replying to something very old.
     raw_parent = data.get("in_reply_to_message_id")
     if raw_parent:
-        import uuid as _uuid
-
         try:
             parent = await db.get(EmailMessage, _uuid.UUID(str(raw_parent)))
         except (ValueError, TypeError):
             parent = None
         if parent is not None:
-            flags.append(detect_stale_reply(parent.sent_at or parent.received_at))
+            ctx.parent_sent_at = parent.sent_at or parent.received_at
 
-    # Supplier card mismatch (kept from the original detector set).
     supplier_id = data.get("supplier_id")
     if supplier_id:
-        import uuid as _uuid
-
         try:
             party = await db.get(Party, _uuid.UUID(str(supplier_id)))
         except (ValueError, TypeError):
             party = None
-        if party is not None and party.contact_email:
-            if not any(party.contact_email.lower() in a.lower() for a in recipients):
-                flags.append(RiskFlagData(
-                    code="recipient_mismatch",
-                    severity="warning",
-                    message=(
-                        f"Получатель не совпадает с email поставщика "
-                        f"({party.contact_email})"
-                    ),
-                ))
+        if party is not None:
+            ctx.supplier_email = party.contact_email
 
-    _ = EmailAttachment, or_  # imported for callers that extend this set
-    return [f for f in flags if f is not None]
+    return ctx
+
+
+def collect_risk_input_sync(db, draft_data: dict) -> DraftRiskInput:
+    """Тот же сбор в синхронной сессии — путь правил фильтрации (ingest)."""
+    import uuid as _uuid
+
+    from sqlalchemy import func, select
+
+    from app.db.models import EmailMessage, Party
+    from app.domain.email_rules import known_domains_sync
+
+    data = draft_data or {}
+    ctx = DraftRiskInput(known_domains=known_domains_sync(db))
+
+    lowered = _recipient_addresses(data)
+    if lowered:
+        seen = db.execute(
+            select(func.lower(EmailMessage.from_address)).where(
+                func.lower(EmailMessage.from_address).in_(lowered)
+            )
+        ).scalars().all()
+        parties = db.execute(
+            select(func.lower(Party.contact_email)).where(
+                func.lower(Party.contact_email).in_(lowered)
+            )
+        ).scalars().all()
+        ctx.known_correspondents = {a for a in [*seen, *parties] if a}
+
+    raw_parent = data.get("in_reply_to_message_id")
+    if raw_parent:
+        try:
+            parent = db.get(EmailMessage, _uuid.UUID(str(raw_parent)))
+        except (ValueError, TypeError):
+            parent = None
+        if parent is not None:
+            ctx.parent_sent_at = parent.sent_at or parent.received_at
+
+    supplier_id = data.get("supplier_id")
+    if supplier_id:
+        try:
+            party = db.get(Party, _uuid.UUID(str(supplier_id)))
+        except (ValueError, TypeError):
+            party = None
+        if party is not None:
+            ctx.supplier_email = party.contact_email
+
+    return ctx
+
+
+async def evaluate_draft(db, draft_data: dict) -> list[RiskFlagData]:
+    """Every applicable detector for one outbound draft.
+
+    Shared by the agent's ``email.risk_check`` and the human's ``email.send``
+    so the two cannot drift apart again.
+    """
+    return evaluate_draft_data(draft_data, await collect_risk_input(db, draft_data))
+
+
+def evaluate_draft_sync(db, draft_data: dict) -> list[RiskFlagData]:
+    """Синхронный близнец :func:`evaluate_draft` для правил фильтрации."""
+    return evaluate_draft_data(draft_data, collect_risk_input_sync(db, draft_data))

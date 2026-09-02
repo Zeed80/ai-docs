@@ -60,6 +60,23 @@ def internal_headers() -> dict:
     return h
 
 
+def capability_args_digest(args: dict) -> str:
+    """Отпечаток аргументов вызова — то, к чему привязано одобрение человека.
+
+    Считается по тем же правилам на обеих сторонах: здесь — перед отправкой,
+    в app.api.capability_router — по фактически пришедшему телу запроса
+    (см. ``_enforce_capability_policy``).
+    """
+    import hashlib
+
+    payload = {k: v for k, v in (args or {}).items() if k != "reason"}
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+_capability_args_digest = capability_args_digest
+
+
 # Max chars for a single tool result stored in the LLM message history.
 # Large lists (invoices, inventory, etc.) can easily hit 100k+ chars which
 # triggers unnecessary context compression. Keep enough for the model to
@@ -777,6 +794,14 @@ async def execute_skill(
             _hdrs = internal_headers()
             if approval_granted:
                 _hdrs["X-Agent-Approval"] = "granted"
+                # Привязываем одобрение к КОНКРЕТНЫМ аргументам вызова.
+                # Голое "granted" сообщало границе лишь «цикл что-то одобрил»:
+                # заголовок годился для любого другого вызова той же
+                # capability. Долговечный путь (tasks/work_orders) так делает
+                # давно — чат-путь оставался единственным без привязки.
+                _hdrs["X-Agent-Approval-Digest"] = _capability_args_digest(
+                    query_args if method == "GET" else body_args
+                )
             async with httpx.AsyncClient(timeout=float(timeout)) as client:
                 if method == "GET":
                     resp = await client.get(url, params=query_args, headers=_hdrs)
@@ -2758,6 +2783,10 @@ class AgentSession:
             return False
         if args.get("action") not in (None, "send"):
             return False
+        # «Да» подтверждает показанное письмо, но не снимает блокирующий риск:
+        # признать риск приемлемым человек должен явно, глядя на его причину.
+        if args.get("acknowledged_risks"):
+            return False
 
         last_user = next(
             (str(m.get("content") or "") for m in reversed(self.messages)
@@ -2816,7 +2845,15 @@ class AgentSession:
         и ключ, и разрешение спросят заново. А подмену содержимого уже
         одобренного черновика ловит content_digest на стороне API.
         """
+        # Подтверждают КОНКРЕТНЫЙ текст: digest письма входит в ключ, поэтому
+        # одобрение, данное на одно содержимое, не переносится на другое.
+        # Раньше комментарий отсылал к content_digest «на стороне API», а тот
+        # был необязательным параметром — круг замыкался на предположении,
+        # которое никто не проверял.
+        digest = args.get("expected_digest") or ""
         ident = args.get("draft_id") or args.get("id")
+        if ident and digest:
+            ident = f"{ident}@{digest}"
         if not ident:
             body = args.get("body")
             if isinstance(body, str):
@@ -2835,18 +2872,28 @@ class AgentSession:
         return f"{skill_name}:{args.get('action') or ''}:{ident}"
 
     def _explicit_send_authorized(self, skill_name: str, args: dict) -> bool:
-        """True when the human, in this turn, explicitly told the agent to SEND
-        an email (not "draft" / "prepare"). Their instruction is the approval —
-        the gate would otherwise ask them to confirm what they just ordered.
+        """True, когда человек в этом ходе прямо велел ОТПРАВИТЬ письмо,
+        которое он уже видел.
 
-        Deliberately narrow: only ``email``/``email.send`` with action=send, only
-        when the latest user message is an imperative send directive AND names a
-        recipient (an @-address or a party word). Anything ambiguous falls
-        through to the normal approval prompt.
+        Ключевое слово — «видел». Раньше здесь хватало приказа: фраза вроде
+        «отправь поставщику письмо с просьбой прислать счёт» выдавала
+        разрешение, и наружу уходил текст, который человеку никто не показывал.
+        Это ровно то, что запрещает draft-first: подтверждают письмо, а не
+        намерение написать письмо. Теперь требуется и приказ, и показанное
+        содержимое (``_draft_shown_in_turn``); если письма ещё не показывали,
+        вызов идёт обычным путём — человек увидит превью и решит сам.
+
+        Второе исправление — отрицание. Проверялась одна подстрока «не отправл»,
+        поэтому «не нужно отправлять письмо поставщику, просто подготовь»
+        считалось приказом отправить. Теперь работает общий ``_NEGATION_RE``.
         """
         if skill_name not in ("email", "email.send"):
             return False
         if args.get("action") not in (None, "send"):
+            return False
+        # Признание блокирующего риска — решение человека, а не модели: такой
+        # вызов всегда идёт через явный запрос подтверждения.
+        if args.get("acknowledged_risks"):
             return False
         last_user = next(
             (str(m.get("content") or "") for m in reversed(self.messages)
@@ -2856,13 +2903,89 @@ class AgentSession:
         if not last_user or not self._EXPLICIT_SEND_RE.search(last_user):
             return False
         low = last_user.lower()
-        if "черновик" in low or "draft" in low or "не отправл" in low:
+        if "черновик" in low or "draft" in low:
+            return False
+        if self._NEGATION_RE.search(last_user):
             return False
         has_recipient = (
             "@" in last_user
             or any(w in low for w in ("поставщик", "клиент", "контрагент", "заказчик", "адрес"))
         )
-        return has_recipient
+        return has_recipient and self._draft_shown_in_turn(args)
+
+    def _draft_snapshot(self, args: dict) -> dict:
+        """Получатели и тема письма, которое отправляет этот вызов.
+
+        Либо прямо из аргументов, либо — когда в вызове только ``draft_id`` —
+        из результата инструмента, которым этот черновик был создан/прочитан в
+        текущей сессии.
+        """
+        body = args.get("body")
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except Exception:  # noqa: BLE001
+                body = {}
+        payload = body if isinstance(body, dict) else {}
+        recipients = payload.get("to_addresses") or args.get("to_addresses")
+        subject = payload.get("subject") or args.get("subject")
+        if recipients:
+            return {
+                "to": [str(a) for a in (recipients if isinstance(recipients, list)
+                                        else [recipients])],
+                "subject": str(subject or ""),
+            }
+
+        draft_id = str(args.get("draft_id") or args.get("id") or "")
+        if not draft_id:
+            return {"to": [], "subject": ""}
+        for msg in reversed(self.messages):
+            if msg.get("role") != "tool":
+                continue
+            content = str(msg.get("content") or "")
+            if draft_id not in content:
+                continue
+            try:
+                data = json.loads(content)
+            except Exception:  # noqa: BLE001
+                continue
+            if not isinstance(data, dict):
+                continue
+            to = data.get("to_addresses")
+            if to:
+                return {
+                    "to": [str(a) for a in (to if isinstance(to, list) else [to])],
+                    "subject": str(data.get("subject") or ""),
+                }
+        return {"to": [], "subject": ""}
+
+    def _draft_shown_in_turn(self, args: dict) -> bool:
+        """Показывал ли агент это письмо человеку в текущем ходе.
+
+        «Показывал» — значит в тексте, который агент вывел после последнего
+        сообщения человека, есть и получатель, и тема письма. Пустой снимок
+        (ни получателей, ни темы) показанным не считается: тогда сверять
+        нечего, и правильный ответ — спросить.
+        """
+        snapshot = self._draft_snapshot(args)
+        recipients = [a for a in snapshot["to"] if a]
+        if not recipients:
+            return False
+
+        shown: list[str] = []
+        for msg in reversed(self.messages):
+            if msg.get("role") == "user":
+                break
+            if msg.get("role") == "assistant" and msg.get("content"):
+                shown.append(str(msg["content"]))
+        if not shown:
+            return False
+        haystack = "\n".join(shown).lower()
+
+        if not all(str(a).lower() in haystack for a in recipients):
+            return False
+        subject = snapshot["subject"].strip().lower()
+        return not subject or subject in haystack
 
     async def _request_approval(self, skill_name: str, args: dict) -> bool:
         preview = json.dumps(args, ensure_ascii=False, indent=2)

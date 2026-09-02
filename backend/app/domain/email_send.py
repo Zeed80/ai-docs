@@ -73,7 +73,13 @@ async def create_reply_draft(
 
     ``mailbox`` picks whose SMTP account the eventual send uses (see
     app/tasks/email_sender.py): explicit override, else the given thread's own
-    mailbox, else the global .env account as a last resort.
+    mailbox, else the single SMTP-configured mailbox of the installation.
+
+    Резолв делается ЗДЕСЬ, а не в момент отправки, потому что ящик входит в
+    ``content_digest``: пока он подставлялся воркером, человек подтверждал
+    письмо, не зная, с какого адреса оно уйдёт, а digest считался по пустому
+    значению. Не разрешилось — поле остаётся пустым, и отправка честно упрётся
+    в ошибку вместо письма от произвольного имени.
 
     ``owner_sub`` is the person (or ``rule:<id>`` / ``agent`` pseudo-actor) this
     draft belongs to. It is what app.domain.email_access.may_access_draft reads
@@ -85,6 +91,8 @@ async def create_reply_draft(
         thread = await db.get(EmailThread, thread_id)
         if thread:
             mailbox_name = thread.mailbox
+    if not mailbox_name:
+        mailbox_name = await resolve_default_mailbox(db)
 
     draft = DraftAction(
         action_type="email.send",
@@ -120,22 +128,33 @@ def resolve_default_mailbox_sync(db) -> str | None:
     Черновик без ящика не имел SMTP-аккаунта, и отправка сваливалась в
     глобальный .env, которого здесь нет, — письмо уходило в мнимую отправку.
     Правило намеренно осторожное: если SMTP настроен ровно у ОДНОГО активного
-    ящика, он и есть ответ; если их несколько — не выбираем, потому что
+    ОБЩЕГО ящика, он и есть ответ; если их несколько — не выбираем, потому что
     отправить от чужого имени хуже, чем не отправить, и вызывающий обязан
     указать ящик сам.
+
+    Личные ящики из автовыбора исключены совсем: «единственный настроенный»
+    легко оказывается личным ящиком сотрудника, и тогда автоподстановка
+    отправляла бы письма от его имени — решение, которое никто не принимал.
     """
     from sqlalchemy import select as _sel
 
     from app.db.models import MailboxConfig
 
     rows = db.execute(
-        _sel(MailboxConfig.name).where(
-            MailboxConfig.is_active == True,  # noqa: E712
-            MailboxConfig.smtp_host.isnot(None),
-            MailboxConfig.smtp_host != "",
-        )
+        _sel(MailboxConfig.name).where(*_default_mailbox_where())
     ).scalars().all()
     return rows[0] if len(rows) == 1 else None
+
+
+def _default_mailbox_where():
+    from app.db.models import MailboxConfig
+
+    return (
+        MailboxConfig.is_active == True,  # noqa: E712
+        MailboxConfig.smtp_host.isnot(None),
+        MailboxConfig.smtp_host != "",
+        MailboxConfig.mailbox_type != "personal",
+    )
 
 
 async def resolve_default_mailbox(db) -> str | None:
@@ -145,12 +164,6 @@ async def resolve_default_mailbox(db) -> str | None:
     from app.db.models import MailboxConfig
 
     rows = (
-        await db.execute(
-            _sel(MailboxConfig.name).where(
-                MailboxConfig.is_active == True,  # noqa: E712
-                MailboxConfig.smtp_host.isnot(None),
-                MailboxConfig.smtp_host != "",
-            )
-        )
+        await db.execute(_sel(MailboxConfig.name).where(*_default_mailbox_where()))
     ).scalars().all()
     return rows[0] if len(rows) == 1 else None

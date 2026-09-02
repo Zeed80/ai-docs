@@ -34,7 +34,61 @@ _MAX_AUTO_REPLIES_PER_THREAD_PER_DAY = 2
 
 # ── known domains (also fixes the hard-coded set in email.risk_check) ──────────
 
+def our_domains_sync(db) -> set[str]:
+    """Домены САМОЙ организации — наш почтовый домен и домены наших ящиков.
+
+    Отдельно от :func:`known_domains_sync`, который добавляет к ним ещё и
+    домены поставщиков. Смешение этих двух множеств стоило дорого: раз домен
+    поставщика «известен», автопересылка правилом на адрес поставщика
+    переставала считаться внешней и уходила без человека — при том, что
+    докстринг ``_forward_message`` обещал ровно обратное. Всё, что решает
+    «можно ли отправить без человека», должно спрашивать ЭТУ функцию;
+    ``known_domains*`` остаётся для эвристик риска, где знакомый корреспондент
+    — это как раз то, что нужно знать.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import MailboxConfig, MailServerConfig
+
+    domains: set[str] = set()
+    row = db.execute(select(MailServerConfig)).scalars().first()
+    if row and row.mail_domain:
+        domains.add(row.mail_domain.lower())
+    for addr in db.execute(select(MailboxConfig.smtp_from_address)).scalars():
+        if addr and "@" in addr:
+            domains.add(addr.split("@")[-1].lower())
+    for addr in db.execute(select(MailboxConfig.name)).scalars():
+        if addr and "@" in addr:
+            domains.add(addr.split("@")[-1].lower())
+    return {d for d in domains if d}
+
+
+async def our_domains(db) -> set[str]:
+    """Async-вариант :func:`our_domains_sync`."""
+    from sqlalchemy import select
+
+    from app.db.models import MailboxConfig, MailServerConfig
+
+    domains: set[str] = set()
+    row = (await db.execute(select(MailServerConfig))).scalars().first()
+    if row and row.mail_domain:
+        domains.add(row.mail_domain.lower())
+    for addr in (await db.execute(select(MailboxConfig.smtp_from_address))).scalars():
+        if addr and "@" in addr:
+            domains.add(addr.split("@")[-1].lower())
+    for addr in (await db.execute(select(MailboxConfig.name))).scalars():
+        if addr and "@" in addr:
+            domains.add(addr.split("@")[-1].lower())
+    return {d for d in domains if d}
+
+
 def known_domains_sync(db) -> set[str]:
+    """Наши домены ПЛЮС домены известных поставщиков.
+
+    Множество «с кем мы вообще имеем дело» — годится для эвристик риска
+    (похожий домен, первый контакт), но НЕ для решения «внутренний ли это
+    адресат»: для этого есть :func:`our_domains_sync`.
+    """
     from sqlalchemy import select
 
     from app.db.models import MailboxConfig, MailServerConfig, Party
@@ -309,14 +363,18 @@ def apply_rules(db, msg, mailbox: str, *, only_rule_id=None) -> list[dict]:
                         # stamped "approved" and dispatched directly, so the
                         # one path with no human in it was also the only path
                         # with no checks.
-                        if do_send and _rule_send_blocked(db, draft):
+                        blocked, codes = (
+                            _rule_send_blocked(db, draft) if do_send else (False, [])
+                        )
+                        if blocked:
                             logger.warning(
                                 "email_rule_auto_send_blocked_by_risk",
-                                rule_id=str(rule.id),
+                                rule_id=str(rule.id), codes=codes,
                             )
                             do_send = False
                             draft.draft_data = {**draft.draft_data, "status": "draft",
-                                                "sent_by": None}
+                                                "sent_by": None,
+                                                "blocked_by": codes}
                         if do_send:
                             _dispatch_rule_send(
                                 db, draft, rule, msg,
@@ -357,28 +415,40 @@ def apply_rules(db, msg, mailbox: str, *, only_rule_id=None) -> list[dict]:
     return all_applied
 
 
-def _rule_send_blocked(db, draft) -> bool:
-    """True when an automatic send must be held for a human.
+def _rule_send_blocked(db, draft) -> tuple[bool, list[str]]:
+    """(держать для человека?, коды сработавших блокирующих флагов).
 
-    Runs the same detectors the API exposes as email.risk_check, in the sync
-    ingest context. Only ERROR-severity flags block: warnings ("внешний домен")
-    are the normal case for supplier correspondence and would stop every
-    auto-reply.
+    Здесь буквально те же детекторы, что и в ``email.risk_check`` — через
+    общий ``email_risk.evaluate_draft_sync``. Раньше это была третья, ручная
+    копия проверок: со своим списком слов (в нём было «внутренн», из-за чего
+    «внутренний диаметр» останавливал автоответ) и БЕЗ проверки похожего
+    домена — то есть единственный путь без человека был единственным путём без
+    защиты от подмены адреса получателя.
+
+    Второе исправление — «хотя бы один знакомый получатель разрешал письмо
+    всем остальным»: достаточно было приписать к знакомому адресу чужой, и
+    правило отправляло без человека. Теперь незнакомый адресат держит письмо
+    независимо от соседей по списку.
     """
-    data = draft.draft_data or {}
-    body = (data.get("body_text") or data.get("body_html") or "").lower()
-    sensitive = ("конфиденциальн", "секрет", "не для распростран", "внутренн")
-    if any(word in body for word in sensitive):
-        return True
+    from app.domain.email_risk import blocking_flags, evaluate_draft_sync
 
-    # A recipient nobody in the system knows is not somewhere to send template
-    # replies unattended.
+    data = draft.draft_data or {}
+    recipients = [a for a in (data.get("to_addresses") or []) if a]
+    if not recipients:
+        return False, []
+
+    flags = evaluate_draft_sync(db, data)
+    blocking = blocking_flags(flags)
+    if blocking:
+        return True, [f.code for f in blocking]
+
+    # Шаблонный автоответ уходит без человека только тем, с кем мы уже имеем
+    # дело: незнакомый домен ХОТЯ БЫ У ОДНОГО получателя держит письмо.
     known = known_domains_sync(db)
-    for addr in data.get("to_addresses") or []:
-        domain = addr.split("@")[-1].lower() if "@" in addr else ""
-        if domain and domain in known:
-            return False
-    return bool(data.get("to_addresses"))
+    unknown = [a for a in recipients if _domain(a) and _domain(a) not in known]
+    if unknown:
+        return True, ["unknown_recipient"]
+    return False, []
 
 
 def _assign_thread(db, thread, role: str) -> str | None:
@@ -435,15 +505,20 @@ def _forward_message(db, msg, rule, address: str, mailbox: str) -> None:
     so it is never sent by a rule on its own: the draft is prepared and a human
     is notified. Internal addresses follow the org's auto-send policy like any
     other rule-generated reply.
+
+    «Внутренний» здесь — это домен НАШЕЙ организации (``our_domains_sync``), а
+    не «знакомый». Пока проверка шла по ``known_domains_sync``, куда входят и
+    домены всех поставщиков, автопересылка контрагенту внешней не считалась —
+    правило фильтра молча отправляло корпоративную переписку наружу, ровно то,
+    что этот абзац обещал не допускать.
     """
     from app.db.models import DraftAction
 
     target = _bare_addr(address)
     if not target or "@" not in target:
         return
-    known = known_domains_sync(db)
     domain = target.split("@")[-1].lower()
-    external = domain not in known
+    external = domain not in our_domains_sync(db)
 
     body_html = (
         f"<p>Переслано правилом «{rule.name}».</p>"
@@ -484,6 +559,18 @@ def _forward_message(db, msg, rule, address: str, mailbox: str) -> None:
     draft.draft_data["content_digest"] = draft_content_digest(draft.draft_data)
     db.add(draft)
     db.flush()
+
+    # Пересылка — такое же исходящее письмо, как автоответ, и проходит те же
+    # детекторы. Раньше их здесь не было вовсе: тело пересылаемого письма
+    # никто не смотрел, хотя именно в нём и уезжает наружу чужое содержимое.
+    blocked, codes = _rule_send_blocked(db, draft) if do_send else (False, [])
+    if blocked:
+        logger.warning(
+            "email_rule_forward_blocked_by_risk", rule_id=str(rule.id), codes=codes,
+        )
+        do_send = False
+        draft.draft_data = {**draft.draft_data, "status": "draft", "sent_by": None,
+                            "blocked_by": codes}
 
     if do_send:
         _dispatch_rule_send(db, draft, rule, msg, target, mailbox)

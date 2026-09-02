@@ -155,6 +155,9 @@ capabilities:
         supplier_id:
           type: string
           description: "ID поставщика каталога (ToolSupplier) — для ingest_web_source"
+        document_id:
+          type: string
+          description: "ID документа-каталога (для catalog_pages, pause_parsing, reingest_upload)"
         entry_id:
           type: string
           description: "ID записи каталога (для approve/similar_positions/search_visual)"
@@ -324,13 +327,17 @@ capabilities:
       человеку предупреждения ДО подтверждения.
       expected_digest — это content_digest из последнего прочтения черновика;
       он привязывает подтверждение человека к конкретному тексту письма, а не
-      к идентификатору. Если черновик менялся после подтверждения — send
-      вернёт 409, нужно перечитать черновик и запросить подтверждение заново.
+      к идентификатору, и потому ОБЯЗАТЕЛЕН: без него send вернёт 400 с
+      error_code "digest_required" и самим digest в ответе. Если черновик
+      менялся после подтверждения — send вернёт 409; перечитай его через
+      action=get_draft и запроси подтверждение заново.
       Если проверка нашла блокирующий риск, send вернёт 400 с error_code
       "blocked_by_risk" и списком blocked_by: покажи причину человеку и, если
       он подтверждает осознанно, повтори send с acknowledged_risks=[коды].
       Сам решать за человека, что риск приемлем, нельзя.
-      Пример создания черновика: action="draft", body={"to":"email@example.com","subject":"Тема","body":"Текст"}.
+      Пример создания черновика: action="draft",
+      body={"to_addresses":["email@example.com"],"subject":"Тема","body_html":"<p>Текст</p>"}.
+      Именно эти имена полей: to_addresses (список), subject, body_html.
       Кто что делает с входящей почтой (Ф6.6): детерминированные ПРАВИЛА
       фильтрации (настройки → Почта → Правила) отрабатывают на каждом письме
       первыми — они быстрые, предсказуемые и не тратят модель: метки, папки,
@@ -365,19 +372,33 @@ capabilities:
       properties:
         action:
           type: string
-          description: "list | search | get | read | draft | compose | compose_assist | reply | send [GATE] | fetch_new | risk_check | label | mailboxes | labels | list_drafts | list_templates | get_template | render_template | suggest_template | style_match | my_mailbox | process_attachment | get_attachment | recognize_attachment"
+          description: "list | search | get | read | draft | get_draft | compose | compose_assist | reply | send [GATE] | fetch_new | risk_check | label | mailboxes | labels | list_drafts | list_templates | get_template | render_template | suggest_template | style_match | my_mailbox | process_attachment | get_attachment | recognize_attachment"
         thread_id:
           type: string
-          description: "ID треда/письма (для get)"
+          description: "ID треда (для get, reply)"
+        email_id:
+          type: string
+          description: "ID письма (для read)"
         message_id:
           type: string
-          description: "ID письма (для process_attachment)"
+          description: "ID письма (для process_attachment, recognize_attachment, get_attachment)"
+        filename:
+          type: string
+          description: "Имя файла вложения (для get_attachment)"
+        template_id:
+          type: string
+          description: "ID шаблона (для get_template, render_template, delete_template, templates.update)"
         draft_id:
           type: string
-          description: "ID черновика (для send, risk_check) — получить из результата action=draft"
+          description: "ID черновика (для send, get_draft, risk_check) — получить из результата action=draft"
         expected_digest:
           type: string
-          description: "content_digest черновика (для send). Берётся из ответа action=draft/get/risk_check. Гарантирует, что уходит именно то письмо, которое подтвердил человек."
+          description: "content_digest черновика — ОБЯЗАТЕЛЕН для send. Берётся из ответа action=draft/get_draft/risk_check; без него send вернёт 400 digest_required. Гарантирует, что уходит именно то письмо, которое подтвердил человек."
+        acknowledged_risks:
+          type: array
+          items:
+            type: string
+          description: "Коды блокирующих рисков, которые человек увидел и принял ОСОЗНАННО. Заполнять только после явного ответа человека — такой вызов всегда требует отдельного подтверждения."
         query:
           type: string
           description: "Поисковый запрос (для search)"
@@ -488,6 +509,9 @@ capabilities:
         rule_id:
           type: string
           description: "ID правила нормализации"
+        card_id:
+          type: string
+          description: "ID карточки нормализации (для update_norm_card)"
         item_id:
           type: string
           description: "ID позиции или нормкарточки"
@@ -1039,6 +1063,9 @@ capabilities:
         body:
           type: object
           description: "Данные для task_create/task_propose: objective, description, role, rationale, suggested_trigger; для capability_propose: name, description, gap; для ai_config_set: auto_approve_confidence_threshold (0–1) и/или auto_verify_enabled (bool)"
+        proposal_id:
+          type: string
+          description: "ID предложения новой capability (для capability_status)"
         entity_id:
           type: string
           description: "Для approval_status: ID approval-запроса"

@@ -32,9 +32,12 @@ async def get_effective_user(
     if user.sub != AGENT_SERVICE_SUB:
         return user
 
+    # Дальше — всегда агент: помечаем это на самом пользователе, чтобы
+    # правила видимости (app.domain.email_access) не зависели от того,
+    # вспомнил ли конкретный эндпоинт передать признак.
     actor = (request.headers.get("x-acting-user") or "").strip()
     if not actor or actor == AGENT_SERVICE_SUB:
-        return user
+        return user.model_copy(update={"via_agent": True})
 
     from app.db.models import User
     from app.db.session import _get_session_factory
@@ -47,7 +50,7 @@ async def get_effective_user(
     if row is None:
         # Unknown/inactive actor — stay on the service account rather than
         # inventing an identity.
-        return user
+        return user.model_copy(update={"via_agent": True})
 
     try:
         roles = [UserRole(row.role)]
@@ -61,4 +64,5 @@ async def get_effective_user(
         roles=roles,
         groups=list(user.groups or []),
         department_id=str(row.department_id) if row.department_id else None,
+        via_agent=True,
     )

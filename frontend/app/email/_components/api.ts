@@ -184,10 +184,14 @@ export const emailApi = {
       (r) => j<{ status: string }>(r),
     ),
 
-  sendDraft: (id: string) =>
-    mutFetch(`${API}/api/email/drafts/${id}/send`, { method: "POST" }).then((r) =>
-      j<{ status: string }>(r),
-    ),
+  sendDraft: (id: string, expectedDigest: string) =>
+    mutFetch(`${API}/api/email/drafts/${id}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // Без expected_digest сервер отвечает 400 digest_required: подтверждают
+      // конкретный текст письма, а не его идентификатор.
+      body: JSON.stringify({ expected_digest: expectedDigest }),
+    }).then((r) => j<{ status: string }>(r)),
 
   riskCheckDraft: (id: string) =>
     mutFetch(`${API}/api/email/drafts/${id}/risk-check`, { method: "POST" }).then((r) =>

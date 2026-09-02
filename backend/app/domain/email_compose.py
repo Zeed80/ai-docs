@@ -197,10 +197,16 @@ async def _gather_context(db: AsyncSession, ctx: ComposeContext) -> tuple[str, s
                 )
             ).scalars().all()
             if msgs:
+                from app.ai.input_sanitizer import UNTRUSTED_NOTE, wrap_untrusted
+
                 prior_seen = True
                 lines.append("Последние сообщения в переписке:")
+                lines.append(UNTRUSTED_NOTE)
                 for m in reversed(msgs):
-                    lines.append(f"  [{m.from_address}] {(m.body_text or '')[:400]}")
+                    lines.append(
+                        f"  [{m.from_address}] "
+                        + wrap_untrusted((m.body_text or "")[:400], "email-body")
+                    )
 
     tone = "formal"
     if not prior_seen and counterparty_email:

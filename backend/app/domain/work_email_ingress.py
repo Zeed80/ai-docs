@@ -79,12 +79,22 @@ async def create_work_order_from_email(
     .env fallback names. ``email_message_pk`` is our stored EmailMessage id, so
     the order can be traced back to a letter a human can actually open.
     """
-    prompt = str(parsed.body_text or parsed.subject or "").strip()
+    from app.ai.input_sanitizer import UNTRUSTED_NOTE, wrap_untrusted
+
+    # Текст поручения написан человеком снаружи — размечаем его как данные.
+    # Отправитель проверен (DKIM/DMARC + allowlist, app.tasks.ingest), но
+    # «письмо от коллеги» не делает его содержимое системной инструкцией: сюда
+    # попадает и пересланная переписка, и цитаты третьих лиц.
+    letter = str(parsed.body_text or parsed.subject or "").strip()
+    prompt = (
+        f"{UNTRUSTED_NOTE}\n\nПоручение из письма:\n"
+        + wrap_untrusted(letter, "email-instruction")
+    ) if letter else ""
     order = await create_work_order(
         db,
         owner_key=f"email:{parsed.from_address}",
         objective=_objective_from_email(parsed),
-        description=prompt[:2000] or None,
+        description=letter[:2000] or None,
         source="email",
         metadata={
             "email_message_id": parsed.message_id,

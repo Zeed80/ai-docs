@@ -82,6 +82,8 @@ logger = structlog.get_logger()
 @router.post("/fetch", response_model=EmailFetchResponse)
 async def fetch_new_emails(
     payload: EmailFetchRequest,
+    request: Request,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.fetch_new — poll IMAP now and report what arrived.
@@ -91,8 +93,19 @@ async def fetch_new_emails(
     read that as "новых писем нет" and reported it to the user. Now it waits
     briefly for the poll it started and answers honestly; if the poll is still
     running it says so instead of guessing.
+
+    Отчитываемся ТОЛЬКО за ящики, видимые вызывающему. Опрос по-прежнему
+    наполняет базу по всем активным ящикам (иначе почтовый клиент перестанет
+    показывать письма), но число в ответе складывается по видимым: иначе агент
+    сообщал «пришло 5 писем», а list/search показывал ноль — расхождение,
+    которое человек может объяснить только «агент врёт».
     """
     from app.tasks.email_triage import run_triage
+
+    if payload.mailbox and not await may_read_mailbox(
+        db, user, payload.mailbox, for_agent=request_is_agent(request)
+    ):
+        raise HTTPException(404, "Mailbox not found")
 
     task = run_triage.delay(payload.mailbox)
     logger.info("email_triage_triggered", mailbox=payload.mailbox, task_id=task.id)
@@ -121,8 +134,17 @@ async def fetch_new_emails(
             task_id=task.id,
         )
 
+    by_mailbox = result.get("by_mailbox")
+    if isinstance(by_mailbox, dict):
+        hidden = set(
+            await hidden_mailbox_names(db, user, for_agent=request_is_agent(request))
+        )
+        fetched = sum(int(v or 0) for k, v in by_mailbox.items() if k not in hidden)
+    else:
+        fetched = int(result.get("total_emails") or 0)
+
     return EmailFetchResponse(
-        fetched_count=int(result.get("total_emails") or 0),
+        fetched_count=fetched,
         new_messages=[],
         errors=[str(e) for e in (result.get("errors") or [])][:10],
         task_id=task.id,
@@ -1354,12 +1376,10 @@ async def create_draft(
 
     # Черновик без ящика не имеет SMTP-аккаунта: отправка сваливалась в
     # глобальный .env, а когда его нет — в мнимую отправку, о которой человеку
-    # сообщали как об успешной. Агент ящик обычно не указывает.
+    # сообщали как об успешной. Агент ящик обычно не указывает, поэтому
+    # create_reply_draft резолвит его сам — до расчёта content_digest, чтобы
+    # подтверждение человека относилось в том числе к адресу отправителя.
     mailbox = payload.mailbox
-    if not mailbox:
-        from app.domain.email_send import resolve_default_mailbox
-
-        mailbox = await resolve_default_mailbox(db)
 
     draft = await create_reply_draft(
         db,
@@ -1872,17 +1892,35 @@ async def compose_assist_poll(task_id: str):
 async def agent_generate_draft(
     payload: AgentComposeRequest,
     request: Request,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.compose — Generate a draft from an intent + context.
 
     Creates a DraftAction (not sent). The agent then follows the existing
     risk_check -> send [GATE] path.
+
+    Проверки доступа здесь такие же, как у ручного создания черновика. Их не
+    было вовсе: ``X-Acting-User`` использовался только как ярлык владельца, а
+    ни ящик-отправитель, ни читаемость треда-контекста, ни доступность
+    вложений никто не проверял — при том, что ``generate_draft_body``
+    подтягивает в тело содержимое указанного треда.
     """
     from app.domain.email_compose import ComposeContext, generate_draft_body
     from app.domain.email_send import create_reply_draft
 
-    acting_sub = (request.headers.get("x-acting-user") or "").strip() or None
+    acting_sub = user.sub
+    for_agent = request_is_agent(request)
+    if payload.mailbox and not await may_write_mailbox(db, user, payload.mailbox):
+        raise HTTPException(403, "Нет доступа для отправки из этого ящика")
+    if payload.thread_id:
+        thread = await db.get(EmailThread, payload.thread_id)
+        if thread is None or not await may_read_mailbox(
+            db, user, thread.mailbox, for_agent=for_agent
+        ):
+            raise HTTPException(404, "Thread not found")
+    await _assert_attachments_usable(db, user, payload.attachment_ids)
+
     res = await generate_draft_body(
         db,
         intent=payload.intent,
@@ -2025,7 +2063,23 @@ async def send_email(
 
     data = draft.draft_data or {}
     mailbox = data.get("mailbox")
-    if mailbox and not await may_write_mailbox(db, user, mailbox):
+    if not mailbox:
+        # Fail-closed. Раньше пустой ящик означал «разбирайся при отправке»:
+        # авторизация ниже пропускала письмо (проверять нечего), а воркер уже
+        # после подтверждения выбирал аккаунт сам — человек подтверждал текст,
+        # не зная адреса отправителя, а при единственном личном ящике письмо
+        # уходило от имени сотрудника.
+        raise HTTPException(
+            400,
+            {
+                "error_code": "mailbox_unresolved",
+                "message": (
+                    "У черновика не указан ящик отправителя. Укажите mailbox "
+                    "в черновике — отправлять от произвольного адреса нельзя."
+                ),
+            },
+        )
+    if not await may_write_mailbox(db, user, mailbox):
         raise HTTPException(403, "Нет доступа для отправки из этого ящика")
 
     # Уже в очереди — второй раз не ставим. Раньше это обеспечивал побочный
@@ -2049,7 +2103,30 @@ async def send_email(
     # авто-проверки рисков: свежий прогон перезаписал бы content_digest и
     # подтверждение, данное на другое содержимое, стало бы «совпадающим».
     expected = payload.expected_digest if payload else None
-    if expected and data.get("content_digest") and expected != data["content_digest"]:
+    current_digest = data.get("content_digest")
+    if current_digest and not expected:
+        # Раньше проверка была `if expected and ...`, то есть привязка
+        # подтверждения к тексту письма выполнялась только если вызывающий сам
+        # о ней вспомнил. Никто в backend/app/ai этот параметр не подставляет —
+        # его должна была передать модель, прочитав описание capability. Защита,
+        # которую обходит забывчивость, защитой не является: без digest — отказ
+        # с подсказкой, где его взять.
+        raise HTTPException(
+            400,
+            {
+                "error_code": "digest_required",
+                "message": (
+                    "Для отправки нужен expected_digest — content_digest из "
+                    "последнего чтения черновика."
+                ),
+                "content_digest": current_digest,
+                "hint": (
+                    "Повтори send с expected_digest=content_digest из ответа "
+                    "action=draft/get_draft/risk_check."
+                ),
+            },
+        )
+    if expected and current_digest and expected != current_digest:
         raise HTTPException(
             409,
             "Черновик изменился после подтверждения — перечитайте его и повторите отправку",
@@ -2739,16 +2816,30 @@ async def agent_reply_draft(
     thread_id: uuid.UUID,
     payload: AgentComposeRequest,
     request: Request,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.reply — Draft a reply into an existing thread (correct
-    threading headers). Send still goes through the email.send gate."""
+    threading headers). Send still goes through the email.send gate.
+
+    Читаемость треда проверяется тем же правилом, что и в get_thread: ответ
+    вытягивает переписку в тело черновика, а черновик принадлежит вызывающему
+    — без этой проверки ``email.reply`` был способом вынести содержимое чужого
+    личного ящика наружу, минуя приватность из email_access.
+    """
     from app.domain.email_compose import ComposeContext, generate_draft_body
     from app.domain.email_send import create_reply_draft
 
     thread = await db.get(EmailThread, thread_id)
     if not thread:
         raise HTTPException(404, "Thread not found")
+    if not await may_read_mailbox(
+        db, user, thread.mailbox, for_agent=request_is_agent(request)
+    ):
+        raise HTTPException(404, "Thread not found")
+    if not await may_write_mailbox(db, user, thread.mailbox):
+        raise HTTPException(403, "Нет доступа для отправки из этого ящика")
+    await _assert_attachments_usable(db, user, payload.attachment_ids)
     last_inbound = (
         await db.execute(
             select(EmailMessage)
@@ -2764,7 +2855,7 @@ async def agent_reply_draft(
         context=ComposeContext(thread_id=thread_id, supplier_id=payload.supplier_id,
                                invoice_id=payload.invoice_id, mailbox=thread.mailbox),
         tone_override=payload.tone,
-        acting_user_sub=(request.headers.get("x-acting-user") or "").strip() or None,
+        acting_user_sub=user.sub,
     )
     # Reply-To wins over From: suppliers routinely send from a no-reply address
     # with Reply-To pointing at the sales desk.
@@ -2784,7 +2875,7 @@ async def agent_reply_draft(
         mailbox=thread.mailbox,
         in_reply_to_message_id=last_inbound.id if last_inbound else None,
         attachment_ids=payload.attachment_ids,
-        owner_sub=(request.headers.get("x-acting-user") or "").strip() or None,
+        owner_sub=user.sub,
     )
     await db.commit()
     await db.refresh(draft)

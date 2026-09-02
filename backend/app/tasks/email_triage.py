@@ -116,11 +116,17 @@ def run_triage(self, mailbox: str | None = None) -> dict:
     total_emails = 0
     total_docs = 0
     results = []
+    # Сколько писем пришло в КАЖДЫЙ ящик: вызывающий (например
+    # POST /api/email/fetch) обязан отчитаться только за те ящики, которые
+    # он вправе показать. Один общий счётчик заставлял агента говорить
+    # «пришло 5 писем» там, где в его выдаче не появится ни одного.
+    by_mailbox: dict[str, int] = {}
 
     for mb in mailboxes:
         try:
             poll_result = poll_imap_mailbox(mb)
             emails_count = poll_result.get("fetched", 0)
+            by_mailbox[mb] = by_mailbox.get(mb, 0) + int(emails_count or 0)
             docs = poll_result.get("documents", [])
             # ``documents`` may be a count (from a failed/short-circuit poll) or a
             # list of ids — normalise so the extraction loop below is safe.
@@ -159,6 +165,7 @@ def run_triage(self, mailbox: str | None = None) -> dict:
     return {
         "total_emails": total_emails,
         "total_documents": total_docs,
+        "by_mailbox": by_mailbox,
         "results": results,
     }
 

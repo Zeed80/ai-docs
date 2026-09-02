@@ -34,6 +34,14 @@ class UserInfo(BaseModel):
     # below. None = no department set — department-scoped memory stays invisible
     # to them, existing session/owner/project/global visibility is unaffected.
     department_id: str | None = None
+    # Этот запрос пришёл от агента (сервисный аккаунт, возможно с де-эскалацией
+    # до человека через X-Acting-User) — см. app.auth.acting.get_effective_user.
+    # Носителем признака сделан сам пользователь, а не request, потому что
+    # согласие на чтение личного ящика агентом (MailboxConfig.sweep_enabled)
+    # проверялось параметром for_agent, который каждый эндпоинт должен был
+    # передать вручную: из восемнадцати мест его передавали в шести, и чтение
+    # письма поштучно, вложения и спек-таблицы шли мимо согласия.
+    via_agent: bool = False
 
 
 # Role → allowed actions map (used by permission checks)
