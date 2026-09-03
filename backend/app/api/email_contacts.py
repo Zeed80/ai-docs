@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,6 +72,10 @@ class ContactCreate(BaseModel):
     is_favorite: bool = False
     trust_images: bool = False
     shared: bool = False  # admins can create org-wide contacts
+    # «Добавить в контакты» из письма нажимают, не помня, есть ли уже такой
+    # адрес. С upsert повторное нажатие возвращает существующую карточку
+    # вместо 409 — ошибка там сообщала бы человеку о его же памяти.
+    upsert: bool = False
 
 
 class ContactUpdate(BaseModel):
@@ -209,6 +213,7 @@ async def list_book(
 @router.post("/book", response_model=ContactBookItem, status_code=201)
 async def create_contact(
     payload: ContactCreate,
+    response: Response,
     user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -216,11 +221,33 @@ async def create_contact(
 
     email = _bare(payload.email).lower()
     owner = None if (payload.shared and UserRole.admin in (user.roles or [])) else user.sub
+    # Ищем и среди общих карточек: адрес, уже записанный автоматически как
+    # общий контакт, иначе получал вторую, личную карточку — и в подсказках
+    # один и тот же человек начинал двоиться.
     existing = (
         await db.execute(
-            select(EmailContact).where(EmailContact.email == email, EmailContact.owner_sub == owner)
+            select(EmailContact).where(
+                EmailContact.email == email,
+                or_(EmailContact.owner_sub == owner, EmailContact.owner_sub.is_(None)),
+            ).order_by(EmailContact.owner_sub.is_(None))
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
+    if existing and payload.upsert:
+        # Дополняем пустые поля, ничего не затирая: карточка могла быть
+        # заведена автоматически и с тех пор отредактирована человеком.
+        existing.name = existing.name or payload.name
+        existing.organization = existing.organization or payload.organization
+        existing.phone = existing.phone or payload.phone
+        existing.notes = existing.notes or payload.notes
+        if payload.tags:
+            existing.tags = sorted(set((existing.tags or []) + payload.tags))
+        if existing.source == "auto":
+            existing.source = "manual"
+        await db.commit()
+        await db.refresh(existing)
+        # 200, а не 201: карточку не создали, а дополнили.
+        response.status_code = 200
+        return existing
     if existing:
         raise HTTPException(409, "Контакт с таким адресом уже есть")
     c = EmailContact(
@@ -370,6 +397,9 @@ class ImportResult(BaseModel):
     added: int
     updated: int
     skipped: int
+    # Что именно не прошло и почему: «пропущено 13» без строк и причин
+    # невозможно ни исправить, ни проверить.
+    skipped_rows: list[dict] = []
 
 
 @router.post("/import", response_model=ImportResult)
@@ -388,12 +418,19 @@ async def import_contacts(
         raise HTTPException(422, "Пустой CSV")
     reader = csv.DictReader(io.StringIO(text))
     added = updated = skipped = 0
-    for raw in reader:
+    skipped_rows: list[dict] = []
+    for line_no, raw in enumerate(reader, start=2):
         row = {(k or "").strip().lower(): (v or "").strip() for k, v in raw.items()}
         _, email = _split(row.get("email") or row.get("e-mail") or row.get("адрес") or "")
         email = email.lower()
         if not email or "@" not in email:
             skipped += 1
+            if len(skipped_rows) < 50:
+                skipped_rows.append({
+                    "line": line_no,
+                    "value": (row.get("email") or row.get("e-mail") or row.get("адрес") or "")[:120],
+                    "reason": "нет адреса" if not email else "адрес без @",
+                })
             continue
         existing = (
             await db.execute(
@@ -422,7 +459,9 @@ async def import_contacts(
             ))
             added += 1
     await db.commit()
-    return ImportResult(added=added, updated=updated, skipped=skipped)
+    return ImportResult(
+        added=added, updated=updated, skipped=skipped, skipped_rows=skipped_rows,
+    )
 
 
 async def remember_recipients(db: AsyncSession, *, owner_sub: str | None, addresses: list[str]) -> None:

@@ -49,6 +49,7 @@ from app.domain.email import (
     ComposeSendRequest,
     EmailAttachmentOut,
     EmailDraftCreate,
+    EmailDraftAttachment,
     EmailDraftOut,
     EmailDraftUpdate,
     EmailFetchRequest,
@@ -423,6 +424,14 @@ def _thread_out(thread: EmailThread, *, with_messages: bool = False) -> EmailThr
     )
     inbound = [m for m in msgs if m.is_inbound]
     sender = (inbound[-1].from_address if inbound else (msgs[-1].from_address if msgs else None))
+    # Собеседник: во «Входящих» это отправитель, в «Отправленных» и
+    # «Черновиках» — получатель. Раньше список отправленных показывал нас
+    # самих, потому что sender там всегда наш адрес.
+    counterparty = sender
+    if thread.folder in ("sent", "drafts", "outbox") or not inbound:
+        outbound = [m for m in msgs if not m.is_inbound]
+        if outbound and outbound[-1].to_addresses:
+            counterparty = ", ".join(outbound[-1].to_addresses[:3])
     return EmailThreadOut(
         id=thread.id,
         subject=thread.subject,
@@ -438,6 +447,7 @@ def _thread_out(thread: EmailThread, *, with_messages: bool = False) -> EmailThr
         last_snippet=thread.last_snippet,
         unread_count=thread.unread_count,
         sender=sender,
+        counterparty=counterparty,
         labels=[EmailLabelOut.model_validate(l) for l in (thread.labels or [])],
         messages=[EmailMessageOut.model_validate(m) for m in msgs] if with_messages else [],
     )
@@ -1401,7 +1411,7 @@ async def create_draft(
     await db.commit()
     await db.refresh(draft)
     logger.info("email_draft_created", draft_id=str(draft.id), by=user.sub)
-    return _draft_to_out(draft)
+    return await _draft_out_with_attachments(db, draft)
 
 
 @router.patch("/drafts/{draft_id}", response_model=EmailDraftOut)
@@ -1440,11 +1450,44 @@ async def update_draft(
     flag_modified(draft, "draft_data")
     await db.commit()
     await db.refresh(draft)
-    return _draft_to_out(draft)
+    return await _draft_out_with_attachments(db, draft)
+
+
+@router.delete("/drafts/{draft_id}", status_code=204)
+async def delete_draft(
+    draft_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Выбросить черновик.
+
+    Его не было ни здесь, ни в интерфейсе, а автосохранение создаёт черновик
+    после пятнадцати секунд печатания: брошенные наброски копились навсегда, и
+    разобрать «Черновики» было нечем. Уже отправленное письмо удалить нельзя —
+    это журнал, а не корзина.
+    """
+    draft = await db.get(DraftAction, draft_id)
+    if not draft or draft.action_type != "email.send":
+        raise HTTPException(404, "Draft not found")
+    if not await may_access_draft(db, user, draft.draft_data):
+        raise HTTPException(404, "Draft not found")
+    if draft.executed or (draft.draft_data or {}).get("status") in ("queued", "sent", "sent_mock"):
+        raise HTTPException(
+            400,
+            {
+                "error_code": "already_sent",
+                "message": "Письмо уже отправлено или отправляется — удалить нельзя",
+            },
+        )
+    await db.delete(draft)
+    await db.commit()
+    logger.info("email_draft_deleted", draft_id=str(draft_id), by=user.sub)
+    return None
 
 
 @router.get("/drafts", response_model=list[EmailDraftOut])
 async def list_drafts(
+    mailbox: str | None = None,
     user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1457,9 +1500,24 @@ async def list_drafts(
         .where(DraftAction.action_type == "email.send", DraftAction.executed == False)
         .order_by(DraftAction.created_at.desc())
     )
-    drafts = result.scalars().all()
     may = await draft_access_filter(db, user)
-    return [_draft_to_out(d) for d in drafts if may(d.draft_data)]
+    drafts = [d for d in result.scalars().all() if may(d.draft_data)]
+    # Папка «Черновики» открывается в контексте выбранного ящика — показывать
+    # там чужие ящики так же неверно, как в списке писем.
+    if mailbox:
+        drafts = [d for d in drafts if (d.draft_data or {}).get("mailbox") == mailbox]
+    known = await _draft_attachments(db, drafts)
+    out = []
+    for d in drafts:
+        ordered = [
+            known[pid]
+            for pid in (
+                _uuid_or_none(a) for a in (d.draft_data or {}).get("attachment_ids") or []
+            )
+            if pid in known
+        ]
+        out.append(_draft_to_out(d, ordered))
+    return out
 
 
 @router.get("/drafts/{draft_id}", response_model=EmailDraftOut)
@@ -1475,10 +1533,19 @@ async def get_draft(
     draft = result.scalar_one_or_none()
     if not draft or not await may_access_draft(db, user, draft.draft_data):
         raise HTTPException(404, "Draft not found")
-    return _draft_to_out(draft)
+    return await _draft_out_with_attachments(db, draft)
 
 
-def _draft_to_out(draft: DraftAction) -> EmailDraftOut:
+def _uuid_or_none(value) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value)) if value else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _draft_to_out(
+    draft: DraftAction, attachments: list["EmailDraftAttachment"] | None = None
+) -> EmailDraftOut:
     data = draft.draft_data or {}
     return EmailDraftOut(
         id=draft.id,
@@ -1488,14 +1555,60 @@ def _draft_to_out(draft: DraftAction) -> EmailDraftOut:
         subject=data.get("subject", ""),
         body_html=data.get("body_html"),
         body_text=data.get("body_text"),
-        thread_id=uuid.UUID(data["thread_id"]) if data.get("thread_id") else None,
+        thread_id=_uuid_or_none(data.get("thread_id")),
         mailbox=data.get("mailbox"),
         status=data.get("status", "draft"),
         risk_flags=data.get("risk_flags", []),
         attachment_ids=[uuid.UUID(a) for a in data.get("attachment_ids", [])],
+        attachments=attachments or [],
+        in_reply_to_message_id=_uuid_or_none(data.get("in_reply_to_message_id")),
+        forward_of_message_id=_uuid_or_none(data.get("forward_of_message_id")),
+        send_at=data.get("send_at"),
         content_digest=data.get("content_digest"),
         created_at=draft.created_at,
     )
+
+
+async def _draft_attachments(db: AsyncSession, drafts: list[DraftAction]) -> dict:
+    """Имена и размеры вложений всех переданных черновиков, одним запросом.
+
+    Композер показывает вложения по имени; без этого открытый заново черновик
+    выглядел так, будто вложений в нём никогда не было.
+    """
+    ids: set[uuid.UUID] = set()
+    for d in drafts:
+        for raw in (d.draft_data or {}).get("attachment_ids") or []:
+            parsed = _uuid_or_none(raw)
+            if parsed:
+                ids.add(parsed)
+    if not ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                EmailAttachment.id, EmailAttachment.filename,
+                EmailAttachment.size, EmailAttachment.content_type,
+            ).where(EmailAttachment.id.in_(list(ids)))
+        )
+    ).all()
+    return {
+        r[0]: EmailDraftAttachment(
+            id=r[0], filename=r[1], size=r[2], content_type=r[3]
+        )
+        for r in rows
+    }
+
+
+async def _draft_out_with_attachments(db: AsyncSession, draft: DraftAction) -> EmailDraftOut:
+    known = await _draft_attachments(db, [draft])
+    ordered = [
+        known[pid]
+        for pid in (
+            _uuid_or_none(a) for a in (draft.draft_data or {}).get("attachment_ids") or []
+        )
+        if pid in known
+    ]
+    return _draft_to_out(draft, ordered)
 
 
 # ── Direct human send (no agent gate) ──────────────────────────────────────

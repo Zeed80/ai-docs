@@ -63,32 +63,42 @@ export function MailSidebar({
   const totalUnread = mailboxes.reduce((n, m) => n + (m.unread_count || 0), 0);
   const activeChip = mailboxes.find((m) => m.name === activeMailbox) ?? null;
 
+  // Каждый пункт был <div onClick>: недостижим с клавиатуры и невидим для
+  // скринридера. Кнопка даёт фокус, Enter/Space и роль бесплатно.
   const rowCls = (on: boolean) =>
-    `flex items-center justify-between rounded px-2 py-1.5 text-sm cursor-pointer ${
-      on ? "bg-blue-900/40 text-blue-200" : "text-slate-300 hover:bg-slate-800"
+    `flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+      on
+        ? "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200"
+        : "text-slate-700 hover:bg-slate-100 dark:hover:text-slate-300 dark:hover:bg-white dark:hover:bg-slate-800"
     }`;
 
+  const countCls = "text-xs text-blue-600 dark:text-blue-300";
+
   return (
-    <div className="flex w-56 shrink-0 flex-col border-r border-slate-700 bg-slate-900/60">
+    <nav
+      aria-label={t("foldersTitle")}
+      className="flex w-56 shrink-0 flex-col border-r border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/60"
+    >
       <div className="p-2">
         <div className="mb-2 flex gap-1">
           <button
             onClick={onSync}
             disabled={syncing}
-            className="flex-1 rounded bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+            className="flex-1 rounded bg-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-300 disabled:opacity-50 dark:disabled:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
           >
             {syncing ? t("syncing") : t("syncNow")}
           </button>
           <button
             onClick={onCollapse}
-            className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-400 hover:bg-slate-700"
-            title="Свернуть"
+            aria-label={t("collapseSidebar")}
+            className="rounded bg-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-300 dark:hover:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
+            title={t("collapseSidebar")}
           >
             «
           </button>
         </div>
         {activeChip?.sync_error && (
-          <p className="mb-2 px-1 text-[10px] text-red-400">
+          <p className="mb-2 px-1 text-[10px] text-red-500 dark:text-red-400">
             {t("syncError", { error: activeChip.sync_error.slice(0, 60) })}
           </p>
         )}
@@ -98,79 +108,95 @@ export function MailSidebar({
         <p className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-wide text-slate-500">
           {t("title")}
         </p>
-        <div
+        <button
+          type="button"
+          aria-current={activeMailbox === "" && !starredOnly && !activeLabel ? "page" : undefined}
           className={rowCls(activeMailbox === "" && !starredOnly && !activeLabel)}
           onClick={() => onSelectMailbox("")}
         >
           <span>{t("folders.inbox")}</span>
-          {totalUnread > 0 && <span className="text-xs text-blue-300">{totalUnread}</span>}
-        </div>
+          {totalUnread > 0 && <span className={countCls}>{totalUnread}</span>}
+        </button>
         {mailboxes.map((m) => (
-          <div
+          <button
             key={m.name}
+            type="button"
+            aria-current={activeMailbox === m.name ? "page" : undefined}
             className={rowCls(activeMailbox === m.name)}
             onClick={() => onSelectMailbox(m.name)}
           >
             <span className="flex items-center gap-1 truncate">
-              {m.sync_error && <span className="h-1.5 w-1.5 rounded-full bg-red-500" />}
+              {m.sync_error && (
+                <span
+                  className="h-1.5 w-1.5 rounded-full bg-red-500"
+                  role="img"
+                  aria-label={t("syncBrokenShort")}
+                />
+              )}
               {m.display_name || m.name}
             </span>
-            {m.unread_count > 0 && (
-              <span className="text-xs text-blue-300">{m.unread_count}</span>
-            )}
-          </div>
+            {m.unread_count > 0 && <span className={countCls}>{m.unread_count}</span>}
+          </button>
         ))}
 
         <p className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wide text-slate-500">
           {t("folders.starred")} / {t("labels")}
         </p>
-        <div className={rowCls(starredOnly)} onClick={onToggleStarred}>
+        <button
+          type="button"
+          aria-pressed={starredOnly}
+          className={rowCls(starredOnly)}
+          onClick={onToggleStarred}
+        >
           <span>★ {t("folders.starred")}</span>
-        </div>
+        </button>
         {FOLDERS.filter((f) => f !== "inbox").map((f) => (
-          <div
+          <button
             key={f}
+            type="button"
+            aria-current={activeFolder === f && !starredOnly ? "page" : undefined}
             className={rowCls(activeFolder === f && !starredOnly)}
             onClick={() => onSelectFolder(f)}
           >
             <span>{t(`folders.${f}`)}</span>
             {fcounts[f]?.unread > 0 ? (
-              <span className="text-xs text-blue-300">{fcounts[f].unread}</span>
+              <span className={countCls}>{fcounts[f].unread}</span>
             ) : fcounts[f]?.total > 0 && f !== "trash" ? (
-              <span className="text-xs text-slate-600">{fcounts[f].total}</span>
+              <span className="text-xs text-slate-500 dark:text-slate-400 dark:text-slate-600">{fcounts[f].total}</span>
             ) : null}
-          </div>
+          </button>
         ))}
 
         {labels.map((l) => (
-          <div
-            key={l.id}
-            className={rowCls(activeLabel === l.id)}
-            onClick={() => onSelectLabel(l.id)}
-          >
-            <span className="flex items-center gap-1.5 truncate">
-              <span
-                className="h-2 w-2 rounded-full"
-                style={{ background: l.color ?? "#64748b" }}
-              />
-              {l.name}
-            </span>
-            <span className="flex items-center gap-1">
+          <div key={l.id} className="flex items-center">
+            <button
+              type="button"
+              aria-current={activeLabel === l.id ? "page" : undefined}
+              className={rowCls(activeLabel === l.id)}
+              onClick={() => onSelectLabel(l.id)}
+            >
+              <span className="flex items-center gap-1.5 truncate">
+                <span
+                  aria-hidden
+                  className="h-2 w-2 rounded-full"
+                  style={{ background: l.color ?? "#64748b" }}
+                />
+                {l.name}
+              </span>
               {l.thread_count > 0 && (
                 <span className="text-xs text-slate-500">{l.thread_count}</span>
               )}
-              {!l.is_system && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    emailApi.deleteLabel(l.id).then(onLabelsChanged);
-                  }}
-                  className="text-slate-600 hover:text-red-400"
-                >
-                  ×
-                </button>
-              )}
-            </span>
+            </button>
+            {!l.is_system && (
+              <button
+                type="button"
+                aria-label={t("deleteLabel", { name: l.name })}
+                onClick={() => emailApi.deleteLabel(l.id).then(onLabelsChanged)}
+                className="px-1 text-slate-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-slate-600 dark:hover:text-red-500 dark:hover:text-red-400"
+              >
+                ×
+              </button>
+            )}
           </div>
         ))}
         <form
@@ -188,17 +214,23 @@ export function MailSidebar({
             value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)}
             placeholder={t("newLabel")}
-            className="w-full rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 placeholder-slate-600"
+            aria-label={t("newLabel")}
+            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 placeholder-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:placeholder-slate-600"
           />
         </form>
 
         <p className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wide text-slate-500">
-          Ещё
+          {t("more")}
         </p>
-        <div className={rowCls(view === "contacts")} onClick={onSelectContacts}>
-          <span>👤 Контакты</span>
-        </div>
+        <button
+          type="button"
+          aria-current={view === "contacts" ? "page" : undefined}
+          className={rowCls(view === "contacts")}
+          onClick={onSelectContacts}
+        >
+          <span>👤 {t("contacts")}</span>
+        </button>
       </div>
-    </div>
+    </nav>
   );
 }

@@ -134,7 +134,14 @@ export const emailApi = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ csv }),
-    }).then((r) => j<{ added: number; updated: number; skipped: number }>(r)),
+    }).then((r) =>
+      j<{
+        added: number;
+        updated: number;
+        skipped: number;
+        skipped_rows: { line: number; value: string; reason: string }[];
+      }>(r),
+    ),
 
   exportContactsUrl: () => `${API}/api/email/contacts/export`,
 
@@ -148,7 +155,18 @@ export const emailApi = {
       `${API}/api/email/signatures/resolve${mailbox ? `?mailbox=${encodeURIComponent(mailbox)}` : ""}`,
     ).then(async (r) => (r.ok ? ((await r.json()) as { body_html: string } | null) : null)),
 
-  drafts: () => apiFetch(`${API}/api/email/drafts`).then((r) => j<EmailDraft[]>(r)),
+  drafts: (mailbox?: string) =>
+    apiFetch(
+      `${API}/api/email/drafts${mailbox ? `?mailbox=${encodeURIComponent(mailbox)}` : ""}`,
+    ).then((r) => j<EmailDraft[]>(r)),
+
+  draft: (id: string) =>
+    apiFetch(`${API}/api/email/drafts/${id}`).then((r) => j<EmailDraft>(r)),
+
+  deleteDraft: (id: string) =>
+    mutFetch(`${API}/api/email/drafts/${id}`, { method: "DELETE" }).then((r) => {
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+    }),
 
   createDraft: (body: Record<string, unknown>) =>
     mutFetch(`${API}/api/email/drafts`, {
@@ -197,6 +215,18 @@ export const emailApi = {
     mutFetch(`${API}/api/email/drafts/${id}/risk-check`, { method: "POST" }).then((r) =>
       j<{ is_safe: boolean; flags: { code: string; severity: string; message: string }[] }>(r),
     ),
+
+  templates: () =>
+    apiFetch(`${API}/api/email-templates/`).then((r) =>
+      j<{ id: string; name: string; subject: string | null; category?: string | null }[]>(r),
+    ),
+
+  renderTemplate: (id: string, variables: Record<string, string>) =>
+    mutFetch(`${API}/api/email-templates/${id}/render`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ variables }),
+    }).then((r) => j<{ subject: string; body_html: string; body_text: string }>(r)),
 
   uploadAttachment: (file: File) => {
     const fd = new FormData();

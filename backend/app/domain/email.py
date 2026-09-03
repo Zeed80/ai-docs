@@ -173,6 +173,10 @@ class EmailThreadOut(BaseModel):
     labels: list[EmailLabelOut] = []
     # Derived-for-list fields (filled by list endpoints, not the ORM):
     sender: str | None = None
+    # С кем переписка с точки зрения читающего. В «Отправленных» и
+    # «Черновиках» отправитель — мы сами, и список выглядел как переписка с
+    # собой; там нужен получатель.
+    counterparty: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -232,6 +236,13 @@ class EmailDraftUpdate(BaseModel):
     mailbox: str | None = None
 
 
+class EmailDraftAttachment(BaseModel):
+    id: uuid.UUID
+    filename: str
+    size: int | None = None
+    content_type: str | None = None
+
+
 class EmailDraftOut(BaseModel):
     id: uuid.UUID
     to_addresses: list[str]
@@ -245,6 +256,17 @@ class EmailDraftOut(BaseModel):
     status: str  # draft, risk_checked, approved, sent
     risk_flags: list[dict] = []
     attachment_ids: list[uuid.UUID] = []
+    # Имена и размеры вложений черновика. Одних id недостаточно: открыв
+    # сохранённый черновик, композер не мог показать вложения (нечего
+    # подписать), не показывал их вовсе — и следующее автосохранение стирало
+    # их вместе с пустым attachment_ids.
+    attachments: list["EmailDraftAttachment"] = []
+    # Без этих двух полей повторно открытый черновик ответа терял связь с
+    # перепиской и уходил как новое письмо.
+    in_reply_to_message_id: uuid.UUID | None = None
+    forward_of_message_id: uuid.UUID | None = None
+    # Отложенная отправка: когда письмо должно уйти (для папки «Исходящие»).
+    send_at: datetime | None = None
     # sha256 of the letter itself — pass it back as ``expected_digest`` when
     # sending, so an approval cannot be spent on rewritten content.
     content_digest: str | None = None

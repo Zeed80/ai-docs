@@ -98,6 +98,8 @@ export interface EmailThread {
   unread_count: number;
   labels: EmailLabel[];
   sender: string | null;
+  /** С кем переписка: во «Входящих» — отправитель, в «Отправленных» — получатель. */
+  counterparty?: string | null;
   messages: EmailMessage[];
 }
 
@@ -114,6 +116,12 @@ export interface EmailDraft {
   status: string;
   risk_flags: { code: string; severity: string; message: string; can_override?: boolean }[];
   attachment_ids: string[];
+  /** Имена вложений: без них открытый заново черновик показывал пустой список
+   *  вложений, а следующее автосохранение стирало их и на сервере. */
+  attachments: { id: string; filename: string; size: number | null; content_type: string | null }[];
+  in_reply_to_message_id: string | null;
+  forward_of_message_id: string | null;
+  send_at: string | null;
   // Отпечаток содержимого письма: обязателен при отправке существующего
   // черновика — он привязывает подтверждение к тексту, а не к идентификатору.
   content_digest: string | null;

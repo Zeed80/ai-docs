@@ -85,6 +85,7 @@ export function Composer({
         mailbox: m.mailbox || defaultMailbox,
         inReplyTo: m.id as string | null,
         forwardOf: null as string | null,
+        threadId: m.thread_id ?? null,
         forwardAttachments: [] as { id: string; filename: string }[],
       };
     }
@@ -103,6 +104,7 @@ export function Composer({
         // existed in the schema and the frontend never sent it, so "перешлю
         // счёт" arrived without the счёт.
         forwardOf: m.id as string | null,
+        threadId: null as string | null,
         forwardAttachments: (m.attachments ?? []).map((a) => ({
           id: a.id,
           filename: a.filename,
@@ -119,9 +121,18 @@ export function Composer({
         body: d.body_html ?? "",
         quote: "",
         mailbox: d.mailbox || defaultMailbox,
-        inReplyTo: null as string | null,
-        forwardOf: null as string | null,
-        forwardAttachments: [] as { id: string; filename: string }[],
+        // Всё это раньше не восстанавливалось. Открыв свой же черновик,
+        // человек не видел вложений — а автосохранение через пятнадцать
+        // секунд отправляло пустой attachment_ids и стирало их на сервере.
+        // Так же терялась связь с письмом, на которое отвечали: черновик
+        // ответа уходил как новое письмо и выпадал из переписки.
+        inReplyTo: d.in_reply_to_message_id ?? null,
+        forwardOf: d.forward_of_message_id ?? null,
+        threadId: d.thread_id ?? null,
+        forwardAttachments: (d.attachments ?? []).map((a) => ({
+          id: a.id,
+          filename: a.filename,
+        })),
       };
     }
     return {
@@ -134,8 +145,10 @@ export function Composer({
       mailbox: defaultMailbox,
       inReplyTo: null as string | null,
       forwardOf: null as string | null,
+      threadId: null as string | null,
       forwardAttachments: [] as { id: string; filename: string }[],
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, defaultMailbox]);
 
   const bareEmail = (s: string) => {
@@ -174,9 +187,10 @@ export function Composer({
       const known = new Set(prev.map((a) => a.id));
       const extra = mode.attachmentIds!
         .filter((id) => !known.has(id))
-        .map((id, i) => ({ id, filename: `Вложение ${i + 1}` }));
+        .map((id, i) => ({ id, filename: `${tc("attach")} ${i + 1}` }));
       return extra.length ? [...prev, ...extra] : prev;
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
@@ -192,6 +206,19 @@ export function Composer({
   const [aiInstruction, setAiInstruction] = useState("");
   // Ф4: risks that stopped the send, and the recall window after it started.
   const [blocked, setBlocked] = useState<{ code: string; message: string }[]>([]);
+  // Предупреждения проверки рисков. Сервер считал их всегда, а клиент читал
+  // только blocked — «в тексте упомянуто вложение, но его нет» и «впервые
+  // пишем на этот адрес» до человека не доходили никогда.
+  const [warnings, setWarnings] = useState<{ code: string; message: string }[]>([]);
+  const [templates, setTemplates] = useState<
+    { id: string; name: string; subject: string | null }[]
+  >([]);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  // Отложенная отправка. Сервер принимает send_at до 30 суток, интерфейс
+  // всегда слал фиксированные 10 секунд «на отмену»: «отправить в понедельник
+  // утром» выразить было нечем.
+  const [sendAt, setSendAt] = useState<string>("");
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [sentUndo, setSentUndo] = useState<{ draftId: string; until: number } | null>(null);
   const [undoLeft, setUndoLeft] = useState(0);
 
@@ -211,14 +238,31 @@ export function Composer({
   }, [sentUndo, onClose]);
 
   // Prefill the applicable signature once, at the bottom of the draft.
+  // Подпись меняется вместе с ящиком-отправителем: она подставлялась ровно
+  // один раз, и письмо из ящика бухгалтерии уходило с подписью снабжения.
+  // Прежняя подпись заменяется, а не накапливается — она помечена в разметке.
+  const sigRef = useRef<string>("");
   useEffect(() => {
-    if (sigApplied || mode.kind === "draft") return;
+    if (mode.kind === "draft" && !sigApplied) {
+      setSigApplied(true);
+      return;
+    }
     setSigApplied(true);
+    let cancelled = false;
     emailApi.resolveSignature(mailbox).then((sig) => {
-      if (sig?.body_html) {
-        setBody((b) => `${b}<br/><br/>${sig.body_html}`);
-      }
+      if (cancelled) return;
+      const next = sig?.body_html
+        ? `<div data-signature="1"><br/>${sig.body_html}</div>`
+        : "";
+      setBody((b) => {
+        const withoutOld = sigRef.current ? b.replace(sigRef.current, "") : b;
+        sigRef.current = next;
+        return next ? `${withoutOld}${next}` : withoutOld;
+      });
     });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mailbox]);
 
@@ -235,6 +279,8 @@ export function Composer({
       attachment_ids: [...attachments.map((a) => a.id), ...inlineIds],
       in_reply_to_message_id: initial.inReplyTo,
       forward_of_message_id: initial.forwardOf,
+      // Без thread_id ответ, сохранённый в черновики, терял переписку.
+      thread_id: initial.threadId,
     };
     if (draftId) {
       await emailApi.updateDraft(draftId, payload);
@@ -281,8 +327,11 @@ export function Composer({
         forward_of_message_id: initial.forwardOf,
         draft_id: draftId,
         acknowledged_risks: acknowledged,
-        delay_seconds: UNDO_SECONDS,
+        ...(sendAt
+          ? { send_at: new Date(sendAt).toISOString() }
+          : { delay_seconds: UNDO_SECONDS }),
       });
+      setWarnings(res.warnings ?? []);
       if (res.status === "blocked") {
         // Ф4: the send was refused — show what and let the person decide,
         // instead of silently sending (the old behaviour) or silently failing.
@@ -329,17 +378,74 @@ export function Composer({
       if (!dirtyRef.current) return;
       if (!subject.trim() && !htmlToText(body).trim() && !to.length) return;
       dirtyRef.current = false;
-      persistDraft().catch(() => {
-        dirtyRef.current = true;
-      });
+      persistDraft()
+        .then(() => setSavedAt(new Date()))
+        .catch(() => {
+          dirtyRef.current = true;
+        });
     }, 15000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subject, body, to, cc, bcc, attachments, mailbox, sentUndo]);
 
+  // Между сохранениями пятнадцать секунд, и закрытая вкладка уносила их с
+  // собой без единого слова. Диалог браузера — единственное, что здесь можно
+  // показать: асинхронный запрос на выгрузке страницы не гарантирован.
+  useEffect(() => {
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      if (!dirtyRef.current) return;
+      if (!subject.trim() && !htmlToText(body).trim() && !to.length) return;
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [subject, body, to]);
+
+  useEffect(() => {
+    emailApi
+      .templates()
+      .then((rows) => setTemplates(rows.map((r) => ({ id: r.id, name: r.name, subject: r.subject }))))
+      .catch(() => setTemplates([]));
+  }, []);
+
+  async function applyTemplate(id: string) {
+    setTemplatesOpen(false);
+    try {
+      const rendered = await emailApi.renderTemplate(id, {});
+      if (rendered.subject && !subject.trim()) setSubject(rendered.subject);
+      setBody((b) => (b.trim() ? `${rendered.body_html}<br/>${b}` : rendered.body_html));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function handleDeleteDraft() {
+    if (!draftId) {
+      onClose();
+      return;
+    }
+    setBusy(true);
+    try {
+      await emailApi.deleteDraft(draftId);
+      dirtyRef.current = false;
+      onSent();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Системный confirm посреди оформленного интерфейса — и без выбора
+  // «сохранить»: человеку предлагали только «выбросить или остаться».
+  const [confirmClose, setConfirmClose] = useState(false);
+
   function requestClose() {
     if (dirtyRef.current && (subject.trim() || htmlToText(body).trim() || to.length)) {
-      if (!window.confirm(t("unsavedConfirm"))) return;
+      setConfirmClose(true);
+      return;
     }
     onClose();
   }
@@ -375,14 +481,32 @@ export function Composer({
     }
   }
 
-  async function handleUpload(files: FileList | null) {
+  // Имена файлов, которые прямо сейчас загружаются. Большой PDF грузился в
+  // полной тишине: человек не знал, приложился он или нет, и жал «Отправить».
+  const [uploading, setUploading] = useState<string[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+
+  async function handleUpload(files: FileList | File[] | null) {
     if (!files) return;
-    for (const f of Array.from(files)) {
+    const list = Array.from(files);
+    if (!list.length) return;
+    setUploading((prev) => [...prev, ...list.map((f) => f.name)]);
+    for (const f of list) {
       try {
         const a = await emailApi.uploadAttachment(f);
         setAttachments((prev) => [...prev, { id: a.id, filename: a.filename }]);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(
+          tc("uploadFailed", {
+            file: f.name,
+            error: e instanceof Error ? e.message : String(e),
+          }),
+        );
+      } finally {
+        setUploading((prev) => {
+          const i = prev.indexOf(f.name);
+          return i === -1 ? prev : [...prev.slice(0, i), ...prev.slice(i + 1)];
+        });
       }
     }
   }
@@ -433,7 +557,7 @@ export function Composer({
         subject,
         body: htmlToText(body),
         instruction:
-          instruction || aiInstruction || "Улучши формулировки, сохрани смысл",
+          instruction || aiInstruction || tc("aiDefault"),
         thread_id: mode.kind === "reply" || mode.kind === "forward" ? mode.message.thread_id : undefined,
         mailbox,
       });
@@ -447,11 +571,11 @@ export function Composer({
           return;
         }
         if (p.status === "error") {
-          setError(p.error || "Агент не смог доработать письмо");
+          setError(p.error || tc("aiFailed"));
           return;
         }
       }
-      setError("Агент не успел ответить, попробуйте ещё раз");
+      setError(tc("aiTimeout"));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -473,12 +597,36 @@ export function Composer({
   }, [to, cc, bcc, subject, body, attachments, mailbox]);
 
   const input =
-    "w-full px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 text-slate-100 placeholder-slate-500 rounded focus:outline-none focus:ring-1 focus:ring-blue-500";
+    "w-full px-3 py-1.5 text-sm bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 rounded focus:outline-none focus:ring-1 focus:ring-blue-500";
 
   return (
-    <div className="flex flex-col h-full bg-slate-900">
-      <div className="flex items-center justify-between border-b border-slate-700 px-4 py-2">
-        <h3 className="text-sm font-semibold text-slate-100">
+    <div
+      className="relative flex h-full flex-col bg-white dark:bg-slate-900"
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        setDragOver(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files?.length) return;
+        e.preventDefault();
+        setDragOver(false);
+        void handleUpload(e.dataTransfer.files);
+      }}
+    >
+      {/* Перетаскивание файла в письмо — базовый жест, которого не было:
+          приложить можно было только через кнопку выбора файла. */}
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-blue-500 bg-blue-500/10 text-sm text-blue-600 dark:text-blue-300">
+          {tc("dropHere")}
+        </div>
+      )}
+      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2 dark:border-slate-700">
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
           {mode.kind === "reply"
             ? tc("subject") + ": " + subject
             : mode.kind === "forward"
@@ -487,8 +635,8 @@ export function Composer({
         </h3>
         <button
           onClick={requestClose}
-          aria-label="Закрыть"
-          className="text-lg leading-none text-slate-400 hover:text-slate-200"
+          aria-label={tc("close")}
+          className="text-lg leading-none text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
         >
           ×
         </button>
@@ -497,11 +645,11 @@ export function Composer({
       <div className="flex-1 overflow-auto p-4 space-y-2">
         {mailboxes.length > 1 && (
           <div className="flex items-center gap-2 text-xs">
-            <span className="text-slate-400 w-10">{tc("from")}</span>
+            <span className="text-slate-500 dark:text-slate-400 w-10">{tc("from")}</span>
             <select
               value={mailbox}
               onChange={(e) => setMailbox(e.target.value)}
-              className="bg-slate-700 border border-slate-600 text-slate-100 rounded px-2 py-1"
+              className="bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 rounded px-2 py-1"
             >
               {mailboxes.map((m) => (
                 <option key={m.name} value={m.name}>
@@ -516,7 +664,7 @@ export function Composer({
           {!showCc && (
             <button
               onClick={() => setShowCc(true)}
-              className="mt-1 shrink-0 text-xs text-slate-400 hover:text-slate-200"
+              className="mt-1 shrink-0 text-xs text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
             >
               Cc/Bcc
             </button>
@@ -529,7 +677,7 @@ export function Composer({
           </>
         )}
         <div className="flex items-center gap-2">
-          <span className="text-slate-400 w-10 text-xs">{tc("subject")}</span>
+          <span className="text-slate-500 dark:text-slate-400 w-10 text-xs">{tc("subject")}</span>
           <input value={subject} onChange={(e) => setSubject(e.target.value)} className={input} />
         </div>
 
@@ -541,18 +689,18 @@ export function Composer({
         />
 
         {quoted && (
-          <div className="rounded border border-slate-700 bg-slate-900/60">
+          <div className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60">
             <button
               type="button"
               onClick={() => setQuoteOpen((o) => !o)}
-              className="w-full px-3 py-1.5 text-left text-xs text-slate-400 hover:text-slate-200"
-              title="Оригинал уйдёт вместе с ответом; править его нельзя — так он и дойдёт получателю в исходном виде"
+              className="w-full px-3 py-1.5 text-left text-xs text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
+              title={tc("quoteHint")}
             >
-              ··· {quoteOpen ? "скрыть цитату" : "показать цитату"}
+              ··· {quoteOpen ? tc("quoteHide") : tc("quoteShow")}
             </button>
             {quoteOpen && (
               <div
-                className="max-h-64 overflow-auto border-t border-slate-700 px-3 py-2 text-xs text-slate-400 [&_table]:w-auto [&_td]:border [&_td]:border-slate-700 [&_td]:px-1 [&_img]:max-w-full"
+                className="max-h-64 overflow-auto border-t border-slate-200 dark:border-slate-700 px-3 py-2 text-xs text-slate-500 dark:text-slate-400 [&_table]:w-auto [&_td]:border [&_td]:border-slate-200 dark:border-slate-700 [&_td]:px-1 [&_img]:max-w-full"
                 // Санитизированная копия с сервера — та же, что рендерится в
                 // просмотре письма; сюда попадает только она.
                 dangerouslySetInnerHTML={{ __html: quoted }}
@@ -561,17 +709,26 @@ export function Composer({
           </div>
         )}
 
-        {attachments.length > 0 && (
+        {(attachments.length > 0 || uploading.length > 0) && (
           <div className="flex flex-wrap gap-2">
+            {uploading.map((name) => (
+              <span
+                key={`up-${name}`}
+                className="flex items-center gap-1 rounded border border-slate-300 bg-slate-100 px-2 py-1 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400"
+              >
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                {name}
+              </span>
+            ))}
             {attachments.map((a) => (
               <span
                 key={a.id}
-                className="flex items-center gap-1 text-xs bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-300"
+                className="flex items-center gap-1 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-slate-700 dark:text-slate-300"
               >
                 📎 {a.filename}
                 <button
                   onClick={() => setAttachments((p) => p.filter((x) => x.id !== a.id))}
-                  className="text-slate-500 hover:text-red-400"
+                  className="text-slate-500 hover:text-red-500 dark:hover:text-red-400"
                 >
                   ×
                 </button>
@@ -581,14 +738,14 @@ export function Composer({
         )}
 
         {/* AI help */}
-        <div className="border border-slate-700 rounded-lg p-2 space-y-2 bg-slate-800/50">
+        <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-2 space-y-2 bg-slate-50 dark:bg-slate-800/50">
           <div className="flex flex-wrap gap-1.5">
             {(tc.raw("aiPresets") as string[]).map((p) => (
               <button
                 key={p}
                 onClick={() => handleAiHelp(p)}
                 disabled={aiBusy}
-                className="text-xs px-2 py-0.5 rounded-full border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                className="text-xs px-2 py-0.5 rounded-full border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
               >
                 {p}
               </button>
@@ -607,15 +764,30 @@ export function Composer({
               className="text-xs px-3 py-1.5 rounded bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-50 shrink-0"
             >
               {aiBusy
-                ? `${aiStep || "Агент работает"}… ${aiElapsed} с`
+                ? `${aiStep || tc("aiWorking")}… ${aiElapsed}`
                 : t("actions.aiHelp")}
             </button>
           </div>
         </div>
 
+        {warnings.length > 0 && blocked.length === 0 && (
+          <div className="rounded border border-amber-500/60 bg-amber-50 p-3 dark:border-amber-800/70 dark:bg-amber-950/25">
+            <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
+              {t("sendWarnings")}
+            </p>
+            <ul className="mt-1 space-y-0.5">
+              {warnings.map((w) => (
+                <li key={w.code} className="text-xs text-amber-800 dark:text-amber-200">
+                  · {w.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {blocked.length > 0 && (
-          <div className="rounded border border-red-800/70 bg-red-950/25 p-3">
-            <p className="text-xs font-medium text-red-300">
+          <div className="rounded border border-red-300 dark:border-red-800/70 bg-red-50 dark:bg-red-950/25 p-3">
+            <p className="text-xs font-medium text-red-600 dark:text-red-300">
               {t("sendBlocked")}
             </p>
             <ul className="mt-1 space-y-0.5">
@@ -628,13 +800,13 @@ export function Composer({
             <div className="mt-2 flex gap-2">
               <button
                 onClick={() => handleSend(blocked.map((b) => b.code))}
-                className="rounded border border-red-700 px-2 py-1 text-xs text-red-200 hover:bg-red-900/40"
+                className="rounded border border-red-700 px-2 py-1 text-xs text-red-200 hover:bg-red-50 dark:hover:bg-red-900/40"
               >
                 {t("sendAnyway")}
               </button>
               <button
                 onClick={() => setBlocked([])}
-                className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
+                className="rounded border border-slate-300 dark:border-slate-600 px-2 py-1 text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
               >
                 {t("fixIt")}
               </button>
@@ -642,84 +814,220 @@ export function Composer({
           </div>
         )}
 
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        {error && <p className="text-xs text-red-500 dark:text-red-400">{error}</p>}
       </div>
 
       {sentUndo && (
-        <div className="flex items-center gap-3 border-t border-emerald-800/60 bg-emerald-950/25 px-4 py-2">
-          <span className="text-xs text-emerald-300">
-            Письмо отправляется… {undoLeft} с
+        <div className="flex items-center gap-3 border-t border-emerald-300 dark:border-emerald-800/60 bg-emerald-50 dark:bg-emerald-950/25 px-4 py-2">
+          <span className="text-xs text-emerald-700 dark:text-emerald-300">
+            {t("sendingUndo")} {undoLeft}
           </span>
           <button
             onClick={handleUndo}
-            className="rounded border border-emerald-700 px-2 py-0.5 text-xs text-emerald-200 hover:bg-emerald-900/40"
+            className="rounded border border-emerald-700 px-2 py-0.5 text-xs text-emerald-200 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
           >
             {t("undo")}
           </button>
         </div>
       )}
 
-      <div className="flex items-center gap-2 border-t border-slate-700 px-4 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 px-4 py-2 dark:border-slate-700">
         <button
           onClick={() => handleSend()}
           disabled={busy}
-          className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded disabled:opacity-50"
+          className="rounded bg-blue-600 px-4 py-1.5 text-sm text-white hover:bg-blue-500 disabled:opacity-50"
         >
-          {busy ? tc("sending") : t("actions.send")}
+          {busy ? tc("sending") : sendAt ? tc("scheduleSend") : t("actions.send")}
         </button>
         <button
           onClick={handleSaveDraft}
           disabled={busy}
-          className="px-3 py-1.5 text-sm border border-slate-600 text-slate-300 rounded hover:bg-slate-700 disabled:opacity-50"
+          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-400 dark:text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:disabled:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
         >
           {t("actions.saveDraft")}
         </button>
-        <label className="cursor-pointer rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700">
+        <label className="cursor-pointer rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-400 dark:text-slate-600 hover:bg-slate-100 dark:hover:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700">
           📎 {tc("attach")}
           <input type="file" multiple hidden onChange={(e) => handleUpload(e.target.files)} />
         </label>
+
+        {/* Шаблон применяется там, где пишут письмо. Раньше шаблоны были
+            доступны только в настройках и агенту: человек копировал текст
+            руками. */}
+        <div className="relative">
+          <button
+            onClick={() => setTemplatesOpen((o) => !o)}
+            disabled={busy || templates.length === 0}
+            aria-haspopup="menu"
+            aria-expanded={templatesOpen}
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-400 dark:text-slate-600 hover:bg-slate-100 disabled:opacity-40 dark:disabled:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
+            title={templates.length ? undefined : tc("noTemplates")}
+          >
+            {tc("template")}
+          </button>
+          {templatesOpen && (
+            <div
+              role="menu"
+              className="absolute bottom-full left-0 z-40 mb-1 max-h-64 w-72 overflow-auto rounded-lg border border-slate-300 bg-white py-1 shadow-xl dark:border-slate-600 dark:bg-slate-800"
+            >
+              {templates.map((tpl) => (
+                <button
+                  key={tpl.id}
+                  role="menuitem"
+                  onClick={() => applyTemplate(tpl.id)}
+                  className="block w-full px-3 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100 dark:hover:text-slate-100 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
+                >
+                  {tpl.name}
+                  {tpl.subject && (
+                    <span className="block truncate text-xs text-slate-500">{tpl.subject}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Отложенная отправка: сервер принимал send_at всегда. */}
+        <label className="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+          {tc("sendLater")}
+          <input
+            type="datetime-local"
+            value={sendAt}
+            onChange={(e) => setSendAt(e.target.value)}
+            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
+          />
+          {sendAt && (
+            <button
+              onClick={() => setSendAt("")}
+              aria-label={tc("clearSchedule")}
+              className="text-slate-500 dark:text-slate-400 hover:text-red-500"
+            >
+              ×
+            </button>
+          )}
+        </label>
+
+        {draftId && (
+          <button
+            onClick={handleDeleteDraft}
+            disabled={busy}
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:disabled:border-slate-600 dark:text-slate-400 dark:hover:bg-red-900/40 dark:hover:text-red-600 dark:hover:text-red-300"
+          >
+            {t("actions.deleteDraft")}
+          </button>
+        )}
+
+        {savedAt && (
+          <span className="ml-auto text-xs text-slate-500 dark:text-slate-400 dark:text-slate-500">
+            {tc("savedAt", {
+              time: savedAt.toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+              }),
+            })}
+          </span>
+        )}
         {native && (
           <button
             onClick={handleScan}
             disabled={busy}
-            className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700 disabled:opacity-50"
-            title="Снять документ камерой и приложить"
+            className="rounded border border-slate-300 dark:border-slate-600 px-3 py-1.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
+            title={tc("scanHint")}
           >
-            📷 Снять
+            📷 {tc("scan")}
           </button>
         )}
         {native && canDictate && (
           <button
             onClick={handleDictate}
             disabled={busy || listening}
-            className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700 disabled:opacity-50"
-            title="Продиктовать текст письма"
+            className="rounded border border-slate-300 dark:border-slate-600 px-3 py-1.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
+            title={tc("dictateHint")}
           >
-            {listening ? "🎙 Слушаю…" : "🎙 Диктовать"}
+            {listening ? `🎙 ${tc("listening")}` : `🎙 ${tc("dictate")}`}
           </button>
         )}
       </div>
 
+      {confirmClose && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("unsavedConfirm")}
+          onClick={() => setConfirmClose(false)}
+          onKeyDown={(e) => e.key === "Escape" && setConfirmClose(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        >
+          <div
+            tabIndex={-1}
+            ref={(el) => el?.focus()}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-4 focus:outline-none dark:border-slate-700 dark:bg-slate-800"
+          >
+            <p className="text-sm text-slate-800 dark:text-slate-200">{t("unsavedConfirm")}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                onClick={async () => {
+                  setConfirmClose(false);
+                  await handleSaveDraft();
+                }}
+                className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-500"
+              >
+                {t("actions.saveDraft")}
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmClose(false);
+                  dirtyRef.current = false;
+                  onClose();
+                }}
+                className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                {tc("discard")}
+              </button>
+              <button
+                onClick={() => setConfirmClose(false)}
+                className="rounded px-3 py-1.5 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+              >
+                {t("actions.cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {suggest && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-slate-800 border border-slate-700 rounded-xl max-w-3xl w-full max-h-[80vh] overflow-auto p-4">
-            <h4 className="text-sm font-semibold text-slate-100 mb-3">{tc("aiPreviewTitle")}</h4>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={tc("aiPreviewTitle")}
+          onClick={() => setSuggest(null)}
+          onKeyDown={(e) => e.key === "Escape" && setSuggest(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        >
+          <div
+            tabIndex={-1}
+            ref={(el) => el?.focus()}
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[80vh] w-full max-w-3xl overflow-auto rounded-xl border border-slate-200 bg-white p-4 focus:outline-none dark:border-slate-700 dark:bg-slate-800"
+          >
+            <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3">{tc("aiPreviewTitle")}</h4>
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div>
-                <p className="text-xs text-slate-500 mb-1">Сейчас</p>
-                <div className="border border-slate-700 rounded p-2 text-slate-300 whitespace-pre-wrap text-xs max-h-[40vh] overflow-auto">
+                <p className="mb-1 text-xs text-slate-500">{tc("aiCurrent")}</p>
+                <div className="border border-slate-200 dark:border-slate-700 rounded p-2 text-slate-700 dark:text-slate-300 whitespace-pre-wrap text-xs max-h-[40vh] overflow-auto">
                   {htmlToText(body)}
                 </div>
               </div>
               <div>
-                <p className="text-xs text-slate-500 mb-1">Предложение</p>
-                <div className="border border-violet-700 rounded p-2 text-slate-100 whitespace-pre-wrap text-xs max-h-[40vh] overflow-auto">
+                <p className="mb-1 text-xs text-slate-500">{tc("aiProposed")}</p>
+                <div className="border border-violet-700 rounded p-2 text-slate-900 dark:text-slate-100 whitespace-pre-wrap text-xs max-h-[40vh] overflow-auto">
                   {suggest.body_text}
                 </div>
               </div>
             </div>
             {suggest.notes?.length > 0 && (
-              <ul className="mt-2 text-xs text-slate-400 list-disc pl-4">
+              <ul className="mt-2 text-xs text-slate-500 dark:text-slate-400 list-disc pl-4">
                 {suggest.notes.map((n: string, i: number) => (
                   <li key={i}>{n}</li>
                 ))}
@@ -738,7 +1046,7 @@ export function Composer({
               </button>
               <button
                 onClick={() => setSuggest(null)}
-                className="px-3 py-1.5 text-sm border border-slate-600 text-slate-300 rounded hover:bg-slate-700"
+                className="px-3 py-1.5 text-sm border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded hover:bg-slate-100 dark:hover:bg-slate-700"
               >
                 {tc("aiReject")}
               </button>
