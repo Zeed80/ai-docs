@@ -164,6 +164,49 @@ async def test_digest_mode_suppresses_per_event_push(db_session):
     assert await _push_allowed_now(db_session, "someone-without-settings") is True
 
 
+async def test_quiet_hours_follow_the_users_timezone(db_session, monkeypatch):
+    """Часы считались по серверу: «не беспокоить с 22 до 8» означало чужие
+    22:00, если сервер и человек в разных поясах."""
+    from app.db.models import UserNotificationSettings
+    from app.services import notifications as svc
+
+    db_session.add(UserNotificationSettings(
+        user_sub="tz-user", quiet_from_hour=22, quiet_to_hour=8,
+        timezone="Asia/Vladivostok",
+    ))
+    await db_session.commit()
+
+    # 15:00 UTC — это полночь во Владивостоке (UTC+10), то есть тишина, хотя
+    # по серверу день.
+    monkeypatch.setattr(svc, "local_hour", lambda tz: 0 if tz == "Asia/Vladivostok" else 15)
+    assert await svc._push_allowed_now(db_session, "tz-user") is False
+
+
+def test_unknown_timezone_falls_back_to_the_server():
+    """Опечатка в зоне не должна ронять уведомление — просто как раньше."""
+    from app.services.notifications import local_hour
+
+    assert 0 <= local_hour("Nowhere/Nothing") <= 23
+    assert 0 <= local_hour(None) <= 23
+
+
+async def test_timezone_round_trips_and_rejects_nonsense(client):
+    saved = await client.put(
+        "/api/notifications/delivery",
+        json={"digest_enabled": True, "digest_hour": 9, "timezone": "Europe/Moscow"},
+    )
+    assert saved.status_code == 200, saved.text
+    assert (await client.get("/api/notifications/delivery")).json()["timezone"] == "Europe/Moscow"
+
+    # «UTC+3» — не имя зоны: приняв такую строку, мы бы молча считали по
+    # серверу, и человек бы этого не заметил.
+    bad = await client.put(
+        "/api/notifications/delivery",
+        json={"digest_enabled": False, "digest_hour": 9, "timezone": "UTC+3"},
+    )
+    assert bad.status_code == 422
+
+
 async def test_agent_quality_report_answers_where_it_errs(client, db_session):
     """Сырьё для «где агент чаще ошибается» собиралось, витрины не было."""
     from app.db.models import Approval, ApprovalActionType, ApprovalStatus

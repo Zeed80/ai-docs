@@ -3993,6 +3993,11 @@ class UserNotificationSettings(TimestampMixin, Base):
     digest_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     digest_hour: Mapped[int] = mapped_column(Integer, default=9, nullable=False)
     last_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: IANA-зона пользователя («Europe/Moscow»). Часы выше — местные, а не
+    #: серверные: для распределённой команды «не беспокоить с 22 до 8»
+    #: означало чужие 22:00, а сводка приходила, когда утро наступило на
+    #: сервере. NULL — прежнее поведение, по времени сервера.
+    timezone: Mapped[str | None] = mapped_column(String(64))
 
 
 class UserNotificationPref(UUIDPrimaryKey, TimestampMixin, Base):

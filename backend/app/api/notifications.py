@@ -8,7 +8,7 @@ from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -108,12 +108,33 @@ class NotificationPrefUpdate(BaseModel):
 
 
 class DeliverySettings(BaseModel):
-    """Когда уведомлять и присылать ли сводкой — отдельно от «о чём»."""
+    """Когда уведомлять и присылать ли сводкой — отдельно от «о чём».
+
+    Часы местные: без зоны «не беспокоить с 22 до 8» означало 22:00 сервера, а
+    для распределённой команды это чужая ночь.
+    """
 
     quiet_from_hour: int | None = Field(None, ge=0, le=23)
     quiet_to_hour: int | None = Field(None, ge=0, le=23)
     digest_enabled: bool = False
     digest_hour: int = Field(9, ge=0, le=23)
+    timezone: str | None = Field(None, max_length=64)
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_timezone(cls, value: str | None) -> str | None:
+        """Только реальная IANA-зона: строка «UTC+3» или опечатка молча
+        превратилась бы в «считаем по серверу», и человек этого бы не заметил.
+        """
+        if not value:
+            return None
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
+            raise ValueError(f"Неизвестный часовой пояс: {value}") from exc
+        return value
 
 
 @router.get("/delivery", response_model=DeliverySettings)
@@ -131,6 +152,7 @@ async def get_delivery_settings(
         quiet_to_hour=row.quiet_to_hour,
         digest_enabled=row.digest_enabled,
         digest_hour=row.digest_hour,
+        timezone=row.timezone,
     )
 
 
@@ -156,6 +178,7 @@ async def update_delivery_settings(
     row.quiet_to_hour = payload.quiet_to_hour
     row.digest_enabled = payload.digest_enabled
     row.digest_hour = payload.digest_hour
+    row.timezone = payload.timezone
     await db.commit()
     return payload
 

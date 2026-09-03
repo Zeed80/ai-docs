@@ -69,6 +69,25 @@ def get_notification_pref_sync(db: Session, user_sub: str, type_value: str) -> d
     return _pref_from_row(row)
 
 
+def local_hour(timezone_name: str | None) -> int:
+    """Текущий час в зоне пользователя.
+
+    Неизвестная или битая зона — не повод уронить уведомление: тогда как
+    раньше, по времени сервера.
+    """
+    from datetime import datetime, timezone as _tz
+
+    now = datetime.now(_tz.utc)
+    if timezone_name:
+        try:
+            from zoneinfo import ZoneInfo
+
+            return now.astimezone(ZoneInfo(timezone_name)).hour
+        except Exception:  # noqa: BLE001
+            logger.debug("unknown_user_timezone", timezone=timezone_name)
+    return now.astimezone().hour
+
+
 def in_quiet_window(hour: int, start: int | None, end: int | None) -> bool:
     """Попадает ли час в окно тишины. Отдельно от БД — чтобы это можно было
     проверить, не подменяя системное время."""
@@ -82,8 +101,6 @@ def in_quiet_window(hour: int, start: int | None, end: int | None) -> bool:
 
 async def _push_allowed_now(db, user_sub: str) -> bool:
     """False, когда сейчас тихие часы или человек ждёт сводку вместо потока."""
-    from datetime import datetime, timezone
-
     from sqlalchemy import select
 
     from app.db.models import UserNotificationSettings
@@ -105,8 +122,7 @@ async def _push_allowed_now(db, user_sub: str) -> bool:
     start, end = row.quiet_from_hour, row.quiet_to_hour
     if start is None or end is None:
         return True
-    hour = datetime.now(timezone.utc).astimezone().hour
-    return not in_quiet_window(hour, start, end)
+    return not in_quiet_window(local_hour(row.timezone), start, end)
 
 
 async def create_notification(

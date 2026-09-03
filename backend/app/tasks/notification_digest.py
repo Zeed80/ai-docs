@@ -35,10 +35,10 @@ async def _run() -> dict:
     )
     from app.db.session import _get_session_factory
     from app.domain.email_access import hidden_mailbox_names
-    from app.services.notifications import create_notification
+    from app.services.notifications import create_notification, local_hour
 
-    now = datetime.now(timezone.utc).astimezone()
-    since = now - timedelta(days=1)
+    now_utc = datetime.now(timezone.utc)
+    since = now_utc - timedelta(days=1)
     sent = 0
 
     async with _get_session_factory()() as db:
@@ -51,10 +51,12 @@ async def _run() -> dict:
         ).scalars().all()
 
         for row in rows:
-            if row.digest_hour != now.hour:
+            # Час сводки — местный для получателя, а не серверный: иначе
+            # «в девять утра» наступало по часовому поясу машины.
+            if row.digest_hour != local_hour(row.timezone):
                 continue
             # Уже отправляли в этот час — beat может сработать несколько раз.
-            if row.last_digest_at and (now - row.last_digest_at) < timedelta(hours=12):
+            if row.last_digest_at and (now_utc - row.last_digest_at) < timedelta(hours=12):
                 continue
 
             hidden = set(await hidden_mailbox_names(db, None))
@@ -94,7 +96,7 @@ async def _run() -> dict:
 
             if not any((unread, docs, anomalies, waiting)):
                 # Пустая сводка — тоже уведомление, которое никто не просил.
-                row.last_digest_at = now
+                row.last_digest_at = now_utc
                 continue
 
             parts = []
@@ -115,7 +117,7 @@ async def _run() -> dict:
                 body=" · ".join(parts),
                 action_url="/inbox",
             )
-            row.last_digest_at = now
+            row.last_digest_at = now_utc
             sent += 1
 
         await db.commit()

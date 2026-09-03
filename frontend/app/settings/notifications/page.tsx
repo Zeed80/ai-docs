@@ -66,6 +66,41 @@ export default function NotificationsSettingsPage() {
   >("idle");
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
 
+  // Когда уведомлять — отдельно от того, о чём. Часы местные: сервер может
+  // стоять в другом поясе, и «не беспокоить с 22 до 8» означало чужую ночь.
+  const [delivery, setDelivery] = useState<{
+    quiet_from_hour: number | null;
+    quiet_to_hour: number | null;
+    digest_enabled: boolean;
+    digest_hour: number;
+    timezone: string | null;
+  }>({
+    quiet_from_hour: null,
+    quiet_to_hour: null,
+    digest_enabled: false,
+    digest_hour: 9,
+    timezone: null,
+  });
+  const [deliverySaving, setDeliverySaving] = useState(false);
+  const browserTz =
+    typeof Intl !== "undefined"
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone
+      : null;
+
+  async function saveDelivery(next: typeof delivery) {
+    setDelivery(next);
+    setDeliverySaving(true);
+    try {
+      await mutFetch(`${getApiBaseUrl()}/api/notifications/delivery`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+    } finally {
+      setDeliverySaving(false);
+    }
+  }
+
   async function loadDevices() {
     try {
       const res = await fetch("/api/devices", { credentials: "include" });
@@ -84,6 +119,22 @@ export default function NotificationsSettingsPage() {
           const next = { ...prev };
           for (const row of rows) if (next[row.type]) next[row.type] = row;
           return next;
+        });
+      })
+      .catch(() => {});
+    apiFetch(`${getApiBaseUrl()}/api/notifications/delivery`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((row) => {
+        if (!row) return;
+        // Зона ещё не выбрана — предлагаем ту, что видит браузер: спрашивать
+        // человека о том, что известно из его же системы, незачем.
+        setDelivery({
+          ...row,
+          timezone:
+            row.timezone ??
+            (typeof Intl !== "undefined"
+              ? Intl.DateTimeFormat().resolvedOptions().timeZone
+              : null),
         });
       })
       .catch(() => {});
@@ -189,6 +240,120 @@ export default function NotificationsSettingsPage() {
             </button>
           </label>
         ))}
+      </div>
+
+      {/* Когда уведомлять. Категорий хватало, чтобы решить, о чём сообщать, и
+          нечем было сказать «не ночью» и «одним письмом утром» — а выключают
+          поток именно из-за этого. */}
+      <div className="mt-6 rounded-lg border border-border p-4">
+        <h3 className="mb-1 text-sm font-semibold">Когда уведомлять</h3>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Часы указываются в вашем часовом поясе.
+        </p>
+
+        <label className="mb-3 flex items-center gap-2 text-sm">
+          <span className="w-32 shrink-0 text-muted-foreground">Часовой пояс</span>
+          <input
+            value={delivery.timezone ?? ""}
+            onChange={(e) =>
+              setDelivery({ ...delivery, timezone: e.target.value || null })
+            }
+            onBlur={() => void saveDelivery(delivery)}
+            placeholder={browserTz ?? "Europe/Moscow"}
+            list="tz-suggestions"
+            className="flex-1 rounded border border-border bg-transparent px-2 py-1 text-sm"
+          />
+          <datalist id="tz-suggestions">
+            {[
+              browserTz,
+              "Europe/Moscow", "Europe/Kaliningrad", "Asia/Yekaterinburg",
+              "Asia/Novosibirsk", "Asia/Krasnoyarsk", "Asia/Irkutsk",
+              "Asia/Vladivostok", "UTC",
+            ]
+              .filter((tz, i, arr): tz is string => Boolean(tz) && arr.indexOf(tz) === i)
+              .map((tz) => (
+                <option key={tz} value={tz} />
+              ))}
+          </datalist>
+        </label>
+        {browserTz && delivery.timezone !== browserTz && (
+          <button
+            onClick={() => void saveDelivery({ ...delivery, timezone: browserTz })}
+            className="mb-3 text-xs text-primary hover:underline"
+          >
+            Взять из системы: {browserTz}
+          </button>
+        )}
+
+        <label className="mb-2 flex items-center gap-2 text-sm">
+          <span className="w-32 shrink-0 text-muted-foreground">Не беспокоить</span>
+          <select
+            value={delivery.quiet_from_hour ?? ""}
+            onChange={(e) =>
+              void saveDelivery({
+                ...delivery,
+                quiet_from_hour: e.target.value === "" ? null : Number(e.target.value),
+              })
+            }
+            className="rounded border border-border bg-transparent px-2 py-1 text-sm"
+          >
+            <option value="">выключено</option>
+            {Array.from({ length: 24 }, (_, h) => (
+              <option key={h} value={h}>
+                {String(h).padStart(2, "0")}:00
+              </option>
+            ))}
+          </select>
+          <span className="text-muted-foreground">до</span>
+          <select
+            value={delivery.quiet_to_hour ?? ""}
+            onChange={(e) =>
+              void saveDelivery({
+                ...delivery,
+                quiet_to_hour: e.target.value === "" ? null : Number(e.target.value),
+              })
+            }
+            className="rounded border border-border bg-transparent px-2 py-1 text-sm"
+          >
+            <option value="">выключено</option>
+            {Array.from({ length: 24 }, (_, h) => (
+              <option key={h} value={h}>
+                {String(h).padStart(2, "0")}:00
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={delivery.digest_enabled}
+            onChange={(e) =>
+              void saveDelivery({ ...delivery, digest_enabled: e.target.checked })
+            }
+            className="rounded"
+          />
+          <span>Присылать одной сводкой в</span>
+          <select
+            value={delivery.digest_hour}
+            onChange={(e) =>
+              void saveDelivery({ ...delivery, digest_hour: Number(e.target.value) })
+            }
+            className="rounded border border-border bg-transparent px-2 py-1 text-sm"
+          >
+            {Array.from({ length: 24 }, (_, h) => (
+              <option key={h} value={h}>
+                {String(h).padStart(2, "0")}:00
+              </option>
+            ))}
+          </select>
+          {deliverySaving && <span className="text-xs text-muted-foreground">…</span>}
+        </label>
+        {delivery.digest_enabled && (
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Пока сводка включена, отдельные push не приходят — всё попадает в неё.
+          </p>
+        )}
       </div>
 
       <label className="mt-4 flex items-start gap-2 cursor-pointer">
