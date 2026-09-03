@@ -52,8 +52,12 @@ async def _run() -> dict:
 
         for row in rows:
             # Час сводки — местный для получателя, а не серверный: иначе
-            # «в девять утра» наступало по часовому поясу машины.
-            if row.digest_hour != local_hour(row.timezone):
+            # «в девять утра» наступало по часовому поясу машины. Зона живёт в
+            # профиле: одна на человека, общая для всего приложения.
+            user_tz = (
+                await db.execute(select(User.timezone).where(User.sub == row.user_sub))
+            ).scalar_one_or_none()
+            if row.digest_hour != local_hour(user_tz):
                 continue
             # Уже отправляли в этот час — beat может сработать несколько раз.
             if row.last_digest_at and (now_utc - row.last_digest_at) < timedelta(hours=12):

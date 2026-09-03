@@ -8,6 +8,7 @@ import { RichTextEditor } from "./RichTextEditor";
 // and unavailable exactly where a person answers a supplier from the road.
 import { dictate, isNative, scanDocument, speechAvailable } from "@/lib/native-bridge";
 import { RecipientInput } from "./RecipientInput";
+import { useUserTimeZone } from "@/lib/user-time";
 import type { ComposeMode, EmailMessage, MailboxChip } from "./types";
 
 // Seconds a sent message can still be recalled. Long enough to notice the
@@ -20,10 +21,10 @@ function htmlToText(html: string): string {
   return (el.textContent ?? "").trim();
 }
 
-function quote(msg: EmailMessage): string {
+function quote(msg: EmailMessage, timeZone?: string): string {
   const when = msg.sent_at || msg.received_at || "";
   const who = msg.from_address.replace(/\s*<[^>]+>\s*/, "").trim() || msg.from_address;
-  const head = `— ${new Date(when).toLocaleString("ru-RU")}, ${who}:`;
+  const head = `— ${new Date(when).toLocaleString(undefined, { timeZone })}, ${who}:`;
   return `<br/><br/><blockquote style="border-left:2px solid #64748b;padding-left:8px;color:#94a3b8">${head}<br/>${
     // Sanitized HTML, never the raw body: the quote goes straight into the
     // editor, i.e. into our own DOM. The stored sanitized copy is what the
@@ -49,6 +50,7 @@ export function Composer({
 }) {
   const t = useTranslations("email");
   const tc = useTranslations("email.composer");
+  const timeZone = useUserTimeZone();
 
   const initial = useMemo(() => {
     if (mode.kind === "reply") {
@@ -81,7 +83,7 @@ export function Composer({
         bcc: [] as string[],
         subject: /^re:/i.test(m.subject ?? "") ? m.subject ?? "" : `Re: ${m.subject ?? ""}`,
         body: "",
-        quote: quote(m),
+        quote: quote(m, timeZone),
         mailbox: m.mailbox || defaultMailbox,
         inReplyTo: m.id as string | null,
         forwardOf: null as string | null,
@@ -97,7 +99,7 @@ export function Composer({
         bcc: [] as string[],
         subject: /^fwd:/i.test(m.subject ?? "") ? m.subject ?? "" : `Fwd: ${m.subject ?? ""}`,
         body: "",
-        quote: quote(m),
+        quote: quote(m, timeZone),
         mailbox: m.mailbox || defaultMailbox,
         inReplyTo: null as string | null,
         // Ф5.2 — forwarding used to drop the attachments entirely: the field

@@ -8,7 +8,7 @@ from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -118,23 +118,9 @@ class DeliverySettings(BaseModel):
     quiet_to_hour: int | None = Field(None, ge=0, le=23)
     digest_enabled: bool = False
     digest_hour: int = Field(9, ge=0, le=23)
-    timezone: str | None = Field(None, max_length=64)
-
-    @field_validator("timezone")
-    @classmethod
-    def _known_timezone(cls, value: str | None) -> str | None:
-        """Только реальная IANA-зона: строка «UTC+3» или опечатка молча
-        превратилась бы в «считаем по серверу», и человек этого бы не заметил.
-        """
-        if not value:
-            return None
-        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-        try:
-            ZoneInfo(value)
-        except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
-            raise ValueError(f"Неизвестный часовой пояс: {value}") from exc
-        return value
+    #: Только для чтения: зона живёт в профиле (PATCH /api/auth/me), здесь она
+    #: показывается, чтобы человек понимал, в каких часах он указывает время.
+    timezone: str | None = None
 
 
 @router.get("/delivery", response_model=DeliverySettings)
@@ -144,15 +130,20 @@ async def get_delivery_settings(
 ):
     from app.db.models import UserNotificationSettings
 
+    from app.services.notifications import _user_timezone
+
+    # Зона читается из профиля в БД, а не из токена: она могла измениться
+    # только что, а UserInfo собирается с кэшем.
+    timezone = await _user_timezone(db, user.sub)
     row = await db.get(UserNotificationSettings, user.sub)
     if row is None:
-        return DeliverySettings()
+        return DeliverySettings(timezone=timezone)
     return DeliverySettings(
         quiet_from_hour=row.quiet_from_hour,
         quiet_to_hour=row.quiet_to_hour,
         digest_enabled=row.digest_enabled,
         digest_hour=row.digest_hour,
-        timezone=row.timezone,
+        timezone=timezone,
     )
 
 
@@ -178,9 +169,12 @@ async def update_delivery_settings(
     row.quiet_to_hour = payload.quiet_to_hour
     row.digest_enabled = payload.digest_enabled
     row.digest_hour = payload.digest_hour
-    row.timezone = payload.timezone
     await db.commit()
-    return payload
+    # Зона не меняется отсюда — она в профиле; возвращаем актуальную, чтобы
+    # интерфейс не показал пустое поле после сохранения.
+    from app.services.notifications import _user_timezone
+
+    return payload.model_copy(update={"timezone": await _user_timezone(db, user.sub)})
 
 
 @router.get("/preferences", response_model=list[NotificationPrefOut])

@@ -3,27 +3,35 @@
 import { useEffect, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { dayKey, useUserTimeZone } from "@/lib/user-time";
 import type { EmailThread } from "./types";
 
-function relDate(iso: string | null): string {
+function relDate(iso: string | null, timeZone?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   const now = new Date();
-  if (d.toDateString() === now.toDateString())
-    return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  // Сравнение дней — тоже в зоне профиля: в UTC+10 день уже сменился, а на
+  // устройстве в UTC+3 ещё нет, и «сегодня» расходилось у двух коллег.
+  if (dayKey(d, timeZone) === dayKey(now, timeZone))
+    return d.toLocaleTimeString(undefined, {
+      timeZone, hour: "2-digit", minute: "2-digit",
+    });
   if (d.getFullYear() === now.getFullYear())
-    return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
-  return d.toLocaleDateString("ru-RU");
+    return d.toLocaleDateString(undefined, { timeZone, day: "numeric", month: "short" });
+  return d.toLocaleDateString(undefined, { timeZone });
 }
 
 /** Заголовок группы: список без разделителей по датам читается как одна
  *  сплошная лента — «Сегодня / Вчера» есть во всех современных клиентах. */
-function dateBucket(iso: string | null, t: (k: string) => string): string {
+function dateBucket(
+  iso: string | null,
+  t: (k: string) => string,
+  timeZone?: string,
+): string {
   if (!iso) return t("groups.older");
   const d = new Date(iso);
   const now = new Date();
-  const startOfDay = (x: Date) =>
-    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const startOfDay = (x: Date) => new Date(`${dayKey(x, timeZone)}T00:00:00`).getTime();
   const days = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
   if (days <= 0) return t("groups.today");
   if (days === 1) return t("groups.yesterday");
@@ -76,6 +84,7 @@ export function ThreadList({
   hasMore?: boolean;
 }) {
   const t = useTranslations("email");
+  const timeZone = useUserTimeZone();
   const parentRef = useRef<HTMLDivElement>(null);
   const rows = useVirtualizer({
     count: threads.length,
@@ -122,9 +131,9 @@ export function ThreadList({
               ? th.counterparty ?? th.sender
               : th.sender) ?? "—";
           const prev = vi.index > 0 ? threads[vi.index - 1] : null;
-          const bucket = dateBucket(th.last_message_at, t);
+          const bucket = dateBucket(th.last_message_at, t, timeZone);
           const showBucket =
-            !prev || dateBucket(prev.last_message_at, t) !== bucket;
+            !prev || dateBucket(prev.last_message_at, t, timeZone) !== bucket;
           return (
             <div
               key={th.id}
@@ -195,7 +204,7 @@ export function ThreadList({
                     <span className={`truncate text-sm ${unread ? "font-semibold text-slate-900 dark:text-slate-100" : "text-slate-700 dark:text-slate-300"}`}>
                       {who}
                     </span>
-                    <span className="shrink-0 text-[11px] text-slate-500">{relDate(th.last_message_at)}</span>
+                    <span className="shrink-0 text-[11px] text-slate-500">{relDate(th.last_message_at, timeZone)}</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className={`truncate text-xs ${unread ? "text-slate-800 dark:text-slate-200" : "text-slate-500 dark:text-slate-400"}`}>

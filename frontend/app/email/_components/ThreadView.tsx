@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { emailApi } from "./api";
 import { useAgentName } from "@/lib/agent-name";
+import { useUserTimeZone } from "@/lib/user-time";
 import type { EmailMessage, EmailThread } from "./types";
 
 // Mirrors app/domain/email_triage.py — the taxonomy the backend acts on.
@@ -34,6 +35,7 @@ function MessageCard({
   onForward: (m: EmailMessage) => void;
 }) {
   const t = useTranslations("email");
+  const timeZone = useUserTimeZone();
   const [open, setOpen] = useState(defaultOpen);
   const [status, setStatus] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -198,7 +200,8 @@ function MessageCard({
           </div>
         </div>
         <span className="shrink-0 text-[11px] text-slate-500">
-          {new Date(msg.sent_at || msg.received_at || "").toLocaleString("ru-RU", {
+          {new Date(msg.sent_at || msg.received_at || "").toLocaleString(undefined, {
+            timeZone,
             day: "numeric",
             month: "short",
             hour: "2-digit",

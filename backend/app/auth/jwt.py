@@ -255,6 +255,7 @@ async def _verify_local_session(token: str) -> UserInfo:
 
         section_access = await _db_section_access_for_sub(claims["sub"])
         department_id = await _db_department_id_for_sub(claims["sub"])
+        timezone = await _db_timezone_for_sub(claims["sub"])
 
         return UserInfo(
             sub=claims["sub"],
@@ -266,6 +267,7 @@ async def _verify_local_session(token: str) -> UserInfo:
             section_access=section_access,
             sections=visible_section_keys(roles, section_access),
             department_id=department_id,
+            timezone=timezone,
         )
     except HTTPException:
         raise
@@ -319,6 +321,7 @@ async def _verify_token(token: str) -> UserInfo:
 
         section_access = await _db_section_access_for_sub(claims["sub"])
         department_id = await _db_department_id_for_sub(claims["sub"])
+        timezone = await _db_timezone_for_sub(claims["sub"])
 
         return UserInfo(
             sub=claims["sub"],
@@ -330,6 +333,7 @@ async def _verify_token(token: str) -> UserInfo:
             section_access=section_access,
             sections=visible_section_keys(roles, section_access),
             department_id=department_id,
+            timezone=timezone,
         )
 
     except Exception as e:
@@ -397,15 +401,19 @@ _ROLE_CACHE_TTL = 45  # seconds
 _ROLE_CACHE_PREFIX = "auth:role:"
 _SECTION_CACHE_TTL = 45  # seconds
 _SECTION_CACHE_PREFIX = "auth:sections:"
+_TIMEZONE_CACHE_TTL = 300  # секунд: зона меняется раз в жизни, не в минуту
+_TIMEZONE_CACHE_PREFIX = "auth:timezone:"
+_TIMEZONE_CACHE_EMPTY = "-"  # «смотрели, зоны нет»
 _DEPARTMENT_CACHE_TTL = 45  # seconds
 _DEPARTMENT_CACHE_PREFIX = "auth:department:"
 _DEPARTMENT_CACHE_EMPTY = "-"  # sentinel: "looked up, user has no department"
 
 
 async def invalidate_active_cache(sub: str) -> None:
-    """Drop the cached active-status, role, section grant and department for a
-    user so a change takes effect immediately. Call after activating/
-    deactivating or changing a user's role, section access or department.
+    """Drop the cached active-status, role, section grant, department and
+    timezone for a user so a change takes effect immediately. Call after
+    activating/deactivating or changing a user's role, section access,
+    department or timezone.
     Best-effort — ignores Redis errors.
     """
     try:
@@ -416,6 +424,7 @@ async def invalidate_active_cache(sub: str) -> None:
         await redis.delete(f"{_ROLE_CACHE_PREFIX}{sub}")
         await redis.delete(f"{_SECTION_CACHE_PREFIX}{sub}")
         await redis.delete(f"{_DEPARTMENT_CACHE_PREFIX}{sub}")
+        await redis.delete(f"{_TIMEZONE_CACHE_PREFIX}{sub}")
     except Exception:  # pragma: no cover - cache invalidation is best-effort
         pass
 
@@ -564,6 +573,53 @@ async def _db_department_id_for_sub(sub: str) -> str | None:
                 cache_key,
                 value if value is not None else _DEPARTMENT_CACHE_EMPTY,
                 ex=_DEPARTMENT_CACHE_TTL,
+            )
+        except Exception:  # pragma: no cover
+            pass
+    return value
+
+
+async def _db_timezone_for_sub(sub: str) -> str | None:
+    """``users.timezone`` — одна зона на человека, для всего приложения.
+
+    Fail-open, как у соседних чтений профиля: недоступная БД означает «считаем
+    по серверу», а не отказ в аутентификации.
+    """
+    cache_key = f"{_TIMEZONE_CACHE_PREFIX}{sub}"
+    redis = None
+    try:
+        from app.utils.redis_client import get_async_redis
+
+        redis = get_async_redis()
+        cached = await redis.get(cache_key)
+        if cached is not None:
+            return None if cached == _TIMEZONE_CACHE_EMPTY else cached
+    except Exception:
+        redis = None
+
+    value: str | None = None
+    try:
+        from sqlalchemy import select
+
+        from app.db.models import User
+        from app.db.session import _get_session_factory
+
+        async with _get_session_factory()() as db:
+            row = (
+                await db.execute(select(User.timezone).where(User.sub == sub))
+            ).scalar_one_or_none()
+        if row:
+            value = str(row)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("timezone_lookup_db_failed", error=str(e))
+        return None
+
+    if redis is not None:
+        try:
+            await redis.set(
+                cache_key,
+                value if value is not None else _TIMEZONE_CACHE_EMPTY,
+                ex=_TIMEZONE_CACHE_TTL,
             )
         except Exception:  # pragma: no cover
             pass

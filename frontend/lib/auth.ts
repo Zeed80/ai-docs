@@ -50,6 +50,9 @@ export interface UserInfo {
   groups: string[];
   /** Resolved section keys the user may see/use (see lib/nav-catalog). */
   sections?: string[];
+  /** Часовой пояс профиля (IANA). По нему интерфейс показывает даты и
+   *  считаются тихие часы; null — время устройства. */
+  timezone?: string | null;
 }
 
 export async function fetchMe(): Promise<UserInfo | null> {

@@ -82,6 +82,7 @@ export default function NotificationsSettingsPage() {
     timezone: null,
   });
   const [deliverySaving, setDeliverySaving] = useState(false);
+  const [tzError, setTzError] = useState<string | null>(null);
   const browserTz =
     typeof Intl !== "undefined"
       ? Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -96,6 +97,29 @@ export default function NotificationsSettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(next),
       });
+    } finally {
+      setDeliverySaving(false);
+    }
+  }
+
+  /** Зона живёт в профиле: по ней интерфейс показывает все даты, а не только
+   *  считает тихие часы. Поэтому и сохраняется она в профиль. */
+  async function saveTimezone(tz: string | null) {
+    setDelivery((prev) => ({ ...prev, timezone: tz }));
+    setDeliverySaving(true);
+    try {
+      const res = await mutFetch(`${getApiBaseUrl()}/api/auth/me`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ timezone: tz }),
+      });
+      if (!res.ok) {
+        setTzError("Неизвестный часовой пояс");
+        return;
+      }
+      setTzError(null);
+      // Даты в интерфейсе берут зону из профиля, загруженного при старте.
+      window.location.reload();
     } finally {
       setDeliverySaving(false);
     }
@@ -248,7 +272,8 @@ export default function NotificationsSettingsPage() {
       <div className="mt-6 rounded-lg border border-border p-4">
         <h3 className="mb-1 text-sm font-semibold">Когда уведомлять</h3>
         <p className="mb-3 text-xs text-muted-foreground">
-          Часы указываются в вашем часовом поясе.
+          Часы указываются в вашем часовом поясе — он же используется для всех
+          дат в интерфейсе.
         </p>
 
         <label className="mb-3 flex items-center gap-2 text-sm">
@@ -258,7 +283,7 @@ export default function NotificationsSettingsPage() {
             onChange={(e) =>
               setDelivery({ ...delivery, timezone: e.target.value || null })
             }
-            onBlur={() => void saveDelivery(delivery)}
+            onBlur={() => void saveTimezone(delivery.timezone)}
             placeholder={browserTz ?? "Europe/Moscow"}
             list="tz-suggestions"
             className="flex-1 rounded border border-border bg-transparent px-2 py-1 text-sm"
@@ -278,12 +303,14 @@ export default function NotificationsSettingsPage() {
         </label>
         {browserTz && delivery.timezone !== browserTz && (
           <button
-            onClick={() => void saveDelivery({ ...delivery, timezone: browserTz })}
+            onClick={() => void saveTimezone(browserTz)}
             className="mb-3 text-xs text-primary hover:underline"
           >
             Взять из системы: {browserTz}
           </button>
         )}
+
+        {tzError && <p className="mb-2 text-xs text-destructive">{tzError}</p>}
 
         <label className="mb-2 flex items-center gap-2 text-sm">
           <span className="w-32 shrink-0 text-muted-foreground">Не беспокоить</span>

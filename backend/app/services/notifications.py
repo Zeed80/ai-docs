@@ -69,6 +69,20 @@ def get_notification_pref_sync(db: Session, user_sub: str, type_value: str) -> d
     return _pref_from_row(row)
 
 
+async def _user_timezone(db, user_sub: str) -> str | None:
+    """Зона из профиля пользователя (users.timezone)."""
+    from sqlalchemy import select
+
+    from app.db.models import User
+
+    try:
+        return (
+            await db.execute(select(User.timezone).where(User.sub == user_sub))
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def local_hour(timezone_name: str | None) -> int:
     """Текущий час в зоне пользователя.
 
@@ -122,7 +136,7 @@ async def _push_allowed_now(db, user_sub: str) -> bool:
     start, end = row.quiet_from_hour, row.quiet_to_hour
     if start is None or end is None:
         return True
-    return not in_quiet_window(local_hour(row.timezone), start, end)
+    return not in_quiet_window(local_hour(await _user_timezone(db, user_sub)), start, end)
 
 
 async def create_notification(

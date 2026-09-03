@@ -3993,11 +3993,9 @@ class UserNotificationSettings(TimestampMixin, Base):
     digest_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     digest_hour: Mapped[int] = mapped_column(Integer, default=9, nullable=False)
     last_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    #: IANA-зона пользователя («Europe/Moscow»). Часы выше — местные, а не
-    #: серверные: для распределённой команды «не беспокоить с 22 до 8»
-    #: означало чужие 22:00, а сводка приходила, когда утро наступило на
-    #: сервере. NULL — прежнее поведение, по времени сервера.
-    timezone: Mapped[str | None] = mapped_column(String(64))
+    #: Часы выше — местные для пользователя. Сама зона живёт в профиле
+    #: (``users.timezone``): это его свойство, а не настройка уведомлений, и
+    #: по нему же показываются все даты в интерфейсе.
 
 
 class UserNotificationPref(UUIDPrimaryKey, TimestampMixin, Base):
@@ -4112,6 +4110,11 @@ class User(UUIDPrimaryKey, TimestampMixin, Base):
     # provisioned after their reports, and sub is the stable cross-system identity).
     manager_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     title: Mapped[str | None] = mapped_column(String(150), nullable=True)
+
+    #: IANA-зона («Europe/Moscow»). Одна на человека: по ней считаются тихие
+    #: часы и час сводки и по ней же интерфейс показывает даты. NULL — время
+    #: сервера, как было до появления поля.
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class ApiKey(UUIDPrimaryKey, TimestampMixin, Base):

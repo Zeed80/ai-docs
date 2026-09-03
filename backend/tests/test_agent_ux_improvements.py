@@ -164,20 +164,24 @@ async def test_digest_mode_suppresses_per_event_push(db_session):
     assert await _push_allowed_now(db_session, "someone-without-settings") is True
 
 
-async def test_quiet_hours_follow_the_users_timezone(db_session, monkeypatch):
+async def test_quiet_hours_follow_the_users_profile_timezone(db_session, monkeypatch):
     """Часы считались по серверу: «не беспокоить с 22 до 8» означало чужие
-    22:00, если сервер и человек в разных поясах."""
-    from app.db.models import UserNotificationSettings
+    22:00, если сервер и человек в разных поясах. Зона берётся из профиля —
+    одна на человека, а не копия в каждой подсистеме."""
+    from app.db.models import User, UserNotificationSettings
     from app.services import notifications as svc
 
+    db_session.add(User(
+        sub="tz-user", email="tz@example.com", name="Дальний",
+        preferred_username="tz", role="buyer", is_active=True,
+        timezone="Asia/Vladivostok",
+    ))
     db_session.add(UserNotificationSettings(
         user_sub="tz-user", quiet_from_hour=22, quiet_to_hour=8,
-        timezone="Asia/Vladivostok",
     ))
     await db_session.commit()
 
-    # 15:00 UTC — это полночь во Владивостоке (UTC+10), то есть тишина, хотя
-    # по серверу день.
+    # 15:00 UTC — полночь во Владивостоке (UTC+10): тишина, хотя по серверу день.
     monkeypatch.setattr(svc, "local_hour", lambda tz: 0 if tz == "Asia/Vladivostok" else 15)
     assert await svc._push_allowed_now(db_session, "tz-user") is False
 
@@ -190,20 +194,32 @@ def test_unknown_timezone_falls_back_to_the_server():
     assert 0 <= local_hour(None) <= 23
 
 
-async def test_timezone_round_trips_and_rejects_nonsense(client):
-    saved = await client.put(
-        "/api/notifications/delivery",
-        json={"digest_enabled": True, "digest_hour": 9, "timezone": "Europe/Moscow"},
-    )
-    assert saved.status_code == 200, saved.text
-    assert (await client.get("/api/notifications/delivery")).json()["timezone"] == "Europe/Moscow"
+async def test_timezone_lives_in_the_profile(client, db_session):
+    """Зона — свойство человека: по ней и тихие часы, и все даты в интерфейсе.
+    Пока она лежала в настройках уведомлений, любому другому потребителю
+    пришлось бы читать чужую таблицу."""
+    from sqlalchemy import select
 
-    # «UTC+3» — не имя зоны: приняв такую строку, мы бы молча считали по
-    # серверу, и человек бы этого не заметил.
-    bad = await client.put(
-        "/api/notifications/delivery",
-        json={"digest_enabled": False, "digest_hour": 9, "timezone": "UTC+3"},
-    )
+    from app.db.models import User
+
+    saved = await client.patch("/api/auth/me", json={"timezone": "Europe/Moscow"})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["timezone"] == "Europe/Moscow"
+
+    row = (
+        await db_session.execute(select(User.timezone).where(User.sub == "dev-user"))
+    ).scalar_one_or_none()
+    assert row == "Europe/Moscow"
+
+    # Настройки уведомлений показывают её, но не владеют ею.
+    delivery = await client.get("/api/notifications/delivery")
+    assert delivery.json()["timezone"] == "Europe/Moscow"
+
+
+async def test_profile_rejects_a_fake_timezone(client):
+    """«UTC+3» — не имя зоны: приняв такую строку, мы бы молча считали по
+    серверу, и человек бы этого не заметил."""
+    bad = await client.patch("/api/auth/me", json={"timezone": "UTC+3"})
     assert bad.status_code == 422
 
 

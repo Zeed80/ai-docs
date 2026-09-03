@@ -9,7 +9,7 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +49,70 @@ async def _pop_state(state: str) -> str | None:
 async def me(user: UserInfo = Depends(get_current_user)) -> UserInfo:
     """Return current user info."""
     return user
+
+
+class ProfileUpdate(BaseModel):
+    """То, что человек меняет себе сам. Пока — часовой пояс.
+
+    Роль, доступы и подразделение сюда не входят: их назначает администратор,
+    и смешивать «мои настройки» с «моими правами» в одном endpoint нельзя.
+    """
+
+    timezone: str | None = Field(None, max_length=64)
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_timezone(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
+            raise ValueError(f"Неизвестный часовой пояс: {value}") from exc
+        return value
+
+
+@router.patch("/me", response_model=UserInfo)
+async def update_me(
+    payload: ProfileUpdate,
+    user: UserInfo = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserInfo:
+    """Изменить собственный профиль.
+
+    Часовой пояс — свойство человека: по нему считаются тихие часы и час
+    сводки и по нему же интерфейс показывает даты. Раньше он жил в настройках
+    уведомлений, и любому другому потребителю пришлось бы читать чужую
+    таблицу.
+    """
+    from sqlalchemy import select
+
+    from app.auth.jwt import invalidate_active_cache
+    from app.db.models import User
+
+    row = (
+        await db.execute(select(User).where(User.sub == user.sub))
+    ).scalar_one_or_none()
+    if row is None:
+        # Аутентифицированный человек без строки в users — обычное дело до
+        # первого upsert'а на логине. Отказ здесь означал бы «настройте
+        # профиль позже», хотя настраивать нечего: личность уже известна.
+        row = User(
+            sub=user.sub,
+            email=user.email,
+            name=user.name or user.preferred_username or user.sub,
+            preferred_username=user.preferred_username or "",
+            role=(user.roles[0].value if user.roles else "viewer"),
+        )
+        db.add(row)
+    row.timezone = payload.timezone
+    await db.commit()
+    # Зона читается через кэш при каждой проверке токена — сбрасываем, иначе
+    # смена вступит в силу только через несколько минут.
+    await invalidate_active_cache(user.sub)
+    return user.model_copy(update={"timezone": payload.timezone})
 
 
 def _frontend_base_from_uri(redirect_uri: str) -> str:

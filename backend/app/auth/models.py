@@ -34,6 +34,9 @@ class UserInfo(BaseModel):
     # below. None = no department set — department-scoped memory stays invisible
     # to them, existing session/owner/project/global visibility is unaffected.
     department_id: str | None = None
+    #: IANA-зона пользователя (users.timezone). По ней считаются тихие часы и
+    #: час сводки и по ней же интерфейс показывает даты. None — время сервера.
+    timezone: str | None = None
     # Этот запрос пришёл от агента (сервисный аккаунт, возможно с де-эскалацией
     # до человека через X-Acting-User) — см. app.auth.acting.get_effective_user.
     # Носителем признака сделан сам пользователь, а не request, потому что
