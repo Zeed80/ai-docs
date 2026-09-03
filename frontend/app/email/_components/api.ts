@@ -145,6 +145,40 @@ export const emailApi = {
 
   exportContactsUrl: () => `${API}/api/email/contacts/export`,
 
+  setupStatus: () =>
+    apiFetch(`${API}/api/email/setup-status`).then((r) =>
+      j<{ key: string; title: string; hint: string; done: boolean; url: string }[]>(r),
+    ),
+
+  agentActivity: (mailbox?: string) =>
+    apiFetch(
+      `${API}/api/email/agent-activity${mailbox ? `?mailbox=${encodeURIComponent(mailbox)}` : ""}`,
+    ).then((r) =>
+      j<
+        {
+          id: string;
+          at: string;
+          message_id: string | null;
+          thread_id: string | null;
+          subject: string | null;
+          from_address: string | null;
+          kind: "triage" | "rule";
+          source: string;
+          category: string | null;
+          summary: string | null;
+          performed: { type?: string; [k: string]: unknown }[];
+          undoable: string[];
+        }[]
+      >(r),
+    ),
+
+  undoAgentAction: (activityId: string, kind: string) =>
+    mutFetch(`${API}/api/email/agent-activity/undo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ activity_id: activityId, kind }),
+    }).then((r) => j<{ undone: string[] }>(r)),
+
   folderCounts: (mailbox?: string) =>
     apiFetch(
       `${API}/api/email/folder-counts${mailbox ? `?mailbox=${encodeURIComponent(mailbox)}` : ""}`,

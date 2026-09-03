@@ -435,6 +435,34 @@ import weakref as _weakref
 _ACTIVE_SESSIONS: "_weakref.WeakSet[AgentSession]" = _weakref.WeakSet()  # type: ignore[assignment]
 
 
+async def deliver_external_approval(db_id: str, approved: bool) -> bool:
+    """Донести решение, принятое ВНЕ вкладки чата, до ждущего хода.
+
+    Запрос подтверждения жил только в WebSocket-сессии: человек, закрывший
+    вкладку или ответивший со страницы согласований (или с телефона), обрывал
+    ход — durable-запись Approval при этом создавалась, но продолжать было
+    некому. Теперь решение по этой записи будит ту же сессию, если она ещё
+    жива в этом процессе; если нет — поведение прежнее, ход давно закончился
+    по таймауту.
+
+    Возвращает True, если решение действительно кому-то доставлено.
+    """
+    for session in list(_ACTIVE_SESSIONS):
+        if getattr(session, "_pending_db_id", None) != db_id:
+            continue
+        try:
+            await session.on_approval(
+                approved, approval_id=getattr(session, "_pending_approval_id", None)
+            )
+            logger.info(
+                "approval_delivered_out_of_band", db_id=db_id, approved=approved,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("approval_delivery_failed", db_id=db_id, error=str(exc))
+    return False
+
+
 def reload_all_sessions() -> int:
     """Tell every live AgentSession to reload its skill map from the registry.
 
@@ -1614,6 +1642,10 @@ class AgentSession:
         self._send = send
         self.messages: list[dict] = []
         self._approval_future: asyncio.Future[bool] | None = None
+        # Правки, внесённые человеком в карточке подтверждения (см. on_approval).
+        self._pending_args_override: dict | None = None
+        # Durable-запись Approval, которую ждёт текущий ход (deliver_external_approval).
+        self._pending_db_id: str | None = None
         # Что человек уже одобрил в этом ходе (см. _approval_key). Очищается
         # при каждом новом сообщении пользователя: одобрение действует на ход,
         # а не навсегда.
@@ -1989,6 +2021,7 @@ class AgentSession:
         approved: bool,
         approval_id: str | None = None,
         db_id: str | None = None,
+        args_override: dict | None = None,
     ) -> None:
         if self._pending_approval_id and approval_id != self._pending_approval_id:
             await self._send({
@@ -1997,6 +2030,12 @@ class AgentSession:
                 "message": "Approval decision does not match the active request.",
             })
             return
+        # Человек поправил письмо прямо в карточке подтверждения: содержимое
+        # изменилось, значит изменился и его отпечаток. Раньше единственным
+        # способом поправить формулировку было отклонить, объяснить словами и
+        # ждать нового черновика — полный круг генерации ради одной строки.
+        if approved and args_override:
+            self._pending_args_override = dict(args_override)
         if self._approval_future and not self._approval_future.done():
             self._approval_future.set_result(approved)
 
@@ -2333,6 +2372,13 @@ class AgentSession:
 
                 self.messages.append(message)
 
+                # План — ДО выполнения, а не по факту. Раньше о замысле агента
+                # можно было судить только по уже сделанным вызовам: «сделал не
+                # то» обнаруживалось после того, как сделал. Показываем список
+                # намерений словами; остановить ход человек может кнопкой
+                # «Стоп», которая уже есть.
+                await self._announce_plan(tool_calls, iteration)
+
                 from app.ai.tool_parallelism import should_parallelize
                 if should_parallelize(tool_calls):
                     results = await self._execute_tools_parallel(tool_calls, iteration)
@@ -2642,6 +2688,13 @@ class AgentSession:
             self._granted_approvals.add(self._approval_key(original_name, args))
             approval_granted = True
 
+        # Человек поправил содержимое в карточке — вызов уходит с новыми
+        # аргументами (для письма это свежий expected_digest, иначе отправка
+        # упрётся в 409 «черновик изменился»).
+        if approval_granted and self._pending_args_override:
+            args = {**args, **self._pending_args_override}
+            self._pending_args_override = None
+
         if skill:
             result = await execute_skill(
                 skill,
@@ -2691,6 +2744,34 @@ class AgentSession:
         if tool_call_id:
             msg["tool_call_id"] = tool_call_id
         self.messages.append(msg)
+
+    async def _announce_plan(self, tool_calls: list[dict], iteration: int) -> None:
+        """Сказать словами, что агент собирается сделать в этом шаге.
+
+        Только когда шагов больше одного или действие необратимое: для
+        одиночного «посмотрю список» объявление было бы шумом.
+        """
+        from app.ai.approval_preview import describe_call, is_irreversible
+
+        steps: list[dict] = []
+        for tc in tool_calls:
+            fn = (tc.get("function") or {})
+            raw_name = str(fn.get("name") or "")
+            skill = self._skill_map.get(raw_name)
+            name = skill["name"] if skill else raw_name.replace("__", ".")
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            steps.append({
+                "tool": name,
+                "text": describe_call(name, args),
+                "irreversible": is_irreversible(name, args),
+            })
+
+        if len(steps) < 2 and not any(s["irreversible"] for s in steps):
+            return
+        await self._send({"type": "plan", "iteration": iteration, "steps": steps})
 
     async def _execute_tools_sequential(
         self, tool_calls: list[dict], iteration: int
@@ -2988,11 +3069,17 @@ class AgentSession:
         return not subject or subject in haystack
 
     async def _request_approval(self, skill_name: str, args: dict) -> bool:
+        from app.ai.approval_preview import build_preview
+
+        # Карточка вместо json.dumps(args): человек, утверждающий отправку
+        # письма, должен видеть письмо, а не draft_id и дайджест. Сырые
+        # аргументы остаются внутри карточки для тех, кому они нужны.
+        card = await build_preview(skill_name, args)
         preview = json.dumps(args, ensure_ascii=False, indent=2)
 
         db_id: str | None = None
         try:
-            db_id = await _create_db_approval(skill_name, args)
+            db_id = await _create_db_approval(skill_name, args, card)
         except Exception as exc:
             log_degraded("agent_loop.approval_create", exc, skill=skill_name)
         if _approval_action_type_for(skill_name, args) and not db_id:
@@ -3010,6 +3097,8 @@ class AgentSession:
         max_attempts = 2
         approval_id = str(uuid.uuid4())
         self._pending_approval_id = approval_id
+        # Чтобы решение, принятое на странице согласований, нашло этот ход.
+        self._pending_db_id = db_id
         for attempt in range(1, max_attempts + 1):
             self._approval_future = asyncio.get_event_loop().create_future()
             await self._send({
@@ -3017,6 +3106,10 @@ class AgentSession:
                 "tool": skill_name,
                 "args": args,
                 "preview": preview,
+                "card": card.as_dict(),
+                # Необратимое действие никогда не проходит по «подтвердить
+                # всё»: письмо, платёж и удаление решаются поимённо.
+                "irreversible": card.irreversible,
                 "approval_id": approval_id,
                 "db_id": db_id,
                 "attempt": attempt,
@@ -3052,6 +3145,7 @@ class AgentSession:
                     })
         self._approval_future = None
         self._pending_approval_id = None
+        self._pending_db_id = None
 
         if db_id:
             try:
@@ -3226,8 +3320,14 @@ def _approval_action_type_for(skill_name: str, args: dict) -> str | None:
     )
 
 
-async def _create_db_approval(skill_name: str, args: dict) -> str | None:
-    """Create an Approval record in DB and return its ID."""
+async def _create_db_approval(skill_name: str, args: dict, card=None) -> str | None:
+    """Create an Approval record in DB and return its ID.
+
+    ``card`` — человекочитаемое описание (app.ai.approval_preview). Оно
+    сохраняется в context, чтобы список ожидающих решений (/inbox,
+    /approvals) показывал «Отправить письмо · Ромекс», а не имя действия и
+    набор идентификаторов.
+    """
     action_type = _approval_action_type_for(skill_name, args)
     if not action_type:
         return None  # DB enum doesn't support this gate yet (Этап 10)
@@ -3261,7 +3361,19 @@ async def _create_db_approval(skill_name: str, args: dict) -> str | None:
                 "entity_type": entity_type,
                 "entity_id": entity_id,
                 "requested_by": "sveta",
-                "context": args,
+                "context": {
+                    **args,
+                    **(
+                        {
+                            "title": card.title,
+                            "subtitle": card.subtitle,
+                            "irreversible": card.irreversible,
+                            "preview_card": card.as_dict(),
+                        }
+                        if card is not None
+                        else {}
+                    ),
+                },
             },
             headers=internal_headers(),
         )

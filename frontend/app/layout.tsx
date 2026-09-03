@@ -10,6 +10,7 @@ import {
 } from "@/components/pwa/ServiceWorkerRegistration";
 import { OfflineQueueWidget } from "@/components/pwa/OfflineQueueWidget";
 import { MobileChrome } from "@/components/mobile/MobileChrome";
+import { CommandPalette } from "@/components/command-palette";
 
 export const metadata: Metadata = {
   title: "AI-DOCS",
@@ -44,6 +45,9 @@ export default async function RootLayout({
           <KeyboardProvider>
             <ClientLayout>{children}</ClientLayout>
           </KeyboardProvider>
+          {/* Ctrl/⌘+K из любого места: поиск и переходы были разбросаны по
+              разделам, хотя проект заявляет keyboard-first. */}
+          <CommandPalette />
           <ServiceWorkerRegistration />
           <InstallPrompt />
           <OfflineQueueWidget />

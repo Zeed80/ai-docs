@@ -14,6 +14,7 @@ export function MailSidebar({
   onCollapse,
   view,
   onSelectContacts,
+  onSelectActivity,
   mailboxes,
   labels,
   activeMailbox,
@@ -29,8 +30,9 @@ export function MailSidebar({
   onSync,
 }: {
   onCollapse: () => void;
-  view: "mail" | "contacts";
+  view: "mail" | "contacts" | "activity";
   onSelectContacts: () => void;
+  onSelectActivity: () => void;
   mailboxes: MailboxChip[];
   labels: EmailLabel[];
   activeMailbox: string;
@@ -229,6 +231,14 @@ export function MailSidebar({
           onClick={onSelectContacts}
         >
           <span>👤 {t("contacts")}</span>
+        </button>
+        <button
+          type="button"
+          aria-current={view === "activity" ? "page" : undefined}
+          className={rowCls(view === "activity")}
+          onClick={onSelectActivity}
+        >
+          <span>🤖 {t("agentActivity")}</span>
         </button>
       </div>
     </nav>

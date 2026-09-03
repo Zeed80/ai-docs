@@ -341,6 +341,37 @@ function MessageCard({
             </div>
           )}
 
+          {(msg.applied_rules?.length ?? 0) > 0 && (
+            <div className="mt-3 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-800/60">
+              {msg.applied_rules!.map((r) => (
+                <p key={r.rule_id} className="text-[11px] text-slate-600 dark:text-slate-400">
+                  {t("activityRule", { name: r.name })}
+                  {r.actions.length > 0 && (
+                    <span className="text-slate-500">
+                      {" → "}
+                      {r.actions
+                        .map((a) =>
+                          ["label", "add_label", "move", "assign_role", "run_extraction",
+                           "forward_to", "auto_reply_template", "mark_read",
+                           "notify_responsible", "link_invoice", "draft_reply",
+                           "compare_quote", "ask_for_attachment"].includes(a)
+                            ? t(`performed.${a}`)
+                            : a,
+                        )
+                        .join(", ")}
+                    </span>
+                  )}
+                  <a
+                    href="/settings?tab=email&sub=rules"
+                    className="ml-1.5 text-blue-600 hover:underline dark:text-blue-400"
+                  >
+                    {t("openRule")}
+                  </a>
+                </p>
+              ))}
+            </div>
+          )}
+
           {triage && triage.status === "done" && (
             <div className="mt-3 rounded border border-sky-300 dark:border-sky-800/60 bg-sky-50 dark:bg-sky-950/20 p-2.5">
               <div className="flex items-center gap-2">

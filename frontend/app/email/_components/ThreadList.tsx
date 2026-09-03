@@ -214,6 +214,14 @@ export function ThreadList({
                         📎
                       </span>
                     )}
+                    {th.has_draft && (
+                      <span
+                        className="rounded bg-sky-100 px-1 text-[9px] text-sky-700 dark:bg-sky-900/50 dark:text-sky-300"
+                        title={t("draftWaitingHint")}
+                      >
+                        {t("draftWaiting")}
+                      </span>
+                    )}
                   </div>
                   {th.last_snippet && !dense && (
                     <p className="truncate text-[11px] text-slate-500">{th.last_snippet}</p>

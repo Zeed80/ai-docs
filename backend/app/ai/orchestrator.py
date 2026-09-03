@@ -328,11 +328,13 @@ class AgentOrchestrator:
         approved: bool,
         approval_id: str | None = None,
         db_id: str | None = None,
+        args_override: dict | None = None,
     ) -> None:
         await self._executor.on_approval(
             approved,
             approval_id=approval_id,
             db_id=db_id,
+            args_override=args_override,
         )
 
     async def on_user_message(

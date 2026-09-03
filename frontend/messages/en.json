@@ -1355,7 +1355,8 @@
       "sortNewest": "Newest first",
       "sortOldest": "Oldest first",
       "sortRelevance": "By relevance",
-      "dense": "Compact"
+      "dense": "Compact",
+      "withDraft": "With draft"
     },
     "groups": {
       "older": "Older",
@@ -1412,7 +1413,14 @@
       "link_invoice": "linked the supplier",
       "draft_reply": "drafted a reply",
       "compare_quote": "added the quote to comparison",
-      "ask_for_attachment": "ask for the attachment"
+      "ask_for_attachment": "ask for the attachment",
+      "add_label": "added a label",
+      "move": "moved the message",
+      "assign_role": "assigned an owner",
+      "run_extraction": "sent the attachment to recognition",
+      "forward_to": "prepared a forward",
+      "auto_reply_template": "prepared an auto-reply",
+      "mark_read": "marked as read"
     },
     "proposes": "suggests",
     "supplierBy": {
@@ -1456,6 +1464,17 @@
     "backToList": "Back to list",
     "assistHint": "The agent reads the thread and drafts a reply — you send it",
     "assistPrompt": "Draft a reply to this email",
-    "syncStillRunning": "The mail check is still running — messages will appear when it finishes"
+    "syncStillRunning": "The mail check is still running — messages will appear when it finishes",
+    "draftWaiting": "draft",
+    "draftWaitingHint": "A reply is prepared — review and send",
+    "agentActivity": "What the agent did",
+    "activityRule": "Rule “{name}”",
+    "activityAgent": "Agent",
+    "activityUndone": "Undone",
+    "openRule": "configure",
+    "setup": {
+      "title": "Mail setup: {done} of {total}",
+      "hide": "hide"
+    }
   }
 }

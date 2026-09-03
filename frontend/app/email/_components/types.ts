@@ -81,6 +81,8 @@ export interface EmailMessage {
   snippet: string | null;
   /** Ф1.4 — картинки этого отправителя разрешено показать сразу. */
   images_trusted?: boolean;
+  /** Какое правило фильтрации сработало на письме и что сделало. */
+  applied_rules?: { rule_id: string; name: string; actions: string[] }[];
 }
 
 export interface EmailThread {
@@ -100,6 +102,8 @@ export interface EmailThread {
   sender: string | null;
   /** С кем переписка: во «Входящих» — отправитель, в «Отправленных» — получатель. */
   counterparty?: string | null;
+  /** Черновик ответа уже готов и ждёт отправки. */
+  has_draft?: boolean;
   messages: EmailMessage[];
 }
 

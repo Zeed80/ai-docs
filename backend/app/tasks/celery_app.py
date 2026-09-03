@@ -85,6 +85,12 @@ celery_app.conf.update(
 _imap_cron = timedelta(minutes=max(1, settings.imap_poll_interval_minutes))
 
 celery_app.conf.beat_schedule = {
+    # Сводка вместо потока: проверяем ежечасно, кому сейчас пора (час выбирает
+    # сам человек в настройках уведомлений).
+    "notification-daily-digest": {
+        "task": "notifications.daily_digest",
+        "schedule": crontab(minute=5),
+    },
     # DB-driven mailbox polling: one dispatcher fans out poll_imap_mailbox for
     # every active MailboxConfig row. Replaces the old hard-coded
     # procurement/accounting/general entries — a mailbox added through the UI
@@ -262,6 +268,7 @@ celery_app.autodiscover_tasks([
 ])
 
 # Flat module — not discovered by autodiscover_tasks(related_name="tasks").
+from app.tasks import notification_digest as _notification_digest  # noqa: F401
 from app.tasks import drawing_analysis as _drawing_analysis  # noqa: F401
 from app.tasks import catalog_ingest as _catalog_ingest  # noqa: F401
 from app.tasks import catalog_archive as _catalog_archive  # noqa: F401

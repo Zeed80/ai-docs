@@ -416,6 +416,19 @@ async def decide_approval(
     except Exception:
         pass
 
+    # Ход агента, ждущий именно этого решения, продолжается — даже если
+    # человек ответил не в чате, а здесь или с телефона. Раньше решение
+    # ложилось в базу, а ход к этому моменту уже был оборван закрытой вкладкой.
+    if approval.action_type == ApprovalActionType.agent_tool_call:
+        try:
+            from app.ai.agent_loop import deliver_external_approval
+
+            await deliver_external_approval(
+                str(approval.id), payload.status == ApprovalStatus.approved,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("approval_resume_failed", approval_id=str(approval.id), error=str(exc))
+
     # Execute the underlying action after approval
     await _execute_approved_action(approval, db)
 

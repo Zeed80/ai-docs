@@ -9,6 +9,7 @@ import { ThreadList } from "./ThreadList";
 import { ThreadView } from "./ThreadView";
 import { Composer } from "./Composer";
 import { ContactsPanel } from "./ContactsPanel";
+import { AgentActivityPanel } from "./AgentActivityPanel";
 import type {
   ComposeMode,
   EmailDraft,
@@ -29,6 +30,22 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
   const [drafts, setDrafts] = useState<EmailDraft[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [syncTimedOut, setSyncTimedOut] = useState(false);
+  // Чек-лист первого запуска: пустой ящик предлагал «настроить почту» и на
+  // этом заканчивался — про согласие, правила, шаблоны и подпись человек
+  // должен был догадаться сам.
+  const [setup, setSetup] = useState<
+    { key: string; title: string; hint: string; done: boolean; url: string }[]
+  >([]);
+  const [setupHidden, setSetupHidden] = useState(false);
+  useEffect(() => {
+    try {
+      setSetupHidden(localStorage.getItem("email:setup-hidden") === "1");
+    } catch {
+      /* ignore */
+    }
+    emailApi.setupStatus().then(setSetup).catch(() => setSetup([]));
+  }, []);
+  const setupPending = setup.filter((st) => !st.done);
   // Плотность списка и порядок сортировки — выбор человека, а не константа
   // в разметке. Хранится локально: это предпочтение рабочего места.
   const [dense, setDense] = useState(false);
@@ -84,7 +101,7 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
   const [cursor, setCursor] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [compose, setCompose] = useState<ComposeMode | null>(null);
-  const [view, setView] = useState<"mail" | "contacts">("mail");
+  const [view, setView] = useState<"mail" | "contacts" | "activity">("mail");
   const [showKeys, setShowKeys] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Ф7.2 — the three-panel layout is unusable on a phone: list, thread and
@@ -668,6 +685,7 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
         onCollapse={() => setSidebarOpen(false)}
         view={view}
         onSelectContacts={() => setView("contacts")}
+        onSelectActivity={() => setView("activity")}
         mailboxes={mailboxes}
         labels={labels}
         activeMailbox={activeMailbox}
@@ -702,7 +720,9 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
       />
       )}
 
-      {view === "contacts" ? (
+      {view === "activity" ? (
+        <AgentActivityPanel mailbox={activeMailbox} />
+      ) : view === "contacts" ? (
         <ContactsPanel
           onCompose={(email) => {
             setView("mail");
@@ -720,6 +740,39 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
             : "w-72 shrink-0"
         }`}
       >
+        {setupPending.length > 0 && !setupHidden && (
+          <div className="border-b border-blue-200 bg-blue-50 px-3 py-2 text-[11px] dark:border-blue-900/60 dark:bg-blue-950/25">
+            <div className="mb-1 flex items-center gap-2">
+              <span className="font-medium text-blue-800 dark:text-blue-300">
+                {t("setup.title", { done: setup.length - setupPending.length, total: setup.length })}
+              </span>
+              <button
+                onClick={() => {
+                  setSetupHidden(true);
+                  try {
+                    localStorage.setItem("email:setup-hidden", "1");
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                className="ml-auto text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+              >
+                {t("setup.hide")}
+              </button>
+            </div>
+            <ul className="space-y-0.5">
+              {setupPending.slice(0, 3).map((st) => (
+                <li key={st.key}>
+                  <a href={st.url} className="text-blue-700 hover:underline dark:text-blue-300">
+                    {st.title}
+                  </a>
+                  <span className="ml-1 text-slate-500">— {st.hint}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {syncTimedOut && !syncErrorBanner && (
           <div className="flex items-center gap-2 border-b border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/20 dark:text-amber-300">
             <span>{t("syncStillRunning")}</span>

@@ -333,6 +333,10 @@ async def chat_ws(ws: WebSocket) -> None:
 
             elif msg_type == "approve":
                 if active_agent_session is not None:
+                    # args_override — правки, внесённые человеком прямо в
+                    # карточке подтверждения (например, отредактированный текст
+                    # письма даёт новый expected_digest).
+                    override = data.get("args_override")
                     await active_agent_session.on_approval(
                         True,
                         approval_id=(
@@ -345,6 +349,7 @@ async def chat_ws(ws: WebSocket) -> None:
                             if data.get("db_id") is not None
                             else None
                         ),
+                        args_override=override if isinstance(override, dict) else None,
                     )
 
             elif msg_type == "reject":

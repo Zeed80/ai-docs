@@ -16,6 +16,8 @@ from app.api.web_search import WebSearchRequest, execute_web_search
 from app.auth.acting import get_effective_user
 from app.auth.jwt import require_human_role
 from app.auth.models import UserInfo, UserRole
+import structlog
+
 from app.db.models import (
     ChatMessage,
     ChatMessageAttachment,
@@ -50,6 +52,8 @@ from app.domain.graph import (
     MemorySearchResponse,
 )
 from app.domain.memory_builder import build_document_memory_async
+
+logger = structlog.get_logger()
 
 router = APIRouter()
 
@@ -1957,7 +1961,34 @@ async def rate_message(
         session_id=req.session_id,
     )
 
-    # Negative rating with comment → propose a learning rule for self-improvement
+    # «Это неправильно, вот как надо» — единственный надёжный сигнал об
+    # ошибке. Раньше он превращался во что-то полезное только при совпадении
+    # трёх условий сразу (минус, комментарий И непустой список инструментов):
+    # замечание к обычному текстовому ответу, где инструментов не было,
+    # не сохранялось нигде. Теперь комментарий сам по себе становится фактом
+    # памяти, а правило обучения по-прежнему предлагается там, где известно,
+    # какой инструмент вёл себя не так.
+    if req.rating == -1 and req.comment:
+        try:
+            db.add(MemoryFact(
+                scope=f"session:{req.session_id}"[:80],
+                kind="correction",
+                title="Замечание к ответу агента"[:500],
+                summary=req.comment[:2000],
+                source="user_rating",
+                confidence=1.0,
+                provenance={
+                    "session_id": req.session_id,
+                    "message_id": req.message_id,
+                    "tools_used": req.tools_used or [],
+                },
+                metadata_={"tools_used": req.tools_used or []},
+            ))
+            await db.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("rating_memory_fact_failed", error=str(exc))
+            await db.rollback()
+
     if req.rating == -1 and req.comment and req.tools_used:
         try:
             import httpx as _httpx

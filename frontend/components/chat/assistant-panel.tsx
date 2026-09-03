@@ -32,6 +32,7 @@ type MessageRole =
   | "assistant"
   | "tool"
   | "approval"
+  | "plan"
   | "error"
   | "status";
 
@@ -43,6 +44,23 @@ interface ActionChip {
   act?: string;
 }
 
+/** Человекочитаемое описание действия, которое агент просит подтвердить.
+ *  До него в карточке показывался json.dumps(args): утверждая отправку
+ *  письма, человек видел draft_id и дайджест — то есть идентификаторы. */
+interface ApprovalCard {
+  title: string;
+  subtitle?: string | null;
+  fields: { label: string; value: string; emphasis?: boolean }[];
+  body_html?: string | null;
+  body_text?: string | null;
+  warnings: string[];
+  reason?: string | null;
+  editable?: string | null;
+  entity_id?: string | null;
+  irreversible: boolean;
+  raw_args: Record<string, unknown>;
+}
+
 interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -52,6 +70,9 @@ interface ChatMessage {
   result?: unknown;
   status?: "calling" | "done" | "pending" | "approved" | "rejected";
   preview?: string;
+  card?: ApprovalCard;
+  irreversible?: boolean;
+  planSteps?: { text: string; irreversible: boolean }[];
   approvalId?: string;
   dbId?: string;
   toolsUsedInTurn?: string[];
@@ -183,6 +204,107 @@ function FileChip({
   );
 }
 
+/** Карточка подтверждения: что именно предлагается сделать, словами.
+ *
+ *  Раньше здесь был json.dumps(args) десятым кеглем в блоке высотой в две
+ *  строки. Для отправки письма это означало «утвердите draft_id и дайджест»:
+ *  прочитать письмо в момент решения было негде, и две кнопки под нечитаемой
+ *  строкой нажимались не глядя.
+ */
+function ApprovalCardView({
+  card,
+  editing,
+  onEdit,
+}: {
+  card: ApprovalCard;
+  editing?: string;
+  onEdit: (text: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
+  const body = editing ?? card.body_text ?? "";
+  const long = body.length > 400;
+
+  return (
+    <div className="mb-2 space-y-1.5">
+      <p className="text-xs font-semibold text-slate-100">{card.title}</p>
+      {card.subtitle && <p className="text-[11px] text-slate-400">{card.subtitle}</p>}
+
+      {/* Зачем агент это делает — он может назвать причину при вызове (G3). */}
+      {card.reason && (
+        <p className="rounded bg-slate-800/60 px-2 py-1 text-[11px] text-slate-300">
+          Зачем: {card.reason}
+        </p>
+      )}
+
+      {card.fields.length > 0 && (
+        <dl className="grid grid-cols-[auto,1fr] gap-x-2 gap-y-0.5 text-[11px]">
+          {card.fields.map((f) => (
+            <div key={f.label} className="contents">
+              <dt className="text-slate-500">{f.label}</dt>
+              <dd
+                className={`min-w-0 break-words ${f.emphasis ? "font-medium text-slate-100" : "text-slate-300"}`}
+              >
+                {f.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {card.warnings.length > 0 && (
+        <ul className="space-y-0.5 rounded border border-amber-700/60 bg-amber-950/30 px-2 py-1">
+          {card.warnings.map((w) => (
+            <li key={w} className="text-[11px] text-amber-200">
+              · {w}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {card.body_text !== null && card.body_text !== undefined && (
+        <div>
+          {card.editable === "email_draft" ? (
+            // Правка прямо здесь: раньше «поменяй срок на пятницу» стоило
+            // полного круга — отклонить, объяснить словами, ждать нового
+            // черновика.
+            <textarea
+              value={body}
+              onChange={(e) => onEdit(e.target.value)}
+              rows={expanded || editing !== undefined ? 12 : 5}
+              className="w-full resize-y rounded border border-slate-700 bg-slate-900/70 p-2 text-[11px] leading-relaxed text-slate-200 focus:outline-none focus:ring-1 focus:ring-green-600"
+            />
+          ) : (
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-slate-900/50 p-2 text-[11px] text-slate-300">
+              {expanded || !long ? body : `${body.slice(0, 400)}…`}
+            </pre>
+          )}
+          {long && card.editable !== "email_draft" && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-0.5 text-[10px] text-slate-400 hover:text-slate-200"
+            >
+              {expanded ? "свернуть" : "показать полностью"}
+            </button>
+          )}
+        </div>
+      )}
+
+      <button
+        onClick={() => setShowRaw((v) => !v)}
+        className="text-[10px] text-slate-500 hover:text-slate-300"
+      >
+        {showRaw ? "скрыть аргументы" : "показать аргументы"}
+      </button>
+      {showRaw && (
+        <pre className="max-h-32 overflow-auto rounded bg-slate-900/60 p-2 text-[10px] text-slate-500">
+          {JSON.stringify(card.raw_args, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export function AssistantPanel() {
   const { isDegraded } = useDegradedMode();
   const agentName = useAgentName();
@@ -211,7 +333,16 @@ export function AssistantPanel() {
   const [voiceOk, setVoiceOk] = useState(false);
   const [listening, setListening] = useState(false);
   const dragCounterRef = useRef(0);
+  // Тексты писем, поправленные человеком прямо в карточке подтверждения.
+  const [editedBodies, setEditedBodies] = useState<Record<string, string>>({});
+  // Сообщение, к которому человек сейчас пишет «как надо было».
+  const [feedbackFor, setFeedbackFor] = useState<string | null>(null);
+  const [feedbackText, setFeedbackText] = useState("");
   const autoApproveRef = useRef(false);
+  // Срок жизни авто-подтверждения и его видимость: режим, который не видно,
+  // человек забывает выключить.
+  const autoApproveUntilRef = useRef(0);
+  const [autoApproveUntil, setAutoApproveUntil] = useState(0);
   const activeHistoryLoadRef = useRef<string | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
   const currentTurnToolsRef = useRef<string[]>([]);
@@ -420,9 +551,16 @@ export function AssistantPanel() {
       .catch(() => {});
   }, []);
 
-  async function rateMessage(msg: ChatMessage, vote: 1 | -1) {
-    if (ratings[msg.id]) return;
+  async function rateMessage(msg: ChatMessage, vote: 1 | -1, comment?: string) {
+    if (ratings[msg.id] && comment === undefined) return;
     setRatings((prev) => ({ ...prev, [msg.id]: vote }));
+    // «Плохо» без объяснения агент никак не может учесть. Просим одну строку
+    // «как надо было» — она становится фактом памяти и, если известен
+    // инструмент, предложением правила обучения.
+    if (vote === -1 && comment === undefined) {
+      setFeedbackFor(msg.id);
+      return;
+    }
     try {
       await mutFetch("/api/memory/rate", {
         method: "POST",
@@ -431,6 +569,7 @@ export function AssistantPanel() {
           session_id: sessionIdRef.current,
           message_id: msg.id,
           rating: vote,
+          comment: comment || null,
           tools_used: msg.toolsUsedInTurn ?? [],
         }),
       });
@@ -658,10 +797,39 @@ export function AssistantPanel() {
     }
 
     // ── Approval (skip Telegram — handled by inline buttons) ─────────────────
+    // Что агент собирается сделать в этом шаге — до выполнения.
+    if (type === "plan") {
+      const steps = (data.steps as { text?: string; irreversible?: boolean }[]) ?? [];
+      if (steps.length) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: genId(),
+            role: "plan",
+            planSteps: steps.map((st) => ({
+              text: String(st.text ?? ""),
+              irreversible: Boolean(st.irreversible),
+            })),
+          },
+        ]);
+      }
+      return;
+    }
+
     if (type === "approval_request") {
+      const card = (data.card as ApprovalCard | undefined) ?? undefined;
+      const irreversible = Boolean(data.irreversible ?? card?.irreversible);
       if (isTelegram) return;
       const approvalId = genId();
 
+      // Авто-подтверждение не распространяется на необратимое (письмо ушло,
+      // платёж отмечен, файл удалён) и живёт ограниченное время: раньше одно
+      // нажатие «⚡ Все» выключало гейт до конца сессии, ничем этого не
+      // показывая.
+      if (autoApproveRef.current && (irreversible || Date.now() > autoApproveUntilRef.current)) {
+        autoApproveRef.current = false;
+        setAutoApproveUntil(0);
+      }
       // Auto-approve mode: skip showing dialog, confirm immediately
       if (
         autoApproveRef.current &&
@@ -700,6 +868,8 @@ export function AssistantPanel() {
           tool: data.tool as string,
           args: data.args as Record<string, unknown>,
           preview: data.preview as string,
+          card,
+          irreversible,
           approvalId:
             typeof data.approval_id === "string" && data.approval_id
               ? data.approval_id
@@ -713,15 +883,19 @@ export function AssistantPanel() {
     }
 
     // ── Canvas ────────────────────────────────────────────────────────────────
-    if (type === "canvas") {
+    // Публикация на рабочий стол больше не выдёргивает человека со страницы:
+    // router.push("/") посреди разговора терял и контекст, и место в диалоге.
+    // Показываем, что появилось, и даём перейти самому.
+    if (type === "canvas" || type === "workspace.updated") {
       window.dispatchEvent(new CustomEvent("workspace-blocks-updated"));
-      router.push("/");
-      return;
-    }
-
-    if (type === "workspace.updated") {
-      window.dispatchEvent(new CustomEvent("workspace-blocks-updated"));
-      router.push("/");
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: genId(),
+          role: "status",
+          content: "published_to_workspace",
+        },
+      ]);
       return;
     }
 
@@ -998,10 +1172,50 @@ export function AssistantPanel() {
     }
 
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    if (!approved) autoApproveRef.current = false;
+    if (!approved) stopAutoApprove();
+
+    // Человек поправил текст письма прямо в карточке: сохраняем черновик и
+    // передаём агенту новый отпечаток содержимого — иначе отправка упрётся в
+    // 409 «черновик изменился после подтверждения».
+    let argsOverride: Record<string, unknown> | undefined;
+    const edited = editedBodies[msgId];
+    if (approved && edited !== undefined && msg?.card?.entity_id) {
+      try {
+        const res = await mutFetch(`/api/email/drafts/${msg.card.entity_id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            body_text: edited,
+            body_html: edited
+              .split(/\n{2,}/)
+              .map((para) => `<p>${para.replace(/\n/g, "<br/>")}</p>`)
+              .join(""),
+          }),
+        });
+        if (res.ok) {
+          const draft = (await res.json()) as { content_digest?: string };
+          if (draft.content_digest) {
+            argsOverride = { expected_digest: draft.content_digest };
+          }
+        }
+      } catch {
+        // Правка не сохранилась — отправляем то, что уже подтверждено, а не
+        // молча подменяем содержимое.
+      }
+    }
+
     wsRef.current.send(
-      JSON.stringify(buildAgentApprovalMessage(approved, msg?.approvalId, msg?.dbId)),
+      JSON.stringify({
+        ...buildAgentApprovalMessage(approved, msg?.approvalId, msg?.dbId),
+        ...(argsOverride ? { args_override: argsOverride } : {}),
+      }),
     );
+    setEditedBodies((prev) => {
+      if (!(msgId in prev)) return prev;
+      const next = { ...prev };
+      delete next[msgId];
+      return next;
+    });
     setMessages((prev) =>
       prev.map((m) =>
         m.id === msgId
@@ -1011,10 +1225,35 @@ export function AssistantPanel() {
     );
   }
 
+  const AUTO_APPROVE_MINUTES = 10;
+
   function handleApproveAll(msgId: string) {
     autoApproveRef.current = true;
+    const until = Date.now() + AUTO_APPROVE_MINUTES * 60_000;
+    autoApproveUntilRef.current = until;
+    setAutoApproveUntil(until);
     void handleApproval(msgId, true);
   }
+
+  function stopAutoApprove() {
+    autoApproveRef.current = false;
+    autoApproveUntilRef.current = 0;
+    setAutoApproveUntil(0);
+  }
+
+  const autoApproveActive = autoApproveUntil > Date.now();
+  useEffect(() => {
+    if (!autoApproveUntil) return;
+    const id = setInterval(() => {
+      if (Date.now() > autoApproveUntilRef.current) {
+        autoApproveRef.current = false;
+        setAutoApproveUntil(0);
+      } else {
+        setAutoApproveUntil((v) => v);
+      }
+    }, 15000);
+    return () => clearInterval(id);
+  }, [autoApproveUntil]);
 
   function stopGeneration() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -1384,6 +1623,35 @@ export function AssistantPanel() {
                     ))}
                   </div>
                 )}
+                {feedbackFor === msg.id && (
+                  <div className="mt-1 flex w-full max-w-[90%] gap-1.5 pl-1">
+                    <input
+                      autoFocus
+                      value={feedbackText}
+                      onChange={(e) => setFeedbackText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && feedbackText.trim()) {
+                          void rateMessage(msg, -1, feedbackText.trim());
+                          setFeedbackFor(null);
+                          setFeedbackText("");
+                        }
+                        if (e.key === "Escape") setFeedbackFor(null);
+                      }}
+                      placeholder="Как надо было?"
+                      className="flex-1 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                    <button
+                      onClick={() => {
+                        void rateMessage(msg, -1, feedbackText.trim() || undefined);
+                        setFeedbackFor(null);
+                        setFeedbackText("");
+                      }}
+                      className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-600"
+                    >
+                      Запомнить
+                    </button>
+                  </div>
+                )}
                 {isLastAssistant && (
                   <div className="flex items-center gap-1 pl-1">
                     <button
@@ -1396,9 +1664,8 @@ export function AssistantPanel() {
                     </button>
                     <button
                       onClick={() => void rateMessage(msg, -1)}
-                      disabled={!!existingRating}
-                      title="Не полезно"
-                      className={`text-base leading-none transition-opacity ${existingRating === -1 ? "opacity-100" : existingRating ? "opacity-20 cursor-default" : "opacity-40 hover:opacity-90"}`}
+                      title="Не так — подскажу, как надо"
+                      className={`text-base leading-none transition-opacity ${existingRating === -1 ? "opacity-100" : existingRating ? "opacity-20" : "opacity-40 hover:opacity-90"}`}
                     >
                       👎
                     </button>
@@ -1427,7 +1694,50 @@ export function AssistantPanel() {
               </div>
             );
           }
+          if (msg.role === "plan") {
+            return (
+              <div
+                key={msg.id}
+                className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2"
+              >
+                <p className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">
+                  Собираюсь сделать
+                </p>
+                <ol className="space-y-0.5">
+                  {msg.planSteps?.map((st, i) => (
+                    <li key={i} className="text-[11px] text-slate-300">
+                      {i + 1}. {st.text}
+                      {st.irreversible && (
+                        <span className="ml-1 text-amber-400">· спрошу разрешение</span>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+                <p className="mt-1 text-[10px] text-slate-500">
+                  Не то? Нажмите «Стоп» и уточните задачу.
+                </p>
+              </div>
+            );
+          }
           if (msg.role === "status") {
+            if (msg.content === "published_to_workspace") {
+              return (
+                <div
+                  key={msg.id}
+                  className="flex items-center gap-2 rounded border border-emerald-800/60 bg-emerald-950/25 px-3 py-1.5"
+                >
+                  <span className="text-[11px] text-emerald-300">
+                    Опубликовано на рабочем столе
+                  </span>
+                  <button
+                    onClick={() => router.push("/")}
+                    className="ml-auto rounded border border-emerald-700 px-2 py-0.5 text-[11px] text-emerald-200 hover:bg-emerald-900/40"
+                  >
+                    Открыть
+                  </button>
+                </div>
+              );
+            }
             return (
               <div key={msg.id} className="flex items-center gap-2 px-1">
                 <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-blue-400" />
@@ -1480,8 +1790,17 @@ export function AssistantPanel() {
                     </span>
                   </p>
                 )}
-                {!isCapability && (
-                  <pre className="text-[10px] text-slate-400 bg-slate-900/50 rounded p-2 overflow-x-auto mb-2 max-h-20">
+                {!isCapability && msg.card && (
+                  <ApprovalCardView
+                    card={msg.card}
+                    editing={editedBodies[msg.id]}
+                    onEdit={(text) =>
+                      setEditedBodies((prev) => ({ ...prev, [msg.id]: text }))
+                    }
+                  />
+                )}
+                {!isCapability && !msg.card && (
+                  <pre className="mb-2 max-h-40 overflow-auto rounded bg-slate-900/50 p-2 text-[10px] text-slate-400">
                     {msg.preview}
                   </pre>
                 )}
@@ -1496,7 +1815,11 @@ export function AssistantPanel() {
                       onClick={() => void handleApproval(msg.id, true)}
                       className={`flex-1 py-1.5 rounded text-xs font-medium transition-colors text-white ${isCapability ? "bg-violet-700 hover:bg-violet-600" : "bg-green-700 hover:bg-green-600"}`}
                     >
-                      {isCapability ? "Добавить" : "Утвердить"}
+                      {isCapability
+                        ? "Добавить"
+                        : editedBodies[msg.id] !== undefined
+                          ? "Утвердить с правкой"
+                          : "Утвердить"}
                     </button>
                     <button
                       onClick={() => void handleApproval(msg.id, false)}
@@ -1504,11 +1827,13 @@ export function AssistantPanel() {
                     >
                       Отклонить
                     </button>
-                    {!isCapability && (
+                    {/* Необратимое решается поимённо: «⚡ Все» для отправки
+                        письма или платежа не предлагается вовсе. */}
+                    {!isCapability && !msg.irreversible && (
                       <button
                         onClick={() => handleApproveAll(msg.id)}
                         className="py-1.5 px-2 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs font-medium transition-colors"
-                        title="Утвердить этот и все последующие запросы"
+                        title={`Утвердить этот и последующие обратимые запросы (${AUTO_APPROVE_MINUTES} мин)`}
                       >
                         ⚡ Все
                       </button>
@@ -1538,6 +1863,24 @@ export function AssistantPanel() {
         })}
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Авто-подтверждение — видимый режим с выключателем: раньше «⚡ Все»
+          снимало гейт до конца сессии, и понять это можно было только по
+          тому, что подтверждений больше не спрашивают. */}
+      {autoApproveActive && (
+        <div className="flex items-center gap-2 border-t border-amber-700/60 bg-amber-950/30 px-3 py-1.5 text-[11px] text-amber-200">
+          <span>
+            Авто-подтверждение обратимых действий ·{" "}
+            {Math.max(0, Math.ceil((autoApproveUntil - Date.now()) / 60000))} мин
+          </span>
+          <button
+            onClick={stopAutoApprove}
+            className="ml-auto rounded border border-amber-700 px-2 py-0.5 hover:bg-amber-900/40"
+          >
+            Выключить
+          </button>
+        </div>
+      )}
 
       {/* Input area */}
       <div className="p-3 border-t border-slate-700 space-y-2">

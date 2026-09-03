@@ -69,6 +69,46 @@ def get_notification_pref_sync(db: Session, user_sub: str, type_value: str) -> d
     return _pref_from_row(row)
 
 
+def in_quiet_window(hour: int, start: int | None, end: int | None) -> bool:
+    """Попадает ли час в окно тишины. Отдельно от БД — чтобы это можно было
+    проверить, не подменяя системное время."""
+    if start is None or end is None or start == end:
+        return False
+    if start < end:
+        return start <= hour < end
+    # Окно через полночь: 22 → 8.
+    return hour >= start or hour < end
+
+
+async def _push_allowed_now(db, user_sub: str) -> bool:
+    """False, когда сейчас тихие часы или человек ждёт сводку вместо потока."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from app.db.models import UserNotificationSettings
+
+    try:
+        row = (
+            await db.execute(
+                select(UserNotificationSettings).where(
+                    UserNotificationSettings.user_sub == user_sub
+                )
+            )
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001 — настройки не должны ронять уведомление
+        return True
+    if row is None:
+        return True
+    if row.digest_enabled:
+        return False
+    start, end = row.quiet_from_hour, row.quiet_to_hour
+    if start is None or end is None:
+        return True
+    hour = datetime.now(timezone.utc).astimezone().hour
+    return not in_quiet_window(hour, start, end)
+
+
 async def create_notification(
     db: AsyncSession,
     user_sub: str,
@@ -128,7 +168,10 @@ async def create_notification(
     # System push to the user's mobile devices (best-effort; never blocks the caller).
     try:
         pref = await get_notification_pref(db, user_sub, type.value)
-        if pref["push"]:
+        # Тихие часы и режим сводки: push не будит человека ночью и не сыплется
+        # поштучно, если он попросил присылать одним письмом утром. In-app
+        # уведомление остаётся — оно никого не будит.
+        if pref["push"] and await _push_allowed_now(db, user_sub):
             push_title, push_body = _redact(pref, private_preview, title, body)
             await push.push_to_user(
                 db,

@@ -588,11 +588,60 @@ async def list_threads(
         last = rows[-1]
         next_cursor = _encode_cursor(last.last_message_at, last.id)
 
+    items = [_thread_out(t) for t in rows]
+    # «Черновик ответа готов» — признак прямо в списке: агент готовит их сам,
+    # а увидеть это можно было, только открыв переписку.
+    if items:
+        drafts = (
+            await db.execute(
+                select(DraftAction.draft_data).where(
+                    DraftAction.action_type == "email.send",
+                    DraftAction.executed == False,  # noqa: E712
+                )
+            )
+        ).scalars().all()
+        waiting = {
+            str(d.get("thread_id"))
+            for d in drafts
+            if isinstance(d, dict)
+            and d.get("thread_id")
+            and d.get("status") not in ("queued", "sent", "sent_mock")
+        }
+        for item in items:
+            if str(item.id) in waiting:
+                item.has_draft = True
+
     return ThreadListResponse(
-        items=[_thread_out(t) for t in rows],
+        items=items,
         total=len(rows),
         next_cursor=next_cursor,
     )
+
+
+async def _attach_rule_logs(db: AsyncSession, thread_out: EmailThreadOut) -> None:
+    """Проставить каждому письму, какое правило на нём сработало и что сделало."""
+    from app.db.models import EmailRule, EmailRuleLog
+
+    ids = [m.id for m in thread_out.messages]
+    if not ids:
+        return
+    rows = (
+        await db.execute(
+            select(EmailRuleLog.message_id, EmailRule.id, EmailRule.name, EmailRuleLog.actions_applied)
+            .join(EmailRule, EmailRule.id == EmailRuleLog.rule_id)
+            .where(EmailRuleLog.message_id.in_(ids))
+            .order_by(EmailRuleLog.at.desc())
+        )
+    ).all()
+    by_message: dict = {}
+    for message_id, rule_id, name, actions in rows:
+        by_message.setdefault(message_id, []).append({
+            "rule_id": str(rule_id),
+            "name": name,
+            "actions": [str(a.get("type")) for a in (actions or []) if a.get("type")],
+        })
+    for msg in thread_out.messages:
+        msg.applied_rules = by_message.get(msg.id, [])
 
 
 async def _attach_derived_invoices(db: AsyncSession, thread_out: EmailThreadOut) -> None:
@@ -783,6 +832,7 @@ async def get_thread(
     if not await may_read_mailbox(db, user, thread.mailbox, for_agent=request_is_agent(request)):
         raise HTTPException(404, "Thread not found")
     out = _thread_out(thread, with_messages=True)
+    await _attach_rule_logs(db, out)
     await _attach_derived_invoices(db, out)
     await _mark_trusted_senders(db, user, out)
     return out
@@ -993,6 +1043,255 @@ async def _queue_sync_ops(db: AsyncSession, ops: list[tuple]) -> None:
 
 
 # ── Labels ─────────────────────────────────────────────────────────────────
+
+
+class AgentActivityItem(BaseModel):
+    """Одна строка «что агент сделал с этим ящиком»."""
+
+    id: uuid.UUID
+    at: datetime
+    message_id: uuid.UUID | None = None
+    thread_id: uuid.UUID | None = None
+    subject: str | None = None
+    from_address: str | None = None
+    kind: str                      # "triage" | "rule"
+    source: str                    # имя правила или "agent"
+    category: str | None = None
+    summary: str | None = None
+    performed: list[dict] = []
+    undoable: list[str] = []       # какие действия можно откатить
+
+
+@router.get("/agent-activity", response_model=list[AgentActivityItem])
+async def agent_activity(
+    request: Request,
+    mailbox: str | None = None,
+    limit: int = 50,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Что агент и правила сделали с почтой — одним списком.
+
+    Автономию принимают, когда её видно и можно отменить. Разбор письма был
+    виден только внутри треда, а сработавшее правило не показывалось нигде,
+    хотя EmailRuleLog пишется с самого начала: человек видел метку и не знал,
+    поставил её агент, правило или коллега.
+    """
+    from app.db.models import EmailRule, EmailRuleLog, EmailTriageResult
+
+    hidden = set(await hidden_mailbox_names(db, user, for_agent=request_is_agent(request)))
+    out: list[AgentActivityItem] = []
+
+    triage_rows = (
+        await db.execute(
+            select(EmailTriageResult, EmailMessage)
+            .join(EmailMessage, EmailMessage.id == EmailTriageResult.message_id)
+            .where(
+                EmailTriageResult.status == "done",
+                *( [EmailMessage.mailbox == mailbox] if mailbox else [] ),
+            )
+            .order_by(EmailTriageResult.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    for row, msg in triage_rows:
+        if msg.mailbox in hidden:
+            continue
+        performed = list(row.performed or [])
+        out.append(AgentActivityItem(
+            id=row.id,
+            at=row.created_at,
+            message_id=msg.id,
+            thread_id=msg.thread_id,
+            subject=msg.subject,
+            from_address=msg.from_address,
+            kind="triage",
+            source="agent",
+            category=row.corrected_category or row.category,
+            summary=row.summary,
+            performed=performed,
+            undoable=[str(a.get("type")) for a in performed if a.get("type") == "label"],
+        ))
+
+    rule_rows = (
+        await db.execute(
+            select(EmailRuleLog, EmailMessage, EmailRule)
+            .join(EmailMessage, EmailMessage.id == EmailRuleLog.message_id)
+            .join(EmailRule, EmailRule.id == EmailRuleLog.rule_id)
+            .where(*( [EmailMessage.mailbox == mailbox] if mailbox else [] ))
+            .order_by(EmailRuleLog.at.desc())
+            .limit(limit)
+        )
+    ).all()
+    for log, msg, rule in rule_rows:
+        if msg.mailbox in hidden:
+            continue
+        applied = list(log.actions_applied or [])
+        out.append(AgentActivityItem(
+            id=log.id,
+            at=log.at,
+            message_id=msg.id,
+            thread_id=msg.thread_id,
+            subject=msg.subject,
+            from_address=msg.from_address,
+            kind="rule",
+            source=rule.name,
+            performed=applied,
+            undoable=[
+                str(a.get("type")) for a in applied
+                if a.get("type") in ("add_label", "move", "assign_role")
+            ],
+        ))
+
+    out.sort(key=lambda i: i.at, reverse=True)
+    return out[:limit]
+
+
+class UndoAgentActionRequest(BaseModel):
+    activity_id: uuid.UUID
+    kind: str
+
+
+@router.post("/agent-activity/undo")
+async def undo_agent_action(
+    payload: UndoAgentActionRequest,
+    request: Request,
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Откатить то, что агент или правило сделали с письмом.
+
+    Пока обратимы метки и перемещение — то, что агент проставляет сам и что
+    человек чаще всего хочет снять. Созданные документы и счета остаются: их
+    удаление это отдельное решение со своими последствиями.
+    """
+    from app.db.models import EmailRuleLog, EmailThreadLabel, EmailTriageResult
+
+    undone: list[str] = []
+    if payload.kind == "rule":
+        log = await db.get(EmailRuleLog, payload.activity_id)
+        if log is None:
+            raise HTTPException(404, "Not found")
+        msg = await db.get(EmailMessage, log.message_id) if log.message_id else None
+        if msg is None or not await may_read_mailbox(db, user, msg.mailbox):
+            raise HTTPException(404, "Not found")
+        for action in log.actions_applied or []:
+            kind = str(action.get("type") or "")
+            if kind == "add_label" and action.get("label_id") and msg.thread_id:
+                await db.execute(
+                    sa_delete(EmailThreadLabel).where(
+                        EmailThreadLabel.thread_id == msg.thread_id,
+                        EmailThreadLabel.label_id == uuid.UUID(str(action["label_id"])),
+                    )
+                )
+                undone.append("add_label")
+            elif kind == "move" and msg.thread_id:
+                thread = await db.get(EmailThread, msg.thread_id)
+                if thread:
+                    thread.folder = "inbox"
+                    undone.append("move")
+    elif payload.kind == "triage":
+        row = await db.get(EmailTriageResult, payload.activity_id)
+        if row is None:
+            raise HTTPException(404, "Not found")
+        msg = await db.get(EmailMessage, row.message_id)
+        if msg is None or not await may_read_mailbox(db, user, msg.mailbox):
+            raise HTTPException(404, "Not found")
+        for action in row.performed or []:
+            if str(action.get("type")) == "label" and action.get("label_id") and msg.thread_id:
+                await db.execute(
+                    sa_delete(EmailThreadLabel).where(
+                        EmailThreadLabel.thread_id == msg.thread_id,
+                        EmailThreadLabel.label_id == uuid.UUID(str(action["label_id"])),
+                    )
+                )
+                undone.append("label")
+    else:
+        raise HTTPException(400, "Unknown activity kind")
+
+    await db.commit()
+    logger.info("email_agent_action_undone", activity=str(payload.activity_id), undone=undone)
+    return {"undone": undone}
+
+
+class SetupStep(BaseModel):
+    key: str
+    title: str
+    hint: str
+    done: bool
+    url: str
+
+
+@router.get("/setup-status", response_model=list[SetupStep])
+async def setup_status(
+    user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Что ещё нужно настроить, чтобы почта работала целиком.
+
+    Пустой ящик предлагал «настроить почту» и на этом заканчивался: про
+    согласие на чтение, правила, шаблоны и подпись человек должен был
+    догадаться сам. Здесь — состояние каждого шага, посчитанное по данным, а
+    не по галочке «мастер пройден».
+    """
+    from app.db.models import (
+        EmailRule, EmailSignature, EmailTemplateDB, MailboxConfig,
+    )
+
+    async def _has(model, *where) -> bool:
+        return (
+            await db.execute(select(model.id).where(*where).limit(1))
+        ).first() is not None
+
+    mailbox_ok = await _has(MailboxConfig, MailboxConfig.is_active == True)  # noqa: E712
+    smtp_ok = await _has(
+        MailboxConfig,
+        MailboxConfig.is_active == True,  # noqa: E712
+        MailboxConfig.smtp_host.isnot(None),
+        MailboxConfig.smtp_host != "",
+    )
+    personal = (
+        await db.execute(
+            select(MailboxConfig.sweep_enabled).where(
+                MailboxConfig.mailbox_type == "personal",
+                MailboxConfig.owner_sub == user.sub,
+            )
+        )
+    ).scalars().all()
+    consent_done = not personal or any(bool(x) for x in personal)
+
+    return [
+        SetupStep(
+            key="mailbox", title="Подключить почтовый ящик",
+            hint="IMAP для чтения писем",
+            done=mailbox_ok, url="/settings?tab=email",
+        ),
+        SetupStep(
+            key="smtp", title="Указать отправляющий аккаунт",
+            hint="Без SMTP письма можно только читать",
+            done=smtp_ok, url="/settings?tab=email",
+        ),
+        SetupStep(
+            key="consent", title="Решить про личный ящик",
+            hint="Агент читает личную почту только с вашего согласия",
+            done=consent_done, url="/settings?tab=email",
+        ),
+        SetupStep(
+            key="rules", title="Создать правило разбора",
+            hint="Метки и папки без участия модели — быстро и предсказуемо",
+            done=await _has(EmailRule), url="/settings?tab=email&sub=rules",
+        ),
+        SetupStep(
+            key="templates", title="Завести шаблон письма",
+            hint="Запрос КП, напоминание об оплате — в один клик из композера",
+            done=await _has(EmailTemplateDB), url="/settings?tab=email&sub=templates",
+        ),
+        SetupStep(
+            key="signature", title="Добавить подпись",
+            hint="Подставляется в письма автоматически",
+            done=await _has(EmailSignature), url="/settings?tab=email&sub=signatures",
+        ),
+    ]
 
 
 @router.get("/labels", response_model=list[EmailLabelOut])

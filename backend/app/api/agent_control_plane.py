@@ -641,6 +641,122 @@ async def control_plane_status(db: AsyncSession = Depends(get_db)) -> AgentContr
     )
 
 
+class AgentQualityReport(BaseModel):
+    """Как агент работает — по данным, а не по ощущениям."""
+
+    window_days: int
+    approvals_total: int
+    approvals_approved: int
+    approvals_rejected: int
+    top_rejected: list[dict]
+    triage_corrections: list[dict]
+    ratings_up: int
+    ratings_down: int
+    recent_complaints: list[dict]
+
+
+@router.get("/quality", response_model=AgentQualityReport)
+async def agent_quality(
+    days: int = 30,
+    db: AsyncSession = Depends(get_db),
+) -> AgentQualityReport:
+    """Витрина качества работы агента.
+
+    Сырьё собиралось давно: решения по подтверждениям, исправления категорий
+    писем, оценки ответов. Посмотреть на это одним взглядом было негде — а
+    «какие действия у нас чаще всего отклоняют» это и есть список того, что
+    агент делает не так.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func
+
+    from app.db.models import (
+        Approval, ApprovalStatus, EmailTriageResult, MemoryFact, MessageRating,
+    )
+
+    since = datetime.now(timezone.utc) - timedelta(days=max(1, days))
+
+    rows = (
+        await db.execute(
+            select(Approval.status, Approval.action_type, func.count(Approval.id))
+            .where(Approval.created_at >= since, Approval.requested_by == "sveta")
+            .group_by(Approval.status, Approval.action_type)
+        )
+    ).all()
+    approved = rejected = 0
+    rejected_by_action: dict[str, int] = {}
+    for status, action_type, count in rows:
+        label = str(getattr(action_type, "value", action_type))
+        if status == ApprovalStatus.approved:
+            approved += int(count)
+        elif status == ApprovalStatus.rejected:
+            rejected += int(count)
+            rejected_by_action[label] = rejected_by_action.get(label, 0) + int(count)
+
+    corrections = (
+        await db.execute(
+            select(
+                EmailTriageResult.category,
+                EmailTriageResult.corrected_category,
+                func.count(EmailTriageResult.id),
+            )
+            .where(
+                EmailTriageResult.corrected_category.isnot(None),
+                EmailTriageResult.created_at >= since,
+            )
+            .group_by(EmailTriageResult.category, EmailTriageResult.corrected_category)
+            .order_by(func.count(EmailTriageResult.id).desc())
+            .limit(10)
+        )
+    ).all()
+
+    ratings = (
+        await db.execute(
+            select(MessageRating.rating, func.count(MessageRating.id))
+            .where(MessageRating.created_at >= since)
+            .group_by(MessageRating.rating)
+        )
+    ).all()
+    up = sum(int(c) for r, c in ratings if r and r > 0)
+    down = sum(int(c) for r, c in ratings if r and r < 0)
+
+    complaints = (
+        await db.execute(
+            select(MemoryFact.summary, MemoryFact.created_at)
+            .where(
+                MemoryFact.source == "user_rating",
+                MemoryFact.created_at >= since,
+            )
+            .order_by(MemoryFact.created_at.desc())
+            .limit(10)
+        )
+    ).all()
+
+    return AgentQualityReport(
+        window_days=days,
+        approvals_total=approved + rejected,
+        approvals_approved=approved,
+        approvals_rejected=rejected,
+        top_rejected=[
+            {"action": action, "count": count}
+            for action, count in sorted(
+                rejected_by_action.items(), key=lambda kv: -kv[1]
+            )[:10]
+        ],
+        triage_corrections=[
+            {"was": was, "now": now_, "count": int(count)}
+            for was, now_, count in corrections
+        ],
+        ratings_up=up,
+        ratings_down=down,
+        recent_complaints=[
+            {"text": text, "at": at.isoformat() if at else None}
+            for text, at in complaints
+        ],
+    )
+
+
 @router.get("/runtime/status", response_model=AgentRuntimeStatus)
 async def runtime_status(db: AsyncSession = Depends(get_db)) -> AgentRuntimeStatus:
     """Runtime observability for the built-in agent and memory stack."""

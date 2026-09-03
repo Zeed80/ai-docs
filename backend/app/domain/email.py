@@ -90,6 +90,10 @@ class EmailMessageOut(BaseModel):
     images_trusted: bool = False
     derived_invoices: list[DerivedInvoiceOut] = []
     triage: "TriageResultOut | None" = None
+    # Какое правило фильтрации сработало на этом письме. Журнал пишется с
+    # самого начала, но в интерфейсе не показывался: человек видел метку и не
+    # знал, поставил её агент, правило или коллега.
+    applied_rules: list[dict] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -173,6 +177,9 @@ class EmailThreadOut(BaseModel):
     labels: list[EmailLabelOut] = []
     # Derived-for-list fields (filled by list endpoints, not the ORM):
     sender: str | None = None
+    # Готовый черновик ответа ждёт отправки. Агент готовит их сам, но узнать
+    # об этом можно было, только открыв переписку.
+    has_draft: bool = False
     # С кем переписка с точки зрения читающего. В «Отправленных» и
     # «Черновиках» отправитель — мы сами, и список выглядел как переписка с
     # собой; там нужен получатель.

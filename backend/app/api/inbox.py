@@ -30,7 +30,7 @@ logger = structlog.get_logger()
 
 class InboxItem(BaseModel):
     id: str
-    kind: str                    # "email" | "document" | "anomaly"
+    kind: str                    # "approval" | "email" | "document" | "anomaly"
     title: str
     subtitle: str | None = None
     at: datetime | None = None
@@ -40,6 +40,19 @@ class InboxItem(BaseModel):
     badge: str | None = None
 
 
+# Человекочитаемые названия ожидающих решений: коды вроде "email_send" в
+# списке «что от меня ждут» ничего не сообщают.
+_APPROVAL_TITLES = {
+    "email_send": "Отправить письмо",
+    "invoice_approve": "Утвердить счёт",
+    "anomaly_resolve": "Закрыть аномалию",
+    "table_apply_diff": "Применить правки таблицы",
+    "agent_tool_call": "Действие агента",
+    "payment_mark_paid": "Отметить платёж",
+    "supplier_create": "Создать поставщика",
+}
+
+
 class InboxFeed(BaseModel):
     items: list[InboxItem]
     counts: dict
@@ -47,7 +60,7 @@ class InboxFeed(BaseModel):
 
 @router.get("", response_model=InboxFeed)
 async def inbox_feed(
-    kinds: str = Query("email,document,anomaly"),
+    kinds: str = Query("approval,email,document,anomaly"),
     limit: int = Query(60, le=200),
     user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
@@ -60,7 +73,45 @@ async def inbox_feed(
 
     wanted = {k.strip() for k in kinds.split(",") if k.strip()}
     items: list[InboxItem] = []
-    counts = {"email": 0, "document": 0, "anomaly": 0}
+    counts = {"approval": 0, "email": 0, "document": 0, "anomaly": 0}
+
+    if "approval" in wanted:
+        # Самое срочное из всего, что ждёт человека, жило на отдельной
+        # странице, внутри чата и на экране поручений — но не в общем списке
+        # «что от меня нужно». Вернувшись с обеда, человек видел непрочитанные
+        # письма и не видел, что агент стоит и ждёт решения.
+        from app.db.models import Approval, ApprovalStatus
+
+        pending = (
+            await db.execute(
+                select(Approval)
+                .where(Approval.status == ApprovalStatus.pending)
+                .order_by(Approval.created_at.desc())
+                .limit(limit)
+            )
+        ).scalars().all()
+        counts["approval"] = len(pending)
+        for row in pending:
+            ctx = row.context if isinstance(row.context, dict) else {}
+            action = str(
+                row.action_type.value
+                if hasattr(row.action_type, "value") else row.action_type
+            )
+            items.append(InboxItem(
+                id=str(row.id),
+                kind="approval",
+                title=str(ctx.get("title") or _APPROVAL_TITLES.get(action, action)),
+                subtitle=(
+                    str(ctx.get("subtitle"))
+                    if ctx.get("subtitle")
+                    else (row.requested_by or None)
+                ),
+                at=row.created_at,
+                url=f"/approvals?id={row.id}",
+                unread=True,
+                severity="critical" if ctx.get("irreversible") else None,
+                badge="ждёт решения",
+            ))
 
     if "email" in wanted:
         query = select(EmailThread).where(
@@ -142,7 +193,11 @@ async def inbox_feed(
     # ago, and a feed sorted purely by clock buries it.
     def _key(item: InboxItem):
         critical = item.kind == "anomaly" and (item.severity or "") == "critical"
-        return (0 if critical else 1, -(item.at.timestamp() if item.at else 0))
+        # Решение, которого ждёт агент, блокирует его работу — оно идёт выше
+        # непрочитанного письма и рядом с критической аномалией.
+        waiting = item.kind == "approval"
+        rank = 0 if critical else (1 if waiting else 2)
+        return (rank, -(item.at.timestamp() if item.at else 0))
 
     items.sort(key=_key)
     return InboxFeed(items=items[:limit], counts=counts)

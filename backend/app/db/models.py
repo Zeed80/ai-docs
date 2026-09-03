@@ -3975,6 +3975,26 @@ class MailServerConfig(UUIDPrimaryKey, TimestampMixin, Base):
     updated_by: Mapped[str | None] = mapped_column(String(100))
 
 
+class UserNotificationSettings(TimestampMixin, Base):
+    """Тихие часы и ежедневная сводка — одна строка на пользователя.
+
+    Категории уведомлений (UserNotificationPref) отвечают на вопрос «о чём
+    сообщать», а этот вопрос другой: «когда» и «поштучно или сводкой». Без
+    него на производстве поток пингов выключают целиком — вместе с тем, ради
+    чего его заводили.
+    """
+
+    __tablename__ = "user_notification_settings"
+
+    user_sub: Mapped[str] = mapped_column(String(255), primary_key=True)
+    #: Окно тишины в местном времени: 22 → 8 означает «с 22:00 до 08:00».
+    quiet_from_hour: Mapped[int | None] = mapped_column(Integer)
+    quiet_to_hour: Mapped[int | None] = mapped_column(Integer)
+    digest_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    digest_hour: Mapped[int] = mapped_column(Integer, default=9, nullable=False)
+    last_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class UserNotificationPref(UUIDPrimaryKey, TimestampMixin, Base):
     """Per-user, per-type notification preferences.
 

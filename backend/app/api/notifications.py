@@ -8,7 +8,7 @@ from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,6 +105,59 @@ class NotificationPrefUpdate(BaseModel):
     in_app: bool | None = None
     push: bool | None = None
     private_preview: bool | None = None
+
+
+class DeliverySettings(BaseModel):
+    """Когда уведомлять и присылать ли сводкой — отдельно от «о чём»."""
+
+    quiet_from_hour: int | None = Field(None, ge=0, le=23)
+    quiet_to_hour: int | None = Field(None, ge=0, le=23)
+    digest_enabled: bool = False
+    digest_hour: int = Field(9, ge=0, le=23)
+
+
+@router.get("/delivery", response_model=DeliverySettings)
+async def get_delivery_settings(
+    user: UserInfo = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.db.models import UserNotificationSettings
+
+    row = await db.get(UserNotificationSettings, user.sub)
+    if row is None:
+        return DeliverySettings()
+    return DeliverySettings(
+        quiet_from_hour=row.quiet_from_hour,
+        quiet_to_hour=row.quiet_to_hour,
+        digest_enabled=row.digest_enabled,
+        digest_hour=row.digest_hour,
+    )
+
+
+@router.put("/delivery", response_model=DeliverySettings)
+async def update_delivery_settings(
+    payload: DeliverySettings,
+    user: UserInfo = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Тихие часы и ежедневная сводка.
+
+    Категорий было достаточно, чтобы решить, о чём уведомлять, и нечем было
+    сказать «не ночью» и «одним письмом утром» — а именно из-за этого поток
+    выключают целиком.
+    """
+    from app.db.models import UserNotificationSettings
+
+    row = await db.get(UserNotificationSettings, user.sub)
+    if row is None:
+        row = UserNotificationSettings(user_sub=user.sub)
+        db.add(row)
+    row.quiet_from_hour = payload.quiet_from_hour
+    row.quiet_to_hour = payload.quiet_to_hour
+    row.digest_enabled = payload.digest_enabled
+    row.digest_hour = payload.digest_hour
+    await db.commit()
+    return payload
 
 
 @router.get("/preferences", response_model=list[NotificationPrefOut])
