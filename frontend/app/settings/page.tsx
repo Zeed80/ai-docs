@@ -15,6 +15,7 @@ import { SignaturesSection, EmailPolicySection } from "@/components/email/addres
 import { PersonalMailboxCard } from "@/components/email/personal-mailbox-card";
 import { isGpuBarEnabled, setGpuBarEnabled } from "@/components/gpu-status-bar";
 import { useAgentName, broadcastAgentName } from "@/lib/agent-name";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -101,7 +102,7 @@ const GRAPH_INTERVAL_PRESETS = [
 function formatGraphDate(iso: string | null): string {
   if (!iso) return "ещё не запускалась";
   try {
-    return new Date(iso).toLocaleString("ru-RU");
+    return new Date(iso).toLocaleString("ru-RU", { timeZone: tz() });
   } catch {
     return iso;
   }
@@ -1847,7 +1848,7 @@ export default function SettingsPage() {
                             {agentRuntime.counters.last_error_at
                               ? `${new Date(
                                   agentRuntime.counters.last_error_at,
-                                ).toLocaleString("ru")} — `
+                                ).toLocaleString("ru", { timeZone: tz() })} — `
                               : ""}
                             {agentRuntime.counters.last_error}
                           </div>
@@ -3412,7 +3413,7 @@ export default function SettingsPage() {
               Текущий режим:{" "}
               {ntdConfig?.mode === "auto" ? "автоматический" : "ручной"}
               {ntdConfig?.updated_at
-                ? ` · обновлено ${new Date(ntdConfig.updated_at).toLocaleString("ru-RU")}`
+                ? ` · обновлено ${new Date(ntdConfig.updated_at).toLocaleString("ru-RU", { timeZone: tz() })}`
                 : ""}
             </p>
           </SectionCard>

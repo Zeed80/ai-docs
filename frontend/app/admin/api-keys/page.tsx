@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { ProtectedRoute } from "@/components/auth/protected-route";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -208,12 +209,12 @@ function ApiKeysContent() {
                   </td>
                   <td className="px-4 py-2 text-xs text-muted-foreground">
                     {k.last_used_at
-                      ? new Date(k.last_used_at).toLocaleString("ru")
+                      ? new Date(k.last_used_at).toLocaleString("ru", { timeZone: tz() })
                       : "—"}
                   </td>
                   <td className="px-4 py-2 text-xs text-muted-foreground">
                     {k.expires_at
-                      ? new Date(k.expires_at).toLocaleDateString("ru")
+                      ? new Date(k.expires_at).toLocaleDateString("ru", { timeZone: tz() })
                       : "∞"}
                   </td>
                   <td className="px-4 py-2">

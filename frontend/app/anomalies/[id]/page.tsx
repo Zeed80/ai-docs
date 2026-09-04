@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 interface SimilarResult {
   id: string;
@@ -170,7 +171,7 @@ export default function AnomalyDetailPage() {
         )}
 
         <div className="text-xs opacity-50 mb-4">
-          Создана: {new Date(anomaly.created_at).toLocaleString("ru-RU")}
+          Создана: {new Date(anomaly.created_at).toLocaleString("ru-RU", { timeZone: tz() })}
         </div>
 
         {anomaly.entity_type && anomaly.entity_id && (
@@ -232,7 +233,7 @@ export default function AnomalyDetailPage() {
 
         {anomaly.status !== "open" && anomaly.resolved_at && (
           <div className="text-xs opacity-50 mt-2">
-            Решена: {new Date(anomaly.resolved_at).toLocaleString("ru-RU")}
+            Решена: {new Date(anomaly.resolved_at).toLocaleString("ru-RU", { timeZone: tz() })}
           </div>
         )}
       </div>

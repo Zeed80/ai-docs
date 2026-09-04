@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -320,7 +321,7 @@ export default function AutoApprovalSettingsPage() {
                     {rule.last_applied_at && (
                       <span className="ml-3">
                         Последний раз:{" "}
-                        {new Date(rule.last_applied_at).toLocaleString("ru-RU")}
+                        {new Date(rule.last_applied_at).toLocaleString("ru-RU", { timeZone: tz() })}
                       </span>
                     )}
                   </div>

@@ -5,6 +5,7 @@ import Link from "next/link";
 import clsx from "clsx";
 import type { Drawing, DrawingStatus } from "@/lib/drawings-api";
 import { drawingsApi } from "@/lib/drawings-api";
+import { tz } from "@/lib/user-time";
 
 const STATUS_LABELS: Record<DrawingStatus, string> = {
   uploaded: "Загружен",
@@ -483,7 +484,7 @@ function DrawingCard({
             </div>
           )}
           <div className="text-white/20 text-xs mt-1">
-            {new Date(drawing.created_at).toLocaleDateString("ru")}
+            {new Date(drawing.created_at).toLocaleDateString("ru", { timeZone: tz() })}
           </div>
         </div>
       </Link>

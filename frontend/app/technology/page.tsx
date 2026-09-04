@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import clsx from "clsx";
+import { tz } from "@/lib/user-time";
 
 interface ProcessPlan {
   id: string;
@@ -218,7 +219,7 @@ export default function TechnologyPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-white/40 text-xs">
-                    {new Date(plan.created_at).toLocaleDateString("ru")}
+                    {new Date(plan.created_at).toLocaleDateString("ru", { timeZone: tz() })}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getApiBaseUrl, getWebSocketBaseUrl } from "@/lib/api-base";
 import { apiFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -47,7 +48,7 @@ function relTime(iso: string | null): string {
   if (minutes < 60) return `${minutes} мин`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} ч`;
-  return new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  return new Date(iso).toLocaleDateString("ru-RU", { timeZone: tz(), day: "numeric", month: "short" });
 }
 
 export default function InboxPage() {

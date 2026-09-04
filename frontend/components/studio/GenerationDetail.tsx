@@ -21,6 +21,7 @@ import {
   resultUrl,
   sourceUrl,
 } from "@/lib/studio-api";
+import { tz } from "@/lib/user-time";
 
 interface Props {
   gen: Generation;
@@ -95,7 +96,7 @@ function CadProcessTimeline({
         </div>
         {process?.started_at && (
           <div className="mt-1 text-[10px] text-zinc-500">
-            {t("detail.cad_process_started")}: {new Date(process.started_at).toLocaleString()}
+            {t("detail.cad_process_started")}: {new Date(process.started_at).toLocaleString(undefined, { timeZone: tz() })}
           </div>
         )}
       </div>
@@ -118,7 +119,7 @@ function CadProcessTimeline({
                   {event.status}
                 </span>
                 <time className="ml-auto text-[10px] opacity-60">
-                  {new Date(event.at).toLocaleTimeString()}
+                  {new Date(event.at).toLocaleTimeString(undefined, { timeZone: tz() })}
                 </time>
               </div>
               <div className="mt-0.5 text-zinc-200">{event.message}</div>

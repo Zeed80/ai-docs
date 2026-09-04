@@ -21,6 +21,7 @@ import {
   pipelineSteps,
   type PipelineStep,
 } from "@/components/pipeline";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 const MAX_UPLOAD_MB = 100;
@@ -1078,7 +1079,7 @@ export default function DocumentsPage() {
                 title="Данные обновляются автоматически"
               >
                 ● обновлено{" "}
-                {lastRefreshedAt.toLocaleTimeString("ru-RU", {
+                {lastRefreshedAt.toLocaleTimeString("ru-RU", { timeZone: tz(),
                   hour: "2-digit",
                   minute: "2-digit",
                   second: "2-digit",
@@ -2215,7 +2216,7 @@ function DocumentTable({
                 {item.pipeline?.graph_edges ?? 0}
               </td>
               <td className="px-3 py-3 text-slate-400">
-                {new Date(item.document.created_at).toLocaleDateString("ru-RU")}
+                {new Date(item.document.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
               </td>
             </tr>
           ))}

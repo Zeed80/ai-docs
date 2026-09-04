@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { apiFetch, mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -264,7 +265,7 @@ export function EmailRulesSection() {
                   {log[r.id].map((entry, idx) => (
                     <li key={idx} className="text-slate-400">
                       <span className="text-slate-500">
-                        {new Date(entry.at).toLocaleString("ru-RU")}
+                        {new Date(entry.at).toLocaleString("ru-RU", { timeZone: tz() })}
                       </span>{" "}
                       · {entry.message_from ?? "—"} ·{" "}
                       {entry.message_subject ?? "(без темы)"} →{" "}

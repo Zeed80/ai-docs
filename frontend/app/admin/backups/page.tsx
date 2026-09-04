@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { ProtectedRoute } from "@/components/auth/protected-route";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 const BASE = `${API}/api/admin/maintenance`;
@@ -49,7 +50,7 @@ function formatBytes(n: number): string {
 
 function formatDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleString("ru-RU");
+    return new Date(iso).toLocaleString("ru-RU", { timeZone: tz() });
   } catch {
     return iso;
   }

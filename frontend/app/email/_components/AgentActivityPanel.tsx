@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { emailApi } from "./api";
+import { useUserTimeZone } from "@/lib/user-time";
 
 type Activity = Awaited<ReturnType<typeof emailApi.agentActivity>>[number];
 
@@ -22,6 +23,7 @@ const PERFORMED_KEYS = [
  */
 export function AgentActivityPanel({ mailbox }: { mailbox: string }) {
   const t = useTranslations("email");
+  const timeZone = useUserTimeZone();
   const [rows, setRows] = useState<Activity[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [undone, setUndone] = useState<Set<string>>(new Set());
@@ -71,7 +73,7 @@ export function AgentActivityPanel({ mailbox }: { mailbox: string }) {
                   : t("activityAgent")}
               </span>
               <span className="text-[10px] text-slate-500">
-                {new Date(row.at).toLocaleString()}
+                {new Date(row.at).toLocaleString(undefined, { timeZone })}
               </span>
               {row.undoable.length > 0 && !undone.has(row.id) && (
                 <button

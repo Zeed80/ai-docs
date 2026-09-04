@@ -36,6 +36,7 @@ import {
   uploadLora,
   uploadSource,
 } from "@/lib/lora-api";
+import { tz } from "@/lib/user-time";
 
 const PRESETS = [
   {
@@ -104,12 +105,12 @@ function remainingSeconds(run: LoraRun): number | null {
 function finishClock(secs: number): string {
   const at = new Date(Date.now() + secs * 1000);
   const sameDay = at.toDateString() === new Date().toDateString();
-  const time = at.toLocaleTimeString("ru", {
+  const time = at.toLocaleTimeString("ru", { timeZone: tz(),
     hour: "2-digit",
     minute: "2-digit",
   });
   if (sameDay) return `сегодня ${time}`;
-  const day = at.toLocaleDateString("ru", { day: "numeric", month: "short" });
+  const day = at.toLocaleDateString("ru", { timeZone: tz(), day: "numeric", month: "short" });
   return `${day} ${time}`;
 }
 
@@ -616,7 +617,7 @@ export default function LoraTrainingPanel() {
       const paths: string[] = [];
       for (const f of files) paths.push((await uploadSource(f)).path);
       await createDataset({
-        name: dsName || `Датасет ${new Date().toLocaleDateString("ru")}`,
+        name: dsName || `Датасет ${new Date().toLocaleDateString("ru", { timeZone: tz() })}`,
         preset,
         source_paths: paths,
         params: {
@@ -645,7 +646,7 @@ export default function LoraTrainingPanel() {
     try {
       await createRun({
         dataset_id: runDatasetId,
-        name: runName || `LoRA ${new Date().toLocaleDateString("ru")}`,
+        name: runName || `LoRA ${new Date().toLocaleDateString("ru", { timeZone: tz() })}`,
         config: {
           steps,
           rank,

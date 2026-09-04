@@ -6,6 +6,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { apiFetch, mutFetch } from "@/lib/auth";
 
 import { SetupGuide } from "./setup-guide";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 const BASE = `${API}/api/cooling`;
@@ -691,7 +692,7 @@ export default function CoolingSettingsPage() {
           <ul className="text-xs space-y-0.5 max-h-64 overflow-y-auto">
             {events.map((e, i) => (
               <li key={i} className={levelClass(e.level)}>
-                <span className="font-mono">{new Date(e.ts * 1000).toLocaleTimeString("ru-RU")}</span>{" "}
+                <span className="font-mono">{new Date(e.ts * 1000).toLocaleTimeString("ru-RU", { timeZone: tz() })}</span>{" "}
                 {e.channel && <span className="font-mono">[{e.channel}]</span>} {e.message}
               </li>
             ))}

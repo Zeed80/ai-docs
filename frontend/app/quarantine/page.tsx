@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
 import { useEffect, useState } from "react";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -195,7 +196,7 @@ export default function QuarantinePage() {
                       {entry.detected_mime ?? "—"}
                     </td>
                     <td className="px-4 py-3 text-slate-400 text-xs">
-                      {new Date(entry.created_at).toLocaleString("ru-RU")}
+                      {new Date(entry.created_at).toLocaleString("ru-RU", { timeZone: tz() })}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-2">

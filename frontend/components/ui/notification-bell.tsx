@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getApiBaseUrl, getWebSocketBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 const WS_BASE = getWebSocketBaseUrl();
@@ -248,7 +249,7 @@ export function NotificationBell() {
                       {n.body}
                     </p>
                     <p className="text-[10px] text-muted-foreground/60 mt-1">
-                      {new Date(n.created_at).toLocaleString("ru", {
+                      {new Date(n.created_at).toLocaleString("ru", { timeZone: tz(),
                         day: "numeric",
                         month: "short",
                         hour: "2-digit",

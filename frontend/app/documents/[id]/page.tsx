@@ -9,6 +9,7 @@ import { CommentThread } from "@/components/review/comment-thread";
 import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -297,7 +298,7 @@ export default function DocumentPage() {
               </div>
               <div>
                 <dt className="text-slate-400">Created</dt>
-                <dd>{new Date(doc.created_at).toLocaleString("ru-RU")}</dd>
+                <dd>{new Date(doc.created_at).toLocaleString("ru-RU", { timeZone: tz() })}</dd>
               </div>
               {doc.doc_type_confidence != null && (
                 <div>
@@ -409,7 +410,7 @@ export default function DocumentPage() {
                 </span>
               </p>
               <p className="text-xs text-slate-500 mt-1">
-                {new Date(pendingHandover.created_at).toLocaleString("ru-RU")}
+                {new Date(pendingHandover.created_at).toLocaleString("ru-RU", { timeZone: tz() })}
               </p>
               {pendingHandover.comment && (
                 <p className="text-xs text-slate-400 mt-1 italic">

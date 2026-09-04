@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -242,7 +243,7 @@ export default function ChatPage() {
             <div className="flex flex-col items-end gap-1 shrink-0">
               {room.last_message_at && (
                 <span className="text-[10px] text-muted-foreground">
-                  {new Date(room.last_message_at).toLocaleTimeString("ru", {
+                  {new Date(room.last_message_at).toLocaleTimeString("ru", { timeZone: tz(),
                     hour: "2-digit",
                     minute: "2-digit",
                   })}

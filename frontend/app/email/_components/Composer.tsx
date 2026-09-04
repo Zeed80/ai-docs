@@ -923,6 +923,7 @@ export function Composer({
           <span className="ml-auto text-xs text-slate-500 dark:text-slate-400 dark:text-slate-500">
             {tc("savedAt", {
               time: savedAt.toLocaleTimeString(undefined, {
+                timeZone,
                 hour: "2-digit",
                 minute: "2-digit",
               }),

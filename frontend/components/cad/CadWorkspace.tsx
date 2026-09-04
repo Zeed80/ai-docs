@@ -64,6 +64,7 @@ import {
   snapPoint,
 } from "@/components/cad/geometry";
 import { ASSURANCE_COLOR } from "@/components/cad/geometry";
+import { tz } from "@/lib/user-time";
 
 interface Props {
   gen: Generation;
@@ -1415,7 +1416,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                   <span>{event.status}</span>
                   {event.at && (
                     <time className="ml-auto">
-                      {new Date(event.at).toLocaleTimeString()}
+                      {new Date(event.at).toLocaleTimeString(undefined, { timeZone: tz() })}
                     </time>
                   )}
                 </div>

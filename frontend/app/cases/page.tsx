@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { apiFetch } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -112,7 +113,7 @@ export default function CasesPage() {
                 )}
                 <p className="text-[10px] text-slate-500 mt-1">
                   {c.documents_count} документов ·{" "}
-                  {new Date(c.created_at).toLocaleDateString("ru-RU")}
+                  {new Date(c.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
                 </p>
               </div>
               <span

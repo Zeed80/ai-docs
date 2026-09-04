@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -182,7 +183,7 @@ export default function PaymentsPage() {
   }, [tab]);
 
   function formatDate(d: string) {
-    return new Date(d).toLocaleDateString("ru-RU", {
+    return new Date(d).toLocaleDateString("ru-RU", { timeZone: tz(),
       day: "2-digit",
       month: "2-digit",
       year: "numeric",

@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { ProtectedRoute } from "@/components/auth/protected-route";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -880,12 +881,12 @@ function UserEditContent() {
           <p>
             Последний вход:{" "}
             {user.last_seen_at
-              ? new Date(user.last_seen_at).toLocaleString("ru")
+              ? new Date(user.last_seen_at).toLocaleString("ru", { timeZone: tz() })
               : "—"}
           </p>
           <p>
             Зарегистрирован:{" "}
-            {new Date(user.created_at).toLocaleDateString("ru")}
+            {new Date(user.created_at).toLocaleDateString("ru", { timeZone: tz() })}
           </p>
         </div>
 

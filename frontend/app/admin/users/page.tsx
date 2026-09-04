@@ -6,6 +6,7 @@ import QRCode from "qrcode";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { ProtectedRoute } from "@/components/auth/protected-route";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -483,7 +484,7 @@ function UsersContent() {
                     </td>
                     <td className="px-4 py-2 text-muted-foreground text-xs">
                       {u.last_seen_at
-                        ? new Date(u.last_seen_at).toLocaleString("ru")
+                        ? new Date(u.last_seen_at).toLocaleString("ru", { timeZone: tz() })
                         : "—"}
                     </td>
                     <td className="px-4 py-2 text-right">

@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { csrfHeaders, mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -400,7 +401,7 @@ function PendingReceiptCard({
               Ожидание
             </span>
             <span className="text-xs text-slate-500">
-              {new Date(receipt.created_at).toLocaleDateString("ru-RU")}
+              {new Date(receipt.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
             </span>
           </div>
           <div className="flex gap-4 mt-0.5 text-[11px] text-slate-500">
@@ -939,7 +940,7 @@ function ReceiptsTab() {
                   </span>
                 </td>
                 <td className="py-2 pr-4 text-slate-400 text-xs">
-                  {new Date(r.received_at).toLocaleDateString("ru-RU")}
+                  {new Date(r.received_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
                 </td>
                 <td className="py-2 pr-4 text-slate-400 text-xs">
                   {r.received_by ?? "—"}
@@ -1035,7 +1036,7 @@ function MovementsTab() {
                 className="hover:bg-slate-800/40 transition-colors"
               >
                 <td className="py-2 pr-4 text-slate-400 text-xs whitespace-nowrap">
-                  {new Date(m.performed_at).toLocaleString("ru-RU", {
+                  {new Date(m.performed_at).toLocaleString("ru-RU", { timeZone: tz(),
                     day: "2-digit",
                     month: "2-digit",
                     year: "2-digit",

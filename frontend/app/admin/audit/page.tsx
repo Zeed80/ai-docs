@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import Link from "next/link";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -298,7 +299,7 @@ function AuditContent() {
                           </span>
                         )}
                         <span className="text-xs text-slate-500 ml-auto shrink-0">
-                          {new Date(log.timestamp).toLocaleString("ru-RU")}
+                          {new Date(log.timestamp).toLocaleString("ru-RU", { timeZone: tz() })}
                         </span>
                       </div>
 
@@ -378,7 +379,7 @@ function AuditContent() {
                     return (
                       <tr key={log.id} className="hover:bg-slate-700/30">
                         <td className="px-3 py-1.5 whitespace-nowrap text-slate-500">
-                          {new Date(log.timestamp).toLocaleString("ru-RU")}
+                          {new Date(log.timestamp).toLocaleString("ru-RU", { timeZone: tz() })}
                         </td>
                         <td
                           className={`px-3 py-1.5 ${meta?.color ?? "text-slate-300"}`}

@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
 import { useEffect, useState, useCallback } from "react";
 import { Sparkline } from "@/components/ui/sparkline";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -507,7 +508,7 @@ function CanonicalTable({
                               <tr key={i}>
                                 <td className="py-1 text-slate-400">
                                   {new Date(p.recorded_at).toLocaleDateString(
-                                    "ru-RU",
+                                    "ru-RU", { timeZone: tz() }
                                   )}
                                 </td>
                                 <td className="py-1 text-right text-slate-200 font-mono">

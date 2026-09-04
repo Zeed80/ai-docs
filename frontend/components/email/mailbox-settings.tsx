@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { apiFetch, mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 interface MailboxOut {
   id: string;
@@ -530,7 +531,7 @@ export function MailboxSection() {
                   {mb.oauth_email || mb.imap_user} @ {mb.imap_host}
                   {mb.last_sync_at && (
                     <span className="ml-2">
-                      синхр. {new Date(mb.last_sync_at).toLocaleString("ru-RU")}
+                      синхр. {new Date(mb.last_sync_at).toLocaleString("ru-RU", { timeZone: tz() })}
                     </span>
                   )}
                 </p>

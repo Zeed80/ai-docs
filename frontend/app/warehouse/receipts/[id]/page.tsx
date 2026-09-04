@@ -5,6 +5,7 @@ import { mutFetch } from "@/lib/auth";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -185,7 +186,7 @@ export default function ReceiptDetailPage() {
           </div>
           <div className="flex gap-4 mt-1 text-xs text-slate-500">
             <span>
-              Дата: {new Date(receipt.received_at).toLocaleDateString("ru-RU")}
+              Дата: {new Date(receipt.received_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
             </span>
             {receipt.received_by && <span>Принял: {receipt.received_by}</span>}
             {receipt.invoice_id && (

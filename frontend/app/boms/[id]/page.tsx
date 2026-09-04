@@ -5,6 +5,7 @@ import { mutFetch } from "@/lib/auth";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -333,7 +334,7 @@ export default function BOMDetailPage() {
             <p className="text-xs text-slate-500 mt-1">
               Утверждена: {bom.approved_by}
               {bom.approved_at &&
-                ` — ${new Date(bom.approved_at).toLocaleDateString("ru-RU")}`}
+                ` — ${new Date(bom.approved_at).toLocaleDateString("ru-RU", { timeZone: tz() })}`}
             </p>
           )}
         </div>

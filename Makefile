@@ -458,6 +458,7 @@ turboquant-quality:
 lint:
 	cd backend && ruff check app/ tests/
 	cd frontend && npm run lint
+	python3 scripts/check_timezone_usage.py
 
 lint-fix:
 	cd backend && ruff check --fix app/ tests/

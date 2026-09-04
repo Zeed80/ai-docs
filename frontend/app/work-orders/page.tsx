@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -377,7 +378,7 @@ export default function WorkOrdersPage() {
                 </div>
                 <div className="mt-2 text-[11px] text-slate-500">
                   rev {order.plan_revision} · priority {order.priority} ·{" "}
-                  {new Date(order.created_at).toLocaleString("ru-RU")}
+                  {new Date(order.created_at).toLocaleString("ru-RU", { timeZone: tz() })}
                 </div>
               </button>
             ))}

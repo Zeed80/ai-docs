@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
@@ -136,7 +137,7 @@ export default function CalendarPage() {
   // Group events by ISO date string (YYYY-MM-DD)
   const grouped: Record<string, CalendarEvent[]> = {};
   for (const e of events) {
-    const dateKey = new Date(e.event_date).toLocaleDateString("ru-RU");
+    const dateKey = new Date(e.event_date).toLocaleDateString("ru-RU", { timeZone: tz() });
     if (!grouped[dateKey]) grouped[dateKey] = [];
     grouped[dateKey].push(e);
   }
@@ -259,7 +260,7 @@ export default function CalendarPage() {
                     {r.message}
                   </div>
                   <div className="text-xs text-amber-500">
-                    {new Date(r.remind_at).toLocaleString("ru-RU")}
+                    {new Date(r.remind_at).toLocaleString("ru-RU", { timeZone: tz() })}
                   </div>
                 </div>
                 <div className="flex gap-1.5">
@@ -408,7 +409,7 @@ export default function CalendarPage() {
                         </div>
                       </div>
                       <div className="text-xs text-slate-400 shrink-0">
-                        {new Date(e.event_date).toLocaleTimeString("ru-RU", {
+                        {new Date(e.event_date).toLocaleTimeString("ru-RU", { timeZone: tz(),
                           hour: "2-digit",
                           minute: "2-digit",
                         })}

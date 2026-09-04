@@ -6,6 +6,7 @@ import Link from "next/link";
 import { getApiBaseUrl, getWebSocketBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/auth-context";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 const WS_BASE = getWebSocketBaseUrl();
@@ -188,7 +189,7 @@ function MessageBubble({
           <p className="text-[10px] text-green-600 mt-0.5">{actionFeedback}</p>
         )}
         <span className="text-[10px] text-muted-foreground mt-0.5">
-          {new Date(msg.created_at).toLocaleTimeString("ru", {
+          {new Date(msg.created_at).toLocaleTimeString("ru", { timeZone: tz(),
             hour: "2-digit",
             minute: "2-digit",
           })}

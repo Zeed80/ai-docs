@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 const PAGE_SIZE = 50;
@@ -299,7 +300,7 @@ export default function AnomaliesPage() {
                         </div>
                       )}
                       <div className="text-xs mt-1">
-                        {new Date(a.created_at).toLocaleString("ru-RU")}
+                        {new Date(a.created_at).toLocaleString("ru-RU", { timeZone: tz() })}
                       </div>
                     </div>
                   </div>

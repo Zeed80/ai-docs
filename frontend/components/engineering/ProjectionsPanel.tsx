@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import { EngineeringProjection, engineeringApi } from "@/lib/engineering-api";
+import { tz } from "@/lib/user-time";
 
 const ENTITY_TYPES: { value: string; label: string }[] = [
   { value: "cad_ir_revision", label: "CAD IR (снимок)" },
@@ -117,7 +118,7 @@ export default function ProjectionsPanel({
                   {p.entity_id.slice(0, 8)}
                 </span>
                 <span>·</span>
-                <span>{new Date(p.created_at).toLocaleDateString("ru")}</span>
+                <span>{new Date(p.created_at).toLocaleDateString("ru", { timeZone: tz() })}</span>
                 {href && (
                   <Link
                     href={href}

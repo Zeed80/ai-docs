@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { useEffect, useRef, useState } from "react";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -103,7 +104,7 @@ export function CommentThread({ entityType, entityId }: Props) {
               {c.author_name}
             </span>
             <span className="text-xs text-slate-400">
-              {new Date(c.created_at).toLocaleString("ru-RU")}
+              {new Date(c.created_at).toLocaleString("ru-RU", { timeZone: tz() })}
             </span>
           </div>
           <p className="text-slate-800 whitespace-pre-wrap break-words">

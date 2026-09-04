@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -220,7 +221,7 @@ export default function CollectionDetailPage() {
           )}
           <p className="text-xs text-slate-600 mt-1">
             {coll.items.length} элементов · создана{" "}
-            {new Date(coll.created_at).toLocaleDateString("ru-RU")}
+            {new Date(coll.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
           </p>
         </div>
 
@@ -428,7 +429,7 @@ export default function CollectionDetailPage() {
                       </span>
                     )}
                     <span className="text-xs text-slate-600 shrink-0">
-                      {new Date(item.created_at).toLocaleDateString("ru-RU")}
+                      {new Date(item.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
                     </span>
                     {!coll.is_closed && (
                       <button
@@ -468,7 +469,7 @@ export default function CollectionDetailPage() {
                 <div className="pb-3 flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
                     <span className="text-[10px] text-slate-500">
-                      {new Date(ev.timestamp).toLocaleString("ru-RU")}
+                      {new Date(ev.timestamp).toLocaleString("ru-RU", { timeZone: tz() })}
                     </span>
                     <span className="text-[10px] px-1 bg-slate-700 text-slate-400 rounded">
                       {ev.event_type}

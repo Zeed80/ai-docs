@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -249,7 +250,7 @@ export default function ComparePage() {
                 <p className="text-sm font-medium text-slate-200">{s.name}</p>
                 <p className="text-xs text-slate-500 mt-0.5">
                   {s.invoice_ids.length} предложений ·{" "}
-                  {new Date(s.created_at).toLocaleDateString("ru-RU")}
+                  {new Date(s.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
                 </p>
               </div>
               <span

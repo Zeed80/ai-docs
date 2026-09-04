@@ -57,6 +57,7 @@ import { ColumnManager } from "@/components/invoices/ColumnManager";
 import { FilterBuilder } from "@/components/invoices/FilterBuilder";
 import { EditableNotesCell } from "@/components/invoices/EditableNotesCell";
 import { useAgentName } from "@/lib/agent-name";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -603,7 +604,7 @@ export default function InvoicesPage() {
       );
     }
     if (col.data_type === "date" && val)
-      return new Date(val as string).toLocaleDateString("ru-RU");
+      return new Date(val as string).toLocaleDateString("ru-RU", { timeZone: tz() });
     return (val as string) ?? "—";
   };
 

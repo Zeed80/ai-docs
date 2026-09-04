@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -200,7 +201,7 @@ export default function HandoversPage() {
                         </>
                       )}
                       <span className="mx-2">·</span>
-                      {new Date(h.created_at).toLocaleString("ru-RU")}
+                      {new Date(h.created_at).toLocaleString("ru-RU", { timeZone: tz() })}
                     </div>
 
                     {h.comment && (

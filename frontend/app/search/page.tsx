@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -388,7 +389,7 @@ function SearchPageInner() {
                     {doc.doc_type
                       ? (DOC_TYPE_LABELS[doc.doc_type] ?? doc.doc_type)
                       : "Документ"}{" "}
-                    · {new Date(doc.created_at).toLocaleDateString("ru-RU")}
+                    · {new Date(doc.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
                   </p>
                 </div>
                 {doc.status && (

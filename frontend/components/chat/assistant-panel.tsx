@@ -26,6 +26,7 @@ import {
   listChatSessions,
   type ChatSession,
 } from "@/lib/api";
+import { tz } from "@/lib/user-time";
 
 type MessageRole =
   | "user"
@@ -108,7 +109,7 @@ function formatSessionTime(iso: string | null): string {
   if (!iso) return "без сообщений";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString("ru-RU", {
+  return date.toLocaleString("ru-RU", { timeZone: tz(),
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",

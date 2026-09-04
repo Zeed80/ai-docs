@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { emailApi } from "./api";
+import { useUserTimeZone } from "@/lib/user-time";
 
 interface Contact {
   id: string;
@@ -32,6 +33,7 @@ const blank = (): Partial<Contact> => ({ tags: [] });
 
 export function ContactsPanel({ onCompose }: { onCompose: (email: string) => void }) {
   const t = useTranslations("email");
+  const timeZone = useUserTimeZone();
   const [rows, setRows] = useState<Contact[]>([]);
   const [tags, setTags] = useState<string[]>([]);
   const [q, setQ] = useState("");
@@ -319,7 +321,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
                       </a>
                       {m.received_at && (
                         <span className="ml-1.5 text-slate-500">
-                          {new Date(m.received_at).toLocaleDateString()}
+                          {new Date(m.received_at).toLocaleDateString(undefined, { timeZone })}
                         </span>
                       )}
                     </li>

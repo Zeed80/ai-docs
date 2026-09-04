@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useCallback, useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -435,7 +436,7 @@ export default function ApprovalsPage() {
                     )}
                     <p className="text-[11px] text-slate-400 mt-0.5">
                       {a.requested_by ?? "ai-docs"} ·{" "}
-                      {new Date(a.created_at).toLocaleString("ru-RU", {
+                      {new Date(a.created_at).toLocaleString("ru-RU", { timeZone: tz(),
                         month: "short",
                         day: "numeric",
                         hour: "2-digit",
@@ -482,7 +483,7 @@ export default function ApprovalsPage() {
                   <span>
                     Создано:{" "}
                     <strong className="text-slate-300">
-                      {new Date(selected.created_at).toLocaleString("ru-RU")}
+                      {new Date(selected.created_at).toLocaleString("ru-RU", { timeZone: tz() })}
                     </strong>
                   </span>
                 </div>
@@ -502,7 +503,7 @@ export default function ApprovalsPage() {
                     const exp = expiryInfo(selected.expires_at);
                     const formatted = new Date(
                       selected.expires_at,
-                    ).toLocaleString("ru-RU", {
+                    ).toLocaleString("ru-RU", { timeZone: tz(),
                       day: "2-digit",
                       month: "2-digit",
                       hour: "2-digit",
@@ -635,7 +636,7 @@ function ContextPanel({
           <Row
             label="Дата"
             value={new Date(context.invoice_date as string).toLocaleDateString(
-              "ru-RU",
+              "ru-RU", { timeZone: tz() }
             )}
           />
         )}

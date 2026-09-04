@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -235,7 +236,7 @@ function CollectionCard({
             </span>
           ))}
           <span className="text-slate-600">
-            {new Date(coll.created_at).toLocaleDateString("ru-RU")}
+            {new Date(coll.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
           </span>
         </div>
       </div>

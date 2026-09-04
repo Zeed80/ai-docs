@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { apiFetch } from "@/lib/auth";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { tz } from "@/lib/user-time";
 
 const API = getApiBaseUrl();
 
@@ -270,7 +271,7 @@ export default function CaseCockpitPage() {
                     {doc.file_name}
                   </h3>
                   <p className="text-[10px] text-slate-500 mt-0.5">
-                    {new Date(doc.added_at).toLocaleString("ru-RU")}
+                    {new Date(doc.added_at).toLocaleString("ru-RU", { timeZone: tz() })}
                     {doc.doc_type && ` · ${doc.doc_type}`}
                   </p>
                 </div>
@@ -306,13 +307,13 @@ export default function CaseCockpitPage() {
                     <p className="text-[10px] text-slate-500 mt-0.5">
                       Запросил: {gate.requested_by}
                       {gate.created_at &&
-                        ` · ${new Date(gate.created_at).toLocaleString("ru-RU")}`}
+                        ` · ${new Date(gate.created_at).toLocaleString("ru-RU", { timeZone: tz() })}`}
                     </p>
                     {gate.decided_by && (
                       <p className="text-[10px] text-slate-500">
                         Решил: {gate.decided_by}
                         {gate.decided_at &&
-                          ` · ${new Date(gate.decided_at).toLocaleString("ru-RU")}`}
+                          ` · ${new Date(gate.decided_at).toLocaleString("ru-RU", { timeZone: tz() })}`}
                       </p>
                     )}
                   </div>
@@ -362,7 +363,7 @@ export default function CaseCockpitPage() {
                 className="flex items-start gap-3 text-xs py-1.5 border-b border-slate-800"
               >
                 <span className="text-slate-500 shrink-0 pt-0.5">
-                  {new Date(ev.timestamp).toLocaleTimeString("ru-RU", {
+                  {new Date(ev.timestamp).toLocaleTimeString("ru-RU", { timeZone: tz(),
                     hour: "2-digit",
                     minute: "2-digit",
                   })}
