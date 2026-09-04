@@ -885,6 +885,7 @@ async def test_mailbox(
     if cfg.smtp_host and cfg.smtp_user:
         try:
             import smtplib
+            import ssl
             if cfg.smtp_use_tls:
                 srv = smtplib.SMTP(cfg.smtp_host, cfg.smtp_port or 587, timeout=10)
                 # Explicit verifying context — matches the real send path in

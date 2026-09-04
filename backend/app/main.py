@@ -521,16 +521,18 @@ async def metrics_endpoint():
         return PlainTextResponse("# prometheus_client not installed\n")
 
 
+# Имя функции — не `health`: модуль `app.api.health` импортирован наверху, и
+# одноимённая функция затеняла его. Работало лишь потому, что `create_app()`
+# вызывается выше по файлу; любой повторный вызов фабрики падал на
+# `health.router` с AttributeError.
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health_root() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/health/ai")
-async def health_ai() -> dict:
-    """Check Ollama health and available models."""
-    from app.ai.ollama_client import check_health
-    return await check_health()
+# `/health/ai` живёт в app/api/health.py (ai_health) — он проверяет все
+# зарегистрированные провайдеры, а не только Ollama. Тот роутер подключается
+# раньше, поэтому здешний дубль всё равно никогда не вызывался.
 
 
 @app.get("/api/tasks/{task_id}", dependencies=[Depends(_get_current_user)])

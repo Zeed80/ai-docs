@@ -31,7 +31,7 @@ async def _run() -> dict:
 
     from app.db.models import (
         AnomalyCard, AnomalyStatus, Approval, ApprovalStatus, Document,
-        DocumentStatus, EmailThread, NotificationType, UserNotificationSettings,
+        DocumentStatus, EmailThread, NotificationType, User, UserNotificationSettings,
     )
     from app.db.session import _get_session_factory
     from app.domain.email_access import hidden_mailbox_names

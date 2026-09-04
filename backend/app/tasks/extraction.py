@@ -1805,8 +1805,11 @@ def process_approved_document(self, document_id: str) -> dict:
     Only verified data gets written to Invoice/Party tables and the knowledge graph.
     """
     logger.info("post_approve_start", document_id=document_id)
+    import time
     from sqlalchemy import delete as _sa_delete
     from sqlalchemy import update as _sa_update
+
+    _t0 = time.monotonic()
 
     with _get_sync_session() as db:
         doc = db.get(Document, uuid.UUID(document_id))
@@ -2106,8 +2109,10 @@ def process_approved_document(self, document_id: str) -> dict:
         try:
             from app.core.metrics import extraction_duration_seconds
             extraction_duration_seconds.observe(time.monotonic() - _t0)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Раньше здесь стоял голый pass, и NameError (_t0 жил в другой
+            # функции) молча съедал метрику целиком — она не писалась никогда.
+            logger.warning("post_approve_metric_failed", error=str(exc))
         return {
             "document_id": document_id,
             "invoice_id": str(invoice.id) if invoice is not None else None,
