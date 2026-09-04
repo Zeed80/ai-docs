@@ -1,5 +1,5 @@
 """
-general. Причина: Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.. Запрошенный артефакт: workspace_template.
+general. Причина: Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.; Ход завершился без ответа: нет текста и нет вывода на Рабочий стол.. Запрошенный артефакт: workspace_template.
 Auto-generated fallback stub — replace execute() with real logic.
 """
 
@@ -8,8 +8,8 @@ from typing import Any
 
 SKILL_META = {
     "name": "workspace_general_tool",
-    "description": "general. Причина: Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.. Запрошенный артефакт: workspace_t",
-    "created_at": "2026-08-29T17:33:56.766911+00:00",
+    "description": "general. Причина: Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.; Ход завершился без ответа: нет те",
+    "created_at": "2026-09-04T20:28:49.902679+00:00",
     "source": "agent_generated_stub",
 }
 
