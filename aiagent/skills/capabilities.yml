@@ -857,13 +857,15 @@ capabilities:
       разрешения искать — это твоя прямая задача.
     path: /api/agent/cap/memory
     method: POST
-    gate_actions: []
+    # prune безвозвратно удаляет эпизодические факты. Память объявлена
+    # защищённой настройкой — значит чистка не должна происходить молча.
+    gate_actions: [prune]
     parameters:
       type: object
       properties:
         action:
           type: string
-          description: "query | search | explain | promote | promotion_list | promotion_evaluate | source_propose | source_list | source_discover | reindex | embeddings_stats | neighborhood | path"
+          description: "query | search | explain | promote | promotion_list | promotion_evaluate | promotion_decide | source_propose | source_list | source_discover | source_decide | reindex | embeddings_stats | embeddings_rebuild | embeddings_rebuild_active | embeddings_index_active | prune | neighborhood | path"
         query:
           type: string
           description: "Запрос для RAG-памяти, поиска или объяснения"
@@ -954,16 +956,28 @@ capabilities:
             bom_stock_check | bom_purchase_request |
             ntd_list | ntd_get | ntd_run_check | ntd_findings |
             learning_suggest | learning_rule_list | learning_rule_create |
-            learning_rule_activate | learning_rule_reject | correction_record
+            learning_rule_activate | learning_rule_reject | correction_record |
+            process_plan_draft_from_document | generate_tp_from_drawing |
+            analyze_surfaces | select_equipment_for_op | calculate_cutting_params |
+            normcontrol_check | normcontrol_resolve | blank_spec_set |
+            surface_specs_list | export_gost_forms | operation_template_create
         entity_id:
           type: string
           description: "ID сущности (плана, нормы, BOM, ресурса, правила)"
+        check_id:
+          type: string
+          description: "ID замечания нормоконтроля (только для normcontrol_resolve)"
         filters:
           type: object
           description: "Фильтры: status, doc_type, limit"
         body:
           type: object
-          description: "Данные для create/update/approve/correction"
+          description: >
+            Данные для create/update/approve/correction.
+            generate_tp_from_drawing: drawing_id (обязателен), tp_type, batch_size.
+            analyze_surfaces: drawing_id (обязателен).
+            normcontrol_resolve: resolution (fixed | waived), resolved_by.
+            export_gost_forms: forms (по умолчанию ["МК","ОК"]), format ("xlsx").
       required: [action]
 
   - name: engineering

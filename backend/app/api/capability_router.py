@@ -311,6 +311,13 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "source_decide":    ("POST", "/api/memory/sources/{entity_id}/decide", ["entity_id"]),
         "reindex":          ("POST", "/api/memory/reindex",                  []),
         "embeddings_stats": ("GET",  "/api/memory/embeddings/stats",         []),
+        # Обслуживание эмбеддингов памяти. Эндпоинты сами объявляют себя
+        # skill'ами в докстрингах, gateway.yml выдавал на них права, но
+        # маршрутов здесь не было.
+        "embeddings_rebuild":        ("POST", "/api/memory/embeddings/rebuild",        []),
+        "embeddings_rebuild_active": ("POST", "/api/memory/embeddings/rebuild-active", []),
+        "embeddings_index_active":   ("POST", "/api/memory/embeddings/index-active",   []),
+        "prune":                     ("POST", "/api/memory/prune",                     []),
         # Multi-hop graph traversal — relational questions ("что связано с
         # этим поставщиком", "цепочка согласования по счёту") need this
         # instead of lexical/vector memory.search.
@@ -340,7 +347,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "ntd_list":                      ("GET",   "/api/ntd/documents",                                               []),
         "ntd_get":                       ("GET",   "/api/ntd/checks/{entity_id}",                                      ["entity_id"]),
         "ntd_run_check":                 ("POST",  "/api/ntd/checks/run",                                              []),
-        "ntd_findings":                  ("GET",   "/api/ntd/checks/{entity_id}/findings" if False else "/api/ntd/requirements/search", []),
+        "ntd_findings":                  ("GET",   "/api/ntd/requirements/search",                                     []),
         "learning_suggest":              ("GET",   "/api/technology/learning-suggestions",                             []),
         "learning_rule_list":            ("GET",   "/api/technology/learning-rules",                                   []),
         "learning_rule_create":          ("POST",  "/api/technology/learning-rules",                                   []),
@@ -348,6 +355,19 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "learning_rule_reject":          ("POST",  "/api/technology/learning-rules/{entity_id}/reject",                ["entity_id"]),
         "correction_record":             ("POST",  "/api/technology/corrections",                                      []),
         "process_plan_draft_from_document": ("POST", "/api/technology/process-plans/draft-from-document",             []),
+        # Вторая половина роли технолога. Эндпоинты существовали всё это время,
+        # gateway.yml раздавал на них права, но маршрутов здесь не было — агент
+        # получал "unknown action", неотличимое от собственной ошибки.
+        "generate_tp_from_drawing":      ("POST",  "/api/technology/process-plans/generate-from-drawing",              []),
+        "analyze_surfaces":              ("POST",  "/api/technology/process-plans/{entity_id}/analyze-surfaces",       ["entity_id"]),
+        "select_equipment_for_op":       ("POST",  "/api/technology/process-plans/{entity_id}/select-equipment",       ["entity_id"]),
+        "calculate_cutting_params":      ("POST",  "/api/technology/process-plans/{entity_id}/calculate-cutting-params", ["entity_id"]),
+        "normcontrol_check":             ("POST",  "/api/technology/process-plans/{entity_id}/normcontrol",            ["entity_id"]),
+        "normcontrol_resolve":           ("POST",  "/api/technology/process-plans/{entity_id}/normcontrol/{check_id}/resolve", ["entity_id", "check_id"]),
+        "blank_spec_set":                ("POST",  "/api/technology/process-plans/{entity_id}/blank-spec",             ["entity_id"]),
+        "surface_specs_list":            ("GET",   "/api/technology/process-plans/{entity_id}/surface-specs",          ["entity_id"]),
+        "export_gost_forms":             ("POST",  "/api/technology/process-plans/{entity_id}/export-gost",            ["entity_id"]),
+        "operation_template_create":     ("POST",  "/api/technology/operation-templates",                              []),
     },
     "engineering": {
         "material_list":      ("GET",  "/api/engineering/materials",                                     []),

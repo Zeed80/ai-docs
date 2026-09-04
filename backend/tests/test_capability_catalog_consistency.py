@@ -51,13 +51,11 @@ def test_image_studio_diffusion_actions_are_non_recipeable():
 
 # ── Ф6.9: the direction nobody was checking ────────────────────────────────
 
-# Pre-existing mismatches outside the e-mail subsystem. Recorded, not fixed:
-# tech/workspace/memory are other people's capabilities and other phases' work.
-# The number must not grow — a new entry here means somebody granted an action
-# that does not exist, and the agent will be told "unknown action" while
-# believing it had the right.
-_KNOWN_BROKEN_GRANT_PREFIXES = ("tech.", "workspace.", "memory.")
-_KNOWN_BROKEN_GRANT_COUNT = 17
+# The backlog this file used to tolerate is closed: tech (10), memory (4) and
+# workspace (3) grants now all resolve to real dispatch entries. There is no
+# allowed remainder any more — a granted action that does not exist means the
+# agent is told "unknown action" while believing it had the right, which is
+# indistinguishable, from the model's side, from its own mistake.
 
 
 def test_no_email_action_is_granted_without_a_route():
@@ -70,16 +68,32 @@ def test_no_email_action_is_granted_without_a_route():
     assert email_problems == [], "\n".join(email_problems)
 
 
-def test_the_backlog_of_broken_grants_does_not_grow():
+def test_every_granted_action_is_routable():
+    """Ни одно выданное право не должно вести в несуществующее действие."""
     from app.api.capability_router import validate_gateway_grants
 
     problems = validate_gateway_grants()
-    unexpected = [
-        p for p in problems
-        if not any(f"'{prefix}" in p for prefix in _KNOWN_BROKEN_GRANT_PREFIXES)
-    ]
-    assert unexpected == [], "новые нерабочие права:\n" + "\n".join(unexpected)
-    assert len(problems) <= _KNOWN_BROKEN_GRANT_COUNT, (
-        f"было {_KNOWN_BROKEN_GRANT_COUNT}, стало {len(problems)}:\n"
-        + "\n".join(problems)
-    )
+    assert problems == [], "нерабочие права:\n" + "\n".join(problems)
+
+
+def test_the_technologist_role_can_actually_reach_its_own_work():
+    """Половина роли технолога была недостижима: эндпоинты существовали,
+    gateway.yml раздавал права, а маршрутов в _DISPATCH не было."""
+    from app.api.capability_router import capability_action_map
+
+    tech = set(capability_action_map()["tech"])
+    assert {
+        "generate_tp_from_drawing", "analyze_surfaces", "select_equipment_for_op",
+        "calculate_cutting_params", "normcontrol_check", "normcontrol_resolve",
+        "blank_spec_set", "surface_specs_list", "export_gost_forms",
+        "operation_template_create",
+    } <= tech
+
+
+def test_memory_prune_is_gated():
+    """prune безвозвратно удаляет эпизодические факты, а память объявлена
+    защищённой настройкой — чистка не должна проходить молча."""
+    from app.ai.capability_manifest import load_capability_manifest
+
+    memory = next(c for c in load_capability_manifest().capabilities if c.name == "memory")
+    assert "prune" in memory.gate_actions
