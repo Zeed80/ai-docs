@@ -1679,6 +1679,59 @@ async def resolve_normcontrol_check(
     return {"ok": True, "check_id": str(check_id), "status": check.status}
 
 
+def _normcontrol_check_out(c: NormControlCheck) -> dict:
+    """Одна форма замечания для запуска проверки и для чтения её результата."""
+    return {
+        "id": str(c.id),
+        "check_code": c.check_code,
+        "gost_code": c.gost_code,
+        "clause": c.clause,
+        "severity": c.severity,
+        "status": c.status,
+        "message": c.message,
+        "recommendation": c.recommendation,
+        "auto_fixable": c.auto_fixable,
+        "operation_id": str(c.operation_id) if c.operation_id else None,
+        "form_type": c.form_type,
+    }
+
+
+@router.get("/process-plans/{plan_id}/normcontrol-result")
+async def get_normcontrol_result(
+    plan_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Последний результат нормоконтроля без повторного запуска проверки.
+
+    Раздел «Нормоконтроль» на карточке плана читал этот адрес с самого начала,
+    а маршрута не было: ответ 404 гасился проверкой `if (r.ok)`, и блок всегда
+    оставался пустым — без единого сообщения об ошибке.
+    """
+    plan = await db.get(ManufacturingProcessPlan, plan_id)
+    if not plan:
+        raise HTTPException(404, detail="ProcessPlan not found")
+
+    rows = (
+        await db.execute(
+            select(NormControlCheck)
+            .where(NormControlCheck.process_plan_id == plan_id)
+            .order_by(NormControlCheck.created_at)
+        )
+    ).scalars().all()
+
+    errors = [c for c in rows if c.severity == "error" and c.status == "open"]
+    warnings = [c for c in rows if c.severity == "warning" and c.status == "open"]
+
+    return {
+        "status": getattr(plan, "normcontrol_status", None) or "not_checked",
+        "checked_at": plan.normcontrol_checked_at.isoformat() if plan.normcontrol_checked_at else None,
+        "checks": [_normcontrol_check_out(c) for c in rows],
+        "errors_count": len(errors),
+        "warnings_count": len(warnings),
+        "total_count": len(rows),
+    }
+
+
 @router.post("/process-plans/{plan_id}/blank-spec")
 async def set_blank_spec(
     plan_id: uuid.UUID,
@@ -1718,6 +1771,84 @@ async def set_blank_spec(
         "confidence": spec.confidence,
         "reasoning": spec.reasoning,
     }
+
+
+def _blank_spec_out(spec: BlankSpec) -> dict:
+    return {
+        "id": str(spec.id),
+        "blank_type": spec.blank_type,
+        "material_grade": spec.material_grade,
+        "standard_gost": spec.standard_gost,
+        "dimensions": spec.dimensions,
+        "mass_blank_kg": spec.mass_blank_kg,
+        "mass_part_kg": spec.mass_part_kg,
+        "utilization_factor": spec.utilization_factor,
+        "confidence": spec.confidence,
+        "reasoning": spec.reasoning,
+    }
+
+
+@router.get("/process-plans/{plan_id}/blank-spec")
+async def get_blank_spec(
+    plan_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Чтение спецификации заготовки.
+
+    Тот же адрес существовал только на запись (POST), а карточка плана читала
+    его через GET — 405 гасился проверкой `if (r.ok)`, и блок «Заготовка» был
+    пуст всегда. Возвращает null, если спецификация ещё не задана.
+    """
+    plan = await db.get(ManufacturingProcessPlan, plan_id)
+    if not plan:
+        raise HTTPException(404, detail="ProcessPlan not found")
+
+    spec = (
+        await db.execute(select(BlankSpec).where(BlankSpec.process_plan_id == plan_id))
+    ).scalar_one_or_none()
+    return _blank_spec_out(spec) if spec else None
+
+
+# Правка операции из карточки ревизии. Белый список: всё остальное (id,
+# process_plan_id, служебные метки) через этот путь не меняется.
+_OPERATION_PATCHABLE = {
+    "operation_code", "name", "operation_type", "sequence_no",
+    "setup_description", "transition_text", "control_requirements",
+    "safety_requirements", "setup_minutes", "machine_minutes", "labor_minutes",
+    "gost_operation_code", "department_code", "workplace_code",
+    "to_minutes", "tv_minutes", "tob_minutes",
+    "cutting_parameters", "tooling_list", "measuring_tools",
+}
+
+
+@router.patch("/operations/{operation_id}", response_model=OperationOut)
+async def update_operation(
+    operation_id: uuid.UUID,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Изменить поля операции техпроцесса.
+
+    Редактор операций слал сюда PATCH с самого начала, маршрута не было, а
+    ответ не проверялся — правка молча терялась: список перечитывался и
+    показывал прежнее значение, будто пользователь ничего не менял.
+    """
+    op = await db.get(ManufacturingOperation, operation_id)
+    if not op:
+        raise HTTPException(404, detail="Operation not found")
+
+    unknown = sorted(set(payload) - _OPERATION_PATCHABLE)
+    if unknown:
+        raise HTTPException(422, detail=f"Поля нельзя изменить здесь: {', '.join(unknown)}")
+    if not payload:
+        raise HTTPException(422, detail="Нечего изменять")
+
+    for field, value in payload.items():
+        setattr(op, field, value)
+
+    await db.commit()
+    await db.refresh(op)
+    return op
 
 
 @router.get("/process-plans/{plan_id}/surface-specs")

@@ -16,7 +16,7 @@ import SurfaceSpecTable, {
   SurfaceSpec,
 } from "@/components/technology/SurfaceSpecTable";
 import GostFormsExporter from "@/components/technology/GostFormsExporter";
-import { mutFetch } from "@/lib/auth";
+import { apiFetch, mutFetch } from "@/lib/auth";
 
 interface ProcessPlan {
   id: string;
@@ -70,36 +70,53 @@ export default function TechProcessReviewPage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("operations");
   const [selectedOpId, setSelectedOpId] = useState<string | null>(null);
   const [rightPanelWidth, setRightPanelWidth] = useState(55);
+  // Каждый сбой здесь раньше уходил в пустой catch: правка операции
+  // «пропадала», а разделы молча оставались пустыми.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchPlan = useCallback(async () => {
     try {
-      const res = await fetch(`/api/technology/process-plans/${planId}`);
-      if (!res.ok) return;
+      const res = await apiFetch(`/api/technology/process-plans/${planId}`);
+      if (!res.ok) {
+        setLoadError(`Техпроцесс не загрузился: сервер ответил ${res.status}`);
+        return;
+      }
       const data = await res.json();
       setPlan(data.process_plan ?? data);
-    } catch {}
+    } catch {
+      setLoadError("Техпроцесс не загрузился: нет связи с сервером");
+    }
   }, [planId]);
 
   const fetchSurfaces = useCallback(async () => {
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/technology/process-plans/${planId}/surface-specs`,
       );
-      if (!res.ok) return;
+      if (!res.ok) {
+        setLoadError(`Поверхности не загрузились: сервер ответил ${res.status}`);
+        return;
+      }
       const data = await res.json();
       setSurfaces(data.items ?? []);
-    } catch {}
+    } catch {
+      setLoadError("Поверхности не загрузились: нет связи с сервером");
+    }
   }, [planId]);
 
   const fetchBlankSpec = useCallback(async () => {
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/technology/process-plans/${planId}/blank-spec`,
       );
-      if (res.ok) {
-        setBlankSpec(await res.json());
+      if (!res.ok) {
+        setLoadError(`Заготовка не загрузилась: сервер ответил ${res.status}`);
+        return;
       }
-    } catch {}
+      setBlankSpec(await res.json());
+    } catch {
+      setLoadError("Заготовка не загрузилась: нет связи с сервером");
+    }
   }, [planId]);
 
   // Poll task status while generation is running
@@ -138,12 +155,16 @@ export default function TechProcessReviewPage() {
       plan.normcontrol_status !== "not_checked" &&
       plan.normcontrol_status !== "checking"
     ) {
-      mutFetch(`/api/technology/process-plans/${planId}/normcontrol-result`)
+      // Здесь стоял mutFetch без init — он по умолчанию шлёт POST, то есть
+      // на GET-адрес уходил запрос не тем методом.
+      apiFetch(`/api/technology/process-plans/${planId}/normcontrol-result`)
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
           if (data) setNormcontrol(data);
         })
-        .catch(() => {});
+        .catch(() => {
+          setLoadError("Нормоконтроль не загрузился: нет связи с сервером");
+        });
     }
   }, [plan, planId]);
 
@@ -201,11 +222,17 @@ export default function TechProcessReviewPage() {
     field: string,
     value: unknown,
   ) => {
-    await mutFetch(`/api/technology/operations/${id}`, {
+    const res = await mutFetch(`/api/technology/operations/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ [field]: value }),
     });
+    if (!res.ok) {
+      // Ответ раньше не проверялся вовсе: fetchPlan() перерисовывал прежнее
+      // значение, и правка выглядела так, будто её и не делали.
+      setLoadError(`Правка операции не сохранена: сервер ответил ${res.status}`);
+      return;
+    }
     await fetchPlan();
   };
 
@@ -238,6 +265,23 @@ export default function TechProcessReviewPage() {
 
   return (
     <div className="h-screen bg-zinc-950 text-zinc-100 flex flex-col overflow-hidden">
+      {loadError && (
+        <div
+          role="alert"
+          className="flex items-start justify-between gap-3 border-b border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-300 flex-shrink-0"
+        >
+          <span>{loadError}</span>
+          <button
+            type="button"
+            onClick={() => setLoadError(null)}
+            aria-label="Скрыть сообщение"
+            className="text-red-300/60 hover:text-red-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Top bar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800 bg-zinc-900 flex-shrink-0">
         <div className="flex items-center gap-3">

@@ -13,7 +13,7 @@ import SurfaceSpecTable, {
   SurfaceSpec,
 } from "@/components/technology/SurfaceSpecTable";
 import GostFormsExporter from "@/components/technology/GostFormsExporter";
-import { mutFetch } from "@/lib/auth";
+import { apiFetch, mutFetch } from "@/lib/auth";
 
 interface Operation {
   id: string;
@@ -102,35 +102,68 @@ export default function TechPlanPage({
     null,
   );
   const [selectedOpId, setSelectedOpId] = useState<string | null>(null);
+  // Раньше любой сбой запроса гасился через `if (r.ok)` без ветки else:
+  // раздел просто оставался пустым, и отличить «данных нет» от «запрос
+  // упал» было нельзя.
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const load = useCallback(
+    async (path: string, what: string): Promise<unknown | undefined> => {
+      try {
+        const r = await apiFetch(`/api/technology/process-plans/${id}${path}`);
+        if (!r.ok) {
+          setLoadError(`${what}: сервер ответил ${r.status}`);
+          return undefined;
+        }
+        return await r.json();
+      } catch {
+        setLoadError(`${what}: нет связи с сервером`);
+        return undefined;
+      }
+    },
+    [id],
+  );
 
   const fetchPlan = useCallback(async () => {
-    const r = await fetch(`/api/technology/process-plans/${id}`);
-    if (!r.ok) return;
-    const data = await r.json();
-    setPlan(data.process_plan ?? data);
-  }, [id]);
+    const data = (await load("", "техпроцесс")) as
+      | { process_plan?: ProcessPlanDetail }
+      | ProcessPlanDetail
+      | undefined;
+    if (data === undefined) return;
+    setPlan(
+      (data as { process_plan?: ProcessPlanDetail }).process_plan ??
+        (data as ProcessPlanDetail),
+    );
+  }, [load]);
 
   const fetchSurfaces = useCallback(async () => {
-    const r = await fetch(`/api/technology/process-plans/${id}/surface-specs`);
-    if (!r.ok) return;
-    const data = await r.json();
+    const data = (await load("/surface-specs", "поверхности")) as
+      | { items?: SurfaceSpec[] }
+      | undefined;
+    if (data === undefined) return;
     setSurfaces(data.items ?? []);
-  }, [id]);
+  }, [load]);
 
   const fetchBlankSpec = useCallback(async () => {
-    const r = await fetch(`/api/technology/process-plans/${id}/blank-spec`);
-    if (r.ok) setBlankSpec(await r.json());
-  }, [id]);
+    const data = (await load("/blank-spec", "заготовка")) as
+      | BlankSpec
+      | null
+      | undefined;
+    if (data === undefined) return;
+    setBlankSpec(data);
+  }, [load]);
 
   const fetchNormcontrol = useCallback(async () => {
-    const r = await fetch(
-      `/api/technology/process-plans/${id}/normcontrol-result`,
-    );
-    if (r.ok) setNormcontrol(await r.json());
-  }, [id]);
+    const data = (await load("/normcontrol-result", "нормоконтроль")) as
+      | NormcontrolResult
+      | undefined;
+    if (data === undefined) return;
+    setNormcontrol(data);
+  }, [load]);
 
   useEffect(() => {
     setLoading(true);
+    setLoadError(null);
     Promise.all([fetchPlan(), fetchSurfaces(), fetchBlankSpec()]).finally(() =>
       setLoading(false),
     );
@@ -163,8 +196,14 @@ export default function TechPlanPage({
       if (r.ok) {
         setNormcontrol(await r.json());
         await fetchPlan();
+      } else {
+        setLoadError(`Нормоконтроль не запустился: сервер ответил ${r.status}`);
+        setNormcontrol(null);
       }
-    } catch {}
+    } catch {
+      setLoadError("Нормоконтроль не запустился: нет связи с сервером");
+      setNormcontrol(null);
+    }
   };
 
   const handleResolveCheck = async (
@@ -179,7 +218,11 @@ export default function TechPlanPage({
         body: JSON.stringify({ resolution }),
       },
     );
-    if (r.ok && normcontrol) {
+    if (!r.ok) {
+      setLoadError(`Замечание не закрыто: сервер ответил ${r.status}`);
+      return;
+    }
+    if (normcontrol) {
       setNormcontrol({
         ...normcontrol,
         checks: normcontrol.checks.map((c) =>
@@ -213,6 +256,23 @@ export default function TechPlanPage({
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
+      {loadError && (
+        <div
+          role="alert"
+          className="mb-4 flex items-start justify-between gap-3 rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+        >
+          <span>{loadError}</span>
+          <button
+            type="button"
+            onClick={() => setLoadError(null)}
+            aria-label="Скрыть сообщение"
+            className="text-red-300/60 hover:text-red-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-xs text-white/30 mb-4">
         <Link
