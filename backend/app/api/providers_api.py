@@ -1152,8 +1152,10 @@ class SlotOut(BaseModel):
     thinking_level_effective: str | None = None  # resolved level actually in effect
 
 
-# local_only=True → конфиденциальные задачи (содержимое документов), облако
-# запрещено. Агентские слоты допускают облако (выбор оператора).
+# local_only=True → слот видит содержимое документов и потому локален по
+# умолчанию. Это не запрет: облако включается отдельным защищённым действием
+# (PATCH /slots/{slot}/allow-cloud), после чего _slot_effective_local_only
+# перестаёт держать слот локальным.
 _SLOTS = [
     ("ocr_fast", "Документы", "Быстрая (OCR/VLM)",
      "OCR счётов, классификация и первичный VLM-анализ", True),
