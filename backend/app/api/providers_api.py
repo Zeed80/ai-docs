@@ -410,6 +410,15 @@ class CatalogModelOut(BaseModel):
     # Каталог помечал «production» модели, которых давно нет ни на одном узле
     # (gemma4 после перехода на qwen3.8), и они спокойно назначались из GUI.
     availability: str = "unknown"
+    # Всё нижеследующее лежит в ModelCapability с самого начала и просто не
+    # доходило до интерфейса: при выборе модели не было видно ни размера
+    # контекста, ни умеет ли она вызывать инструменты, ни сколько стоит.
+    max_context_tokens: int | None = None
+    supports_tool_calling: bool = False
+    supports_structured_output: bool = False
+    cost_per_1k_input: float | None = None
+    cost_per_1k_output: float | None = None
+    notes: str | None = None
 
 
 @router.get("/models", response_model=list[CatalogModelOut], dependencies=_admin)
@@ -461,6 +470,12 @@ async def list_models(
                 speed_score=cap.speed_score,
                 vram_gb_estimate=cap.vram_gb_estimate,
                 availability=avail.get(key, "unknown"),
+                max_context_tokens=cap.max_context_tokens,
+                supports_tool_calling=cap.supports_tool_calling,
+                supports_structured_output=cap.supports_structured_output,
+                cost_per_1k_input=cap.cost_per_1k_input,
+                cost_per_1k_output=cap.cost_per_1k_output,
+                notes=cap.notes,
             )
         )
     return out
@@ -617,6 +632,27 @@ class LiveModelOut(BaseModel):
     # UI offer "run this model on the GPU node / on the CPU node".
     preferred_instance: str | None = None
     vram_gb_estimate: float | None
+    # Те же факты, что и в CatalogModelOut: вкладка «Назначение» читает
+    # /live-models, а не /models, и потому не видела ни размера контекста, ни
+    # умеет ли модель вызывать инструменты, ни цены облачной.
+    max_context_tokens: int | None = None
+    supports_tool_calling: bool = False
+    supports_structured_output: bool = False
+    cost_per_1k_input: float | None = None
+    cost_per_1k_output: float | None = None
+    notes: str | None = None
+
+
+def _capability_facts(cap) -> dict:
+    """Поля модели, одинаковые для всех трёх мест сборки LiveModelOut."""
+    return {
+        "max_context_tokens": cap.max_context_tokens,
+        "supports_tool_calling": cap.supports_tool_calling,
+        "supports_structured_output": cap.supports_structured_output,
+        "cost_per_1k_input": cap.cost_per_1k_input,
+        "cost_per_1k_output": cap.cost_per_1k_output,
+        "notes": cap.notes,
+    }
 
 
 _VISION_HINTS = (
@@ -956,6 +992,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                         loaded=True, node=inst.name,
                         preferred_instance=cap.preferred_instance,
                         vram_gb_estimate=cap.vram_gb_estimate or vram,
+                        **_capability_facts(cap),
                     )
                 else:
                     # Discovered model on a non-Ollama provider — register into
@@ -997,6 +1034,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                         loaded=True, node=inst.name,
                         preferred_instance=th.preferred_instance,
                         vram_gb_estimate=vram,
+                        **_capability_facts(th),
                     )
 
     # 2) Non-loaded catalog models that are still selectable:
@@ -1023,6 +1061,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
             loaded=False, node=None,
             preferred_instance=cap.preferred_instance,
             vram_gb_estimate=cap.vram_gb_estimate,
+            **_capability_facts(cap),
         )
 
     # Persist newly-discovered models once (race-safe upsert + single commit).

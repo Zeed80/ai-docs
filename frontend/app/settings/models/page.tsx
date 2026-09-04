@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
+import { ModelCombobox } from "@/components/models/picker/ModelCombobox";
+import type { CatalogModel, Modality } from "@/lib/models/types";
 
 const API = getApiBaseUrl();
 
@@ -36,6 +38,15 @@ interface CatalogEntry {
   local_only: boolean;
   vram_gb_estimate: number | null;
   status: string;
+  // Приходят из /live-models и /models; до этого не запрашивались и не
+  // показывались, хотя лежат в каталоге моделей с самого начала.
+  max_context_tokens?: number | null;
+  supports_tool_calling?: boolean;
+  supports_structured_output?: boolean;
+  cost_per_1k_input?: number | null;
+  cost_per_1k_output?: number | null;
+  notes?: string | null;
+  availability?: "available" | "missing" | "unknown";
 }
 
 interface RepoFile {
@@ -2453,102 +2464,6 @@ const MODALITY_LABEL: Record<string, string> = {
   rerank: "переранжирование",
 };
 
-function ProviderModelSelect({
-  value,
-  options,
-  onChange,
-  placeholder,
-  allowEmpty,
-  statuses,
-  requiredModality,
-}: {
-  value: string;
-  options: CatalogEntry[];
-  onChange: (key: string) => void;
-  placeholder?: string;
-  allowEmpty?: boolean;
-  statuses?: Record<string, boolean>; // provider -> running (for the ●/○ hint)
-  requiredModality?: string; // capability the slot needs; mismatch → warn, not hide
-}) {
-  const providers = Array.from(new Set(options.map((o) => o.provider)));
-  const current = options.find((o) => o.key === value);
-  // Remember the chosen provider locally so it survives an empty model value.
-  // Without this, an optional (allowEmpty) field whose model is cleared would
-  // snap the provider back to providers[0], making it impossible to switch
-  // provider before picking a model.
-  const [provOverride, setProvOverride] = useState<string | null>(null);
-  const selectedProvider =
-    current?.provider ??
-    (provOverride && providers.includes(provOverride)
-      ? provOverride
-      : (providers[0] ?? ""));
-  const models = options.filter((o) => o.provider === selectedProvider);
-
-  const dot = (p: string) => {
-    if (!statuses || !(p in statuses)) return "";
-    return statuses[p] ? " ●" : " ○";
-  };
-
-  const onProvider = (p: string) => {
-    if (p === selectedProvider) return;
-    setProvOverride(p);
-    const first = options.find((o) => o.provider === p);
-    // For required fields auto-pick the first model so the result is always
-    // valid; optional fields stay empty (provider remembered via provOverride)
-    // until the user chooses a model.
-    onChange(allowEmpty ? "" : (first?.key ?? ""));
-  };
-
-  const unsuitable = (o: CatalogEntry) =>
-    !!requiredModality && !o.modalities?.includes(requiredModality);
-  const selectedUnsuitable = !!current && unsuitable(current);
-  const reqLabel =
-    (requiredModality &&
-      (MODALITY_LABEL[requiredModality] ?? requiredModality)) ||
-    "";
-
-  return (
-    <div className="flex flex-col gap-1 min-w-0">
-      <div className="flex gap-2 min-w-0">
-        <select
-          className={`${selectBase} w-32 shrink-0`}
-          value={selectedProvider}
-          onChange={(e) => onProvider(e.target.value)}
-        >
-          {providers.length === 0 && <option value="">— нет —</option>}
-          {providers.map((p) => (
-            <option key={p} value={p}>
-              {providerLabel(p)}
-              {dot(p)}
-            </option>
-          ))}
-        </select>
-        <select
-          className={`${selectBase} flex-1 min-w-0`}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          {(allowEmpty || !value) && (
-            <option value="">{placeholder ?? "— модель —"}</option>
-          )}
-          {models.map((c) => (
-            <option key={c.key} value={c.key}>
-              {unsuitable(c) ? "⚠ " : ""}
-              {c.provider_model}
-              {c.vram_gb_estimate ? ` · ${c.vram_gb_estimate} GB` : ""}
-            </option>
-          ))}
-        </select>
-      </div>
-      {selectedUnsuitable && (
-        <span className="text-xs text-amber-400">
-          ⚠ Модель не заявляет «{reqLabel}» — может работать хуже для этой роли.
-          Выбор разрешён.
-        </span>
-      )}
-    </div>
-  );
-}
 
 interface SlotItem {
   slot: string;
@@ -2856,7 +2771,7 @@ function AssignmentTab() {
   const selectable = (c: ProvModel) => c.loaded || c.status !== "disabled";
   // Show EVERY loaded model for the slot — never hide by capability. Models that
   // lack the slot's required modality are still selectable but flagged with a
-  // warning (see ProviderModelSelect). local_only stays a hard rule: confidential
+  // warning (see ModelCombobox). local_only stays a hard rule: confidential
   // slots must not offer cloud models.
   const optsFor = (slot: SlotItem): CatalogEntry[] => {
     return models.filter(
@@ -3313,11 +3228,19 @@ function AssignmentTab() {
                     </div>
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="flex-1 min-w-0">
-                        <ProviderModelSelect
-                          value={draftValue}
-                          options={optsFor(s)}
-                          statuses={running}
-                          requiredModality={s.required_modality ?? undefined}
+                        {/* Каскад «провайдер → модель» заменён одним списком с
+                            поиском: у OpenRouter это сотни опций, и найти
+                            нужную в нативном селекте можно было только
+                            прокруткой. Непригодные модели не прячутся, а
+                            объясняются — иначе человек ищет модель, которой не
+                            видит, и не понимает, почему её нет. */}
+                        <ModelCombobox
+                          models={optsFor(s) as unknown as CatalogModel[]}
+                          value={draftValue || null}
+                          localOnly={Boolean(s.local_only)}
+                          requiredModality={
+                            (s.required_modality as Modality | null) ?? null
+                          }
                           onChange={(v) => setDraftModel(s.slot, v)}
                         />
                       </div>

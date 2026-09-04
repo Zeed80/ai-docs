@@ -59,6 +59,13 @@ export interface CatalogModel {
   speed_score: number;
   vram_gb_estimate: number | null;
   availability: Availability;
+  /** Ниже — поля, которые лежали в схеме модели и не доходили до интерфейса. */
+  max_context_tokens: number | null;
+  supports_tool_calling: boolean;
+  supports_structured_output: boolean;
+  cost_per_1k_input: number | null;
+  cost_per_1k_output: number | null;
+  notes: string | null;
 }
 
 export interface Slot {
