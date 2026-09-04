@@ -32,7 +32,7 @@ from app.ai import provider_registry
 from app.ai import model_runtime_store
 from app.ai.model_registry import ModelRegistry
 from app.ai.schemas import AITask, ModelCapability, ModelStatus, ProviderKind
-from app.ai.secret_box import decrypt, encrypt, mask
+from app.ai.secret_box import decrypt, encrypt, key_state, mask
 from app.ai.thinking_params import effective_thinking_levels
 from app.auth.jwt import get_current_user, require_role
 from app.auth.models import UserInfo, UserRole
@@ -67,6 +67,10 @@ class ProviderInstanceOut(BaseModel):
     is_local: bool
     api_key_set: bool
     api_key_mask: str
+    # "unset" | "set" | "corrupt". Испорченный ключ (например после смены
+    # app_secret_key) раньше был неотличим от отсутствующего: api_key_set
+    # приходил False, и человек вводил ключ заново с тем же результатом.
+    api_key_state: str
     extra: dict                 # {headers: {...}, body: {...}} — provider-specific params
     last_check_at: datetime | None
     last_check_ok: bool | None
@@ -131,6 +135,7 @@ def _to_out(inst: ProviderInstance) -> ProviderInstanceOut:
         extra=inst.extra or {},
         api_key_set=bool(key),
         api_key_mask=mask(key),
+        api_key_state=key_state(inst.api_key_encrypted),
         last_check_at=inst.last_check_at,
         last_check_ok=inst.last_check_ok,
         last_error=inst.last_error,

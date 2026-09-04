@@ -865,6 +865,9 @@ interface ProviderInstanceT {
   enabled: boolean;
   is_local: boolean;
   api_key_set: boolean;
+  // "unset" | "set" | "corrupt" — испорченный ключ (например после смены
+  // app_secret_key) раньше выглядел как отсутствующий.
+  api_key_state?: "unset" | "set" | "corrupt";
   api_key_mask: string;
   last_check_ok: boolean | null;
   last_error: string | null;
@@ -976,10 +979,18 @@ function ProvidersConfigPanel() {
                   </span>
                   <span
                     className={`text-[10px] ${
-                      c.api_key_set ? "text-emerald-400" : "text-slate-600"
+                      c.api_key_state === "corrupt"
+                        ? "text-amber-400"
+                        : c.api_key_set
+                          ? "text-emerald-400"
+                          : "text-slate-600"
                     }`}
                   >
-                    {c.api_key_set ? "ключ ✓" : "нет"}
+                    {c.api_key_state === "corrupt"
+                      ? "ключ повреждён"
+                      : c.api_key_set
+                        ? "ключ ✓"
+                        : "нет"}
                   </span>
                 </button>
               ))}
@@ -1121,7 +1132,11 @@ function CloudProviderDetail({
           {providerLabel(inst.kind)}
         </span>
         <span className="text-xs text-slate-500">
-          {inst.api_key_set ? `ключ: ${inst.api_key_mask}` : "ключ не задан"}
+          {inst.api_key_state === "corrupt"
+            ? "ключ сохранён, но не расшифровывается — введите его заново (обычно после смены APP_SECRET_KEY)"
+            : inst.api_key_set
+              ? `ключ: ${inst.api_key_mask}`
+              : "ключ не задан"}
         </span>
       </div>
 

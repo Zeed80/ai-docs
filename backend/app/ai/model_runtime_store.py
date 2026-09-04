@@ -111,6 +111,38 @@ async def hydrate_runtime_cache(db: AsyncSession) -> None:
         except Exception as exc:  # noqa: BLE001
             logger.warning("agent_config_hydrate_failed", error=str(exc))
 
+    _refresh_live_resolvers()
+
+
+def _refresh_live_resolvers() -> None:
+    """Донести свежие оверлеи до тех, кто держит каталог в памяти.
+
+    Redis-оверлеи обновлялись, а резолвер продолжал работать с каталогом,
+    прочитанным один раз при старте процесса: модель, подтянутая из облака или
+    найденная на узле, была назначаема в GUI и невидима при исполнении до
+    перезапуска контейнера. Кэши YAML-дефолтов вели себя так же.
+    """
+    try:
+        from app.ai.task_routing import invalidate_defaults_cache
+
+        invalidate_defaults_cache()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("routing_defaults_invalidate_failed", error=str(exc))
+
+    try:
+        from app.ai.provider_registry import invalidate_registry_providers_cache
+
+        invalidate_registry_providers_cache()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("provider_cache_invalidate_failed", error=str(exc))
+
+    try:
+        from app.ai.router import ai_router
+
+        ai_router.reload_registry()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ai_router_reload_failed", error=str(exc))
+
 
 async def persist_catalog_entry(
     db: AsyncSession,

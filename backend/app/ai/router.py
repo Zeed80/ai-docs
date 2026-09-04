@@ -198,6 +198,34 @@ class AIRouter:
                 except Exception:  # noqa: BLE001 — placeholder kinds may be unbuildable
                     pass
 
+    def reload_registry(self) -> int:
+        """Перечитать каталог моделей в живом процессе.
+
+        ``ai_router`` — модульный синглтон, а реестр читался единственный раз в
+        ``__init__``. Модель, подтянутая через /refresh-models или обнаруженная
+        в /live-models, немедленно появлялась в каталоге для GUI и назначалась
+        на слот — но резолвер её не видел до перезапуска контейнера. Со стороны
+        человека это выглядело так: назначил модель, ничего не изменилось,
+        сообщений нет.
+
+        Возвращает число моделей в перечитанном каталоге.
+        """
+        fresh = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
+        self.registry = fresh
+        # Провайдеры, подставленные снаружи (тесты, встраивание), не трогаем —
+        # иначе перезагрузка каталога незаметно вернула бы живые HTTP-вызовы.
+        for kind in fresh.providers:
+            if kind in self._injected_kinds or kind in self.providers:
+                continue
+            try:
+                self.providers[kind] = self._build_provider(
+                    kind, self._default_resolved(kind)
+                )
+            except Exception:  # noqa: BLE001 — placeholder kinds may be unbuildable
+                pass
+        logger.info("ai_router_registry_reloaded", models=len(fresh.models))
+        return len(fresh.models)
+
     def use_providers(self, providers: dict[ProviderKind, AIProvider]) -> None:
         """Подменить провайдеров после создания роутера (тесты, встраивание).
 

@@ -56,12 +56,34 @@ def _resolve(task: AITask, fallback_model: str) -> tuple[str, str]:
     return (model or fallback_model), (provider or "ollama")
 
 
+def _force_local(
+    task: AITask, model: str, provider: str, local_model: str, event: str
+) -> ModelConfig:
+    """Отвести конфиденциальную задачу на локальную модель — пару целиком.
+
+    Раньше подменялся только провайдер, а имя модели оставалось облачным: в
+    локальный Ollama уходил запрос вида `claude-sonnet-5` и возвращал 404, то
+    есть задача не «падала на локальную модель», а просто ломалась. Провайдер
+    и имя должны меняться вместе — иначе получается пара, которой нет нигде.
+    """
+    logger.error(
+        event,
+        task=task.value,
+        blocked_provider=provider,
+        blocked_model=model,
+        used_model=local_model,
+    )
+    return ModelConfig(model=local_model, provider="ollama")
+
+
 def get_ocr_model() -> ModelConfig:
     """Model for OCR / invoice extraction. Must be local (documents are confidential)."""
     model, provider = _resolve(AITask.INVOICE_OCR, settings.ollama_model_ocr)
     if provider not in _LOCAL_PROVIDERS:
-        logger.warning("model_resolver_ocr_cloud_blocked", provider=provider, model=model)
-        provider = "ollama"
+        return _force_local(
+            AITask.INVOICE_OCR, model, provider,
+            settings.ollama_model_ocr, "model_resolver_ocr_cloud_blocked",
+        )
     return ModelConfig(model=model, provider=provider)
 
 
@@ -69,8 +91,10 @@ def get_vlm_model() -> ModelConfig:
     """Vision Language Model for drawing / image analysis. Must be local."""
     model, provider = _resolve(AITask.DRAWING_ANALYSIS_VLM, settings.ollama_model_vlm)
     if provider not in _LOCAL_PROVIDERS:
-        logger.warning("model_resolver_vlm_cloud_blocked", provider=provider, model=model)
-        provider = "ollama"
+        return _force_local(
+            AITask.DRAWING_ANALYSIS_VLM, model, provider,
+            settings.ollama_model_vlm, "model_resolver_vlm_cloud_blocked",
+        )
     return ModelConfig(model=model, provider=provider)
 
 
@@ -92,7 +116,10 @@ def get_verify_model() -> ModelConfig:
     """Model for extraction verification. Must be local."""
     model, provider = _resolve(AITask.STRUCTURED_EXTRACTION, settings.ollama_model_ocr)
     if provider not in _LOCAL_PROVIDERS:
-        provider = "ollama"
+        return _force_local(
+            AITask.STRUCTURED_EXTRACTION, model, provider,
+            settings.ollama_model_ocr, "model_resolver_verify_cloud_blocked",
+        )
     return ModelConfig(model=model, provider=provider)
 
 

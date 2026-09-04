@@ -134,6 +134,17 @@ def _registry() -> Any:
     return ModelRegistry.from_yaml(_REGISTRY_PATH)
 
 
+def invalidate_defaults_cache() -> None:
+    """Сбросить кэш YAML-дефолтов маршрутизации.
+
+    Кэш заполнялся один раз за жизнь процесса и не инвалидировался никогда,
+    поэтому правка `routes:` в model_registry.yaml требовала перезапуска
+    контейнера, ничем себя не обнаруживая.
+    """
+    global _defaults_cache
+    _defaults_cache = None
+
+
 def _registry_defaults() -> dict[str, TaskRouting]:
     """Default routing per task from the YAML registry (routes never change at runtime)."""
     global _defaults_cache

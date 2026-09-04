@@ -17,10 +17,21 @@ def test_confidential_slot_opened_to_cloud(monkeypatch):
     assert p._slot_effective_local_only("cad_spec_read") is False
 
 
-def test_non_confidential_slot_is_never_local_only(monkeypatch):
+def test_every_content_bearing_slot_is_local_until_opened(monkeypatch):
+    """Раньше agent_email не считался конфиденциальным, и облачная модель
+    попадала на генерацию деловых писем обычным выбором из списка — без
+    подтверждения и без следа. Теперь письма, как и остальные слоты, через
+    которые проходит содержимое документов, локальны до явного разрешения."""
     monkeypatch.setattr(p, "_cloud_allowed_slots", lambda: set())
-    # agent_email is not a confidential slot.
-    assert p._slot_base_local_only("agent_email") is False
+    for slot in ("agent_email", "agent_orchestrator", "agent_fast", "agent_large"):
+        assert p._slot_base_local_only(slot) is True, slot
+        assert p._slot_effective_local_only(slot) is True, slot
+
+
+def test_email_slot_can_still_be_opened_to_cloud(monkeypatch):
+    """Это не запрет: CLAUDE.md разрешает cloud-модели для planner/auditor и
+    генерации писем. Возможность сохраняется, но включается осознанно."""
+    monkeypatch.setattr(p, "_cloud_allowed_slots", lambda: {"agent_email"})
     assert p._slot_effective_local_only("agent_email") is False
 
 
@@ -46,9 +57,17 @@ async def test_allow_cloud_endpoint_toggles_confidential_slot(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_allow_cloud_endpoint_noop_on_non_confidential(monkeypatch):
-    touched = {"set": False}
-    monkeypatch.setattr(p, "_set_slot_cloud_allowed", lambda s, a: touched.update(set=True))
+async def test_allow_cloud_endpoint_records_the_choice_for_the_email_slot(monkeypatch):
+    """Разрешение для писем теперь именно сохраняется, а не оказывается no-op:
+    до этого слот и так пускал облако, поэтому фиксировать было нечего."""
+    calls = {}
+    monkeypatch.setattr(p, "_set_slot_cloud_allowed", lambda s, a: calls.update(slot=s, allowed=a))
     res = await p.set_slot_allow_cloud("agent_email", p.SlotCloudWrite(allowed=True))
     assert res["cloud_allowed"] is True
-    assert touched["set"] is False  # already allows cloud → nothing stored
+    assert calls == {"slot": "agent_email", "allowed": True}
+
+
+@pytest.mark.asyncio
+async def test_allow_cloud_endpoint_rejects_an_unknown_slot():
+    with pytest.raises(Exception):
+        await p.set_slot_allow_cloud("no_such_slot", p.SlotCloudWrite(allowed=True))

@@ -74,6 +74,12 @@ _LOCAL_KINDS = {
 _registry_providers_cache: dict | None = None
 
 
+def invalidate_registry_providers_cache() -> None:
+    """Сбросить кэш providers: из YAML — см. task_routing.invalidate_defaults_cache."""
+    global _registry_providers_cache
+    _registry_providers_cache = None
+
+
 def _registry_providers() -> dict:
     global _registry_providers_cache
     if _registry_providers_cache is None:

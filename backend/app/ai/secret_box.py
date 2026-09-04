@@ -47,6 +47,25 @@ def decrypt(ciphertext: str | None) -> str:
         return ""
 
 
+def key_state(ciphertext: str | None) -> str:
+    """Различить «ключа нет» и «ключ есть, но не расшифровывается».
+
+    decrypt() возвращает "" в обоих случаях, поэтому испорченная строка — а
+    ровно так выглядят все сохранённые ключи после смены app_secret_key —
+    показывалась в интерфейсе как «ключ не задан». Человек вводил ключ заново,
+    получал тот же результат и не понимал, почему.
+
+    Возвращает "unset" | "set" | "corrupt".
+    """
+    if not ciphertext:
+        return "unset"
+    try:
+        _fernet().decrypt(ciphertext.encode("ascii"))
+    except Exception:  # noqa: BLE001 — любая неудача расшифровки
+        return "corrupt"
+    return "set"
+
+
 def mask(plaintext: str | None) -> str:
     """Return a display-safe mask of a secret, e.g. ``sk-…a1b2``.
 

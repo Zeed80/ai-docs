@@ -891,21 +891,58 @@ async def get_assignment() -> dict:
 
 
 @router.put("/assignment/documents")
-async def set_document_assignment(body: DocumentGroupUpdate) -> dict:
-    from app.ai.assignment_groups import DocumentGroup, set_document_group
+async def set_document_assignment(
+    body: DocumentGroupUpdate, db: AsyncSession = Depends(get_db)
+) -> dict:
+    from app.ai.assignment_groups import (
+        EMBEDDING_DOC_TASKS,
+        RERANK_DOC_TASKS,
+        TEXT_DOC_TASKS,
+        VISION_DOC_TASKS,
+        DocumentGroup,
+        set_document_group,
+    )
 
     try:
         result = set_document_group(DocumentGroup(**body.model_dump()))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # set_document_group пишет только в Redis, а старт восстанавливает этот
+    # ключ из Postgres — без durable-снимка назначение откатывалось на прежнюю
+    # модель при первом же перезапуске, молча.
+    await _persist_routing(
+        db,
+        [
+            t.value
+            for t in (
+                *VISION_DOC_TASKS, *TEXT_DOC_TASKS,
+                *EMBEDDING_DOC_TASKS, *RERANK_DOC_TASKS,
+            )
+        ],
+    )
     return result.model_dump()
 
 
 @router.put("/assignment/agent")
-async def set_agent_assignment(body: AgentGroupUpdate) -> dict:
-    from app.ai.assignment_groups import AgentGroup, set_agent_group
+async def set_agent_assignment(
+    body: AgentGroupUpdate, db: AsyncSession = Depends(get_db)
+) -> dict:
+    from app.ai import model_runtime_store
+    from app.ai.agent_config import get_builtin_agent_config
+    from app.ai.assignment_groups import AGENT_SYNC_TASKS, AgentGroup, set_agent_group
 
     result = set_agent_group(AgentGroup(**body.model_dump()))
+    # Та же причина, что и у документов, плюс agent_config: он живёт в Redis и
+    # файле, а Postgres-строка при старте перезаписывает Redis — без снимка
+    # роли агента возвращались к прежней модели.
+    await _persist_routing(db, [t.value for t in AGENT_SYNC_TASKS])
+    try:
+        await model_runtime_store.persist_agent_config(
+            db, config=get_builtin_agent_config().model_dump(mode="json")
+        )
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 — запись в Redis/файл уже прошла
+        logger.warning("agent_config_persist_failed", error=str(exc))
     return result.model_dump()
 
 
