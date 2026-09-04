@@ -78,3 +78,26 @@ def test_provider_defaults_cache_can_be_invalidated():
 
     provider_registry.invalidate_registry_providers_cache()
     assert provider_registry._registry_providers_cache is None
+
+
+def test_model_pins_survive_a_node_rename(monkeypatch):
+    """Пин модели к узлу хранится строкой и матчится по имени или id, но
+    записывается всегда имя. После переименования узла ни одно сравнение не
+    срабатывало, и select_instance молча уходил на первый попавшийся узел:
+    модель, прибитая к конкретной машине, считалась на другой."""
+    from app.api import providers_api
+
+    store = {"qwen3_8_27b": "gpu-old", "embedder": "cpu-node"}
+    monkeypatch.setattr(
+        "app.ai.model_registry._load_preferred_instances", lambda: dict(store)
+    )
+    monkeypatch.setattr(
+        "app.ai.model_registry.set_preferred_instance",
+        lambda key, name: store.__setitem__(key, name),
+    )
+
+    providers_api._repin_models_after_rename("gpu-old", "gpu-new")
+
+    assert store["qwen3_8_27b"] == "gpu-new"
+    # Чужие пины не трогаем.
+    assert store["embedder"] == "cpu-node"

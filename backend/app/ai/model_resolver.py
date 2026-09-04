@@ -127,9 +127,33 @@ def get_verify_model() -> ModelConfig:
 # Provider URL helpers (used by dispatch functions)
 # ---------------------------------------------------------------------------
 
+def _resolved_node(provider: str):
+    """Узел из provider_instances для этого kind, если он там есть.
+
+    Прямой путь вызова (drawing_extractor, telegram, reasoning_generate) шёл
+    мимо реестра узлов: адреса и ключи брались из захардкоженной таблицы ниже.
+    Узел, заведённый в GUI — второй Ollama на другой машине, свой base_url,
+    ключ из зашифрованного хранилища, — на этот путь просто не действовал.
+    Теперь сначала спрашиваем реестр, а таблица остаётся последним резервом
+    для окружений, где узлы ещё не заведены.
+    """
+    try:
+        from app.ai.provider_registry import select_instance
+        from app.ai.schemas import ProviderKind
+
+        return select_instance(ProviderKind(provider))
+    except Exception as exc:  # noqa: BLE001 — незнакомый kind или нет БД/Redis
+        logger.debug("model_resolver_node_lookup_failed", provider=provider, error=str(exc))
+        return None
+
+
 def _provider_base_url(provider: str) -> str:
     """Return the base URL (without /v1) for OpenAI-compatible providers."""
     import os
+
+    node = _resolved_node(provider)
+    if node is not None and node.base_url:
+        return str(node.base_url).rstrip("/").removesuffix("/v1")
 
     if provider == "llamacpp":
         return str(settings.llamacpp_url).rstrip("/").rstrip("/v1")
@@ -180,6 +204,10 @@ def _provider_base_url(provider: str) -> str:
 def _provider_api_key(provider: str) -> str:
     """Return API key for the given cloud provider (empty string for local)."""
     import os
+
+    node = _resolved_node(provider)
+    if node is not None and node.api_key:
+        return str(node.api_key)
 
     key_map = {
         "openrouter": settings.openrouter_api_key,

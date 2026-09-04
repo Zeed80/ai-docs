@@ -221,6 +221,7 @@ async def update_provider(
     instance_id: str, payload: ProviderInstanceUpdate, db: AsyncSession = Depends(get_db)
 ) -> ProviderInstanceOut:
     inst = await _get_or_404(db, instance_id)
+    old_name = inst.name
     if payload.name is not None:
         inst.name = payload.name.strip() or inst.name
     if payload.base_url is not None:
@@ -237,8 +238,33 @@ async def update_provider(
         inst.extra = payload.extra or None
     await db.commit()
     await db.refresh(inst)
+    if inst.name != old_name:
+        _repin_models_after_rename(old_name, inst.name)
     await _sync_cache(db)
     return _to_out(inst)
+
+
+def _repin_models_after_rename(old_name: str, new_name: str) -> None:
+    """Перенести пины моделей на переименованный узел.
+
+    Пин хранится строкой и матчится по имени ИЛИ id, но записывается всегда
+    имя. После переименования узла ни одно из сравнений не срабатывало, и
+    select_instance молча уходил на первый попавшийся узел — модель, прибитая
+    к конкретной машине, начинала считаться на другой, без единого сообщения.
+    """
+    try:
+        from app.ai.model_registry import _load_preferred_instances, set_preferred_instance
+
+        moved = [k for k, v in _load_preferred_instances().items() if v == old_name]
+        for model_key in moved:
+            set_preferred_instance(model_key, new_name)
+        if moved:
+            logger.info(
+                "model_pins_followed_node_rename",
+                old_name=old_name, new_name=new_name, models=moved,
+            )
+    except Exception as exc:  # noqa: BLE001 — переименование уже сохранено
+        logger.warning("model_pin_repin_failed", error=str(exc))
 
 
 # ── Delete ──────────────────────────────────────────────────────────────────

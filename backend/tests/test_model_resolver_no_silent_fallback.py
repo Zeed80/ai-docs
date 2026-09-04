@@ -72,3 +72,33 @@ def test_reasoning_may_use_cloud_when_not_confidential(monkeypatch):
     blocked = model_resolver.get_reasoning_model(confidential=True)
     assert blocked.provider == "ollama"
     assert blocked.model == settings.ollama_model_reasoning
+
+
+# ── Узлы из БД действуют и на прямом пути вызова ──────────────────────────────
+
+
+def test_direct_call_path_uses_the_node_registry(monkeypatch):
+    """`_provider_base_url`/`_provider_api_key` держали свою таблицу из 18
+    захардкоженных адресов и набор env-имён, не заглядывая в provider_instances.
+    Узел, заведённый в GUI (второй Ollama на другой машине, свой base_url, ключ
+    из зашифрованного хранилища), на этот путь просто не действовал."""
+    from types import SimpleNamespace
+
+    from app.ai import model_resolver
+
+    node = SimpleNamespace(base_url="http://gpu-node:11434/v1", api_key="secret-from-db")
+    monkeypatch.setattr(model_resolver, "_resolved_node", lambda provider: node)
+
+    # /v1 срезается — оба потребителя в ollama_client дописывают его сами,
+    # иначе получилось бы /v1/v1.
+    assert model_resolver._provider_base_url("ollama") == "http://gpu-node:11434"
+    assert model_resolver._provider_api_key("anthropic") == "secret-from-db"
+
+
+def test_hardcoded_table_still_covers_kinds_the_registry_does_not_know(monkeypatch):
+    """`kimi` и `qwen` — не значения ProviderKind (в enum они moonshot и
+    dashscope). Реестр их не резолвит, и таблица остаётся резервом."""
+    from app.ai import model_resolver
+
+    assert model_resolver._resolved_node("kimi") is None
+    assert model_resolver._provider_base_url("kimi") == "https://api.moonshot.cn/v1"
