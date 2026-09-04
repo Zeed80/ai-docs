@@ -49,18 +49,50 @@ def _resolve_db_url() -> tuple[str, str]:
     pg_db = os.environ.get("POSTGRES_DB", "aiworkspace")
     test_db = pg_db + "_test"
 
-    import socket
-    for host in ([pg_host] if pg_host != "localhost" else ["localhost"]):
-        try:
-            s = socket.create_connection((host, pg_port), timeout=1)
-            s.close()
-            url = f"postgresql+asyncpg://{pg_user}:{pg_pass}@{host}:{pg_port}/{test_db}"
-            return url, f"stack:{host}:{pg_port}/{test_db}"
-        except OSError:
-            pass
+    # Открытый порт сам по себе ничего не доказывает: на машине разработчика
+    # на 5432 может слушать посторонний Postgres из другого проекта. Раньше
+    # проверялся только факт TCP-соединения, поэтому запасной путь через
+    # testcontainers не включался, и треть набора падала ошибкой авторизации
+    # вместо тестов. Проверяем именно ту базу, которой собираемся пользоваться.
+    if _can_connect_to(pg_host, pg_port, pg_user, pg_pass, test_db):
+        url = f"postgresql+asyncpg://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{test_db}"
+        return url, f"stack:{pg_host}:{pg_port}/{test_db}"
 
     # 3. testcontainers fallback
     return "__testcontainers__", "testcontainers:postgres:16-alpine"
+
+
+def _can_connect_to(host: str, port: int, user: str, password: str, dbname: str) -> bool:
+    """Действительно ли по этому адресу отвечает наша тестовая база."""
+    import socket
+
+    try:
+        socket.create_connection((host, port), timeout=1).close()
+    except OSError:
+        return False
+
+    try:
+        import asyncio
+
+        import asyncpg
+    except ImportError:  # драйвера нет — доверяем открытому порту, как раньше
+        return True
+
+    async def _probe() -> bool:
+        try:
+            conn = await asyncpg.connect(
+                host=host, port=port, user=user, password=password,
+                database=dbname, timeout=3,
+            )
+        except Exception:
+            return False
+        await conn.close()
+        return True
+
+    try:
+        return asyncio.run(_probe())
+    except Exception:
+        return False
 
 
 _DB_URL, _DB_LABEL = _resolve_db_url()

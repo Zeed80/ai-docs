@@ -32,6 +32,16 @@ test = [
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 pythonpath = ["."]
+# Маркеры не были объявлены вовсе: pytest молча принимал любое имя, поэтому
+# опечатка в `-m` тихо отбирала пустой набор, а `--strict-markers` включить
+# было нельзя.
+markers = [
+  "live: требует запущенного стека (Ollama, MinIO, Redis) — не гоняется в обычном прогоне",
+  "llamacpp: требует поднятого llama.cpp-сервера",
+  "vllm: требует поднятого vLLM-сервера",
+  "slow: заметно дольше остальных",
+  "recipes: сценарии самообучения (рецепты)",
+]
 
 [tool.ruff]
 line-length = 100

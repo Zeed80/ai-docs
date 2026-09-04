@@ -65,6 +65,27 @@ def _count_active_skills(config: BuiltinAgentConfig) -> int:
     return len(config.exposed_skills)
 
 
+def _approval_gates_total(config: BuiltinAgentConfig) -> int:
+    """Сколько действий действительно требуют подтверждения человека.
+
+    Считалось по списку `approval_gates` из gateway.yml, который остался от
+    registry-режима и пользуется другой схемой имён (`invoice.approve` против
+    `invoices.approve`). Оператору показывалось 31 при 41 реально
+    закрытом действии. Enforcement идёт по манифесту — по нему и считаем.
+    """
+    if gateway_config.skills_mode == "capabilities":
+        try:
+            from app.ai.capability_manifest import load_capability_manifest
+
+            return sum(
+                len(c.gate_actions or ())
+                for c in load_capability_manifest().capabilities
+            )
+        except Exception:
+            pass
+    return len(config.approval_gates)
+
+
 class AgentControlPlaneStatus(BaseModel):
     ok: bool
     autonomy_mode: str
@@ -625,7 +646,7 @@ async def control_plane_status(db: AsyncSession = Depends(get_db)) -> AgentContr
             if is_protected_setting(name)
         ),
         skills_total=_count_active_skills(config),
-        approval_gates_total=len(config.approval_gates),
+        approval_gates_total=_approval_gates_total(config),
         plugins_total=int(plugin_total or 0),
         plugins_enabled=int(plugin_enabled or 0),
         tasks_open=int(tasks_open or 0),

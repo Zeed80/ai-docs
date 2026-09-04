@@ -46,8 +46,8 @@ infra/             — docker-compose, traefik, scripts
 - Язык общения и документации: **русский**
 - Код, комментарии в коде, имена переменных: **английский**
 - Pydantic schemas = единый источник правды для AiAgent skills (auto-gen YAML)
-- 52 skills в 13 категориях, 9 approval gates
-- Все endpoints = AiAgent tools (через `generate-skill-registry.py`)
+- 23 capability (21 маршрутизируемая + vault/mcp), 323 действия, 41 gate_action
+- Все endpoints = AiAgent tools (через `infra/scripts/generate-skill-registry.py`)
 
 ## Команды (целевые)
 ```bash
@@ -80,9 +80,9 @@ make agent-test   # AiAgent scenarios на mock skills
 
 - **Чёткое разделение**: провайдеры (инфраструктура) vs модели (каталог) vs назначение (task/role → model).
 - **Provider instances** (`backend/app/ai/provider_registry.py`, таблица `provider_instances`): несколько узлов на один kind — Ollama/vLLM/llama.cpp на разных машинах сети. `select_instance(kind, model, preferred_instance)` выбирает узел (pin модели → узел с моделью → первый живой). Облачные ключи — зашифрованы в БД (`secret_box.py`, Fernet на app_secret_key), `.env` остаётся fallback. Резолв base_url/ключа: DB → YAML → env. Кэш в Redis (`provider_instances`), сидинг на старте (`provider_bootstrap.py`).
-- **API**: `/api/providers/*` (CRUD узлов, `/test`, `/refresh-models` авто-подтягивает облачные модели), `/api/providers/models` (каталог + thinking), `/api/providers/assignments` (единая таблица). GUI: `/settings/models` (провайдер-центричный); рич-функции (библиотека/загрузка/GPU) — `/settings/models/advanced`.
+- **API**: `/api/providers/*` (CRUD узлов, `/test`, `/refresh-models` авто-подтягивает облачные модели), `/api/providers/models` (каталог + thinking), `/api/providers/assignments` (единая таблица). GUI: `/settings/models` — единый экран с вкладками «Провайдеры / Назначение / Библиотека / Параметры / GPU».
 - **Thinking (режим рассуждения)**: per-модель в каталоге (`thinking_supported`/`thinking_enabled`) + `AIRequest.thinking` прокидывается в провайдеры (Ollama `think`, Anthropic extended). Роли агента — tri-state override (`*_disable_thinking: None` → дефолт модели). UI: галочка у каждой локальной модели.
-- **Каталог**: core-набор = production (6 локальных + 2 cloud Claude); дубли VLM/устаревшее → `disabled` (скрыты фильтром по `status`, не удалены). `task_routing` (Redis) — источник правды для *task→model* назначений (`model_resolver.py` читает только его). `ai_config` (`data/ai_config.json` + Redis-зеркало, `api/ai_settings.py`) — отдельный, всё ещё активно читаемый store для настроек, которые более старые модули (OCR-экстракция, embeddings, reasoning-provider, agent-model override, memory) читают напрямую, минуя `task_routing`; `assignment_groups.py`/`providers_api.py` пишут в оба места (`_mirror_ai_config`), `task_routing.migrate_from_ai_config()` — one-time миграция при старте.
+- **Каталог**: core-набор = production (6 локальных + 2 cloud Claude); дубли VLM/устаревшее → `disabled` (скрыты фильтром по `status`, не удалены). `task_routing` (Redis) — источник правды для *task→model* назначений (`model_resolver.py` читает только его). `ai_config` (`backend/data/ai_config.json` + Redis-зеркало, `api/ai_settings.py`) — отдельный, всё ещё активно читаемый store для настроек, которые более старые модули (OCR-экстракция, embeddings, reasoning-provider, agent-model override, memory) читают напрямую, минуя `task_routing`; `assignment_groups.py`/`providers_api.py` пишут в оба места (`_mirror_ai_config`), `task_routing.migrate_from_ai_config()` — one-time миграция при старте.
 
 ## Агент: архитектура хода (после рефакторинга 2026-06)
 
@@ -91,16 +91,18 @@ make agent-test   # AiAgent scenarios на mock skills
 - **Аудит**: типизированные коды (`backend/app/ai/audit.py`, `AuditCode`); retry/repair/gap управляются кодами, не текстом сообщений. Бюджет вспомогательных LLM-вызовов на ход: `aux_quality_budget(tier)`.
 - **Spec-таблицы**: «таблица = спецификация, данные = SQL». LLM передаёт только TableSpec (источник/колонки/фильтры/сортировка из whitelisted-каталога `backend/app/domain/table_spec.py`), движок отдаёт ПОЛНЫЙ датасет (true total, cap 5000). Spec хранится в workspace-блоке; правки («добавь столбец с НДС перед суммой», «отсортируй…», «покажи только…») — детерминированные патчи через fast-path оркестратора, 0 LLM. API: `/api/workspace/agent/spec-table(+/patch,/catalog)`; capability `workspace`, actions `spec_table*`. Smart-фильтр: стемминг + точные числа + canonical items.
 - **Рецепты (self-learning)**: успешный многошаговый ход → draft `RecipeSkill` (Postgres + Qdrant `recipe_triggers`); активный рецепт с похожим триггером выполняется replay'ем без LLM-планирования (`backend/app/ai/recipes.py`, UI: /settings/recipes). Approval-gated действия в рецепты не попадают.
-- **Кодоген под замком**: сгенерированный Python исполняется ТОЛЬКО в изолированном контейнере `skill-runner` (infra/skill-runner; non-root, read-only, без секретов); активация только через proposal → human decide → promote. Реестр promoted-скиллов: `aiagent/skills/capabilities.generated.yml`.
+- **Кодоген под замком**: сгенерированный Python исполняется ТОЛЬКО в изолированном контейнере `skill-runner` (infra/skill-runner; non-root, read-only, без секретов); активация только через proposal → human decide → promote. Реестр promoted-скиллов: `aiagent/skills/capabilities.generated.yml` — создаётся при первом promote, в чистом репозитории его нет.
 - **AgentCron**: beat-задача `agent.cron_dispatch` создаёт `WorkOrder` и совместимый `AgentTask`; выполнение идёт только через durable runtime. `AgentTeam` пока остаётся registry.
 
 ## Skills и endpoints
 
-52 skills в 13 категориях. Каждый skill = FastAPI endpoint, описанный Pydantic-схемой. Скрипт `generate-skill-registry.py` генерирует YAML для AiAgent из Pydantic-схем автоматически. Pydantic схемы = единственный источник правды для AiAgent skills.
+23 capability, 323 действия. Каждое действие = FastAPI endpoint, описанный Pydantic-схемой. Скрипт `infra/scripts/generate-skill-registry.py` генерирует YAML для AiAgent из Pydantic-схем автоматически. Pydantic схемы = единственный источник правды для AiAgent skills.
 
 Категории skills: Documents, Invoices, Email, Suppliers, Anomalies, Tables & Export, Approvals, Calendar, Collections, Normalization, NL & Search, Compare (КП), Audit.
 
-9 approval gates — только они блокируют агента и требуют явного подтверждения человеком. Примеры: `invoice.approve`, `email.send`, `anomaly.resolve`, `table.apply_diff`.
+41 gate_action — только они блокируют агента и требуют явного подтверждения человеком. Источник правды — `gate_actions` в `aiagent/skills/capabilities.yml`, enforcement — HTTP-граница `capability_router` (ответ `423 approval_required`). Примеры: `invoices.approve`, `email.send`, `anomalies.resolve`, `memory.prune`.
+
+Сверять реестр: `validate_capability_catalog()` и `validate_gateway_grants()` в `backend/app/api/capability_router.py` — оба должны возвращать пустой список.
 
 ## Agent Control Plane
 
