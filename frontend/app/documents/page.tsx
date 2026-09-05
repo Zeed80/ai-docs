@@ -266,7 +266,11 @@ function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void] {
     try {
       const stored = localStorage.getItem(key);
       if (stored !== null) setValue(JSON.parse(stored) as T);
-    } catch {}
+    } catch {
+      // Молчим намеренно: приватное окно и настройки браузера могут
+      // запрещать хранилище, а испорченное значение — не повод ломать
+      // страницу. Останется значение по умолчанию.
+    }
   }, [key]);
 
   const set = useCallback(
@@ -274,7 +278,9 @@ function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void] {
       setValue(v);
       try {
         localStorage.setItem(key, JSON.stringify(v));
-      } catch {}
+      } catch {
+        // То же самое: не сохранилась настройка вида — не беда.
+      }
     },
     [key],
   );
@@ -738,7 +744,8 @@ export default function DocumentsPage() {
         try {
           payload = JSON.parse(xhr.responseText);
         } catch {
-          /* ignore */
+          // Тело ответа не JSON (например, страница ошибки прокси). Статус
+          // ниже разберут и без него.
         }
         resolve({
           ok: xhr.status >= 200 && xhr.status < 300,

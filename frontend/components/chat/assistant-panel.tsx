@@ -455,7 +455,9 @@ export function AssistantPanel() {
       const items = await listChatSessions();
       setSessions(items);
     } catch {
-      /* ignore */
+      // Список чатов не обновился — прежний остаётся на экране, а текущий
+      // разговор от этого не страдает. Прерывать его сообщением об ошибке
+      // было бы хуже самой ошибки.
     }
   }, []);
 
@@ -1147,7 +1149,8 @@ export function AssistantPanel() {
           );
           restOk = res.ok;
         } catch {
-          // non-critical
+          // Это и есть проверка доступности: недоступный REST — ожидаемый
+          // исход, ради которого вызов и делается.
         }
       }
       setMessages((prev) =>
