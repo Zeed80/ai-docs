@@ -350,7 +350,7 @@ async def refresh_models(instance_id: str, db: AsyncSession = Depends(get_db)) -
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Failed to fetch models: {exc}")
 
-    from app.ai.schemas import ModelCapability, Modality, ModelStatus
+    from app.ai.provider_catalog_probes import capability_from_listing
 
     registry = _registry()
     added: list[str] = []
@@ -359,18 +359,12 @@ async def refresh_models(instance_id: str, db: AsyncSession = Depends(get_db)) -
         if not provider_model:
             continue
         key = f"{kind.value}_{provider_model}".replace("/", "_").replace(":", "_").replace(".", "_")
-        cap = ModelCapability(
-            name=key,
-            provider=kind,
-            provider_model=provider_model,
-            status=ModelStatus.CANDIDATE,
-            modalities={Modality.TEXT, Modality.TOOL_CALLING},
-            supports_tool_calling=True,
-            supports_structured_output=True,
-            local_only=False,
-            capability_source="discovered",
-            notes=f"Auto-fetched from {kind.value} on {time.strftime('%Y-%m-%d')}.",
-        )
+        # Раньше здесь каждой модели вслепую проставлялись
+        # supports_tool_calling=True и {TEXT, TOOL_CALLING} — независимо от
+        # провайдера и от того, что он на самом деле сообщил. Теперь метаданные
+        # берутся из ответа, а где их нет — возможности честно помечаются
+        # неподтверждёнными.
+        cap = capability_from_listing(key, kind, item)
         registry.add_model(key, cap, persist=True)
         await model_runtime_store.persist_catalog_entry(
             db,
@@ -1878,7 +1872,21 @@ async def _validate_assignment_draft(
             ))
         required = _SLOT_MODALITY.get(slot)
         if required and required not in {m.value for m in cap.modalities}:
-            warnings.append(AssignmentIssue(slot=slot, model=model_key, code="modality_mismatch", message=f"Модель не заявляет capability '{required}'"))
+            # «Не умеет» и «мы не проверяли» — разные вещи для того, кто
+            # выбирает модель. Второе чинится пробным запросом, первое нет.
+            if getattr(cap, "capabilities_unknown", False):
+                warnings.append(AssignmentIssue(
+                    slot=slot, model=model_key, code="capabilities_unknown",
+                    message=(
+                        "Провайдер не сообщает возможности этой модели — "
+                        "проверьте пробным запросом"
+                    ),
+                ))
+            else:
+                warnings.append(AssignmentIssue(
+                    slot=slot, model=model_key, code="modality_mismatch",
+                    message=f"Модель не заявляет capability '{required}'",
+                ))
         # A loaded local model has proven it runs → suppress catalog-status and
         # not-loaded caveats; only real constraints (modality/confidential) stand.
         is_loaded = cap.provider in _LOCAL_KINDS and _loaded_node_for(cap, loaded) is not None

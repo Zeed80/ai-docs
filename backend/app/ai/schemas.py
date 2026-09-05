@@ -202,6 +202,13 @@ class ModelCapability(BaseModel):
     rerank_score_range: str | None = None
     model_family: str | None = None
     capability_source: Literal["discovered", "manual", "verified"] = "manual"
+    # Модель подтянута из каталога провайдера, который не сообщает её
+    # возможности. Раньше в этом случае проставлялись выдуманные
+    # supports_tool_calling=True и {TEXT, TOOL_CALLING}, и валидация назначения
+    # ссылалась на них как на факт. Флаг позволяет сказать «не проверяли»
+    # вместо «не умеет» — это разные вещи для человека, который выбирает
+    # модель.
+    capabilities_unknown: bool = False
     local_only: bool = True
     supports_multi_image: bool = False
     cost_per_1k_input: float | None = None
