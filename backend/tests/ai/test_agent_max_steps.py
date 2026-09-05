@@ -44,7 +44,7 @@ async def test_max_steps_emits_final_text(monkeypatch):
     ):
         monkeypatch.setattr(agent_loop.AgentSession, name, _noop, raising=False)
 
-    async def fake_execute_skill(skill, args, config):  # noqa: A002
+    async def fake_execute_skill(skill, args, config, *, approval_granted=False):  # noqa: A002
         return {"status": "ok"}
 
     monkeypatch.setattr(agent_loop, "execute_skill", fake_execute_skill)

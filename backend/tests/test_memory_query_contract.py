@@ -44,7 +44,13 @@ async def test_memory_query_returns_compact_evidence_pack(monkeypatch):
             include_graph=False,
         ),
         db=None,
-        user=UserInfo(sub="tester", roles=[UserRole.admin]),
+        user=UserInfo(
+            sub="tester",
+            email="tester@example.local",
+            name="Тестировщик",
+            preferred_username="tester",
+            roles=[UserRole.admin],
+        ),
     )
 
     assert result.query == "АКМЕ"

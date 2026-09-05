@@ -11,13 +11,37 @@ from app.api.web_search import (
 
 
 @pytest.mark.asyncio
-async def test_web_search_requires_configured_provider(client: AsyncClient, monkeypatch):
-    monkeypatch.delenv("WEB_SEARCH_PROVIDER", raising=False)
+async def test_web_search_refuses_an_unsupported_provider(client: AsyncClient, monkeypatch):
+    """Провайдер настраивается через store, а не через переменную окружения.
+
+    Тест снимал `WEB_SEARCH_PROVIDER` и ждал 503 «web_search_not_configured» —
+    и переменная, и этот код ошибки исчезли, когда настройка переехала в
+    `web_search_config`. На настроенном стенде запрос отвечал 200, и тест
+    проверял отсутствующее поведение.
+    """
+    from app.ai import web_search_config as wsc
+
+    monkeypatch.setattr(wsc, "get_config", lambda: wsc.WebSearchConfig(provider="нет-такого"))
 
     resp = await client.post("/api/web-search/query", json={"query": "каталог поставщика"})
 
     assert resp.status_code == 503
-    assert resp.json()["detail"]["error_code"] == "web_search_not_configured"
+    assert resp.json()["detail"]["error_code"] == "web_search_provider_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_web_search_refuses_a_provider_without_an_endpoint(client: AsyncClient, monkeypatch):
+    """Адрес нельзя вывести из имени провайдера `custom` — его задают руками."""
+    from app.ai import web_search_config as wsc
+
+    monkeypatch.setattr(
+        wsc, "get_config", lambda: wsc.WebSearchConfig(provider="custom", endpoint=None)
+    )
+
+    resp = await client.post("/api/web-search/query", json={"query": "каталог поставщика"})
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error_code"] == "web_search_endpoint_missing"
 
 
 def test_tavily_request_uses_native_fields():

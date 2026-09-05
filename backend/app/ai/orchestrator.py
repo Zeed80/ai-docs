@@ -315,6 +315,12 @@ class AgentOrchestrator:
         # callers (e.g. table-patch correction learning) that need it without a
         # second round trip.
         self._last_direct_tool_result: dict[str, Any] = {}
+        # Отказ политики и сетевой сбой возвращались из _execute_workspace_spec
+        # одним и тем же False, и вызывающие одинаково «шли дальше». В итоге
+        # после «требуется подтверждение» ход продолжался обычной
+        # диспетчеризацией и выдавал человеку результат вместо запроса
+        # подтверждения. Флаг отличает одно от другого.
+        self._last_direct_tool_blocked: bool = False
         self._plan_source: str = "heuristic"
         # Set by _decide_turn: True when the LLM router produced no usable
         # decision (degrade to the heuristic planner this turn).
@@ -476,7 +482,16 @@ class AgentOrchestrator:
                 plan = heuristic_plan
                 self._workspace_before = _workspace_updated_at_snapshot()
                 await self._announce_plan(plan)
-                if await self._try_proactive_workspace_execution(plan, config):
+                executed = await self._try_proactive_workspace_execution(plan, config)
+                if not executed and self._last_direct_tool_blocked:
+                    # Инструмент требует подтверждения — человеку об этом уже
+                    # сказано. Уходить дальше к worker-LLM незачем: он упрётся
+                    # в тот же гейт, потратив прогон большой модели, а человек
+                    # увидит после «нужно подтверждение» ещё и попытку сделать
+                    # что-то другое.
+                    await self._outer_send({"type": "done", "action_chips": []})
+                    return
+                if executed:
                     audit = await self._audit_turn(plan, config)
                     await self._publish_audit(audit)
                     _record_feedback_async(
@@ -1276,7 +1291,14 @@ class AgentOrchestrator:
             announce="Секретарь: применяю правку таблицы…",
         )
         if not ok:
-            return False  # policy-blocked or HTTP failure — fall through to normal dispatch
+            if self._last_direct_tool_blocked:
+                # Инструмент требует подтверждения. Продолжать ход нельзя:
+                # обычная диспетчеризация выдала бы человеку таблицу вместо
+                # запроса подтверждения, то есть гейт был бы обойдён по сути,
+                # оставшись формально соблюдённым.
+                await self._outer_send({"type": "done", "action_chips": []})
+                return True
+            return False  # HTTP failure — fall through to normal dispatch
 
         result = self._last_direct_tool_result
         if result.get("status") not in ("published",):
@@ -2993,6 +3015,7 @@ class AgentOrchestrator:
         and records tool_call/result/text events so audit + done see the output.
         """
         tool_name: str = spec["tool"]
+        self._last_direct_tool_blocked = False
         approval_gates: set[str] = set(config.approval_gates or [])
         policy = check_tool_execution(
             skill_name=tool_name,
@@ -3001,6 +3024,7 @@ class AgentOrchestrator:
             approval_gates=approval_gates,
         )
         if not policy.allowed or tool_name in approval_gates:
+            self._last_direct_tool_blocked = True
             reason = (
                 "требует подтверждения человеком (approval gate)"
                 if tool_name in approval_gates

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import String, cast, func, literal_column, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -22,6 +24,15 @@ def trigram_condition(columns: list[ColumnElement], query: str) -> ColumnElement
     return or_(*(func.similarity(cast(column, String), query) > 0.15 for column in columns))
 
 
+# Запрос из одних цифр и разделителей — это идентификатор: номер счёта, ИНН,
+# артикул. Такой либо тот, либо не тот.
+_IDENTIFIER_QUERY = re.compile(r"^[\d\s./\-_№]+$")
+
+
+def _is_identifier_query(query: str) -> bool:
+    return bool(_IDENTIFIER_QUERY.fullmatch(query.strip()))
+
+
 def text_search_condition(
     db: AsyncSession,
     columns: list[ColumnElement],
@@ -36,7 +47,11 @@ def text_search_condition(
         postgres_fts_condition(columns, query, config=config),
         ilike_condition(columns, query),
     ]
-    if fuzzy and len(query) >= 3:
+    # Нечёткость полезна на словах и вредна на идентификаторах: при пороге
+    # 0.15 similarity('СЧ-1001', '1002') = 0.30, то есть поиск конкретного
+    # номера возвращал и соседний счёт. Опечаткоустойчивость номеру не нужна —
+    # он либо совпал, либо нет.
+    if fuzzy and len(query) >= 3 and not _is_identifier_query(query):
         conditions.append(trigram_condition(columns, query))
     return or_(*conditions)
 

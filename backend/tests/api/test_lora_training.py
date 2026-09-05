@@ -161,12 +161,18 @@ async def test_run_config_validation(client, db_session, monkeypatch):
 async def test_gated_model_without_token_is_refused_early(client, db_session, monkeypatch):
     """A gated HF base model (klein-9B/dev) without HF_TOKEN must fail fast at
     creation with actionable guidance, not 10 min into a doomed download."""
+    from app.api import lora_training as lora_api
     from app.config import settings
     from app.db.models import LoraDataset, LoraDatasetStatus
     from app.tasks.celery_app import celery_app
 
     monkeypatch.setattr(celery_app, "send_task", lambda *a, **k: type("T", (), {"id": "x"})())
+    # Токен теперь берётся сначала из общих настроек и только потом из env,
+    # поэтому снятия settings.hf_token мало: на настроенном стенде отказ не
+    # срабатывал и тест проверял отсутствующее поведение. Подменяем сам
+    # резолвер — по имени, под которым его импортировал обработчик.
     monkeypatch.setattr(settings, "hf_token", None, raising=False)
+    monkeypatch.setattr(lora_api, "get_hf_token", lambda: None)
 
     ds = LoraDataset(
         name="ds",

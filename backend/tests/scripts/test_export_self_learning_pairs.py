@@ -48,7 +48,12 @@ async def test_export_skips_auto_only_and_exports_corrected(
     import export_self_learning_pairs as export_mod
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from app.db.models import CadIrRevision, ImageGeneration, ImageGenStatus
+    from app.db.models import (
+        CadCertification,
+        CadIrRevision,
+        ImageGeneration,
+        ImageGenStatus,
+    )
 
     conn = db_session.bind
 
@@ -80,12 +85,19 @@ async def test_export_skips_auto_only_and_exports_corrected(
     )
 
     fake_storage["image-gen-src/corrected/src.png"] = b"src-b"
+    # Экспорт берёт только принятую и заверенную ревизию: пары для обучения
+    # не должны собираться из черновиков. Тест этого не создавал и потому
+    # проверял правило, которого в скрипте давно нет, — «есть правка человека,
+    # значит экспортируем».
     corrected = ImageGeneration(
         owner_sub=None,
         operation="vectorize",
         status=ImageGenStatus.done,
         params={},
         source_image_paths=["image-gen-src/corrected/src.png"],
+        accepted=True,
+        accepted_by="drafter@example.local",
+        accepted_revision=1,
     )
     db_session.add(corrected)
     await db_session.flush()
@@ -99,12 +111,24 @@ async def test_export_skips_auto_only_and_exports_corrected(
             origin="auto",
         )
     )
+    accepted_revision = CadIrRevision(
+        generation_id=corrected.id,
+        revision=1,
+        ir_path="ir/corrected_r1.json",
+        origin="editor",
+    )
+    db_session.add(accepted_revision)
+    await db_session.flush()
+    # Сертификат «в четыре глаза»: чертёжник и нормоконтролёр обязаны быть
+    # разными людьми — экспорт отвергает подпись одного и того же человека.
     db_session.add(
-        CadIrRevision(
-            generation_id=corrected.id,
-            revision=1,
-            ir_path="ir/corrected_r1.json",
-            origin="editor",
+        CadCertification(
+            cad_ir_revision_id=accepted_revision.id,
+            profile="eskd",
+            status="certified",
+            verification={},
+            drafter_approved_by="drafter@example.local",
+            normcontrol_approved_by="normcontrol@example.local",
         )
     )
     await db_session.commit()

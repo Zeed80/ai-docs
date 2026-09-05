@@ -30,7 +30,7 @@ def test_clarify_gated_vague_reference_asks():
 
 
 def test_clarify_gated_short_no_target_asks():
-    assert needs_clarification("утверди счёт", _plan(["invoice.approve"])) is not None
+    assert needs_clarification("утверди счёт", _plan(["invoices.approve"])) is not None
 
 
 def test_no_clarify_gated_with_concrete_target():
@@ -39,7 +39,7 @@ def test_no_clarify_gated_with_concrete_target():
         needs_clarification('отправь письмо в ООО "Ромашка" по счёту 145', _plan(["email.send"]))
         is None
     )
-    assert needs_clarification("утверди счёт 145", _plan(["invoice.approve"])) is None
+    assert needs_clarification("утверди счёт 145", _plan(["invoices.approve"])) is None
 
 
 def test_no_clarify_for_cheap_action():

@@ -177,7 +177,7 @@ tools:
         await on_token("Готово")
         return {"role": "assistant", "content": "Готово"}
 
-    async def fake_execute_skill(skill, args, runtime_config):
+    async def fake_execute_skill(skill, args, runtime_config, *, approval_granted=False):
         assert skill["name"] == "memory.search"
         assert args["query"] == "ГОСТ"
         return {"hits": []}
@@ -267,7 +267,7 @@ tools:
         await on_token("Готово, анализ завершен")
         return {"role": "assistant", "content": "Готово, анализ завершен"}
 
-    async def fake_execute_skill(skill, args, runtime_config):
+    async def fake_execute_skill(skill, args, runtime_config, *, approval_granted=False):
         assert skill["name"] == "invoice.list"
         return {"items": [{"id": "inv-1"}], "total": 1}
 
