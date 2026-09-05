@@ -225,11 +225,17 @@ def _get_agent_model(
     if config and config.model:
         return config.model
     try:
-        from app.api.ai_settings import get_ai_config
+        # Раньше здесь читался ai_config.model_agent — второе хранилище той же
+        # настройки. Модель агента задаётся слотом «Оркестратор», который
+        # пишет и в agent_config, и в маршрутизацию задачи orchestrator_planning;
+        # берём оттуда, чтобы значение не зависело от того, каким путём его
+        # меняли в последний раз.
+        from app.ai.schemas import AITask
+        from app.ai.task_routing import resolve_model
 
-        override = get_ai_config().get("model_agent")
-        if override and str(override).strip():
-            return str(override).strip()
+        model, _provider = resolve_model(AITask.ORCHESTRATOR_PLANNING)
+        if model and str(model).strip():
+            return str(model).strip()
     except Exception as exc:
         log_degraded("agent_loop.model_override", exc)
     return gateway_config.reasoning_model

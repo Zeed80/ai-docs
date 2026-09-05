@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.ai_settings import get_ai_config
 from app.api.web_search import WebSearchRequest, execute_web_search
 from app.auth.acting import get_effective_user
 from app.auth.jwt import require_human_role
@@ -361,8 +360,7 @@ async def search_memory(
     hits = _rrf_fuse(hits)
 
     if hits:
-        cfg = get_ai_config()
-        if cfg.get("reranker_model"):
+        if _reranker_model_key():
             hits = _sort_memory_hits(payload.query, hits)
             reranked = await _try_rerank_hits(payload.query, hits[:_RERANK_CANDIDATE_LIMIT])
             hits = reranked + hits[_RERANK_CANDIDATE_LIMIT:]
@@ -1133,9 +1131,22 @@ async def _search_vector_memory(
     return hits
 
 
+def _reranker_model_key() -> str | None:
+    """Ключ модели переранжирования из маршрутизации задач.
+
+    Читался ai_config — второе хранилище тех же настроек, куда значение
+    попадает только при сохранении из GUI. Маршрутизация правится и другими
+    путями, поэтому «реранкер выключен» здесь могло означать просто отставший
+    ai_config.
+    """
+    from app.ai.schemas import AITask
+    from app.ai.task_routing import get_routing_for
+
+    return get_routing_for(AITask.RERANKING).primary
+
+
 async def _try_rerank_hits(query: str, hits: list[MemorySearchHit]) -> list[MemorySearchHit]:
-    config = get_ai_config()
-    reranker_model = config.get("reranker_model")
+    reranker_model = _reranker_model_key()
     if not reranker_model:
         return hits
     try:

@@ -135,11 +135,17 @@ def _get_breaker(model: str) -> CircuitBreaker:
 
 
 def _runtime_reasoning_model() -> str:
-    """Resolve reasoning model from runtime AI config with env fallback."""
-    try:
-        from app.api.ai_settings import get_ai_config
+    """Модель рассуждения из маршрутизации задач, с env-запасом.
 
-        model = get_ai_config().get("model_reasoning")
+    Читался ai_config — второе хранилище тех же настроек, куда значение
+    попадает только при сохранении из интерфейса. Оно расходилось с
+    маршрутизацией месяцами: в докстринге reconcile_ai_config прямо описан
+    случай, когда в model_reasoning лежала давно снятая модель.
+    """
+    try:
+        from app.ai.model_resolver import get_reasoning_model
+
+        model = get_reasoning_model().model
         if model and str(model).strip():
             return str(model).strip()
     except Exception:
@@ -148,15 +154,17 @@ def _runtime_reasoning_model() -> str:
 
 
 def _runtime_ocr_model_and_provider() -> tuple[str, str]:
-    """Resolve OCR model + provider from runtime AI config."""
-    try:
-        from app.api.ai_settings import get_ai_config
+    """Модель и провайдер OCR из маршрутизации задач.
 
-        cfg = get_ai_config()
-        model = cfg.get("model_ocr") or ""
-        provider = cfg.get("model_ocr_provider") or "ollama"
-        if model.strip():
-            return model.strip(), provider.strip()
+    model_resolver сам держит OCR локальным: облачное назначение здесь
+    заменяется локальной парой целиком, а не только провайдером.
+    """
+    try:
+        from app.ai.model_resolver import get_ocr_model
+
+        cfg = get_ocr_model()
+        if cfg.model and cfg.model.strip():
+            return cfg.model.strip(), (cfg.provider or "ollama").strip()
     except Exception:
         pass
     return settings.ollama_model_ocr, "ollama"

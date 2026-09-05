@@ -1587,10 +1587,21 @@ def auto_verify_document(self, document_id: str) -> dict:
     """
     logger.info("auto_verify_start", document_id=document_id)
 
+    # Модель перепроверки берётся из маршрутизации задач, а не из ai_config:
+    # это второе хранилище тех же настроек, куда значение попадает лишь при
+    # сохранении из GUI. Пустое назначение по-прежнему означает «сверку не
+    # делать» — здесь это осознанный режим, а не сбой конфигурации.
+    from app.ai.model_resolver import get_verify_model
+    from app.ai.schemas import AITask
+    from app.ai.task_routing import get_routing_for
     from app.api.ai_settings import get_ai_config
 
+    # Порог автоодобрения — настройка поведения, а не модели; он остаётся в
+    # ai_config, который для таких вещей и предназначен.
     cfg = get_ai_config()
-    verify_model_1 = cfg.get("verify_model_1", "")
+
+    _verify_cfg = get_verify_model() if get_routing_for(AITask.STRUCTURED_EXTRACTION).primary else None
+    verify_model_1 = _verify_cfg.model if _verify_cfg else ""
 
     with _get_sync_session() as db:
         doc = db.get(Document, uuid.UUID(document_id))
@@ -1709,7 +1720,7 @@ def auto_verify_document(self, document_id: str) -> dict:
         # checksum gates. Skipped (and not required) when no verify model is set.
         consensus = 1.0
         models_used: list[str] = []
-        verify_model_1_provider = cfg.get("verify_model_1_provider", "ollama")
+        verify_model_1_provider = _verify_cfg.provider if _verify_cfg else "ollama"
         if verify_model_1 and verify_model_1.strip():
             logger.info("auto_verify_extracting", model=verify_model_1, document_id=document_id)
             from app.ai.router import ai_router

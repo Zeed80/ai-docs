@@ -25,10 +25,14 @@ class EmbeddingProfile:
 
 
 def get_active_embedding_profile() -> EmbeddingProfile:
-    from app.api.ai_settings import get_ai_config
+    # Ключ берётся из маршрутизации задач — того же места, которое правит GUI.
+    # Раньше читался ai_config: второе хранилище тех же настроек, куда
+    # значение попадает только при сохранении из интерфейса, и оно уже
+    # расходилось с маршрутизацией.
+    from app.ai.schemas import AITask
+    from app.ai.task_routing import get_routing_for
 
-    config = get_ai_config()
-    model_key = config.get("embedding_model") or "local_embedding_ollama"
+    model_key = get_routing_for(AITask.EMBEDDING).primary or "local_embedding_ollama"
     registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
     model = registry.get_model(model_key)
     dimension = model.embedding_dimension or EMBED_DIM
