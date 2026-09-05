@@ -81,6 +81,7 @@ export function ProviderModelPicker({
   /** Слот видит содержимое документов: облачный выбор требует подтверждения. */
   confidential,
   disabled = false,
+  nodes = [],
 }: {
   models: CatalogModel[];
   value: string | null;
@@ -88,6 +89,15 @@ export function ProviderModelPicker({
   requiredModality?: Modality | null;
   confidential: boolean;
   disabled?: boolean;
+  /**
+   * Настроенные узлы провайдеров.
+   *
+   * Нужны, чтобы показать подключённого провайдера, у которого ещё нет
+   * моделей. Без этого список строился только по каталогу: OpenRouter с
+   * введённым ключом и пройденной проверкой просто отсутствовал в выборе, и
+   * человек не мог понять, почему подключённое облако не предлагается.
+   */
+  nodes?: { kind: string; enabled: boolean; api_key_set: boolean }[];
 }) {
   const selectable = useMemo(
     () => models.filter((m) => m.status !== "disabled"),
@@ -103,6 +113,14 @@ export function ProviderModelPicker({
     for (const m of selectable) {
       seen.set(m.provider, (seen.get(m.provider) ?? 0) + 1);
     }
+    // Подключённое облако без единой модели тоже показываем. Иначе провайдер
+    // с введённым ключом исчезает из выбора целиком, и причина нигде не
+    // названа — а она проста: каталог моделей ещё не загружен.
+    for (const node of nodes) {
+      if (!node.enabled || isLocalProvider(node.kind)) continue;
+      if (!node.api_key_set) continue;
+      if (!seen.has(node.kind)) seen.set(node.kind, 0);
+    }
     return [...seen.entries()]
       .map(([kind, count]) => ({ kind, count, local: isLocalProvider(kind) }))
       .sort((a, b) =>
@@ -112,7 +130,7 @@ export function ProviderModelPicker({
             ? -1
             : 1,
       );
-  }, [selectable]);
+  }, [selectable, nodes]);
 
   // Провайдер берётся из выбранной модели; пока её нет — первый локальный.
   const activeProvider =
@@ -181,7 +199,8 @@ export function ProviderModelPicker({
               .filter((p) => !p.local)
               .map((p) => (
                 <option key={p.kind} value={p.kind}>
-                  {providerLabel(p.kind)} · {p.count}
+                  {providerLabel(p.kind)}
+                  {p.count > 0 ? ` · ${p.count}` : " · модели не загружены"}
                 </option>
               ))}
           </optgroup>
@@ -194,7 +213,11 @@ export function ProviderModelPicker({
             disabled={disabled}
             groupOrder={GROUP_ORDER}
             placeholder="Найти модель…"
-            emptyText="У этого провайдера нет подходящих моделей"
+            emptyText={
+              providerModels.length === 0
+                ? "Модели этого провайдера ещё не загружены — «Провайдеры» → «Загрузить модели»"
+                : "У этого провайдера нет подходящих моделей"
+            }
             onChange={(key) =>
               onChange(key, {
                 cloud: !isLocalProvider(

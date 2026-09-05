@@ -89,6 +89,12 @@ def sync_db(test_engine, monkeypatch):
     engine = create_engine(sync_url, pool_pre_ping=True)
     import app.db.sync_session as sync_module
 
+    # Импорт обязателен: monkeypatch по строке "app.tasks.extraction..."
+    # находит модуль только если тот УЖЕ загружен. В одиночку файл проходил —
+    # его подтягивал импорт auto_supplier_task ниже; в общем прогоне порядок
+    # другой, и фикстура падала AttributeError ещё до первого теста.
+    import app.tasks.extraction  # noqa: F401
+
     monkeypatch.setattr(sync_module, "sync_session", lambda: Session(engine))
     monkeypatch.setattr("app.tasks.extraction._get_sync_session", lambda: Session(engine))
 

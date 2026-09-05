@@ -48,10 +48,10 @@ function ModelsPageInner() {
     (next: Tab) => {
       // replace, а не push: перебор вкладок не должен наполнять историю
       // десятком записей, через которые потом придётся продираться назад.
-      router.replace(
-        next === "assignment" ? "/settings/models" : `/settings/models?tab=${next}`,
-        { scroll: false },
-      );
+      // tab пишется всегда, включая «Назначение». Без него адрес вкладки по
+      // умолчанию отличался от остальных, и ссылка на неё выглядела иначе,
+      // чем ссылка на соседнюю — при том что это такая же вкладка.
+      router.replace(`/settings/models?tab=${next}`, { scroll: false });
     },
     [router],
   );

@@ -702,6 +702,7 @@ export function AssignmentBoard() {
                             облачного провайдера и есть это решение. */}
                         <ProviderModelPicker
                           models={allModelsFor(s) as unknown as CatalogModel[]}
+                          nodes={nodes}
                           value={draftValue || null}
                           confidential={Boolean(s.cloud_optionable)}
                           requiredModality={
