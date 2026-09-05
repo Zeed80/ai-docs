@@ -134,3 +134,15 @@ export const THINKING_DISABLE_SUPPORTED_PROVIDERS = [
 
 export const providerCanDisableThinking = (kind: string): boolean =>
   (THINKING_DISABLE_SUPPORTED_PROVIDERS as readonly string[]).includes(kind);
+
+/**
+ * Названия профилей параметров инференса.
+ * Используются и на вкладке параметров, и в телеметрии — где ими же
+ * подписываются задачи.
+ */
+export const PROFILE_LABELS: Record<string, string> = {
+  anti_hallucination: "Без галлюцинаций",
+  structured_reasoning: "Структ. рассуждение",
+  balanced: "Баланс",
+  creative: "Творческий",
+};
