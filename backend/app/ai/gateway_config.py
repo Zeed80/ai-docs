@@ -10,7 +10,10 @@ import os
 import re
 from pathlib import Path
 
+import structlog
 import yaml
+
+logger = structlog.get_logger()
 
 _AIAGENT_ROOT = Path(
     os.environ.get(
@@ -73,7 +76,27 @@ class GatewayConfig:
 
     @property
     def approval_gates(self) -> set[str]:
-        """Skills that require explicit human confirmation before execution."""
+        """Действия, требующие явного подтверждения человеком.
+
+        В режиме capabilities источник — gate_actions манифеста, то есть ровно
+        то, по чему принимает решение HTTP-граница. Список в gateway.yml
+        остался от registry-режима и пользуется другой схемой имён
+        (`invoice.approve` против `invoices.approve`): из 31 записи с
+        манифестом совпадали 8. Оркестратор и agent_loop сверялись с этим
+        списком и потому просто не находили большинство действий — заслон
+        держала одна HTTP-граница вместо трёх.
+        """
+        if self.skills_mode == "capabilities":
+            try:
+                from app.ai.capability_manifest import load_capability_manifest
+
+                return {
+                    f"{cap.name}.{action}"
+                    for cap in load_capability_manifest().capabilities
+                    for action in (cap.gate_actions or ())
+                }
+            except Exception as exc:  # noqa: BLE001 — манифест может быть недоступен
+                logger.warning("approval_gates_from_manifest_failed", error=str(exc))
         return set(self._raw.get("skills", {}).get("approval_gates", []))
 
     @property
