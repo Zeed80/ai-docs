@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { ModelCombobox } from "@/components/models/picker/ModelCombobox";
+import { providerBarColor, providerLabel } from "@/lib/models/labels";
+import { useCurrentUser } from "@/lib/auth-context";
+import { hasRole } from "@/lib/rbac";
 import type { CatalogModel, Modality } from "@/lib/models/types";
 
 const API = getApiBaseUrl();
@@ -156,11 +159,6 @@ interface ProviderDefaults {
   total_vram_gb: number;
 }
 
-const PROVIDER_LABELS: Record<Provider, string> = {
-  ollama: "Ollama",
-  llamacpp: "llama.cpp",
-  vllm: "vLLM",
-};
 
 const PROFILE_LABELS: Record<string, string> = {
   anti_hallucination: "Без галлюцинаций",
@@ -168,17 +166,6 @@ const PROFILE_LABELS: Record<string, string> = {
   balanced: "Баланс",
   creative: "Творческий",
 };
-
-function humanBytes(b: number): string {
-  if (!b) return "—";
-  const units = ["B", "KB", "MB", "GB"];
-  let v = b;
-  for (const u of units) {
-    if (v < 1024) return `${v.toFixed(1)} ${u}`;
-    v /= 1024;
-  }
-  return `${v.toFixed(1)} TB`;
-}
 
 function VRAMBar({
   used,
@@ -190,11 +177,6 @@ function VRAMBar({
   allocations: AllStatus["vram_allocations"];
 }) {
   const pct = total > 0 ? Math.min((used / total) * 100, 100) : 0;
-  const colors: Record<string, string> = {
-    ollama: "bg-blue-500",
-    llamacpp: "bg-emerald-500",
-    vllm: "bg-purple-500",
-  };
   return (
     <div className="space-y-2">
       <div className="flex justify-between text-xs text-slate-400">
@@ -209,9 +191,9 @@ function VRAMBar({
           return w > 0 ? (
             <div
               key={p}
-              className={`${colors[p] ?? "bg-slate-500"} transition-all`}
+              className={`${providerBarColor(p)} transition-all`}
               style={{ width: `${w}%` }}
-              title={`${PROVIDER_LABELS[p as Provider] ?? p}: ${a.vram_used_gb.toFixed(1)} GB`}
+              title={`${providerLabel(p)}: ${a.vram_used_gb.toFixed(1)} GB`}
             />
           ) : null;
         })}
@@ -220,9 +202,9 @@ function VRAMBar({
         {Object.entries(allocations).map(([p, a]) => (
           <span key={p} className="flex items-center gap-1">
             <span
-              className={`w-2 h-2 rounded-full ${colors[p] ?? "bg-slate-500"}`}
+              className={`w-2 h-2 rounded-full ${providerBarColor(p)}`}
             />
-            {PROVIDER_LABELS[p as Provider] ?? p}: {a.vram_used_gb.toFixed(1)}{" "}
+            {providerLabel(p)}: {a.vram_used_gb.toFixed(1)}{" "}
             GB
           </span>
         ))}
@@ -254,7 +236,7 @@ function ProviderCard({
             className={`w-2 h-2 rounded-full ${running ? "bg-emerald-400" : "bg-slate-500"}`}
           />
           <span className="text-sm font-medium text-slate-100">
-            {PROVIDER_LABELS[name]}
+            {providerLabel(name)}
           </span>
         </div>
         <span
@@ -330,7 +312,7 @@ function ServerControls({ provider }: { provider: Provider }) {
           onClick={() => act(a)}
           disabled={busy !== null}
           className={`${btn} flex-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-50`}
-          title={`${a} ${PROVIDER_LABELS[provider]} container`}
+          title={`${a} ${providerLabel(provider)} container`}
         >
           {busy === a ? "..." : a === "start" ? "▶" : a === "stop" ? "■" : "↻"}
         </button>
@@ -494,7 +476,7 @@ function ServerConfigPanel({ provider }: { provider: "llamacpp" | "vllm" }) {
     <div className={card}>
       <div className={cardH}>
         <span className="text-sm font-medium text-slate-100">
-          {PROVIDER_LABELS[provider]} — настройки сервера
+          {providerLabel(provider)} — настройки сервера
         </span>
         <span className="text-xs text-slate-500">
           применяются после рестарта
@@ -1459,6 +1441,16 @@ function LibraryTab() {
   );
   const streamRefs = useRef<Record<string, EventSource>>({});
 
+  // Потоки прогресса закрывались только по терминальному статусу: уход с
+  // вкладки во время скачивания оставлял соединение висеть, а браузер
+  // продолжал получать события в размонтированный компонент.
+  useEffect(() => {
+    const streams = streamRefs.current;
+    return () => {
+      for (const es of Object.values(streams)) es.close();
+    };
+  }, []);
+
   const toggleFiles = async (repoId: string) => {
     if (files[repoId]) {
       setFiles((prev) => {
@@ -1667,6 +1659,16 @@ function LibraryTab() {
           delete streamRefs.current[key];
           if (d.status !== "error") loadLocal();
         }
+      };
+      // Без этого обработчика оборванный поток переподключался бесконечно, а
+      // индикатор навсегда застывал на последнем известном проценте.
+      es.onerror = () => {
+        es.close();
+        delete streamRefs.current[key];
+        setDownloading((prev) => ({
+          ...prev,
+          [key]: { pct: prev[key]?.pct ?? 0, status: "error" },
+        }));
       };
     } catch (e) {
       alert(`Ошибка: ${e}`);
@@ -1899,7 +1901,7 @@ function LibraryTab() {
           <div key={p} className={card}>
             <div className={cardH}>
               <span className="text-sm font-medium text-slate-100">
-                {PROVIDER_LABELS[p]} — локальные модели
+                {providerLabel(p)} — локальные модели
               </span>
               <span className="text-xs text-slate-400">
                 {models.length} моделей
@@ -2240,7 +2242,7 @@ function ParametersTab() {
                 className="bg-slate-900 rounded p-3 border border-slate-700"
               >
                 <div className="text-sm font-medium text-slate-100 mb-2">
-                  {PROVIDER_LABELS[provName as Provider] ?? provName}
+                  {providerLabel(provName)}
                 </div>
                 <div className="space-y-1">
                   {Object.entries(params as Record<string, unknown>).map(
@@ -2301,11 +2303,6 @@ function GPUTab({ status }: { status: AllStatus | null }) {
   const { gpu, vram_allocations, total_vram_gb } = status;
   const total = gpu?.total_gb ?? total_vram_gb;
   const usedByProvider = Object.entries(vram_allocations);
-  const colors: Record<string, string> = {
-    ollama: "bg-blue-500",
-    llamacpp: "bg-emerald-500",
-    vllm: "bg-purple-500",
-  };
 
   return (
     <div className="space-y-4">
@@ -2344,7 +2341,7 @@ function GPUTab({ status }: { status: AllStatus | null }) {
               <div key={p} className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-200">
-                    {PROVIDER_LABELS[p as Provider] ?? p}
+                    {providerLabel(p)}
                   </span>
                   <span className="text-slate-400">
                     {a.vram_used_gb.toFixed(1)} /{" "}
@@ -2362,7 +2359,7 @@ function GPUTab({ status }: { status: AllStatus | null }) {
                   )}
                   {/* Usage bar */}
                   <div
-                    className={`h-full rounded ${colors[p] ?? "bg-slate-500"} transition-all`}
+                    className={`h-full rounded ${providerBarColor(p)} transition-all`}
                     style={{ width: `${pct}%` }}
                   />
                 </div>
@@ -2422,36 +2419,6 @@ function GPUTab({ status }: { status: AllStatus | null }) {
 
 // ── Agent Tab ─────────────────────────────────────────────────────────────────
 
-const PROVIDER_DISPLAY: Record<string, string> = {
-  ollama: "Ollama",
-  llamacpp: "llama.cpp",
-  vllm: "vLLM",
-  openai_compatible: "OpenAI-совм.",
-  lmstudio: "LM Studio",
-  anthropic: "Anthropic",
-  openrouter: "OpenRouter",
-  deepseek: "DeepSeek",
-  gemini: "Gemini",
-  openai: "OpenAI",
-  ollama_cloud: "Ollama Cloud",
-  moonshot: "Kimi (Moonshot)",
-  minimax: "MiniMax",
-  dashscope: "Qwen (DashScope)",
-  mistral: "Mistral",
-  groq: "Groq",
-  together: "Together",
-  fireworks: "Fireworks",
-  xai: "xAI (Grok)",
-  cohere: "Cohere",
-  perplexity: "Perplexity",
-  deepinfra: "DeepInfra",
-  cerebras: "Cerebras",
-  sambanova: "SambaNova",
-  nebius: "Nebius",
-  novita: "Novita",
-  hyperbolic: "Hyperbolic",
-};
-const providerLabel = (p: string) => PROVIDER_DISPLAY[p] ?? p;
 
 // Two-step cascade: pick a provider, then a model of that provider. Far clearer
 // than one flat list mixing every provider's models. `value` is a catalog key.
@@ -3051,7 +3018,11 @@ function AssignmentTab() {
 
   if (loading) return <div className="text-sm text-slate-500">Загрузка…</div>;
 
-  const groups = ["Документы", "Агент", "Поиск", "Оцифровка"];
+  // Порядок групп берём из ответа сервера, а не из литерала: слот новой
+  // группы (или переименованной) просто не отрисовывался, без единого следа.
+  // Порядок в _SLOTS на бэкенде уже осмысленный, сохранение порядка появления
+  // даёт тот же результат и не теряет слоты.
+  const groups = Array.from(new Set(slots.map((s) => s.group)));
   const provList = Array.from(new Set(models.map((m) => m.provider)));
   const provModels = models.filter(
     (m) => m.provider === selProv && selectable(m),
@@ -3158,7 +3129,7 @@ function AssignmentTab() {
               <span className="text-sm font-semibold text-slate-100">
                 {GROUP_ICON[g]} {g}
               </span>
-              {g === "Документы" && (
+              {gslots.every((s) => s.local_only) && (
                 <span className="text-xs text-slate-500">
                   🔒 конфиденциально — только локальные модели
                 </span>
@@ -3500,7 +3471,11 @@ function AssignmentTab() {
 }
 
 export default function ModelsPage() {
-  const [tab, setTab] = useState<Tab>("overview");
+  const currentUser = useCurrentUser();
+  const isAdmin = !!currentUser && hasRole(currentUser.roles, "admin");
+  // Дефолтная вкладка — «Назначение»: это ежедневный сценарий, а открывался
+  // экран на «Провайдерах», куда заходят при первичной настройке.
+  const [tab, setTab] = useState<Tab>("assignment");
   const [status, setStatus] = useState<AllStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -3523,12 +3498,31 @@ export default function ModelsPage() {
   }, [loadStatus]);
 
   const TABS: { id: Tab; label: string }[] = [
-    { id: "overview", label: "Провайдеры" },
     { id: "assignment", label: "Назначение" },
+    { id: "overview", label: "Провайдеры" },
     { id: "library", label: "Библиотека" },
     { id: "parameters", label: "Параметры" },
     { id: "gpu", label: "GPU Бюджет" },
   ];
+
+  // Каждый эндпоинт раздела требует роли admin, а гарда на странице не было:
+  // не-админ видел пустые списки и ошибки запросов вместо объяснения.
+  if (currentUser && !isAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100">
+        <div className="mx-auto max-w-2xl px-4 py-16 text-center">
+          <h1 className="text-xl font-semibold text-slate-100">
+            Раздел доступен администраторам
+          </h1>
+          <p className="mt-2 text-sm text-slate-400">
+            Здесь настраиваются узлы провайдеров, ключи доступа и то, какая
+            модель отвечает за какую задачу. Если настройка нужна — попросите
+            администратора.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">

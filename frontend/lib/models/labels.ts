@@ -82,3 +82,17 @@ export const LOCAL_PROVIDER_KINDS = [
 
 export const isLocalProvider = (kind: string): boolean =>
   (LOCAL_PROVIDER_KINDS as readonly string[]).includes(kind);
+
+/**
+ * Цвет полосы провайдера в графике VRAM.
+ * Таблица была продублирована в двух местах экрана моделей — в общей полосе и
+ * в GPU-вкладке, — и при добавлении провайдера её правили в одном из них.
+ */
+export const PROVIDER_BAR_COLOR: Record<string, string> = {
+  ollama: "bg-blue-500",
+  llamacpp: "bg-emerald-500",
+  vllm: "bg-purple-500",
+};
+
+export const providerBarColor = (kind: string): string =>
+  PROVIDER_BAR_COLOR[kind] ?? "bg-slate-500";

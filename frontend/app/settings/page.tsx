@@ -108,13 +108,6 @@ function formatGraphDate(iso: string | null): string {
   }
 }
 
-interface AiConfigStatus {
-  ok: boolean;
-  ollama_available: boolean;
-  installed_models: string[];
-  warnings: string[];
-}
-
 interface AgentConfig {
   enabled: boolean;
   agent_name: string;
@@ -574,7 +567,6 @@ export default function SettingsPage() {
 
   // AI Config
   const [config, setConfig] = useState<AiConfig | null>(null);
-  const [configStatus, setConfigStatus] = useState<AiConfigStatus | null>(null);
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
 
@@ -677,18 +669,9 @@ export default function SettingsPage() {
     try {
       const r = await fetch(`${API}/api/ai/config`);
       setConfig(await r.json());
-      await loadConfigStatus();
     } catch {}
   }
 
-  async function loadConfigStatus() {
-    try {
-      const r = await fetch(`${API}/api/ai/config/status`);
-      setConfigStatus(await r.json());
-    } catch {
-      setConfigStatus(null);
-    }
-  }
 
   async function loadEmbeddingProfile() {
     try {
