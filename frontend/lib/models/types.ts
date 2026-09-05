@@ -164,3 +164,50 @@ export interface ModelCandidate extends CatalogModel {
   eligibility: "ok" | "needs_action" | "unsuitable" | "forbidden";
   reasons: CandidateReason[];
 }
+
+// ── Состояние локальных серверов и видеопамяти ───────────────────────────────
+// Приходит из /api/local-models/status. Жило внутри монолита экрана моделей,
+// из-за чего вкладки нельзя было разнести по файлам.
+
+export interface ProviderStatus {
+  running: boolean;
+  url?: string;
+  models?: string[];
+  model_loaded?: string | null;
+  model_count?: number;
+  error?: string;
+  gpu_memory_utilization?: number;
+  max_model_len?: number;
+  dtype?: string;
+}
+
+export interface VramAllocation {
+  vram_used_gb: number;
+  vram_limit_gb: number | null;
+  running: boolean;
+  models: { name: string; vram_gb: number }[];
+}
+
+export interface AllStatus {
+  providers: {
+    ollama: ProviderStatus;
+    llamacpp: ProviderStatus;
+    vllm: ProviderStatus;
+  };
+  gpu: {
+    total_gb: number;
+    used_gb: number;
+    free_gb: number;
+    driver_version?: string;
+  } | null;
+  vram_allocations: Record<string, VramAllocation>;
+  total_vram_gb: number;
+}
+
+/** Вкладки раздела «Модели». */
+export type ModelsTab =
+  | "assignment"
+  | "overview"
+  | "library"
+  | "parameters"
+  | "gpu";
