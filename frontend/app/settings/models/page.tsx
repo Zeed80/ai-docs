@@ -6,6 +6,7 @@ import { csrfHeaders } from "@/lib/auth";
 import { ModelCombobox } from "@/components/models/picker/ModelCombobox";
 import { providerBarColor, providerLabel } from "@/lib/models/labels";
 import { RoutingChains } from "@/components/models/telemetry/RoutingChains";
+import { ToastProvider, useToast } from "@/components/ui/primitives/Toast";
 import { useCurrentUser } from "@/lib/auth-context";
 import { hasRole } from "@/lib/rbac";
 import type { CatalogModel, Modality } from "@/lib/models/types";
@@ -1236,6 +1237,7 @@ function LocalKindBlock({
   onChanged: () => void;
   flash: (m: string) => void;
 }) {
+  const toast = useToast();
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("http://");
@@ -1256,7 +1258,7 @@ function LocalKindBlock({
       onChanged();
     } else {
       const d = await r.json().catch(() => ({}));
-      alert(`Ошибка: ${d.detail || r.status}`);
+      toast.error("Узел не добавлен", detailText(d));
     }
   };
   const remove = async (id: string) => {
@@ -2493,7 +2495,25 @@ const GROUP_ICON: Record<string, string> = {
 };
 
 
+/**
+ * Ответ сервера в читаемую строку.
+ *
+ * Раньше здесь стоял JSON.stringify(d.detail || d) — человек видел ошибку
+ * вместе с фигурными скобками и кавычками, а если detail был объектом с
+ * полем message, оно тонуло среди служебных ключей.
+ */
+function detailText(payload: unknown): string {
+  const d = (payload as { detail?: unknown })?.detail ?? payload;
+  if (typeof d === "string") return d;
+  if (d && typeof d === "object") {
+    const msg = (d as { message?: unknown }).message;
+    if (typeof msg === "string") return msg;
+  }
+  return JSON.stringify(d);
+}
+
 function AssignmentTab() {
+  const toast = useToast();
   const [slots, setSlots] = useState<SlotItem[]>([]);
   const [draft, setDraft] = useState<Record<string, string | null>>({});
   const [models, setModels] = useState<ProvModel[]>([]);
@@ -2610,10 +2630,10 @@ function AssignmentTab() {
         flash("Проверка завершена");
       } else {
         const d = await r.json().catch(() => ({}));
-        alert(`Ошибка: ${d.detail || r.status}`);
+        toast.error("Проверка не прошла", String(d.detail || r.status));
       }
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     } finally {
       setBusy(null);
     }
@@ -2647,14 +2667,14 @@ function AssignmentTab() {
         return;
       }
       if (!r.ok) {
-        alert(`Ошибка: ${JSON.stringify(d.detail || d)}`);
+        toast.error("Назначения не применены", detailText(d));
         return;
       }
       setLastRevision(d.revision_id || null);
       flash("Назначения применены");
       load();
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     } finally {
       setBusy(null);
     }
@@ -2674,14 +2694,14 @@ function AssignmentTab() {
       );
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        alert(`Ошибка: ${d.detail || r.status}`);
+        toast.error("Проверка не прошла", String(d.detail || r.status));
         return;
       }
       flash("Последнее изменение откачено");
       setLastRevision(null);
       load();
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     } finally {
       setBusy(null);
     }
@@ -2708,7 +2728,7 @@ function AssignmentTab() {
       flash(enabled ? "Рассуждение включено" : "Рассуждение выключено");
       load();
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     }
   };
 
@@ -2738,7 +2758,7 @@ function AssignmentTab() {
       );
       load();
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     }
   };
 
@@ -2774,7 +2794,7 @@ function AssignmentTab() {
       );
       load();
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     }
   };
 
@@ -2807,13 +2827,13 @@ function AssignmentTab() {
       );
       load();
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     }
   };
 
   const delModel = async (m: ProvModel) => {
     if (m.provider !== "ollama") {
-      alert(
+      toast.error(
         "Удаление поддерживается только для Ollama. Для llama.cpp/vLLM — во вкладке «Библиотека».",
       );
       return;
@@ -2831,9 +2851,9 @@ function AssignmentTab() {
       if (r.ok) {
         flash("Модель удалена");
         load();
-      } else alert("Не удалось удалить");
+      } else toast.error("Модель не удалена");
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     }
   };
   const modelByKey = (key: string | null) =>
@@ -3305,7 +3325,7 @@ function AssignmentTab() {
   );
 }
 
-export default function ModelsPage() {
+function ModelsPageInner() {
   const currentUser = useCurrentUser();
   const isAdmin = !!currentUser && hasRole(currentUser.roles, "admin");
   // Дефолтная вкладка — «Назначение»: это ежедневный сценарий, а открывался
@@ -3410,5 +3430,13 @@ export default function ModelsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ModelsPage() {
+  return (
+    <ToastProvider>
+      <ModelsPageInner />
+    </ToastProvider>
   );
 }
