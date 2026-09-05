@@ -14,14 +14,6 @@
       "category": "documents",
       "method": "POST",
       "path": "/api/documents/ingest",
-      "approval_required": false
-    },
-    {
-      "name": "doc.list",
-      "description": "Skill: doc.list — List documents with filters.",
-      "category": "documents",
-      "method": "GET",
-      "path": "/api/documents",
       "approval_required": false,
       "parameters": {
         "$defs": {
@@ -33,6 +25,8 @@
               "buyer",
               "engineer",
               "technologist",
+              "normcontroller",
+              "calculator",
               "viewer"
             ],
             "title": "UserRole",
@@ -71,6 +65,179 @@
             },
             "title": "Groups",
             "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
+    },
+    {
+      "name": "doc.list",
+      "description": "Skill: doc.list — List documents with filters.",
+      "category": "documents",
+      "method": "GET",
+      "path": "/api/documents",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
           }
         },
         "required": [
@@ -89,7 +256,120 @@
       "category": "documents",
       "method": "GET",
       "path": "/api/documents/workspace",
-      "approval_required": false
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
     },
     {
       "name": "doc.get",
@@ -391,6 +671,7 @@
               "commercial_offer",
               "act",
               "waybill",
+              "supplier_catalog",
               "other"
             ],
             "title": "DocumentType",
@@ -656,6 +937,8 @@
               "buyer",
               "engineer",
               "technologist",
+              "normcontroller",
+              "calculator",
               "viewer"
             ],
             "title": "UserRole",
@@ -694,6 +977,58 @@
             },
             "title": "Groups",
             "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
           }
         },
         "required": [
@@ -861,8 +1196,7 @@
               }
             ],
             "default": null,
-            "title": "Notes",
-            "description": "User remarks only. Do not write AI-extracted data here."
+            "title": "Notes"
           },
           "special_marks": {
             "anyOf": [
@@ -874,8 +1208,7 @@
               }
             ],
             "default": null,
-            "title": "Special Marks",
-            "description": "AI-extracted special conditions, delivery notes, payment terms from invoice text."
+            "title": "Special Marks"
           }
         },
         "title": "InvoiceFieldUpdate",
@@ -964,6 +1297,18 @@
             "default": null,
             "title": "Amount"
           },
+          "pre_discount_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pre Discount Amount"
+          },
           "tax_rate": {
             "anyOf": [
               {
@@ -1046,6 +1391,14 @@
       "category": "invoices",
       "method": "GET",
       "path": "/api/invoices/{invoice_id}/price-check",
+      "approval_required": false
+    },
+    {
+      "name": "invoice.catalog_price_check",
+      "description": "Skill: invoice.catalog_price_check — Compare invoice lines with the supplier's catalog.",
+      "category": "invoices",
+      "method": "GET",
+      "path": "/api/invoices/{invoice_id}/catalog-price-check",
       "approval_required": false
     },
     {
@@ -1139,7 +1492,7 @@
     },
     {
       "name": "email.fetch_new",
-      "description": "Skill: email.fetch_new — Check for new emails via IMAP.",
+      "description": "Skill: email.fetch_new — poll IMAP now and report what arrived.",
       "category": "email",
       "method": "POST",
       "path": "/api/email/fetch",
@@ -1165,7 +1518,7 @@
     },
     {
       "name": "email.search",
-      "description": "Skill: email.search — Search emails by query, supplier, or address.",
+      "description": "Skill: email.search — Full-text search with folder/label/date filters.",
       "category": "email",
       "method": "POST",
       "path": "/api/email/search",
@@ -1221,8 +1574,137 @@
             "default": null,
             "title": "Mailbox"
           },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Folder"
+          },
+          "label_ids": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Label Ids",
+            "type": "array"
+          },
+          "is_unread": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Is Unread"
+          },
+          "is_starred": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Is Starred"
+          },
+          "has_attachments": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Has Attachments"
+          },
+          "date_from": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date From"
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date To"
+          },
+          "from_addr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "From Addr"
+          },
+          "to_addr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To Addr"
+          },
+          "sort": {
+            "default": "date_desc",
+            "enum": [
+              "date_desc",
+              "date_asc",
+              "relevance"
+            ],
+            "title": "Sort",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
           "limit": {
-            "default": 20,
+            "default": 50,
             "title": "Limit",
             "type": "integer"
           }
@@ -1232,20 +1714,988 @@
       }
     },
     {
+      "name": "email.mailboxes",
+      "description": "Skill: email.mailboxes — Mailboxes visible to the caller, with counts and",
+      "category": "email",
+      "method": "GET",
+      "path": "/api/email/mailboxes",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
+    },
+    {
       "name": "email.list_threads",
-      "description": "Skill: email.list_threads — List email threads.",
+      "description": "Skill: email.list_threads — List email threads (with client filters).",
       "category": "email",
       "method": "GET",
       "path": "/api/email/threads",
-      "approval_required": false
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.get_preferences",
+      "description": "Skill: email.get_preferences — Per-user mail reading preferences.",
+      "category": "email",
+      "method": "GET",
+      "path": "/api/email/preferences",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.set_preferences",
+      "description": "Skill: email.set_preferences — Update per-user mail reading preferences.",
+      "category": "email",
+      "method": "PATCH",
+      "path": "/api/email/preferences",
+      "approval_required": false,
+      "parameters": {
+        "description": "Ф1.4 — пользовательские настройки чтения почты. Живут в\n``users.preferences`` (JSON), где уже лежат прочие настройки, — отдельная\nтаблица ради одного флага была бы дороже, чем польза от неё.",
+        "properties": {
+          "always_show_images": {
+            "default": false,
+            "title": "Always Show Images",
+            "type": "boolean"
+          }
+        },
+        "title": "EmailUserPrefs",
+        "type": "object"
+      }
     },
     {
       "name": "email.get_thread",
-      "description": "Skill: email.get_thread — Get thread with all messages.",
+      "description": "Skill: email.get_thread — Get thread with all messages + attachments.",
       "category": "email",
       "method": "GET",
       "path": "/api/email/threads/{thread_id}",
-      "approval_required": false
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.label",
+      "description": "Skill: email.label — Bulk mark read/star/move/label email threads.",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/threads/actions",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "thread_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Thread Ids",
+            "type": "array"
+          },
+          "action": {
+            "enum": [
+              "read",
+              "unread",
+              "star",
+              "unstar",
+              "archive",
+              "trash",
+              "spam",
+              "inbox",
+              "move",
+              "add_label",
+              "remove_label"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Folder"
+          },
+          "label_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Label Id"
+          }
+        },
+        "required": [
+          "thread_ids",
+          "action"
+        ],
+        "title": "BulkThreadAction",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.labels_list",
+      "description": "Skill: email.labels_list — List email labels visible to the caller.",
+      "category": "email",
+      "method": "GET",
+      "path": "/api/email/labels",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.labels_create",
+      "description": "Skill: email.labels_create — Create an email label.",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/labels",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Color"
+          },
+          "mailbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mailbox"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "EmailLabelCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.signatures_list",
+      "description": "Skill: email.signatures_list — Signatures the caller can use.",
+      "category": "email",
+      "method": "GET",
+      "path": "/api/email/signatures",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.attachment_upload",
+      "description": "Skill: email.attachment_upload — Stage a file for an outbound email.",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/attachments/upload",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
     },
     {
       "name": "email.draft",
@@ -1269,6 +2719,14 @@
               "type": "string"
             },
             "title": "Cc Addresses",
+            "type": "array"
+          },
+          "bcc_addresses": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Bcc Addresses",
             "type": "array"
           },
           "subject": {
@@ -1329,6 +2787,53 @@
             ],
             "default": null,
             "title": "Context"
+          },
+          "in_reply_to_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "In Reply To Message Id"
+          },
+          "forward_of_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Forward Of Message Id"
+          },
+          "attachment_ids": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Attachment Ids",
+            "type": "array"
+          },
+          "mailbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mailbox"
           }
         },
         "required": [
@@ -1341,12 +2846,248 @@
       }
     },
     {
+      "name": "email.draft_update",
+      "description": "Skill: email.draft_update — Autosave / edit a draft in place.",
+      "category": "email",
+      "method": "PATCH",
+      "path": "/api/email/drafts/{draft_id}",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "to_addresses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To Addresses"
+          },
+          "cc_addresses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cc Addresses"
+          },
+          "bcc_addresses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bcc Addresses"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subject"
+          },
+          "body_html": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Body Html"
+          },
+          "body_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Body Text"
+          },
+          "attachment_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Attachment Ids"
+          },
+          "mailbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mailbox"
+          }
+        },
+        "title": "EmailDraftUpdate",
+        "type": "object"
+      }
+    },
+    {
       "name": "email.list_drafts",
-      "description": "Skill: email.list_drafts — List email drafts.",
+      "description": "Skill: email.list_drafts — Drafts the caller may see (own drafts plus",
       "category": "email",
       "method": "GET",
       "path": "/api/email/drafts",
-      "approval_required": false
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
     },
     {
       "name": "email.style_match",
@@ -1393,12 +3134,302 @@
       }
     },
     {
+      "name": "email.compose_assist",
+      "description": "Skill: email.compose_assist — start an agentic \"improve this draft\" turn.",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/compose/assist",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "subject": {
+            "default": "",
+            "title": "Subject",
+            "type": "string"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "instruction": {
+            "default": "Улучши формулировки, сохрани смысл",
+            "title": "Instruction",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          },
+          "supplier_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supplier Id"
+          },
+          "invoice_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invoice Id"
+          },
+          "mailbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mailbox"
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "title": "ComposeAssistRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.compose",
+      "description": "Skill: email.compose — Generate a draft from an intent + context.",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/compose/generate",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "mailbox": {
+            "title": "Mailbox",
+            "type": "string"
+          },
+          "to_addresses": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "To Addresses",
+            "type": "array"
+          },
+          "intent": {
+            "title": "Intent",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          },
+          "supplier_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supplier Id"
+          },
+          "invoice_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invoice Id"
+          },
+          "attachment_ids": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Attachment Ids",
+            "type": "array"
+          },
+          "tone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tone"
+          }
+        },
+        "required": [
+          "mailbox",
+          "to_addresses",
+          "intent"
+        ],
+        "title": "AgentComposeRequest",
+        "type": "object"
+      }
+    },
+    {
       "name": "email.risk_check",
       "description": "Skill: email.risk_check — Check email draft for risks before sending.",
       "category": "email",
       "method": "POST",
       "path": "/api/email/drafts/{draft_id}/risk-check",
-      "approval_required": false
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
     },
     {
       "name": "email.send",
@@ -1406,7 +3437,34 @@
       "category": "email",
       "method": "POST",
       "path": "/api/email/drafts/{draft_id}/send",
-      "approval_required": true
+      "approval_required": true,
+      "parameters": {
+        "description": "``expected_digest`` is the ``content_digest`` the caller last saw.\n\nThis endpoint is the agent's approval-gated send path (the human composer\nuses POST /api/email/send instead). Requiring the digest is what makes the\ngate mean something: the approval machinery hashes the call arguments\n(work_planning.tool_call_digest), so with the digest among them a decision\nis bound to a specific letter rather than to a mutable draft id.",
+        "properties": {
+          "expected_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Digest"
+          },
+          "acknowledged_risks": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Acknowledged Risks",
+            "type": "array"
+          }
+        },
+        "title": "SendDraftRequest",
+        "type": "object"
+      }
     },
     {
       "name": "email.suggest_template",
@@ -1461,12 +3519,404 @@
       }
     },
     {
+      "name": "email.process_attachment",
+      "description": "Skill: email.process_attachment — manually (re)send an already-ingested",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/messages/{message_id}/attachments/process",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "target"
+        ],
+        "title": "AttachmentProcessRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.get_attachment",
+      "description": "Skill: email.get_attachment — Stream the raw bytes of one attachment.",
+      "category": "email",
+      "method": "GET",
+      "path": "/api/email/messages/{message_id}/attachments/{filename}/content",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.recognize_attachment",
+      "description": "Skill: email.recognize_attachment — OCR/classify/extract an attachment and",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/messages/{message_id}/attachments/recognize",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Filename"
+          },
+          "mode": {
+            "default": "full",
+            "enum": [
+              "ocr",
+              "classify",
+              "extract",
+              "full"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "AttachmentRecognizeRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.reply",
+      "description": "Skill: email.reply — Draft a reply into an existing thread (correct",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/threads/{thread_id}/reply-draft",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "mailbox": {
+            "title": "Mailbox",
+            "type": "string"
+          },
+          "to_addresses": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "To Addresses",
+            "type": "array"
+          },
+          "intent": {
+            "title": "Intent",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          },
+          "supplier_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supplier Id"
+          },
+          "invoice_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invoice Id"
+          },
+          "attachment_ids": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Attachment Ids",
+            "type": "array"
+          },
+          "tone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tone"
+          }
+        },
+        "required": [
+          "mailbox",
+          "to_addresses",
+          "intent"
+        ],
+        "title": "AgentComposeRequest",
+        "type": "object"
+      }
+    },
+    {
       "name": "email.read",
       "description": "Skill: email.read — Read email message with attachments.",
       "category": "email",
       "method": "GET",
       "path": "/api/email/{email_id}",
-      "approval_required": false
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
     },
     {
       "name": "approval.request",
@@ -1497,7 +3947,8 @@
               "tech.norm_estimate_approve",
               "tech.learning_rule_activate",
               "tech.process_plan_from_drawing",
-              "agent.tool_call"
+              "agent.tool_call",
+              "lora.train"
             ],
             "title": "ApprovalActionType",
             "type": "string"
@@ -1586,6 +4037,8 @@
               "buyer",
               "engineer",
               "technologist",
+              "normcontroller",
+              "calculator",
               "viewer"
             ],
             "title": "UserRole",
@@ -1624,6 +4077,58 @@
             },
             "title": "Groups",
             "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2330,6 +4835,24 @@
             ],
             "title": "TableFilter",
             "type": "object"
+          },
+          "TableSort": {
+            "properties": {
+              "column": {
+                "title": "Column",
+                "type": "string"
+              },
+              "direction": {
+                "default": "desc",
+                "title": "Direction",
+                "type": "string"
+              }
+            },
+            "required": [
+              "column"
+            ],
+            "title": "TableSort",
+            "type": "object"
           }
         },
         "properties": {
@@ -2344,6 +4867,14 @@
               "$ref": "#/$defs/TableFilter"
             },
             "title": "Filters",
+            "type": "array"
+          },
+          "sort": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TableSort"
+            },
+            "title": "Sort",
             "type": "array"
           },
           "columns": {
@@ -3497,13 +6028,29 @@
       "parameters": {
         "properties": {
           "entity_type": {
-            "title": "Entity Type",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Entity Type"
           },
           "entity_id": {
-            "format": "uuid",
-            "title": "Entity Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Entity Id"
           },
           "remind_at": {
             "format": "date-time",
@@ -3529,8 +6076,6 @@
           }
         },
         "required": [
-          "entity_type",
-          "entity_id",
           "remind_at",
           "message"
         ],
@@ -3552,7 +6097,120 @@
       "category": "calendar",
       "method": "POST",
       "path": "/api/calendar/reminders/{reminder_id}/generate-followup",
-      "approval_required": false
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "UserRole": {
+            "enum": [
+              "admin",
+              "manager",
+              "accountant",
+              "buyer",
+              "engineer",
+              "technologist",
+              "normcontroller",
+              "calculator",
+              "viewer"
+            ],
+            "title": "UserRole",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "sub": {
+            "title": "Sub",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preferred_username": {
+            "title": "Preferred Username",
+            "type": "string"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/UserRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "section_access": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section Access"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timezone"
+          },
+          "via_agent": {
+            "default": false,
+            "title": "Via Agent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "email",
+          "name",
+          "preferred_username"
+        ],
+        "title": "UserInfo",
+        "type": "object"
+      }
     },
     {
       "name": "calendar.mark_sent",
@@ -4274,6 +6932,18 @@
             "default": null,
             "title": "Scope"
           },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
           "limit": {
             "default": 50,
             "maximum": 500,
@@ -4437,6 +7107,30 @@
             ],
             "default": null,
             "title": "Node Types"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
           },
           "limit": {
             "default": 50,
@@ -5883,6 +8577,57 @@
       }
     },
     {
+      "name": "tech.learning_rule_reflect",
+      "description": "Skill: tech.learning_rule_reflect — internal, not agent-exposed.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/learning-rules/reflect",
+      "approval_required": false,
+      "parameters": {
+        "description": "Reflection loop: a behavioural lesson learned from a self-corrected\nagent turn (orchestrator._maybe_record_reflection_lesson). Idempotent by\n(rule_type='behavior', entity_type, field_name) — repeated occurrences\nreinforce the existing rule rather than creating duplicates.",
+        "properties": {
+          "entity_type": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "field_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Field Name",
+            "type": "string"
+          },
+          "lesson": {
+            "minLength": 1,
+            "title": "Lesson",
+            "type": "string"
+          },
+          "trigger_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Trigger Keywords",
+            "type": "array"
+          },
+          "activate_after": {
+            "default": 2,
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Activate After",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entity_type",
+          "field_name",
+          "lesson"
+        ],
+        "title": "LearningRuleReflectRequest",
+        "type": "object"
+      }
+    },
+    {
       "name": "tech.learning_rule_activate",
       "description": "Skill: tech.learning_rule_activate — Activate a proposed learning rule.",
       "category": "technology",
@@ -6254,6 +8999,14 @@
       "approval_required": false
     },
     {
+      "name": "bom.where_used",
+      "description": "Skill: bom.where_used — E4: every BOM line that uses the given item",
+      "category": "boms",
+      "method": "GET",
+      "path": "/api/boms/where-used",
+      "approval_required": false
+    },
+    {
       "name": "bom.get",
       "description": "Skill: bom.get — Get BOM with all lines.",
       "category": "boms",
@@ -6292,6 +9045,14 @@
       "method": "POST",
       "path": "/api/boms/{bom_id}/create-purchase-request",
       "approval_required": true
+    },
+    {
+      "name": "bom.derive_mbom",
+      "description": "Skill: bom.derive_mbom — E4: mint a manufacturing BOM from an APPROVED",
+      "category": "boms",
+      "method": "POST",
+      "path": "/api/boms/{bom_id}/derive-mbom",
+      "approval_required": false
     },
     {
       "name": "ntd.control_settings_get",
@@ -6470,6 +9231,14 @@
       "approval_required": false
     },
     {
+      "name": "workspace.compare_table_data",
+      "description": "Skill: workspace.compare_table_data — Compare two Workspace tables/sheets.",
+      "category": "workspace",
+      "method": "POST",
+      "path": "/api/workspace/agent/compare-table-data",
+      "approval_required": false
+    },
+    {
       "name": "workspace.sql_table",
       "description": "Skill: workspace.sql_table — Build and publish a table using SQL-first pipeline.",
       "category": "workspace",
@@ -6483,6 +9252,22 @@
       "category": "workspace",
       "method": "POST",
       "path": "/api/workspace/agent/generated/general",
+      "approval_required": false
+    },
+    {
+      "name": "mailbox.map_folder",
+      "description": "Skill: mailbox.map_folder — Map a server folder to one of ours / toggle sync.",
+      "category": "mailbox",
+      "method": "PATCH",
+      "path": "/api/mailbox/folders/{folder_id}",
+      "approval_required": false
+    },
+    {
+      "name": "mailbox.presets",
+      "description": "Skill: mailbox.presets — Known providers with autofill + auth hints.",
+      "category": "mailbox",
+      "method": "GET",
+      "path": "/api/mailbox/presets",
       "approval_required": false
     },
     {
@@ -6507,6 +9292,14 @@
       "category": "mailbox",
       "method": "GET",
       "path": "/api/mailbox/configs/{mailbox_id}",
+      "approval_required": false
+    },
+    {
+      "name": "mailbox.sync",
+      "description": "Skill: mailbox.sync — Trigger an immediate IMAP poll for this mailbox.",
+      "category": "mailbox",
+      "method": "POST",
+      "path": "/api/mailbox/configs/{mailbox_id}/sync",
       "approval_required": false
     },
     {
@@ -6603,6 +9396,14 @@
       "category": "agent_control",
       "method": "POST",
       "path": "/api/agent/tasks/create",
+      "approval_required": false
+    },
+    {
+      "name": "task.propose",
+      "description": "Skill: task.propose — Propose autonomous work without executing it.",
+      "category": "agent_control",
+      "method": "POST",
+      "path": "/api/agent/tasks/propose",
       "approval_required": false
     },
     {

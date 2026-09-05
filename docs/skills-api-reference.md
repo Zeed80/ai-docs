@@ -1,26 +1,26 @@
 # AiAgent Skills API Reference
 
-*Auto-generated from FastAPI Pydantic schemas. Version 2. Total: 236 skills.*
+*Auto-generated from FastAPI Pydantic schemas. Version 2. Total: 260 skills.*
 
 > **Usage**: agent calls `POST /api/agent/cap/{capability}` with `{"action": "..."}`. See [ADR 001](adrs/001-capability-routing.md).
 
 ## Table of Contents
 
-- [Agent Control Plane (5)](#agent-control-plane)
+- [Agent Control Plane (6)](#agent-control-plane)
 - [Anomalies (5)](#anomalies)
 - [Approvals (3)](#approvals)
-- [BOMs (7)](#boms)
+- [BOMs (9)](#boms)
 - [Calendar (8)](#calendar)
 - [Canvas (1)](#canvas)
 - [Collections (7)](#collections)
 - [Compare (КП) (6)](#compare-кп)
 - [Dashboard (1)](#dashboard)
 - [Documents (22)](#documents)
-- [Email (11)](#email)
+- [Email (26)](#email)
 - [Email Templates (7)](#email-templates)
 - [Graph (10)](#graph)
-- [Invoices (12)](#invoices)
-- [Mailboxes (6)](#mailboxes)
+- [Invoices (13)](#invoices)
+- [Mailboxes (9)](#mailboxes)
 - [Memory (8)](#memory)
 - [Normalization (11)](#normalization)
 - [NTD / Technology (15)](#ntd--technology)
@@ -30,9 +30,9 @@
 - [Search & NL (5)](#search--nl)
 - [Suppliers (9)](#suppliers)
 - [Tables & Export (10)](#tables--export)
-- [Technology Cards (28)](#technology-cards)
+- [Technology Cards (29)](#technology-cards)
 - [Warehouse (15)](#warehouse)
-- [Workspace (8)](#workspace)
+- [Workspace (9)](#workspace)
 
 ## Agent Control Plane
 
@@ -65,6 +65,12 @@ config.propose
 task.create
 
 **`POST /api/agent/tasks/create`**
+
+### `task.propose`
+
+task.propose
+
+**`POST /api/agent/tasks/propose`**
 
 
 ## Anomalies
@@ -138,12 +144,17 @@ approval.list_pending
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
 | `email` | `string` | ✓ | Email |
 | `groups` | `array` |  | Groups |
 | `name` | `string` | ✓ | Name |
 | `preferred_username` | `string` | ✓ | Preferred Username |
 | `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
 | `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
 
 ### `approval.request`
 
@@ -190,6 +201,12 @@ bom.create_purchase_request
 
 **`POST /api/boms/{bom_id}/create-purchase-request`**
 
+### `bom.derive_mbom`
+
+bom.derive_mbom
+
+**`POST /api/boms/{bom_id}/derive-mbom`**
+
 ### `bom.get`
 
 bom.get
@@ -213,6 +230,12 @@ bom.stock_check
 bom.update
 
 **`PATCH /api/boms/{bom_id}`**
+
+### `bom.where_used`
+
+bom.where_used
+
+**`GET /api/boms/where-used`**
 
 
 ## Calendar
@@ -245,8 +268,8 @@ calendar.create_reminder
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `calendar_event_id` | `string` |  | Calendar Event Id |
-| `entity_id` | `string` | ✓ | Entity Id |
-| `entity_type` | `string` | ✓ | Entity Type |
+| `entity_id` | `string` |  | Entity Id |
+| `entity_type` | `string` |  | Entity Type |
 | `message` | `string` | ✓ | Message |
 | `remind_at` | `string` | ✓ | Remind At |
 
@@ -267,6 +290,22 @@ calendar.extract_dates
 calendar.generate_followup
 
 **`POST /api/calendar/reminders/{reminder_id}/generate-followup`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
 
 ### `calendar.list_events`
 
@@ -558,6 +597,22 @@ doc.ingest
 
 **`POST /api/documents/ingest`**
 
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
+
 ### `doc.link`
 
 doc.link
@@ -602,12 +657,17 @@ doc.list
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
 | `email` | `string` | ✓ | Email |
 | `groups` | `array` |  | Groups |
 | `name` | `string` | ✓ | Name |
 | `preferred_username` | `string` | ✓ | Preferred Username |
 | `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
 | `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
 
 ### `doc.management`
 
@@ -650,8 +710,83 @@ doc.workspace
 
 **`GET /api/documents/workspace`**
 
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
+
 
 ## Email
+
+### `email.attachment_upload`
+
+email.attachment_upload
+
+**`POST /api/email/attachments/upload`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
+
+### `email.compose`
+
+email.compose
+
+**`POST /api/email/compose/generate`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `attachment_ids` | `array` |  | Attachment Ids |
+| `intent` | `string` | ✓ | Intent |
+| `invoice_id` | `string` |  | Invoice Id |
+| `mailbox` | `string` | ✓ | Mailbox |
+| `supplier_id` | `string` |  | Supplier Id |
+| `thread_id` | `string` |  | Thread Id |
+| `to_addresses` | `array` | ✓ | To Addresses |
+| `tone` | `string` |  | Tone |
+
+### `email.compose_assist`
+
+email.compose_assist
+
+**`POST /api/email/compose/assist`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `body` | `string` | ✓ | Body |
+| `instruction` | `string` |  | Instruction |
+| `invoice_id` | `string` |  | Invoice Id |
+| `mailbox` | `string` |  | Mailbox |
+| `subject` | `string` |  | Subject |
+| `supplier_id` | `string` |  | Supplier Id |
+| `thread_id` | `string` |  | Thread Id |
 
 ### `email.draft`
 
@@ -663,14 +798,38 @@ email.draft
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `attachment_ids` | `array` |  | Attachment Ids |
+| `bcc_addresses` | `array` |  | Bcc Addresses |
 | `body_html` | `string` | ✓ | Body Html |
 | `body_text` | `string` |  | Body Text |
 | `cc_addresses` | `array` |  | Cc Addresses |
 | `context` | `object` |  | Context |
+| `forward_of_message_id` | `string` |  | Forward Of Message Id |
+| `in_reply_to_message_id` | `string` |  | In Reply To Message Id |
+| `mailbox` | `string` |  | Mailbox |
 | `subject` | `string` | ✓ | Subject |
 | `supplier_id` | `string` |  | Supplier Id |
 | `thread_id` | `string` |  | Thread Id |
 | `to_addresses` | `array` | ✓ | To Addresses |
+
+### `email.draft_update`
+
+email.draft_update
+
+**`PATCH /api/email/drafts/{draft_id}`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `attachment_ids` | `array` |  | Attachment Ids |
+| `bcc_addresses` | `array` |  | Bcc Addresses |
+| `body_html` | `string` |  | Body Html |
+| `body_text` | `string` |  | Body Text |
+| `cc_addresses` | `array` |  | Cc Addresses |
+| `mailbox` | `string` |  | Mailbox |
+| `subject` | `string` |  | Subject |
+| `to_addresses` | `array` |  | To Addresses |
 
 ### `email.fetch_new`
 
@@ -684,11 +843,122 @@ email.fetch_new
 |-------|------|----------|-------------|
 | `mailbox` | `string` |  | Mailbox |
 
+### `email.get_attachment`
+
+email.get_attachment
+
+**`GET /api/email/messages/{message_id}/attachments/{filename}/content`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
+
+### `email.get_preferences`
+
+email.get_preferences
+
+**`GET /api/email/preferences`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
+
 ### `email.get_thread`
 
 email.get_thread
 
 **`GET /api/email/threads/{thread_id}`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
+
+### `email.label`
+
+email.label
+
+**`POST /api/email/threads/actions`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `action` | `string` | ✓ | Action |
+| `folder` | `string` |  | Folder |
+| `label_id` | `string` |  | Label Id |
+| `thread_ids` | `array` | ✓ | Thread Ids |
+
+### `email.labels_create`
+
+email.labels_create
+
+**`POST /api/email/labels`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `color` | `string` |  | Color |
+| `mailbox` | `string` |  | Mailbox |
+| `name` | `string` | ✓ | Name |
+
+### `email.labels_list`
+
+email.labels_list
+
+**`GET /api/email/labels`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
 
 ### `email.list_drafts`
 
@@ -696,11 +966,78 @@ email.list_drafts
 
 **`GET /api/email/drafts`**
 
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
+
 ### `email.list_threads`
 
 email.list_threads
 
 **`GET /api/email/threads`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
+
+### `email.mailboxes`
+
+email.mailboxes
+
+**`GET /api/email/mailboxes`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
+
+### `email.process_attachment`
+
+email.process_attachment
+
+**`POST /api/email/messages/{message_id}/attachments/process`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `filename` | `string` | ✓ | Filename |
+| `target` | `string` | ✓ | Target |
 
 ### `email.read`
 
@@ -708,11 +1045,75 @@ email.read
 
 **`GET /api/email/{email_id}`**
 
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
+
+### `email.recognize_attachment`
+
+email.recognize_attachment
+
+**`POST /api/email/messages/{message_id}/attachments/recognize`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `filename` | `string` |  | Filename |
+| `mode` | `string` |  | Mode |
+
+### `email.reply`
+
+email.reply
+
+**`POST /api/email/threads/{thread_id}/reply-draft`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `attachment_ids` | `array` |  | Attachment Ids |
+| `intent` | `string` | ✓ | Intent |
+| `invoice_id` | `string` |  | Invoice Id |
+| `mailbox` | `string` | ✓ | Mailbox |
+| `supplier_id` | `string` |  | Supplier Id |
+| `thread_id` | `string` |  | Thread Id |
+| `to_addresses` | `array` | ✓ | To Addresses |
+| `tone` | `string` |  | Tone |
+
 ### `email.risk_check`
 
 email.risk_check
 
 **`POST /api/email/drafts/{draft_id}/risk-check`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
 
 ### `email.search`
 
@@ -724,17 +1125,69 @@ email.search
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `cursor` | `string` |  | Cursor |
+| `date_from` | `string` |  | Date From |
+| `date_to` | `string` |  | Date To |
 | `email_address` | `string` |  | Email Address |
+| `folder` | `string` |  | Folder |
+| `from_addr` | `string` |  | From Addr |
+| `has_attachments` | `boolean` |  | Has Attachments |
+| `is_starred` | `boolean` |  | Is Starred |
+| `is_unread` | `boolean` |  | Is Unread |
+| `label_ids` | `array` |  | Label Ids |
 | `limit` | `integer` |  | Limit |
 | `mailbox` | `string` |  | Mailbox |
 | `query` | `string` |  | Query |
+| `sort` | `string` |  | Sort |
 | `supplier_id` | `string` |  | Supplier Id |
+| `to_addr` | `string` |  | To Addr |
 
 ### `email.send` ⛔ **approval gate**
 
 email.send
 
 **`POST /api/email/drafts/{draft_id}/send`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `acknowledged_risks` | `array` |  | Acknowledged Risks |
+| `expected_digest` | `string` |  | Expected Digest |
+
+### `email.set_preferences`
+
+email.set_preferences
+
+**`PATCH /api/email/preferences`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `always_show_images` | `boolean` |  | Always Show Images |
+
+### `email.signatures_list`
+
+email.signatures_list
+
+**`GET /api/email/signatures`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
+| `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
 
 ### `email.style_match`
 
@@ -984,6 +1437,12 @@ invoice.bulk_delete
 | `status` | `any` |  |  |
 | `supplier_id` | `string` |  | Supplier Id |
 
+### `invoice.catalog_price_check`
+
+invoice.catalog_price_check
+
+**`GET /api/invoices/{invoice_id}/catalog-price-check`**
+
 ### `invoice.compare_prices`
 
 invoice.compare_prices
@@ -1020,6 +1479,7 @@ invoice.line.update
 |-------|------|----------|-------------|
 | `amount` | `number` |  | Amount |
 | `description` | `string` |  | Description |
+| `pre_discount_amount` | `number` |  | Pre Discount Amount |
 | `quantity` | `number` |  | Quantity |
 | `sku` | `string` |  | Sku |
 | `tax_amount` | `number` |  | Tax Amount |
@@ -1037,12 +1497,17 @@ invoice.list
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `department_id` | `string` |  | Department Id |
 | `email` | `string` | ✓ | Email |
 | `groups` | `array` |  | Groups |
 | `name` | `string` | ✓ | Name |
 | `preferred_username` | `string` | ✓ | Preferred Username |
 | `roles` | `array` |  | Roles |
+| `section_access` | `array` |  | Section Access |
+| `sections` | `array` |  | Sections |
 | `sub` | `string` | ✓ | Sub |
+| `timezone` | `string` |  | Timezone |
+| `via_agent` | `boolean` |  | Via Agent |
 
 ### `invoice.receive`
 
@@ -1078,6 +1543,7 @@ invoice.update
 | `invoice_number` | `string` |  | Invoice Number |
 | `notes` | `string` |  | Notes |
 | `payment_id` | `string` |  | Payment Id |
+| `special_marks` | `string` |  | Special Marks |
 | `subtotal` | `number` |  | Subtotal |
 | `tax_amount` | `number` |  | Tax Amount |
 | `total_amount` | `number` |  | Total Amount |
@@ -1115,6 +1581,24 @@ mailbox.get
 mailbox.list
 
 **`GET /api/mailbox/configs`**
+
+### `mailbox.map_folder`
+
+mailbox.map_folder
+
+**`PATCH /api/mailbox/folders/{folder_id}`**
+
+### `mailbox.presets`
+
+mailbox.presets
+
+**`GET /api/mailbox/presets`**
+
+### `mailbox.sync`
+
+mailbox.sync
+
+**`POST /api/mailbox/configs/{mailbox_id}/sync`**
 
 ### `mailbox.test` ⛔ **approval gate**
 
@@ -1204,6 +1688,8 @@ memory.explain
 | `node_types` | `array` |  | Node Types |
 | `query` | `string` | ✓ | Query |
 | `retrieval_mode` | `string` |  | Retrieval Mode |
+| `scope` | `string` |  | Scope |
+| `session_id` | `string` |  | Session Id |
 
 ### `memory.prune`
 
@@ -1255,6 +1741,7 @@ memory.search
 | `query` | `string` | ✓ | Query |
 | `retrieval_mode` | `string` |  | Retrieval Mode |
 | `scope` | `string` |  | Scope |
+| `session_id` | `string` |  | Session Id |
 
 
 ## Normalization
@@ -1797,6 +2284,7 @@ table.export_excel
 | `columns` | `array` |  | Columns |
 | `filters` | `array` |  | Filters |
 | `format` | `string` |  | Format |
+| `sort` | `array` |  | Sort |
 | `table` | `string` |  | Table |
 
 ### `table.import_excel` ⛔ **approval gate**
@@ -1938,6 +2426,22 @@ tech.learning_rule_create
 tech.learning_rule_list
 
 **`GET /api/technology/learning-rules`**
+
+### `tech.learning_rule_reflect`
+
+tech.learning_rule_reflect
+
+**`POST /api/technology/learning-rules/reflect`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `activate_after` | `integer` |  | Activate After |
+| `entity_type` | `string` | ✓ | Entity Type |
+| `field_name` | `string` | ✓ | Field Name |
+| `lesson` | `string` | ✓ | Lesson |
+| `trigger_keywords` | `array` |  | Trigger Keywords |
 
 ### `tech.learning_suggest`
 
@@ -2265,6 +2769,12 @@ warehouse.update_status
 
 
 ## Workspace
+
+### `workspace.compare_table_data`
+
+workspace.compare_table_data
+
+**`POST /api/workspace/agent/compare-table-data`**
 
 ### `workspace.general`
 
