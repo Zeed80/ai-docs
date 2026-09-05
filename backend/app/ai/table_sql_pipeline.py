@@ -293,11 +293,41 @@ async def execute_sql(sql: str, *, max_rows: int = 200) -> list[dict[str, Any]]:
         # таймауту, а не занимает соединение до бесконечности.
         await db.execute(text("SET LOCAL transaction_read_only = on"))
         await db.execute(text("SET LOCAL statement_timeout = '15s'"))
+        # Третий рубеж, и единственный не текстовый: под ролью agent_sql_reader
+        # у соединения есть SELECT ровно на разрешённые таблицы. Разбор FROM
+        # выше — это разбор текста, написанного моделью по содержимому письма
+        # или документа; ошибка в нём пропустила бы запрос к чужой таблице, а
+        # права СУБД — нет.
+        await _enter_reader_role(db)
         result = await db.execute(text(safe_sql))
         cols = list(result.keys())
         rows = [dict(zip(cols, row)) for row in result.fetchall()]
         await db.rollback()
     return rows
+
+
+# Роль создаётся миграцией 20260905_0001. Имя и список таблиц обязаны совпадать
+# с ALLOWED_TABLES — за расхождением следит test_agent_sql_reader_role.py.
+_READER_ROLE = "agent_sql_reader"
+
+
+async def _enter_reader_role(db) -> None:
+    """Переключить транзакцию на роль только для чтения разрешённых таблиц.
+
+    Роль может отсутствовать: база поднята через ``create_all`` без миграций
+    (так делают тесты) или миграция ещё не применена. Тогда остаются два
+    прежних рубежа — белый список и read-only транзакция, — но об этом надо
+    знать, поэтому пишем в журнал уровнем error, а не молча продолжаем.
+    """
+    from sqlalchemy import text
+
+    try:
+        await db.execute(text(f"SET LOCAL ROLE {_READER_ROLE}"))
+    except Exception as exc:  # noqa: BLE001 — отсутствие роли не повод падать
+        await db.rollback()
+        logger.error("sql_pipeline_reader_role_unavailable", error=str(exc))
+        await db.execute(text("SET LOCAL transaction_read_only = on"))
+        await db.execute(text("SET LOCAL statement_timeout = '15s'"))
 
 
 # ── Canvas block formatting ────────────────────────────────────────────────────
