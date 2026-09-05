@@ -427,6 +427,12 @@ models:
     vram_gb_estimate: 0.0
     quality_score: 0.93
     speed_score: 0.70
+    # Цена за 1000 токенов. Публикуется провайдером за миллион ($3 / $15),
+    # здесь делённая на 1000 — в этих единицах её ждёт отчёт по расходам.
+    # Проверять при пересмотре тарифов: устаревшая цена хуже отсутствующей,
+    # потому что выглядит достоверной.
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
     notes: "Claude Sonnet via Anthropic API. Enable only with allow_cloud=True. Prompt caching supported."
   claude_haiku_anthropic:
     provider: "anthropic"
@@ -442,6 +448,9 @@ models:
     vram_gb_estimate: 0.0
     quality_score: 0.82
     speed_score: 0.92
+    # $1 / $5 за миллион токенов.
+    cost_per_1k_input: 0.001
+    cost_per_1k_output: 0.005
     notes: "Claude Haiku — fast and cheap. Good for summarisation and context compression."
   deepseek_r1_openrouter:
     provider: "openrouter"

@@ -2556,6 +2556,96 @@ async def slots_health() -> list[SlotHealthOut]:
     return out
 
 
+class CostRow(BaseModel):
+    model: str
+    provider: str | None = None
+    calls: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: float | None = None
+    # Цена известна. Без этого флага «0» читалось бы как «ничего не
+    # потрачено», хотя означает «не знаем сколько».
+    priced: bool = False
+
+
+class CostReportOut(BaseModel):
+    total_usd: float
+    priced_models: int
+    unpriced_models: list[str]
+    by_model: list[CostRow]
+
+
+@router.get("/cost-report", response_model=CostReportOut, dependencies=_admin)
+async def cost_report() -> CostReportOut:
+    """Во что обошлись облачные вызовы.
+
+    Токены телеметрия копит с самого начала, цена лежит в каталоге — но вместе
+    их никто не сводил, и вопрос «сколько мы тратим на облако» оставался без
+    ответа.
+
+    Сумма показывается как нижняя оценка: у моделей, для которых цена в
+    каталоге не заполнена, расход неизвестен, и делать вид, что он нулевой,
+    нельзя. Такие модели перечислены отдельно — это и есть список того, что
+    мешает считать точно.
+    """
+    from app.ai import telemetry
+
+    registry = _registry()
+    try:
+        rows = telemetry.get_summary().get("by_model") or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cost_report_telemetry_failed", error=str(exc))
+        rows = []
+
+    # Одна модель встречается в нескольких задачах — расход считаем по модели.
+    agg: dict[str, dict] = {}
+    for row in rows:
+        key = str(row.get("model") or "")
+        if not key:
+            continue
+        acc = agg.setdefault(key, {"calls": 0, "tokens_in": 0, "tokens_out": 0})
+        acc["calls"] += int(row.get("calls") or 0)
+        acc["tokens_in"] += int(row.get("tokens_in") or 0)
+        acc["tokens_out"] += int(row.get("tokens_out") or 0)
+
+    out: list[CostRow] = []
+    unpriced: list[str] = []
+    total = 0.0
+    for key, acc in agg.items():
+        cap = registry.models.get(key)
+        # Локальные модели денег не стоят — в списке «цена неизвестна» им не
+        # место, иначе он превратится в шум.
+        if cap is not None and cap.local_only:
+            continue
+        priced = bool(cap and (cap.cost_per_1k_input or cap.cost_per_1k_output))
+        cost = None
+        if priced and cap:
+            cost = (
+                acc["tokens_in"] / 1000 * (cap.cost_per_1k_input or 0)
+                + acc["tokens_out"] / 1000 * (cap.cost_per_1k_output or 0)
+            )
+            total += cost
+        elif acc["calls"]:
+            unpriced.append(key)
+        out.append(CostRow(
+            model=key,
+            provider=cap.provider.value if cap else None,
+            calls=acc["calls"],
+            tokens_in=acc["tokens_in"],
+            tokens_out=acc["tokens_out"],
+            cost_usd=round(cost, 4) if cost is not None else None,
+            priced=priced,
+        ))
+
+    out.sort(key=lambda r: (r.cost_usd or 0, r.calls), reverse=True)
+    return CostReportOut(
+        total_usd=round(total, 2),
+        priced_models=sum(1 for r in out if r.priced),
+        unpriced_models=sorted(unpriced),
+        by_model=out,
+    )
+
+
 class AssignmentRevisionOut(BaseModel):
     id: str
     created_at: datetime
