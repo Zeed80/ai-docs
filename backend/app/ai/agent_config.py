@@ -23,13 +23,18 @@ class BuiltinAgentConfig(BaseModel):
     department_enabled: bool = True
     orchestrator_model: str | None = None
     orchestrator_provider: str | None = None
-    # Per-role thinking override (tri-state):
-    #   None  → defer to the model's catalog default (ModelCapability.thinking_enabled)
-    #   True  → force thinking OFF for this role
-    #   False → force thinking ON for this role
-    # Tool-calling roles default to None: on non-thinking models (the catalog
-    # default) this resolves to OFF, matching prior behaviour, while a model the
-    # operator marks as a thinker (UI checkbox) will reason. Builder forces ON.
+    # Переопределение рассуждения для роли (три состояния). Поле называется
+    # `disable_*`, то есть хранит ОТРИЦАНИЕ — читать его напрямую неудобно и
+    # легко перепутать. Для чтения и записи есть аксессоры без отрицания:
+    # thinking_enabled_for() / with_thinking_enabled_for() ниже.
+    #
+    #   None  → как у модели (ModelCapability.thinking_enabled)
+    #   True  → рассуждение выключено для этой роли
+    #   False → рассуждение включено для этой роли
+    #
+    # Роли с вызовом инструментов по умолчанию None: на модели без рассуждения
+    # это даёт «выключено», а модель, помеченную оператором как думающую, —
+    # включает. У builder значение False, то есть рассуждение включено всегда.
     orchestrator_disable_thinking: bool | None = None
     # Per-role reasoning-effort override (tri-state), same defer-if-None
     # semantics as the *_disable_thinking fields above. Only meaningful when
@@ -372,3 +377,54 @@ def reset_builtin_agent_config() -> BuiltinAgentConfig:
     config = _default_config()
     save_builtin_agent_config(config)
     return config
+
+
+# ── Рассуждение ролей: чтение и запись без отрицания ─────────────────────────
+#
+# Поля называются `*_disable_thinking`, и это единственное место в системе с
+# обратной полярностью: в каталоге моделей и в маршрутизации задач тот же
+# смысл выражен прямо (`thinking_enabled`, `TaskRouting.thinking`). Двойное
+# отрицание уже приводило к рассинхрону, поэтому вызывающие работают через
+# аксессоры, а не с полем напрямую.
+
+ROLE_THINKING_FIELDS: dict[str, str] = {
+    "orchestrator": "orchestrator_disable_thinking",
+    "worker": "worker_disable_thinking",
+    "auditor": "auditor_disable_thinking",
+    "builder": "builder_disable_thinking",
+    "fast": "fast_disable_thinking",
+}
+
+ROLE_THINKING_LEVEL_FIELDS: dict[str, str] = {
+    "orchestrator": "orchestrator_thinking_level",
+    "worker": "worker_thinking_level",
+    "auditor": "auditor_thinking_level",
+    "builder": "builder_thinking_level",
+    "fast": "fast_thinking_level",
+}
+
+
+def thinking_enabled_for(config: BuiltinAgentConfig, role: str) -> bool | None:
+    """Включено ли рассуждение у роли. None = как у модели."""
+    field = ROLE_THINKING_FIELDS.get(role)
+    if field is None:
+        return None
+    disabled = getattr(config, field, None)
+    return None if disabled is None else (not disabled)
+
+
+def with_thinking_enabled_for(
+    config: BuiltinAgentConfig, role: str, enabled: bool | None
+) -> BuiltinAgentConfig:
+    """Копия конфига с новым состоянием рассуждения роли (None = как у модели)."""
+    field = ROLE_THINKING_FIELDS.get(role)
+    if field is None:
+        return config
+    return config.model_copy(
+        update={field: None if enabled is None else (not enabled)}
+    )
+
+
+def thinking_level_for(config: BuiltinAgentConfig, role: str) -> str | None:
+    field = ROLE_THINKING_LEVEL_FIELDS.get(role)
+    return getattr(config, field, None) if field else None

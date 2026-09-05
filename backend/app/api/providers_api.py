@@ -1230,6 +1230,9 @@ class SlotOut(BaseModel):
     thinking_effective: bool | None = None
     thinking_source: str = "unsupported"  # slot | model | unsupported
     thinking_disable_supported: bool = True
+    # Поля за одним переключателем разошлись — переключатель показывает
+    # состояние первого, и это надо назвать вслух.
+    thinking_mixed: bool = False
     thinking_warning: str | None = None
     # Reasoning-effort level for the selected model, if it declares any.
     thinking_levels: list[str] = []          # levels the SELECTED model supports (empty = none)
@@ -1469,16 +1472,52 @@ def _slot_supports_thinking(slot: str) -> bool:
     return slot in _SLOT_THINKING_TASKS or slot in _SLOT_THINKING_AGENT_FIELDS
 
 
+def _slot_thinking_values(slot: str) -> list[bool | None]:
+    """Состояние рассуждения по КАЖДОМУ полю, которое стоит за слотом.
+
+    Слот `agent_orchestrator` пишет сразу в две роли (orchestrator и worker), а
+    читалось только первое поле. Если значения разошлись — например, роль
+    поменяли из другого места, — интерфейс показывал одно и умалчивал про
+    второе, и человек видел не то состояние, которое реально применяется.
+    """
+    if not _slot_supports_thinking(slot):
+        return []
+    if slot in _SLOT_THINKING_AGENT_FIELDS:
+        from app.ai.agent_config import get_builtin_agent_config
+
+        cfg = get_builtin_agent_config()
+        out: list[bool | None] = []
+        for field in _SLOT_THINKING_AGENT_FIELDS[slot]:
+            disable = getattr(cfg, field, None)
+            out.append(None if disable is None else (not disable))
+        return out
+    if slot in _SLOT_THINKING_TASKS:
+        from app.ai.schemas import AITask
+        from app.ai.task_routing import get_routing_for
+
+        out = []
+        for task_value in _SLOT_THINKING_TASKS[slot]:
+            try:
+                out.append(get_routing_for(AITask(task_value)).thinking)
+            except (ValueError, KeyError):
+                out.append(None)
+        return out
+    return []
+
+
+def _slot_thinking_mixed(slot: str) -> bool:
+    """Разошлись ли поля, стоящие за одним переключателем."""
+    values = _slot_thinking_values(slot)
+    return len(set(values)) > 1 if values else False
+
+
 def _slot_thinking_override(slot: str) -> bool | None:
     """Current per-assignment reasoning override. None = model default."""
     if not _slot_supports_thinking(slot):
         return None
     if slot in _SLOT_THINKING_AGENT_FIELDS:
-        from app.ai.agent_config import get_builtin_agent_config
-        cfg = get_builtin_agent_config()
-        field = _SLOT_THINKING_AGENT_FIELDS[slot][0]
-        disable = getattr(cfg, field, None)
-        return None if disable is None else (not disable)
+        values = _slot_thinking_values(slot)
+        return values[0] if values else None
     if slot in _SLOT_THINKING_TASKS:
         from app.ai.schemas import AITask
         from app.ai.task_routing import get_routing_for
@@ -1563,6 +1602,10 @@ def _slot_thinking_state(slot: str, registry, model_key: str | None) -> dict[str
         "thinking_effective": effective,
         "thinking_source": source,
         "thinking_disable_supported": disable_supported,
+        # За одним переключателем может стоять несколько полей (слот
+        # «Оркестратор» пишет и в orchestrator, и в worker). Если они
+        # разошлись, честнее сказать об этом, чем показать значение первого.
+        "thinking_mixed": _slot_thinking_mixed(slot),
         "thinking_warning": warning,
         "thinking_levels": model_levels,
         "thinking_level_override": level_override,

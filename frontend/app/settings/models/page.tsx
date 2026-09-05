@@ -7,9 +7,14 @@ import { ModelCombobox } from "@/components/models/picker/ModelCombobox";
 import { providerBarColor, providerLabel } from "@/lib/models/labels";
 import { RoutingChains } from "@/components/models/telemetry/RoutingChains";
 import { ToastProvider, useToast } from "@/components/ui/primitives/Toast";
+import { SlotThinkingControl } from "@/components/models/assignment/SlotThinkingControl";
 import { useCurrentUser } from "@/lib/auth-context";
 import { hasRole } from "@/lib/rbac";
-import type { CatalogModel, Modality } from "@/lib/models/types";
+import type {
+  CatalogModel,
+  Modality,
+  ThinkingLevel,
+} from "@/lib/models/types";
 
 const API = getApiBaseUrl();
 
@@ -2455,6 +2460,9 @@ interface SlotItem {
   thinking_effective?: boolean | null;
   thinking_source?: "slot" | "model" | "unsupported";
   thinking_disable_supported?: boolean;
+  // За одним переключателем может стоять несколько ролей; если их
+  // значения разошлись, показывается состояние первой.
+  thinking_mixed?: boolean;
   thinking_warning?: string | null;
   thinking_levels?: string[]; // reasoning-effort levels the SELECTED model supports (empty = none)
   thinking_level_override?: string | null; // this slot's explicit level override
@@ -2860,17 +2868,6 @@ function AssignmentTab() {
     key ? models.find((m) => m.key === key) : undefined;
   const providerCanDisableThinking = (provider?: string) =>
     !provider || THINKING_DISABLE_SUPPORTED_PROVIDERS.includes(provider);
-  const thinkingText = (
-    effective: boolean | null | undefined,
-    source: string | undefined,
-  ) => {
-    if (effective === null || effective === undefined)
-      return "не поддерживается";
-    const state = effective ? "вкл" : "выкл";
-    const src = source === "slot" ? "слот" : "модель";
-    return `${state} · ${src}`;
-  };
-
   if (loading) return <div className="text-sm text-slate-500">Загрузка…</div>;
 
   // Порядок групп берём из ответа сервера, а не из литерала: слот новой
@@ -3022,11 +3019,6 @@ function AssignmentTab() {
                 const effectiveThinking = selectedThinkingCapable
                   ? (thinkingOverride ?? selectedModelDefault)
                   : null;
-                const thinkingSource = !selectedThinkingCapable
-                  ? "unsupported"
-                  : thinkingOverride === null
-                    ? "model"
-                    : "slot";
                 const disableSupported = providerCanDisableThinking(
                   draftChosen?.provider,
                 );
@@ -3075,85 +3067,28 @@ function AssignmentTab() {
                           черновик
                         </span>
                       )}
-                      {slotSupportsThinking && (
-                        <div className="flex flex-col items-end gap-1 text-xs text-slate-300">
-                          {selectedThinkingCapable ? (
-                            <label
-                              className="flex items-center gap-1.5 whitespace-nowrap"
-                              title="Override режима рассуждения для этого назначения. Одна модель может думать в одном слоте и не думать в другом."
-                            >
-                              слот
-                              <select
-                                className="rounded border border-slate-600 bg-slate-900 px-1 py-0.5 text-xs text-slate-200"
-                                value={
-                                  thinkingOverride === true
-                                    ? "on"
-                                    : thinkingOverride === false
-                                      ? "off"
-                                      : "default"
-                                }
-                                onChange={(e) =>
-                                  setSlotThinking(
-                                    s.slot,
-                                    e.target.value === "on"
-                                      ? true
-                                      : e.target.value === "off"
-                                        ? false
-                                        : null,
-                                  )
-                                }
-                              >
-                                <option value="default">модель</option>
-                                <option value="on">вкл</option>
-                                <option value="off">выкл</option>
-                              </select>
-                            </label>
-                          ) : (
-                            <span className="text-slate-600 whitespace-nowrap">
-                              reasoning недоступен
-                            </span>
-                          )}
-                          {selectedThinkingCapable &&
-                            effectiveThinking !== false &&
-                            selectedThinkingLevels.length > 0 && (
-                              <label
-                                className="flex items-center gap-1.5 whitespace-nowrap"
-                                title="Сила размышления (reasoning effort) для этого назначения"
-                              >
-                                сила
-                                <select
-                                  className="rounded border border-slate-600 bg-slate-900 px-1 py-0.5 text-xs text-slate-200"
-                                  value={thinkingLevelOverride ?? "default"}
-                                  onChange={(e) =>
-                                    setSlotThinking(
-                                      s.slot,
-                                      thinkingOverride,
-                                      e.target.value === "default"
-                                        ? null
-                                        : e.target.value,
-                                    )
-                                  }
-                                >
-                                  <option value="default">по умолчанию</option>
-                                  {selectedThinkingLevels.map((lvl) => (
-                                    <option key={lvl} value={lvl}>
-                                      {THINKING_LEVEL_LABEL[lvl] ?? lvl}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                            )}
-                          <span className="text-slate-500 whitespace-nowrap">
-                            эффективно:{" "}
-                            {thinkingText(effectiveThinking, thinkingSource)}
-                          </span>
-                          {thinkingWarning && (
-                            <span className="max-w-52 text-right text-amber-400">
-                              {thinkingWarning}
-                            </span>
-                          )}
-                        </div>
-                      )}
+                      <SlotThinkingControl
+                        state={{
+                          supportedBySlot: slotSupportsThinking,
+                          supportedByModel: selectedSupportsThinking,
+                          modelDefault: selectedModelDefault,
+                          override: thinkingOverride,
+                          effective: effectiveThinking,
+                          disableSupported: s.thinking_disable_supported ?? true,
+                          mixed: Boolean(s.thinking_mixed),
+                          warning: thinkingWarning ?? null,
+                          levels: selectedThinkingLevels as ThinkingLevel[],
+                          levelOverride:
+                            (thinkingLevelOverride as ThinkingLevel | null) ?? null,
+                          levelEffective:
+                            (s.thinking_level_effective as ThinkingLevel | null) ??
+                            null,
+                        }}
+                        onChange={(enabled) => setSlotThinking(s.slot, enabled)}
+                        onLevelChange={(level) =>
+                          setSlotThinking(s.slot, thinkingOverride, level)
+                        }
+                      />
                     </div>
                     {s.cloud_optionable && (
                       <label className="sm:col-span-2 mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
