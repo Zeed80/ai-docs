@@ -1,7 +1,5 @@
 """Extraction API tests — doc.classify, doc.extract, doc.correct_field"""
 
-import sys
-import types
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +7,15 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# Модуль импортируется обычным образом. Раньше здесь в sys.modules
+# подсовывалась заглушка «на случай, если Celery autodiscover не сработает в
+# тестовой среде», и это ломало весь прогон: подмена в sys.modules не
+# выставляет атрибут на пакете, поэтому у `app.tasks` не появлялось
+# `extraction`, а настоящий модуль уже не загружался никогда. Соседние файлы
+# (email_supplier_match, upload_pipeline_stages, scenario_trace) падали на
+# monkeypatch по строке "app.tasks.extraction..." — каждый по-своему и не там,
+# где ломалось. Импорт проверен: модуль загружается без Celery-воркера.
+import app.tasks.extraction  # noqa: F401,E402
 from app.db.models import (
     ConfidenceReason,
     Document,
@@ -16,14 +23,6 @@ from app.db.models import (
     DocumentStatus,
     ExtractionField,
 )
-
-# Ensure app.tasks.extraction module exists for patching (Celery autodiscover may fail in test env)
-if "app.tasks.extraction" not in sys.modules:
-    _mock_mod = types.ModuleType("app.tasks.extraction")
-    _mock_mod.classify_document = MagicMock()
-    _mock_mod.process_document = MagicMock()
-    _mock_mod.extract_invoice = MagicMock()
-    sys.modules["app.tasks.extraction"] = _mock_mod
 
 
 async def _create_doc(db: AsyncSession, status=DocumentStatus.ingested) -> uuid.UUID:
