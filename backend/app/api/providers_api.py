@@ -2299,6 +2299,108 @@ async def apply_assignment_draft(
     )
 
 
+class SlotHealthOut(BaseModel):
+    slot: str
+    label: str
+    model: str | None
+    provider: str | None
+    availability: str
+    node: str | None
+    calls: int = 0
+    errors: int = 0
+    error_rate: float = 0.0
+    avg_latency_ms: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    # None означает «цена неизвестна», а не «бесплатно»: у большинства
+    # моделей cost_per_1k_* в каталоге не заполнена.
+    cost_usd: float | None = None
+    priced: bool = False
+
+
+@router.get("/slots/health", response_model=list[SlotHealthOut], dependencies=_admin)
+async def slots_health() -> list[SlotHealthOut]:
+    """Здоровье каждого слота одним запросом.
+
+    Три источника уже существовали, но лежали на разных вкладках: доступность
+    модели — в каталоге, вызовы и задержка — в телеметрии, мёртвые звенья
+    цепочки — в отдельной панели. Человек, назначивший модель, не мог узнать,
+    работает ли она, не уходя с экрана.
+
+    Задержка честно называется средней: телеметрия хранит сумму и счётчик, а
+    не гистограмму, поэтому медианы здесь взяться неоткуда.
+    """
+    from app.ai import telemetry
+    from app.ai.provider_registry import catalog_availability
+
+    registry = _registry()
+    try:
+        avail = {
+            k: v.value
+            for k, v in (
+                await asyncio.to_thread(catalog_availability, registry.models)
+            ).items()
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("slot_health_availability_failed", error=str(exc))
+        avail = {}
+
+    # Телеметрия хранит строку на КАЖДУЮ пару (задача, модель): у одной задачи
+    # их столько, сколько моделей на ней перебывало. Схлопывать по задаче
+    # нельзя — иначе слот показывает статистику давно снятой модели: на стенде
+    # так и вышло, embedding отдавал 100% ошибок от local_embedding_ollama,
+    # которой в каталоге уже нет, вместо 0.7% у назначенной сейчас.
+    by_task_model: dict[tuple[str, str], dict] = {}
+    try:
+        for row in (telemetry.get_summary().get("by_model") or []):
+            by_task_model[(str(row.get("task")), str(row.get("model")))] = row
+    except Exception as exc:  # noqa: BLE001 — телеметрия не критична
+        logger.warning("slot_health_telemetry_failed", error=str(exc))
+
+    out: list[SlotHealthOut] = []
+    for slot, _group, label, _hint, _local in _SLOTS:
+        model_key = _slot_current_model(slot, registry)
+        cap = registry.models.get(model_key) if model_key else None
+
+        calls = errors = tokens_in = tokens_out = latency_sum = 0
+        for task in _slot_affected(slot):
+            row = by_task_model.get((task, model_key or ""))
+            if not row:
+                continue
+            c = int(row.get("calls") or 0)
+            calls += c
+            errors += int(row.get("errors") or 0)
+            tokens_in += int(row.get("tokens_in") or 0)
+            tokens_out += int(row.get("tokens_out") or 0)
+            latency_sum += int(row.get("avg_latency_ms") or 0) * c
+
+        priced = bool(cap and (cap.cost_per_1k_input or cap.cost_per_1k_output))
+        cost = None
+        if priced and cap:
+            cost = (
+                tokens_in / 1000 * (cap.cost_per_1k_input or 0)
+                + tokens_out / 1000 * (cap.cost_per_1k_output or 0)
+            )
+
+        out.append(SlotHealthOut(
+            slot=slot,
+            label=label,
+            model=model_key,
+            provider=cap.provider.value if cap else None,
+            availability=avail.get(model_key or "", "unknown"),
+            node=_pin_display_name(cap.preferred_instance) if cap else None,
+            calls=calls,
+            errors=errors,
+            error_rate=(errors / calls) if calls else 0.0,
+            avg_latency_ms=round(latency_sum / calls) if calls else 0,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost_usd=round(cost, 4) if cost is not None else None,
+            priced=priced,
+        ))
+    return out
+
+
 class AssignmentRevisionOut(BaseModel):
     id: str
     created_at: datetime

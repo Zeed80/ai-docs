@@ -9,6 +9,10 @@ import { RoutingChains } from "@/components/models/telemetry/RoutingChains";
 import { ToastProvider, useToast } from "@/components/ui/primitives/Toast";
 import { SlotThinkingControl } from "@/components/models/assignment/SlotThinkingControl";
 import { RevisionHistory } from "@/components/models/assignment/RevisionHistory";
+import {
+  SlotHealthStrip,
+  type SlotHealth,
+} from "@/components/models/assignment/SlotHealthStrip";
 import { useCurrentUser } from "@/lib/auth-context";
 import { hasRole } from "@/lib/rbac";
 import type {
@@ -2524,6 +2528,7 @@ function detailText(payload: unknown): string {
 function AssignmentTab() {
   const toast = useToast();
   const [slots, setSlots] = useState<SlotItem[]>([]);
+  const [health, setHealth] = useState<Record<string, SlotHealth>>({});
   const [draft, setDraft] = useState<Record<string, string | null>>({});
   const [models, setModels] = useState<ProvModel[]>([]);
   // Nodes of each local provider kind — a kind can have several (e.g. the GPU
@@ -2573,6 +2578,19 @@ function AssignmentTab() {
         const m: ProvModel[] = await md.json();
         setModels(m);
         setSelProv((cur) => cur || m[0]?.provider || "");
+      }
+      // Здоровье слотов — отдельным запросом и молча: это справочная строка,
+      // из-за которой экран не должен падать.
+      try {
+        const hr = await fetch(`${API}/api/providers/slots/health`, {
+          credentials: "include",
+        });
+        if (hr.ok) {
+          const list: SlotHealth[] = await hr.json();
+          setHealth(Object.fromEntries(list.map((h) => [h.slot, h])));
+        }
+      } catch {
+        /* строка здоровья не обязательна */
       }
       if (st.ok) {
         const s = await st.json();
@@ -3091,6 +3109,9 @@ function AssignmentTab() {
                           setSlotThinking(s.slot, thinkingOverride, level)
                         }
                       />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <SlotHealthStrip health={health[s.slot] ?? null} />
                     </div>
                     {s.cloud_optionable && (
                       <label className="sm:col-span-2 mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
