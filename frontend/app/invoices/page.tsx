@@ -296,9 +296,12 @@ export default function InvoicesPage() {
         offset,
         limit,
       });
-      setRows(data.rows);
-      setCatalog(data.columns);
-      setTotal(data.total);
+      // Форма ответа — предположение: catch ловит сбой запроса, но не
+      // отсутствующее поле. Без запасных значений `undefined` попадал в
+      // состояние, и следующий catalog.map ронял весь раздел белым экраном.
+      setRows(data.rows ?? []);
+      setCatalog(data.columns ?? []);
+      setTotal(data.total ?? 0);
     } catch {
       setRows([]);
     } finally {
