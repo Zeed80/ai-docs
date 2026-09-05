@@ -1368,8 +1368,7 @@ def _slot_current_model(slot: str, registry) -> str | None:
         return get_routing_for(AITask.CAD_SPEC_DRAFT).primary
     if slot == "ocr_large":
         try:
-            from app.api.ai_settings import get_ai_config
-            return get_ai_config().get("model_ocr_fallback")
+            return _get_ocr_fallback()
         except Exception:
             return None
     cfg = get_builtin_agent_config()
@@ -1716,6 +1715,35 @@ async def get_slots() -> list[SlotOut]:
     return _all_slots_out(lambda s: _slot_current_model(s, registry), registry)
 
 
+def _set_ocr_fallback(model_key: str | None) -> None:
+    """Запасная модель OCR — второй элемент цепочки задачи invoice_ocr.
+
+    Она жила отдельным полем в ai_config и была единственным назначением,
+    которое не имело представления в маршрутизации задач. Заводить ради неё
+    отдельную AITask не нужно: `TaskRouting.models` — это и есть цепочка, где
+    первый элемент основной, а остальные запасные. Так запасная модель
+    начинает участвовать в обычном резолве, а не только в одной ветке
+    повторного извлечения.
+    """
+    from app.ai.schemas import AITask
+    from app.ai.task_routing import get_routing_for, save_task_routing
+
+    routing = get_routing_for(AITask.INVOICE_OCR)
+    head = routing.models[0] if routing.models else None
+    tail = [m for m in routing.models[1:] if m != model_key]
+    models = [m for m in ([head] + ([model_key] if model_key else []) + tail) if m]
+    save_task_routing(AITask.INVOICE_OCR, routing.model_copy(update={"models": models}))
+
+
+def _get_ocr_fallback() -> str | None:
+    """Второй элемент цепочки invoice_ocr, если он есть."""
+    from app.ai.schemas import AITask
+    from app.ai.task_routing import get_routing_for
+
+    models = get_routing_for(AITask.INVOICE_OCR).models
+    return models[1] if len(models) > 1 else None
+
+
 def _slot_affected(slot: str) -> list[str]:
     if slot == "ocr_fast":
         return [
@@ -1727,7 +1755,7 @@ def _slot_affected(slot: str) -> list[str]:
     if slot == "structured_extraction":
         return [AITask.STRUCTURED_EXTRACTION.value, AITask.LONG_CONTEXT_SUMMARIZATION.value]
     if slot == "ocr_large":
-        return ["ai_config.model_ocr_fallback"]
+        return [f"{AITask.INVOICE_OCR.value} (запасная)"]
     if slot == "embedding":
         return [AITask.EMBEDDING.value]
     if slot == "rerank":
@@ -1963,6 +1991,9 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
                 _set_primary(t, key)
             _mirror_ai_config(DocumentGroup(text_model=key))
         elif slot == "ocr_large":
+            _set_ocr_fallback(key)
+            # Зеркало в ai_config пока остаётся: его читает ветка повторного
+            # извлечения в extraction.py, переводимая следом.
             _mirror_ai_config(DocumentGroup(ocr_fallback_model=key))
         elif slot == "embedding":
             _set_primary(AITask.EMBEDDING, key)

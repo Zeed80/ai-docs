@@ -394,9 +394,15 @@ def extract_invoice(self, document_id: str) -> dict:
         if _arith_errors or _mandatory_missing:
             _fb_model = _fb_provider = None
             try:
-                from app.api.ai_settings import get_ai_config as _get_ai_cfg
+                # Запасная модель OCR — второй элемент цепочки задачи
+                # invoice_ocr. Раньше читалась из ai_config: это было
+                # единственное назначение без представления в маршрутизации,
+                # и правка из GUI до сюда доходила только через зеркало.
                 from app.ai.model_registry import ModelRegistry
-                _fb_key = _get_ai_cfg().get("model_ocr_fallback")
+                from app.ai.schemas import AITask
+                from app.ai.task_routing import get_routing_for
+                _fb_chain = get_routing_for(AITask.INVOICE_OCR).models
+                _fb_key = _fb_chain[1] if len(_fb_chain) > 1 else None
                 if _fb_key:
                     _reg = ModelRegistry.from_yaml(
                         "backend/app/ai/config/model_registry.yaml"
@@ -1491,8 +1497,15 @@ def _cr_fallback(
     from app.ai.router import ai_router
     from app.tasks.gpu_lock import gpu_single_flight
 
-    cr_model = cfg.get("model_reasoning", "")
-    cr_provider = cfg.get("model_reasoning_provider", "ollama")
+    # Модель рассуждения — из маршрутизации задач, как и везде. Здесь она
+    # читалась из ai_config, то есть из второго хранилища: правка назначения
+    # доходила сюда только через зеркало, а оно обновляется лишь при
+    # сохранении из интерфейса.
+    from app.ai.model_resolver import get_reasoning_model
+
+    _cr_cfg = get_reasoning_model(confidential=True)
+    cr_model = _cr_cfg.model or ""
+    cr_provider = _cr_cfg.provider or "ollama"
 
     # Only proceed if a local CR model is configured.
     # Cloud providers are explicitly forbidden for invoice docs (security policy).
