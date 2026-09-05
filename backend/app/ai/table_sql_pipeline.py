@@ -93,24 +93,89 @@ _SELECT_RE = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
 # Maximum complexity guard
 _MAX_SQL_CHARS = 4_000
 
+# Таблицы, которые модель вообще видит: ровно те, чью схему ей показывает
+# _get_schema_context(). Всё остальное — отказ.
+#
+# До этого проверка была только чёрным списком ключевых слов, то есть
+# защищала от записи, но не от чтения: запрос к mailbox_configs,
+# email_messages или memory_facts проходил свободно. Задачу пишет LLM по
+# тексту, который может прийти из письма или документа, — то есть содержимое
+# запроса не полностью под нашим контролем, и список разрешённого надёжнее
+# списка запрещённого.
+ALLOWED_TABLES = frozenset({
+    "documents",
+    "invoices",
+    "invoice_lines",
+    "parties",
+    "anomaly_cards",
+    "approvals",
+    "users",
+})
+
+# FROM / JOIN <таблица>. Подзапросы и CTE тоже сюда попадают: после FROM у них
+# стоит скобка, а не имя, и такое совпадение просто не матчится.
+_TABLE_REF_RE = re.compile(
+    r"\b(?:FROM|JOIN)\s+(?!\()([a-zA-Z_][a-zA-Z0-9_]*)", re.IGNORECASE
+)
+
+# Комментарии убираем ДО проверок: `SELECT 1 -- DROP TABLE x` и
+# `/* */`-вставки иначе позволяют спрятать что угодно от регулярных выражений.
+_LINE_COMMENT_RE = re.compile(r"--[^\n]*")
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _strip_comments(sql: str) -> str:
+    return _BLOCK_COMMENT_RE.sub(" ", _LINE_COMMENT_RE.sub(" ", sql))
+
+
+def referenced_tables(sql: str) -> set[str]:
+    """Имена таблиц, к которым обращается запрос."""
+    return {m.lower() for m in _TABLE_REF_RE.findall(_strip_comments(sql))}
+
 
 def validate_sql(sql: str) -> str | None:
     """Return cleaned SQL if safe, or None if dangerous/invalid.
 
     Checks:
     - Must start with SELECT
+    - Single statement
+    - Only tables the model was actually shown
     - No DML/DDL keywords
     - Reasonable length
     """
     sql = sql.strip().rstrip(";")
     if not sql:
         return None
-    if not _SELECT_RE.match(sql):
+
+    probe = _strip_comments(sql)
+
+    if not _SELECT_RE.match(probe.lstrip()):
         logger.warning("sql_pipeline_not_select", sql=sql[:80])
         return None
-    if _INJECTION_PATTERNS.search(sql):
+    # Точка с запятой внутри запроса означает второй оператор: одиночная
+    # висящая на конце уже снята выше.
+    if ";" in probe:
+        logger.warning("sql_pipeline_multiple_statements", sql=sql[:80])
+        return None
+    if _INJECTION_PATTERNS.search(probe):
         logger.warning("sql_pipeline_injection_attempt", sql=sql[:80])
         return None
+
+    tables = referenced_tables(sql)
+    forbidden = tables - ALLOWED_TABLES
+    if forbidden:
+        logger.warning(
+            "sql_pipeline_table_not_allowed",
+            tables=sorted(forbidden),
+            sql=sql[:120],
+        )
+        return None
+    if not tables:
+        # Запрос без единой таблицы ничего осмысленного не вернёт, а вот
+        # `SELECT current_setting(...)` — вернёт лишнее.
+        logger.warning("sql_pipeline_no_table", sql=sql[:80])
+        return None
+
     if len(sql) > _MAX_SQL_CHARS:
         logger.warning("sql_pipeline_too_long", length=len(sql))
         return None
@@ -206,14 +271,23 @@ async def execute_sql(sql: str, *, max_rows: int = 200) -> list[dict[str, Any]]:
     if not safe_sql:
         raise ValueError("SQL failed validation")
 
-    # Enforce row limit at SQL level
-    if not re.search(r"\bLIMIT\b", safe_sql, re.IGNORECASE):
+    # Ограничение строк. Проверка была по любому вхождению LIMIT, поэтому
+    # LIMIT внутри подзапроса подавлял внешний, и наружу мог уйти весь
+    # результат. Смотрим только хвост запроса — там, где внешний LIMIT и
+    # стоит.
+    if not re.search(r"\bLIMIT\s+\d+\s*$", safe_sql, re.IGNORECASE):
         safe_sql = f"{safe_sql} LIMIT {max_rows}"
 
     async with _get_session_factory()() as db:
+        # Второй рубеж, не зависящий от качества регулярных выражений: сама
+        # транзакция объявлена только на чтение, а долгий запрос обрывается по
+        # таймауту, а не занимает соединение до бесконечности.
+        await db.execute(text("SET LOCAL transaction_read_only = on"))
+        await db.execute(text("SET LOCAL statement_timeout = '15s'"))
         result = await db.execute(text(safe_sql))
         cols = list(result.keys())
         rows = [dict(zip(cols, row)) for row in result.fetchall()]
+        await db.rollback()
     return rows
 
 
