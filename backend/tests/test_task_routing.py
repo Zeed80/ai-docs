@@ -125,10 +125,13 @@ def test_migration_from_ai_config(mem_store, monkeypatch):
     ocr = tr.get_routing_for(AITask.INVOICE_OCR)
     assert ocr.local_only is True and ocr.models[0] == "gemma4_e4b_ollama"
 
-    # Cloud reasoning model migrated with cloud allowed.
+    # Рассуждение по чертежам теперь конфиденциально: имя модели из старого
+    # store переносится (чтобы не потерять след настройки), но облако для
+    # задачи закрыто — миграция не может втащить наружу то, что запрещено
+    # политикой. Понижение пишется в журнал как task_routing_forced_local.
     reasoning = tr.get_routing_for(AITask.ENGINEERING_REASONING)
     assert reasoning.models[0] == "claude_sonnet_anthropic"
-    assert reasoning.local_only is False and reasoning.allow_cloud is True
+    assert reasoning.local_only is True and reasoning.allow_cloud is False
 
     # Idempotent: second run is a no-op.
     assert tr.migrate_from_ai_config()["migrated"] is False

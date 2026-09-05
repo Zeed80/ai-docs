@@ -50,6 +50,29 @@ CONFIDENTIAL_TASKS: set[AITask] = {
     AITask.CAD_SPEC_READ,
     AITask.CAD_SPEC_DRAFT,
     AITask.CAD_TEXT_OCR,
+    # Через эти три проходит содержимое документов, писем и чертежей, а
+    # разрешения на облако для них нигде не давалось — в отличие от
+    # planner/auditor и генерации писем, которые CLAUDE.md разрешает явно.
+    # Поэтому здесь жёсткий запрет, а не cloud-opt-in слота: настройка,
+    # которую можно снять галочкой, не защищает от случайного снятия галочки.
+    #
+    #   classification            — читает документ целиком, чтобы решить, что это;
+    #   long_context_summarization — сжимает длинный документ или переписку;
+    #   engineering_reasoning      — рассуждает по содержимому чертежа.
+    AITask.CLASSIFICATION,
+    AITask.LONG_CONTEXT_SUMMARIZATION,
+    AITask.ENGINEERING_REASONING,
+}
+
+# Задачи, которым облако разрешено CLAUDE.md (planner/auditor, письма), но
+# через которые тоже проходит пользовательский контент. Жёсткого запрета у них
+# нет — вместо него слоты `agent_*` объявлены local_only, и облако включается
+# отдельным защищённым действием. Список существует, чтобы это решение было
+# записано, а не выводилось из отсутствия имён в CONFIDENTIAL_TASKS.
+CLOUD_OPT_IN_TASKS: set[AITask] = {
+    AITask.EMAIL_DRAFTING,
+    AITask.ORCHESTRATOR_PLANNING,
+    AITask.TOOL_CALLING,
 }
 
 # Coordinate extraction is a constrained observation task.  Keep the routing
@@ -209,6 +232,15 @@ def _invalidate_lifecycle_cache() -> None:
 
 def _enforce_confidential(task: AITask, routing: TaskRouting) -> TaskRouting:
     if task in CONFIDENTIAL_TASKS and (not routing.local_only or routing.allow_cloud):
+        # Понижение видно в журнале: человек, назначивший облачную модель,
+        # иначе увидит в интерфейсе локальную и решит, что настройка не
+        # сохранилась, — вместо того чтобы узнать, что задача конфиденциальна.
+        logger.warning(
+            "task_routing_forced_local",
+            task=task.value,
+            reason="задача читает содержимое документов — облако для неё закрыто",
+            models=list(routing.models)[:3],
+        )
         return routing.model_copy(update={"local_only": True, "allow_cloud": False})
     return routing
 
