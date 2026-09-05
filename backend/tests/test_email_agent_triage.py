@@ -220,6 +220,14 @@ async def test_unknown_correction_category_is_refused(client, db_session, letter
     assert resp.status_code == 422
 
 
+def _reset_app_engine() -> None:
+    """Сбросить кэш движка приложения (см. пояснение на месте вызова)."""
+    from app.db.session import _get_engine, _get_session_factory
+
+    _get_engine.cache_clear()
+    _get_session_factory.cache_clear()
+
+
 def test_triage_is_skipped_for_a_mailbox_with_the_mode_off(test_engine):
     """The mode gate must hold in the task itself, not only at dispatch:
     a queued job outliving a policy change must not read mail it may not read.
@@ -266,7 +274,17 @@ def test_triage_is_skipped_for_a_mailbox_with_the_mode_off(test_engine):
             db.commit()
             ids = {"msg": msg.id, "thread": thread.id}
 
-        result = triage_message.apply(args=[str(ids["msg"])]).get()
+        # Задача идёт через run_async — у него СВОЙ вечный цикл на процесс, а
+        # пул asyncpg привязан к тому циклу, в котором соединение открылось
+        # впервые. Если до этого теста БД трогали async-тесты, пул остался в
+        # цикле pytest, и задача падала «Future attached to a different loop»
+        # — по соседству, а не сама по себе. Сбрасываем кэш движка до и после,
+        # чтобы каждый цикл работал со своими соединениями.
+        _reset_app_engine()
+        try:
+            result = triage_message.apply(args=[str(ids["msg"])]).get()
+        finally:
+            _reset_app_engine()
         assert result["status"] == "skipped"
         assert result["reason"] == "triage_off"
 
