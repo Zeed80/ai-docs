@@ -298,6 +298,7 @@ function ProviderCard({
 }
 
 function ServerControls({ provider }: { provider: Provider }) {
+  const toast = useToast();
   const [busy, setBusy] = useState<string | null>(null);
   const act = async (action: "start" | "stop" | "restart") => {
     setBusy(action);
@@ -311,9 +312,9 @@ function ServerControls({ provider }: { provider: Provider }) {
         },
       );
       const data = await r.json().catch(() => ({}));
-      if (!r.ok) alert(`Ошибка: ${data.detail || r.statusText}`);
+      if (!r.ok) toast.error("Не удалось выполнить команду", detailText(data));
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     }
     setBusy(null);
   };
@@ -441,6 +442,7 @@ function TokensPanel() {
 }
 
 function ServerConfigPanel({ provider }: { provider: "llamacpp" | "vllm" }) {
+  const toast = useToast();
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
@@ -476,9 +478,9 @@ function ServerConfigPanel({ provider }: { provider: "llamacpp" | "vllm" }) {
       if (r.ok) {
         setConfig(d.config);
         setDraft(d.config);
-      } else alert(`Ошибка: ${d.detail}`);
+      } else toast.error("Настройки не сохранены", detailText(d));
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     }
     setSaving(false);
   };
@@ -669,6 +671,7 @@ interface PresetItem {
 }
 
 function PresetsPanel() {
+  const toast = useToast();
   const [presets, setPresets] = useState<PresetItem[]>([]);
   const [selected, setSelected] = useState("");
   const [applying, setApplying] = useState(false);
@@ -703,14 +706,13 @@ function PresetsPanel() {
       );
       const d = await r.json();
       if (r.ok)
-        alert(
-          `Применено: ${d.applied?.join(", ") || "—"}${
-            d.skipped?.length ? ` · пропущено: ${d.skipped.join(", ")}` : ""
-          }`,
+        toast.ok(
+          `Применено: ${d.applied?.join(", ") || "—"}`,
+          d.skipped?.length ? `пропущено: ${d.skipped.join(", ")}` : undefined,
         );
-      else alert(`Ошибка: ${d.detail}`);
+      else toast.error("Пресет не применён", detailText(d));
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     }
     setApplying(false);
   };
@@ -1446,6 +1448,7 @@ function OverviewTab({
 // ── Library Tab ───────────────────────────────────────────────────────────────
 
 function LibraryTab() {
+  const toast = useToast();
   const [source, setSource] = useState<Source>("local");
   const [provider, setProvider] = useState<Provider | "">("");
   const [query, setQuery] = useState("");
@@ -1564,11 +1567,11 @@ function LibraryTab() {
       });
       const data = await r.json();
       if (!r.ok)
-        alert(`Ошибка активации: ${data.detail || JSON.stringify(data)}`);
-      else alert(`Активация: ${data.message ?? data.status}`);
+        toast.error("Модель не активирована", detailText(data));
+      else toast.ok(String(data.message ?? data.status ?? "Готово"));
       loadLocal();
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     }
     setActivating(null);
   };
@@ -1586,11 +1589,11 @@ function LibraryTab() {
       );
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));
-        alert(`Ошибка: ${data.detail || r.status}`);
+        toast.error("Не удалось удалить модель", detailText(data));
       }
       loadLocal();
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     }
   };
 
@@ -1663,7 +1666,7 @@ function LibraryTab() {
       const data = await r.json();
       const did = data.download_id;
       if (!did) {
-        alert("Ошибка запуска загрузки");
+        toast.error("Загрузка не запустилась");
         return;
       }
       setDownloading((prev) => ({
@@ -1701,7 +1704,7 @@ function LibraryTab() {
         }));
       };
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast.error("Не удалось выполнить действие", String(e));
     }
   };
 
