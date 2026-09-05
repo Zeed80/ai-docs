@@ -310,7 +310,7 @@ function PendingTab({ onAccepted }: { onAccepted: () => void }) {
         <div className="text-center py-16 text-slate-500">
           <p className="text-4xl mb-3">✅</p>
           <p className="text-sm">Нет ожидающих ордеров</p>
-          <p className="text-xs mt-2 text-slate-600">
+          <p className="text-xs mt-2 text-slate-400">
             Ордера появятся автоматически после одобрения счёта
           </p>
         </div>
@@ -446,7 +446,7 @@ function PendingReceiptCard({
         <div className="overflow-x-auto">
           <table className="w-full text-xs border-collapse">
             <thead>
-              <tr className="text-[10px] text-slate-600 border-b border-slate-700/60">
+              <tr className="text-[10px] text-slate-400 border-b border-slate-700/60">
                 <th className="px-4 py-1.5 text-left font-medium">
                   Наименование
                 </th>

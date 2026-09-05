@@ -131,7 +131,7 @@ export function GpuPanel({ status }: { status: AllStatus | null }) {
                     }
                     className={`${input} w-24`}
                   />
-                  <span className="text-xs text-slate-600">
+                  <span className="text-xs text-slate-400">
                     (мягкий лимит — предупреждение при превышении)
                   </span>
                 </div>

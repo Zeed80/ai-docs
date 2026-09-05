@@ -1082,7 +1082,7 @@ export default function DocumentsPage() {
           <div className="flex flex-wrap items-center gap-2">
             {lastRefreshedAt && (
               <span
-                className="text-xs text-slate-600"
+                className="text-xs text-slate-400"
                 title="Данные обновляются автоматически"
               >
                 ● обновлено{" "}
@@ -1609,7 +1609,7 @@ function UploadPanel({
                         <span className="truncate text-xs font-medium text-slate-200">
                           {pf.file.name}
                         </span>
-                        <span className="shrink-0 text-xs text-slate-600">
+                        <span className="shrink-0 text-xs text-slate-400">
                           {fmtBytes(pf.file.size)}
                         </span>
                       </div>
@@ -1650,7 +1650,7 @@ function UploadPanel({
                             </span>
                             {detectedLabel && detectedLabel !== typeLabel && (
                               <>
-                                <span className="text-xs text-slate-600">
+                                <span className="text-xs text-slate-400">
                                   →
                                 </span>
                                 <span className="text-xs text-emerald-400">
@@ -1725,7 +1725,7 @@ function UploadPanel({
                       {pf.status === "pending" && (
                         <button
                           onClick={() => onRemoveFile(pf.id)}
-                          className="text-slate-600 hover:text-red-400"
+                          className="text-slate-400 hover:text-red-400"
                           title="Убрать из очереди"
                         >
                           ×
@@ -1818,7 +1818,7 @@ function UploadPanel({
         </label>
         <label
           className={`mt-3 flex items-start gap-2 text-sm ${
-            autoProcess ? "text-slate-300" : "cursor-not-allowed text-slate-600"
+            autoProcess ? "text-slate-300" : "cursor-not-allowed text-slate-400"
           }`}
         >
           <input
@@ -2844,7 +2844,7 @@ function ListPanel({
           </div>
         ))}
         {!items.length && (
-          <div className="py-6 text-sm text-slate-600">Нет данных</div>
+          <div className="py-6 text-sm text-slate-400">Нет данных</div>
         )}
       </div>
     </div>

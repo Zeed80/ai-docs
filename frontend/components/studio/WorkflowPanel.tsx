@@ -720,7 +720,7 @@ export default function WorkflowPanel() {
         />
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center lg:hidden">
           <svg
-            className="h-8 w-8 text-zinc-600"
+            className="h-8 w-8 text-zinc-400"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -1111,7 +1111,7 @@ function EditWorkflowDialog({
                   {t("import_autodetect")}
                 </button>
               </div>
-              <p className="text-[11px] text-zinc-600 mb-1.5">
+              <p className="text-[11px] text-zinc-400 mb-1.5">
                 {t("import_map_hint")}
               </p>
               <MappingFields graph={graph} map={map} setMap={setMap} />
@@ -1318,7 +1318,7 @@ function ImportDialog({
               {t("import_autodetect")}
             </button>
           </div>
-          <p className="text-[11px] text-zinc-600 mb-1.5">
+          <p className="text-[11px] text-zinc-400 mb-1.5">
             {t("import_map_hint")}
           </p>
           <MappingFields graph={graph} map={map} setMap={setMap} />

@@ -136,7 +136,7 @@ export function PipelineSteps({
     running: "border-blue-800 bg-blue-950/60 text-blue-200",
     queued: "border-amber-800 bg-amber-950/40 text-amber-200",
     failed: "border-red-800 bg-red-950/50 text-red-200",
-    pending: "border-slate-800 bg-slate-950 text-slate-600",
+    pending: "border-slate-800 bg-slate-950 text-slate-400",
   };
   return (
     <div className={`flex flex-wrap ${compact ? "gap-1" : "gap-2"}`}>

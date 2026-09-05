@@ -116,7 +116,7 @@ function DeleteButton({
         event.stopPropagation();
         setConfirming(true);
       }}
-      className="shrink-0 rounded px-1 text-zinc-600 opacity-0 hover:bg-red-500/15 hover:text-red-300 group-hover:opacity-100"
+      className="shrink-0 rounded px-1 text-zinc-400 opacity-0 hover:bg-red-500/15 hover:text-red-300 group-hover:opacity-100"
     >
       ✕
     </button>

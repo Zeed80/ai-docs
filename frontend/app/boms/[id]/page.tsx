@@ -411,7 +411,7 @@ export default function BOMDetailPage() {
                     <td className="py-2.5 px-4 text-center">
                       <button
                         onClick={() => handleDeleteLine(line.id)}
-                        className="text-slate-600 hover:text-red-400 transition-colors text-xs"
+                        className="text-slate-400 hover:text-red-400 transition-colors text-xs"
                       >
                         ✕
                       </button>
@@ -501,7 +501,7 @@ export default function BOMDetailPage() {
                         </td>
                         <td className="py-2 pr-4 text-right">
                           {unknown ? (
-                            <span className="text-slate-600 text-xs">
+                            <span className="text-slate-400 text-xs">
                               не учтено
                             </span>
                           ) : (
@@ -522,7 +522,7 @@ export default function BOMDetailPage() {
                               −{line.shortage} {line.unit}
                             </span>
                           ) : (
-                            <span className="text-slate-600">—</span>
+                            <span className="text-slate-400">—</span>
                           )}
                         </td>
                       </tr>

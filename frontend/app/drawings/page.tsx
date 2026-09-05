@@ -67,7 +67,10 @@ export default function DrawingsPage() {
         status: statusFilter || undefined,
         drawing_number: search || undefined,
       });
-      setDrawings(result.items);
+      // Ответ без items (ошибка, отдавшая другой объект) обнулял список в
+      // undefined, и следующий же `drawings.length` ронял весь раздел в
+      // белый экран вместо пустого состояния.
+      setDrawings(Array.isArray(result?.items) ? result.items : []);
       setTotal(result.total);
     } catch {
     } finally {
@@ -162,6 +165,7 @@ export default function DrawingsPage() {
 
           {/* Status filter */}
           <select
+            aria-label="Фильтр по статусу чертежа"
             value={statusFilter}
             onChange={(e) => {
               setStatusFilter(e.target.value as DrawingStatus | "");

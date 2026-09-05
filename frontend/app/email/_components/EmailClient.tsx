@@ -876,7 +876,7 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
                   className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
                 />
               </div>
-              <label className="flex items-center gap-1.5 text-slate-400 dark:text-slate-600 dark:text-slate-300">
+              <label className="flex items-center gap-1.5 text-slate-400 dark:text-slate-300">
                 <input
                   type="checkbox"
                   checked={adv.has_attachments}
@@ -1028,7 +1028,7 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
             hasMore={Boolean(nextCursor)}
           />
         </div>
-        <p className="border-t border-slate-200 dark:border-slate-800 px-2 py-1 text-[10px] text-slate-400 dark:text-slate-600">
+        <p className="border-t border-slate-200 dark:border-slate-800 px-2 py-1 text-[10px] text-slate-400 dark:text-slate-400">
           {t("keysHint")}
         </p>
       </div>
@@ -1109,7 +1109,7 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
             className="rounded-xl border border-slate-300 bg-white p-5 text-sm text-slate-800 focus:outline-none dark:focus:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
           >
             <h4 className="mb-2 font-semibold">{t("keysTitle")}</h4>
-            <ul className="space-y-1 text-xs text-slate-400 dark:text-slate-600 dark:text-slate-400">
+            <ul className="space-y-1 text-xs text-slate-400 dark:text-slate-400">
               {(t.raw("keys") as string[]).map((line) => (
                 <li key={line}>{line}</li>
               ))}

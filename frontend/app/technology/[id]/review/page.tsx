@@ -414,7 +414,7 @@ export default function TechProcessReviewPage() {
                     Открыть →
                   </a>
                 </div>
-                <div className="h-40 flex items-center justify-center text-zinc-600 text-xs border border-zinc-700 rounded">
+                <div className="h-40 flex items-center justify-center text-zinc-400 text-xs border border-zinc-700 rounded">
                   Предпросмотр чертежа
                 </div>
               </div>

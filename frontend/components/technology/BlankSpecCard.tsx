@@ -123,7 +123,7 @@ export default function BlankSpecCard({ spec, onEdit }: Props) {
       {expanded && spec.reasoning && (
         <div className="pt-1 border-t border-zinc-700">
           <p className="text-xs text-zinc-400 italic">{spec.reasoning}</p>
-          <p className="text-xs text-zinc-600 mt-1">
+          <p className="text-xs text-zinc-400 mt-1">
             Достоверность: {Math.round(spec.confidence * 100)}%
           </p>
         </div>

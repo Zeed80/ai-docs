@@ -891,7 +891,7 @@ export default function StudioComposer({
               placeholder={t("size_h")}
               className="w-24 rounded bg-zinc-900 border border-white/10 p-1.5 text-sm text-zinc-200"
             />
-            <span className="text-[11px] text-zinc-600">{t("size_hint")}</span>
+            <span className="text-[11px] text-zinc-400">{t("size_hint")}</span>
           </div>
         )}
       </div>
@@ -959,7 +959,7 @@ export default function StudioComposer({
           </div>
         )}
         {selectedWorkflow?.description && renaming !== workflowId && (
-          <p className="mt-1 text-[11px] text-zinc-600">
+          <p className="mt-1 text-[11px] text-zinc-400">
             {selectedWorkflow.description}
           </p>
         )}
@@ -976,7 +976,7 @@ export default function StudioComposer({
             <div className="text-xs text-zinc-500">
               {t("workflow_params_label")}
             </div>
-            <div className="text-[11px] text-zinc-600">
+            <div className="text-[11px] text-zinc-400">
               {selectedWorkflow.is_builtin
                 ? t("workflow_params_builtin_hint")
                 : t("workflow_params_hint")}
@@ -1314,7 +1314,7 @@ export default function StudioComposer({
               className="max-h-56 rounded border border-white/10 bg-zinc-900"
             />
           )}
-          <p className="text-[11px] text-zinc-600">{t("vector_cleanup_tip")}</p>
+          <p className="text-[11px] text-zinc-400">{t("vector_cleanup_tip")}</p>
 
           {/* Method: understanding→redraw (default) vs auxiliary pixel trace.
               Only meaningful with a source sheet attached. */}
@@ -1358,7 +1358,7 @@ export default function StudioComposer({
                     </option>
                   ))}
                 </select>
-                <p className="mt-1 text-[11px] text-zinc-600">
+                <p className="mt-1 text-[11px] text-zinc-400">
                   {t("digitization_type_hint")}
                 </p>
               </label>
@@ -1375,7 +1375,7 @@ export default function StudioComposer({
                   <option value={2}>{t("read_passes_two")}</option>
                   <option value={3}>{t("read_passes_three")}</option>
                 </select>
-                <p className="mt-1 text-[11px] text-zinc-600">
+                <p className="mt-1 text-[11px] text-zinc-400">
                   {t("read_passes_hint")}
                 </p>
               </label>
@@ -1448,7 +1448,7 @@ export default function StudioComposer({
                   className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
                 />
               </label>
-              <p className="text-[11px] text-zinc-600">
+              <p className="text-[11px] text-zinc-400">
                 {t("vector_description_hint")}
               </p>
               <div className="space-y-1">
@@ -1491,7 +1491,7 @@ export default function StudioComposer({
                   </option>
                 </select>
               </label>
-              <p className="text-[11px] text-zinc-600">
+              <p className="text-[11px] text-zinc-400">
                 {vectorSheetFormat
                   ? t("vector_autoscale_hint")
                   : t("vector_autoscale_need_sheet")}
@@ -1631,7 +1631,7 @@ export default function StudioComposer({
                 <span className="text-xs text-zinc-500">
                   {t("upscale_label")}
                 </span>
-                <span className="text-[11px] text-zinc-600">
+                <span className="text-[11px] text-zinc-400">
                   {upscale > 1 ? t("upscale_hint_on") : t("upscale_hint_off")}
                 </span>
               </div>
@@ -1732,7 +1732,7 @@ export default function StudioComposer({
               <span className="text-xs text-zinc-500">
                 {t("quality_label")}
               </span>
-              <span className="text-[11px] text-zinc-600">
+              <span className="text-[11px] text-zinc-400">
                 {quality === "quality"
                   ? t("quality_hint_quality")
                   : t("quality_hint_fast")}
@@ -1760,7 +1760,7 @@ export default function StudioComposer({
               <span className="text-xs text-zinc-500">
                 {t("upscale_label")}
               </span>
-              <span className="text-[11px] text-zinc-600">
+              <span className="text-[11px] text-zinc-400">
                 {upscale > 1 ? t("upscale_hint_on") : t("upscale_hint_off")}
               </span>
             </div>
@@ -1788,7 +1788,7 @@ export default function StudioComposer({
                 <span className="text-xs text-zinc-500">
                   {t("postprocess_label")}
                 </span>
-                <span className="text-[11px] text-zinc-600">
+                <span className="text-[11px] text-zinc-400">
                   {t("postprocess_hint")}
                 </span>
               </div>

@@ -133,7 +133,7 @@ export default function CadModelTracePanel({
                             {t("vector.model_trace_show_source")}
                           </button>
                         ) : (
-                          <span className="text-zinc-600">—</span>
+                          <span className="text-zinc-400">—</span>
                         )}
                       </td>
                     </tr>

@@ -139,7 +139,7 @@ export function EditableCell({
       className="min-h-[1.4rem] cursor-text whitespace-pre-line rounded px-1 py-0.5 hover:bg-slate-700/40"
     >
       {value == null || value === "" ? (
-        <span className="text-slate-600 italic">—</span>
+        <span className="text-slate-400 italic">—</span>
       ) : display ? (
         display(value)
       ) : (

@@ -356,7 +356,7 @@ export default function ImportPage() {
                 setStep("upload");
                 setDiff(null);
               }}
-              className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800"
+              className="px-4 py-2 text-sm text-slate-400 hover:text-slate-800"
             >
               Загрузить другой файл
             </button>
@@ -392,7 +392,7 @@ export default function ImportPage() {
               </svg>
             </div>
             <h2 className="text-xl font-semibold">Импорт завершён</h2>
-            <div className="mt-4 text-sm text-slate-600 space-y-1">
+            <div className="mt-4 text-sm text-slate-400 space-y-1">
               <p>
                 Применено записей: <strong>{result.applied}</strong>
               </p>

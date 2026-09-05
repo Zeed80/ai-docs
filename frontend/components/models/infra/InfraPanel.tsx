@@ -625,7 +625,7 @@ function PresetsPanel() {
         {current && (
           <div className="text-xs text-slate-500">
             {current.description}
-            <div className="mt-1 text-slate-600">
+            <div className="mt-1 text-slate-400">
               Задачи: {current.tasks.join(", ")}
             </div>
           </div>
@@ -851,7 +851,7 @@ function ProvidersConfigPanel() {
                         ? "text-amber-400"
                         : c.api_key_set
                           ? "text-emerald-400"
-                          : "text-slate-600"
+                          : "text-slate-400"
                     }`}
                   >
                     {c.api_key_state === "corrupt"
@@ -913,7 +913,7 @@ function StatusDotT({ ok }: { ok: boolean | null }) {
       ? "text-emerald-400"
       : ok === false
         ? "text-red-400"
-        : "text-slate-600";
+        : "text-slate-400";
   return <span className={c}>●</span>;
 }
 
@@ -1063,7 +1063,7 @@ function CloudProviderDetail({
                 placeholder={'{\n  "reasoning_effort": "low"\n}'}
               />
             </label>
-            <p className="text-[11px] text-slate-600">
+            <p className="text-[11px] text-slate-400">
               Применяются ко всем вызовам этого провайдера. Стандартные
               temperature / top-p / max-tokens — во вкладке «Параметры».
             </p>

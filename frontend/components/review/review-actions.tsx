@@ -106,7 +106,7 @@ export function ReviewActions({
               ? "bg-green-50 text-green-700"
               : status === "rejected"
                 ? "bg-red-50 text-red-700"
-                : "bg-slate-50 text-slate-600"
+                : "bg-slate-50 text-slate-400"
           }`}
         >
           {status === "approved"

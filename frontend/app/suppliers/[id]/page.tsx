@@ -139,7 +139,7 @@ function StarRating({
           onMouseEnter={() => !readonly && setHover(star)}
           onMouseLeave={() => !readonly && setHover(0)}
           className={`text-xl leading-none transition-colors ${readonly ? "cursor-default" : "cursor-pointer"} ${
-            star <= (hover || value) ? "text-yellow-400" : "text-slate-600"
+            star <= (hover || value) ? "text-yellow-400" : "text-slate-400"
           }`}
         >
           ★
@@ -211,7 +211,7 @@ function Sparkline({
   trend: string | null;
 }) {
   if (points.length < 2)
-    return <span className="text-slate-600 text-xs">—</span>;
+    return <span className="text-slate-400 text-xs">—</span>;
   const W = 64,
     H = 24,
     pad = 2;
@@ -720,7 +720,7 @@ function CatalogTab({
               <span className="text-sm text-slate-400">
                 Перетащите или нажмите для загрузки каталога инструментов
               </span>
-              <span className="text-xs text-slate-600">
+              <span className="text-xs text-slate-400">
                 PDF, Excel (.xlsx/.xls), CSV, JSON, Word, HTML, архивы
                 (.zip/.7z/.rar) — можно несколько файлов сразу
               </span>
@@ -1270,7 +1270,7 @@ function CatalogTab({
                           <td className="px-2 py-2">
                             <button
                               onClick={() => handleDeleteEntry(e.id)}
-                              className="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:text-red-400 hover:bg-red-900/30 transition-colors opacity-0 group-hover:opacity-100"
+                              className="w-6 h-6 rounded flex items-center justify-center text-slate-400 hover:text-red-400 hover:bg-red-900/30 transition-colors opacity-0 group-hover:opacity-100"
                               title="Удалить"
                             >
                               <svg

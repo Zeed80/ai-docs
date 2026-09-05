@@ -204,7 +204,7 @@ export default function PropertiesPanel({
         <p className="text-sm font-medium text-zinc-100">
           {kindLabel(operation.kind)}
         </p>
-        <p className="mt-0.5 font-mono text-[10px] text-zinc-600">
+        <p className="mt-0.5 font-mono text-[10px] text-zinc-400">
           {operation.id}
         </p>
       </div>
@@ -239,7 +239,7 @@ export default function PropertiesPanel({
           <section key={feature.id}>
             <h4 className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
               Прочитано с чертежа — {kindLabel(feature.kind)}
-              <span className="font-mono normal-case text-zinc-600">
+              <span className="font-mono normal-case text-zinc-400">
                 {feature.id}
               </span>
             </h4>

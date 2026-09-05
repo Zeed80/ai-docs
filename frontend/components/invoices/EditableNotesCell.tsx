@@ -96,7 +96,7 @@ export function EditableNotesCell({
       title="Нажмите, чтобы редактировать"
       className="min-h-[1.5rem] cursor-text whitespace-pre-line rounded px-1 py-0.5 text-slate-300 hover:bg-slate-700/40"
     >
-      {value ? value : <span className="text-slate-600 italic">добавить…</span>}
+      {value ? value : <span className="text-slate-400 italic">добавить…</span>}
     </div>
   );
 }

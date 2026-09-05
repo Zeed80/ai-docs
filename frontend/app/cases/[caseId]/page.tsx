@@ -372,7 +372,7 @@ export default function CaseCockpitPage() {
                   {ev.event_type}
                 </span>
                 <span className="text-slate-300 flex-1">{ev.summary}</span>
-                <span className="text-slate-600 shrink-0">{ev.actor}</span>
+                <span className="text-slate-400 shrink-0">{ev.actor}</span>
               </div>
             ))}
           </div>

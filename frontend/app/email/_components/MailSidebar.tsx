@@ -164,7 +164,7 @@ export function MailSidebar({
             {fcounts[f]?.unread > 0 ? (
               <span className={countCls}>{fcounts[f].unread}</span>
             ) : fcounts[f]?.total > 0 && f !== "trash" ? (
-              <span className="text-xs text-slate-500 dark:text-slate-400 dark:text-slate-600">{fcounts[f].total}</span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">{fcounts[f].total}</span>
             ) : null}
           </button>
         ))}
@@ -194,7 +194,7 @@ export function MailSidebar({
                 type="button"
                 aria-label={t("deleteLabel", { name: l.name })}
                 onClick={() => emailApi.deleteLabel(l.id).then(onLabelsChanged)}
-                className="px-1 text-slate-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-slate-600 dark:hover:text-red-500 dark:hover:text-red-400"
+                className="px-1 text-slate-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-red-400"
               >
                 ×
               </button>

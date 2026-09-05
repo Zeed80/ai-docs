@@ -192,7 +192,7 @@ export function AssignmentBoard() {
       ]);
       if (sl.ok) {
         const d = await sl.json();
-        const nextSlots: SlotItem[] = d.slots || [];
+        const nextSlots: SlotItem[] = Array.isArray(d?.slots) ? d.slots : [];
         setSlots(nextSlots);
         setDraft(
           Object.fromEntries(nextSlots.map((s) => [s.slot, s.model ?? null])),
@@ -203,7 +203,11 @@ export function AssignmentBoard() {
         setDirty(false);
       }
       if (md.ok) {
-        const m: ProvModel[] = await md.json();
+        // Каталог обязан быть массивом: объект вместо него ронял весь экран
+        // на `models.map` — вместо «моделей не найдено» человек видел белую
+        // страницу и не понимал, что сломалось.
+        const raw: unknown = await md.json();
+        const m: ProvModel[] = Array.isArray(raw) ? (raw as ProvModel[]) : [];
         setModels(m);
         setSelProv((cur) => cur || m[0]?.provider || "");
       }
@@ -296,7 +300,7 @@ export function AssignmentBoard() {
       });
       if (r.ok) {
         const d = await r.json();
-        setSlots(d.slots || []);
+        setSlots(Array.isArray(d?.slots) ? d.slots : []);
         setDiff(d.diff || []);
         setWarnings(d.warnings || []);
         setErrors(d.errors || []);
@@ -518,7 +522,7 @@ export function AssignmentBoard() {
       <RoutingChains />
       <RevisionHistory onRolledBack={load} />
       <div className="flex items-center justify-between">
-        <p className="text-xs text-slate-600">
+        <p className="text-xs text-slate-400">
           <span className="text-emerald-400">●</span> запущен ·{" "}
           <span className="text-slate-500">○</span> остановлен — vLLM и
           llama.cpp стартуют по требованию. Изменения сначала попадают в
@@ -773,7 +777,7 @@ export function AssignmentBoard() {
                 {p in running && (
                   <span
                     className={
-                      running[p] ? "text-emerald-400" : "text-slate-600"
+                      running[p] ? "text-emerald-400" : "text-slate-400"
                     }
                   >
                     {running[p] ? "●" : "○"}
@@ -797,7 +801,7 @@ export function AssignmentBoard() {
                   <tr key={m.key} className="border-b border-slate-800">
                     <td className="py-1.5 pr-2">
                       <div className="text-slate-200">{m.provider_model}</div>
-                      <div className="text-xs text-slate-600">
+                      <div className="text-xs text-slate-400">
                         {m.modalities.join(", ")}
                         {m.vram_gb_estimate
                           ? ` · ${m.vram_gb_estimate} GB`
@@ -865,7 +869,7 @@ export function AssignmentBoard() {
                             )}
                         </div>
                       ) : (
-                        <span className="text-xs text-slate-600">без CoT</span>
+                        <span className="text-xs text-slate-400">без CoT</span>
                       )}
                     </td>
                     <td className="py-1.5 pl-2 text-right whitespace-nowrap">

@@ -332,7 +332,7 @@ export default function CompareSessionPage() {
                             {entry ? (
                               <span title={entry.description}>
                                 {fmt(entry.unit_price)}
-                                <span className="text-slate-600 ml-1 text-[10px]">
+                                <span className="text-slate-400 ml-1 text-[10px]">
                                   ×{entry.qty}
                                 </span>
                               </span>
@@ -369,7 +369,7 @@ export default function CompareSessionPage() {
             </p>
           )}
           {session.decided_at && (
-            <p className="text-xs text-slate-600 mt-1">
+            <p className="text-xs text-slate-400 mt-1">
               {new Date(session.decided_at).toLocaleString("ru-RU", { timeZone: tz() })}
             </p>
           )}

@@ -186,7 +186,7 @@ export function ThreadList({
                   }}
                   aria-label={th.is_starred ? t("actions.unstar") : t("actions.star")}
                   aria-pressed={th.is_starred}
-                  className={`mt-0.5 shrink-0 text-sm ${th.is_starred ? "text-amber-500" : "text-slate-500 dark:text-slate-400 hover:text-slate-600 dark:hover:text-slate-400 dark:hover:text-slate-600 dark:text-slate-600 dark:hover:text-slate-500 dark:hover:text-slate-400"}`}
+                  className={`mt-0.5 shrink-0 text-sm ${th.is_starred ? "text-amber-500" : "text-slate-500 dark:text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"}`}
                 >
                   {th.is_starred ? "★" : "☆"}
                 </button>
@@ -258,7 +258,7 @@ export function ThreadList({
         <p className="py-3 text-center text-xs text-slate-500">{t("loadingMore")}</p>
       )}
       {!hasMore && threads.length > 20 && (
-        <p className="py-3 text-center text-xs text-slate-400 dark:text-slate-600">{t("allLoaded")}</p>
+        <p className="py-3 text-center text-xs text-slate-400 dark:text-slate-400">{t("allLoaded")}</p>
       )}
     </div>
   );

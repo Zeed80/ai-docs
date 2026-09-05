@@ -246,7 +246,7 @@ export default function StudioQueuePanel({
                       </span>
                     )}
                     {eta && <span className="text-[11px] text-zinc-500">{t("queue.eta", { eta })}</span>}
-                    <span className="text-[11px] text-zinc-600">{job.resource}</span>
+                    <span className="text-[11px] text-zinc-400">{job.resource}</span>
                   </div>
                   <div className="mt-1 truncate text-xs text-zinc-300">
                     {job.title || t(`queue.kind.${job.kind}`)}

@@ -233,7 +233,7 @@ export default function CollectionDetailPage() {
           {coll.description && (
             <p className="text-sm text-slate-500 mt-1">{coll.description}</p>
           )}
-          <p className="text-xs text-slate-600 mt-1">
+          <p className="text-xs text-slate-400 mt-1">
             {coll.items.length} элементов · создана{" "}
             {new Date(coll.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
           </p>
@@ -442,13 +442,13 @@ export default function CollectionDetailPage() {
                         {item.note}
                       </span>
                     )}
-                    <span className="text-xs text-slate-600 shrink-0">
+                    <span className="text-xs text-slate-400 shrink-0">
                       {new Date(item.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
                     </span>
                     {!coll.is_closed && (
                       <button
                         onClick={() => removeItem(item.id)}
-                        className="text-slate-600 hover:text-red-400 text-sm ml-1"
+                        className="text-slate-400 hover:text-red-400 text-sm ml-1"
                         title="Удалить"
                       >
                         ×
@@ -488,7 +488,7 @@ export default function CollectionDetailPage() {
                     <span className="text-[10px] px-1 bg-slate-700 text-slate-400 rounded">
                       {ev.event_type}
                     </span>
-                    <span className="text-[10px] text-slate-600">
+                    <span className="text-[10px] text-slate-400">
                       {ENTITY_TYPE_LABELS[ev.entity_type] ?? ev.entity_type}
                     </span>
                   </div>

@@ -96,11 +96,11 @@ export default function AdminPage() {
       {/* AI Providers */}
       <div className="bg-card border border-border rounded-lg p-4">
         <h2 className="text-sm font-semibold mb-3">AI-провайдеры</h2>
-        {Object.keys(status.ai_providers).length === 0 ? (
+        {Object.keys(status.ai_providers ?? {}).length === 0 ? (
           <p className="text-xs text-muted-foreground">Нет данных</p>
         ) : (
           <div className="space-y-2">
-            {Object.entries(status.ai_providers).map(([provider, value]) => (
+            {Object.entries(status.ai_providers ?? {}).map(([provider, value]) => (
               <div
                 key={provider}
                 className="flex items-center justify-between text-sm"

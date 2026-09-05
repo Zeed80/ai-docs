@@ -145,7 +145,7 @@ function popoverTheme(variant: "dark" | "light") {
       : "bg-white border-slate-200 text-slate-700 shadow-xl",
     chipBase: dark
       ? "border-slate-600 hover:bg-slate-700 text-slate-300"
-      : "border-slate-300 hover:bg-slate-100 text-slate-600",
+      : "border-slate-300 hover:bg-slate-100 text-slate-400",
     chipActive: dark
       ? "bg-blue-900/60 border-blue-600 text-blue-200"
       : "bg-blue-100 border-blue-400 text-blue-700",
@@ -1117,7 +1117,7 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
   if (!enabled || hidden || (!gpu && !cpu)) return null;
 
   const cls = LEVEL_CLASS[variant];
-  const sep = variant === "dark" ? "text-slate-600" : "text-slate-300";
+  const sep = variant === "dark" ? "text-slate-400" : "text-slate-300";
   const border = variant === "dark" ? "border-slate-700" : "border-slate-200";
   const innerBorder =
     variant === "dark" ? "border-slate-700/60" : "border-slate-100";

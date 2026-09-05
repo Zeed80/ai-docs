@@ -391,7 +391,7 @@ export default function CompareDetailPage() {
                         return (
                           <td
                             key={sid}
-                            className="px-4 py-2.5 text-xs text-slate-600 text-right"
+                            className="px-4 py-2.5 text-xs text-slate-400 text-right"
                           >
                             —
                           </td>

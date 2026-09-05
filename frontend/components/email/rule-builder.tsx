@@ -235,7 +235,7 @@ export function EmailRulesSection() {
             <span className="text-slate-500">
               {r.conditions.rules.length} усл. → {r.actions.map((a) => a.type).join(", ")}
             </span>
-            <span className="text-slate-600">· сработало {r.run_count}×</span>
+            <span className="text-slate-400">· сработало {r.run_count}×</span>
             <span className="ml-auto flex gap-1">
               {testResult[r.id] && <span className="text-slate-400">{testResult[r.id]}</span>}
               <button onClick={() => dryRun(r)} className="text-slate-400 hover:text-slate-200">

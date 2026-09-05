@@ -497,7 +497,7 @@ export default function NormCardsPage() {
                       <td className="py-3">
                         <button
                           onClick={() => deleteCard(card.id)}
-                          className="text-xs text-slate-600 hover:text-red-400 transition-colors"
+                          className="text-xs text-slate-400 hover:text-red-400 transition-colors"
                         >
                           удалить
                         </button>
@@ -558,11 +558,11 @@ export default function NormCardsPage() {
                       </td>
                       <td className="py-3 pr-4 text-slate-300 text-xs font-mono">
                         {item.okpd2_code ?? (
-                          <span className="text-slate-600">—</span>
+                          <span className="text-slate-400">—</span>
                         )}
                       </td>
                       <td className="py-3 pr-4 text-slate-400 text-xs">
-                        {item.gost ?? <span className="text-slate-600">—</span>}
+                        {item.gost ?? <span className="text-slate-400">—</span>}
                       </td>
                       <td className="py-3 pr-4">
                         {item.hazard_class ? (
@@ -570,7 +570,7 @@ export default function NormCardsPage() {
                             {item.hazard_class} кл.
                           </span>
                         ) : (
-                          <span className="text-slate-600">—</span>
+                          <span className="text-slate-400">—</span>
                         )}
                       </td>
                       <td className="py-3">

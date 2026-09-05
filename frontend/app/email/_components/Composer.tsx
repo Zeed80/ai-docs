@@ -844,11 +844,11 @@ export function Composer({
         <button
           onClick={handleSaveDraft}
           disabled={busy}
-          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-400 dark:text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:disabled:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
+          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-400 dark:text-slate-400 hover:bg-slate-100 disabled:opacity-50 dark:disabled:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
         >
           {t("actions.saveDraft")}
         </button>
-        <label className="cursor-pointer rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-400 dark:text-slate-600 hover:bg-slate-100 dark:hover:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700">
+        <label className="cursor-pointer rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-400 dark:text-slate-400 hover:bg-slate-100 dark:hover:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700">
           📎 {tc("attach")}
           <input type="file" multiple hidden onChange={(e) => handleUpload(e.target.files)} />
         </label>
@@ -862,7 +862,7 @@ export function Composer({
             disabled={busy || templates.length === 0}
             aria-haspopup="menu"
             aria-expanded={templatesOpen}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-400 dark:text-slate-600 hover:bg-slate-100 disabled:opacity-40 dark:disabled:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-400 dark:text-slate-400 hover:bg-slate-100 disabled:opacity-40 dark:disabled:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
             title={templates.length ? undefined : tc("noTemplates")}
           >
             {tc("template")}
@@ -920,7 +920,7 @@ export function Composer({
         )}
 
         {savedAt && (
-          <span className="ml-auto text-xs text-slate-500 dark:text-slate-400 dark:text-slate-500">
+          <span className="ml-auto text-xs text-slate-500 dark:text-slate-400">
             {tc("savedAt", {
               time: savedAt.toLocaleTimeString(undefined, {
                 timeZone,
@@ -984,7 +984,7 @@ export function Composer({
                   dirtyRef.current = false;
                   onClose();
                 }}
-                className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+                className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
               >
                 {tc("discard")}
               </button>

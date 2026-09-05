@@ -47,6 +47,8 @@ export function RoutingChains() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  // msg показывался всегда зелёным — сообщение об ошибке выглядело успехом.
+  const [msgIsError, setMsgIsError] = useState(false);
   const [open, setOpen] = useState(false);
 
   const load = useCallback(async () => {
@@ -54,9 +56,20 @@ export function RoutingChains() {
       const r = await fetch(`${API}/api/providers/routing-health`, {
         credentials: "include",
       });
-      if (r.ok) setRows(await r.json());
-    } catch {
-      /* ignore */
+      if (r.ok) {
+        // Ответ обязан быть массивом: объект вместо него ронял весь экран
+        // моделей на `rows.reduce` — вместо строки о цепочках человек видел
+        // белую страницу.
+        const raw: unknown = await r.json();
+        setRows(Array.isArray(raw) ? (raw as ChainRow[]) : []);
+      }
+    } catch (e) {
+      // Цепочки — справочная панель на экране назначения: без неё назначать
+      // модели можно, поэтому падать не из-за чего. Но и молчать нельзя —
+      // пустой список читается как «мёртвых звеньев нет».
+      setRows([]);
+      setMsgIsError(true);
+      setMsg(`Цепочки не загружены: ${String(e)}`);
     }
     setLoading(false);
   }, []);
@@ -68,6 +81,7 @@ export function RoutingChains() {
   const prune = async () => {
     setBusy(true);
     setMsg(null);
+    setMsgIsError(false);
     try {
       const r = await fetch(`${API}/api/providers/routing-health/prune`, {
         method: "POST",
@@ -84,9 +98,11 @@ export function RoutingChains() {
         );
         await load();
       } else {
+        setMsgIsError(true);
         setMsg(`Ошибка: ${d.detail || r.status}`);
       }
     } catch (e) {
+      setMsgIsError(true);
       setMsg(`Ошибка: ${e}`);
     } finally {
       setBusy(false);
@@ -109,7 +125,13 @@ export function RoutingChains() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {msg && <span className="text-xs text-emerald-400">{msg}</span>}
+          {msg && (
+            <span
+              className={`text-xs ${msgIsError ? "text-red-400" : "text-emerald-400"}`}
+            >
+              {msg}
+            </span>
+          )}
           {dead > 0 && (
             <button
               className={`${btnSecondary} text-xs`}
@@ -165,7 +187,7 @@ export function RoutingChains() {
                     <span className="truncate font-mono">
                       {m.provider_model || m.key}
                     </span>
-                    <span className="shrink-0 text-[11px] text-slate-600">
+                    <span className="shrink-0 text-[11px] text-slate-400">
                       {AVAIL_LABEL[m.availability]}
                     </span>
                   </li>

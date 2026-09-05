@@ -49,7 +49,7 @@ export default function CommandLine({
         placeholder={prompt ? "" : hint}
         spellCheck={false}
         autoComplete="off"
-        className="min-w-0 flex-1 bg-transparent text-zinc-100 outline-none placeholder:text-zinc-600"
+        className="min-w-0 flex-1 bg-transparent text-zinc-100 outline-none placeholder:text-zinc-400"
         onKeyDown={(ev) => {
           // The workspace's global shortcuts must not fire while typing here;
           // stopPropagation keeps single-letter tool hotkeys usable elsewhere.

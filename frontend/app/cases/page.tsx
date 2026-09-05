@@ -88,7 +88,7 @@ export default function CasesPage() {
         <div className="py-16 text-center">
           <div className="text-4xl text-slate-700 mb-3">📋</div>
           <p className="text-slate-400 text-sm">Нет кейсов.</p>
-          <p className="text-slate-600 text-xs mt-1">
+          <p className="text-slate-400 text-xs mt-1">
             Создайте кейс на главной странице.
           </p>
         </div>

@@ -112,7 +112,7 @@ export default function Viewport({
             }
             disabled={!canFitSelection}
             onClick={() => runViewCommand("fit_selection")}
-            className="h-7 rounded px-2 text-[10px] text-sky-200 hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:text-zinc-600"
+            className="h-7 rounded px-2 text-[10px] text-sky-200 hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:text-zinc-400"
           >
             Выбор
           </button>
@@ -142,7 +142,7 @@ export default function Viewport({
           viewCommand={viewCommand}
         />
       ) : (
-        <div className="grid h-full place-items-center text-sm text-zinc-600">
+        <div className="grid h-full place-items-center text-sm text-zinc-400">
           3D-модель ещё не построена
         </div>
       )}

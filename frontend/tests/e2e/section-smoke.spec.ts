@@ -21,6 +21,22 @@ import {
   type Route,
 } from "@playwright/test";
 
+const ARRAY_ENDPOINTS = [
+  "/api/anomalies",
+  "/api/compare",
+  "/api/invoices",
+  "/api/collections",
+  "/api/canonical",
+  "/api/suppliers",
+  "/api/boms",
+  "/api/drawings",
+  "/api/payments",
+  "/api/procurement",
+  "/api/catalogs",
+  "/api/providers/models",
+  "/api/providers/instances",
+];
+
 async function setAuthCookie(context: BrowserContext) {
   await context.addCookies([
     {
@@ -59,6 +75,15 @@ async function mockEmptyApi(page: Page) {
     }
     if (path === "/api/dashboard/feed") {
       return route.fulfill({ json: { total: 0, items: [] } });
+    }
+    // Часть эндпоинтов отдаёт голый массив, и объект вместо него роняет
+    // рендер («sessions.map is not a function») уже после того, как заголовок
+    // отрисован, — то есть незаметно для беглой проверки.
+    if (
+      path.startsWith("/api/chat/sessions") ||
+      ARRAY_ENDPOINTS.some((p) => path === p || path.startsWith(`${p}/`))
+    ) {
+      return route.fulfill({ json: [] });
     }
     // Списочные ответы приходят в двух формах — отдаём обе разом, чтобы не
     // угадывать по каждому разделу.

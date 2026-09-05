@@ -255,7 +255,7 @@ export function RecipientInput({
                   {c.organization && c.name ? ` · ${c.organization}` : ""}
                 </span>
               </span>
-              <span className="shrink-0 text-[9px] uppercase text-slate-400 dark:text-slate-600">
+              <span className="shrink-0 text-[9px] uppercase text-slate-400 dark:text-slate-400">
                 {c.source === "book"
                   ? t("source.book")
                   : c.source === "party"

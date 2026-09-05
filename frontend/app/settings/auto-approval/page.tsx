@@ -340,7 +340,7 @@ export default function AutoApprovalSettingsPage() {
                 <div className="flex gap-1.5 shrink-0">
                   <button
                     onClick={() => toggleActive(rule)}
-                    className={`px-2.5 py-1 text-xs rounded border transition-colors ${rule.is_active ? "border-slate-200 text-slate-600 hover:bg-slate-50" : "border-green-200 text-green-700 hover:bg-green-50"}`}
+                    className={`px-2.5 py-1 text-xs rounded border transition-colors ${rule.is_active ? "border-slate-200 text-slate-400 hover:bg-slate-50" : "border-green-200 text-green-700 hover:bg-green-50"}`}
                   >
                     {rule.is_active ? "Отключить" : "Включить"}
                   </button>

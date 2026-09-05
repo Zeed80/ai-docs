@@ -67,7 +67,7 @@ export function CatalogCard({
             className="h-full w-full object-contain"
           />
         ) : (
-          <span className="text-4xl text-slate-600">PDF</span>
+          <span className="text-4xl text-slate-400">PDF</span>
         )}
         {active && (
           <span className="absolute right-2 top-2 rounded bg-blue-950/80 px-2 py-0.5 text-[11px] text-blue-200">

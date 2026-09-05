@@ -330,11 +330,11 @@ function AuditContent() {
                           <span className="w-4 h-4 rounded-full bg-blue-700 flex items-center justify-center text-[8px] font-bold text-white">
                             {userInitial(log.user_id)}
                           </span>
-                          <span className="text-[10px] font-mono text-slate-600">
+                          <span className="text-[10px] font-mono text-slate-400">
                             {log.user_id.slice(0, 20)}…
                           </span>
                           {log.ip_address && (
-                            <span className="text-[10px] text-slate-600">
+                            <span className="text-[10px] text-slate-400">
                               · {log.ip_address}
                             </span>
                           )}
@@ -343,7 +343,7 @@ function AuditContent() {
 
                       {/* Key details */}
                       {log.details && Object.keys(log.details).length > 0 && (
-                        <div className="mt-1 text-[10px] text-slate-600 font-mono truncate max-w-lg">
+                        <div className="mt-1 text-[10px] text-slate-400 font-mono truncate max-w-lg">
                           {Object.entries(log.details)
                             .filter(
                               ([, v]) =>
@@ -396,7 +396,7 @@ function AuditContent() {
                               {log.entity_id.slice(0, 8)}…
                             </Link>
                           ) : log.entity_id ? (
-                            <span className="ml-1 font-mono text-slate-600">
+                            <span className="ml-1 font-mono text-slate-400">
                               {log.entity_id.slice(0, 8)}…
                             </span>
                           ) : null}

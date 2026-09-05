@@ -590,7 +590,7 @@ export default function CadListPage() {
                       loading="lazy"
                     />
                   ) : (
-                    <span className="text-xs text-zinc-600">
+                    <span className="text-xs text-zinc-400">
                       {processing ? t("status_processing") : "DXF"}
                     </span>
                   )}

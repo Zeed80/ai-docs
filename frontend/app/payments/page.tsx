@@ -314,7 +314,7 @@ export default function PaymentsPage() {
                   <td className="py-3 pr-4 text-xs text-slate-500">
                     {s.reference || s.payment_method || "—"}
                     {s.paid_at && (
-                      <div className="text-slate-600">
+                      <div className="text-slate-400">
                         {formatDate(s.paid_at)}
                       </div>
                     )}

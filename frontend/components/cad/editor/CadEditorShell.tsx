@@ -1153,7 +1153,7 @@ function ExportMenu({
               </a>
             ))
           ) : (
-            <p className="border-t border-white/5 px-3 py-1.5 text-[10px] text-zinc-600">
+            <p className="border-t border-white/5 px-3 py-1.5 text-[10px] text-zinc-400">
               CAD-экспорт доступен после приёмки
             </p>
           )}

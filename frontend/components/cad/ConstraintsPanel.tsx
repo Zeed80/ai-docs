@@ -252,7 +252,7 @@ export default function ConstraintsPanel({
                       title={chk?.message}
                       className={
                         !c.enabled
-                          ? "text-zinc-600"
+                          ? "text-zinc-400"
                           : chk
                             ? chk.ok
                               ? "text-emerald-400"

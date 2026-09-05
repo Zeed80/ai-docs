@@ -195,7 +195,7 @@ export default function EngineeringProjectPage() {
                 type="button"
                 disabled={busy || selectedRevision.status === "approved"}
                 onClick={validate}
-                className="text-sm text-sky-300 hover:text-sky-100 disabled:text-zinc-600"
+                className="text-sm text-sky-300 hover:text-sky-100 disabled:text-zinc-400"
               >
                 Проверить выпуск
               </button>
@@ -335,7 +335,7 @@ export default function EngineeringProjectPage() {
                   type="button"
                   disabled={busy || selectedRevision?.status === "approved"}
                   onClick={() => void runCase(item.id)}
-                  className="mt-2 text-xs text-sky-300 hover:text-sky-100 disabled:text-zinc-600"
+                  className="mt-2 text-xs text-sky-300 hover:text-sky-100 disabled:text-zinc-400"
                 >
                   Рассчитать
                 </button>

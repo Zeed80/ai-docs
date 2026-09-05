@@ -330,7 +330,7 @@ export default function CanonicalItemsPage() {
         <div className="py-16 text-center">
           <div className="text-4xl text-slate-700 mb-3">📦</div>
           <p className="text-slate-400 text-sm">Справочник пуст.</p>
-          <p className="text-slate-600 text-xs mt-1">
+          <p className="text-slate-400 text-xs mt-1">
             Позиции добавляются при маппинге строк счетов или вручную.
           </p>
         </div>
@@ -476,7 +476,7 @@ function CanonicalTable({
                     </button>
                     <button
                       onClick={() => onDelete(item.id)}
-                      className="text-xs text-slate-600 hover:text-red-400"
+                      className="text-xs text-slate-400 hover:text-red-400"
                       title="Удалить"
                     >
                       ×

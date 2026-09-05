@@ -89,7 +89,7 @@ export function RibbonGroup({
   return (
     <div className="flex flex-col items-center gap-0.5">
       <div className="flex items-center gap-1">{children}</div>
-      <span className="text-[9px] uppercase tracking-wide text-zinc-600">
+      <span className="text-[9px] uppercase tracking-wide text-zinc-400">
         {label}
       </span>
     </div>

@@ -189,7 +189,7 @@ function DraggableHeader({
         <button
           {...attributes}
           {...listeners}
-          className="shrink-0 cursor-grab text-slate-600 hover:text-slate-300 active:cursor-grabbing"
+          className="shrink-0 cursor-grab text-slate-400 hover:text-slate-300 active:cursor-grabbing"
           title="Перетащить столбец"
           aria-label="Перетащить столбец"
         >
@@ -566,7 +566,7 @@ export default function InvoicesPage() {
           {text}
         </span>
       ) : (
-        <span className="text-xs text-slate-600">—</span>
+        <span className="text-xs text-slate-400">—</span>
       );
     }
     if (col.key === "items_list") {
@@ -1124,7 +1124,7 @@ export default function InvoicesPage() {
           <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
             <div className="flex items-center gap-2">
               <span>{total} всего</span>
-              <span className="text-slate-600">·</span>
+              <span className="text-slate-400">·</span>
               <button
                 onClick={() => setDeleteDialog({ mode: "filtered" })}
                 className="text-red-500 hover:text-red-400"

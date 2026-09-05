@@ -274,7 +274,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
                 )}
               </div>
               <button onClick={() => toggleFav(sel)} className="text-xl">
-                <span className={sel.is_favorite ? "text-amber-600 dark:text-amber-400" : "text-slate-400 dark:text-slate-600"}>★</span>
+                <span className={sel.is_favorite ? "text-amber-600 dark:text-amber-400" : "text-slate-400 dark:text-slate-400"}>★</span>
               </button>
             </div>
 
@@ -435,7 +435,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
             <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
               {t("deleteContact.title")}
             </h3>
-            <p className="mt-1 text-sm text-slate-400 dark:text-slate-600 dark:text-slate-400">
+            <p className="mt-1 text-sm text-slate-400 dark:text-slate-400">
               {confirmDelete.name || confirmDelete.email}
             </p>
             <div className="mt-3 flex gap-2">
@@ -452,7 +452,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
               </button>
               <button
                 onClick={() => setConfirmDelete(null)}
-                className="rounded border border-slate-300 px-4 py-1.5 text-sm text-slate-400 dark:text-slate-600 hover:bg-slate-100 dark:hover:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
+                className="rounded border border-slate-300 px-4 py-1.5 text-sm text-slate-400 dark:text-slate-400 hover:bg-slate-100 dark:hover:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
               >
                 {t("actions.cancel")}
               </button>

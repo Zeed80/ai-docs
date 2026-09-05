@@ -79,7 +79,7 @@ export function AgentActivityPanel({ mailbox }: { mailbox: string }) {
                 <button
                   onClick={() => void undo(row)}
                   disabled={busy === row.id}
-                  className="ml-auto rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+                  className="ml-auto rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-400 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
                 >
                   {t("undo")}
                 </button>

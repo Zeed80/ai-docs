@@ -509,7 +509,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
             <div className="text-xs text-zinc-500">
               {t("composer.workflow_params_label")}
             </div>
-            <div className="text-[11px] text-zinc-600">
+            <div className="text-[11px] text-zinc-400">
               {selectedWorkflow.is_builtin
                 ? t("composer.workflow_params_builtin_hint")
                 : t("composer.workflow_params_hint")}
@@ -891,7 +891,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
                 </div>
               )}
               {selectedWorkflow?.description && renaming !== workflowId && (
-                <p className="mt-1 text-[11px] text-zinc-600">
+                <p className="mt-1 text-[11px] text-zinc-400">
                   {selectedWorkflow.description}
                 </p>
               )}

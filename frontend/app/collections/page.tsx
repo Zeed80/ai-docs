@@ -150,9 +150,9 @@ export default function CollectionsPage() {
         </div>
       ) : collections.length === 0 ? (
         <div className="py-16 text-center">
-          <div className="text-slate-600 text-4xl mb-3">📂</div>
+          <div className="text-slate-400 text-4xl mb-3">📂</div>
           <p className="text-slate-400 text-sm">Подборок пока нет.</p>
-          <p className="text-slate-600 text-xs mt-1">
+          <p className="text-slate-400 text-xs mt-1">
             Создайте подборку для группировки связанных документов и счетов.
           </p>
         </div>
@@ -241,7 +241,7 @@ function CollectionCard({
               {count} {type}
             </span>
           ))}
-          <span className="text-slate-600">
+          <span className="text-slate-400">
             {new Date(coll.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
           </span>
         </div>

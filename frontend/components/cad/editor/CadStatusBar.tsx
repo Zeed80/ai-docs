@@ -69,7 +69,7 @@ export default function CadStatusBar({
       {hasModel && incrementalBuild && (
         <span className="text-zinc-700">·</span>
       )}
-      <span className={hasModel ? "text-emerald-400" : "text-zinc-600"}>
+      <span className={hasModel ? "text-emerald-400" : "text-zinc-400"}>
         {hasModel ? "Модель построена" : "Модель не построена"}
       </span>
     </div>

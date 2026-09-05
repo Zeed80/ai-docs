@@ -292,7 +292,7 @@ function SampleEvolution({
         );
       })}
       {steps.length > 1 && (
-        <div className="text-[10px] text-zinc-600">
+        <div className="text-[10px] text-zinc-400">
           шаги: {steps.join(" · ")}
         </div>
       )}

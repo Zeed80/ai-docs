@@ -485,14 +485,14 @@ export default function EngineeringModelGraphPanel({
             <button
               disabled={busy}
               onClick={() => void verify()}
-              className="text-sky-300 disabled:text-zinc-600"
+              className="text-sky-300 disabled:text-zinc-400"
             >
               Проверить 12 уровней
             </button>
             <button
               disabled={busy}
               onClick={() => void runReader()}
-              className="text-violet-300 disabled:text-zinc-600"
+              className="text-violet-300 disabled:text-zinc-400"
             >
               Адаптивно дочитать
             </button>
@@ -500,7 +500,7 @@ export default function EngineeringModelGraphPanel({
               <button
                 disabled={busy}
                 onClick={() => void buildDomainArtifact()}
-                className="text-emerald-300 disabled:text-zinc-600"
+                className="text-emerald-300 disabled:text-zinc-400"
               >
                 {artifactBuild.label}
               </button>
@@ -1012,7 +1012,7 @@ function DomainArtifacts({
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-zinc-200">{node.name || node.id}</p>
-                  <p className="mt-1 font-mono text-[10px] text-zinc-600">
+                  <p className="mt-1 font-mono text-[10px] text-zinc-400">
                     {node.id}
                   </p>
                 </div>

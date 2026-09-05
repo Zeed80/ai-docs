@@ -529,7 +529,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                       ? "bg-amber-100 text-amber-700"
                       : item.status === "approved"
                         ? "bg-green-100 text-green-700"
-                        : "bg-slate-100 text-slate-600"
+                        : "bg-slate-100 text-slate-400"
                   }`}
                 >
                   {item.status}
@@ -561,7 +561,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 router.push(`/invoices`);
                 onClose();
               }}
-              className="px-2.5 py-1 rounded-full text-xs bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 border border-slate-200 transition-colors"
+              className="px-2.5 py-1 rounded-full text-xs bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-400 border border-slate-200 transition-colors"
             >
               📋 Открыть список
             </button>
@@ -578,7 +578,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 });
                 onClose();
               }}
-              className="px-2.5 py-1 rounded-full text-xs bg-slate-100 hover:bg-green-50 hover:text-green-700 text-slate-600 border border-slate-200 transition-colors"
+              className="px-2.5 py-1 rounded-full text-xs bg-slate-100 hover:bg-green-50 hover:text-green-700 text-slate-400 border border-slate-200 transition-colors"
             >
               ✓ Утвердить все
             </button>
@@ -587,7 +587,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 router.push("/collections");
                 onClose();
               }}
-              className="px-2.5 py-1 rounded-full text-xs bg-slate-100 hover:bg-purple-50 hover:text-purple-700 text-slate-600 border border-slate-200 transition-colors"
+              className="px-2.5 py-1 rounded-full text-xs bg-slate-100 hover:bg-purple-50 hover:text-purple-700 text-slate-400 border border-slate-200 transition-colors"
             >
               📁 В коллекцию
             </button>

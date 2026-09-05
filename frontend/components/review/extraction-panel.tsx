@@ -421,7 +421,7 @@ export function ExtractionPanel({
             placeholder="Ваши заметки по этому счёту…"
             rows={3}
             disabled={disabled}
-            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 resize-none placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 resize-none placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
           />
         </div>
       )}

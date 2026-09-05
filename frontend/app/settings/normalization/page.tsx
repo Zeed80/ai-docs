@@ -346,7 +346,7 @@ export default function NormalizationSettingsPage() {
             className={`px-3 py-1 text-sm rounded-full border transition-colors ${
               filter === f
                 ? "bg-slate-800 text-white border-slate-800"
-                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                : "bg-white text-slate-400 border-slate-200 hover:bg-slate-50"
             }`}
           >
             {filterLabels[f]}

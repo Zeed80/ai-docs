@@ -83,7 +83,7 @@ function NodeList({
           <div key={id}>
             <p className="break-all">{nodeNames.get(id) ?? id}</p>
             {dependencyPaths?.[id] && (
-              <p className="break-all text-[9px] text-zinc-600">
+              <p className="break-all text-[9px] text-zinc-400">
                 ↳ {dependencyPaths[id].join(" → ")}
               </p>
             )}

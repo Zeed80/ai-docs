@@ -17,7 +17,7 @@ export function Sparkline({
 }: SparklineProps) {
   if (!data || data.length < 2) {
     return (
-      <span className={`inline-block text-slate-600 text-[10px] ${className}`}>
+      <span className={`inline-block text-slate-400 text-[10px] ${className}`}>
         —
       </span>
     );

@@ -65,7 +65,7 @@ function StarRating({
           onMouseEnter={() => !readonly && setHover(star)}
           onMouseLeave={() => !readonly && setHover(0)}
           className={`text-base leading-none transition-colors ${readonly ? "cursor-default" : "cursor-pointer"} ${
-            star <= (hover || value) ? "text-yellow-400" : "text-slate-600"
+            star <= (hover || value) ? "text-yellow-400" : "text-slate-400"
           }`}
         >
           ★
@@ -399,7 +399,7 @@ export default function SuppliersPage() {
                     {s.user_rating ? (
                       <StarRating value={s.user_rating} readonly />
                     ) : (
-                      <span className="text-slate-600 text-xs">—</span>
+                      <span className="text-slate-400 text-xs">—</span>
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-center">

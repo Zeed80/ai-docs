@@ -90,7 +90,7 @@ function CellInput({
           setEditing(true);
         }}
       >
-        {value ?? <span className="text-zinc-600 italic">—</span>}
+        {value ?? <span className="text-zinc-400 italic">—</span>}
       </span>
     );
   }

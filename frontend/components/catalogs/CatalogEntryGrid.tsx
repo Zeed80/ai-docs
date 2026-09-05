@@ -9,7 +9,7 @@ function EntryThumb({ entry }: { entry: CatalogEntry }) {
   const [failed, setFailed] = useState(false);
   if (!entry.thumb_url || failed) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-slate-900 text-xs text-slate-600">
+      <div className="flex h-full w-full items-center justify-center bg-slate-900 text-xs text-slate-400">
         нет изображения
       </div>
     );

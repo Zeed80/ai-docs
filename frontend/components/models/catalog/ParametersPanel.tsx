@@ -214,7 +214,7 @@ export function ParametersPanel() {
                       }}
                       className="w-full accent-blue-500"
                     />
-                    <div className="text-xs text-slate-600">{desc}</div>
+                    <div className="text-xs text-slate-400">{desc}</div>
                   </div>
                 );
               })}

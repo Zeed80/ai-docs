@@ -292,7 +292,7 @@ export default function BomsPage() {
                   </div>
                 </div>
                 <svg
-                  className="w-4 h-4 text-slate-600 shrink-0 mt-1"
+                  className="w-4 h-4 text-slate-400 shrink-0 mt-1"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"

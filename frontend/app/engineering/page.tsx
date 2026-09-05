@@ -10,7 +10,7 @@ const STATUS: Record<EngineeringProject["status"], string> = {
 };
 
 const STATUS_COLOR: Record<EngineeringProject["status"], string> = {
-  draft: "text-zinc-400", validated: "text-sky-300", needs_review: "text-amber-300", approved: "text-emerald-300", obsolete: "text-zinc-600",
+  draft: "text-zinc-400", validated: "text-sky-300", needs_review: "text-amber-300", approved: "text-emerald-300", obsolete: "text-zinc-400",
 };
 
 export default function EngineeringPage() {

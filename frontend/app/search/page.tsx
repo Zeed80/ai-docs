@@ -265,7 +265,7 @@ function SearchPageInner() {
                   </button>
                   <button
                     onClick={() => deleteSavedQuery(sq.id)}
-                    className="text-slate-600 hover:text-red-400 text-xs shrink-0"
+                    className="text-slate-400 hover:text-red-400 text-xs shrink-0"
                   >
                     ✕
                   </button>
@@ -295,7 +295,7 @@ function SearchPageInner() {
                 : "Семантический"}
           </button>
         ))}
-        <span className="ml-2 text-xs text-slate-600 self-center">
+        <span className="ml-2 text-xs text-slate-400 self-center">
           {mode === "nl"
             ? "Фильтрует по структурированным полям из текста запроса"
             : mode === "similar"

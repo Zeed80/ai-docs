@@ -295,7 +295,7 @@ export default function CatalogViewerPage() {
                   className="w-full"
                 />
               ) : (
-                <div className="flex h-24 items-center justify-center bg-slate-900 text-[10px] text-slate-600">
+                <div className="flex h-24 items-center justify-center bg-slate-900 text-[10px] text-slate-400">
                   {item.page_number}
                 </div>
               )}

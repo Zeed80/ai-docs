@@ -74,7 +74,7 @@ export default function LayersPanel({
                     className={`h-5 w-5 rounded ${
                       isVisible && !isFrozen
                         ? "bg-white/10 text-zinc-100"
-                        : "text-zinc-600"
+                        : "text-zinc-400"
                     } disabled:opacity-30`}
                   >
                     {isVisible ? "👁" : "—"}

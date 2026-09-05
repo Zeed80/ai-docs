@@ -264,19 +264,19 @@ function MessageCard({
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
             <button
               onClick={() => onReply(msg)}
-              className="rounded border border-slate-300 px-2 py-0.5 text-slate-400 dark:text-slate-600 hover:bg-slate-100 dark:hover:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
+              className="rounded border border-slate-300 px-2 py-0.5 text-slate-400 dark:text-slate-400 hover:bg-slate-100 dark:hover:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
             >
               {t("actions.reply")}
             </button>
             <button
               onClick={() => onReply(msg, true)}
-              className="rounded border border-slate-300 px-2 py-0.5 text-slate-400 dark:text-slate-600 hover:bg-slate-100 dark:hover:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
+              className="rounded border border-slate-300 px-2 py-0.5 text-slate-400 dark:text-slate-400 hover:bg-slate-100 dark:hover:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
             >
               {t("actions.replyAll")}
             </button>
             <button
               onClick={() => onForward(msg)}
-              className="rounded border border-slate-300 px-2 py-0.5 text-slate-400 dark:text-slate-600 hover:bg-slate-100 dark:hover:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
+              className="rounded border border-slate-300 px-2 py-0.5 text-slate-400 dark:text-slate-400 hover:bg-slate-100 dark:hover:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
             >
               {t("actions.forward")}
             </button>
@@ -285,7 +285,7 @@ function MessageCard({
             <button
               onClick={addToContacts}
               disabled={savedContact}
-              className="rounded border border-slate-300 px-2 py-0.5 text-slate-400 dark:text-slate-600 hover:bg-slate-100 disabled:opacity-60 dark:disabled:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
+              className="rounded border border-slate-300 px-2 py-0.5 text-slate-400 dark:text-slate-400 hover:bg-slate-100 disabled:opacity-60 dark:disabled:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
             >
               {savedContact ? t("contactSaved") : t("actions.addContact")}
             </button>
@@ -506,7 +506,7 @@ function MessageCard({
                       {preview === a.id ? "▾" : "▸"}
                     </button>
                   ) : (
-                    <span className="shrink-0 text-xs text-slate-400 dark:text-slate-600">·</span>
+                    <span className="shrink-0 text-xs text-slate-400 dark:text-slate-400">·</span>
                   )}
                   <span className="shrink-0 text-sm" aria-hidden>
                     {fileIcon(a)}

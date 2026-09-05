@@ -447,7 +447,7 @@ export function LibraryPanel() {
                 {Array.isArray(files[m.repo_id!]) && (
                   <div className="mt-2 space-y-1 border-t border-slate-800 pt-2">
                     {(files[m.repo_id!] as RepoFile[]).length === 0 && (
-                      <div className="text-xs text-slate-600">
+                      <div className="text-xs text-slate-400">
                         Файлы не найдены
                       </div>
                     )}
@@ -470,7 +470,7 @@ export function LibraryPanel() {
                               {fname}
                             </span>
                             {f.size_human && (
-                              <span className="text-slate-600">
+                              <span className="text-slate-400">
                                 {f.size_human}
                               </span>
                             )}

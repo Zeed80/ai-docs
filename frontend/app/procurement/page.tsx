@@ -427,7 +427,7 @@ export default function ProcurementPage() {
                 >
                   {s.status}
                 </span>
-                <span className="text-xs text-slate-600">
+                <span className="text-xs text-slate-400">
                   {new Date(s.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
                 </span>
               </button>
