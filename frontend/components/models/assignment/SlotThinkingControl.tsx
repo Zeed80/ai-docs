@@ -109,7 +109,7 @@ export function SlotThinkingControl({
         )}
       </div>
 
-      <p className="text-[11px] text-slate-500">{effectiveText}</p>
+      <p className="text-[11px] text-slate-400">{effectiveText}</p>
 
       {state.supportedByModel && state.effective && state.levels.length > 0 && (
         <div className="flex items-center gap-2">
@@ -132,7 +132,7 @@ export function SlotThinkingControl({
             <button
               type="button"
               onClick={() => onLevelChange(null)}
-              className="text-[11px] text-slate-500 underline hover:text-slate-300"
+              className="text-[11px] text-slate-400 underline hover:text-slate-300"
             >
               как у модели
             </button>

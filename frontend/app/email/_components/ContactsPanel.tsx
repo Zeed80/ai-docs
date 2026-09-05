@@ -165,7 +165,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
           <div className="flex flex-wrap items-center gap-1 text-xs">
             <button
               onClick={() => setFavOnly((v) => !v)}
-              className={`rounded-full px-2 py-0.5 ${favOnly ? "bg-amber-600 text-white" : "text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"}`}
+              className={`rounded-full px-2 py-0.5 ${favOnly ? "bg-amber-600 text-white" : "text-slate-400 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"}`}
             >
               ★ {t("favorites")}
             </button>
@@ -173,7 +173,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
               <button
                 key={tg}
                 onClick={() => setTag(tag === tg ? null : tg)}
-                className={`rounded-full px-2 py-0.5 ${tag === tg ? "bg-blue-600 text-white" : "text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"}`}
+                className={`rounded-full px-2 py-0.5 ${tag === tg ? "bg-blue-600 text-white" : "text-slate-400 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"}`}
               >
                 {tg}
               </button>
@@ -181,7 +181,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
             <span className="ml-auto flex gap-1">
               <a
                 href={emailApi.exportContactsUrl()}
-                className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
                 title={t("exportCsv")}
               >
                 ↓CSV
@@ -189,7 +189,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
               <button
                 onClick={() => fileRef.current?.click()}
                 disabled={importing}
-                className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 disabled:opacity-50"
+                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 disabled:opacity-50"
                 title={t("importCsv")}
               >
                 ↑CSV
@@ -206,7 +206,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
         </div>
         <div ref={listRef} className="flex-1 overflow-auto">
           {rows.length === 0 && (
-            <p className="py-8 text-center text-xs text-slate-500">{t("contactsEmpty")}</p>
+            <p className="py-8 text-center text-xs text-slate-400">{t("contactsEmpty")}</p>
           )}
           {/* Список писем виртуализирован давно, а книга контактов — нет:
               импорт на пару тысяч строк заметно подтормаживал. */}
@@ -243,7 +243,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
                       </span>
                       {c.is_favorite && <span className="text-xs text-amber-500">★</span>}
                     </span>
-                    <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                    <span className="block truncate text-xs text-slate-400 dark:text-slate-400">
                       {c.name ? c.email : c.organization || ""}
                     </span>
                   </span>
@@ -270,7 +270,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
                   {sel.name || sel.email}
                 </h2>
                 {sel.organization && (
-                  <p className="text-sm text-slate-500 dark:text-slate-400">{sel.organization}</p>
+                  <p className="text-sm text-slate-400 dark:text-slate-400">{sel.organization}</p>
                 )}
               </div>
               <button onClick={() => toggleFav(sel)} className="text-xl">
@@ -298,7 +298,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
               )}
               {sel.notes && <Row label={t("fields.notes")}>{sel.notes}</Row>}
               <Row label="">
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-slate-400">
                   {t("usedTimes", { n: sel.use_count })} ·{" "}
                   {sel.source === "auto" ? t("sourceAuto") : t("sourceManual")}
                 </span>
@@ -307,7 +307,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
 
             {history.length > 0 && (
               <div className="mt-5">
-                <p className="mb-1 text-xs font-medium text-slate-500">
+                <p className="mb-1 text-xs font-medium text-slate-400">
                   {t("contactHistory")}
                 </p>
                 <ul className="space-y-0.5">
@@ -320,7 +320,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
                         {m.subject || t("noSubject")}
                       </a>
                       {m.received_at && (
-                        <span className="ml-1.5 text-slate-500">
+                        <span className="ml-1.5 text-slate-400">
                           {new Date(m.received_at).toLocaleDateString(undefined, { timeZone })}
                         </span>
                       )}
@@ -329,7 +329,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
                 </ul>
                 <a
                   href={`/email?from=${encodeURIComponent(sel.email)}`}
-                  className="mt-1 inline-block text-xs text-slate-500 hover:underline"
+                  className="mt-1 inline-block text-xs text-slate-400 hover:underline"
                 >
                   {t("actions.allFromSender")}
                 </a>
@@ -351,14 +351,14 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
               </button>
               <button
                 onClick={() => setConfirmDelete(sel)}
-                className="rounded border border-slate-300 dark:border-slate-600 px-4 py-1.5 text-sm text-slate-500 dark:text-slate-400 hover:bg-red-50 dark:hover:bg-red-900/40 hover:text-red-600 dark:hover:text-red-300"
+                className="rounded border border-slate-300 dark:border-slate-600 px-4 py-1.5 text-sm text-slate-400 dark:text-slate-400 hover:bg-red-50 dark:hover:bg-red-900/40 hover:text-red-600 dark:hover:text-red-300"
               >
                 Удалить
               </button>
             </div>
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center text-center text-slate-500">
+          <div className="flex h-full items-center justify-center text-center text-slate-400">
             <div>
               <div className="mb-2 text-4xl">👤</div>
               <p className="text-sm">{t("pickContact")}</p>
@@ -398,7 +398,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
                   <tbody>
                     {importReport.skipped_rows.map((r) => (
                       <tr key={r.line} className="border-b border-slate-100 dark:border-slate-800">
-                        <td className="px-2 py-1 text-slate-500">{r.line}</td>
+                        <td className="px-2 py-1 text-slate-400">{r.line}</td>
                         <td className="px-2 py-1 text-slate-700 dark:text-slate-300">{r.value}</td>
                         <td className="px-2 py-1 text-amber-600 dark:text-amber-400">{r.reason}</td>
                       </tr>
@@ -554,7 +554,7 @@ export function ContactsPanel({ onCompose }: { onCompose: (email: string) => voi
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-3">
-      <span className="w-20 shrink-0 text-xs text-slate-500">{label}</span>
+      <span className="w-20 shrink-0 text-xs text-slate-400">{label}</span>
       <span className="min-w-0 flex-1 text-slate-800 dark:text-slate-200">{children}</span>
     </div>
   );

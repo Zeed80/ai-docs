@@ -89,7 +89,7 @@ export default function CollectionsPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-bold text-slate-100">Подборки</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-400 mt-0.5">
             Группировка документов, счетов и событий для совместного анализа
           </p>
         </div>
@@ -145,7 +145,7 @@ export default function CollectionsPage() {
       )}
 
       {loading ? (
-        <div className="py-12 text-center text-slate-500 text-sm">
+        <div className="py-12 text-center text-slate-400 text-sm">
           Загрузка...
         </div>
       ) : collections.length === 0 ? (
@@ -160,7 +160,7 @@ export default function CollectionsPage() {
         <div className="space-y-6">
           {open.length > 0 && (
             <section>
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
                 Активные ({open.length})
               </h2>
               <div className="grid gap-3">
@@ -176,7 +176,7 @@ export default function CollectionsPage() {
           )}
           {closed.length > 0 && (
             <section>
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
                 Закрытые ({closed.length})
               </h2>
               <div className="grid gap-3">
@@ -225,7 +225,7 @@ function CollectionCard({
             )}
           </div>
           {coll.description && (
-            <p className="text-xs text-slate-500 mt-0.5 truncate">
+            <p className="text-xs text-slate-400 mt-0.5 truncate">
               {coll.description}
             </p>
           )}
@@ -235,7 +235,7 @@ function CollectionCard({
             </p>
           )}
         </div>
-        <div className="flex items-center gap-3 ml-4 shrink-0 text-xs text-slate-500">
+        <div className="flex items-center gap-3 ml-4 shrink-0 text-xs text-slate-400">
           {Object.entries(entityCounts).map(([type, count]) => (
             <span key={type}>
               {count} {type}

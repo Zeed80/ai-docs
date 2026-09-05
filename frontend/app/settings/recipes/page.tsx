@@ -36,7 +36,7 @@ const STATUS_LABELS: Record<Recipe["status"], string> = {
 const STATUS_COLORS: Record<Recipe["status"], string> = {
   draft: "bg-amber-900/30 text-amber-400 border-amber-700/40",
   active: "bg-green-900/30 text-green-400 border-green-700/40",
-  retired: "bg-slate-800 text-slate-500 border-slate-700",
+  retired: "bg-slate-800 text-slate-400 border-slate-700",
 };
 
 export default function RecipesSettingsPage() {
@@ -125,10 +125,10 @@ export default function RecipesSettingsPage() {
                 >
                   {STATUS_LABELS[recipe.status]}
                 </span>
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-slate-400">
                   роль: {recipe.role}
                 </span>
-                <span className="ml-auto text-xs text-slate-500">
+                <span className="ml-auto text-xs text-slate-400">
                   ✓ {recipe.success_count} · ✗ {recipe.fail_count}
                 </span>
               </div>
@@ -147,7 +147,7 @@ export default function RecipesSettingsPage() {
               </div>
               {recipe.param_slots &&
                 Object.keys(recipe.param_slots).length > 0 && (
-                  <div className="mt-1 text-xs text-slate-500">
+                  <div className="mt-1 text-xs text-slate-400">
                     Параметры: {Object.keys(recipe.param_slots).join(", ")}
                   </div>
                 )}

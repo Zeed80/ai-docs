@@ -74,7 +74,7 @@ export default function TitleBlockPanel({
         className="flex w-full items-center justify-between text-xs text-zinc-300"
       >
         <span>{t("vector.title_block")}</span>
-        <span className="text-zinc-500">{open ? "−" : "+"}</span>
+        <span className="text-zinc-400">{open ? "−" : "+"}</span>
       </button>
       {open && (
         <div className="space-y-2">
@@ -82,7 +82,7 @@ export default function TitleBlockPanel({
             {TEXT_FIELDS.map((f) => (
               <label
                 key={f.key}
-                className={`flex flex-col gap-0.5 text-[10px] text-zinc-500 ${f.wide ? "col-span-2" : ""}`}
+                className={`flex flex-col gap-0.5 text-[10px] text-zinc-400 ${f.wide ? "col-span-2" : ""}`}
               >
                 {f.label}
                 <input
@@ -94,7 +94,7 @@ export default function TitleBlockPanel({
                 />
               </label>
             ))}
-            <label className="flex flex-col gap-0.5 text-[10px] text-zinc-500">
+            <label className="flex flex-col gap-0.5 text-[10px] text-zinc-400">
               {t("vector.title_mass")}
               <input
                 value={mass}

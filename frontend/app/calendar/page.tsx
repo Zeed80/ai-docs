@@ -320,7 +320,7 @@ export default function CalendarPage() {
             {monthOffset !== 0 && (
               <button
                 onClick={() => setMonthOffset(0)}
-                className="text-xs text-slate-500 hover:text-slate-300"
+                className="text-xs text-slate-400 hover:text-slate-300"
               >
                 Сегодня
               </button>
@@ -330,7 +330,7 @@ export default function CalendarPage() {
             {DAY_NAMES.map((d) => (
               <div
                 key={d}
-                className="bg-slate-800 text-center text-[10px] font-semibold text-slate-500 py-1"
+                className="bg-slate-800 text-center text-[10px] font-semibold text-slate-400 py-1"
               >
                 {d}
               </div>
@@ -370,7 +370,7 @@ export default function CalendarPage() {
                       </div>
                     ))}
                     {dayEvents.length > 3 && (
-                      <div className="text-[9px] text-slate-500">
+                      <div className="text-[9px] text-slate-400">
                         +{dayEvents.length - 3}
                       </div>
                     )}
@@ -410,7 +410,7 @@ export default function CalendarPage() {
                         <div className="text-sm font-medium truncate">
                           {e.title}
                         </div>
-                        <div className="text-xs text-slate-500">
+                        <div className="text-xs text-slate-400">
                           {EVENT_TYPE_LABELS[e.event_type] ?? e.event_type}
                           {e.source !== "manual" && (
                             <span className="ml-2 text-slate-400">

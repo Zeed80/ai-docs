@@ -19,7 +19,7 @@ const STATUS_COLOR: Record<string, string> = {
   waiting_resource: "text-amber-300",
   running: "text-sky-400",
   cancel_requested: "text-orange-300",
-  cancelled: "text-zinc-500",
+  cancelled: "text-zinc-400",
   done: "text-emerald-400",
   failed: "text-red-400",
 };
@@ -128,25 +128,25 @@ export default function StudioQueuePanel({
     <div className="rounded border border-white/10 bg-zinc-900/40">
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
         <div className="text-sm font-medium text-zinc-200">{t("queue.title")}</div>
-        <div className="text-[11px] text-zinc-500">
+        <div className="text-[11px] text-zinc-400">
           {active.length ? t("queue.active_count", { count: active.length }) : t("queue.no_active")}
         </div>
       </div>
       <div className="grid gap-2 border-b border-white/10 p-3 text-[11px] text-zinc-400 sm:grid-cols-3">
         <div className="rounded border border-white/10 bg-black/20 p-2">
-          <div className="text-zinc-500">{t("queue.metrics.active")}</div>
+          <div className="text-zinc-400">{t("queue.metrics.active")}</div>
           <div className="mt-1 text-base font-medium text-zinc-100">
             {stats ? `${stats.active}/${stats.limits.global_active}` : active.length}
           </div>
         </div>
         <div className="rounded border border-white/10 bg-black/20 p-2">
-          <div className="text-zinc-500">{t("queue.metrics.wait")}</div>
+          <div className="text-zinc-400">{t("queue.metrics.wait")}</div>
           <div className="mt-1 text-base font-medium text-zinc-100">
             {fmtDuration(stats?.avg_wait_seconds_24h) || "-"}
           </div>
         </div>
         <div className="rounded border border-white/10 bg-black/20 p-2">
-          <div className="text-zinc-500">{t("queue.metrics.runtime")}</div>
+          <div className="text-zinc-400">{t("queue.metrics.runtime")}</div>
           <div className="mt-1 text-base font-medium text-zinc-100">
             {fmtDuration(stats?.avg_runtime_seconds_24h) || "-"}
           </div>
@@ -216,7 +216,7 @@ export default function StudioQueuePanel({
         </div>
       )}
       {shown.length === 0 && (
-        <div className="p-3 text-xs text-zinc-500">{t("queue.empty")}</div>
+        <div className="p-3 text-xs text-zinc-400">{t("queue.empty")}</div>
       )}
       <div className="divide-y divide-white/10">
         {shown.map((job) => {
@@ -241,11 +241,11 @@ export default function StudioQueuePanel({
                       {t(`queue.status.${job.status}`)}
                     </span>
                     {job.position && (
-                      <span className="text-[11px] text-zinc-500">
+                      <span className="text-[11px] text-zinc-400">
                         {t("queue.position", { position: job.position })}
                       </span>
                     )}
-                    {eta && <span className="text-[11px] text-zinc-500">{t("queue.eta", { eta })}</span>}
+                    {eta && <span className="text-[11px] text-zinc-400">{t("queue.eta", { eta })}</span>}
                     <span className="text-[11px] text-zinc-400">{job.resource}</span>
                   </div>
                   <div className="mt-1 truncate text-xs text-zinc-300">

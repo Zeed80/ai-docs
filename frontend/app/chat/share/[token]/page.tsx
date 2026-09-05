@@ -48,7 +48,7 @@ export default function SharedChatPage() {
   if (!session) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
-        <div className="text-slate-500 text-sm">Загрузка...</div>
+        <div className="text-slate-400 text-sm">Загрузка...</div>
       </div>
     );
   }
@@ -57,7 +57,7 @@ export default function SharedChatPage() {
     <div className="min-h-screen bg-slate-900 flex flex-col">
       <header className="border-b border-slate-700 px-6 py-4 bg-slate-800">
         <div className="max-w-2xl mx-auto">
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
+          <div className="flex items-center gap-2 text-xs text-slate-400 mb-1">
             <span>💬</span>
             <span>Поделились чатом</span>
           </div>
@@ -87,7 +87,7 @@ export default function SharedChatPage() {
       </main>
 
       <footer className="border-t border-slate-700 px-6 py-3 bg-slate-800">
-        <div className="max-w-2xl mx-auto text-center text-xs text-slate-500">
+        <div className="max-w-2xl mx-auto text-center text-xs text-slate-400">
           Просмотр общего чата · AI Workspace
         </div>
       </footer>

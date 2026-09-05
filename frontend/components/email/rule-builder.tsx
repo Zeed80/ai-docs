@@ -223,7 +223,7 @@ export function EmailRulesSection() {
       </div>
 
       <div className="space-y-2">
-        {rules.length === 0 && <p className="text-xs text-slate-500">Правил нет</p>}
+        {rules.length === 0 && <p className="text-xs text-slate-400">Правил нет</p>}
         {rules.map((r) => (
           <div
             key={r.id}
@@ -232,7 +232,7 @@ export function EmailRulesSection() {
           <div className="flex items-center gap-2">
             <span className={`h-2 w-2 rounded-full ${r.is_active ? "bg-green-500" : "bg-slate-600"}`} />
             <span className="font-medium text-slate-200">{r.name}</span>
-            <span className="text-slate-500">
+            <span className="text-slate-400">
               {r.conditions.rules.length} усл. → {r.actions.map((a) => a.type).join(", ")}
             </span>
             <span className="text-slate-400">· сработало {r.run_count}×</span>
@@ -258,7 +258,7 @@ export function EmailRulesSection() {
                 onClick={() =>
                   mutFetch(`${API}/api/email/rules/${r.id}`, { method: "DELETE" }).then(load)
                 }
-                className="text-slate-500 hover:text-red-400"
+                className="text-slate-400 hover:text-red-400"
               >
                 ✕
               </button>
@@ -268,14 +268,14 @@ export function EmailRulesSection() {
           {log[r.id] && (
             <div className="mt-2 border-t border-slate-800 pt-2">
               {log[r.id].length === 0 ? (
-                <p className="text-slate-500">
+                <p className="text-slate-400">
                   Правило ещё ни разу не срабатывало на реальных письмах.
                 </p>
               ) : (
                 <ul className="space-y-1">
                   {log[r.id].map((entry, idx) => (
                     <li key={idx} className="text-slate-400">
-                      <span className="text-slate-500">
+                      <span className="text-slate-400">
                         {new Date(entry.at).toLocaleString("ru-RU", { timeZone: tz() })}
                       </span>{" "}
                       · {entry.message_from ?? "—"} ·{" "}
@@ -364,7 +364,7 @@ export function EmailRulesSection() {
                     const rules = editing.conditions.rules.filter((_, j) => j !== i);
                     setEditing({ ...editing, conditions: { ...editing.conditions, rules } });
                   }}
-                  className="text-slate-500 hover:text-red-400"
+                  className="text-slate-400 hover:text-red-400"
                 >
                   ✕
                 </button>
@@ -497,7 +497,7 @@ export function EmailRulesSection() {
                   onClick={() =>
                     setEditing({ ...editing, actions: editing.actions.filter((_, j) => j !== i) })
                   }
-                  className="text-slate-500 hover:text-red-400"
+                  className="text-slate-400 hover:text-red-400"
                 >
                   ✕
                 </button>

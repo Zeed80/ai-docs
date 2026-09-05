@@ -77,7 +77,7 @@ const TAB_LABELS: Record<Tab, string> = {
 const STATUS_COLORS: Record<string, string> = {
   draft: "text-yellow-400 bg-yellow-400/10",
   approved: "text-emerald-400 bg-emerald-400/10",
-  obsolete: "text-zinc-500 bg-zinc-500/10",
+  obsolete: "text-zinc-400 bg-zinc-500/10",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -236,7 +236,7 @@ export default function TechPlanPage({
 
   if (loading)
     return (
-      <div className="p-8 text-white/30 text-sm">Загрузка техпроцесса...</div>
+      <div className="p-8 text-white/50 text-sm">Загрузка техпроцесса...</div>
     );
   if (!plan)
     return (
@@ -274,7 +274,7 @@ export default function TechPlanPage({
       )}
 
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-xs text-white/30 mb-4">
+      <div className="flex items-center gap-2 text-xs text-white/50 mb-4">
         <Link
           href="/technology"
           className="hover:text-white/60 transition-colors"
@@ -295,7 +295,7 @@ export default function TechPlanPage({
             <span
               className={clsx(
                 "text-xs px-2 py-0.5 rounded-full font-medium",
-                STATUS_COLORS[plan.status] || "text-white/40 bg-white/5",
+                STATUS_COLORS[plan.status] || "text-white/50 bg-white/5",
               )}
             >
               {STATUS_LABELS[plan.status] || plan.status}
@@ -306,7 +306,7 @@ export default function TechPlanPage({
               </span>
             )}
           </div>
-          <div className="flex flex-wrap gap-4 text-xs text-white/40">
+          <div className="flex flex-wrap gap-4 text-xs text-white/50">
             {plan.product_code && (
               <span>
                 Код:{" "}
@@ -363,7 +363,7 @@ export default function TechPlanPage({
             key={label}
             className="bg-zinc-900 border border-white/10 rounded-xl p-4"
           >
-            <div className="text-white/30 text-xs mb-1">{label}</div>
+            <div className="text-white/50 text-xs mb-1">{label}</div>
             <div className="text-white font-semibold">{value || "—"}</div>
           </div>
         ))}
@@ -385,7 +385,7 @@ export default function TechPlanPage({
               "px-4 py-2 text-xs font-medium border-b-2 -mb-px transition-colors",
               tab === t
                 ? "border-blue-500 text-blue-400"
-                : "border-transparent text-white/40 hover:text-white/70",
+                : "border-transparent text-white/50 hover:text-white/70",
             )}
           >
             {TAB_LABELS[t]}
@@ -408,7 +408,7 @@ export default function TechPlanPage({
         <div>
           {plan.route_summary && (
             <div className="bg-zinc-900 border border-white/10 rounded-xl p-4 mb-4">
-              <div className="text-white/30 text-xs mb-1">Маршрут</div>
+              <div className="text-white/50 text-xs mb-1">Маршрут</div>
               <div className="text-white/80 text-sm">{plan.route_summary}</div>
             </div>
           )}
@@ -497,7 +497,7 @@ function RouteCardView({
             <div className="flex items-baseline gap-2 mb-1">
               <span className="font-semibold text-white">{op.name}</span>
               {op.operation_code && (
-                <span className="font-mono text-white/30 text-xs">
+                <span className="font-mono text-white/50 text-xs">
                   {op.operation_code}
                 </span>
               )}
@@ -514,7 +514,7 @@ function RouteCardView({
               </p>
             )}
             {op.transition_text && (
-              <p className="text-white/40 text-xs mb-2 italic">
+              <p className="text-white/50 text-xs mb-2 italic">
                 {op.transition_text}
               </p>
             )}
@@ -544,7 +544,7 @@ function RouteCardView({
 
 function TimeChip({ label, value }: { label: string; value: number }) {
   return (
-    <span className="flex items-center gap-1 text-xs text-white/40">
+    <span className="flex items-center gap-1 text-xs text-white/50">
       <span className="text-white/20">{label}</span>
       <span className="text-white/60 font-mono">{value.toFixed(2)} мин</span>
     </span>
@@ -579,7 +579,7 @@ function OperationsTable({ operations }: { operations: Operation[] }) {
             ].map((h) => (
               <th
                 key={h}
-                className="text-left px-3 py-3 text-white/30 font-medium whitespace-nowrap"
+                className="text-left px-3 py-3 text-white/50 font-medium whitespace-nowrap"
               >
                 {h}
               </th>
@@ -595,13 +595,13 @@ function OperationsTable({ operations }: { operations: Operation[] }) {
               <td className="px-3 py-2 text-white/50 font-mono">
                 {String(op.sequence_no).padStart(3, "0")}
               </td>
-              <td className="px-3 py-2 font-mono text-white/40">
+              <td className="px-3 py-2 font-mono text-white/50">
                 {op.operation_code || "—"}
               </td>
               <td className="px-3 py-2 text-white font-medium max-w-[200px]">
                 {op.name}
               </td>
-              <td className="px-3 py-2 text-white/40">
+              <td className="px-3 py-2 text-white/50">
                 {op.operation_type || "—"}
               </td>
               <td className="px-3 py-2 text-right font-mono text-white/50">
@@ -613,10 +613,10 @@ function OperationsTable({ operations }: { operations: Operation[] }) {
               <td className="px-3 py-2 text-right font-mono text-white/70 font-medium">
                 {op.tsht_k_minutes?.toFixed(2) ?? "—"}
               </td>
-              <td className="px-3 py-2 text-right font-mono text-white/40">
+              <td className="px-3 py-2 text-right font-mono text-white/50">
                 {op.tpz_minutes?.toFixed(2) ?? "—"}
               </td>
-              <td className="px-3 py-2 text-white/30 max-w-[160px] truncate">
+              <td className="px-3 py-2 text-white/50 max-w-[160px] truncate">
                 {op.control_requirements || "—"}
               </td>
             </tr>
@@ -624,7 +624,7 @@ function OperationsTable({ operations }: { operations: Operation[] }) {
           <tr className="border-t border-white/20 bg-zinc-800/30">
             <td
               colSpan={4}
-              className="px-3 py-2 text-white/40 text-right font-semibold"
+              className="px-3 py-2 text-white/50 text-right font-semibold"
             >
               Итого (мин):
             </td>

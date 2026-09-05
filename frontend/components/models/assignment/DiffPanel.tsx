@@ -130,13 +130,13 @@ export function DiffPanel({
               </div>
 
               {entry.affected.length > 0 && (
-                <p className="text-slate-500">
+                <p className="text-slate-400">
                   затронет: {entry.affected.join(", ")}
                 </p>
               )}
 
               {preview === "loading" && (
-                <p className="text-slate-500">проверяем…</p>
+                <p className="text-slate-400">проверяем…</p>
               )}
 
               {preview && preview !== "loading" && (
@@ -168,7 +168,7 @@ export function DiffPanel({
                         </Badge>
                       )}
                       {preview.latency_ms != null && (
-                        <span className="text-slate-500">
+                        <span className="text-slate-400">
                           {formatLatency(preview.latency_ms)}
                         </span>
                       )}

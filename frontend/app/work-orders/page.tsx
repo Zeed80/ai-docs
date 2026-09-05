@@ -317,13 +317,13 @@ export default function WorkOrdersPage() {
             исполнителя
           </p>
         </div>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-slate-400">
           обновление каждые 5 секунд
         </span>
       </div>
       {metrics && (
         <div className="mb-5 flex flex-wrap gap-3 text-xs">
-          <span className="text-slate-500">за {metrics.window_hours}ч:</span>
+          <span className="text-slate-400">за {metrics.window_hours}ч:</span>
           {Object.entries(metrics.status_counts).map(([status, count]) => (
             <span
               key={status}
@@ -382,7 +382,7 @@ export default function WorkOrdersPage() {
                     {order.status}
                   </span>
                 </div>
-                <div className="mt-2 text-[11px] text-slate-500">
+                <div className="mt-2 text-[11px] text-slate-400">
                   rev {order.plan_revision} · priority {order.priority} ·{" "}
                   {new Date(order.created_at).toLocaleString("ru-RU", { timeZone: tz() })}
                 </div>
@@ -392,7 +392,7 @@ export default function WorkOrdersPage() {
         </section>
         <section className="min-w-0">
           {!current ? (
-            <div className="h-64 grid place-items-center text-slate-500 border border-dashed border-slate-700 rounded-xl">
+            <div className="h-64 grid place-items-center text-slate-400 border border-dashed border-slate-700 rounded-xl">
               Выберите поручение
             </div>
           ) : (
@@ -501,7 +501,7 @@ export default function WorkOrdersPage() {
                             <div className="text-sm font-medium">
                               {step.title}
                             </div>
-                            <div className="text-xs text-slate-500 mt-1">
+                            <div className="text-xs text-slate-400 mt-1">
                               {step.step_key} · уровень{" "}
                               {levels[step.step_key] ?? 0} ·{" "}
                               {step.capability
@@ -631,7 +631,7 @@ export default function WorkOrdersPage() {
                       {JSON.stringify(learning.provenance, null, 2)}
                     </pre>
                   </div>
-                  <div className="mt-2 text-[11px] text-slate-500">
+                  <div className="mt-2 text-[11px] text-slate-400">
                     memory {learning.memory_fact_id || "—"} · recipe{" "}
                     {learning.recipe_skill_id || "не создан"} · попыток{" "}
                     {learning.extraction_attempts}
@@ -654,7 +654,7 @@ export default function WorkOrdersPage() {
                         key={event.sequence}
                         className="grid grid-cols-[54px_180px_1fr] gap-2 text-xs border-b border-slate-800 pb-2"
                       >
-                        <span className="text-slate-500">
+                        <span className="text-slate-400">
                           #{event.sequence}
                         </span>
                         <span className="text-blue-300">

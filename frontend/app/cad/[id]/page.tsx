@@ -42,7 +42,7 @@ function ReadSoFar({
   const field = (label: string, value: unknown) =>
     value ? (
       <div key={label}>
-        <span className="text-zinc-500">{label}: </span>
+        <span className="text-zinc-400">{label}: </span>
         <span className="text-zinc-200">{String(value)}</span>
       </div>
     ) : null;
@@ -65,19 +65,19 @@ function ReadSoFar({
       </div>
       {outer.length > 0 && (
         <p className="mt-2 break-words">
-          <span className="text-zinc-500">Наружный контур: </span>
+          <span className="text-zinc-400">Наружный контур: </span>
           <span className="text-zinc-200">{steps(outer)}</span>
         </p>
       )}
       {bore.length > 0 && (
         <p className="mt-1 break-words">
-          <span className="text-zinc-500">Расточка: </span>
+          <span className="text-zinc-400">Расточка: </span>
           <span className="text-zinc-200">{steps(bore)}</span>
         </p>
       )}
       {dimensions.length > 0 && (
         <p className="mt-2 break-words">
-          <span className="text-zinc-500">Размеры ({dimensions.length}): </span>
+          <span className="text-zinc-400">Размеры ({dimensions.length}): </span>
           <span className="text-zinc-200">
             {dimensions
               .map((d) => d.value)
@@ -95,7 +95,7 @@ function ReadSoFar({
           ))}
         </ul>
       )}
-      <p className="mt-2 text-zinc-500">{note}</p>
+      <p className="mt-2 text-zinc-400">{note}</p>
     </section>
   );
 }
@@ -121,7 +121,7 @@ function BlockedSolidInput({
           ✕ {item}
         </p>
       ))}
-      <p className="mt-2 break-all font-mono text-[10px] text-zinc-500">
+      <p className="mt-2 break-all font-mono text-[10px] text-zinc-400">
         SHA-256: {String(input.sha256 ?? "—")}
       </p>
       <div className="mt-2 space-y-2">
@@ -140,7 +140,7 @@ function BlockedSolidInput({
         <summary className="cursor-pointer text-zinc-400">
           {t("kernel_payload_json")}
         </summary>
-        <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-zinc-500">
+        <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-zinc-400">
           {JSON.stringify(payload, null, 2)}
         </pre>
       </details>
@@ -212,7 +212,7 @@ export default function CadEditorPage() {
             t("title")}
         </h1>
         {gen && (
-          <span className="text-xs text-zinc-500">
+          <span className="text-xs text-zinc-400">
             {gen.accepted ? t("status_accepted") : t("status_draft")}
           </span>
         )}
@@ -237,7 +237,7 @@ export default function CadEditorPage() {
         {gen && (
           <Link
             href={`/studio?id=${gen.id}`}
-            className="text-xs text-zinc-500 hover:text-zinc-300"
+            className="text-xs text-zinc-400 hover:text-zinc-300"
           >
             {t("open_in_studio")}
           </Link>
@@ -250,7 +250,7 @@ export default function CadEditorPage() {
         </p>
       )}
       {!gen && !error && (
-        <p className="py-12 text-center text-sm text-zinc-500">
+        <p className="py-12 text-center text-sm text-zinc-400">
           {t("loading")}
         </p>
       )}

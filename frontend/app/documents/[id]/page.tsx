@@ -207,7 +207,7 @@ export default function DocumentPage() {
               {tDoc(`status.${doc.status}`)}
             </span>
             {doc.doc_type && (
-              <span className="text-sm text-slate-500">
+              <span className="text-sm text-slate-400">
                 {tDoc(`type.${doc.doc_type}`)}
               </span>
             )}
@@ -409,7 +409,7 @@ export default function DocumentPage() {
                   → {pendingHandover.to_user_name ?? pendingHandover.to_user}
                 </span>
               </p>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs text-slate-400 mt-1">
                 {new Date(pendingHandover.created_at).toLocaleString("ru-RU", { timeZone: tz() })}
               </p>
               {pendingHandover.comment && (

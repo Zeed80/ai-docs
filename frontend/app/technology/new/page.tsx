@@ -102,7 +102,7 @@ function NewTechProcessContent() {
     <div className="min-h-screen bg-zinc-950 text-zinc-100 p-6">
       <div className="max-w-2xl mx-auto">
         {/* Breadcrumb */}
-        <div className="text-xs text-zinc-500 mb-4">
+        <div className="text-xs text-zinc-400 mb-4">
           <Link href="/technology" className="hover:text-zinc-300">
             Техпроцессы
           </Link>{" "}
@@ -128,7 +128,7 @@ function NewTechProcessContent() {
                 {step > n ? "✓" : n}
               </div>
               <span
-                className={`text-xs ${step === n ? "text-zinc-200" : "text-zinc-500"}`}
+                className={`text-xs ${step === n ? "text-zinc-200" : "text-zinc-400"}`}
               >
                 {label}
               </span>
@@ -155,11 +155,11 @@ function NewTechProcessContent() {
 
             <div className="border border-zinc-700 rounded-lg overflow-hidden max-h-80 overflow-y-auto">
               {drawingsLoading ? (
-                <div className="p-6 text-center text-zinc-500 text-sm">
+                <div className="p-6 text-center text-zinc-400 text-sm">
                   Загрузка…
                 </div>
               ) : filteredDrawings.length === 0 ? (
-                <div className="p-6 text-center text-zinc-500 text-sm">
+                <div className="p-6 text-center text-zinc-400 text-sm">
                   Чертежи не найдены.{" "}
                   <Link
                     href="/drawings"
@@ -185,7 +185,7 @@ function NewTechProcessContent() {
                           <span className="mr-2">{d.drawing_number}</span>
                         )}
                         {d.title_block?.material && (
-                          <span className="text-zinc-500">
+                          <span className="text-zinc-400">
                             {d.title_block.material}
                           </span>
                         )}
@@ -219,7 +219,7 @@ function NewTechProcessContent() {
           <div className="space-y-5">
             {selectedDrawing && (
               <div className="rounded-lg border border-zinc-700 bg-zinc-800/50 p-3">
-                <p className="text-xs text-zinc-500 mb-0.5">
+                <p className="text-xs text-zinc-400 mb-0.5">
                   Выбранный чертёж:
                 </p>
                 <p className="text-sm text-zinc-200 font-medium">
@@ -248,7 +248,7 @@ function NewTechProcessContent() {
                   </button>
                 ))}
               </div>
-              <p className="text-xs text-zinc-500 mt-1">
+              <p className="text-xs text-zinc-400 mt-1">
                 {tpType === "единичный" &&
                   "Разрабатывается для одного изделия."}
                 {tpType === "типовой" &&
@@ -271,7 +271,7 @@ function NewTechProcessContent() {
                 }
                 className="w-32 bg-zinc-800 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-blue-500"
               />
-              <p className="text-xs text-zinc-500 mt-1">
+              <p className="text-xs text-zinc-400 mt-1">
                 Используется для расчёта Тшт-к = Тшт + Тпз/n.
               </p>
             </div>
@@ -301,25 +301,25 @@ function NewTechProcessContent() {
                 Параметры генерации:
               </p>
               <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-                <span className="text-zinc-500">Чертёж:</span>
+                <span className="text-zinc-400">Чертёж:</span>
                 <span className="text-zinc-200">
                   {selectedDrawing?.title_block?.title ??
                     selectedDrawing?.filename}
                 </span>
-                <span className="text-zinc-500">Обозначение:</span>
+                <span className="text-zinc-400">Обозначение:</span>
                 <span className="text-zinc-200">
                   {selectedDrawing?.drawing_number ?? "—"}
                 </span>
-                <span className="text-zinc-500">Тип ТП:</span>
+                <span className="text-zinc-400">Тип ТП:</span>
                 <span className="text-zinc-200">{tpType}</span>
-                <span className="text-zinc-500">Размер партии:</span>
+                <span className="text-zinc-400">Размер партии:</span>
                 <span className="text-zinc-200">{batchSize} шт.</span>
-                <span className="text-zinc-500">Нормоконтроль:</span>
+                <span className="text-zinc-400">Нормоконтроль:</span>
                 <span className="text-emerald-400">автоматически</span>
               </div>
             </div>
 
-            <div className="text-xs text-zinc-500 space-y-1">
+            <div className="text-xs text-zinc-400 space-y-1">
               <p>Агент {agentName} выполнит:</p>
               <ol className="list-decimal list-inside space-y-0.5 text-zinc-400">
                 <li>Анализ поверхностей чертежа</li>

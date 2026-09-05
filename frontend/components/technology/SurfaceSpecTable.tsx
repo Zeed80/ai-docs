@@ -70,7 +70,7 @@ export default function SurfaceSpecTable({
 }: Props) {
   if (specs.length === 0) {
     return (
-      <div className="flex items-center justify-center h-24 text-zinc-500 text-sm">
+      <div className="flex items-center justify-center h-24 text-zinc-400 text-sm">
         Поверхности не проанализированы.
       </div>
     );

@@ -1830,7 +1830,7 @@ export default function SettingsPage() {
                           </div>
                         </div>
                       ) : (
-                        <div className="mt-2 text-slate-500">
+                        <div className="mt-2 text-slate-400">
                           Статус недоступен
                         </div>
                       )}
@@ -1927,7 +1927,7 @@ export default function SettingsPage() {
                             Qdrant: {agentRuntime.memory.qdrant_points ?? "—"}
                           </div>
                         </div>
-                        <div className="mt-2 truncate text-slate-500">
+                        <div className="mt-2 truncate text-slate-400">
                           {agentRuntime.memory.active_embedding_model ??
                             "embedding model —"}
                         </div>
@@ -1960,7 +1960,7 @@ export default function SettingsPage() {
                               </span>
                             </div>
                             {activeTasks.length === 0 ? (
-                              <div className="mt-2 text-slate-500">
+                              <div className="mt-2 text-slate-400">
                                 Нет активных задач
                               </div>
                             ) : (
@@ -1982,7 +1982,7 @@ export default function SettingsPage() {
                                     <span className="truncate">
                                       {t.objective}
                                     </span>
-                                    <span className="ml-auto flex-shrink-0 text-slate-500">
+                                    <span className="ml-auto flex-shrink-0 text-slate-400">
                                       {t.role}
                                     </span>
                                     {t.status === "proposed" && (
@@ -2022,7 +2022,7 @@ export default function SettingsPage() {
                                   </li>
                                 ))}
                                 {activeTasks.length > 5 && (
-                                  <li className="text-slate-500">
+                                  <li className="text-slate-400">
                                     …ещё {activeTasks.length - 5}
                                   </li>
                                 )}
@@ -2044,7 +2044,7 @@ export default function SettingsPage() {
                         </span>
                       </div>
                       {agentPlugins.length === 0 ? (
-                        <div className="mt-2 text-slate-500">
+                        <div className="mt-2 text-slate-400">
                           Плагины не установлены
                         </div>
                       ) : (
@@ -2057,7 +2057,7 @@ export default function SettingsPage() {
                               <span className="truncate text-slate-300">
                                 {p.name}
                               </span>
-                              <span className="ml-auto flex-shrink-0 text-slate-500">
+                              <span className="ml-auto flex-shrink-0 text-slate-400">
                                 v{p.version}
                               </span>
                               <button
@@ -2085,7 +2085,7 @@ export default function SettingsPage() {
                         </span>
                       </div>
                       {agentCrons.length === 0 ? (
-                        <div className="mt-2 text-slate-500">
+                        <div className="mt-2 text-slate-400">
                           Задания не настроены
                         </div>
                       ) : (
@@ -2098,7 +2098,7 @@ export default function SettingsPage() {
                               <span className="truncate text-slate-300">
                                 {c.description || c.prompt.slice(0, 40)}
                               </span>
-                              <span className="ml-auto flex-shrink-0 font-mono text-slate-500">
+                              <span className="ml-auto flex-shrink-0 font-mono text-slate-400">
                                 {c.schedule}
                               </span>
                               <button
@@ -2123,7 +2123,7 @@ export default function SettingsPage() {
                         </span>
                       </div>
                       {agentTeams.length === 0 ? (
-                        <div className="mt-2 text-slate-500">
+                        <div className="mt-2 text-slate-400">
                           Команды не созданы
                         </div>
                       ) : (
@@ -2135,7 +2135,7 @@ export default function SettingsPage() {
                             >
                               <span className="truncate">{t.name}</span>
                               {t.purpose && (
-                                <span className="ml-auto flex-shrink-0 truncate text-slate-500 max-w-[120px]">
+                                <span className="ml-auto flex-shrink-0 truncate text-slate-400 max-w-[120px]">
                                   {t.purpose}
                                 </span>
                               )}
@@ -2323,7 +2323,7 @@ export default function SettingsPage() {
                                         rule.match_old_value ||
                                         rule.entity_type}
                                     </div>
-                                    <div className="mt-2 text-slate-500">
+                                    <div className="mt-2 text-slate-400">
                                       confidence {rule.confidence} ·{" "}
                                       {rule.occurrences} cases
                                     </div>
@@ -2379,7 +2379,7 @@ export default function SettingsPage() {
                                   <span className="rounded bg-amber-900/50 px-1.5 py-0.5 text-amber-200">
                                     {proposal.risk_level}
                                   </span>
-                                  <span className="text-slate-500">
+                                  <span className="text-slate-400">
                                     {proposal.requested_by}
                                   </span>
                                 </div>
@@ -2414,7 +2414,7 @@ export default function SettingsPage() {
                               </div>
                             </div>
                             <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-                              <pre className="max-h-28 overflow-auto rounded bg-slate-950/70 p-2 text-slate-500">
+                              <pre className="max-h-28 overflow-auto rounded bg-slate-950/70 p-2 text-slate-400">
                                 {formatProposalValue(proposal.current_value)}
                               </pre>
                               <pre className="max-h-28 overflow-auto rounded bg-slate-950/70 p-2 text-amber-100">
@@ -2488,7 +2488,7 @@ export default function SettingsPage() {
                                         {proposal.missing_capability}
                                       </div>
                                       {proposal.sandbox_status && (
-                                        <div className="mt-1 flex gap-2 text-slate-500">
+                                        <div className="mt-1 flex gap-2 text-slate-400">
                                           <span>
                                             Sandbox: {proposal.sandbox_status}
                                           </span>
@@ -2553,7 +2553,7 @@ export default function SettingsPage() {
                           </div>
                         )}
                         {doneProposals.length > 0 && (
-                          <div className="rounded-md border border-slate-700/50 bg-slate-900/30 p-3 text-xs text-slate-500">
+                          <div className="rounded-md border border-slate-700/50 bg-slate-900/30 p-3 text-xs text-slate-400">
                             <span className="font-medium">История:</span>{" "}
                             {doneProposals
                               .slice(0, 3)
@@ -3052,11 +3052,11 @@ export default function SettingsPage() {
                                 <div className="font-mono text-slate-200">
                                   {skill.name}
                                 </div>
-                                <div className="mt-0.5 text-slate-500">
+                                <div className="mt-0.5 text-slate-400">
                                   {skill.description || "—"}
                                 </div>
                               </td>
-                              <td className="hidden px-3 py-2 font-mono text-slate-500 md:table-cell">
+                              <td className="hidden px-3 py-2 font-mono text-slate-400 md:table-cell">
                                 {skill.method} {skill.path}
                               </td>
                             </tr>
@@ -3243,7 +3243,7 @@ export default function SettingsPage() {
                 },
               ].map(({ label, value }) => (
                 <div key={label} className="rounded-md bg-slate-900/50 p-3">
-                  <p className="text-xs text-slate-500">{label}</p>
+                  <p className="text-xs text-slate-400">{label}</p>
                   <p className="mt-1 text-sm font-mono text-slate-200 break-all">
                     {value}
                   </p>
@@ -3294,7 +3294,7 @@ export default function SettingsPage() {
                 },
               ].map(({ label, value }) => (
                 <div key={label} className="rounded-md bg-slate-900/50 p-3">
-                  <p className="text-xs text-slate-500">{label}</p>
+                  <p className="text-xs text-slate-400">{label}</p>
                   <p className="mt-1 text-sm font-mono text-slate-200 break-all">
                     {value}
                   </p>
@@ -3344,7 +3344,7 @@ export default function SettingsPage() {
                 </>
               )}
             </div>
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-2 text-xs text-slate-400">
               Пересчёт пропускается, если граф не менялся с прошлого прогона —
               интервал задаёт лишь верхнюю границу частоты, не гарантию.
               «Пересобрать граф полностью» проходит по всем
@@ -3358,7 +3358,7 @@ export default function SettingsPage() {
 
             <div className="mt-4 overflow-hidden rounded-md border border-slate-800">
               <table className="w-full text-sm">
-                <thead className="bg-slate-900/70 text-slate-500">
+                <thead className="bg-slate-900/70 text-slate-400">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">Тип</th>
                     <th className="px-3 py-2 text-left font-medium">
@@ -3374,7 +3374,7 @@ export default function SettingsPage() {
                     <tr>
                       <td
                         colSpan={3}
-                        className="px-3 py-6 text-center text-slate-500"
+                        className="px-3 py-6 text-center text-slate-400"
                       >
                         Пока нет данных — фоновая аналитика ещё не запускалась
                         либо граф пуст.
@@ -3386,7 +3386,7 @@ export default function SettingsPage() {
                         key={i.id}
                         className="border-t border-slate-800 align-top"
                       >
-                        <td className="px-3 py-2 whitespace-nowrap text-xs text-slate-500">
+                        <td className="px-3 py-2 whitespace-nowrap text-xs text-slate-400">
                           {GRAPH_INSIGHT_LABELS[i.insight_type] ??
                             i.insight_type}
                         </td>
@@ -3451,7 +3451,7 @@ export default function SettingsPage() {
                 </button>
               ))}
             </div>
-            <p className="mt-3 text-xs text-slate-500">
+            <p className="mt-3 text-xs text-slate-400">
               Текущий режим:{" "}
               {ntdConfig?.mode === "auto" ? "автоматический" : "ручной"}
               {ntdConfig?.updated_at
@@ -3531,7 +3531,7 @@ export default function SettingsPage() {
                     }
                     className="w-full"
                   />
-                  <p className="mt-1 text-xs text-slate-500">
+                  <p className="mt-1 text-xs text-slate-400">
                     Выше порог — больше счетов уходит на ручную проверку
                     (строже); ниже — больше утверждается автоматически.
                     Незначительные поля (адрес, телефон, примечания) на порог не
@@ -3737,7 +3737,7 @@ export default function SettingsPage() {
               {tgStatus?.configured && !tgEditing && (
                 <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 space-y-1.5 text-sm">
                   <div className="flex gap-3">
-                    <span className="text-slate-500 w-36 shrink-0">
+                    <span className="text-slate-400 w-36 shrink-0">
                       Токен бота
                     </span>
                     <span className="font-mono text-slate-300">
@@ -3745,7 +3745,7 @@ export default function SettingsPage() {
                     </span>
                   </div>
                   <div className="flex gap-3">
-                    <span className="text-slate-500 w-36 shrink-0">
+                    <span className="text-slate-400 w-36 shrink-0">
                       Chat ID
                     </span>
                     <span className="font-mono text-slate-300">
@@ -3754,7 +3754,7 @@ export default function SettingsPage() {
                   </div>
                   {tgStatus.allowed_users_count > 0 && (
                     <div className="flex gap-3">
-                      <span className="text-slate-500 w-36 shrink-0">
+                      <span className="text-slate-400 w-36 shrink-0">
                         Разрешённые ID
                       </span>
                       <span className="font-mono text-slate-300 truncate">
@@ -3905,7 +3905,7 @@ export default function SettingsPage() {
                 AI-ассистент: {agentName} · Backend: FastAPI · AI: Ollama /
                 OpenRouter / Anthropic
               </p>
-              <p className="text-slate-500 text-xs mt-2">
+              <p className="text-slate-400 text-xs mt-2">
                 Настройки сохраняются в Redis (shared) и локальном файле
                 (fallback).
               </p>

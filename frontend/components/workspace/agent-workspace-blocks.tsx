@@ -195,7 +195,7 @@ export function AgentWorkspaceBlocks({
   if (loading) {
     return (
       <div
-        className={`rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-500 ${className}`}
+        className={`rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-400 ${className}`}
       >
         Загружаю рабочий стол...
       </div>
@@ -221,7 +221,7 @@ export function AgentWorkspaceBlocks({
           <h2 className="text-sm font-semibold text-slate-100">
             Вывод {agentName}
           </h2>
-          <p className="mt-0.5 text-xs text-slate-500">
+          <p className="mt-0.5 text-xs text-slate-400">
             Таблицы, документы, ссылки, графики и отчеты открываются здесь.
           </p>
         </div>

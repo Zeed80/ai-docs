@@ -93,7 +93,7 @@ export function MailSidebar({
           <button
             onClick={onCollapse}
             aria-label={t("collapseSidebar")}
-            className="rounded bg-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-300 dark:hover:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
+            className="rounded bg-slate-200 px-2 py-1 text-xs text-slate-400 hover:bg-slate-300 dark:hover:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-100 dark:hover:bg-slate-700"
             title={t("collapseSidebar")}
           >
             «
@@ -107,7 +107,7 @@ export function MailSidebar({
       </div>
 
       <div className="flex-1 overflow-auto px-2 pb-4">
-        <p className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-wide text-slate-500">
+        <p className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-wide text-slate-400">
           {t("title")}
         </p>
         <button
@@ -141,7 +141,7 @@ export function MailSidebar({
           </button>
         ))}
 
-        <p className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wide text-slate-500">
+        <p className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wide text-slate-400">
           {t("folders.starred")} / {t("labels")}
         </p>
         <button
@@ -164,7 +164,7 @@ export function MailSidebar({
             {fcounts[f]?.unread > 0 ? (
               <span className={countCls}>{fcounts[f].unread}</span>
             ) : fcounts[f]?.total > 0 && f !== "trash" ? (
-              <span className="text-xs text-slate-500 dark:text-slate-400">{fcounts[f].total}</span>
+              <span className="text-xs text-slate-400 dark:text-slate-400">{fcounts[f].total}</span>
             ) : null}
           </button>
         ))}
@@ -186,7 +186,7 @@ export function MailSidebar({
                 {l.name}
               </span>
               {l.thread_count > 0 && (
-                <span className="text-xs text-slate-500">{l.thread_count}</span>
+                <span className="text-xs text-slate-400">{l.thread_count}</span>
               )}
             </button>
             {!l.is_system && (
@@ -194,7 +194,7 @@ export function MailSidebar({
                 type="button"
                 aria-label={t("deleteLabel", { name: l.name })}
                 onClick={() => emailApi.deleteLabel(l.id).then(onLabelsChanged)}
-                className="px-1 text-slate-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-red-400"
+                className="px-1 text-slate-400 dark:text-slate-400 hover:text-red-500 dark:hover:text-red-400"
               >
                 ×
               </button>
@@ -221,7 +221,7 @@ export function MailSidebar({
           />
         </form>
 
-        <p className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wide text-slate-500">
+        <p className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wide text-slate-400">
           {t("more")}
         </p>
         <button

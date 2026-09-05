@@ -76,7 +76,7 @@ export default function QrLoginPage() {
       {error ? (
         <p className="text-sm text-red-400">{error}</p>
       ) : (
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-400">
           Код обновится через {secondsLeft} с
         </p>
       )}

@@ -755,7 +755,7 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
                     /* ignore */
                   }
                 }}
-                className="ml-auto text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                className="ml-auto text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
               >
                 {t("setup.hide")}
               </button>
@@ -766,7 +766,7 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
                   <a href={st.url} className="text-blue-700 hover:underline dark:text-blue-300">
                     {st.title}
                   </a>
-                  <span className="ml-1 text-slate-500">— {st.hint}</span>
+                  <span className="ml-1 text-slate-400">— {st.hint}</span>
                 </li>
               ))}
             </ul>
@@ -800,7 +800,7 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
             {!sidebarOpen && (
               <button
                 onClick={() => setSidebarOpen(true)}
-                className="rounded p-1 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-800 dark:hover:text-slate-200"
+                className="rounded p-1 text-slate-400 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-800 dark:hover:text-slate-200"
                 title={t("foldersTitle")}
               >
                 ☰
@@ -818,14 +818,14 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
             <button
               onClick={() => setUnreadOnly((u) => !u)}
               aria-pressed={unreadOnly}
-              className={`rounded-full px-2 py-0.5 ${unreadOnly ? "bg-blue-600 text-white" : "text-slate-500 hover:bg-slate-100 dark:hover:text-slate-400 dark:hover:bg-slate-100 dark:hover:bg-slate-700"}`}
+              className={`rounded-full px-2 py-0.5 ${unreadOnly ? "bg-blue-600 text-white" : "text-slate-400 hover:bg-slate-100 dark:hover:text-slate-400 dark:hover:bg-slate-100 dark:hover:bg-slate-700"}`}
             >
               {t("filters.unreadOnly")}
             </button>
             <button
               onClick={() => setAdvOpen((o) => !o)}
               aria-expanded={advOpen}
-              className={`rounded-full px-2 py-0.5 ${advActive || advOpen ? "bg-blue-600 text-white" : "text-slate-500 hover:bg-slate-100 dark:hover:text-slate-400 dark:hover:bg-slate-100 dark:hover:bg-slate-700"}`}
+              className={`rounded-full px-2 py-0.5 ${advActive || advOpen ? "bg-blue-600 text-white" : "text-slate-400 hover:bg-slate-100 dark:hover:text-slate-400 dark:hover:bg-slate-100 dark:hover:bg-slate-700"}`}
             >
               {t("filters.advanced")}
             </button>
@@ -834,7 +834,7 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
                 const unread = threads.filter((th) => !th.is_read).map((th) => th.id);
                 if (unread.length) bulk("read", unread);
               }}
-              className="text-slate-500 hover:text-slate-900 dark:hover:text-slate-400 dark:hover:text-slate-800 dark:hover:text-slate-200"
+              className="text-slate-400 hover:text-slate-900 dark:hover:text-slate-400 dark:hover:text-slate-800 dark:hover:text-slate-200"
             >
               {t("actions.markAllRead")}
             </button>
@@ -928,35 +928,35 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
             <span className="text-slate-700 dark:text-slate-300">
               {t("bulk.selected", { n: selected.size })}
             </span>
-            <button onClick={() => bulk("read")} className="text-slate-500 hover:text-slate-900 dark:hover:text-slate-400 dark:hover:text-slate-800 dark:hover:text-slate-200">
+            <button onClick={() => bulk("read")} className="text-slate-400 hover:text-slate-900 dark:hover:text-slate-400 dark:hover:text-slate-800 dark:hover:text-slate-200">
               {t("actions.markRead")}
             </button>
             {/* Действия, которые сервер поддерживал всё это время, а нажать
                 их было негде: «не прочитано», «в спам», «вернуть во входящие»
                 и метки. */}
-            <button onClick={() => bulk("unread")} className="text-slate-500 hover:text-slate-900 dark:hover:text-slate-400 dark:hover:text-slate-800 dark:hover:text-slate-200">
+            <button onClick={() => bulk("unread")} className="text-slate-400 hover:text-slate-900 dark:hover:text-slate-400 dark:hover:text-slate-800 dark:hover:text-slate-200">
               {t("actions.markUnread")}
             </button>
-            <button onClick={() => bulk("archive")} className="text-slate-500 hover:text-slate-900 dark:hover:text-slate-400 dark:hover:text-slate-800 dark:hover:text-slate-200">
+            <button onClick={() => bulk("archive")} className="text-slate-400 hover:text-slate-900 dark:hover:text-slate-400 dark:hover:text-slate-800 dark:hover:text-slate-200">
               {t("actions.archive")}
             </button>
             {activeFolder !== "spam" ? (
-              <button onClick={() => bulk("spam")} className="text-slate-500 hover:text-amber-600 dark:hover:text-slate-400 dark:hover:text-amber-700 dark:hover:text-amber-300">
+              <button onClick={() => bulk("spam")} className="text-slate-400 hover:text-amber-600 dark:hover:text-slate-400 dark:hover:text-amber-700 dark:hover:text-amber-300">
                 {t("actions.spam")}
               </button>
             ) : (
-              <button onClick={() => bulk("inbox")} className="text-slate-500 hover:text-emerald-600 dark:hover:text-slate-400 dark:hover:text-emerald-700 dark:hover:text-emerald-300">
+              <button onClick={() => bulk("inbox")} className="text-slate-400 hover:text-emerald-600 dark:hover:text-slate-400 dark:hover:text-emerald-700 dark:hover:text-emerald-300">
                 {t("actions.notSpam")}
               </button>
             )}
             {(activeFolder === "trash" || activeFolder === "archive") && (
-              <button onClick={() => bulk("inbox")} className="text-slate-500 hover:text-emerald-600 dark:hover:text-slate-400 dark:hover:text-emerald-700 dark:hover:text-emerald-300">
+              <button onClick={() => bulk("inbox")} className="text-slate-400 hover:text-emerald-600 dark:hover:text-slate-400 dark:hover:text-emerald-700 dark:hover:text-emerald-300">
                 {t("actions.restore")}
               </button>
             )}
             <button
               onClick={() => bulk("trash")}
-              className="text-slate-500 hover:text-red-500 dark:hover:text-slate-400 dark:hover:text-red-600 dark:hover:text-red-300"
+              className="text-slate-400 hover:text-red-500 dark:hover:text-slate-400 dark:hover:text-red-600 dark:hover:text-red-300"
             >
               {t("actions.trash")}
             </button>
@@ -979,13 +979,13 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
             )}
             <button
               onClick={() => setSelected(new Set(threads.map((th) => th.id)))}
-              className="text-slate-500 hover:text-slate-900 dark:hover:text-slate-400 dark:hover:text-slate-800 dark:hover:text-slate-200"
+              className="text-slate-400 hover:text-slate-900 dark:hover:text-slate-400 dark:hover:text-slate-800 dark:hover:text-slate-200"
             >
               {t("actions.selectAll")}
             </button>
             <button
               onClick={() => setSelected(new Set())}
-              className="ml-auto text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-500 dark:hover:text-slate-700 dark:hover:text-slate-300"
+              className="ml-auto text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
             >
               {t("bulk.clear")}
             </button>
@@ -1079,7 +1079,7 @@ export function EmailClient({ initialThreadId }: { initialThreadId?: string }) {
             onClose={closeThread}
           />
         ) : (
-          <div className="flex h-full items-center justify-center text-center text-slate-500">
+          <div className="flex h-full items-center justify-center text-center text-slate-400">
             <div>
               <div className="mb-2 text-4xl">✉</div>
               <p className="text-sm">{t("noThreadSelected")}</p>

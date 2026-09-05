@@ -732,7 +732,7 @@ export default function WorkflowPanel() {
               d="M4 6h16M4 12h16M4 18h10"
             />
           </svg>
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-zinc-400">
             Визуальный редактор узлов доступен на компьютере. На телефоне можно
             просматривать, включать и удалять воркфлоу из списка ниже.
           </p>
@@ -753,13 +753,13 @@ export default function WorkflowPanel() {
                   <h3 className="text-sm font-medium text-zinc-100 truncate">
                     {selected.title}
                   </h3>
-                  <span className="text-[11px] text-zinc-500">
+                  <span className="text-[11px] text-zinc-400">
                     {selected.operation}
                   </span>
                 </div>
                 <button
                   onClick={() => setSelected(null)}
-                  className="shrink-0 text-zinc-500 hover:text-zinc-200 text-xs px-1"
+                  className="shrink-0 text-zinc-400 hover:text-zinc-200 text-xs px-1"
                   aria-label={t("close")}
                 >
                   ✕
@@ -847,12 +847,12 @@ export default function WorkflowPanel() {
           {t("import_open")}
         </button>
         {loading && (
-          <div className="text-xs text-zinc-500 px-1">{t("loading")}</div>
+          <div className="text-xs text-zinc-400 px-1">{t("loading")}</div>
         )}
         {err && <div className="text-xs text-red-400 px-1">{err}</div>}
         {Object.entries(byCategory).map(([cat, ws]) => (
           <div key={cat}>
-            <h4 className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1 px-1">
+            <h4 className="text-[10px] uppercase tracking-wide text-zinc-400 mb-1 px-1">
               {t.has(`category.${cat}`) ? t(`category.${cat}`) : cat}
             </h4>
             <div className="space-y-0.5">
@@ -1008,7 +1008,7 @@ function EditWorkflowDialog({
           </h3>
           <button
             onClick={onClose}
-            className="text-zinc-500 hover:text-zinc-200 text-sm px-1"
+            className="text-zinc-400 hover:text-zinc-200 text-sm px-1"
             aria-label={t("close")}
           >
             x
@@ -1017,7 +1017,7 @@ function EditWorkflowDialog({
 
         <div className="grid gap-2 sm:grid-cols-2">
           <div>
-            <label className="text-xs text-zinc-500">
+            <label className="text-xs text-zinc-400">
               {t("import_name_label")}
             </label>
             <input
@@ -1027,7 +1027,7 @@ function EditWorkflowDialog({
             />
           </div>
           <div>
-            <label className="text-xs text-zinc-500">
+            <label className="text-xs text-zinc-400">
               {t("edit_category_label")}
             </label>
             <input
@@ -1037,7 +1037,7 @@ function EditWorkflowDialog({
             />
           </div>
           <div>
-            <label className="text-xs text-zinc-500">
+            <label className="text-xs text-zinc-400">
               {t("import_operation_label")}
             </label>
             <select
@@ -1056,7 +1056,7 @@ function EditWorkflowDialog({
             </select>
           </div>
           <div>
-            <label className="text-xs text-zinc-500">
+            <label className="text-xs text-zinc-400">
               {t("edit_description_label")}
             </label>
             <input
@@ -1069,7 +1069,7 @@ function EditWorkflowDialog({
 
         <div className="grid gap-3 lg:grid-cols-2">
           <div>
-            <label className="text-xs text-zinc-500">
+            <label className="text-xs text-zinc-400">
               {t("edit_graph_label")}
             </label>
             <textarea
@@ -1087,7 +1087,7 @@ function EditWorkflowDialog({
           </div>
           <div className="space-y-3">
             <div>
-              <label className="text-xs text-zinc-500">
+              <label className="text-xs text-zinc-400">
                 {t("edit_params_label")}
               </label>
               <textarea
@@ -1099,7 +1099,7 @@ function EditWorkflowDialog({
             </div>
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-xs text-zinc-500">
+                <label className="text-xs text-zinc-400">
                   {t("import_map_label")}
                 </label>
                 <button
@@ -1247,17 +1247,17 @@ function ImportDialog({
           </h3>
           <button
             onClick={onClose}
-            className="text-zinc-500 hover:text-zinc-200 text-sm px-1"
+            className="text-zinc-400 hover:text-zinc-200 text-sm px-1"
             aria-label={t("close")}
           >
             ✕
           </button>
         </div>
 
-        <p className="text-[11px] text-zinc-500">{t("import_hint")}</p>
+        <p className="text-[11px] text-zinc-400">{t("import_hint")}</p>
 
         <div>
-          <label className="text-xs text-zinc-500">
+          <label className="text-xs text-zinc-400">
             {t("import_json_label")}
           </label>
           <textarea
@@ -1277,7 +1277,7 @@ function ImportDialog({
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-xs text-zinc-500">
+            <label className="text-xs text-zinc-400">
               {t("import_name_label")}
             </label>
             <input
@@ -1287,7 +1287,7 @@ function ImportDialog({
             />
           </div>
           <div>
-            <label className="text-xs text-zinc-500">
+            <label className="text-xs text-zinc-400">
               {t("import_operation_label")}
             </label>
             <select
@@ -1306,7 +1306,7 @@ function ImportDialog({
 
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label className="text-xs text-zinc-500">
+            <label className="text-xs text-zinc-400">
               {t("import_map_label")}
             </label>
             <button

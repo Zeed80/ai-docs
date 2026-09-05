@@ -170,7 +170,7 @@ function LoginScreen() {
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="text-center">
           <Spinner />
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-slate-400">
             Перенаправление на страницу входа…
           </p>
         </div>

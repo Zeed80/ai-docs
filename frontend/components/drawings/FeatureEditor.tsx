@@ -540,7 +540,7 @@ export function FeatureEditor({
 
         {/* Primitives list */}
         <div className="w-48 bg-zinc-900 rounded-lg border border-white/10 p-2 overflow-y-auto">
-          <div className="text-xs text-white/40 uppercase tracking-wider mb-2 px-1">
+          <div className="text-xs text-white/50 uppercase tracking-wider mb-2 px-1">
             Примитивы ({primitives.length})
           </div>
           {primitives.map((p, i) => (
@@ -574,7 +574,7 @@ export function FeatureEditor({
             </div>
           ))}
           {primitives.length === 0 && (
-            <div className="text-xs text-white/30 text-center py-4">
+            <div className="text-xs text-white/50 text-center py-4">
               Нарисуйте примитив на холсте
             </div>
           )}

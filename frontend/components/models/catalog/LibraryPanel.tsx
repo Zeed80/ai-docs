@@ -365,17 +365,17 @@ export function LibraryPanel() {
                     <div className="text-sm font-medium text-slate-100 truncate">
                       {name}
                     </div>
-                    <div className="text-xs text-slate-500 truncate">
+                    <div className="text-xs text-slate-400 truncate">
                       {m.repo_id}
                     </div>
                     <div className="flex gap-2 flex-wrap mt-1">
                       {m.downloads != null && (
-                        <span className="text-xs text-slate-500">
+                        <span className="text-xs text-slate-400">
                           ↓ {m.downloads.toLocaleString()}
                         </span>
                       )}
                       {m.likes != null && (
-                        <span className="text-xs text-slate-500">
+                        <span className="text-xs text-slate-400">
                           ♥ {m.likes}
                         </span>
                       )}
@@ -433,14 +433,14 @@ export function LibraryPanel() {
                         style={{ width: `${dl.pct}%` }}
                       />
                     </div>
-                    <div className="text-xs text-slate-500 mt-1">
+                    <div className="text-xs text-slate-400 mt-1">
                       {dl.status} · {dl.pct.toFixed(1)}%
                     </div>
                   </div>
                 )}
                 {/* File / quant list */}
                 {files[m.repo_id!] === "loading" && (
-                  <div className="mt-2 text-xs text-slate-500">
+                  <div className="mt-2 text-xs text-slate-400">
                     Загрузка списка файлов...
                   </div>
                 )}
@@ -545,7 +545,7 @@ export function LibraryPanel() {
             )}
             <div className="divide-y divide-slate-800">
               {models.length === 0 && (
-                <div className="px-4 py-3 text-sm text-slate-500">
+                <div className="px-4 py-3 text-sm text-slate-400">
                   Нет загруженных моделей
                 </div>
               )}
@@ -566,7 +566,7 @@ export function LibraryPanel() {
                         )}
                         {name}
                       </div>
-                      <div className="text-xs text-slate-500 flex gap-3">
+                      <div className="text-xs text-slate-400 flex gap-3">
                         {m.size_human && <span>{m.size_human}</span>}
                         {m.format && <span>{m.format.toUpperCase()}</span>}
                         {m.vram_gb_estimate != null &&
@@ -585,7 +585,7 @@ export function LibraryPanel() {
                         disabled={activating === (m.path ?? name) || !!m.active}
                         className={
                           m.active
-                            ? `${btn} bg-slate-800 text-slate-500 cursor-default`
+                            ? `${btn} bg-slate-800 text-slate-400 cursor-default`
                             : btnSecondary
                         }
                       >

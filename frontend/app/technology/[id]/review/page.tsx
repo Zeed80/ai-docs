@@ -297,7 +297,7 @@ export default function TechProcessReviewPage() {
         <div className="flex items-center gap-3">
           <Link
             href="/technology"
-            className="text-xs text-zinc-500 hover:text-zinc-300"
+            className="text-xs text-zinc-400 hover:text-zinc-300"
           >
             ← Техпроцессы
           </Link>
@@ -305,7 +305,7 @@ export default function TechProcessReviewPage() {
           <span className="text-sm font-medium text-zinc-200 truncate max-w-xs">
             {plan.product_name}
           </span>
-          <span className="text-xs text-zinc-500">{plan.product_code}</span>
+          <span className="text-xs text-zinc-400">{plan.product_code}</span>
           <span className="text-xs bg-zinc-700 px-1.5 py-0.5 rounded text-zinc-300">
             {plan.tp_type}
           </span>
@@ -354,7 +354,7 @@ export default function TechProcessReviewPage() {
           </span>
 
           {plan.total_norm_minutes !== null && (
-            <span className="text-xs text-zinc-500">
+            <span className="text-xs text-zinc-400">
               Σ Тшт-к ={" "}
               <span className="text-zinc-300 font-mono">
                 {plan.total_norm_minutes} мин
@@ -387,7 +387,7 @@ export default function TechProcessReviewPage() {
           <div className="p-4 space-y-4">
             {/* Plan header */}
             <div className="space-y-1">
-              <p className="text-xs text-zinc-500">Материал</p>
+              <p className="text-xs text-zinc-400">Материал</p>
               <p className="text-sm text-zinc-200">{plan.material ?? "—"}</p>
             </div>
 
@@ -395,7 +395,7 @@ export default function TechProcessReviewPage() {
 
             {plan.route_summary && (
               <div>
-                <p className="text-xs text-zinc-500 mb-1">Маршрут</p>
+                <p className="text-xs text-zinc-400 mb-1">Маршрут</p>
                 <p className="text-xs text-zinc-400 leading-relaxed">
                   {plan.route_summary}
                 </p>
@@ -436,7 +436,7 @@ export default function TechProcessReviewPage() {
                 className={`px-4 py-2.5 text-xs font-medium transition border-b-2 ${
                   activeTab === tab
                     ? "border-blue-500 text-blue-400"
-                    : "border-transparent text-zinc-500 hover:text-zinc-300"
+                    : "border-transparent text-zinc-400 hover:text-zinc-300"
                 }`}
               >
                 {TAB_LABELS[tab]}

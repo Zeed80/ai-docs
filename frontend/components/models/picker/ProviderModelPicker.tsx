@@ -212,7 +212,7 @@ export function ProviderModelPicker({
                   <span className="truncate">{selected.provider_model}</span>
                 </span>
               ) : (
-                <span className="text-slate-500">Модель не назначена</span>
+                <span className="text-slate-400">Модель не назначена</span>
               )
             }
             renderItem={(item) => {

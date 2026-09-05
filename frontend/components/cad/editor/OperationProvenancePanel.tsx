@@ -77,7 +77,7 @@ function NodeList({
   if (!ids.length) return null;
   return (
     <div>
-      <p className="text-zinc-500">{label}</p>
+      <p className="text-zinc-400">{label}</p>
       <div className="mt-1 space-y-1 font-mono text-[10px] text-zinc-300">
         {ids.map((id) => (
           <div key={id}>
@@ -196,12 +196,12 @@ export default function OperationProvenancePanel({
     >
       <div className="px-3 py-2">
         <h3 className="text-xs font-medium text-zinc-200">Источник и влияние</h3>
-        <p className="mt-1 text-[10px] text-zinc-500">
+        <p className="mt-1 text-[10px] text-zinc-400">
           Операция → утверждение → bbox → зависимые узлы
         </p>
       </div>
       {!assertions.length ? (
-        <p className="px-3 pb-3 text-[11px] text-zinc-500">
+        <p className="px-3 pb-3 text-[11px] text-zinc-400">
           Для операции нет активных утверждений с provenance.
         </p>
       ) : (
@@ -266,7 +266,7 @@ export default function OperationProvenancePanel({
                     </div>
                   </>
                 ) : (
-                  <div className="flex h-28 items-center justify-center rounded border border-dashed border-white/10 text-center text-zinc-500">
+                  <div className="flex h-28 items-center justify-center rounded border border-dashed border-white/10 text-center text-zinc-400">
                     Точный bbox не приложен
                   </div>
                 )}
@@ -279,17 +279,17 @@ export default function OperationProvenancePanel({
                   >
                     {CLASS_LABEL[provenanceClass(assertion)]}
                   </span>
-                  <span className="text-zinc-500">
+                  <span className="text-zinc-400">
                     {Math.round(assertion.confidence * 100)}%
                   </span>
                 </div>
-                <p className="break-all font-mono text-[10px] text-zinc-500">
+                <p className="break-all font-mono text-[10px] text-zinc-400">
                   {assertion.subject_id}
                 </p>
                 <p className="text-zinc-200">
                   {assertion.predicate}: {displayValue(assertion.value)}
                 </p>
-                <p className="text-zinc-500">
+                <p className="text-zinc-400">
                   assurance: {assertion.assurance}
                 </p>
                 <p className="text-zinc-400">
@@ -342,7 +342,7 @@ export default function OperationProvenancePanel({
                       dependencyPaths={impact.dependency_paths}
                     />
                   ) : (
-                    <p className="text-zinc-500">
+                    <p className="text-zinc-400">
                       Межвидовая связь для этого утверждения не зафиксирована.
                     </p>
                   )}
@@ -356,7 +356,7 @@ export default function OperationProvenancePanel({
                       dependencyPaths={impact.dependency_paths}
                     />
                   ) : (
-                    <p className="text-zinc-500">
+                    <p className="text-zinc-400">
                       BIM/IFC связь для этого утверждения не зафиксирована.
                     </p>
                   )}
@@ -364,7 +364,7 @@ export default function OperationProvenancePanel({
                 {!impact.affected_build_operation_ids.length &&
                   !impact.affected_topology_element_ids.length &&
                   !impact.affected_artifact_ids.length && (
-                    <p className="text-zinc-500">Зависимые узлы не найдены.</p>
+                    <p className="text-zinc-400">Зависимые узлы не найдены.</p>
                   )}
               </div>
             )}

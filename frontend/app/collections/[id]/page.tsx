@@ -214,7 +214,7 @@ export default function CollectionDetailPage() {
     <div className="p-6 max-w-4xl mx-auto">
       <button
         onClick={() => router.push("/collections")}
-        className="text-sm text-slate-500 hover:text-slate-300 mb-4 block"
+        className="text-sm text-slate-400 hover:text-slate-300 mb-4 block"
       >
         ← Все подборки
       </button>
@@ -231,7 +231,7 @@ export default function CollectionDetailPage() {
             )}
           </div>
           {coll.description && (
-            <p className="text-sm text-slate-500 mt-1">{coll.description}</p>
+            <p className="text-sm text-slate-400 mt-1">{coll.description}</p>
           )}
           <p className="text-xs text-slate-400 mt-1">
             {coll.items.length} элементов · создана{" "}
@@ -300,7 +300,7 @@ export default function CollectionDetailPage() {
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               tab === t
                 ? "border-blue-500 text-blue-400"
-                : "border-transparent text-slate-500 hover:text-slate-300"
+                : "border-transparent text-slate-400 hover:text-slate-300"
             }`}
           >
             {t === "items"
@@ -379,7 +379,7 @@ export default function CollectionDetailPage() {
                         <span className="flex-1 text-slate-300 truncate">
                           {s.title}
                         </span>
-                        <span className="text-slate-500 italic truncate max-w-[120px]">
+                        <span className="text-slate-400 italic truncate max-w-[120px]">
                           {s.reason}
                         </span>
                         <button
@@ -407,7 +407,7 @@ export default function CollectionDetailPage() {
           )}
 
           {coll.items.length === 0 ? (
-            <div className="py-10 text-center text-slate-500 text-sm">
+            <div className="py-10 text-center text-slate-400 text-sm">
               Подборка пуста
             </div>
           ) : (
@@ -438,7 +438,7 @@ export default function CollectionDetailPage() {
                       {item.entity_id}
                     </span>
                     {item.note && (
-                      <span className="text-xs text-slate-500 truncate max-w-xs">
+                      <span className="text-xs text-slate-400 truncate max-w-xs">
                         {item.note}
                       </span>
                     )}
@@ -465,7 +465,7 @@ export default function CollectionDetailPage() {
       {tab === "timeline" && (
         <div className="space-y-2">
           {timeline.length === 0 ? (
-            <div className="py-10 text-center text-slate-500 text-sm">
+            <div className="py-10 text-center text-slate-400 text-sm">
               История пуста
             </div>
           ) : (
@@ -482,7 +482,7 @@ export default function CollectionDetailPage() {
                 </div>
                 <div className="pb-3 flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-[10px] text-slate-500">
+                    <span className="text-[10px] text-slate-400">
                       {new Date(ev.timestamp).toLocaleString("ru-RU", { timeZone: tz() })}
                     </span>
                     <span className="text-[10px] px-1 bg-slate-700 text-slate-400 rounded">

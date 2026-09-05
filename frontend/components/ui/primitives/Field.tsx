@@ -31,7 +31,7 @@ export function Field({
           {error}
         </p>
       ) : (
-        hint && <p className="text-[11px] text-slate-500">{hint}</p>
+        hint && <p className="text-[11px] text-slate-400">{hint}</p>
       )}
     </div>
   );

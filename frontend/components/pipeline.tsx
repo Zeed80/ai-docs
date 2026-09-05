@@ -112,7 +112,7 @@ export function ProgressBar({
 }) {
   return (
     <div>
-      <div className="mb-1 text-xs text-slate-500">{value}%</div>
+      <div className="mb-1 text-xs text-slate-400">{value}%</div>
       <div className="h-2 overflow-hidden rounded-full bg-slate-800">
         <div
           className={`h-full rounded-full ${failed ? "bg-red-500" : "bg-emerald-500"}`}
@@ -132,7 +132,7 @@ export function PipelineSteps({
 }) {
   const colors: Record<string, string> = {
     done: "border-emerald-900 bg-emerald-950/50 text-emerald-200",
-    skipped: "border-slate-700 bg-slate-900 text-slate-500",
+    skipped: "border-slate-700 bg-slate-900 text-slate-400",
     running: "border-blue-800 bg-blue-950/60 text-blue-200",
     queued: "border-amber-800 bg-amber-950/40 text-amber-200",
     failed: "border-red-800 bg-red-950/50 text-red-200",
@@ -174,7 +174,7 @@ export function PipelineProgressCard({
     <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs text-slate-500">Пайплайн</p>
+          <p className="text-xs text-slate-400">Пайплайн</p>
           <p className="mt-1 text-sm text-slate-300">
             {pipeline?.processing_status === "running"
               ? "выполняется"

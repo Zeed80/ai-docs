@@ -27,7 +27,7 @@ interface NormStats {
 const statusBadge: Record<string, string> = {
   proposed: "bg-amber-100 text-amber-700",
   active: "bg-green-100 text-green-700",
-  disabled: "bg-slate-100 text-slate-500",
+  disabled: "bg-slate-100 text-slate-400",
   rejected: "bg-red-100 text-red-700",
 };
 
@@ -189,7 +189,7 @@ export default function NormalizationSettingsPage() {
           <h3 className="text-sm font-semibold">Новое правило</h3>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-slate-500 block mb-1">Поле</label>
+              <label className="text-xs text-slate-400 block mb-1">Поле</label>
               <input
                 value={newRule.field_name}
                 onChange={(e) =>
@@ -200,7 +200,7 @@ export default function NormalizationSettingsPage() {
               />
             </div>
             <div>
-              <label className="text-xs text-slate-500 block mb-1">
+              <label className="text-xs text-slate-400 block mb-1">
                 Описание
               </label>
               <input
@@ -213,7 +213,7 @@ export default function NormalizationSettingsPage() {
               />
             </div>
             <div>
-              <label className="text-xs text-slate-500 block mb-1">
+              <label className="text-xs text-slate-400 block mb-1">
                 Паттерн
               </label>
               <input
@@ -226,7 +226,7 @@ export default function NormalizationSettingsPage() {
               />
             </div>
             <div>
-              <label className="text-xs text-slate-500 block mb-1">
+              <label className="text-xs text-slate-400 block mb-1">
                 Замена
               </label>
               <input
@@ -301,13 +301,13 @@ export default function NormalizationSettingsPage() {
                 >
                   {value}
                 </p>
-                <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+                <p className="text-xs text-slate-400 mt-0.5">{label}</p>
               </div>
             ))}
           </div>
           {stats.top_rules.length > 0 && (
             <div>
-              <p className="text-xs font-medium text-slate-500 mb-1.5">
+              <p className="text-xs font-medium text-slate-400 mb-1.5">
                 Топ правил по применениям
               </p>
               <div className="space-y-1">
@@ -316,7 +316,7 @@ export default function NormalizationSettingsPage() {
                     <span className="w-5 text-center text-slate-400 font-mono">
                       {i + 1}
                     </span>
-                    <span className="text-slate-500 w-28 truncate">
+                    <span className="text-slate-400 w-28 truncate">
                       {r.field_name}
                     </span>
                     <span className="font-mono text-red-400 line-through truncate max-w-[120px]">
@@ -393,7 +393,7 @@ export default function NormalizationSettingsPage() {
                     <span className="text-green-600">{rule.replacement}</span>
                   </div>
                   {rule.description && (
-                    <p className="text-xs text-slate-500 mt-1">
+                    <p className="text-xs text-slate-400 mt-1">
                       {rule.description}
                     </p>
                   )}

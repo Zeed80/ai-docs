@@ -69,7 +69,7 @@ export default function AnnotationsPanel({
         className="flex w-full items-center justify-between text-xs text-zinc-300"
       >
         <span>{t("vector.annotations")}</span>
-        <span className="text-zinc-500">{open ? "−" : "+"}</span>
+        <span className="text-zinc-400">{open ? "−" : "+"}</span>
       </button>
       {open && (
         <div className="space-y-1.5">

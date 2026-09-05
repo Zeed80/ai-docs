@@ -34,7 +34,7 @@ export function ActionCell({
     "idle",
   );
   const action = getAction(value);
-  if (!action.href) return <span className="text-slate-500">—</span>;
+  if (!action.href) return <span className="text-slate-400">—</span>;
 
   if (type === "delete") {
     async function runDelete() {
@@ -54,7 +54,7 @@ export function ActionCell({
       <button
         onClick={runDelete}
         disabled={status === "pending" || status === "done"}
-        className="text-red-300 underline hover:text-red-200 disabled:text-slate-500"
+        className="text-red-300 underline hover:text-red-200 disabled:text-slate-400"
       >
         {status === "pending"
           ? "Удаляю..."

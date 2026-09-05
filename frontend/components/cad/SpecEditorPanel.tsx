@@ -419,7 +419,7 @@ export default function SpecEditorPanel({
       const path = `main_view.${group}.${index}`;
       return (
         <tr key={`${group}-${index}`} className="border-t border-white/5">
-          <td className="py-1 pr-2 text-zinc-500">
+          <td className="py-1 pr-2 text-zinc-400">
             {group === "outer" ? index + 1 : `⌀${index + 1}`}
           </td>
           {(["diameter_mm", "length_mm"] as const).map((field) => {
@@ -440,7 +440,7 @@ export default function SpecEditorPanel({
               </td>
             );
           })}
-          <td className="py-1 pr-2 text-[11px] text-zinc-500">
+          <td className="py-1 pr-2 text-[11px] text-zinc-400">
             {String(section.tolerance ?? "")}
           </td>
           <td className="py-1">
@@ -483,12 +483,12 @@ export default function SpecEditorPanel({
         className="flex w-full items-center justify-between text-sm font-medium text-zinc-200"
       >
         <span>{t("vector.spec_editor_title")}</span>
-        <span className="text-zinc-500">{open ? "▾" : "▸"}</span>
+        <span className="text-zinc-400">{open ? "▾" : "▸"}</span>
       </button>
 
       {open && (
         <>
-          <p className="mt-1 text-[11px] text-zinc-500">
+          <p className="mt-1 text-[11px] text-zinc-400">
             {t("vector.spec_editor_hint")}
           </p>
 
@@ -528,7 +528,7 @@ export default function SpecEditorPanel({
             </h4>
             {outer.length > 0 && (
               <table className="w-full">
-                <thead className="text-[11px] text-zinc-500">
+                <thead className="text-[11px] text-zinc-400">
                   <tr>
                     <th className="w-8 text-left font-normal">#</th>
                     <th className="text-left font-normal">
@@ -568,7 +568,7 @@ export default function SpecEditorPanel({
             </h4>
             {bore.length > 0 ? (
               <table className="w-full">
-                <thead className="text-[11px] text-zinc-500">
+                <thead className="text-[11px] text-zinc-400">
                   <tr>
                     <th className="w-8 text-left font-normal">#</th>
                     <th className="text-left font-normal">
@@ -621,7 +621,7 @@ export default function SpecEditorPanel({
                     </span>
                   </div>
                   <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_count")}
                       <div className="mt-1">
                         {numericInput(
@@ -631,7 +631,7 @@ export default function SpecEditorPanel({
                         )}
                       </div>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_pcd")}
                       <div className="mt-1">
                         {numericInput(
@@ -646,7 +646,7 @@ export default function SpecEditorPanel({
                         )}
                       </div>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_from_face")}
                       <select
                         value={item.from_face ?? ""}
@@ -671,7 +671,7 @@ export default function SpecEditorPanel({
                         </option>
                       </select>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_entry_offset")}
                       <div className="mt-1">
                         {numericInput(
@@ -682,7 +682,7 @@ export default function SpecEditorPanel({
                         )}
                       </div>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_entry_recess_diameter")}
                       <div className="mt-1">
                         {numericInput(
@@ -697,7 +697,7 @@ export default function SpecEditorPanel({
                         )}
                       </div>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_execution")}
                       <select
                         value={
@@ -730,7 +730,7 @@ export default function SpecEditorPanel({
                         </option>
                       </select>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_thread_depth")}
                       <div className="mt-1">
                         {numericInput(
@@ -741,7 +741,7 @@ export default function SpecEditorPanel({
                         )}
                       </div>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_drill_depth")}
                       <div className="mt-1">
                         {numericInput(
@@ -782,7 +782,7 @@ export default function SpecEditorPanel({
                     {String(item.axis_mode ?? "—")}
                   </div>
                   <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_count")}
                       <div className="mt-1">
                         {numericInput(
@@ -792,7 +792,7 @@ export default function SpecEditorPanel({
                         )}
                       </div>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_diameter")}
                       <div className="mt-1">
                         {numericInput(
@@ -803,7 +803,7 @@ export default function SpecEditorPanel({
                         )}
                       </div>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_pcd")}
                       <div className="mt-1">
                         {numericInput(
@@ -818,7 +818,7 @@ export default function SpecEditorPanel({
                         )}
                       </div>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_axis_mode")}
                       <select
                         value={item.axis_mode ?? ""}
@@ -843,7 +843,7 @@ export default function SpecEditorPanel({
                         </option>
                       </select>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_from_face")}
                       <select
                         value={item.from_face ?? ""}
@@ -868,7 +868,7 @@ export default function SpecEditorPanel({
                         </option>
                       </select>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_start_angle")}
                       <div className="mt-1">
                         {numericInput(
@@ -879,7 +879,7 @@ export default function SpecEditorPanel({
                         )}
                       </div>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_execution")}
                       <select
                         value={
@@ -912,7 +912,7 @@ export default function SpecEditorPanel({
                         </option>
                       </select>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_depth")}
                       <div className="mt-1">
                         {numericInput(
@@ -922,7 +922,7 @@ export default function SpecEditorPanel({
                         )}
                       </div>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_inclination")}
                       <div className="mt-1">
                         {numericInput(
@@ -933,7 +933,7 @@ export default function SpecEditorPanel({
                         )}
                       </div>
                     </label>
-                    <label className="text-zinc-500">
+                    <label className="text-zinc-400">
                       {t("vector.spec_editor_radial_direction")}
                       <select
                         value={item.radial_direction ?? ""}
@@ -961,7 +961,7 @@ export default function SpecEditorPanel({
                       </select>
                     </label>
                     {item.axis_mode === "inclined" && (
-                      <label className="text-zinc-500">
+                      <label className="text-zinc-400">
                         {t("vector.spec_editor_connection_station")}
                         <div className="mt-1">
                           {numericInput(
@@ -1007,7 +1007,7 @@ export default function SpecEditorPanel({
                   key={index}
                   className="mt-2 grid grid-cols-1 gap-2 rounded border border-white/10 bg-black/20 p-2 sm:grid-cols-2 lg:grid-cols-3"
                 >
-                  <label className="text-zinc-500">
+                  <label className="text-zinc-400">
                     {t("vector.spec_editor_size")}
                     <div className="mt-1">
                       {numericInput(
@@ -1017,7 +1017,7 @@ export default function SpecEditorPanel({
                       )}
                     </div>
                   </label>
-                  <label className="text-zinc-500">
+                  <label className="text-zinc-400">
                     {t("vector.spec_editor_angle")}
                     <div className="mt-1">
                       {numericInput(
@@ -1027,7 +1027,7 @@ export default function SpecEditorPanel({
                       )}
                     </div>
                   </label>
-                  <label className="col-span-2 text-zinc-500">
+                  <label className="col-span-2 text-zinc-400">
                     {t("vector.spec_editor_location")}
                     <select
                       value={item.location ?? ""}
@@ -1054,7 +1054,7 @@ export default function SpecEditorPanel({
                       </option>
                     </select>
                   </label>
-                  <label className="text-zinc-500">
+                  <label className="text-zinc-400">
                     {t("vector.spec_editor_at_z")}
                     <div className="mt-1">
                       {numericInput(
@@ -1064,7 +1064,7 @@ export default function SpecEditorPanel({
                       )}
                     </div>
                   </label>
-                  <label className="text-zinc-500">
+                  <label className="text-zinc-400">
                     {t("vector.spec_editor_at_diameter")}
                     <div className="mt-1 flex gap-1">
                       {numericInput(
@@ -1111,7 +1111,7 @@ export default function SpecEditorPanel({
                   key={index}
                   className="mt-2 grid grid-cols-1 gap-2 rounded border border-white/10 bg-black/20 p-2 sm:grid-cols-2 lg:grid-cols-3"
                 >
-                  <label className="text-zinc-500">
+                  <label className="text-zinc-400">
                     {t("vector.spec_editor_radius")}
                     <div className="mt-1">
                       {numericInput(
@@ -1121,7 +1121,7 @@ export default function SpecEditorPanel({
                       )}
                     </div>
                   </label>
-                  <label className="col-span-2 text-zinc-500">
+                  <label className="col-span-2 text-zinc-400">
                     {t("vector.spec_editor_location")}
                     <select
                       value={item.location ?? ""}
@@ -1148,7 +1148,7 @@ export default function SpecEditorPanel({
                       </option>
                     </select>
                   </label>
-                  <label className="text-zinc-500">
+                  <label className="text-zinc-400">
                     {t("vector.spec_editor_at_z")}
                     <div className="mt-1">
                       {numericInput(
@@ -1158,7 +1158,7 @@ export default function SpecEditorPanel({
                       )}
                     </div>
                   </label>
-                  <label className="text-zinc-500">
+                  <label className="text-zinc-400">
                     {t("vector.spec_editor_at_diameter")}
                     <div className="mt-1 flex gap-1">
                       {numericInput(

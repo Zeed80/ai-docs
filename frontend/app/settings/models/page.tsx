@@ -9,7 +9,8 @@
  * теперь можно, не открывая остальные.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AssignmentBoard } from "@/components/models/assignment/AssignmentBoard";
 import { LibraryPanel } from "@/components/models/catalog/LibraryPanel";
 import { ParametersPanel } from "@/components/models/catalog/ParametersPanel";
@@ -32,10 +33,28 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "gpu", label: "GPU Бюджет" },
 ];
 
-export default function ModelsPage() {
+const TAB_IDS = new Set(TABS.map((t) => t.id));
+
+function ModelsPageInner() {
   const currentUser = useCurrentUser();
   const isAdmin = !!currentUser && hasRole(currentUser.roles, "admin");
-  const [tab, setTab] = useState<Tab>("assignment");
+  const router = useRouter();
+  const params = useSearchParams();
+  // Вкладка живёт в адресе: раньше на неё нельзя было дать ссылку, а «назад»
+  // уводило со страницы вместо возврата к предыдущей вкладке.
+  const raw = params.get("tab") ?? "";
+  const tab: Tab = TAB_IDS.has(raw as Tab) ? (raw as Tab) : "assignment";
+  const setTab = useCallback(
+    (next: Tab) => {
+      // replace, а не push: перебор вкладок не должен наполнять историю
+      // десятком записей, через которые потом придётся продираться назад.
+      router.replace(
+        next === "assignment" ? "/settings/models" : `/settings/models?tab=${next}`,
+        { scroll: false },
+      );
+    },
+    [router],
+  );
   const [status, setStatus] = useState<AllStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -110,7 +129,7 @@ export default function ModelsPage() {
           <button
             type="button"
             onClick={loadStatus}
-            className="px-3 py-2 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+            className="px-3 py-2 text-xs text-slate-400 hover:text-slate-300 transition-colors"
             title="Обновить состояние серверов"
             aria-label="Обновить состояние серверов"
           >
@@ -129,5 +148,23 @@ export default function ModelsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Обёртка ради Suspense: `useSearchParams` переводит страницу в клиентский
+ * рендер, и без границы Next отказывается её пререндерить.
+ */
+export default function ModelsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-950 px-4 py-8 text-sm text-slate-400">
+          Загрузка раздела…
+        </div>
+      }
+    >
+      <ModelsPageInner />
+    </Suspense>
   );
 }

@@ -38,7 +38,7 @@ function DocumentRow({ doc }: { doc: CanvasDocumentItem }) {
         <div className="truncate text-sm font-medium text-slate-200">
           {doc.title}
         </div>
-        <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-slate-500">
+        <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-slate-400">
           {doc.filename && <span>{doc.filename}</span>}
           {doc.mime_type && <span>{doc.mime_type}</span>}
           {doc.size_bytes ? <span>{formatBytes(doc.size_bytes)}</span> : null}
@@ -57,7 +57,7 @@ function DocumentRow({ doc }: { doc: CanvasDocumentItem }) {
         <button
           onClick={deleteDocument}
           disabled={deleteState === "pending" || deleteState === "done"}
-          className="shrink-0 rounded bg-red-900/70 px-2 py-1 text-xs text-red-100 hover:bg-red-800 disabled:bg-slate-800 disabled:text-slate-500"
+          className="shrink-0 rounded bg-red-900/70 px-2 py-1 text-xs text-red-100 hover:bg-red-800 disabled:bg-slate-800 disabled:text-slate-400"
         >
           {deleteState === "pending"
             ? "Удаляю..."
@@ -74,7 +74,7 @@ function DocumentRow({ doc }: { doc: CanvasDocumentItem }) {
 
 export function CanvasDocuments({ documents }: CanvasDocumentsProps) {
   if (documents.length === 0) {
-    return <div className="text-sm text-slate-500">Документы не найдены</div>;
+    return <div className="text-sm text-slate-400">Документы не найдены</div>;
   }
 
   return (

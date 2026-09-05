@@ -67,7 +67,7 @@ export function MailReadingPrefsCard() {
         />
         <span>
           Всегда показывать изображения
-          <span className="block text-xs text-slate-500">
+          <span className="block text-xs text-slate-400">
             Отдельным отправителям можно доверять точечно — кнопка «всегда для
             отправителя» есть в самом письме.
           </span>

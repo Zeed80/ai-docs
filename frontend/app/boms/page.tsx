@@ -41,7 +41,7 @@ const STATUS_LABELS: Record<string, string> = {
 const STATUS_COLORS: Record<string, string> = {
   draft: "bg-slate-700 text-slate-300",
   approved: "bg-green-900 text-green-200",
-  obsolete: "bg-slate-800 text-slate-500",
+  obsolete: "bg-slate-800 text-slate-400",
 };
 
 interface CreateBOMModalProps {
@@ -244,7 +244,7 @@ export default function BomsPage() {
       {loading ? (
         <p className="text-slate-400 text-sm">Загрузка...</p>
       ) : boms.length === 0 ? (
-        <div className="text-center py-16 text-slate-500">
+        <div className="text-center py-16 text-slate-400">
           <p className="text-4xl mb-3">📋</p>
           <p className="text-sm">Спецификаций нет</p>
           <button
@@ -274,16 +274,16 @@ export default function BomsPage() {
                     <h3 className="text-sm font-medium text-slate-100 truncate">
                       {bom.product_name}
                     </h3>
-                    <span className="text-xs text-slate-500">
+                    <span className="text-xs text-slate-400">
                       v{bom.version}
                     </span>
                     {bom.product_code && (
-                      <span className="text-xs text-slate-500 font-mono">
+                      <span className="text-xs text-slate-400 font-mono">
                         {bom.product_code}
                       </span>
                     )}
                   </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
                     <span>{bom.lines.length} позиций</span>
                     <span>Создана {formatDate(bom.created_at)}</span>
                     {bom.approved_by && (

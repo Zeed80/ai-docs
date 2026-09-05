@@ -640,7 +640,7 @@ export default function SketchCanvas({
 
           {selectedEntities.length > 0 && (
             <div className="mb-2 space-y-1.5 border-t border-white/10 pt-2">
-              <p className="text-[11px] text-zinc-500">
+              <p className="text-[11px] text-zinc-400">
                 Выбрано: {selectedEntities.length}
               </p>
               {availableKinds.some((k) => CONSTRAINT_NEEDS_VALUE.has(k)) && (
@@ -669,7 +669,7 @@ export default function SketchCanvas({
 
           {constraints.length > 0 && (
             <div className="mb-2 space-y-1 border-t border-white/10 pt-2">
-              <p className="text-[11px] text-zinc-500">
+              <p className="text-[11px] text-zinc-400">
                 Ограничения: {constraints.length}
                 {dof && (
                   <span
@@ -699,7 +699,7 @@ export default function SketchCanvas({
                             ? chk.ok
                               ? "text-emerald-400"
                               : "text-amber-300"
-                            : "text-zinc-500"
+                            : "text-zinc-400"
                         }
                       >
                         {chk ? (chk.ok ? "✓" : "✗") : "•"}
@@ -715,7 +715,7 @@ export default function SketchCanvas({
                             current.filter((item) => item.id !== c.id),
                           )
                         }
-                        className="text-zinc-500 hover:text-red-300"
+                        className="text-zinc-400 hover:text-red-300"
                       >
                         ✕
                       </button>

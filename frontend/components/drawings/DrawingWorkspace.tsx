@@ -242,7 +242,7 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full text-white/40 gap-3">
+      <div className="flex items-center justify-center h-full text-white/50 gap-3">
         <div className="w-6 h-6 border-2 border-blue-500/40 border-t-blue-500 rounded-full animate-spin" />
         <span>Загрузка чертежа...</span>
       </div>
@@ -270,7 +270,7 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
               {titleBlock?.title || drawing.filename}
             </span>
             {titleBlock?.drawing_number && (
-              <span className="text-white/40 text-xs font-mono">
+              <span className="text-white/50 text-xs font-mono">
                 {titleBlock.drawing_number}
               </span>
             )}
@@ -288,18 +288,18 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
           <div className="flex items-center gap-3 mt-0.5">
             <StatusBadge status={drawing.status} />
             {titleBlock?.material && (
-              <span className="text-white/40 text-xs">
+              <span className="text-white/50 text-xs">
                 <span className="text-white/20">Материал: </span>
                 {titleBlock.material}
               </span>
             )}
             {titleBlock?.scale && (
-              <span className="text-white/40 text-xs">
+              <span className="text-white/50 text-xs">
                 <span className="text-white/20">Масштаб: </span>
                 {titleBlock.scale}
               </span>
             )}
-            <span className="text-white/30 text-xs">
+            <span className="text-white/50 text-xs">
               {drawing.features.length} элем.
             </span>
           </div>
@@ -386,7 +386,7 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
                   "flex-1 text-xs py-2 px-1 font-medium transition-colors truncate",
                   leftTab === tab.id
                     ? "text-blue-400 border-b-2 border-blue-500 bg-blue-500/5"
-                    : "text-white/40 hover:text-white/70 border-b-2 border-transparent",
+                    : "text-white/50 hover:text-white/70 border-b-2 border-transparent",
                 )}
               >
                 {tab.label}
@@ -398,7 +398,7 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
                 "flex-1 text-xs py-2 px-1 font-medium transition-colors",
                 leftTab === "review"
                   ? "text-amber-400 border-b-2 border-amber-500 bg-amber-500/5"
-                  : "text-white/40 hover:text-white/70 border-b-2 border-transparent",
+                  : "text-white/50 hover:text-white/70 border-b-2 border-transparent",
               )}
             >
               Пров.
@@ -659,7 +659,7 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
 function ViewsPanel({ views }: { views: DrawingViewSection[] | null }) {
   if (views === null) {
     return (
-      <div className="flex items-center justify-center h-24 text-white/30 text-xs">
+      <div className="flex items-center justify-center h-24 text-white/50 text-xs">
         <div className="w-4 h-4 border border-white/20 border-t-white/50 rounded-full animate-spin mr-2" />
         Загрузка...
       </div>
@@ -667,7 +667,7 @@ function ViewsPanel({ views }: { views: DrawingViewSection[] | null }) {
   }
   if (views.length === 0) {
     return (
-      <div className="px-3 py-4 text-white/30 text-xs text-center">
+      <div className="px-3 py-4 text-white/50 text-xs text-center">
         Виды не выделены.
         <br />
         Запустите повторный анализ для мультивидового распознавания.
@@ -697,12 +697,12 @@ function ViewsPanel({ views }: { views: DrawingViewSection[] | null }) {
                 sectionTypeLabel[v.section_type] ||
                 v.section_type}
             </span>
-            <span className="text-xs text-white/30 shrink-0">
+            <span className="text-xs text-white/50 shrink-0">
               {Math.round(v.confidence * 100)}%
             </span>
           </div>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-xs text-white/40">
+            <span className="text-xs text-white/50">
               {sectionTypeLabel[v.section_type] || v.section_type}
             </span>
             {v.cutting_plane_label && (
@@ -733,7 +733,7 @@ function ViewsPanel({ views }: { views: DrawingViewSection[] | null }) {
 function AssemblyBOMPanel({ items }: { items: AssemblyBOMItem[] | null }) {
   if (items === null) {
     return (
-      <div className="flex items-center justify-center h-24 text-white/30 text-xs">
+      <div className="flex items-center justify-center h-24 text-white/50 text-xs">
         <div className="w-4 h-4 border border-white/20 border-t-white/50 rounded-full animate-spin mr-2" />
         Загрузка...
       </div>
@@ -741,7 +741,7 @@ function AssemblyBOMPanel({ items }: { items: AssemblyBOMItem[] | null }) {
   }
   if (items.length === 0) {
     return (
-      <div className="px-3 py-4 text-white/30 text-xs text-center">
+      <div className="px-3 py-4 text-white/50 text-xs text-center">
         Спецификация не найдена.
         <br />
         Применимо только к сборочным чертежам.
@@ -753,7 +753,7 @@ function AssemblyBOMPanel({ items }: { items: AssemblyBOMItem[] | null }) {
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-white/30 border-b border-white/10">
+          <tr className="text-white/50 border-b border-white/10">
             <th className="text-left px-2 py-1.5 font-medium w-8">#</th>
             <th className="text-left px-2 py-1.5 font-medium">Наименование</th>
             <th className="text-right px-2 py-1.5 font-medium w-10">Кол.</th>
@@ -763,7 +763,7 @@ function AssemblyBOMPanel({ items }: { items: AssemblyBOMItem[] | null }) {
         <tbody className="divide-y divide-white/5">
           {items.map((item) => (
             <tr key={item.id} className="hover:bg-white/5 transition-colors">
-              <td className="px-2 py-1.5 text-white/40 font-mono">
+              <td className="px-2 py-1.5 text-white/50 font-mono">
                 {item.item_no}
               </td>
               <td className="px-2 py-1.5">
@@ -774,7 +774,7 @@ function AssemblyBOMPanel({ items }: { items: AssemblyBOMItem[] | null }) {
                   {item.designation}
                 </div>
                 {item.drawing_number && (
-                  <div className="text-white/30 font-mono text-xs">
+                  <div className="text-white/50 font-mono text-xs">
                     {item.drawing_number}
                   </div>
                 )}
@@ -783,7 +783,7 @@ function AssemblyBOMPanel({ items }: { items: AssemblyBOMItem[] | null }) {
                 {item.quantity} {item.unit !== "шт" ? item.unit : ""}
               </td>
               <td
-                className="px-2 py-1.5 text-white/40 truncate max-w-[80px]"
+                className="px-2 py-1.5 text-white/50 truncate max-w-[80px]"
                 title={item.material}
               >
                 {item.material || "—"}
@@ -805,7 +805,7 @@ function ValidationPanel({
 }) {
   if (report === null) {
     return (
-      <div className="flex items-center justify-center h-24 text-white/30 text-xs">
+      <div className="flex items-center justify-center h-24 text-white/50 text-xs">
         <div className="w-4 h-4 border border-white/20 border-t-white/50 rounded-full animate-spin mr-2" />
         Загрузка...
       </div>
@@ -817,7 +817,7 @@ function ValidationPanel({
     report.confidence_score === undefined
   ) {
     return (
-      <div className="px-3 py-4 text-white/30 text-xs text-center">
+      <div className="px-3 py-4 text-white/50 text-xs text-center">
         {report.message || "Валидация ещё не выполнена."}
         <br />
         Запустите повторный анализ для получения отчёта.
@@ -879,7 +879,7 @@ function ValidationPanel({
       {/* Auto-fixed */}
       {report.auto_fixed && report.auto_fixed.length > 0 && (
         <div>
-          <div className="text-xs text-white/40 mb-1 uppercase tracking-wider font-medium">
+          <div className="text-xs text-white/50 mb-1 uppercase tracking-wider font-medium">
             Авто-исправлено ({report.auto_fixed.length})
           </div>
           <ul className="space-y-0.5">
@@ -899,7 +899,7 @@ function ValidationPanel({
       {/* Warnings */}
       {report.warnings && report.warnings.length > 0 && (
         <div>
-          <div className="text-xs text-white/40 mb-1 uppercase tracking-wider font-medium">
+          <div className="text-xs text-white/50 mb-1 uppercase tracking-wider font-medium">
             Предупреждения ({report.warnings.length})
           </div>
           <ul className="space-y-0.5">
@@ -939,7 +939,7 @@ function CheckRow({
       <span className="text-xs text-white/50 truncate">{label}</span>
       <div className="flex items-center gap-1 shrink-0">
         {value && (
-          <span className="text-xs text-white/40 font-mono">{value}</span>
+          <span className="text-xs text-white/50 font-mono">{value}</span>
         )}
         {ok === true && <span className="text-green-400 text-xs">✓</span>}
         {ok === false && <span className="text-red-400 text-xs">✗</span>}
@@ -991,7 +991,7 @@ function ReviewListPanel({
 }) {
   if (features === null) {
     return (
-      <div className="flex items-center justify-center h-24 text-white/30 text-xs">
+      <div className="flex items-center justify-center h-24 text-white/50 text-xs">
         <div className="w-4 h-4 border border-white/20 border-t-white/50 rounded-full animate-spin mr-2" />
         Загрузка...
       </div>
@@ -1106,11 +1106,11 @@ function ReviewPanel({
         </span>
         <div className="flex items-center gap-2">
           {remaining > 0 && (
-            <span className="text-xs text-white/30">{remaining} ост.</span>
+            <span className="text-xs text-white/50">{remaining} ост.</span>
           )}
           <button
             onClick={onClose}
-            className="text-white/30 hover:text-white/60 text-lg leading-none"
+            className="text-white/50 hover:text-white/60 text-lg leading-none"
           >
             ×
           </button>
@@ -1124,7 +1124,7 @@ function ReviewPanel({
             <div className="text-xs font-medium text-white/90">
               {feature.name}
             </div>
-            <div className="text-xs text-white/40 mt-0.5">
+            <div className="text-xs text-white/50 mt-0.5">
               VLM: {feature.feature_type} —{" "}
               <span className={pct < 40 ? "text-red-400" : "text-amber-400"}>
                 {pct}% уверенность
@@ -1132,7 +1132,7 @@ function ReviewPanel({
             </div>
           </div>
         </div>
-        <div className="text-xs text-white/30 mt-1.5 italic">
+        <div className="text-xs text-white/50 mt-1.5 italic">
           Контур подсвечен синим на чертеже ↑
         </div>
       </div>
@@ -1140,7 +1140,7 @@ function ReviewPanel({
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
         {/* Type buttons */}
         <div>
-          <div className="text-xs text-white/40 mb-2">Что это?</div>
+          <div className="text-xs text-white/50 mb-2">Что это?</div>
           <div className="grid grid-cols-2 gap-1.5">
             {FEATURE_TYPE_BUTTONS.map((btn) => (
               <button
@@ -1164,7 +1164,7 @@ function ReviewPanel({
 
         {/* Custom type input */}
         <div>
-          <label className="block text-xs text-white/40 mb-1">
+          <label className="block text-xs text-white/50 mb-1">
             Или введите тип:
           </label>
           <input
@@ -1180,7 +1180,7 @@ function ReviewPanel({
 
         {/* Corrected name */}
         <div>
-          <label className="block text-xs text-white/40 mb-1">
+          <label className="block text-xs text-white/50 mb-1">
             Уточнённое название (необязательно):
           </label>
           <input
@@ -1193,7 +1193,7 @@ function ReviewPanel({
 
         {/* Note */}
         <div>
-          <label className="block text-xs text-white/40 mb-1">
+          <label className="block text-xs text-white/50 mb-1">
             Примечание:
           </label>
           <input

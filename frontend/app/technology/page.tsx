@@ -33,7 +33,7 @@ const STATUS_LABELS: Record<string, string> = {
 const STATUS_COLORS: Record<string, string> = {
   draft: "text-yellow-400",
   approved: "text-emerald-400",
-  obsolete: "text-zinc-500",
+  obsolete: "text-zinc-400",
 };
 
 const NC_STATUS: Record<string, { label: string; cls: string }> = {
@@ -96,7 +96,7 @@ export default function TechnologyPage() {
           <h1 className="text-2xl font-bold text-white">
             Технологические процессы
           </h1>
-          <p className="text-white/40 text-sm mt-1">
+          <p className="text-white/50 text-sm mt-1">
             {total > 0 ? `${total} ТП` : "Нет технологических процессов"}
           </p>
         </div>
@@ -139,11 +139,11 @@ export default function TechnologyPage() {
 
       {/* Table */}
       {loading ? (
-        <div className="text-white/30 text-sm py-12 text-center">
+        <div className="text-white/50 text-sm py-12 text-center">
           Загрузка...
         </div>
       ) : plans.length === 0 ? (
-        <div className="text-white/30 text-sm py-12 text-center">
+        <div className="text-white/50 text-sm py-12 text-center">
           Техкарты не найдены
         </div>
       ) : (
@@ -151,28 +151,28 @@ export default function TechnologyPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/10">
-                <th className="text-left px-4 py-3 text-white/40 font-medium">
+                <th className="text-left px-4 py-3 text-white/50 font-medium">
                   Изделие
                 </th>
-                <th className="text-left px-4 py-3 text-white/40 font-medium">
+                <th className="text-left px-4 py-3 text-white/50 font-medium">
                   Код
                 </th>
-                <th className="text-left px-4 py-3 text-white/40 font-medium">
+                <th className="text-left px-4 py-3 text-white/50 font-medium">
                   Тип ТП
                 </th>
-                <th className="text-left px-4 py-3 text-white/40 font-medium">
+                <th className="text-left px-4 py-3 text-white/50 font-medium">
                   Материал
                 </th>
-                <th className="text-left px-4 py-3 text-white/40 font-medium">
+                <th className="text-left px-4 py-3 text-white/50 font-medium">
                   НК
                 </th>
-                <th className="text-left px-4 py-3 text-white/40 font-medium">
+                <th className="text-left px-4 py-3 text-white/50 font-medium">
                   Статус
                 </th>
-                <th className="text-left px-4 py-3 text-white/40 font-medium">
+                <th className="text-left px-4 py-3 text-white/50 font-medium">
                   Создан
                 </th>
-                <th className="text-right px-4 py-3 text-white/40 font-medium">
+                <th className="text-right px-4 py-3 text-white/50 font-medium">
                   Действия
                 </th>
               </tr>
@@ -191,7 +191,7 @@ export default function TechnologyPage() {
                       {plan.product_name}
                     </Link>
                     {plan.route_summary && (
-                      <p className="text-white/30 text-xs mt-0.5 truncate max-w-xs">
+                      <p className="text-white/50 text-xs mt-0.5 truncate max-w-xs">
                         {plan.route_summary}
                       </p>
                     )}
@@ -212,34 +212,34 @@ export default function TechnologyPage() {
                     <span
                       className={clsx(
                         "text-xs font-medium",
-                        STATUS_COLORS[plan.status] || "text-white/40",
+                        STATUS_COLORS[plan.status] || "text-white/50",
                       )}
                     >
                       {STATUS_LABELS[plan.status] || plan.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-white/40 text-xs">
+                  <td className="px-4 py-3 text-white/50 text-xs">
                     {new Date(plan.created_at).toLocaleDateString("ru", { timeZone: tz() })}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">
                       <Link
                         href={`/technology/${plan.id}/review`}
-                        className="text-xs text-white/30 hover:text-blue-400 transition-colors"
+                        className="text-xs text-white/50 hover:text-blue-400 transition-colors"
                         title="Открыть редактор ТП"
                       >
                         Ред.
                       </Link>
                       <a
                         href={`/api/technology/process-plans/${plan.id}/export?format=excel`}
-                        className="text-xs text-white/30 hover:text-emerald-400 transition-colors"
+                        className="text-xs text-white/50 hover:text-emerald-400 transition-colors"
                         title="Скачать Excel"
                       >
                         XLS
                       </a>
                       <Link
                         href={`/technology/${plan.id}`}
-                        className="text-xs text-white/30 hover:text-white transition-colors"
+                        className="text-xs text-white/50 hover:text-white transition-colors"
                       >
                         →
                       </Link>

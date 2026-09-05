@@ -131,7 +131,7 @@ export default function GostFormsExporter({
       </div>
 
       {normBlocked && (
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-zinc-400">
           Рекомендуется исправить замечания нормоконтроля перед экспортом.
         </p>
       )}

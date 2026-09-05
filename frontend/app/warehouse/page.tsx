@@ -282,7 +282,7 @@ function PendingTab({ onAccepted }: { onAccepted: () => void }) {
     <div>
       {/* Toolbar */}
       <div className="flex items-center gap-3 mb-4">
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-slate-400">
           {total} ордеров в очереди
         </span>
         {selected.size > 0 && (
@@ -307,7 +307,7 @@ function PendingTab({ onAccepted }: { onAccepted: () => void }) {
       {loading ? (
         <p className="text-slate-400 text-sm">Загрузка...</p>
       ) : receipts.length === 0 ? (
-        <div className="text-center py-16 text-slate-500">
+        <div className="text-center py-16 text-slate-400">
           <p className="text-4xl mb-3">✅</p>
           <p className="text-sm">Нет ожидающих ордеров</p>
           <p className="text-xs mt-2 text-slate-400">
@@ -324,7 +324,7 @@ function PendingTab({ onAccepted }: { onAccepted: () => void }) {
               onChange={toggleAll}
               className="w-3.5 h-3.5 accent-blue-500"
             />
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               Выбрать все ({receipts.length})
             </span>
           </div>
@@ -400,11 +400,11 @@ function PendingReceiptCard({
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300">
               Ожидание
             </span>
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               {new Date(receipt.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
             </span>
           </div>
-          <div className="flex gap-4 mt-0.5 text-[11px] text-slate-500">
+          <div className="flex gap-4 mt-0.5 text-[11px] text-slate-400">
             <span>{receipt.lines.length} позиций</span>
             {receipt.invoice_id && (
               <Link
@@ -529,7 +529,7 @@ function PendingLineRow({
       }`}
     >
       <td className="px-4 py-1.5 text-slate-300">{line.description}</td>
-      <td className="px-3 py-1.5 text-right text-slate-500 font-mono">
+      <td className="px-3 py-1.5 text-right text-slate-400 font-mono">
         {line.quantity_expected}
       </td>
       <td className="px-3 py-1.5 text-right">
@@ -546,7 +546,7 @@ function PendingLineRow({
           }`}
         />
       </td>
-      <td className="px-3 py-1.5 text-slate-500">{line.unit}</td>
+      <td className="px-3 py-1.5 text-slate-400">{line.unit}</td>
       <td className="px-4 py-1.5">
         <div className="flex items-center gap-1">
           <input
@@ -560,7 +560,7 @@ function PendingLineRow({
             className="flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-slate-700 border border-slate-600 rounded text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500"
           />
           {saving && (
-            <span className="text-[9px] text-slate-500 flex-shrink-0">⏳</span>
+            <span className="text-[9px] text-slate-400 flex-shrink-0">⏳</span>
           )}
         </div>
       </td>
@@ -652,7 +652,7 @@ function InventoryTab() {
             </span>
           )}
         </label>
-        <span className="ml-auto text-xs text-slate-500">{total} позиций</span>
+        <span className="ml-auto text-xs text-slate-400">{total} позиций</span>
         <button
           onClick={() => setShowCreate(true)}
           className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
@@ -664,14 +664,14 @@ function InventoryTab() {
       {loading ? (
         <p className="text-slate-400 text-sm">Загрузка...</p>
       ) : items.length === 0 ? (
-        <div className="text-center py-16 text-slate-500">
+        <div className="text-center py-16 text-slate-400">
           <p className="text-4xl mb-3">📦</p>
           <p>Позиции не найдены</p>
         </div>
       ) : (
         <table className="w-full text-sm border-collapse">
           <thead>
-            <tr className="text-left text-[11px] text-slate-500 border-b border-slate-700">
+            <tr className="text-left text-[11px] text-slate-400 border-b border-slate-700">
               <th className="pb-2 pr-4 font-medium">Наименование</th>
               <th className="pb-2 pr-4 font-medium">Артикул</th>
               <th className="pb-2 pr-4 font-medium text-right">Остаток</th>
@@ -696,7 +696,7 @@ function InventoryTab() {
                     </span>
                   )}
                 </td>
-                <td className="py-2 pr-4 text-slate-500 font-mono text-xs">
+                <td className="py-2 pr-4 text-slate-400 font-mono text-xs">
                   {item.sku ?? "—"}
                 </td>
                 <td
@@ -705,11 +705,11 @@ function InventoryTab() {
                   }`}
                 >
                   {item.current_qty.toLocaleString("ru-RU")}
-                  <span className="text-slate-500 text-xs ml-1">
+                  <span className="text-slate-400 text-xs ml-1">
                     {item.unit}
                   </span>
                 </td>
-                <td className="py-2 pr-4 text-right text-slate-500 font-mono text-xs">
+                <td className="py-2 pr-4 text-right text-slate-400 font-mono text-xs">
                   {item.min_qty != null ? (
                     <>
                       {item.min_qty.toLocaleString("ru-RU")}{" "}
@@ -896,13 +896,13 @@ function ReceiptsTab() {
           <option value="issued">Выдан</option>
           <option value="cancelled">Отменён</option>
         </select>
-        <span className="ml-auto text-xs text-slate-500">{total} ордеров</span>
+        <span className="ml-auto text-xs text-slate-400">{total} ордеров</span>
       </div>
 
       {loading ? (
         <p className="text-slate-400 text-sm">Загрузка...</p>
       ) : receipts.length === 0 ? (
-        <div className="text-center py-16 text-slate-500">
+        <div className="text-center py-16 text-slate-400">
           <p className="text-4xl mb-3">📋</p>
           <p>Приходных ордеров нет</p>
           <p className="text-xs mt-2">
@@ -912,7 +912,7 @@ function ReceiptsTab() {
       ) : (
         <table className="w-full text-sm border-collapse">
           <thead>
-            <tr className="text-left text-[11px] text-slate-500 border-b border-slate-700">
+            <tr className="text-left text-[11px] text-slate-400 border-b border-slate-700">
               <th className="pb-2 pr-4 font-medium">Номер</th>
               <th className="pb-2 pr-4 font-medium">Статус</th>
               <th className="pb-2 pr-4 font-medium">Дата</th>
@@ -1006,20 +1006,20 @@ function MovementsTab() {
           <option value="issue">Выдача</option>
           <option value="adjustment">Корректировка</option>
         </select>
-        <span className="ml-auto text-xs text-slate-500">{total} движений</span>
+        <span className="ml-auto text-xs text-slate-400">{total} движений</span>
       </div>
 
       {loading ? (
         <p className="text-slate-400 text-sm">Загрузка...</p>
       ) : movements.length === 0 ? (
-        <div className="text-center py-16 text-slate-500">
+        <div className="text-center py-16 text-slate-400">
           <p className="text-4xl mb-3">📈</p>
           <p>Движений нет</p>
         </div>
       ) : (
         <table className="w-full text-sm border-collapse">
           <thead>
-            <tr className="text-left text-[11px] text-slate-500 border-b border-slate-700">
+            <tr className="text-left text-[11px] text-slate-400 border-b border-slate-700">
               <th className="pb-2 pr-4 font-medium">Дата</th>
               <th className="pb-2 pr-4 font-medium">Позиция</th>
               <th className="pb-2 pr-4 font-medium">Тип</th>
@@ -1068,7 +1068,7 @@ function MovementsTab() {
                 <td className="py-2 pr-4 text-slate-400 text-xs">
                   {m.performed_by}
                 </td>
-                <td className="py-2 text-slate-500 text-xs max-w-xs truncate">
+                <td className="py-2 text-slate-400 text-xs max-w-xs truncate">
                   {m.notes ?? "—"}
                 </td>
               </tr>
@@ -1298,7 +1298,7 @@ function EditItemModal({
         <h2 className="text-base font-semibold text-slate-100 mb-1">
           Изменить позицию
         </h2>
-        <p className="text-xs text-slate-500 mb-4">
+        <p className="text-xs text-slate-400 mb-4">
           Текущий остаток: {item.current_qty} {item.unit}
         </p>
         {error && <p className="text-red-400 text-xs mb-3">{error}</p>}
@@ -1442,7 +1442,7 @@ function IssueModal({
         <h2 className="text-base font-semibold text-slate-100 mb-1">
           Выдача со склада
         </h2>
-        <p className="text-xs text-slate-500 mb-4">
+        <p className="text-xs text-slate-400 mb-4">
           {item.name} — остаток: {item.current_qty} {item.unit}
         </p>
         {error && <p className="text-red-400 text-xs mb-3">{error}</p>}
@@ -1466,7 +1466,7 @@ function IssueModal({
               />
             </div>
             <div className="w-16 flex items-end pb-1.5">
-              <span className="text-sm text-slate-500">{item.unit}</span>
+              <span className="text-sm text-slate-400">{item.unit}</span>
             </div>
           </div>
           <div>
@@ -1570,7 +1570,7 @@ function AdjustModal({
         <h2 className="text-base font-semibold text-slate-100 mb-1">
           Корректировка остатка
         </h2>
-        <p className="text-xs text-slate-500 mb-4">
+        <p className="text-xs text-slate-400 mb-4">
           {item.name} — текущий остаток: {item.current_qty} {item.unit}
         </p>
         {error && <p className="text-red-400 text-xs mb-3">{error}</p>}
@@ -1590,11 +1590,11 @@ function AdjustModal({
                 placeholder="+10 или -5"
                 className="flex-1 px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 rounded text-slate-200 focus:outline-none focus:border-blue-500"
               />
-              <span className="text-sm text-slate-500">{item.unit}</span>
+              <span className="text-sm text-slate-400">{item.unit}</span>
             </div>
             {qty && (
               <p
-                className={`text-xs mt-1 ${newBalance < 0 ? "text-red-400" : "text-slate-500"}`}
+                className={`text-xs mt-1 ${newBalance < 0 ? "text-red-400" : "text-slate-400"}`}
               >
                 Новый остаток:{" "}
                 <span

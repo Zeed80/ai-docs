@@ -169,7 +169,7 @@ export default function CompareSessionPage() {
     <div className="p-6 max-w-6xl mx-auto">
       <button
         onClick={() => router.push("/procurement")}
-        className="text-sm text-slate-500 hover:text-slate-300 mb-4 block"
+        className="text-sm text-slate-400 hover:text-slate-300 mb-4 block"
       >
         ← Закупки
       </button>
@@ -178,7 +178,7 @@ export default function CompareSessionPage() {
       <div className="flex items-start justify-between mb-5">
         <div>
           <h1 className="text-xl font-bold text-slate-100">{session.name}</h1>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-slate-400 mt-1">
             {session.invoice_ids.length} КП · создана{" "}
             {new Date(session.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
           </p>
@@ -242,7 +242,7 @@ export default function CompareSessionPage() {
                 <div className="text-xl font-bold text-slate-100 mt-2">
                   {fmt(s.total)}
                 </div>
-                <div className="text-xs text-slate-500">
+                <div className="text-xs text-slate-400">
                   {s.item_count} позиций
                 </div>
                 <PriceBar value={s.total} max={maxTotals} />

@@ -846,7 +846,7 @@ export default function StudioComposer({
     const custom = sizePreset < 0;
     return (
       <div>
-        <div className="mb-1 text-xs text-zinc-500">{t("size_label")}</div>
+        <div className="mb-1 text-xs text-zinc-400">{t("size_label")}</div>
         <div className="flex flex-wrap gap-1">
           {SIZE_PRESETS.map((p, i) => (
             <button
@@ -882,7 +882,7 @@ export default function StudioComposer({
               placeholder={t("size_w")}
               className="w-24 rounded bg-zinc-900 border border-white/10 p-1.5 text-sm text-zinc-200"
             />
-            <span className="text-zinc-500">×</span>
+            <span className="text-zinc-400">×</span>
             <input
               type="number"
               step={16}
@@ -906,7 +906,7 @@ export default function StudioComposer({
     return (
       <div>
         <div className="flex items-center justify-between mb-1">
-          <label className="text-xs text-zinc-500">{t("workflow_label")}</label>
+          <label className="text-xs text-zinc-400">{t("workflow_label")}</label>
           <button
             type="button"
             onClick={addOwnWorkflow}
@@ -973,7 +973,7 @@ export default function StudioComposer({
       <div className="space-y-2 border-t border-white/10 pt-2">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <div className="text-xs text-zinc-500">
+            <div className="text-xs text-zinc-400">
               {t("workflow_params_label")}
             </div>
             <div className="text-[11px] text-zinc-400">
@@ -1017,7 +1017,7 @@ export default function StudioComposer({
             if (options) {
               return (
                 <label key={key} className="block">
-                  <span className="text-xs text-zinc-500">{label}</span>
+                  <span className="text-xs text-zinc-400">{label}</span>
                   <select
                     value={String(value ?? "")}
                     onChange={(e) => setWorkflowParamValue(key, e.target.value)}
@@ -1037,7 +1037,7 @@ export default function StudioComposer({
             );
             return (
               <label key={key} className="block">
-                <span className="text-xs text-zinc-500">{label}</span>
+                <span className="text-xs text-zinc-400">{label}</span>
                 <input
                   type={numeric ? "number" : "text"}
                   value={String(value ?? "")}
@@ -1106,7 +1106,7 @@ export default function StudioComposer({
                     {t("generated_source_label")}
                   </div>
                   {previewGeneration && (
-                    <div className="text-[11px] text-zinc-500">
+                    <div className="text-[11px] text-zinc-400">
                       {generationLabel(previewGeneration)}
                     </div>
                   )}
@@ -1131,7 +1131,7 @@ export default function StudioComposer({
                       className="max-h-[58vh] w-full object-contain"
                     />
                   ) : (
-                    <div className="px-4 text-center text-sm text-zinc-500">
+                    <div className="px-4 text-center text-sm text-zinc-400">
                       {previewGeneration
                         ? t("generated_source_no_result")
                         : t("generated_source_empty")}
@@ -1162,7 +1162,7 @@ export default function StudioComposer({
                               className="h-full w-full object-cover"
                             />
                           ) : (
-                            <div className="flex h-full items-center justify-center text-[11px] text-zinc-500">
+                            <div className="flex h-full items-center justify-center text-[11px] text-zinc-400">
                               {t(`status.${g.status}`)}
                             </div>
                           )}
@@ -1209,7 +1209,7 @@ export default function StudioComposer({
     <div className="space-y-4">
       {/* Traceability: optional link to a document/case (shared by both modes) */}
       <details className="text-sm">
-        <summary className="text-xs text-zinc-500 cursor-pointer">
+        <summary className="text-xs text-zinc-400 cursor-pointer">
           {t("link_summary")}
         </summary>
         <div className="mt-2 grid grid-cols-2 gap-2">
@@ -1252,7 +1252,7 @@ export default function StudioComposer({
 
       {mode === "vector" && (
         <div className="space-y-3">
-          <p className="text-xs text-zinc-500">{t("vector_hint")}</p>
+          <p className="text-xs text-zinc-400">{t("vector_hint")}</p>
 
           {/* Source: file / camera / previous generation result */}
           <div className="flex flex-wrap items-center gap-2">
@@ -1320,7 +1320,7 @@ export default function StudioComposer({
               Only meaningful with a source sheet attached. */}
           {(sourceFile || sourceGenerationId) && (
             <label className="block">
-              <span className="text-xs text-zinc-500">
+              <span className="text-xs text-zinc-400">
                 {t("vectorize_method")}
               </span>
               <select
@@ -1342,7 +1342,7 @@ export default function StudioComposer({
           {(sourceFile || sourceGenerationId) && vectorMethod === "spec" && (
             <div className="grid gap-2 sm:grid-cols-2">
               <label className="block">
-                <span className="text-xs text-zinc-500">
+                <span className="text-xs text-zinc-400">
                   {t("digitization_type")}
                 </span>
                 <select
@@ -1363,7 +1363,7 @@ export default function StudioComposer({
                 </p>
               </label>
               <label className="block">
-                <span className="text-xs text-zinc-500">
+                <span className="text-xs text-zinc-400">
                   {t("read_passes_label")}
                 </span>
                 <select
@@ -1384,7 +1384,7 @@ export default function StudioComposer({
 
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="block">
-              <span className="text-xs text-zinc-500">
+              <span className="text-xs text-zinc-400">
                 {t("vector_scale_label")}
               </span>
               <input
@@ -1400,7 +1400,7 @@ export default function StudioComposer({
               />
             </label>
             <label className="block">
-              <span className="text-xs text-zinc-500">
+              <span className="text-xs text-zinc-400">
                 {t("vector_sheet_format_label")}
               </span>
               <select
@@ -1437,7 +1437,7 @@ export default function StudioComposer({
           {!sourceFile && !sourceGenerationId && (
             <div className="space-y-1">
               <label className="block">
-                <span className="text-xs text-zinc-500">
+                <span className="text-xs text-zinc-400">
                   {t("vector_description_label")}
                 </span>
                 <textarea
@@ -1452,7 +1452,7 @@ export default function StudioComposer({
                 {t("vector_description_hint")}
               </p>
               <div className="space-y-1">
-                <div className="text-[11px] text-zinc-500">
+                <div className="text-[11px] text-zinc-400">
                   {t("vector_description_templates")}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
@@ -1473,7 +1473,7 @@ export default function StudioComposer({
                 </div>
               </div>
               <label className="block">
-                <span className="text-xs text-zinc-500">
+                <span className="text-xs text-zinc-400">
                   {t("vector_orientation_label")}
                 </span>
                 <select
@@ -1522,7 +1522,7 @@ export default function StudioComposer({
 
           {/* Manual drafting: an empty ГОСТ sheet to draw on in the editor */}
           <div className="border-t border-white/10 pt-3 space-y-2">
-            <div className="text-xs text-zinc-500">
+            <div className="text-xs text-zinc-400">
               {t("vector_blank_label")}
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1579,11 +1579,11 @@ export default function StudioComposer({
         <div className="space-y-3">
           {/* ЕСКД pipeline: exact vector (default) or a diffusion ЕСКД workflow */}
           {workflowSelector(true)}
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-zinc-400">
             {workflowId ? t("eskd_diffusion_hint") : t("tech_hint")}
           </p>
           <div className="flex items-center justify-between gap-2">
-            <label className="text-xs text-zinc-500">
+            <label className="text-xs text-zinc-400">
               {t("prompt_to_send_label")}
             </label>
             <button
@@ -1606,7 +1606,7 @@ export default function StudioComposer({
           {/* View is meaningful only for the deterministic vector render. */}
           {!workflowId && (
             <div className="space-y-1">
-              <span className="text-xs text-zinc-500">
+              <span className="text-xs text-zinc-400">
                 {t("tech_view_label")}
               </span>
               <div className="grid grid-cols-2 gap-1 p-1 rounded bg-white/5 sm:grid-cols-4">
@@ -1628,7 +1628,7 @@ export default function StudioComposer({
           {workflowId && (
             <div>
               <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-zinc-500">
+                <span className="text-xs text-zinc-400">
                   {t("upscale_label")}
                 </span>
                 <span className="text-[11px] text-zinc-400">
@@ -1654,12 +1654,12 @@ export default function StudioComposer({
           )}
           {workflowId && (
             <details className="text-sm">
-              <summary className="text-xs text-zinc-500 cursor-pointer">
+              <summary className="text-xs text-zinc-400 cursor-pointer">
                 {t("advanced")}
               </summary>
               <div className="mt-2 space-y-2">
                 <div>
-                  <label className="text-xs text-zinc-500">
+                  <label className="text-xs text-zinc-400">
                     {t("seed_label")}
                   </label>
                   <input
@@ -1729,7 +1729,7 @@ export default function StudioComposer({
               builtins and custom clones carry their own tuned steps. */}
           <div className={showQuality ? undefined : "hidden"}>
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs text-zinc-500">
+              <span className="text-xs text-zinc-400">
                 {t("quality_label")}
               </span>
               <span className="text-[11px] text-zinc-400">
@@ -1757,7 +1757,7 @@ export default function StudioComposer({
           {/* High-quality upscale (any mode) */}
           <div>
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs text-zinc-500">
+              <span className="text-xs text-zinc-400">
                 {t("upscale_label")}
               </span>
               <span className="text-[11px] text-zinc-400">
@@ -1785,7 +1785,7 @@ export default function StudioComposer({
           {(operation === "cleanup" || operation === "edit") && (
             <div>
               <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-zinc-500">
+                <span className="text-xs text-zinc-400">
                   {t("postprocess_label")}
                 </span>
                 <span className="text-[11px] text-zinc-400">
@@ -1862,7 +1862,7 @@ export default function StudioComposer({
               {sourcePreview && (
                 <div className="space-y-1">
                   {selectedGeneration && (
-                    <div className="text-[11px] text-zinc-500">
+                    <div className="text-[11px] text-zinc-400">
                       {generationLabel(selectedGeneration)}
                     </div>
                   )}
@@ -1885,7 +1885,7 @@ export default function StudioComposer({
           {operation !== "cleanup" && (
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-xs text-zinc-500">
+                <label className="text-xs text-zinc-400">
                   {operation === "generate"
                     ? t("prompt_label_generate")
                     : t("prompt_label_edit")}
@@ -1924,7 +1924,7 @@ export default function StudioComposer({
           {operation === "cleanup" && (
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-xs text-zinc-500">
+                <label className="text-xs text-zinc-400">
                   {t("cleanup_prompt_label")}
                 </label>
                 <button
@@ -1948,13 +1948,13 @@ export default function StudioComposer({
           )}
 
           <details className="text-sm">
-            <summary className="text-xs text-zinc-500 cursor-pointer">
+            <summary className="text-xs text-zinc-400 cursor-pointer">
               {t("advanced")}
             </summary>
             <div className="mt-2 space-y-2">
               {operation !== "cleanup" && (
                 <div>
-                  <label className="text-xs text-zinc-500">
+                  <label className="text-xs text-zinc-400">
                     {t("negative_prompt_label")}
                   </label>
                   <input
@@ -1966,7 +1966,7 @@ export default function StudioComposer({
                 </div>
               )}
               <div>
-                <label className="text-xs text-zinc-500">
+                <label className="text-xs text-zinc-400">
                   {t("seed_label")}
                 </label>
                 <input

@@ -1071,7 +1071,7 @@ export default function DocumentsPage() {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold">Документы</h1>
-            <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
+            <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-400">
               <span>Всего: {workspace?.total ?? 0}</span>
               <span>
                 На проверку: {workspace?.status_counts?.needs_review ?? 0}
@@ -1547,7 +1547,7 @@ function UploadPanel({
             {uploading ? "Идёт загрузка…" : "Перетащите или выберите файлы"}
           </div>
           {pendingFiles.length === 0 && (
-            <div className="mt-1.5 max-w-lg text-xs text-slate-500">
+            <div className="mt-1.5 max-w-lg text-xs text-slate-400">
               PDF, DWG, DXF, SVG, PNG/JPG, DOCX, XLSX, TXT, STEP, XML, CSV
               <br />
               <span className="text-blue-500">
@@ -1577,7 +1577,7 @@ function UploadPanel({
               {doneCount > 0 && (
                 <button
                   onClick={onClearDone}
-                  className="text-xs text-slate-500 hover:text-slate-300"
+                  className="text-xs text-slate-400 hover:text-slate-300"
                 >
                   Очистить завершённые
                 </button>
@@ -1692,7 +1692,7 @@ function UploadPanel({
                               : pf.status === "quarantined"
                                 ? "text-amber-400"
                                 : pf.status === "duplicate"
-                                  ? "text-slate-500"
+                                  ? "text-slate-400"
                                   : "text-emerald-400"
                           }`}
                         >
@@ -1716,7 +1716,7 @@ function UploadPanel({
                       {pf.status === "error" && (
                         <button
                           onClick={() => onRetryFile(pf.id)}
-                          className="text-slate-500 hover:text-blue-400"
+                          className="text-slate-400 hover:text-blue-400"
                           title="Повторить загрузку"
                         >
                           ↺
@@ -1787,7 +1787,7 @@ function UploadPanel({
           </select>
         </label>
         {uploadDocType && (
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-slate-400">
             Тип применяется ко всей партии. Для каждого файла можно задать свой
             тип в очереди выше.
           </p>
@@ -1802,7 +1802,7 @@ function UploadPanel({
           />
           <span>
             Закрепить тип (игнорировать авто)
-            <span className="block text-xs text-slate-500 mt-0.5">
+            <span className="block text-xs text-slate-400 mt-0.5">
               Если включено — тип партии перекрывает авто-определение по файлу
             </span>
           </span>
@@ -1831,7 +1831,7 @@ function UploadPanel({
           />
           <span>
             Автоматически проверять и утверждать
-            <span className="mt-0.5 block text-xs text-slate-500">
+            <span className="mt-0.5 block text-xs text-slate-400">
               Повторное извлечение проверочными моделями, утверждение при 95%+
               консенсусе
             </span>
@@ -1843,15 +1843,15 @@ function UploadPanel({
           <p className="text-xs font-medium text-slate-400">Источник типа</p>
           <div className="mt-2 flex flex-col gap-1.5">
             {typeSourceBadge("extension", "drawing")}
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               — определён по расширению файла
             </span>
             {typeSourceBadge("ai", "")}
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               — определён ИИ после анализа
             </span>
             {typeSourceBadge("manual", "")}
-            <span className="text-xs text-slate-500">— задан вручную</span>
+            <span className="text-xs text-slate-400">— задан вручную</span>
           </div>
         </div>
       </div>
@@ -2085,12 +2085,12 @@ function QueuePanel({
         {currentDoc ? (
           <span className="text-blue-300">Сейчас: {currentDoc.file_name}</span>
         ) : (
-          <span className="text-slate-500">Сейчас: простаивает</span>
+          <span className="text-slate-400">Сейчас: простаивает</span>
         )}{" "}
         · В очереди: {queueCount}
       </div>
       <div className="overflow-hidden rounded-md border border-slate-800">
-        <div className="grid grid-cols-[minmax(220px,1.1fr)_minmax(360px,2fr)_90px] border-b border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-500">
+        <div className="grid grid-cols-[minmax(220px,1.1fr)_minmax(360px,2fr)_90px] border-b border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-400">
           <span>Документ</span>
           <span>Этапы</span>
           <span>Прогресс</span>
@@ -2107,7 +2107,7 @@ function QueuePanel({
               <span className="block truncate font-medium text-slate-100">
                 {item.document.file_name}
               </span>
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-slate-400">
                 {statusLabel(item.document.status)}
                 {item.document.id === currentId ? (
                   <span className="ml-2 text-blue-300">● идёт</span>
@@ -2131,7 +2131,7 @@ function QueuePanel({
           </button>
         ))}
         {!displayItems.length && (
-          <div className="p-8 text-center text-sm text-slate-500">
+          <div className="p-8 text-center text-sm text-slate-400">
             Нет данных
           </div>
         )}
@@ -2161,7 +2161,7 @@ function DocumentTable({
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[880px] border-collapse text-sm">
-        <thead className="bg-slate-900 text-xs text-slate-500">
+        <thead className="bg-slate-900 text-xs text-slate-400">
           <tr>
             <th className="w-10 px-3 py-2 text-left">
               <input
@@ -2208,7 +2208,7 @@ function DocumentTable({
                 <div className="truncate font-medium">
                   {item.document.file_name}
                 </div>
-                <div className="text-xs text-slate-500">
+                <div className="text-xs text-slate-400">
                   {fmtBytes(item.document.file_size)} ·{" "}
                   {item.document.source_channel ?? "upload"}
                 </div>
@@ -2230,7 +2230,7 @@ function DocumentTable({
         </tbody>
       </table>
       {!items.length && (
-        <div className="p-8 text-center text-sm text-slate-500">
+        <div className="p-8 text-center text-sm text-slate-400">
           Нет документов
         </div>
       )}
@@ -2309,7 +2309,7 @@ function GraphPanel({
       </p>
       <div className="rounded-md border border-slate-800 bg-slate-900 p-4 space-y-4">
         <div>
-          <label className="mb-1 block text-xs text-slate-500">
+          <label className="mb-1 block text-xs text-slate-400">
             1. Найдите документ, с которым нужно связать
           </label>
           {selectedTargetDoc ? (
@@ -2347,7 +2347,7 @@ function GraphPanel({
                         >
                           {item.file_name}
                           {docTypeLabel(item.doc_type) && (
-                            <span className="ml-2 text-xs text-slate-500">
+                            <span className="ml-2 text-xs text-slate-400">
                               {docTypeLabel(item.doc_type)}
                             </span>
                           )}
@@ -2358,7 +2358,7 @@ function GraphPanel({
               )}
               {targetQuery.trim().length > 0 &&
                 targetSearchResults.length === 0 && (
-                  <p className="mt-1 text-xs text-slate-500">
+                  <p className="mt-1 text-xs text-slate-400">
                     Ничего не найдено — попробуйте другую часть имени файла.
                   </p>
                 )}
@@ -2367,7 +2367,7 @@ function GraphPanel({
         </div>
 
         <div>
-          <label className="mb-1 block text-xs text-slate-500">
+          <label className="mb-1 block text-xs text-slate-400">
             2. Укажите, как документы связаны
           </label>
           <div className="grid gap-2 md:grid-cols-2">
@@ -2407,7 +2407,7 @@ function GraphPanel({
           Связанные документы ({summary?.links.length ?? 0})
         </h3>
         {!summary?.links.length ? (
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-slate-400">
             Пока нет связанных документов.
           </p>
         ) : (
@@ -2428,7 +2428,7 @@ function GraphPanel({
                         ? target.file_name
                         : `${link.linked_entity_type}: ${link.linked_entity_id.slice(0, 8)}…`}
                     </span>
-                    <span className="ml-2 text-xs text-slate-500">
+                    <span className="ml-2 text-xs text-slate-400">
                       {linkTypeLabel(link.link_type)}
                       {target?.doc_type
                         ? ` · ${DOC_TYPE_LABELS[target.doc_type] ?? target.doc_type}`
@@ -2452,7 +2452,7 @@ function GraphPanel({
         <div>
           <button
             onClick={onToggleGraphDebug}
-            className="text-xs text-slate-500 underline hover:text-slate-300"
+            className="text-xs text-slate-400 underline hover:text-slate-300"
           >
             {showGraphDebug ? "Скрыть" : "Показать"} технические детали графа
             памяти
@@ -2462,7 +2462,7 @@ function GraphPanel({
 
       {isAdmin && showGraphDebug && (
         <div className="space-y-5">
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-slate-400">
             Окружение графа памяти для этого документа (узлы/рёбра, до которых
             можно дойти за 2 шага от него). Это локальный срез, а не граф
             целиком — общую картину (все узлы/связи, god nodes, кластеры)
@@ -2628,7 +2628,7 @@ function DetailPanel({
             <h2 className="line-clamp-2 text-lg font-semibold">
               {selected.file_name}
             </h2>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-slate-400">
               {selected.mime_type} · {fmtBytes(selected.file_size)}
             </p>
           </div>
@@ -2793,7 +2793,7 @@ function Metric({
 }) {
   return (
     <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
-      <p className="text-xs text-slate-500">{label}</p>
+      <p className="text-xs text-slate-400">{label}</p>
       <p
         className={
           compact ? "mt-1 text-lg font-semibold" : "mt-1 text-2xl font-semibold"
@@ -2819,7 +2819,7 @@ function ListPanel({
 }) {
   return (
     <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
-      <h3 className="text-xs font-semibold uppercase text-slate-500">
+      <h3 className="text-xs font-semibold uppercase text-slate-400">
         {title}
       </h3>
       <div className="mt-2 max-h-96 overflow-y-auto divide-y divide-slate-800">
@@ -2829,7 +2829,7 @@ function ListPanel({
               <div className="truncate text-sm text-slate-100">
                 {item.title}
               </div>
-              <div className="mt-1 line-clamp-2 text-xs text-slate-500">
+              <div className="mt-1 line-clamp-2 text-xs text-slate-400">
                 {item.detail}
               </div>
             </div>
@@ -2853,7 +2853,7 @@ function ListPanel({
 
 function EmptySelection() {
   return (
-    <div className="rounded-md border border-slate-800 bg-slate-900 p-8 text-center text-sm text-slate-500">
+    <div className="rounded-md border border-slate-800 bg-slate-900 p-8 text-center text-sm text-slate-400">
       Выберите документ
     </div>
   );

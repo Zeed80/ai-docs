@@ -286,7 +286,7 @@ export function ParametersPanel() {
                   {Object.entries(params as Record<string, unknown>).map(
                     ([k, v]) => (
                       <div key={k} className="flex justify-between text-xs">
-                        <span className="text-slate-500">{k}</span>
+                        <span className="text-slate-400">{k}</span>
                         <span className="text-slate-300 font-mono">
                           {String(v)}
                         </span>

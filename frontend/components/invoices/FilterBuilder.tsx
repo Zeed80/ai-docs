@@ -77,7 +77,7 @@ export function FilterBuilder({
         <h3 className="text-sm font-semibold text-slate-200">Фильтр</h3>
         <button
           onClick={onClose}
-          className="text-lg leading-none text-slate-500 hover:text-slate-200"
+          className="text-lg leading-none text-slate-400 hover:text-slate-200"
         >
           ×
         </button>

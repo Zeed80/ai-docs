@@ -231,7 +231,7 @@ function FieldRow({
                 e.stopPropagation();
                 startEdit();
               }}
-              className="text-xs text-slate-500 hover:text-blue-400 ml-2 flex-shrink-0"
+              className="text-xs text-slate-400 hover:text-blue-400 ml-2 flex-shrink-0"
               style={{ opacity: isActive ? 1 : 0.4 }}
               title="Исправить"
             >
@@ -242,7 +242,7 @@ function FieldRow({
       )}
 
       {field.confidence_reason && (
-        <span className="text-[10px] text-slate-500 mt-0.5 block">
+        <span className="text-[10px] text-slate-400 mt-0.5 block">
           {field.confidence_reason}
         </span>
       )}
@@ -358,7 +358,7 @@ export function ExtractionPanel({
                   )}
                 </span>
                 {group.collapsible && (
-                  <span className="text-slate-500 text-xs">
+                  <span className="text-slate-400 text-xs">
                     {isCollapsed ? "▶" : "▼"}
                   </span>
                 )}

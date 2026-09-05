@@ -201,7 +201,7 @@ export function CanvasTable({
         </div>
       )}
 
-      <div className="text-xs text-slate-500">
+      <div className="text-xs text-slate-400">
         {filteredCount} из {rows.length} строк
       </div>
     </div>

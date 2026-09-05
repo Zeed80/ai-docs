@@ -41,7 +41,7 @@ function SlaBar({
     pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-green-500";
   return (
     <div className="mt-3">
-      <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+      <div className="flex justify-between text-[10px] text-slate-400 mb-1">
         <span>SLA</span>
         <span>{pct}% использовано</span>
       </div>
@@ -379,7 +379,7 @@ export default function ApprovalsPage() {
                   </button>
                 </>
               ) : (
-                <span className="text-xs text-slate-500">Выбрать все</span>
+                <span className="text-xs text-slate-400">Выбрать все</span>
               )}
             </div>
 
@@ -429,7 +429,7 @@ export default function ApprovalsPage() {
                           a.entity_id.slice(0, 8))}
                     </p>
                     {a.context?.total_amount != null && (
-                      <p className="text-xs text-slate-500">
+                      <p className="text-xs text-slate-400">
                         {formatAmount(a.context.total_amount)}{" "}
                         {(a.context.currency as string) ?? "RUB"}
                       </p>

@@ -638,7 +638,7 @@ export function Composer({
         <button
           onClick={requestClose}
           aria-label={tc("close")}
-          className="text-lg leading-none text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
+          className="text-lg leading-none text-slate-400 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
         >
           ×
         </button>
@@ -647,7 +647,7 @@ export function Composer({
       <div className="flex-1 overflow-auto p-4 space-y-2">
         {mailboxes.length > 1 && (
           <div className="flex items-center gap-2 text-xs">
-            <span className="text-slate-500 dark:text-slate-400 w-10">{tc("from")}</span>
+            <span className="text-slate-400 dark:text-slate-400 w-10">{tc("from")}</span>
             <select
               value={mailbox}
               onChange={(e) => setMailbox(e.target.value)}
@@ -666,7 +666,7 @@ export function Composer({
           {!showCc && (
             <button
               onClick={() => setShowCc(true)}
-              className="mt-1 shrink-0 text-xs text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
+              className="mt-1 shrink-0 text-xs text-slate-400 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
             >
               Cc/Bcc
             </button>
@@ -679,7 +679,7 @@ export function Composer({
           </>
         )}
         <div className="flex items-center gap-2">
-          <span className="text-slate-500 dark:text-slate-400 w-10 text-xs">{tc("subject")}</span>
+          <span className="text-slate-400 dark:text-slate-400 w-10 text-xs">{tc("subject")}</span>
           <input value={subject} onChange={(e) => setSubject(e.target.value)} className={input} />
         </div>
 
@@ -695,14 +695,14 @@ export function Composer({
             <button
               type="button"
               onClick={() => setQuoteOpen((o) => !o)}
-              className="w-full px-3 py-1.5 text-left text-xs text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
+              className="w-full px-3 py-1.5 text-left text-xs text-slate-400 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
               title={tc("quoteHint")}
             >
               ··· {quoteOpen ? tc("quoteHide") : tc("quoteShow")}
             </button>
             {quoteOpen && (
               <div
-                className="max-h-64 overflow-auto border-t border-slate-200 dark:border-slate-700 px-3 py-2 text-xs text-slate-500 dark:text-slate-400 [&_table]:w-auto [&_td]:border [&_td]:border-slate-200 dark:border-slate-700 [&_td]:px-1 [&_img]:max-w-full"
+                className="max-h-64 overflow-auto border-t border-slate-200 dark:border-slate-700 px-3 py-2 text-xs text-slate-400 dark:text-slate-400 [&_table]:w-auto [&_td]:border [&_td]:border-slate-200 dark:border-slate-700 [&_td]:px-1 [&_img]:max-w-full"
                 // Санитизированная копия с сервера — та же, что рендерится в
                 // просмотре письма; сюда попадает только она.
                 dangerouslySetInnerHTML={{ __html: quoted }}
@@ -716,7 +716,7 @@ export function Composer({
             {uploading.map((name) => (
               <span
                 key={`up-${name}`}
-                className="flex items-center gap-1 rounded border border-slate-300 bg-slate-100 px-2 py-1 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400"
+                className="flex items-center gap-1 rounded border border-slate-300 bg-slate-100 px-2 py-1 text-xs text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400"
               >
                 <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
                 {name}
@@ -730,7 +730,7 @@ export function Composer({
                 📎 {a.filename}
                 <button
                   onClick={() => setAttachments((p) => p.filter((x) => x.id !== a.id))}
-                  className="text-slate-500 hover:text-red-500 dark:hover:text-red-400"
+                  className="text-slate-400 hover:text-red-500 dark:hover:text-red-400"
                 >
                   ×
                 </button>
@@ -881,7 +881,7 @@ export function Composer({
                 >
                   {tpl.name}
                   {tpl.subject && (
-                    <span className="block truncate text-xs text-slate-500">{tpl.subject}</span>
+                    <span className="block truncate text-xs text-slate-400">{tpl.subject}</span>
                   )}
                 </button>
               ))}
@@ -890,7 +890,7 @@ export function Composer({
         </div>
 
         {/* Отложенная отправка: сервер принимал send_at всегда. */}
-        <label className="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+        <label className="flex items-center gap-1 text-xs text-slate-400 dark:text-slate-400">
           {tc("sendLater")}
           <input
             type="datetime-local"
@@ -902,7 +902,7 @@ export function Composer({
             <button
               onClick={() => setSendAt("")}
               aria-label={tc("clearSchedule")}
-              className="text-slate-500 dark:text-slate-400 hover:text-red-500"
+              className="text-slate-400 dark:text-slate-400 hover:text-red-500"
             >
               ×
             </button>
@@ -913,14 +913,14 @@ export function Composer({
           <button
             onClick={handleDeleteDraft}
             disabled={busy}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:disabled:border-slate-600 dark:text-slate-400 dark:hover:bg-red-900/40 dark:hover:text-red-600 dark:hover:text-red-300"
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:disabled:border-slate-600 dark:text-slate-400 dark:hover:bg-red-900/40 dark:hover:text-red-600 dark:hover:text-red-300"
           >
             {t("actions.deleteDraft")}
           </button>
         )}
 
         {savedAt && (
-          <span className="ml-auto text-xs text-slate-500 dark:text-slate-400">
+          <span className="ml-auto text-xs text-slate-400 dark:text-slate-400">
             {tc("savedAt", {
               time: savedAt.toLocaleTimeString(undefined, {
                 timeZone,
@@ -990,7 +990,7 @@ export function Composer({
               </button>
               <button
                 onClick={() => setConfirmClose(false)}
-                className="rounded px-3 py-1.5 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                className="rounded px-3 py-1.5 text-sm text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
               >
                 {t("actions.cancel")}
               </button>
@@ -1017,20 +1017,20 @@ export function Composer({
             <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3">{tc("aiPreviewTitle")}</h4>
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div>
-                <p className="mb-1 text-xs text-slate-500">{tc("aiCurrent")}</p>
+                <p className="mb-1 text-xs text-slate-400">{tc("aiCurrent")}</p>
                 <div className="border border-slate-200 dark:border-slate-700 rounded p-2 text-slate-700 dark:text-slate-300 whitespace-pre-wrap text-xs max-h-[40vh] overflow-auto">
                   {htmlToText(body)}
                 </div>
               </div>
               <div>
-                <p className="mb-1 text-xs text-slate-500">{tc("aiProposed")}</p>
+                <p className="mb-1 text-xs text-slate-400">{tc("aiProposed")}</p>
                 <div className="border border-violet-700 rounded p-2 text-slate-900 dark:text-slate-100 whitespace-pre-wrap text-xs max-h-[40vh] overflow-auto">
                   {suggest.body_text}
                 </div>
               </div>
             </div>
             {suggest.notes?.length > 0 && (
-              <ul className="mt-2 text-xs text-slate-500 dark:text-slate-400 list-disc pl-4">
+              <ul className="mt-2 text-xs text-slate-400 dark:text-slate-400 list-disc pl-4">
                 {suggest.notes.map((n: string, i: number) => (
                   <li key={i}>{n}</li>
                 ))}

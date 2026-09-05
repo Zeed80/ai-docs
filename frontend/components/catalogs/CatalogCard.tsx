@@ -116,7 +116,7 @@ export function CatalogCard({
 
         {(active || percent < 100) && catalog.progress_total > 0 && (
           <div>
-            <div className="mb-1 text-[11px] text-slate-500">
+            <div className="mb-1 text-[11px] text-slate-400">
               страница {catalog.progress_done} из {catalog.progress_total}
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-slate-700">
@@ -226,7 +226,7 @@ export function CatalogCard({
               </button>
               <button
                 onClick={() => setDeleteOpen(false)}
-                className="rounded px-2 py-1 text-left text-slate-500 hover:text-slate-300"
+                className="rounded px-2 py-1 text-left text-slate-400 hover:text-slate-300"
               >
                 Отмена
               </button>

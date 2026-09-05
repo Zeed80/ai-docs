@@ -133,12 +133,12 @@ export function ModelCombobox({
               title={AVAILABILITY_LABEL[selected.availability] ?? ""}
             />
             <span className="truncate">{selected.provider_model}</span>
-            <span className="shrink-0 text-xs text-slate-500">
+            <span className="shrink-0 text-xs text-slate-400">
               {providerLabel(selected.provider)}
             </span>
           </span>
         ) : (
-          <span className="text-slate-500">Модель не назначена</span>
+          <span className="text-slate-400">Модель не назначена</span>
         )
       }
       renderItem={(item) => {

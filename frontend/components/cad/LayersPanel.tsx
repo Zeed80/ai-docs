@@ -39,7 +39,7 @@ export default function LayersPanel({
         className="flex w-full items-center justify-between text-xs text-zinc-300"
       >
         <span>{t("vector.layers")}</span>
-        <span className="text-zinc-500">{open ? "−" : "+"}</span>
+        <span className="text-zinc-400">{open ? "−" : "+"}</span>
       </button>
       {open && (
         <div className="space-y-1">
@@ -64,7 +64,7 @@ export default function LayersPanel({
                     <span className="truncate text-zinc-200">
                       {t(`vector.line_${layer.lineClass}`)}
                     </span>
-                    <span className="text-zinc-500">{n}</span>
+                    <span className="text-zinc-400">{n}</span>
                   </div>
                   <button
                     type="button"
@@ -86,7 +86,7 @@ export default function LayersPanel({
                     className={`h-5 w-5 rounded ${
                       isLocked
                         ? "bg-amber-500/20 text-amber-300"
-                        : "text-zinc-500"
+                        : "text-zinc-400"
                     }`}
                   >
                     {isLocked ? "🔒" : "🔓"}
@@ -96,7 +96,7 @@ export default function LayersPanel({
                     title={t("vector.layer_freeze")}
                     onClick={() => onToggleFrozen(layer.lineClass)}
                     className={`h-5 w-5 rounded ${
-                      isFrozen ? "bg-sky-500/20 text-sky-300" : "text-zinc-500"
+                      isFrozen ? "bg-sky-500/20 text-sky-300" : "text-zinc-400"
                     }`}
                   >
                     {isFrozen ? "❄" : "○"}
@@ -105,7 +105,7 @@ export default function LayersPanel({
               );
             })}
           </div>
-          <p className="pt-1 text-[10px] leading-tight text-zinc-500">
+          <p className="pt-1 text-[10px] leading-tight text-zinc-400">
             {t("vector.layers_hint")}
           </p>
         </div>

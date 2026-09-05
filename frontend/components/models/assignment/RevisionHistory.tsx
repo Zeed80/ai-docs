@@ -93,7 +93,7 @@ export function RevisionHistory({
         className="flex w-full items-center justify-between px-3 py-2 text-left text-xs text-slate-300 hover:bg-slate-800/50"
       >
         <span>История назначений</span>
-        <span aria-hidden="true" className="text-slate-500">
+        <span aria-hidden="true" className="text-slate-400">
           {open ? "▾" : "▸"}
         </span>
       </button>
@@ -106,10 +106,10 @@ export function RevisionHistory({
             </p>
           )}
           {items === null && (
-            <p className="text-[11px] text-slate-500">Загрузка…</p>
+            <p className="text-[11px] text-slate-400">Загрузка…</p>
           )}
           {items?.length === 0 && (
-            <p className="text-[11px] text-slate-500">
+            <p className="text-[11px] text-slate-400">
               Изменений ещё не было — история появится после первого применения.
             </p>
           )}

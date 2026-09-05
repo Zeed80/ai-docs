@@ -193,13 +193,13 @@ function MessageCard({
           <div className="min-w-0">
             <p className="truncate text-sm text-slate-900 dark:text-slate-100">{msg.from_address}</p>
             {!open && (
-              <p className="truncate text-xs text-slate-500">
+              <p className="truncate text-xs text-slate-400">
                 {msg.snippet || (msg.body_text ?? "").slice(0, 90)}
               </p>
             )}
           </div>
         </div>
-        <span className="shrink-0 text-[11px] text-slate-500">
+        <span className="shrink-0 text-[11px] text-slate-400">
           {new Date(msg.sent_at || msg.received_at || "").toLocaleString(undefined, {
             timeZone,
             day: "numeric",
@@ -213,7 +213,7 @@ function MessageCard({
       {open && (
         <div className="border-t border-slate-200 dark:border-slate-700 px-4 pb-4">
           {msg.to_addresses && (
-            <p className="mt-2 text-xs text-slate-500">{t("toLabel")}: {msg.to_addresses.join(", ")}</p>
+            <p className="mt-2 text-xs text-slate-400">{t("toLabel")}: {msg.to_addresses.join(", ")}</p>
           )}
 
           {/* Ф1.2 verdicts, finally visible: the agent may create an invoice
@@ -246,14 +246,14 @@ function MessageCard({
               href={emailApi.rawUrl(msg.id)}
               target="_blank"
               rel="noreferrer"
-              className="ml-auto rounded px-1.5 py-0.5 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+              className="ml-auto rounded px-1.5 py-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
               title={t("downloadEmlHint")}
             >
               {t("downloadEml")}
             </a>
             <button
               onClick={printLetter}
-              className="rounded px-1.5 py-0.5 text-slate-500 hover:text-slate-700 dark:hover:text-slate-700 dark:hover:text-slate-300"
+              className="rounded px-1.5 py-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-700 dark:hover:text-slate-300"
               title={t("printLetterHint")}
             >
               {t("print")}
@@ -291,7 +291,7 @@ function MessageCard({
             </button>
             <a
               href={`/email?from=${encodeURIComponent(msg.from_address)}`}
-              className="rounded px-2 py-0.5 text-slate-500 hover:text-slate-700 dark:hover:text-slate-700 dark:hover:text-slate-300"
+              className="rounded px-2 py-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-700 dark:hover:text-slate-300"
             >
               {t("actions.allFromSender")}
             </a>
@@ -340,7 +340,7 @@ function MessageCard({
             </>
           ) : (
             <div className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-800 dark:text-slate-200">
-              {msg.body_text || <span className="italic text-slate-500">{t("emptyBody")}</span>}
+              {msg.body_text || <span className="italic text-slate-400">{t("emptyBody")}</span>}
             </div>
           )}
 
@@ -350,7 +350,7 @@ function MessageCard({
                 <p key={r.rule_id} className="text-[11px] text-slate-600 dark:text-slate-400">
                   {t("activityRule", { name: r.name })}
                   {r.actions.length > 0 && (
-                    <span className="text-slate-500">
+                    <span className="text-slate-400">
                       {" → "}
                       {r.actions
                         .map((a) =>
@@ -382,7 +382,7 @@ function MessageCard({
                   {t("triageBy", { category: triage.category_label })}
                 </span>
                 {triage.confidence != null && (
-                  <span className="text-[10px] text-slate-500">
+                  <span className="text-[10px] text-slate-400">
                     {t("confidence", { n: (triage.confidence * 100).toFixed(0) })}
                   </span>
                 )}
@@ -398,7 +398,7 @@ function MessageCard({
               {triage.performed.length > 0 && (
                 <ul className="mt-1.5 space-y-0.5">
                   {triage.performed.map((a, i) => (
-                    <li key={i} className="text-[11px] text-slate-500 dark:text-slate-400">
+                    <li key={i} className="text-[11px] text-slate-400 dark:text-slate-400">
                       ✓ {(PERFORMED_KEYS as readonly string[]).includes(a.type)
                         ? t(`performed.${a.type}`)
                         : a.type}
@@ -420,7 +420,7 @@ function MessageCard({
                 </ul>
               )}
               <div className="mt-1.5 flex items-center gap-1.5">
-                <span className="text-[10px] text-slate-500">{t("wrongCategory")}</span>
+                <span className="text-[10px] text-slate-400">{t("wrongCategory")}</span>
                 <select
                   defaultValue=""
                   onChange={(e) => e.target.value && correctCategory(e.target.value)}
@@ -433,7 +433,7 @@ function MessageCard({
                     </option>
                   ))}
                 </select>
-                {correcting && <span className="text-[10px] text-slate-500">…</span>}
+                {correcting && <span className="text-[10px] text-slate-400">…</span>}
               </div>
             </div>
           )}
@@ -453,17 +453,17 @@ function MessageCard({
                       {t("invoiceNo", { number: inv.invoice_number ?? t("noNumber") })}
                     </a>
                     {inv.total_amount != null && (
-                      <span className="text-slate-500 dark:text-slate-400">
+                      <span className="text-slate-400 dark:text-slate-400">
                         {" · "}
                         {inv.total_amount.toLocaleString("ru-RU")} {inv.currency ?? "RUB"}
                       </span>
                     )}
-                    <span className="text-slate-500">
+                    <span className="text-slate-400">
                       {" · "}
                       {inv.status === "needs_review" ? t("needsReview") : inv.status}
                     </span>
                     {inv.supplier_name && (
-                      <span className="block text-[11px] text-slate-500">
+                      <span className="block text-[11px] text-slate-400">
                         {t("supplierLabel")}: {inv.supplier_name}
                         {inv.supplier_matched_by &&
                           ["email_sender_exact", "email_sender_domain", "inn", "created"].includes(
@@ -500,7 +500,7 @@ function MessageCard({
                       onClick={() =>
                         setPreview((p) => (p === a.id ? null : a.id))
                       }
-                      className="shrink-0 text-xs text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
+                      className="shrink-0 text-xs text-slate-400 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
                       title={preview === a.id ? t("collapseAttachment") : t("expandAttachment")}
                     >
                       {preview === a.id ? "▾" : "▸"}
@@ -519,7 +519,7 @@ function MessageCard({
                   >
                     {a.filename}
                   </a>
-                  <span className="shrink-0 text-[11px] text-slate-500">
+                  <span className="shrink-0 text-[11px] text-slate-400">
                     {humanSize(a.size)}
                   </span>
                   <button
@@ -537,7 +537,7 @@ function MessageCard({
                     {t("attachmentTo.drawing")}
                   </button>
                   {status[a.filename] && (
-                    <span className="w-full text-[11px] text-slate-500 dark:text-slate-400">{status[a.filename]}</span>
+                    <span className="w-full text-[11px] text-slate-400 dark:text-slate-400">{status[a.filename]}</span>
                   )}
                   {preview === a.id && (
                     // ?disposition=inline честен только для типов из белого
@@ -638,7 +638,7 @@ export function ThreadView({
   }, [threadId]);
 
   if (error) return <div className="p-6 text-sm text-red-500 dark:text-red-400">{error}</div>;
-  if (!thread) return <div className="p-6 text-sm text-slate-500 dark:text-slate-400">…</div>;
+  if (!thread) return <div className="p-6 text-sm text-slate-400 dark:text-slate-400">…</div>;
 
   const last = thread.messages[thread.messages.length - 1];
 
@@ -650,7 +650,7 @@ export function ThreadView({
         <button
           onClick={onClose}
           aria-label={t("backToList")}
-          className="text-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 md:hidden"
+          className="text-lg text-slate-400 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 md:hidden"
         >
           ←
         </button>
@@ -694,7 +694,7 @@ export function ThreadView({
         </button>
         <button
           onClick={onTrash}
-          className="rounded px-2 py-1 text-xs text-slate-500 dark:text-slate-400 hover:bg-red-50 dark:hover:bg-red-900/40 hover:text-red-600 dark:hover:text-red-300"
+          className="rounded px-2 py-1 text-xs text-slate-400 dark:text-slate-400 hover:bg-red-50 dark:hover:bg-red-900/40 hover:text-red-600 dark:hover:text-red-300"
         >
           {t("actions.trash")}
         </button>

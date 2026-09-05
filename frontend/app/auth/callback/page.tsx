@@ -51,7 +51,7 @@ function CallbackHandler() {
             </svg>
           </div>
           <h2 className="text-lg font-semibold text-slate-800">Ошибка входа</h2>
-          <p className="text-sm text-slate-500 mt-2">{error}</p>
+          <p className="text-sm text-slate-400 mt-2">{error}</p>
           <a
             href="/auth/login"
             className="mt-4 inline-block px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
@@ -67,7 +67,7 @@ function CallbackHandler() {
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
       <div className="text-center">
         <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-        <p className="text-sm text-slate-500">Выполняется вход...</p>
+        <p className="text-sm text-slate-400">Выполняется вход...</p>
       </div>
     </div>
   );

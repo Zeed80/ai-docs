@@ -99,7 +99,7 @@ export default function DownloadPage() {
           >
             Скачать APK
           </a>
-          <p className="break-all text-center text-xs text-slate-500">
+          <p className="break-all text-center text-xs text-slate-400">
             {absUrl}
           </p>
         </div>
@@ -130,7 +130,7 @@ export default function DownloadPage() {
               </div>
             )}
           </div>
-          <p className="break-all text-center text-xs text-slate-500">
+          <p className="break-all text-center text-xs text-slate-400">
             {origin}
           </p>
         </div>
@@ -153,7 +153,7 @@ export default function DownloadPage() {
         </div>
       )}
 
-      <p className="text-center text-xs text-slate-500">
+      <p className="text-center text-xs text-slate-400">
         После установки приложение само предложит обновление, когда выйдет новая
         версия — переустанавливать вручную не нужно.
       </p>

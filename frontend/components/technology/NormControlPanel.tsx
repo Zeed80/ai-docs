@@ -111,7 +111,7 @@ export default function NormControlPanel({
             {STATUS_LABEL[status]}
           </span>
           {result && (
-            <span className="text-xs text-zinc-500">
+            <span className="text-xs text-zinc-400">
               ({result.errors_count} ош. / {result.warnings_count} пред.)
             </span>
           )}
@@ -150,7 +150,7 @@ export default function NormControlPanel({
       {/* Checks list */}
       <div className="flex-1 overflow-y-auto">
         {!result ? (
-          <div className="flex flex-col items-center justify-center h-40 text-zinc-500 text-sm">
+          <div className="flex flex-col items-center justify-center h-40 text-zinc-400 text-sm">
             <p>Нормоконтроль не запускался.</p>
             <button
               onClick={onRerun}
@@ -160,7 +160,7 @@ export default function NormControlPanel({
             </button>
           </div>
         ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-40 text-zinc-500 text-sm">
+          <div className="flex flex-col items-center justify-center h-40 text-zinc-400 text-sm">
             {status === "passed" ? (
               <>
                 <span className="text-2xl">✅</span>
@@ -196,7 +196,7 @@ export default function NormControlPanel({
                           {check.check_code}
                         </span>
                         {check.clause && (
-                          <span className="text-xs text-zinc-500">
+                          <span className="text-xs text-zinc-400">
                             {check.clause}
                           </span>
                         )}

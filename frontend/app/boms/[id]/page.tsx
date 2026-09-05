@@ -51,7 +51,7 @@ interface StockCheckResult {
 const STATUS_COLORS: Record<string, string> = {
   draft: "bg-slate-700 text-slate-300",
   approved: "bg-green-900 text-green-200",
-  obsolete: "bg-slate-800 text-slate-500",
+  obsolete: "bg-slate-800 text-slate-400",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -309,7 +309,7 @@ export default function BOMDetailPage() {
           <div className="flex items-center gap-3 mb-1">
             <Link
               href="/boms"
-              className="text-slate-500 hover:text-slate-300 text-sm"
+              className="text-slate-400 hover:text-slate-300 text-sm"
             >
               ← Спецификации
             </Link>
@@ -318,9 +318,9 @@ export default function BOMDetailPage() {
             <h1 className="text-xl font-semibold text-slate-100">
               {bom.product_name}
             </h1>
-            <span className="text-slate-500 text-sm">v{bom.version}</span>
+            <span className="text-slate-400 text-sm">v{bom.version}</span>
             {bom.product_code && (
-              <span className="text-xs text-slate-500 font-mono bg-slate-800 px-2 py-0.5 rounded">
+              <span className="text-xs text-slate-400 font-mono bg-slate-800 px-2 py-0.5 rounded">
                 {bom.product_code}
               </span>
             )}
@@ -331,7 +331,7 @@ export default function BOMDetailPage() {
             </span>
           </div>
           {bom.approved_by && (
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-slate-400 mt-1">
               Утверждена: {bom.approved_by}
               {bom.approved_at &&
                 ` — ${new Date(bom.approved_at).toLocaleDateString("ru-RU", { timeZone: tz() })}`}
@@ -367,7 +367,7 @@ export default function BOMDetailPage() {
           </h2>
         </div>
         {bom.lines.length === 0 ? (
-          <div className="text-center py-12 text-slate-500">
+          <div className="text-center py-12 text-slate-400">
             <p className="text-sm">Позиций нет</p>
             {isDraft && (
               <button
@@ -381,7 +381,7 @@ export default function BOMDetailPage() {
         ) : (
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-slate-700 text-xs text-slate-500 uppercase tracking-wider">
+              <tr className="border-b border-slate-700 text-xs text-slate-400 uppercase tracking-wider">
                 <th className="text-left py-2 px-4 w-10">№</th>
                 <th className="text-left py-2 pr-4">Наименование</th>
                 <th className="text-right py-2 pr-4 w-24">Кол-во</th>
@@ -392,13 +392,13 @@ export default function BOMDetailPage() {
             <tbody className="divide-y divide-slate-700/50">
               {bom.lines.map((line) => (
                 <tr key={line.id} className="hover:bg-slate-700/30">
-                  <td className="py-2.5 px-4 text-slate-500 text-xs">
+                  <td className="py-2.5 px-4 text-slate-400 text-xs">
                     {line.line_number}
                   </td>
                   <td className="py-2.5 pr-4 text-slate-200">
                     {line.description}
                     {line.notes && (
-                      <span className="ml-2 text-xs text-slate-500">
+                      <span className="ml-2 text-xs text-slate-400">
                         {line.notes}
                       </span>
                     )}
@@ -432,7 +432,7 @@ export default function BOMDetailPage() {
               Проверка складских остатков
             </h2>
             <div className="flex items-center gap-2">
-              <label className="text-xs text-slate-500">Партия:</label>
+              <label className="text-xs text-slate-400">Партия:</label>
               <input
                 type="number"
                 value={batchQty}
@@ -441,7 +441,7 @@ export default function BOMDetailPage() {
                 step="0.001"
                 className="w-20 px-2 py-1 bg-slate-700 rounded text-sm text-slate-100 border border-slate-600 focus:outline-none focus:border-indigo-500"
               />
-              <span className="text-xs text-slate-500">шт</span>
+              <span className="text-xs text-slate-400">шт</span>
             </div>
             <button
               onClick={handleStockCheck}
@@ -476,7 +476,7 @@ export default function BOMDetailPage() {
               </div>
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-xs text-slate-500 uppercase tracking-wider border-b border-slate-700">
+                  <tr className="text-xs text-slate-400 uppercase tracking-wider border-b border-slate-700">
                     <th className="text-left py-1.5 pr-4">Позиция</th>
                     <th className="text-right py-1.5 pr-4">Требуется</th>
                     <th className="text-right py-1.5 pr-4">В наличии</th>

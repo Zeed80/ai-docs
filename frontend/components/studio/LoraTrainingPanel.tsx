@@ -248,7 +248,7 @@ function SampleEvolution({
 
   return (
     <div className="space-y-2">
-      <div className="text-[11px] text-zinc-500">
+      <div className="text-[11px] text-zinc-400">
         Прогресс на контрольных образцах (не входят в обучение)
       </div>
       {rows.map((row) => {
@@ -283,7 +283,7 @@ function SampleEvolution({
                   }
                   className="h-40 rounded border border-white/10 cursor-zoom-in"
                 />
-                <figcaption className="text-[10px] text-zinc-500 text-center mt-0.5">
+                <figcaption className="text-[10px] text-zinc-400 text-center mt-0.5">
                   шаг {it.step}
                 </figcaption>
               </figure>
@@ -379,7 +379,7 @@ function Freshness({ ts, now }: { ts?: number; now: number }) {
   if (!ts) return null;
   const age = Math.max(0, now - ts);
   const color =
-    age > 300 ? "text-red-400" : age > 120 ? "text-amber-400" : "text-zinc-500";
+    age > 300 ? "text-red-400" : age > 120 ? "text-amber-400" : "text-zinc-400";
   const label =
     age > 300
       ? `связь с тренером потеряна (${humanDuration(age)})`
@@ -911,7 +911,7 @@ export default function LoraTrainingPanel() {
           </Collapsible>
 
           {datasets.length === 0 && (
-            <p className="text-xs text-zinc-500 px-1">
+            <p className="text-xs text-zinc-400 px-1">
               Датасетов пока нет — создайте первый выше.
             </p>
           )}
@@ -1119,7 +1119,7 @@ export default function LoraTrainingPanel() {
           </Collapsible>
 
           {runs.length === 0 && (
-            <p className="text-xs text-zinc-500 px-1">
+            <p className="text-xs text-zinc-400 px-1">
               Запусков пока нет — подготовьте датасет и запустите обучение.
             </p>
           )}
@@ -1178,7 +1178,7 @@ function DatasetCard({
               onClick={onDelete}
               title={t("lora_delete")}
               aria-label={t("lora_delete")}
-              className="text-zinc-500 hover:text-red-400 text-xs"
+              className="text-zinc-400 hover:text-red-400 text-xs"
             >
               ✕
             </button>
@@ -1212,7 +1212,7 @@ function DatasetCard({
         </div>
       )}
       {rejected.length > 0 && (
-        <details className="text-[11px] text-zinc-500">
+        <details className="text-[11px] text-zinc-400">
           <summary className="cursor-pointer">
             отклонённые пары: {rejected.length}
           </summary>
@@ -1313,7 +1313,7 @@ function RunCard({
           <div className="text-sm text-white font-medium truncate">
             {run.name}
           </div>
-          <div className="text-[11px] text-zinc-500 truncate">
+          <div className="text-[11px] text-zinc-400 truncate">
             {datasetName} · {run.base_family} · {String(cfg.steps ?? total)}{" "}
             шагов · rank {String(cfg.rank ?? "?")} ·{" "}
             {String(cfg.resolution ?? "?")}px
@@ -1328,7 +1328,7 @@ function RunCard({
               onClick={onDelete}
               title={t("lora_delete")}
               aria-label={t("lora_delete")}
-              className="text-zinc-500 hover:text-red-400 text-xs"
+              className="text-zinc-400 hover:text-red-400 text-xs"
             >
               ✕
             </button>
@@ -1394,7 +1394,7 @@ function RunCard({
       {/* Loss chart + trend */}
       {(p.history?.length ?? 0) >= 3 && (
         <div>
-          <div className="flex items-center justify-between text-[10px] text-zinc-500">
+          <div className="flex items-center justify-between text-[10px] text-zinc-400">
             <span>loss</span>
             {trend && <span>{trend}</span>}
           </div>
@@ -1437,7 +1437,7 @@ function RunCard({
       {/* Checkpoints */}
       {run.checkpoints.length > 0 && (
         <div className="space-y-1">
-          <div className="text-xs text-zinc-500">{t("lora_checkpoints")}:</div>
+          <div className="text-xs text-zinc-400">{t("lora_checkpoints")}:</div>
           {run.checkpoints.map((c) => {
             const st = sampleStep(c);
             const deployKey = `deploy:${run.id}:${c}`;

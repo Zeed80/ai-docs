@@ -456,7 +456,7 @@ export default function EngineeringModelGraphPanel({
           <h2 className="text-sm font-medium text-zinc-100">
             Engineering Model Graph
           </h2>
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="mt-1 text-xs text-zinc-400">
             Канонический граф, evidence, patch и влияние на построение
           </p>
           {selected?.workflow_status === "review_required" && (
@@ -509,7 +509,7 @@ export default function EngineeringModelGraphPanel({
         )}
       </div>
       {!selected ? (
-        <p className="px-4 py-8 text-sm text-zinc-500">
+        <p className="px-4 py-8 text-sm text-zinc-400">
           EMG ещё не создан. Legacy CAD/spec продолжают работать как derived
           views.
         </p>
@@ -573,7 +573,7 @@ export default function EngineeringModelGraphPanel({
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.7fr)]">
             <div className="max-h-80 overflow-auto border border-white/10">
-              <div className="grid grid-cols-[minmax(120px,1fr)_120px_120px] gap-2 border-b border-white/10 px-3 py-2 text-xs text-zinc-500">
+              <div className="grid grid-cols-[minmax(120px,1fr)_120px_120px] gap-2 border-b border-white/10 px-3 py-2 text-xs text-zinc-400">
                 <span>Assertion</span>
                 <span>Источник</span>
                 <span>Assurance</span>
@@ -652,7 +652,7 @@ export default function EngineeringModelGraphPanel({
                           Цепочки пересборки (
                           {Object.keys(impact.dependency_paths).length})
                         </summary>
-                        <div className="mt-2 max-h-32 space-y-1 overflow-auto font-mono text-[10px] text-zinc-500">
+                        <div className="mt-2 max-h-32 space-y-1 overflow-auto font-mono text-[10px] text-zinc-400">
                           {Object.entries(impact.dependency_paths).map(
                             ([id, path]) => (
                               <p key={id}>{path.join(" → ")}</p>
@@ -923,7 +923,7 @@ export default function EngineeringModelGraphPanel({
                       {item.validation_errors.join(", ")}
                     </p>
                   )}
-                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-500">
+                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-400">
                     {JSON.stringify(item.payload, null, 2)}
                   </pre>
                 </details>
@@ -946,10 +946,10 @@ export default function EngineeringModelGraphPanel({
                     Visual verifier: {item.visual_verifications.length}{" "}
                     запуск(ов)
                   </p>
-                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-500">
+                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-400">
                     {JSON.stringify(item.payload, null, 2)}
                   </pre>
-                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-500">
+                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-400">
                     {JSON.stringify(item.visual_verifications, null, 2)}
                   </pre>
                 </details>
@@ -975,7 +975,7 @@ function DomainArtifacts({
 }) {
   if (!artifacts.length) {
     return (
-      <div className="border border-dashed border-white/10 px-3 py-4 text-xs text-zinc-500">
+      <div className="border border-dashed border-white/10 px-3 py-4 text-xs text-zinc-400">
         Проверенных доменных артефактов в этой ревизии пока нет.
       </div>
     );
@@ -1267,7 +1267,7 @@ function Log({
       <h3 className="border-b border-white/10 px-3 py-2 text-xs font-medium text-zinc-300">
         {title}
       </h3>
-      {children || <p className="px-3 py-5 text-xs text-zinc-500">{empty}</p>}
+      {children || <p className="px-3 py-5 text-xs text-zinc-400">{empty}</p>}
     </div>
   );
 }

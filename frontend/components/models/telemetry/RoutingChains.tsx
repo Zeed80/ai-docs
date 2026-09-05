@@ -118,7 +118,7 @@ export function RoutingChains() {
           <h3 className="text-sm font-semibold text-slate-200">
             Цепочки моделей по задачам
           </h3>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-slate-400">
             Выше видна только назначенная модель. Здесь — весь порядок
             фолбэков: именно по нему пойдёт запрос, если основная модель
             недоступна.
@@ -152,7 +152,7 @@ export function RoutingChains() {
       </div>
 
       {loading ? (
-        <p className="mt-3 text-xs text-slate-500">Загрузка…</p>
+        <p className="mt-3 text-xs text-slate-400">Загрузка…</p>
       ) : dead > 0 ? (
         <p className="mt-3 text-xs text-amber-400">
           Мёртвых звеньев: {dead}. Пока основная модель работает, это незаметно
@@ -177,7 +177,7 @@ export function RoutingChains() {
                       m.availability === "available"
                         ? "text-slate-400"
                         : m.availability === "unknown"
-                          ? "text-slate-500"
+                          ? "text-slate-400"
                           : "text-amber-400"
                     }`}
                   >

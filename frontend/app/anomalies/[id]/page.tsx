@@ -259,7 +259,7 @@ export default function AnomalyDetailPage() {
                   <span className="text-sm text-blue-400 group-hover:underline truncate">
                     {s.snippet ?? s.id.slice(0, 16) + "…"}
                   </span>
-                  <span className="shrink-0 text-xs text-slate-500 font-mono">
+                  <span className="shrink-0 text-xs text-slate-400 font-mono">
                     {(s.score * 100).toFixed(0)}%
                   </span>
                 </Link>

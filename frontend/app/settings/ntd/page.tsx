@@ -345,7 +345,7 @@ export default function NtdSettingsPage() {
             </div>
           ))}
           {!documents.length && (
-            <p className="py-6 text-center text-sm text-slate-500">НТД не добавлены</p>
+            <p className="py-6 text-center text-sm text-slate-400">НТД не добавлены</p>
           )}
         </div>
       </section>
@@ -367,12 +367,12 @@ export default function NtdSettingsPage() {
               </div>
               <p className="mt-1 text-sm text-slate-300">{item.text}</p>
               {item.required_keywords?.length ? (
-                <p className="mt-1 text-xs text-slate-500">Ключевые слова: {item.required_keywords.join(", ")}</p>
+                <p className="mt-1 text-xs text-slate-400">Ключевые слова: {item.required_keywords.join(", ")}</p>
               ) : null}
             </div>
           ))}
           {!requirements.length && (
-            <p className="py-6 text-center text-sm text-slate-500">Требований не найдено</p>
+            <p className="py-6 text-center text-sm text-slate-400">Требований не найдено</p>
           )}
         </div>
       </section>

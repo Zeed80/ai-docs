@@ -141,14 +141,14 @@ export default function BlockersAlternativesPanel({
                   </span>
                   <ArrowRight className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 </button>
-                <p className="mt-1 text-[10px] text-zinc-500">
+                <p className="mt-1 text-[10px] text-zinc-400">
                   {operationId
                     ? `Переход к ${operationId}`
                     : "Прямая связь не зафиксирована; операция проверяется по server dependency closure"}
                 </p>
                 {alternatives.length > 1 && (
                   <div className="mt-2 border-t border-white/5 pt-2">
-                    <p className="text-[10px] uppercase tracking-wide text-zinc-500">
+                    <p className="text-[10px] uppercase tracking-wide text-zinc-400">
                       Альтернативы из {hypothesisSet?.id}
                     </p>
                     <div className="mt-1 space-y-1">
@@ -189,7 +189,7 @@ export default function BlockersAlternativesPanel({
                               )}
                             </div>
                             {facts.length > 0 && (
-                              <p className="mt-1 break-all text-zinc-500">
+                              <p className="mt-1 break-all text-zinc-400">
                                 {facts.join(" · ")}
                               </p>
                             )}

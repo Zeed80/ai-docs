@@ -229,7 +229,7 @@ export function DrawingViewer({
         )}
 
         {error && !loading && (
-          <div className="flex flex-col items-center gap-3 text-white/40">
+          <div className="flex flex-col items-center gap-3 text-white/50">
             <span className="text-4xl">📐</span>
             <span className="text-sm">{error}</span>
             <span className="text-xs text-center max-w-xs">
@@ -239,7 +239,7 @@ export function DrawingViewer({
         )}
 
         {!loading && !error && !svgContent && !svgUrl && (
-          <div className="flex flex-col items-center gap-3 text-white/30">
+          <div className="flex flex-col items-center gap-3 text-white/50">
             <span className="text-6xl">📄</span>
             <span className="text-sm">SVG не доступен</span>
           </div>

@@ -68,7 +68,7 @@ export default function EngineeringPage() {
       {error && <div className="border-l-2 border-red-400 bg-red-500/5 px-3 py-2 text-sm text-red-300">{error}</div>}
 
       <section className="overflow-hidden border border-white/10">
-        <div className="grid grid-cols-[minmax(0,1fr)_140px_130px] gap-3 border-b border-white/10 bg-zinc-900/70 px-4 py-2 text-xs uppercase text-zinc-500">
+        <div className="grid grid-cols-[minmax(0,1fr)_140px_130px] gap-3 border-b border-white/10 bg-zinc-900/70 px-4 py-2 text-xs uppercase text-zinc-400">
           <span>Изделие</span><span>Обозначение</span><span>Состояние</span>
         </div>
         {projects.map((project) => (
@@ -78,14 +78,14 @@ export default function EngineeringPage() {
             <span className={STATUS_COLOR[project.status]}>{STATUS[project.status]}</span>
           </div>
         ))}
-        {projects.length === 0 && <div className="px-4 py-10 text-center text-sm text-zinc-500">Проекты пока не созданы.</div>}
+        {projects.length === 0 && <div className="px-4 py-10 text-center text-sm text-zinc-400">Проекты пока не созданы.</div>}
       </section>
 
       <section className="border-t border-white/10 pt-4">
         <h2 className="text-sm font-medium text-zinc-200">Материалы</h2>
         <div className="mt-2 flex flex-wrap gap-2">
           {materials.map((material) => <span key={material.id} className="border border-white/10 bg-zinc-900 px-2 py-1 text-xs text-zinc-300">{material.designation}{material.standard ? ` · ${material.standard}` : ""}</span>)}
-          {materials.length === 0 && <span className="text-xs text-zinc-500">Справочник материалов пуст.</span>}
+          {materials.length === 0 && <span className="text-xs text-zinc-400">Справочник материалов пуст.</span>}
         </div>
       </section>
     </main>

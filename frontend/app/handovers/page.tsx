@@ -120,7 +120,7 @@ export default function HandoversPage() {
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-xl font-bold text-slate-100">Передачи</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-400 mt-0.5">
             Документы, переданные вам или отправленные другим
           </p>
         </div>
@@ -144,7 +144,7 @@ export default function HandoversPage() {
       </div>
 
       {loading ? (
-        <div className="py-10 text-center text-slate-500 text-sm">
+        <div className="py-10 text-center text-slate-400 text-sm">
           Загрузка...
         </div>
       ) : items.length === 0 ? (

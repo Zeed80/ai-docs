@@ -157,13 +157,13 @@ export default function AutoApprovalSettingsPage() {
           <h3 className="text-sm font-semibold">
             Новое правило авто-утверждения
           </h3>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-slate-400">
             Все заданные условия должны выполняться одновременно. Оставьте поле
             пустым, чтобы не ограничивать по этому критерию.
           </p>
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
-              <label className="text-xs text-slate-500 block mb-1">
+              <label className="text-xs text-slate-400 block mb-1">
                 Название правила *
               </label>
               <input
@@ -177,7 +177,7 @@ export default function AutoApprovalSettingsPage() {
               />
             </div>
             <div>
-              <label className="text-xs text-slate-500 block mb-1">
+              <label className="text-xs text-slate-400 block mb-1">
                 Тип документа
               </label>
               <select
@@ -195,7 +195,7 @@ export default function AutoApprovalSettingsPage() {
               </select>
             </div>
             <div>
-              <label className="text-xs text-slate-500 block mb-1">
+              <label className="text-xs text-slate-400 block mb-1">
                 ID поставщика (необязательно)
               </label>
               <input
@@ -208,7 +208,7 @@ export default function AutoApprovalSettingsPage() {
               />
             </div>
             <div>
-              <label className="text-xs text-slate-500 block mb-1">
+              <label className="text-xs text-slate-400 block mb-1">
                 Макс. сумма
               </label>
               <div className="flex gap-2">
@@ -235,7 +235,7 @@ export default function AutoApprovalSettingsPage() {
               </div>
             </div>
             <div>
-              <label className="text-xs text-slate-500 block mb-1">
+              <label className="text-xs text-slate-400 block mb-1">
                 Мин. Trust Score (%)
               </label>
               <input
@@ -280,7 +280,7 @@ export default function AutoApprovalSettingsPage() {
       ) : rules.length === 0 ? (
         <div className="py-16 text-center">
           <div className="text-3xl text-slate-300 mb-3">✓</div>
-          <p className="text-slate-500 text-sm">Правил авто-утверждения нет.</p>
+          <p className="text-slate-400 text-sm">Правил авто-утверждения нет.</p>
           <p className="text-slate-400 text-xs mt-1">
             Добавьте правило, чтобы небольшие счета от надёжных поставщиков
             проходили без ручного просмотра.
@@ -300,12 +300,12 @@ export default function AutoApprovalSettingsPage() {
                       {rule.name}
                     </span>
                     <span
-                      className={`text-[10px] px-2 py-0.5 rounded-full ${rule.is_active ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}
+                      className={`text-[10px] px-2 py-0.5 rounded-full ${rule.is_active ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-400"}`}
                     >
                       {rule.is_active ? "Активно" : "Отключено"}
                     </span>
                   </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-slate-500">
+                  <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-slate-400">
                     {rule.doc_type && <span>Тип: {rule.doc_type}</span>}
                     {rule.max_amount != null && (
                       <span>

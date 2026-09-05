@@ -106,13 +106,13 @@ export function ThreadList({
 
   if (loading)
     return (
-      <div className="py-8 text-center text-sm text-slate-500" role="status" aria-live="polite">
+      <div className="py-8 text-center text-sm text-slate-400" role="status" aria-live="polite">
         {t("loading")}
       </div>
     );
   if (threads.length === 0)
     return (
-      <div className="px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+      <div className="px-4 py-10 text-center text-sm text-slate-400 dark:text-slate-400">
         {emptyState}
       </div>
     );
@@ -142,7 +142,7 @@ export function ThreadList({
               style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
             >
               {showBucket && (
-                <div className="bg-slate-100/80 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:bg-slate-900/70 dark:text-slate-500">
+                <div className="bg-slate-100/80 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:bg-slate-900/70 dark:text-slate-400">
                   {bucket}
                 </div>
               )}
@@ -186,7 +186,7 @@ export function ThreadList({
                   }}
                   aria-label={th.is_starred ? t("actions.unstar") : t("actions.star")}
                   aria-pressed={th.is_starred}
-                  className={`mt-0.5 shrink-0 text-sm ${th.is_starred ? "text-amber-500" : "text-slate-500 dark:text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"}`}
+                  className={`mt-0.5 shrink-0 text-sm ${th.is_starred ? "text-amber-500" : "text-slate-400 dark:text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"}`}
                 >
                   {th.is_starred ? "★" : "☆"}
                 </button>
@@ -204,14 +204,14 @@ export function ThreadList({
                     <span className={`truncate text-sm ${unread ? "font-semibold text-slate-900 dark:text-slate-100" : "text-slate-700 dark:text-slate-300"}`}>
                       {who}
                     </span>
-                    <span className="shrink-0 text-[11px] text-slate-500">{relDate(th.last_message_at, timeZone)}</span>
+                    <span className="shrink-0 text-[11px] text-slate-400">{relDate(th.last_message_at, timeZone)}</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className={`truncate text-xs ${unread ? "text-slate-800 dark:text-slate-200" : "text-slate-500 dark:text-slate-400"}`}>
+                    <span className={`truncate text-xs ${unread ? "text-slate-800 dark:text-slate-200" : "text-slate-400 dark:text-slate-400"}`}>
                       {th.subject || t("noSubject")}
                     </span>
                     {th.message_count > 1 && (
-                      <span className="text-[10px] text-slate-500">{th.message_count}</span>
+                      <span className="text-[10px] text-slate-400">{th.message_count}</span>
                     )}
                     {th.unread_count > 1 && (
                       <span className="rounded-full bg-blue-600 px-1.5 text-[9px] font-medium text-white">
@@ -233,7 +233,7 @@ export function ThreadList({
                     )}
                   </div>
                   {th.last_snippet && !dense && (
-                    <p className="truncate text-[11px] text-slate-500">{th.last_snippet}</p>
+                    <p className="truncate text-[11px] text-slate-400">{th.last_snippet}</p>
                   )}
                   {th.labels.length > 0 && (
                     <div className="mt-0.5 flex flex-wrap gap-1">
@@ -255,7 +255,7 @@ export function ThreadList({
         })}
       </div>
       {loadingMore && (
-        <p className="py-3 text-center text-xs text-slate-500">{t("loadingMore")}</p>
+        <p className="py-3 text-center text-xs text-slate-400">{t("loadingMore")}</p>
       )}
       {!hasMore && threads.length > 20 && (
         <p className="py-3 text-center text-xs text-slate-400 dark:text-slate-400">{t("allLoaded")}</p>

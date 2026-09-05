@@ -198,7 +198,7 @@ function CreateModal({ onClose, onCreated }: CreateModalProps) {
                   <button
                     type="button"
                     onClick={() => removeItem(i)}
-                    className="col-span-1 text-slate-500 hover:text-red-400 text-center"
+                    className="col-span-1 text-slate-400 hover:text-red-400 text-center"
                   >
                     ✕
                   </button>
@@ -328,7 +328,7 @@ export default function ProcurementPage() {
       {loading ? (
         <p className="text-slate-400 text-sm">Загрузка...</p>
       ) : requests.length === 0 ? (
-        <div className="text-center py-16 text-slate-500">
+        <div className="text-center py-16 text-slate-400">
           <p className="text-4xl mb-3">📋</p>
           <p className="text-sm">Заявок на закупку нет</p>
           <button
@@ -357,7 +357,7 @@ export default function ProcurementPage() {
                       {req.title}
                     </h3>
                   </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
                     <span>{req.items.length} позиций</span>
                     <span>Создана {formatDate(req.created_at)}</span>
                     {req.deadline && (
@@ -413,7 +413,7 @@ export default function ProcurementPage() {
                 className="w-full text-left flex items-center gap-4 bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 hover:border-slate-600 transition-colors"
               >
                 <span className="text-sm text-slate-200 flex-1">{s.name}</span>
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-slate-400">
                   {s.invoice_ids.length} КП
                 </span>
                 <span

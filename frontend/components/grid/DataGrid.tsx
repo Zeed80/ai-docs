@@ -266,7 +266,7 @@ export function DataGrid({
                 />
               );
             }
-            if (v == null) return <span className="text-slate-500">—</span>;
+            if (v == null) return <span className="text-slate-400">—</span>;
             return (
               <span
                 className={`whitespace-pre-line ${
@@ -487,7 +487,7 @@ export function DataGrid({
         tableEl
       )}
       {table.getRowModel().rows.length === 0 && (
-        <div className="py-6 text-center text-xs text-slate-500">
+        <div className="py-6 text-center text-xs text-slate-400">
           Нет данных
         </div>
       )}

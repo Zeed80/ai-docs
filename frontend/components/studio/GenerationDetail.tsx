@@ -95,7 +95,7 @@ function CadProcessTimeline({
           />
         </div>
         {process?.started_at && (
-          <div className="mt-1 text-[10px] text-zinc-500">
+          <div className="mt-1 text-[10px] text-zinc-400">
             {t("detail.cad_process_started")}: {new Date(process.started_at).toLocaleString(undefined, { timeZone: tz() })}
           </div>
         )}
@@ -177,7 +177,7 @@ export function CadModelOutputsPanel({ generationId }: { generationId: string })
             : t("detail.cad_model_outputs_load")}
         </button>
       ) : outputs.length === 0 ? (
-        <p className="mt-2 text-zinc-500">
+        <p className="mt-2 text-zinc-400">
           {t("detail.cad_model_outputs_empty")}
         </p>
       ) : (
@@ -194,7 +194,7 @@ export function CadModelOutputsPanel({ generationId }: { generationId: string })
               </summary>
               <div className="mt-2 space-y-2">
                 <div>
-                  <div className="mb-1 text-[10px] uppercase text-zinc-500">
+                  <div className="mb-1 text-[10px] uppercase text-zinc-400">
                     {t("detail.cad_model_prompt")}
                   </div>
                   <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-black/40 p-2 text-[10px] text-zinc-300">
@@ -202,7 +202,7 @@ export function CadModelOutputsPanel({ generationId }: { generationId: string })
                   </pre>
                 </div>
                 <div>
-                  <div className="mb-1 text-[10px] uppercase text-zinc-500">
+                  <div className="mb-1 text-[10px] uppercase text-zinc-400">
                     {t("detail.cad_model_answer")}
                   </div>
                   <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-black/40 p-2 text-[10px] text-zinc-200">
@@ -211,7 +211,7 @@ export function CadModelOutputsPanel({ generationId }: { generationId: string })
                 </div>
                 {output.thinking && (
                   <div>
-                    <div className="mb-1 text-[10px] uppercase text-zinc-500">
+                    <div className="mb-1 text-[10px] uppercase text-zinc-400">
                       {t("detail.cad_model_thinking")}
                     </div>
                     <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-black/40 p-2 text-[10px] text-zinc-300">
@@ -506,7 +506,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
       <div className="space-y-2 border-t border-white/10 pt-2">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <div className="text-xs text-zinc-500">
+            <div className="text-xs text-zinc-400">
               {t("composer.workflow_params_label")}
             </div>
             <div className="text-[11px] text-zinc-400">
@@ -550,7 +550,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
             if (options) {
               return (
                 <label key={key} className="block">
-                  <span className="text-xs text-zinc-500">{label}</span>
+                  <span className="text-xs text-zinc-400">{label}</span>
                   <select
                     value={String(value ?? "")}
                     onChange={(e) => setWorkflowParamValue(key, e.target.value)}
@@ -570,7 +570,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
             );
             return (
               <label key={key} className="block">
-                <span className="text-xs text-zinc-500">{label}</span>
+                <span className="text-xs text-zinc-400">{label}</span>
                 <input
                   type={numeric ? "number" : "text"}
                   value={String(value ?? "")}
@@ -803,7 +803,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
       <div className="grid grid-cols-2 gap-2">
         {hasSource && (
           <figure>
-            <figcaption className="text-[11px] text-zinc-500 mb-1">
+            <figcaption className="text-[11px] text-zinc-400 mb-1">
               {t("detail.source_label")}
             </figcaption>
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -816,7 +816,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
         )}
         {gen.has_result && (
           <figure className={hasSource ? "" : "col-span-2"}>
-            <figcaption className="text-[11px] text-zinc-500 mb-1">
+            <figcaption className="text-[11px] text-zinc-400 mb-1">
               {t("detail.result_label")}
             </figcaption>
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -838,7 +838,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
           {workflows.length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-xs text-zinc-500">
+                <label className="text-xs text-zinc-400">
                   {t("composer.workflow_label")}
                 </label>
                 <button
@@ -900,7 +900,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
 
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="text-[11px] text-zinc-500">
+              <label className="text-[11px] text-zinc-400">
                 {t("detail.iterate_label")}
               </label>
               <button
@@ -951,12 +951,12 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
           )}
 
           <details className="text-sm">
-            <summary className="text-xs text-zinc-500 cursor-pointer">
+            <summary className="text-xs text-zinc-400 cursor-pointer">
               {t("composer.advanced")}
             </summary>
             <div className="mt-2 space-y-2">
               <div>
-                <label className="text-xs text-zinc-500">
+                <label className="text-xs text-zinc-400">
                   {t("composer.negative_prompt_label")}
                 </label>
                 <input
@@ -967,7 +967,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
                 />
               </div>
               <div>
-                <label className="text-xs text-zinc-500">
+                <label className="text-xs text-zinc-400">
                   {t("composer.seed_label")}
                 </label>
                 <input

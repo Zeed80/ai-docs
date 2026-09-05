@@ -73,7 +73,7 @@ function FeatureParamField({
 function ReadOnlyParamRow({ param }: { param: EmgParam }) {
   return (
     <div className="flex items-center justify-between gap-2 py-1 text-[11px]">
-      <span className="font-mono text-zinc-500">{param.name}</span>
+      <span className="font-mono text-zinc-400">{param.name}</span>
       <span className="flex items-center gap-1.5">
         <span className="font-mono text-zinc-200">
           {formatValue(param.value)}
@@ -132,7 +132,7 @@ export default function PropertiesPanel({
 
   if (!operation) {
     return (
-      <p className="p-3 text-xs text-zinc-500">
+      <p className="p-3 text-xs text-zinc-400">
         Выберите элемент в дереве слева, чтобы увидеть и поправить его значения.
       </p>
     );
@@ -211,7 +211,7 @@ export default function PropertiesPanel({
 
       {readOnlyOperationParams.length > 0 && (
         <section>
-          <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+          <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
             Параметры операции (что реально построено)
           </h4>
           <div className="divide-y divide-white/5 rounded border border-white/10 bg-black/20 px-2">
@@ -223,7 +223,7 @@ export default function PropertiesPanel({
       )}
 
       {features.length === 0 && (
-        <p className="rounded border border-white/10 bg-white/5 p-2 text-[11px] text-zinc-500">
+        <p className="rounded border border-white/10 bg-white/5 p-2 text-[11px] text-zinc-400">
           Эта операция не связана ни с одним элементом чтения (например, базовая
           форма из всего профиля, или фича, добавленная вручную) — править здесь
           нечего; значения выше показаны для справки.
@@ -237,7 +237,7 @@ export default function PropertiesPanel({
         if (params.length === 0 && !feature.location) return null;
         return (
           <section key={feature.id}>
-            <h4 className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+            <h4 className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
               Прочитано с чертежа — {kindLabel(feature.kind)}
               <span className="font-mono normal-case text-zinc-400">
                 {feature.id}

@@ -58,7 +58,7 @@ export default function CasesPage() {
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-xl font-bold text-slate-100">Кейсы</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-400 mt-0.5">
             Рабочие задания — группировка документов, согласований и аудита
           </p>
         </div>
@@ -81,7 +81,7 @@ export default function CasesPage() {
       </div>
 
       {loading ? (
-        <div className="py-12 text-center text-slate-500 text-sm">
+        <div className="py-12 text-center text-slate-400 text-sm">
           Загрузка...
         </div>
       ) : cases.length === 0 ? (
@@ -111,7 +111,7 @@ export default function CasesPage() {
                     {c.customer}
                   </p>
                 )}
-                <p className="text-[10px] text-slate-500 mt-1">
+                <p className="text-[10px] text-slate-400 mt-1">
                   {c.documents_count} документов ·{" "}
                   {new Date(c.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
                 </p>

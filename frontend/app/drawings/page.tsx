@@ -149,7 +149,7 @@ export default function DrawingsPage() {
       {/* Header */}
       <div className="flex items-center gap-4 px-6 py-4 bg-zinc-900 border-b border-white/10">
         <h1 className="text-xl font-semibold text-white">Чертежи</h1>
-        <span className="text-white/30 text-sm">{total} шт.</span>
+        <span className="text-white/50 text-sm">{total} шт.</span>
 
         <div className="flex items-center gap-2 ml-auto">
           {/* Search */}
@@ -160,7 +160,7 @@ export default function DrawingsPage() {
               setPage(1);
             }}
             placeholder="Обозначение чертежа..."
-            className="bg-zinc-800 border border-white/10 rounded px-3 py-1.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-blue-500/50 w-48"
+            className="bg-zinc-800 border border-white/10 rounded px-3 py-1.5 text-sm text-white placeholder-white/50 focus:outline-none focus:border-blue-500/50 w-48"
           />
 
           {/* Status filter */}
@@ -219,7 +219,7 @@ export default function DrawingsPage() {
 
       {/* Drop zone hint */}
       <div
-        className="mx-6 mt-3 border-2 border-dashed border-white/10 rounded-lg p-3 flex items-center gap-3 text-white/30 text-sm hover:border-blue-500/30 hover:text-white/50 transition-colors cursor-pointer"
+        className="mx-6 mt-3 border-2 border-dashed border-white/10 rounded-lg p-3 flex items-center gap-3 text-white/50 text-sm hover:border-blue-500/30 hover:text-white/50 transition-colors cursor-pointer"
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
         onClick={() => fileRef.current?.click()}
@@ -234,14 +234,14 @@ export default function DrawingsPage() {
       {/* Grid */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {loading && (
-          <div className="flex items-center justify-center py-12 text-white/40 gap-2">
+          <div className="flex items-center justify-center py-12 text-white/50 gap-2">
             <div className="w-5 h-5 border border-white/30 border-t-white rounded-full animate-spin" />
             <span>Загрузка...</span>
           </div>
         )}
 
         {!loading && drawings.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16 text-white/30 gap-3">
+          <div className="flex flex-col items-center justify-center py-16 text-white/50 gap-3">
             <span className="text-6xl">📐</span>
             <span className="text-lg">Нет чертежей</span>
             <span className="text-sm text-center max-w-xs">
@@ -296,7 +296,7 @@ export default function DrawingsPage() {
           </span>
           <button
             onClick={() => setSelectedIds(new Set())}
-            className="text-white/40 hover:text-white text-sm px-2 transition-colors"
+            className="text-white/50 hover:text-white text-sm px-2 transition-colors"
           >
             Снять
           </button>
@@ -417,7 +417,7 @@ function DrawingCard({
       {/* Delete button */}
       <button
         onClick={onDelete}
-        className="absolute top-2 right-8 z-10 w-6 h-6 rounded flex items-center justify-center bg-zinc-900/80 hover:bg-red-600 text-white/40 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+        className="absolute top-2 right-8 z-10 w-6 h-6 rounded flex items-center justify-center bg-zinc-900/80 hover:bg-red-600 text-white/50 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
         title="Удалить"
       >
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 14 14">
@@ -472,7 +472,7 @@ function DrawingCard({
           </div>
           <div className="flex items-center gap-2 mt-1">
             {drawing.drawing_number && (
-              <span className="text-white/40 text-xs font-mono">
+              <span className="text-white/50 text-xs font-mono">
                 {drawing.drawing_number}
               </span>
             )}
@@ -483,7 +483,7 @@ function DrawingCard({
             )}
           </div>
           {titleBlock?.material && (
-            <div className="text-white/30 text-xs mt-1 truncate">
+            <div className="text-white/50 text-xs mt-1 truncate">
               {titleBlock.material}
             </div>
           )}

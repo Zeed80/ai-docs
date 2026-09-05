@@ -322,7 +322,7 @@ function SystemHealthBar() {
           >
             {s.value}
           </span>
-          <span className="text-[10px] text-slate-500 group-hover:text-slate-400">
+          <span className="text-[10px] text-slate-400 group-hover:text-slate-400">
             {s.label}
           </span>
           {s.sub && <span className="text-[10px] text-red-400">· {s.sub}</span>}
@@ -510,7 +510,7 @@ export default function FeedPage() {
                             критично
                           </span>
                         )}
-                        <span className="text-[10px] text-slate-500 ml-auto">
+                        <span className="text-[10px] text-slate-400 ml-auto">
                           {timeAgo(item.created_at)}
                         </span>
                       </div>

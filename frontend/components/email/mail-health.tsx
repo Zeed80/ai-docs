@@ -249,7 +249,7 @@ export function MailHealthSection() {
 
               {expanded === m.name && (
                 <div className="mt-3 border-t border-slate-700 pt-3 space-y-1">
-                  <p className="pb-1 text-[11px] text-slate-500">
+                  <p className="pb-1 text-[11px] text-slate-400">
                     Папку, которую мы не узнали, можно назначить вручную:
                     провайдеры раскладывают почту по-своему, а несинкаемая папка
                     — это письма, которые есть на сервере и которых нет здесь.
@@ -260,13 +260,13 @@ export function MailHealthSection() {
                       className="flex items-center justify-between gap-3 text-xs"
                     >
                       <span
-                        className={`truncate ${f.sync_enabled ? "" : "text-slate-500"}`}
+                        className={`truncate ${f.sync_enabled ? "" : "text-slate-400"}`}
                       >
                         {f.remote_name}
                       </span>
                       <div className="flex shrink-0 items-center gap-2">
                         <span
-                          className={f.sync_error ? "text-red-400" : "text-slate-500"}
+                          className={f.sync_error ? "text-red-400" : "text-slate-400"}
                         >
                           {f.sync_error ? f.sync_error : ago(f.last_sync_at)}
                         </span>

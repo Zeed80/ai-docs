@@ -123,7 +123,7 @@ export function LineItemsTable({
 
   if (!lines?.length) {
     return (
-      <div className="text-sm text-slate-500 text-center py-4">
+      <div className="text-sm text-slate-400 text-center py-4">
         Позиции не извлечены
       </div>
     );
@@ -184,7 +184,7 @@ export function LineItemsTable({
                 key={line.id}
                 className="hover:bg-slate-800/50 transition-colors"
               >
-                <td className="py-1.5 px-2 text-slate-500">
+                <td className="py-1.5 px-2 text-slate-400">
                   {line.line_number}
                 </td>
                 <EditableCell

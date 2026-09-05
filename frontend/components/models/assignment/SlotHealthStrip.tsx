@@ -41,10 +41,10 @@ export function SlotHealthStrip({ health }: { health: SlotHealth | null }) {
       ? "text-red-400"
       : health.calls >= 20 && health.error_rate > 0
         ? "text-amber-400"
-        : "text-slate-500";
+        : "text-slate-400";
 
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
       <span className="flex items-center gap-1.5">
         <StatusDot
           state={state}

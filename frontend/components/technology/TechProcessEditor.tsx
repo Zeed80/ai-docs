@@ -219,7 +219,7 @@ export default function TechProcessEditor({
                         e.stopPropagation();
                         setExpandedId(isExpanded ? null : op.id);
                       }}
-                      className="text-zinc-500 hover:text-zinc-300 transition"
+                      className="text-zinc-400 hover:text-zinc-300 transition"
                     >
                       {isExpanded ? "▲" : "▼"}
                     </button>
@@ -231,7 +231,7 @@ export default function TechProcessEditor({
                     <td colSpan={8} className="px-4 py-3">
                       <div className="grid grid-cols-2 gap-4 text-xs">
                         <div>
-                          <p className="text-zinc-500 mb-0.5">
+                          <p className="text-zinc-400 mb-0.5">
                             Установка / описание:
                           </p>
                           <p className="text-zinc-300 leading-relaxed">
@@ -239,13 +239,13 @@ export default function TechProcessEditor({
                           </p>
                         </div>
                         <div>
-                          <p className="text-zinc-500 mb-0.5">Переходы:</p>
+                          <p className="text-zinc-400 mb-0.5">Переходы:</p>
                           <p className="text-zinc-300 leading-relaxed whitespace-pre-line">
                             {op.transition_text || "—"}
                           </p>
                         </div>
                         <div>
-                          <p className="text-zinc-500 mb-0.5">
+                          <p className="text-zinc-400 mb-0.5">
                             Требования к контролю:
                           </p>
                           <p className="text-zinc-300">
@@ -254,7 +254,7 @@ export default function TechProcessEditor({
                         </div>
                         {op.cutting_parameters && (
                           <div>
-                            <p className="text-zinc-500 mb-0.5">
+                            <p className="text-zinc-400 mb-0.5">
                               Режимы резания:
                             </p>
                             <div className="font-mono text-zinc-300 space-y-0.5">
@@ -274,7 +274,7 @@ export default function TechProcessEditor({
                                 )
                                 .map(([k, v]) => (
                                   <div key={k}>
-                                    <span className="text-zinc-500">{k}=</span>
+                                    <span className="text-zinc-400">{k}=</span>
                                     <span>{String(v)}</span>
                                   </div>
                                 ))}
@@ -282,7 +282,7 @@ export default function TechProcessEditor({
                           </div>
                         )}
                         <div className="col-span-2">
-                          <p className="text-zinc-500 mb-0.5">
+                          <p className="text-zinc-400 mb-0.5">
                             Нормы времени (мин):
                           </p>
                           <div className="flex gap-4 font-mono text-zinc-300">
@@ -294,7 +294,7 @@ export default function TechProcessEditor({
                               ["Тпз", op.tpz_minutes],
                             ].map(([label, val]) => (
                               <span key={String(label)}>
-                                <span className="text-zinc-500">{label}=</span>
+                                <span className="text-zinc-400">{label}=</span>
                                 {val != null ? Number(val).toFixed(2) : "—"}
                               </span>
                             ))}

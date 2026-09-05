@@ -6,7 +6,7 @@ export default function OfflinePage() {
       <div className="max-w-md w-full text-center">
         <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center">
           <svg
-            className="w-8 h-8 text-slate-500"
+            className="w-8 h-8 text-slate-400"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"

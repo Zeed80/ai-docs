@@ -150,7 +150,7 @@ function ProviderCard({
             )}
           </>
         ) : (
-          <div className="text-slate-500">
+          <div className="text-slate-400">
             {status.error ? status.error.slice(0, 60) : "Сервис не запущен"}
           </div>
         )}
@@ -368,7 +368,7 @@ function ServerConfigPanel({ provider }: { provider: "llamacpp" | "vllm" }) {
         <span className="text-sm font-medium text-slate-100">
           {providerLabel(provider)} — настройки сервера
         </span>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-slate-400">
           применяются после рестарта
         </span>
       </div>
@@ -492,7 +492,7 @@ function VllmVersionPanel() {
         <span className="text-sm font-medium text-slate-100">
           vLLM — версия движка
         </span>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-slate-400">
           pull + пересоздание контейнера
         </span>
       </div>
@@ -623,7 +623,7 @@ function PresetsPanel() {
           </button>
         </div>
         {current && (
-          <div className="text-xs text-slate-500">
+          <div className="text-xs text-slate-400">
             {current.description}
             <div className="mt-1 text-slate-400">
               Задачи: {current.tasks.join(", ")}
@@ -687,7 +687,7 @@ function TelemetryPanel() {
           </span>
           <button
             onClick={reset}
-            className="text-xs text-slate-500 hover:text-slate-300"
+            className="text-xs text-slate-400 hover:text-slate-300"
           >
             Сброс
           </button>
@@ -695,12 +695,12 @@ function TelemetryPanel() {
       </div>
       <div className="p-4">
         {rows.length === 0 ? (
-          <div className="text-sm text-slate-500">
+          <div className="text-sm text-slate-400">
             Пока нет данных — статистика появится после AI-вызовов.
           </div>
         ) : (
           <div className="space-y-1">
-            <div className="grid grid-cols-12 gap-2 text-xs text-slate-500 pb-1 border-b border-slate-800">
+            <div className="grid grid-cols-12 gap-2 text-xs text-slate-400 pb-1 border-b border-slate-800">
               <span className="col-span-3">Задача</span>
               <span className="col-span-4">Модель</span>
               <span className="col-span-1 text-right">N</span>
@@ -825,7 +825,7 @@ function ProvidersConfigPanel() {
       <div className="p-4 space-y-5">
         {/* Cloud providers — master/detail */}
         <div>
-          <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+          <div className="text-xs uppercase tracking-wide text-slate-400 mb-2">
             Облачные провайдеры — выберите слева, настройте справа
           </div>
           <div className="flex flex-col sm:flex-row gap-3 rounded-md border border-slate-700 bg-slate-900/40">
@@ -875,7 +875,7 @@ function ProvidersConfigPanel() {
                   setBusy={setBusy}
                 />
               ) : (
-                <div className="text-sm text-slate-500">
+                <div className="text-sm text-slate-400">
                   Выберите провайдера слева.
                 </div>
               )}
@@ -885,7 +885,7 @@ function ProvidersConfigPanel() {
 
         {/* Local nodes */}
         <div>
-          <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+          <div className="text-xs uppercase tracking-wide text-slate-400 mb-2">
             Локальные узлы — можно добавить адрес Ollama/vLLM на другой машине
           </div>
           <div className="space-y-3">
@@ -1000,7 +1000,7 @@ function CloudProviderDetail({
         <span className="text-sm font-semibold text-slate-100">
           {providerLabel(inst.kind)}
         </span>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-slate-400">
           {inst.api_key_state === "corrupt"
             ? "ключ сохранён, но не расшифровывается — введите его заново (обычно после смены APP_SECRET_KEY)"
             : inst.api_key_set
@@ -1171,7 +1171,7 @@ function LocalKindBlock({
         <div key={n.id} className="flex items-center gap-2 py-1 text-sm">
           <StatusDotT ok={n.last_check_ok} />
           <span className="text-slate-300 w-40 truncate">{n.name}</span>
-          <span className="text-xs text-slate-500 flex-1 truncate">
+          <span className="text-xs text-slate-400 flex-1 truncate">
             {n.base_url || "(адрес по умолчанию)"}
           </span>
           <button
@@ -1278,7 +1278,7 @@ export function InfraPanel({
       <TelemetryPanel />
 
       {/* Quick tips */}
-      <div className="text-xs text-slate-500 space-y-1 bg-slate-900 rounded p-3 border border-slate-800">
+      <div className="text-xs text-slate-400 space-y-1 bg-slate-900 rounded p-3 border border-slate-800">
         <div className="text-slate-400 font-medium mb-2">Быстрый старт</div>
         <div>
           • <b className="text-slate-300">Ollama</b>: запустить через{" "}

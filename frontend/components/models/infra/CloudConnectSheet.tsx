@@ -183,7 +183,7 @@ export function CloudConnectSheet({
                 <span className="text-slate-300">{label}</span>
                 {step.message && (
                   <span
-                    className={`ml-1 ${step.state === "error" ? "text-red-400" : "text-slate-500"}`}
+                    className={`ml-1 ${step.state === "error" ? "text-red-400" : "text-slate-400"}`}
                   >
                     — {step.message}
                   </span>
@@ -193,7 +193,7 @@ export function CloudConnectSheet({
           ))}
         </ol>
 
-        <p className="text-[11px] text-slate-500">
+        <p className="text-[11px] text-slate-400">
           После загрузки моделей они появятся в списке выбора. Слоты, через
           которые проходит содержимое документов, остаются локальными, пока для
           них отдельно не разрешить облако.

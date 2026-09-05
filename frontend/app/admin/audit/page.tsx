@@ -239,18 +239,18 @@ function AuditContent() {
         </div>
       </div>
 
-      {loading && <p className="text-sm text-slate-500">Загрузка...</p>}
+      {loading && <p className="text-sm text-slate-400">Загрузка...</p>}
       {error && <p className="text-sm text-red-400">Ошибка: {error}</p>}
 
       {!loading && (
         <>
-          <p className="text-xs text-slate-500">Найдено: {total}</p>
+          <p className="text-xs text-slate-400">Найдено: {total}</p>
 
           {view === "timeline" ? (
             /* Timeline view */
             <div className="space-y-0">
               {items.length === 0 && (
-                <p className="text-sm text-slate-500 py-8 text-center">
+                <p className="text-sm text-slate-400 py-8 text-center">
                   Записей нет
                 </p>
               )}
@@ -294,11 +294,11 @@ function AuditContent() {
                           {meta?.label ?? log.action}
                         </span>
                         {!meta && (
-                          <span className="text-xs font-mono text-slate-500">
+                          <span className="text-xs font-mono text-slate-400">
                             {log.action}
                           </span>
                         )}
-                        <span className="text-xs text-slate-500 ml-auto shrink-0">
+                        <span className="text-xs text-slate-400 ml-auto shrink-0">
                           {new Date(log.timestamp).toLocaleString("ru-RU", { timeZone: tz() })}
                         </span>
                       </div>
@@ -317,7 +317,7 @@ function AuditContent() {
                               {log.entity_id.slice(0, 8)}…
                             </Link>
                           ) : log.entity_id ? (
-                            <span className="font-mono text-slate-500">
+                            <span className="font-mono text-slate-400">
                               {log.entity_id.slice(0, 8)}…
                             </span>
                           ) : null}
@@ -378,7 +378,7 @@ function AuditContent() {
                     const link = entityLink(log.entity_type, log.entity_id);
                     return (
                       <tr key={log.id} className="hover:bg-slate-700/30">
-                        <td className="px-3 py-1.5 whitespace-nowrap text-slate-500">
+                        <td className="px-3 py-1.5 whitespace-nowrap text-slate-400">
                           {new Date(log.timestamp).toLocaleString("ru-RU", { timeZone: tz() })}
                         </td>
                         <td
@@ -401,10 +401,10 @@ function AuditContent() {
                             </span>
                           ) : null}
                         </td>
-                        <td className="px-3 py-1.5 font-mono text-slate-500">
+                        <td className="px-3 py-1.5 font-mono text-slate-400">
                           {log.user_id ? log.user_id.slice(0, 16) + "…" : "—"}
                         </td>
-                        <td className="px-3 py-1.5 text-slate-500">
+                        <td className="px-3 py-1.5 text-slate-400">
                           {log.ip_address ?? "—"}
                         </td>
                       </tr>
@@ -414,7 +414,7 @@ function AuditContent() {
                     <tr>
                       <td
                         colSpan={5}
-                        className="px-3 py-4 text-center text-slate-500"
+                        className="px-3 py-4 text-center text-slate-400"
                       >
                         Записей нет
                       </td>

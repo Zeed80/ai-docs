@@ -143,7 +143,7 @@ export default function ReviewPanel({
                 <span className="truncate">
                   {entityLabel(e, t)} — {Math.round(e.confidence * 100)}%
                 </span>
-                <span className="shrink-0 text-zinc-500">
+                <span className="shrink-0 text-zinc-400">
                   {t(`vector.review_reason_${r.reason}`)}
                 </span>
               </button>

@@ -118,7 +118,7 @@ export function Combobox<T>({
         className={`${input} ${focusRing} flex items-center justify-between text-left disabled:cursor-not-allowed`}
       >
         <span className="min-w-0 flex-1 truncate">{buttonLabel}</span>
-        <span aria-hidden="true" className="ml-2 shrink-0 text-slate-500">
+        <span aria-hidden="true" className="ml-2 shrink-0 text-slate-400">
           ▾
         </span>
       </button>
@@ -138,13 +138,13 @@ export function Combobox<T>({
 
           <ul role="listbox" className="max-h-80 overflow-y-auto py-1">
             {total === 0 && (
-              <li className="px-3 py-4 text-center text-xs text-slate-500">
+              <li className="px-3 py-4 text-center text-xs text-slate-400">
                 {emptyText}
               </li>
             )}
             {grouped.map(([group, list]) => (
               <li key={group}>
-                <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-slate-400">
                   {group}
                 </p>
                 <ul>

@@ -169,7 +169,7 @@ export default function ReceiptDetailPage() {
           <div className="flex items-center gap-2 mb-1">
             <Link
               href="/warehouse"
-              className="text-slate-500 hover:text-slate-300 text-xs"
+              className="text-slate-400 hover:text-slate-300 text-xs"
             >
               ← Склад
             </Link>
@@ -184,7 +184,7 @@ export default function ReceiptDetailPage() {
               {STATUS_LABELS[receipt.status] ?? receipt.status}
             </span>
           </div>
-          <div className="flex gap-4 mt-1 text-xs text-slate-500">
+          <div className="flex gap-4 mt-1 text-xs text-slate-400">
             <span>
               Дата: {new Date(receipt.received_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
             </span>
@@ -218,7 +218,7 @@ export default function ReceiptDetailPage() {
           </div>
         )}
         {isFinal && (
-          <span className="text-xs px-3 py-1.5 border border-slate-700 text-slate-500 rounded">
+          <span className="text-xs px-3 py-1.5 border border-slate-700 text-slate-400 rounded">
             {STATUS_LABELS[receipt.status] ?? receipt.status}
           </span>
         )}
@@ -227,13 +227,13 @@ export default function ReceiptDetailPage() {
       {/* Summary */}
       <div className="px-6 py-3 border-b border-slate-700 flex gap-6 text-sm">
         <div>
-          <span className="text-slate-500 text-xs">Ожидалось</span>
+          <span className="text-slate-400 text-xs">Ожидалось</span>
           <p className="text-slate-200 font-mono font-semibold">
             {totalExpected.toLocaleString("ru-RU")}
           </p>
         </div>
         <div>
-          <span className="text-slate-500 text-xs">Получено</span>
+          <span className="text-slate-400 text-xs">Получено</span>
           <p
             className={`font-mono font-semibold ${
               hasDiscrepancy ? "text-orange-400" : "text-green-400"
@@ -243,7 +243,7 @@ export default function ReceiptDetailPage() {
           </p>
         </div>
         <div>
-          <span className="text-slate-500 text-xs">Строк</span>
+          <span className="text-slate-400 text-xs">Строк</span>
           <p className="text-slate-200 font-mono font-semibold">
             {lines.length}
           </p>
@@ -260,13 +260,13 @@ export default function ReceiptDetailPage() {
       {/* Lines */}
       <div className="flex-1 overflow-auto">
         {lines.length === 0 ? (
-          <div className="text-center py-16 text-slate-500 text-sm">
+          <div className="text-center py-16 text-slate-400 text-sm">
             Строки не найдены
           </div>
         ) : (
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 bg-slate-900">
-              <tr className="text-left text-[11px] text-slate-500 border-b border-slate-700">
+              <tr className="text-left text-[11px] text-slate-400 border-b border-slate-700">
                 <th className="px-6 py-2 font-medium">Наименование</th>
                 <th className="px-3 py-2 font-medium text-right">Ожидалось</th>
                 <th className="px-3 py-2 font-medium text-right">Получено</th>
@@ -398,7 +398,7 @@ function LineRow({
           </span>
         )}
       </td>
-      <td className="px-3 py-3 text-slate-500 text-xs">{line.unit}</td>
+      <td className="px-3 py-3 text-slate-400 text-xs">{line.unit}</td>
       <td className="px-6 py-3">
         {isEditable ? (
           <div className="flex items-center gap-2">

@@ -198,7 +198,7 @@ export default function StudioPage() {
           <h1 className="text-lg sm:text-xl font-semibold text-white">
             {t("title")}
           </h1>
-          <p className="text-xs text-zinc-500 hidden sm:block">
+          <p className="text-xs text-zinc-400 hidden sm:block">
             {t("subtitle")}
           </p>
         </div>

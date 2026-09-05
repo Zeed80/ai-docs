@@ -82,7 +82,7 @@ export default function ProjectionsPanel({
     <section className="border border-white/10">
       <div className="border-b border-white/10 px-4 py-3">
         <h2 className="text-sm font-medium text-zinc-100">Проекции ревизии</h2>
-        <p className="mt-0.5 text-xs text-zinc-500">
+        <p className="mt-0.5 text-xs text-zinc-400">
           Связанные артефакты: CAD IR, чертёж, спецификация, техпроцесс — с
           признаком актуальности.
         </p>
@@ -98,7 +98,7 @@ export default function ProjectionsPanel({
                 <span className="truncate text-zinc-200">
                   {ENTITY_LABEL[p.entity_type] || p.entity_type}
                   {p.projection_type && p.projection_type !== p.entity_type && (
-                    <span className="ml-1 text-xs text-zinc-500">
+                    <span className="ml-1 text-xs text-zinc-400">
                       · {p.projection_type}
                     </span>
                   )}
@@ -113,7 +113,7 @@ export default function ProjectionsPanel({
                   {stale ? "устарела" : "актуальна"}
                 </span>
               </div>
-              <div className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
+              <div className="mt-1 flex items-center gap-2 text-xs text-zinc-400">
                 <span className="truncate font-mono" title={p.entity_id}>
                   {p.entity_id.slice(0, 8)}
                 </span>
@@ -132,12 +132,12 @@ export default function ProjectionsPanel({
           );
         })}
         {revisionId && projections.length === 0 && (
-          <p className="px-4 py-6 text-sm text-zinc-500">
+          <p className="px-4 py-6 text-sm text-zinc-400">
             Ревизия не связана с артефактами.
           </p>
         )}
         {!revisionId && (
-          <p className="px-4 py-6 text-sm text-zinc-500">Выберите ревизию.</p>
+          <p className="px-4 py-6 text-sm text-zinc-400">Выберите ревизию.</p>
         )}
       </div>
 

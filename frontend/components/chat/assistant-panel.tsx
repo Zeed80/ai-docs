@@ -194,10 +194,10 @@ function FileChip({
       <span className="truncate flex-1" title={af.name}>
         {af.name}
       </span>
-      <span className="text-slate-500 shrink-0">{formatBytes(af.size)}</span>
+      <span className="text-slate-400 shrink-0">{formatBytes(af.size)}</span>
       <button
         onClick={onRemove}
-        className="shrink-0 text-slate-500 hover:text-slate-300 transition-colors"
+        className="shrink-0 text-slate-400 hover:text-slate-300 transition-colors"
         title="Убрать файл"
       >
         ×
@@ -243,7 +243,7 @@ function ApprovalCardView({
         <dl className="grid grid-cols-[auto,1fr] gap-x-2 gap-y-0.5 text-[11px]">
           {card.fields.map((f) => (
             <div key={f.label} className="contents">
-              <dt className="text-slate-500">{f.label}</dt>
+              <dt className="text-slate-400">{f.label}</dt>
               <dd
                 className={`min-w-0 break-words ${f.emphasis ? "font-medium text-slate-100" : "text-slate-300"}`}
               >
@@ -294,12 +294,12 @@ function ApprovalCardView({
 
       <button
         onClick={() => setShowRaw((v) => !v)}
-        className="text-[10px] text-slate-500 hover:text-slate-300"
+        className="text-[10px] text-slate-400 hover:text-slate-300"
       >
         {showRaw ? "скрыть аргументы" : "показать аргументы"}
       </button>
       {showRaw && (
-        <pre className="max-h-32 overflow-auto rounded bg-slate-900/60 p-2 text-[10px] text-slate-500">
+        <pre className="max-h-32 overflow-auto rounded bg-slate-900/60 p-2 text-[10px] text-slate-400">
           {JSON.stringify(card.raw_args, null, 2)}
         </pre>
       )}
@@ -1697,7 +1697,7 @@ export function AssistantPanel() {
                 <span
                   className={`w-1.5 h-1.5 rounded-full shrink-0 ${msg.status === "calling" ? "bg-amber-400 animate-pulse" : "bg-green-400"}`}
                 />
-                <span className="text-[10px] text-slate-500 font-mono truncate">
+                <span className="text-[10px] text-slate-400 font-mono truncate">
                   {msg.tool?.replace("__", ".")}{" "}
                   {msg.status === "calling" ? "…" : "✓"}
                 </span>
@@ -1710,7 +1710,7 @@ export function AssistantPanel() {
                 key={msg.id}
                 className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2"
               >
-                <p className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">
+                <p className="mb-1 text-[10px] uppercase tracking-wide text-slate-400">
                   Собираюсь сделать
                 </p>
                 <ol className="space-y-0.5">
@@ -1723,7 +1723,7 @@ export function AssistantPanel() {
                     </li>
                   ))}
                 </ol>
-                <p className="mt-1 text-[10px] text-slate-500">
+                <p className="mt-1 text-[10px] text-slate-400">
                   Не то? Нажмите «Стоп» и уточните задачу.
                 </p>
               </div>

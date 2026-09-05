@@ -1345,7 +1345,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                 {fmt}
               </button>
             ))}
-            <span className="text-zinc-500">·</span>
+            <span className="text-zinc-400">·</span>
             <input
               value={scaleInput}
               onChange={(e) => setScaleInput(e.target.value)}
@@ -1423,7 +1423,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                 <div className="mt-0.5 text-zinc-200">{event.message}</div>
                 {event.details && Object.keys(event.details).length > 0 && (
                   <details className="mt-1">
-                    <summary className="cursor-pointer text-[10px] text-zinc-500">
+                    <summary className="cursor-pointer text-[10px] text-zinc-400">
                       {t("detail.cad_process_details")}
                     </summary>
                     <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded bg-black/30 p-1.5 text-[10px]">
@@ -2297,7 +2297,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           <div className="flex items-center justify-between">
             <span className="flex flex-wrap items-center gap-1 text-zinc-300">
               {entityLabel(selected, t)}
-              <span className="text-zinc-500">
+              <span className="text-zinc-400">
                 {Math.round(selected.confidence * 100)}% · {selected.origin}
               </span>
               <AssuranceBadge assurance={selected.assurance} t={t} />
@@ -2362,7 +2362,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           )}
           {(selected.alternatives?.length ?? 0) > 0 && (
             <div className="rounded bg-white/5 p-1.5 space-y-1">
-              <div className="text-[10px] text-zinc-500">
+              <div className="text-[10px] text-zinc-400">
                 {t("vector.alternatives_title")}
               </div>
               {selected.alternatives!.map((alt, i) => (
@@ -2382,7 +2382,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                   className="flex w-full items-center justify-between rounded px-1.5 py-1 text-left text-[11px] text-zinc-300 hover:bg-white/10 disabled:cursor-default disabled:opacity-60"
                 >
                   <span>{alt.value ?? t("vector.alternative_geometry")}</span>
-                  <span className="text-zinc-500">
+                  <span className="text-zinc-400">
                     {Math.round(alt.p * 100)}%
                   </span>
                 </button>
@@ -2682,13 +2682,13 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                 ? t("vector.release_reproducible")
                 : t("vector.release_not_reproducible")}
             </span>
-            <span className="text-zinc-500">· DXF {release.dxf_version}</span>
+            <span className="text-zinc-400">· DXF {release.dxf_version}</span>
           </div>
-          <div className="font-mono text-zinc-500">
+          <div className="font-mono text-zinc-400">
             manifest {(release.manifest_sha256 ?? "").slice(0, 16)}…
           </div>
           {release.approval.accepted_by && (
-            <div className="text-zinc-500">
+            <div className="text-zinc-400">
               {t("vector.release_approved_by", {
                 who: release.approval.accepted_by,
               })}

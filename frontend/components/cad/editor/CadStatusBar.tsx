@@ -33,7 +33,7 @@ export default function CadStatusBar({
   const reusedOperations = incrementalBuild?.reused_feature_indices?.length ?? 0;
   const rebuiltOperations = incrementalBuild?.rebuilt_feature_indices?.length ?? 0;
   return (
-    <div className="flex shrink-0 items-center gap-3 border-t border-white/10 bg-zinc-900/80 px-3 py-1 text-[11px] text-zinc-500">
+    <div className="flex shrink-0 items-center gap-3 border-t border-white/10 bg-zinc-900/80 px-3 py-1 text-[11px] text-zinc-400">
       <span>
         {selectedOperation
           ? `Выбрано: ${kindLabel(selectedOperation.kind)}`
@@ -52,7 +52,7 @@ export default function CadStatusBar({
       <span className="flex-1" />
       {hasModel && incrementalBuild && (
         <span
-          className={reusedOperations > 0 ? "text-sky-300" : "text-zinc-500"}
+          className={reusedOperations > 0 ? "text-sky-300" : "text-zinc-400"}
           title={
             reusedOperations > 0
               ? "Переиспользован только самый длинный BREP-reopen и topology-validated префикс фактического порядка операций"

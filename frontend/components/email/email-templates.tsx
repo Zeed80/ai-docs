@@ -243,9 +243,9 @@ export function EmailTemplatesSection() {
       </div>
 
       {loading ? (
-        <p className="text-slate-500 text-sm">Загрузка...</p>
+        <p className="text-slate-400 text-sm">Загрузка...</p>
       ) : displayed.length === 0 ? (
-        <p className="text-slate-500 text-sm">Нет шаблонов</p>
+        <p className="text-slate-400 text-sm">Нет шаблонов</p>
       ) : (
         <div className="grid gap-2 sm:grid-cols-2">
           {displayed.map((tpl) => (
@@ -268,7 +268,7 @@ export function EmailTemplatesSection() {
                       {CATEGORY_LABELS[tpl.category]}
                     </span>
                   </div>
-                  <p className="text-xs text-slate-500 truncate mt-0.5">
+                  <p className="text-xs text-slate-400 truncate mt-0.5">
                     {tpl.subject}
                   </p>
                 </div>
@@ -310,7 +310,7 @@ export function EmailTemplatesSection() {
                     </span>
                   ))}
                   {tpl.variables.length > 5 && (
-                    <span className="text-[10px] text-slate-500">
+                    <span className="text-[10px] text-slate-400">
                       +{tpl.variables.length - 5}
                     </span>
                   )}
@@ -438,7 +438,7 @@ export function EmailTemplatesSection() {
               onChange={(e) => f("variables", e.target.value)}
               placeholder="invoice_number, contact_name, total_amount"
             />
-            <p className="text-[10px] text-slate-500 mt-0.5">
+            <p className="text-[10px] text-slate-400 mt-0.5">
               Оставьте пустым — переменные будут определены автоматически из{" "}
               {"{...}"}
             </p>
@@ -480,12 +480,12 @@ export function EmailTemplatesSection() {
             </div>
             <div className="overflow-y-auto p-4 space-y-3 text-sm">
               <div>
-                <span className="text-xs text-slate-500">Тема:</span>
+                <span className="text-xs text-slate-400">Тема:</span>
                 <p className="text-slate-200 mt-0.5">{preview.subject}</p>
               </div>
               {preview.variables && preview.variables.length > 0 && (
                 <div>
-                  <span className="text-xs text-slate-500">Переменные:</span>
+                  <span className="text-xs text-slate-400">Переменные:</span>
                   <div className="flex flex-wrap gap-1 mt-1">
                     {preview.variables.map((v) => (
                       <span
@@ -501,7 +501,7 @@ export function EmailTemplatesSection() {
                 </div>
               )}
               <div>
-                <span className="text-xs text-slate-500">Содержимое:</span>
+                <span className="text-xs text-slate-400">Содержимое:</span>
                 <div
                   className="mt-1 text-slate-300 bg-slate-800 rounded p-3 text-xs leading-relaxed"
                   dangerouslySetInnerHTML={{ __html: preview.body_html }}

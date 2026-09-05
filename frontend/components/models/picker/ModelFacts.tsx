@@ -38,10 +38,10 @@ export function ModelFacts({ model }: { model: CatalogModel }) {
   if (price) parts.push(price);
 
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-400">
       <span className="text-slate-400">{providerLabel(model.provider)}</span>
       {model.preferred_instance && (
-        <span className="text-slate-500">· {model.preferred_instance}</span>
+        <span className="text-slate-400">· {model.preferred_instance}</span>
       )}
       {parts.length > 0 && <span>· {parts.join(" · ")}</span>}
       {model.thinking_supported && (

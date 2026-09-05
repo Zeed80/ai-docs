@@ -118,7 +118,7 @@ export function CanvasSheet({
 
   if (!sheetId) {
     return (
-      <div className="text-xs text-slate-500">Лист не инициализирован.</div>
+      <div className="text-xs text-slate-400">Лист не инициализирован.</div>
     );
   }
 
@@ -153,7 +153,7 @@ export function CanvasSheet({
         >
           Разъединить
         </button>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-slate-400">
           Формулы: =A1*B1, =SUM(A1:A10), =ROUND(quantity*price,2)
         </span>
       </div>

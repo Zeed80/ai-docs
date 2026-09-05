@@ -199,7 +199,7 @@ export default function SkillsMarketplacePage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-6 gap-4">
         <div>
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-2">
+          <div className="flex items-center gap-2 text-xs text-slate-400 mb-2">
             <Link href="/settings" className="hover:text-slate-300">
               Настройки
             </Link>
@@ -237,7 +237,7 @@ export default function SkillsMarketplacePage() {
           placeholder="Поиск навыка..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 min-w-[180px] bg-zinc-800 border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500/60 placeholder-white/30"
+          className="flex-1 min-w-[180px] bg-zinc-800 border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500/60 placeholder-white/50"
         />
         <select
           value={categoryFilter}
@@ -325,7 +325,7 @@ export default function SkillsMarketplacePage() {
                         </div>
                       </div>
                       {skill.description && (
-                        <p className="text-xs text-white/40 line-clamp-2">
+                        <p className="text-xs text-white/50 line-clamp-2">
                           {skill.description}
                         </p>
                       )}
@@ -365,18 +365,18 @@ export default function SkillsMarketplacePage() {
                     <span className="text-sm font-medium text-white">
                       {plugin.name}
                     </span>
-                    <span className="ml-2 text-xs text-white/30">
+                    <span className="ml-2 text-xs text-white/50">
                       v{plugin.version}
                     </span>
                   </div>
                   <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded border ${RISK_COLORS[plugin.risk_level] ?? "bg-zinc-800 text-white/40 border-white/10"}`}
+                    className={`text-[10px] px-1.5 py-0.5 rounded border ${RISK_COLORS[plugin.risk_level] ?? "bg-zinc-800 text-white/50 border-white/10"}`}
                   >
                     {plugin.risk_level}
                   </span>
                 </div>
                 {plugin.description && (
-                  <p className="text-xs text-white/40 mb-3 line-clamp-2">
+                  <p className="text-xs text-white/50 mb-3 line-clamp-2">
                     {plugin.description}
                   </p>
                 )}

@@ -165,7 +165,7 @@ export default function InboxPage() {
                     {item.title}
                   </span>
                   {item.subtitle && (
-                    <span className="mt-0.5 block truncate text-xs text-slate-500">
+                    <span className="mt-0.5 block truncate text-xs text-slate-400">
                       {item.subtitle}
                     </span>
                   )}
@@ -175,7 +175,7 @@ export default function InboxPage() {
                     </span>
                   )}
                 </span>
-                <span className="shrink-0 text-[11px] text-slate-500">
+                <span className="shrink-0 text-[11px] text-slate-400">
                   {relTime(item.at)}
                 </span>
               </a>

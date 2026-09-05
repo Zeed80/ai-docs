@@ -94,7 +94,7 @@ export function InstallPrompt() {
       <div className="flex gap-1.5 shrink-0">
         <button
           onClick={() => setDismissed(true)}
-          className="px-2 py-1 text-slate-500 hover:text-slate-300 text-xs"
+          className="px-2 py-1 text-slate-400 hover:text-slate-300 text-xs"
         >
           Нет
         </button>

@@ -437,7 +437,7 @@ export default function SuppliersPage() {
               </h2>
               <button
                 onClick={() => setShowCreate(false)}
-                className="text-slate-500 hover:text-slate-300 text-lg leading-none"
+                className="text-slate-400 hover:text-slate-300 text-lg leading-none"
               >
                 ×
               </button>

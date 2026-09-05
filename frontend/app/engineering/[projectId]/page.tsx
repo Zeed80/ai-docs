@@ -221,7 +221,7 @@ export default function EngineeringProjectPage() {
               </button>
             ))}
             {!project?.revisions.length && (
-              <p className="px-4 py-8 text-sm text-zinc-500">
+              <p className="px-4 py-8 text-sm text-zinc-400">
                 Создайте первую ревизию изделия.
               </p>
             )}
@@ -342,7 +342,7 @@ export default function EngineeringProjectPage() {
               </div>
             ))}
             {selectedRevision && analysisCases.length === 0 && (
-              <p className="px-4 py-6 text-sm text-zinc-500">
+              <p className="px-4 py-6 text-sm text-zinc-400">
                 Расчеты для ревизии не созданы.
               </p>
             )}

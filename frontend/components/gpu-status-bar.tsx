@@ -134,7 +134,7 @@ function powerLevel(draw: number, limit: number | null): Level {
 
 const LEVEL_CLASS: Record<"dark" | "light", Record<Level, string>> = {
   dark: { ok: "text-slate-400", warn: "text-amber-400", crit: "text-red-400" },
-  light: { ok: "text-slate-500", warn: "text-amber-600", crit: "text-red-500" },
+  light: { ok: "text-slate-400", warn: "text-amber-600", crit: "text-red-500" },
 };
 
 function popoverTheme(variant: "dark" | "light") {
@@ -152,7 +152,7 @@ function popoverTheme(variant: "dark" | "light") {
     inputCls: dark
       ? "bg-slate-900 border-slate-600 text-slate-200"
       : "bg-white border-slate-300 text-slate-700",
-    muted: dark ? "text-slate-400" : "text-slate-500",
+    muted: dark ? "text-slate-400" : "text-slate-400",
   };
 }
 

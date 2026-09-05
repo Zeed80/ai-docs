@@ -206,7 +206,7 @@ export function CommandPalette() {
         />
         <ul className="max-h-80 overflow-auto py-1">
           {commands.length === 0 && (
-            <li className="px-4 py-3 text-xs text-slate-500">Ничего не найдено</li>
+            <li className="px-4 py-3 text-xs text-slate-400">Ничего не найдено</li>
           )}
           {commands.map((c, i) => (
             <li key={c.id}>
@@ -221,13 +221,13 @@ export function CommandPalette() {
               >
                 <span className="text-slate-800 dark:text-slate-100">{c.label}</span>
                 {c.hint && (
-                  <span className="truncate text-xs text-slate-500">{c.hint}</span>
+                  <span className="truncate text-xs text-slate-400">{c.hint}</span>
                 )}
               </button>
             </li>
           ))}
         </ul>
-        <p className="border-t border-slate-200 px-4 py-1.5 text-[10px] text-slate-500 dark:border-slate-700">
+        <p className="border-t border-slate-200 px-4 py-1.5 text-[10px] text-slate-400 dark:border-slate-700">
           ↑↓ выбор · Enter открыть · Esc закрыть
         </p>
       </div>

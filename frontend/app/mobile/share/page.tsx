@@ -96,13 +96,13 @@ export default function SharePage() {
               📄
             </span>
             <span className="flex-1 truncate text-slate-200">{f.name}</span>
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               {(f.size / 1024).toFixed(0)} КБ
             </span>
           </li>
         ))}
         {!files.length && (
-          <li className="p-3 text-sm text-slate-500">Нет файлов</li>
+          <li className="p-3 text-sm text-slate-400">Нет файлов</li>
         )}
       </ul>
 

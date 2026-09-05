@@ -167,13 +167,13 @@ export default function ConstraintsPanel({
             </span>
           )}
         </span>
-        <span className="text-zinc-500">{open ? "−" : "+"}</span>
+        <span className="text-zinc-400">{open ? "−" : "+"}</span>
       </button>
       {open && (
         <div className="space-y-2">
           {/* palette */}
           {selected.length === 0 || kinds.length === 0 ? (
-            <p className="text-[11px] text-zinc-500">
+            <p className="text-[11px] text-zinc-400">
               {t("vector.constraints_select_hint")}
             </p>
           ) : (
@@ -257,7 +257,7 @@ export default function ConstraintsPanel({
                             ? chk.ok
                               ? "text-emerald-400"
                               : "text-amber-300"
-                            : "text-zinc-500"
+                            : "text-zinc-400"
                       }
                     >
                       {!c.enabled ? "○" : chk ? (chk.ok ? "✓" : "✗") : "•"}
@@ -266,7 +266,7 @@ export default function ConstraintsPanel({
                       type="button"
                       onClick={() => ids[0] && onFocus(ids[0])}
                       className={`flex-1 truncate text-left hover:text-sky-300 ${
-                        c.driven ? "text-zinc-500 italic" : "text-zinc-300"
+                        c.driven ? "text-zinc-400 italic" : "text-zinc-300"
                       }`}
                     >
                       {t(`vector.constraint_${c.kind}`)}
@@ -307,7 +307,7 @@ export default function ConstraintsPanel({
                       disabled={busy}
                       onClick={() => remove(c.id)}
                       title={t("vector.constraint_delete")}
-                      className="rounded px-1 text-zinc-500 hover:bg-white/10 hover:text-red-300 disabled:opacity-40"
+                      className="rounded px-1 text-zinc-400 hover:bg-white/10 hover:text-red-300 disabled:opacity-40"
                     >
                       ✕
                     </button>

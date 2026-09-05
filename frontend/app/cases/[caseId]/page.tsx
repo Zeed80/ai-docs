@@ -167,7 +167,7 @@ export default function CaseCockpitPage() {
 
   if (loading) {
     return (
-      <div className="p-6 text-center text-slate-500 text-sm">Загрузка...</div>
+      <div className="p-6 text-center text-slate-400 text-sm">Загрузка...</div>
     );
   }
 
@@ -191,7 +191,7 @@ export default function CaseCockpitPage() {
       <div>
         <button
           onClick={() => router.push("/cases")}
-          className="text-xs text-slate-500 hover:text-slate-300 mb-2 block"
+          className="text-xs text-slate-400 hover:text-slate-300 mb-2 block"
         >
           ← Все кейсы
         </button>
@@ -206,7 +206,7 @@ export default function CaseCockpitPage() {
               </p>
             )}
             {caseData.task_description && (
-              <p className="text-xs text-slate-500 mt-1 max-w-xl">
+              <p className="text-xs text-slate-400 mt-1 max-w-xl">
                 {caseData.task_description}
               </p>
             )}
@@ -270,7 +270,7 @@ export default function CaseCockpitPage() {
                   <h3 className="text-sm font-medium text-slate-200 truncate">
                     {doc.file_name}
                   </h3>
-                  <p className="text-[10px] text-slate-500 mt-0.5">
+                  <p className="text-[10px] text-slate-400 mt-0.5">
                     {new Date(doc.added_at).toLocaleString("ru-RU", { timeZone: tz() })}
                     {doc.doc_type && ` · ${doc.doc_type}`}
                   </p>
@@ -304,13 +304,13 @@ export default function CaseCockpitPage() {
                 <div className="flex items-center gap-3 flex-wrap">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-slate-200">{gate.action_type}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">
+                    <p className="text-[10px] text-slate-400 mt-0.5">
                       Запросил: {gate.requested_by}
                       {gate.created_at &&
                         ` · ${new Date(gate.created_at).toLocaleString("ru-RU", { timeZone: tz() })}`}
                     </p>
                     {gate.decided_by && (
-                      <p className="text-[10px] text-slate-500">
+                      <p className="text-[10px] text-slate-400">
                         Решил: {gate.decided_by}
                         {gate.decided_at &&
                           ` · ${new Date(gate.decided_at).toLocaleString("ru-RU", { timeZone: tz() })}`}
@@ -362,7 +362,7 @@ export default function CaseCockpitPage() {
                 key={ev.id}
                 className="flex items-start gap-3 text-xs py-1.5 border-b border-slate-800"
               >
-                <span className="text-slate-500 shrink-0 pt-0.5">
+                <span className="text-slate-400 shrink-0 pt-0.5">
                   {new Date(ev.timestamp).toLocaleTimeString("ru-RU", { timeZone: tz(),
                     hour: "2-digit",
                     minute: "2-digit",

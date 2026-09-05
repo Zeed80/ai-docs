@@ -102,7 +102,7 @@ export function CatalogEntryGrid({
                 ? `${entry.name.slice(0, 90)}…`
                 : entry.name}
             </span>
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               {toolTypeLabel(entry.tool_type)}
               {entry.diameter_mm ? ` · Ø${entry.diameter_mm}` : ""}
               {entry.material ? ` · ${entry.material}` : ""}
@@ -115,7 +115,7 @@ export function CatalogEntryGrid({
               </span>
               {entry.catalog_name && (
                 <span
-                  className="max-w-[45%] truncate text-[11px] text-slate-500"
+                  className="max-w-[45%] truncate text-[11px] text-slate-400"
                   title={entry.catalog_name}
                 >
                   {entry.catalog_name}

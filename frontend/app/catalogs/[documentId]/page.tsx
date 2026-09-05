@@ -183,7 +183,7 @@ export default function CatalogViewerPage() {
             {query && (
               <button
                 onClick={() => setQuery("")}
-                className="absolute right-2 top-1.5 text-sm text-slate-500 hover:text-slate-200"
+                className="absolute right-2 top-1.5 text-sm text-slate-400 hover:text-slate-200"
                 title="Очистить поиск"
               >
                 ✕
@@ -220,7 +220,7 @@ export default function CatalogViewerPage() {
           <aside className="w-72 shrink-0 overflow-y-auto rounded border border-slate-700 bg-slate-800/40 p-2">
             <h2 className="mb-2 text-sm text-slate-300">
               Найдено страниц: {found.total}
-              {searching && <span className="ml-2 text-slate-500">…</span>}
+              {searching && <span className="ml-2 text-slate-400">…</span>}
             </h2>
             {found.message && (
               <p className="mb-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
@@ -228,7 +228,7 @@ export default function CatalogViewerPage() {
               </p>
             )}
             {found.items.length === 0 && !found.message && (
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-400">
                 Ничего не нашлось. Попробуйте часть артикула или другое слово.
               </p>
             )}
@@ -255,12 +255,12 @@ export default function CatalogViewerPage() {
                   <span className="block text-xs text-slate-300">
                     стр. {hit.page_number}
                     {hit.matched_entries > 0 && (
-                      <span className="ml-1 text-slate-500">
+                      <span className="ml-1 text-slate-400">
                         · совпало позиций: {hit.matched_entries}
                       </span>
                     )}
                   </span>
-                  <span className="mt-0.5 block text-[11px] leading-snug text-slate-500">
+                  <span className="mt-0.5 block text-[11px] leading-snug text-slate-400">
                     {hit.snippet.length > 120
                       ? `${hit.snippet.slice(0, 120)}…`
                       : hit.snippet}
@@ -299,7 +299,7 @@ export default function CatalogViewerPage() {
                   {item.page_number}
                 </div>
               )}
-              <div className="mt-0.5 text-center text-[10px] text-slate-500">
+              <div className="mt-0.5 text-center text-[10px] text-slate-400">
                 {item.page_number}
                 {item.entries_count > 0 ? ` · ${item.entries_count}` : ""}
               </div>
@@ -327,7 +327,7 @@ export default function CatalogViewerPage() {
               highlight={highlight}
             />
           ) : (
-            <div className="flex h-full items-center justify-center text-sm text-slate-500">
+            <div className="flex h-full items-center justify-center text-sm text-slate-400">
               {parsing
                 ? "Страницы ещё рендерятся…"
                 : "Страницы каталога не размечены"}
@@ -338,10 +338,10 @@ export default function CatalogViewerPage() {
         <aside className="w-80 shrink-0 overflow-y-auto rounded border border-slate-700 bg-slate-800/40 p-2">
           <h2 className="mb-2 text-sm text-slate-300">
             Позиции страницы {page}
-            <span className="ml-1 text-slate-500">({entries.length})</span>
+            <span className="ml-1 text-slate-400">({entries.length})</span>
           </h2>
           {entries.length === 0 && (
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-slate-400">
               На этой странице позиций нет
             </p>
           )}
@@ -371,7 +371,7 @@ export default function CatalogViewerPage() {
                     </div>
                   )}
                   <div className="text-xs text-slate-200">{entry.name}</div>
-                  <div className="text-[11px] text-slate-500">
+                  <div className="text-[11px] text-slate-400">
                     {entry.price_value
                       ? `${entry.price_value.toLocaleString("ru")} ${entry.price_currency}`
                       : "цена не указана"}

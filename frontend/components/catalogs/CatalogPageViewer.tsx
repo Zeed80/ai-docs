@@ -164,7 +164,7 @@ export function CatalogPageViewer({
         style={{ cursor: panning ? "grabbing" : "grab" }}
       >
         {!loaded && (
-          <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-500">
+          <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-400">
             Загрузка страницы…
           </div>
         )}

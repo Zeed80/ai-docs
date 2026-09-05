@@ -58,7 +58,7 @@ export function AgentActivityPanel({ mailbox }: { mailbox: string }) {
         {t("agentActivity")}
       </h2>
       {rows.length === 0 && (
-        <p className="text-xs text-slate-500">{t("empty.filtered")}</p>
+        <p className="text-xs text-slate-400">{t("empty.filtered")}</p>
       )}
       <ul className="space-y-1.5">
         {rows.map((row) => (
@@ -72,7 +72,7 @@ export function AgentActivityPanel({ mailbox }: { mailbox: string }) {
                   ? t("activityRule", { name: row.source })
                   : t("activityAgent")}
               </span>
-              <span className="text-[10px] text-slate-500">
+              <span className="text-[10px] text-slate-400">
                 {new Date(row.at).toLocaleString(undefined, { timeZone })}
               </span>
               {row.undoable.length > 0 && !undone.has(row.id) && (
@@ -103,10 +103,10 @@ export function AgentActivityPanel({ mailbox }: { mailbox: string }) {
               </span>
             )}
             {row.summary && (
-              <p className="truncate text-[11px] text-slate-500">{row.summary}</p>
+              <p className="truncate text-[11px] text-slate-400">{row.summary}</p>
             )}
             {row.performed.length > 0 && (
-              <p className="text-[10px] text-slate-500">
+              <p className="text-[10px] text-slate-400">
                 {row.performed
                   .map((a) => actionLabel(a.type as string | undefined))
                   .filter(Boolean)

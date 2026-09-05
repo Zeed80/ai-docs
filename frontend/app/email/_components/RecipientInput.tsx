@@ -150,7 +150,7 @@ export function RecipientInput({
 
   return (
     <div ref={boxRef} className="relative flex min-w-0 flex-1 flex-wrap items-center gap-1">
-      <span className="w-8 shrink-0 text-xs text-slate-500 dark:text-slate-400">{label}</span>
+      <span className="w-8 shrink-0 text-xs text-slate-400 dark:text-slate-400">{label}</span>
       <div
         className="flex min-h-[30px] flex-1 flex-wrap items-center gap-1 rounded border border-slate-300 dark:border-slate-600 bg-slate-100 dark:bg-slate-700 px-1.5 py-1"
         onClick={() => inputRef.current?.focus()}
@@ -175,7 +175,7 @@ export function RecipientInput({
                 ev.stopPropagation();
                 onChange(value.filter((x) => x !== e));
               }}
-              className="text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-300"
+              className="text-slate-400 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-300"
             >
               ×
             </button>
@@ -219,7 +219,7 @@ export function RecipientInput({
               </span>
               <span className="min-w-0 flex-1">
                 <span className="truncate text-sm text-slate-800 dark:text-slate-100">{g.tag}</span>
-                <span className="block truncate text-xs text-slate-500">
+                <span className="block truncate text-xs text-slate-400">
                   {g.emails.length}
                 </span>
               </span>
@@ -250,7 +250,7 @@ export function RecipientInput({
                   </span>
                   {c.is_favorite && <span className="text-amber-600 dark:text-amber-400 text-xs">★</span>}
                 </span>
-                <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                <span className="block truncate text-xs text-slate-400 dark:text-slate-400">
                   {c.name ? c.email : c.organization || ""}
                   {c.organization && c.name ? ` · ${c.organization}` : ""}
                 </span>

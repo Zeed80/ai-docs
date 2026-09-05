@@ -136,7 +136,7 @@ export function ToolBindingPanel({
 
   if (!feature) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-white/30 gap-2 py-6">
+      <div className="flex flex-col items-center justify-center h-full text-white/50 gap-2 py-6">
         <span className="text-3xl">🔧</span>
         <span className="text-sm">Выберите элемент чертежа</span>
       </div>
@@ -150,7 +150,7 @@ export function ToolBindingPanel({
         <div className="font-medium text-white text-sm truncate">
           {feature.name}
         </div>
-        <div className="text-white/40 text-xs mt-0.5">Привязка инструмента</div>
+        <div className="text-white/50 text-xs mt-0.5">Привязка инструмента</div>
       </div>
 
       {/* Current binding */}
@@ -194,7 +194,7 @@ export function ToolBindingPanel({
               "flex-1 py-1.5 text-xs transition-colors",
               activeTab === tab
                 ? "text-blue-400 border-b-2 border-blue-500"
-                : "text-white/40 hover:text-white/60",
+                : "text-white/50 hover:text-white/60",
             )}
           >
             {tab === "suggestions" && "AI-подбор"}
@@ -215,13 +215,13 @@ export function ToolBindingPanel({
         {activeTab === "suggestions" && (
           <div className="p-2">
             {loadingSuggestions && (
-              <div className="flex items-center gap-2 text-white/40 py-4 justify-center">
+              <div className="flex items-center gap-2 text-white/50 py-4 justify-center">
                 <div className="w-4 h-4 border border-blue-500/50 border-t-blue-500 rounded-full animate-spin" />
                 <span className="text-xs">AI подбирает инструменты...</span>
               </div>
             )}
             {!loadingSuggestions && suggestions.length === 0 && (
-              <div className="text-white/30 text-xs text-center py-4">
+              <div className="text-white/50 text-xs text-center py-4">
                 Нет предложений. Загрузите каталоги поставщиков.
               </div>
             )}
@@ -249,7 +249,7 @@ export function ToolBindingPanel({
                 onChange={(e) => setCatalogQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && searchCatalog()}
                 placeholder="Сверло Ø5, HSS, метчик M6..."
-                className="flex-1 bg-zinc-800 border border-white/10 rounded px-2 py-1 text-xs text-white placeholder-white/30 focus:outline-none focus:border-blue-500/50"
+                className="flex-1 bg-zinc-800 border border-white/10 rounded px-2 py-1 text-xs text-white placeholder-white/50 focus:outline-none focus:border-blue-500/50"
               />
               <button
                 onClick={searchCatalog}
@@ -261,7 +261,7 @@ export function ToolBindingPanel({
             </div>
 
             {loadingCatalog && (
-              <div className="text-white/40 text-xs text-center py-3">
+              <div className="text-white/50 text-xs text-center py-3">
                 Поиск...
               </div>
             )}
@@ -274,7 +274,7 @@ export function ToolBindingPanel({
               />
             ))}
             {!loadingCatalog && catalogQuery && catalogResults.length === 0 && (
-              <div className="text-white/30 text-xs text-center py-3">
+              <div className="text-white/50 text-xs text-center py-3">
                 Ничего не найдено
               </div>
             )}
@@ -283,7 +283,7 @@ export function ToolBindingPanel({
 
         {activeTab === "manual" && (
           <div className="p-2">
-            <div className="text-xs text-white/40 mb-2">
+            <div className="text-xs text-white/50 mb-2">
               Укажите инструмент в произвольном формате:
             </div>
             <textarea
@@ -291,7 +291,7 @@ export function ToolBindingPanel({
               onChange={(e) => setManualDesc(e.target.value)}
               placeholder="Сверло Ø5 HSS-Co, ГОСТ 10902-77&#10;Резец проходной 25×25&#10;Метчик М8×1.25"
               rows={3}
-              className="w-full bg-zinc-800 border border-white/10 rounded px-2 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none focus:border-blue-500/50 resize-none"
+              className="w-full bg-zinc-800 border border-white/10 rounded px-2 py-1.5 text-xs text-white placeholder-white/50 focus:outline-none focus:border-blue-500/50 resize-none"
             />
             <button
               onClick={bindManual}
@@ -339,7 +339,7 @@ function ToolCard({
               {entry.name}
             </div>
             <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-              <span className="text-white/40 text-xs">
+              <span className="text-white/50 text-xs">
                 {TOOL_TYPE_LABELS[entry.tool_type] || entry.tool_type}
               </span>
               {entry.diameter_mm && (
@@ -359,7 +359,7 @@ function ToolCard({
               )}
             </div>
             {supplier && (
-              <div className="text-white/30 text-xs mt-0.5">
+              <div className="text-white/50 text-xs mt-0.5">
                 {supplier.name}
               </div>
             )}
@@ -371,7 +371,7 @@ function ToolCard({
                     style={{ width: `${Math.round(score * 100)}%` }}
                   />
                 </div>
-                <span className="text-white/30 text-xs">
+                <span className="text-white/50 text-xs">
                   {Math.round(score * 100)}%
                 </span>
               </div>
@@ -387,7 +387,7 @@ function ToolCard({
         </div>
 
         {reason && (
-          <div className="mt-1.5 text-xs text-white/40 italic leading-relaxed">
+          <div className="mt-1.5 text-xs text-white/50 italic leading-relaxed">
             {reason}
           </div>
         )}
@@ -395,7 +395,7 @@ function ToolCard({
         {entry.description && (
           <button
             onClick={() => setExpanded((e) => !e)}
-            className="text-white/30 hover:text-white/50 text-xs mt-1"
+            className="text-white/50 hover:text-white/50 text-xs mt-1"
           >
             {expanded ? "▲ Скрыть" : "▼ Подробнее"}
           </button>
@@ -408,7 +408,7 @@ function ToolCard({
       </div>
 
       {entry.price_value && (
-        <div className="px-2 py-1 bg-zinc-900/50 border-t border-white/5 text-xs text-white/30">
+        <div className="px-2 py-1 bg-zinc-900/50 border-t border-white/5 text-xs text-white/50">
           {entry.price_value.toLocaleString("ru")} {entry.price_currency}
           {entry.part_number && ` · Арт. ${entry.part_number}`}
         </div>

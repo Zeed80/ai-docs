@@ -503,7 +503,7 @@ export default function InvoicesPage() {
               row.original.id.slice(0, 8);
             void openSimilar(row.original.id, label);
           }}
-          className="p-1 text-slate-500 hover:text-purple-400 transition-colors"
+          className="p-1 text-slate-400 hover:text-purple-400 transition-colors"
           title="Похожие счета"
         >
           <svg
@@ -526,7 +526,7 @@ export default function InvoicesPage() {
             setRowSelection({ [row.index]: true });
             setDeleteDialog({ mode: "selected" });
           }}
-          className="p-1 text-slate-500 hover:text-red-400 transition-colors"
+          className="p-1 text-slate-400 hover:text-red-400 transition-colors"
           title="Удалить"
         >
           <svg
@@ -577,7 +577,7 @@ export default function InvoicesPage() {
       );
     }
     if (col.key === "row_no") {
-      return <span className="text-slate-500">{val as number}</span>;
+      return <span className="text-slate-400">{val as number}</span>;
     }
     if (col.key === "status") {
       const s = val as string;
@@ -863,7 +863,7 @@ export default function InvoicesPage() {
                   setViews((prev) => prev.filter((x) => x.id !== v.id));
                   if (activeView === v.id) setActiveView(null);
                 }}
-                className="pr-2 text-slate-500 hover:text-red-400"
+                className="pr-2 text-slate-400 hover:text-red-400"
                 title="Удалить вид"
               >
                 ×
@@ -1121,7 +1121,7 @@ export default function InvoicesPage() {
           </div>
 
           {/* Pagination + bulk delete buttons */}
-          <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+          <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
             <div className="flex items-center gap-2">
               <span>{total} всего</span>
               <span className="text-slate-400">·</span>
@@ -1185,7 +1185,7 @@ export default function InvoicesPage() {
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setShowViewDialog(false)}
-                className="px-3 py-1.5 text-xs text-slate-500"
+                className="px-3 py-1.5 text-xs text-slate-400"
               >
                 Отмена
               </button>
@@ -1256,18 +1256,18 @@ export default function InvoicesPage() {
               </div>
               <button
                 onClick={() => setSimilarFor(null)}
-                className="text-slate-500 hover:text-slate-200 text-lg leading-none"
+                className="text-slate-400 hover:text-slate-200 text-lg leading-none"
               >
                 ×
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-4">
               {similarLoading ? (
-                <div className="text-slate-500 text-sm text-center py-8">
+                <div className="text-slate-400 text-sm text-center py-8">
                   Поиск...
                 </div>
               ) : similarResults.length === 0 ? (
-                <div className="text-slate-500 text-sm text-center py-8">
+                <div className="text-slate-400 text-sm text-center py-8">
                   Похожих счетов не найдено
                 </div>
               ) : (

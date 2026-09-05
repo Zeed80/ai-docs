@@ -565,7 +565,7 @@ export default function ReviewPage() {
             </div>
           )}
           {queueRemaining > 0 && (
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               Осталось: {queueRemaining}
             </span>
           )}
@@ -636,7 +636,7 @@ export default function ReviewPage() {
                 ))}
               </tbody>
             </table>
-            <p className="mt-4 text-[11px] text-slate-500 text-center">
+            <p className="mt-4 text-[11px] text-slate-400 text-center">
               Нажмите Esc или кликните за пределами для закрытия
             </p>
           </div>
@@ -757,7 +757,7 @@ export default function ReviewPage() {
                       {finding.message}
                     </p>
                     {finding.recommendation && (
-                      <p className="mt-1 text-[11px] text-slate-500">
+                      <p className="mt-1 text-[11px] text-slate-400">
                         {finding.recommendation}
                       </p>
                     )}
@@ -846,7 +846,7 @@ export default function ReviewPage() {
                 </div>
                 <div className="max-h-40 overflow-y-auto">
                   <table className="w-full text-xs">
-                    <thead className="bg-slate-800/50 text-slate-500">
+                    <thead className="bg-slate-800/50 text-slate-400">
                       <tr>
                         <th className="text-left px-3 py-1.5">Позиция</th>
                         <th className="text-right px-3 py-1.5">Текущая</th>
@@ -884,7 +884,7 @@ export default function ReviewPage() {
                                   invoiceDetail?.currency ?? "RUB",
                                 )}
                               </td>
-                              <td className="px-3 py-1.5 text-right text-slate-500 font-mono">
+                              <td className="px-3 py-1.5 text-right text-slate-400 font-mono">
                                 {formatCurrency(
                                   c.previous_price,
                                   invoiceDetail?.currency ?? "RUB",

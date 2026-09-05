@@ -176,7 +176,7 @@ export default function FeatureTreePanel({
 
   if (operations.length === 0) {
     return (
-      <p className="p-3 text-xs text-zinc-500">Дерево построения пока пусто.</p>
+      <p className="p-3 text-xs text-zinc-400">Дерево построения пока пусто.</p>
     );
   }
   return (
@@ -225,7 +225,7 @@ export default function FeatureTreePanel({
         )}
       </div>
       {visibleOperations.length === 0 ? (
-        <p className="p-3 text-xs text-zinc-500">
+        <p className="p-3 text-xs text-zinc-400">
           В этой категории операций нет.
         </p>
       ) : (
@@ -280,7 +280,7 @@ export default function FeatureTreePanel({
                       : "text-zinc-300 hover:bg-white/5"
                   }`}
                 >
-                  <span className="w-4 shrink-0 text-center text-zinc-500">
+                  <span className="w-4 shrink-0 text-center text-zinc-400">
                     {index + 1}
                   </span>
                   <span className="w-5 shrink-0 text-center text-sm">

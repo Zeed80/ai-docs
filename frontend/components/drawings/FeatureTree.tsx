@@ -121,7 +121,7 @@ export function FeatureTree({
               <span className="ml-auto bg-white/10 rounded-full px-2 py-0.5 text-xs">
                 {typeFeatures.length}
               </span>
-              <span className="text-white/40">{isExpanded ? "▾" : "▸"}</span>
+              <span className="text-white/50">{isExpanded ? "▾" : "▸"}</span>
             </button>
 
             {isExpanded && (
@@ -228,7 +228,7 @@ export function FeatureTree({
       })}
 
       {features.length === 0 && (
-        <div className="flex flex-col items-center justify-center flex-1 py-12 text-white/40 gap-2">
+        <div className="flex flex-col items-center justify-center flex-1 py-12 text-white/50 gap-2">
           <span className="text-3xl">📐</span>
           <span className="text-sm">Элементы не найдены</span>
           <span className="text-xs text-center px-4">

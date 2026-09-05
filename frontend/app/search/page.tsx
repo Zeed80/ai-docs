@@ -207,7 +207,7 @@ function SearchPageInner() {
             className="w-full px-4 py-2.5 pr-10 text-sm bg-slate-800 border border-slate-600 text-slate-200 placeholder-slate-500 rounded-lg outline-none focus:border-blue-400"
           />
           {loading && (
-            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs animate-pulse">
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs animate-pulse">
               ...
             </span>
           )}
@@ -243,7 +243,7 @@ function SearchPageInner() {
             Сохранённые запросы ({savedQueries.length})
           </h3>
           {savedQueries.length === 0 ? (
-            <p className="text-xs text-slate-500">Нет сохранённых запросов</p>
+            <p className="text-xs text-slate-400">Нет сохранённых запросов</p>
           ) : (
             <div className="space-y-1">
               {savedQueries.map((sq) => (
@@ -258,7 +258,7 @@ function SearchPageInner() {
                   >
                     {sq.nl_text}
                     {sq.result_count != null && (
-                      <span className="ml-2 text-xs text-slate-500">
+                      <span className="ml-2 text-xs text-slate-400">
                         ({sq.result_count})
                       </span>
                     )}
@@ -333,13 +333,13 @@ function SearchPageInner() {
 
       {/* Results */}
       {results.length === 0 && !loading && query && (
-        <div className="py-12 text-center text-slate-500 text-sm">
+        <div className="py-12 text-center text-slate-400 text-sm">
           Ничего не найдено по запросу «{query}»
         </div>
       )}
 
       {!query && !loading && (
-        <div className="py-12 text-center text-slate-500 text-sm">
+        <div className="py-12 text-center text-slate-400 text-sm">
           <p>Введите запрос и нажмите Enter</p>
           <div className="mt-4 grid grid-cols-3 gap-3 max-w-lg mx-auto text-left">
             {[
@@ -360,7 +360,7 @@ function SearchPageInner() {
                   setMode(modeMap[tip.label] ?? "text");
                 }}
               >
-                <p className="text-[10px] text-slate-500 mb-1">{tip.label}</p>
+                <p className="text-[10px] text-slate-400 mb-1">{tip.label}</p>
                 <p className="text-xs text-slate-300">«{tip.ex}»</p>
               </div>
             ))}
@@ -370,7 +370,7 @@ function SearchPageInner() {
 
       {results.length > 0 && (
         <>
-          <p className="text-xs text-slate-500 mb-3">
+          <p className="text-xs text-slate-400 mb-3">
             {total !== null
               ? `${total} результатов`
               : `${results.length} результатов`}
@@ -391,7 +391,7 @@ function SearchPageInner() {
                       {doc.snippet}
                     </p>
                   )}
-                  <p className="text-xs text-slate-500 mt-0.5">
+                  <p className="text-xs text-slate-400 mt-0.5">
                     {doc.doc_type
                       ? (DOC_TYPE_LABELS[doc.doc_type] ?? doc.doc_type)
                       : "Документ"}{" "}
@@ -406,7 +406,7 @@ function SearchPageInner() {
                   </span>
                 )}
                 {doc.score !== null && doc.score !== undefined && (
-                  <span className="text-[10px] text-slate-500 shrink-0">
+                  <span className="text-[10px] text-slate-400 shrink-0">
                     {(doc.score * 100).toFixed(0)}%
                   </span>
                 )}

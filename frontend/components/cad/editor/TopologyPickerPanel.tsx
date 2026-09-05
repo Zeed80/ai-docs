@@ -59,7 +59,7 @@ export default function TopologyPickerPanel({
   return (
     <section className="border-t border-white/10" data-testid="topology-picker">
       <div className="flex items-center justify-between gap-2 px-3 py-2">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+        <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">
           Топология
         </span>
         <span className="text-[9px] text-zinc-400">мелкие сначала</span>

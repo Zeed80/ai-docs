@@ -11,7 +11,7 @@ function generationLabel(g: Generation): string {
 const STATUS_COLOR: Record<string, string> = {
   queued: "text-amber-400",
   running: "text-sky-400",
-  cancelled: "text-zinc-500",
+  cancelled: "text-zinc-400",
   done: "text-emerald-400",
   failed: "text-red-400",
 };
@@ -40,7 +40,7 @@ export default function GenerationGallery({
 
   if (items.length === 0) {
     return (
-      <div className="text-sm text-zinc-500 px-2 py-6 text-center">
+      <div className="text-sm text-zinc-400 px-2 py-6 text-center">
         {t("gallery.empty")}
       </div>
     );

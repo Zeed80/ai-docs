@@ -62,7 +62,7 @@ export function Segmented<T extends string>({
         })}
       </div>
       {active?.hint && (
-        <p className="mt-1 text-[11px] text-slate-500">{active.hint}</p>
+        <p className="mt-1 text-[11px] text-slate-400">{active.hint}</p>
       )}
     </div>
   );

@@ -91,7 +91,7 @@ function polar(cx: number, cy: number, r: number, fraction: number) {
 export function CanvasChart({ chartType = "bar", chartData, title }: CanvasChartProps) {
   const points = normalizePoints(chartData).slice(0, 24);
   if (!points.length) {
-    return <div className="text-xs text-slate-500">Нет данных для графика.</div>;
+    return <div className="text-xs text-slate-400">Нет данных для графика.</div>;
   }
 
   const max = Math.max(...points.map((p) => p.value), 1);
@@ -173,7 +173,7 @@ export function CanvasChart({ chartType = "bar", chartData, title }: CanvasChart
           </>
         )}
       </svg>
-      {title && <div className="text-xs text-slate-500">{title}</div>}
+      {title && <div className="text-xs text-slate-400">{title}</div>}
     </div>
   );
 }
@@ -188,7 +188,7 @@ function Legend({ points, palette }: { points: ChartPoint[]; palette: string[] }
             style={{ backgroundColor: palette[index % palette.length] }}
           />
           <span className="truncate">{point.label}</span>
-          <span className="ml-auto text-slate-500">{point.value}</span>
+          <span className="ml-auto text-slate-400">{point.value}</span>
         </div>
       ))}
     </div>

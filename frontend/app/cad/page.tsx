@@ -466,7 +466,7 @@ export default function CadListPage() {
                   .map((m) => m.key)
                   .join(" → ") || t("pipeline_unassigned")}
               </div>
-              <div className="text-zinc-500">
+              <div className="text-zinc-400">
                 {t("pipeline_graph_experiment")}:{" "}
                 {vectorizerStatus.runtime_pipeline.components.drawing_graph_reader?.models
                   .map((m) => m.key)
@@ -478,7 +478,7 @@ export default function CadListPage() {
                 {t("pipeline_revision")}:{" "}
                 {vectorizerStatus.runtime_pipeline.pipeline_revision}
               </div>
-              <div className="font-mono text-[10px] text-zinc-500">
+              <div className="font-mono text-[10px] text-zinc-400">
                 config{" "}
                 {vectorizerStatus.runtime_pipeline.config_sha256.slice(0, 16)}…
               </div>
@@ -568,7 +568,7 @@ export default function CadListPage() {
       />
 
       {filtered.length === 0 ? (
-        <p className="py-12 text-center text-sm text-zinc-500">{t("empty")}</p>
+        <p className="py-12 text-center text-sm text-zinc-400">{t("empty")}</p>
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           {filtered.map((g) => {
@@ -607,7 +607,7 @@ export default function CadListPage() {
                       type="button"
                       onClick={(ev) => void onRename(g, ev)}
                       title={t("rename")}
-                      className="shrink-0 rounded px-1 text-zinc-500 opacity-0 transition hover:bg-white/10 hover:text-zinc-200 group-hover:opacity-100"
+                      className="shrink-0 rounded px-1 text-zinc-400 opacity-0 transition hover:bg-white/10 hover:text-zinc-200 group-hover:opacity-100"
                     >
                       ✎
                     </button>

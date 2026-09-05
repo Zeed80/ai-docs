@@ -48,7 +48,7 @@ const ACTION_LABELS = {
 const ACTION_BADGE = {
   create: "bg-green-100 text-green-700",
   update: "bg-amber-100 text-amber-700",
-  skip: "bg-slate-100 text-slate-500",
+  skip: "bg-slate-100 text-slate-400",
 };
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -459,7 +459,7 @@ function DiffRowCard({
           {ACTION_LABELS[row.action]}
         </span>
 
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-slate-400">
           Строка {row.row_index + 1}
           {row.entity_id && (
             <span className="ml-1 font-mono text-[10px] text-slate-400">
@@ -507,7 +507,7 @@ function DiffRowCard({
                 : String(change);
               return (
                 <div key={field} className="flex items-center gap-2 text-xs">
-                  <span className="w-32 text-slate-500 shrink-0">{field}</span>
+                  <span className="w-32 text-slate-400 shrink-0">{field}</span>
                   {isObj && (
                     <>
                       <span className="line-through text-red-500">

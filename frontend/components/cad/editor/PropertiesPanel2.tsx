@@ -96,7 +96,7 @@ export default function PropertiesPanel2({
   if (addFeatureDraft) {
     if (sketchModeActive) {
       return (
-        <p className="p-3 text-[11px] text-zinc-500">
+        <p className="p-3 text-[11px] text-zinc-400">
           Эскиз открыт в центральной области. Нарисуйте контур и нажмите
           «Использовать этот контур», чтобы вернуться сюда.
         </p>
@@ -314,7 +314,7 @@ function AddFeatureForm({
         <button
           type="button"
           onClick={onCancel}
-          className="text-[11px] text-zinc-500 hover:text-zinc-300"
+          className="text-[11px] text-zinc-400 hover:text-zinc-300"
         >
           ✕ Отмена
         </button>
@@ -455,7 +455,7 @@ function AddFeatureForm({
             onChange={setDiameter}
           />
           <label className="block space-y-1">
-            <span className="font-mono text-[10px] text-zinc-500">spec</span>
+            <span className="font-mono text-[10px] text-zinc-400">spec</span>
             <input
               value={threadSpec}
               onChange={(event) => setThreadSpec(event.target.value)}
@@ -505,7 +505,7 @@ function NumberField({
 }) {
   return (
     <label className="block space-y-1">
-      <span className="font-mono text-[10px] text-zinc-500">{label}</span>
+      <span className="font-mono text-[10px] text-zinc-400">{label}</span>
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -596,7 +596,7 @@ function PatternForm({
 
   if (!operation) {
     return (
-      <p className="p-3 text-[11px] text-zinc-500">
+      <p className="p-3 text-[11px] text-zinc-400">
         Выберите операцию в дереве слева, чтобы создать по ней массив.
       </p>
     );
@@ -611,7 +611,7 @@ function PatternForm({
         <button
           type="button"
           onClick={onCancel}
-          className="text-[11px] text-zinc-500 hover:text-zinc-300"
+          className="text-[11px] text-zinc-400 hover:text-zinc-300"
         >
           ✕ Отмена
         </button>

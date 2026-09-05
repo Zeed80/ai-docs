@@ -147,7 +147,7 @@ export default function QuarantinePage() {
         <p className="text-slate-400">Загрузка...</p>
       ) : tab === "queue" ? (
         entries.length === 0 ? (
-          <div className="text-center py-16 text-slate-500">
+          <div className="text-center py-16 text-slate-400">
             <svg
               className="w-12 h-12 mx-auto mb-3 opacity-50"
               fill="none"

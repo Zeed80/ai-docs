@@ -76,7 +76,7 @@ export default function CadModelTracePanel({
       <h3 className="text-sm font-medium text-sky-100">
         {t("vector.model_trace_title")}
       </h3>
-      <p className="mt-1 text-[11px] text-zinc-500">
+      <p className="mt-1 text-[11px] text-zinc-400">
         {t("vector.model_trace_hint")}
       </p>
 
@@ -102,7 +102,7 @@ export default function CadModelTracePanel({
           </summary>
           <div className="mt-2 max-h-80 overflow-auto">
             <table className="w-full text-left text-[10px]">
-              <thead className="sticky top-0 bg-zinc-950 text-zinc-500">
+              <thead className="sticky top-0 bg-zinc-950 text-zinc-400">
                 <tr>
                   <th className="p-1">{t("vector.model_trace_path")}</th>
                   <th className="p-1">{t("vector.model_trace_value")}</th>
@@ -162,7 +162,7 @@ export default function CadModelTracePanel({
           <div className="mt-2 text-[11px] text-zinc-400">
             {t("vector.model_trace_status")}: {solid?.build_status ?? "blocked"}
           </div>
-          <div className="mt-1 break-all font-mono text-[10px] text-zinc-500">
+          <div className="mt-1 break-all font-mono text-[10px] text-zinc-400">
             SHA-256: {kernelInput?.sha256 ?? "—"}
           </div>
           <div className="mt-2 space-y-2">
@@ -178,7 +178,7 @@ export default function CadModelTracePanel({
                   {JSON.stringify(feature.params ?? {}, null, 2)}
                 </pre>
                 {feature.param_provenance && (
-                  <pre className="mt-1 overflow-auto whitespace-pre-wrap break-words border-t border-white/5 pt-1 font-mono text-[10px] text-zinc-500">
+                  <pre className="mt-1 overflow-auto whitespace-pre-wrap break-words border-t border-white/5 pt-1 font-mono text-[10px] text-zinc-400">
                     {JSON.stringify(feature.param_provenance, null, 2)}
                   </pre>
                 )}
@@ -189,7 +189,7 @@ export default function CadModelTracePanel({
             <summary className="cursor-pointer text-[11px] text-zinc-400">
               {t("vector.model_trace_raw_payload")}
             </summary>
-            <pre className="mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-zinc-500">
+            <pre className="mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-zinc-400">
               {JSON.stringify(kernelInput?.payload, null, 2)}
             </pre>
           </details>
@@ -216,7 +216,7 @@ export default function CadModelTracePanel({
               </pre>
             </>
           ) : (
-            <p className="mt-2 text-[11px] text-zinc-500">
+            <p className="mt-2 text-[11px] text-zinc-400">
               {t("vector.model_trace_not_built")}
             </p>
           )}

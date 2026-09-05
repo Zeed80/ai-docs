@@ -430,7 +430,7 @@ export default function NormCardsPage() {
         (loading ? (
           <p className="text-slate-400 text-sm">Загрузка...</p>
         ) : cards.length === 0 ? (
-          <div className="text-center py-16 text-slate-500">
+          <div className="text-center py-16 text-slate-400">
             <p className="text-4xl mb-3">📐</p>
             <p className="text-sm">Нормкарточек нет</p>
             <button
@@ -456,7 +456,7 @@ export default function NormCardsPage() {
                   ].map((h) => (
                     <th
                       key={h}
-                      className="text-left py-2 pr-4 text-xs font-medium text-slate-500 uppercase tracking-wider"
+                      className="text-left py-2 pr-4 text-xs font-medium text-slate-400 uppercase tracking-wider"
                     >
                       {h}
                     </th>
@@ -470,7 +470,7 @@ export default function NormCardsPage() {
                     <tr key={card.id} className="hover:bg-slate-800/50">
                       <td className="py-3 pr-4 text-slate-200 max-w-xs truncate">
                         {item?.name ?? (
-                          <span className="text-slate-500 text-xs">
+                          <span className="text-slate-400 text-xs">
                             {card.canonical_item_id.slice(0, 8)}…
                           </span>
                         )}
@@ -491,7 +491,7 @@ export default function NormCardsPage() {
                           "1.0×"
                         )}
                       </td>
-                      <td className="py-3 pr-4 text-slate-500 text-xs">
+                      <td className="py-3 pr-4 text-slate-400 text-xs">
                         {card.approved_by ?? "—"}
                       </td>
                       <td className="py-3">
@@ -522,7 +522,7 @@ export default function NormCardsPage() {
           {loading ? (
             <p className="text-slate-400 text-sm">Загрузка...</p>
           ) : items.length === 0 ? (
-            <p className="text-slate-500 text-sm text-center py-12">
+            <p className="text-slate-400 text-sm text-center py-12">
               Позиций не найдено
             </p>
           ) : (
@@ -540,7 +540,7 @@ export default function NormCardsPage() {
                     ].map((h) => (
                       <th
                         key={h}
-                        className="text-left py-2 pr-4 text-xs font-medium text-slate-500 uppercase tracking-wider"
+                        className="text-left py-2 pr-4 text-xs font-medium text-slate-400 uppercase tracking-wider"
                       >
                         {h}
                       </th>

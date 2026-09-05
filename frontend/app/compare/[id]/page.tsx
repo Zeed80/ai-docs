@@ -173,7 +173,7 @@ export default function CompareDetailPage() {
 
   if (loading) {
     return (
-      <div className="p-6 text-center text-slate-500 text-sm">Загрузка...</div>
+      <div className="p-6 text-center text-slate-400 text-sm">Загрузка...</div>
     );
   }
   if (!session) return null;
@@ -189,12 +189,12 @@ export default function CompareDetailPage() {
         <div>
           <button
             onClick={() => router.push("/compare")}
-            className="text-xs text-slate-500 hover:text-slate-300 mb-1"
+            className="text-xs text-slate-400 hover:text-slate-300 mb-1"
           >
             ← Все сравнения
           </button>
           <h1 className="text-xl font-bold text-slate-100">{session.name}</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-400 mt-0.5">
             {session.invoice_ids.length} предложений ·{" "}
             {new Date(session.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
           </p>
@@ -338,7 +338,7 @@ export default function CompareDetailPage() {
                 {sup.total.toLocaleString("ru-RU")} ₽
               </p>
               {sup.invoice_number && (
-                <p className="text-[10px] text-slate-500">
+                <p className="text-[10px] text-slate-400">
                   № {sup.invoice_number}
                 </p>
               )}
@@ -408,11 +408,11 @@ export default function CompareDetailPage() {
                           <span className="font-medium">
                             {d.unit_price?.toLocaleString("ru-RU")} ₽
                           </span>
-                          <span className="text-slate-500 ml-1">
+                          <span className="text-slate-400 ml-1">
                             / {d.unit || "шт"}
                           </span>
                           <br />
-                          <span className="text-[10px] text-slate-500">
+                          <span className="text-[10px] text-slate-400">
                             {d.quantity} × {d.amount?.toLocaleString("ru-RU")} ₽
                           </span>
                         </td>
@@ -425,11 +425,11 @@ export default function CompareDetailPage() {
           </table>
         </div>
       ) : session.status === "draft" ? (
-        <div className="py-12 text-center text-slate-500 text-sm">
+        <div className="py-12 text-center text-slate-400 text-sm">
           <p>Нажмите «Выровнять позиции», чтобы выполнить сравнение.</p>
         </div>
       ) : (
-        <div className="py-12 text-center text-slate-500 text-sm">
+        <div className="py-12 text-center text-slate-400 text-sm">
           Нет позиций для сравнения.
         </div>
       )}

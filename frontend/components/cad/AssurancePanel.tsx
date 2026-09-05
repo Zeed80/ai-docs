@@ -230,7 +230,7 @@ export default function AssurancePanel({
                   {item.path}.{item.field}
                 </span>{" "}
                 = {item.value_mm} мм
-                <span className="text-zinc-500"> — {item.rule}</span>
+                <span className="text-zinc-400"> — {item.rule}</span>
               </li>
             ))}
           </ul>
@@ -293,7 +293,7 @@ function Row({
       <span className={`${colour} shrink-0`}>{mark}</span>
       <span className="text-zinc-300">
         {label}
-        {detail ? <span className="text-zinc-500"> — {detail}</span> : null}
+        {detail ? <span className="text-zinc-400"> — {detail}</span> : null}
       </span>
     </li>
   );

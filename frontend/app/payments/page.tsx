@@ -41,7 +41,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 function getDueDateColor(dueDate: string, status: string) {
-  if (status === "paid" || status === "cancelled") return "text-slate-500";
+  if (status === "paid" || status === "cancelled") return "text-slate-400";
   const now = new Date();
   const due = new Date(dueDate);
   const diffDays = Math.ceil(
@@ -252,7 +252,7 @@ export default function PaymentsPage() {
       {loading ? (
         <p className="text-slate-400 text-sm">Загрузка...</p>
       ) : schedules.length === 0 ? (
-        <div className="text-center py-16 text-slate-500">
+        <div className="text-center py-16 text-slate-400">
           <p className="text-4xl mb-3">📅</p>
           <p className="text-sm">
             {tab === "overdue"
@@ -267,19 +267,19 @@ export default function PaymentsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-700">
-                <th className="text-left py-2 pr-4 text-xs font-medium text-slate-500 uppercase tracking-wider">
+                <th className="text-left py-2 pr-4 text-xs font-medium text-slate-400 uppercase tracking-wider">
                   Срок оплаты
                 </th>
-                <th className="text-left py-2 pr-4 text-xs font-medium text-slate-500 uppercase tracking-wider">
+                <th className="text-left py-2 pr-4 text-xs font-medium text-slate-400 uppercase tracking-wider">
                   Счёт
                 </th>
-                <th className="text-right py-2 pr-4 text-xs font-medium text-slate-500 uppercase tracking-wider">
+                <th className="text-right py-2 pr-4 text-xs font-medium text-slate-400 uppercase tracking-wider">
                   Сумма
                 </th>
-                <th className="text-left py-2 pr-4 text-xs font-medium text-slate-500 uppercase tracking-wider">
+                <th className="text-left py-2 pr-4 text-xs font-medium text-slate-400 uppercase tracking-wider">
                   Статус
                 </th>
-                <th className="text-left py-2 pr-4 text-xs font-medium text-slate-500 uppercase tracking-wider">
+                <th className="text-left py-2 pr-4 text-xs font-medium text-slate-400 uppercase tracking-wider">
                   Реквизиты
                 </th>
                 <th className="py-2"></th>
@@ -311,7 +311,7 @@ export default function PaymentsPage() {
                       {STATUS_LABELS[s.status] ?? s.status}
                     </span>
                   </td>
-                  <td className="py-3 pr-4 text-xs text-slate-500">
+                  <td className="py-3 pr-4 text-xs text-slate-400">
                     {s.reference || s.payment_method || "—"}
                     {s.paid_at && (
                       <div className="text-slate-400">

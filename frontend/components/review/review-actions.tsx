@@ -137,7 +137,7 @@ export function ReviewActions({
       {status === "approved" &&
         (onReceive || onSchedulePayment || onExportExcel || onExport1C) && (
           <div className="border-t border-slate-700 pt-3 space-y-2">
-            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+            <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
               Действия после утверждения
             </p>
             {onReceive && (

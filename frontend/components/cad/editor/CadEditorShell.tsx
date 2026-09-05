@@ -638,7 +638,7 @@ export default function CadEditorShell({
 
   if (!gen) {
     return (
-      <div className="grid h-screen place-items-center bg-zinc-950 text-sm text-zinc-500">
+      <div className="grid h-screen place-items-center bg-zinc-950 text-sm text-zinc-400">
         {error ?? "Загрузка…"}
       </div>
     );
@@ -702,7 +702,7 @@ export default function CadEditorShell({
 
       <Ribbon active={ribbonTab} onChange={setRibbonTab}>
         {ribbonTab === "sketch" && (
-          <span className="px-2 text-[11px] text-zinc-500">
+          <span className="px-2 text-[11px] text-zinc-400">
             {sketchModeActive
               ? "Эскиз открыт в центральной области — рисуйте контур, затем «Использовать этот контур»."
               : "Чтобы начать эскиз: вкладка Фичи → Бобышка/Карман → профиль «Эскиз»."}
@@ -799,7 +799,7 @@ export default function CadEditorShell({
           </RibbonGroup>
         )}
         {ribbonTab === "spec" && (
-          <span className="px-2 text-[11px] text-zinc-500">
+          <span className="px-2 text-[11px] text-zinc-400">
             Наружный/внутренний профиль, фаски, скругления, резьбовые отверстия
             — правки ниже, в центральной области. То же исправление, что раньше
             было только на обычной странице чертежа.
@@ -880,7 +880,7 @@ export default function CadEditorShell({
           side="left"
         >
           <aside className="h-full overflow-y-auto border-r border-white/10 bg-zinc-900/60">
-            <div className="border-b border-white/10 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+            <div className="border-b border-white/10 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
               Дерево построения
             </div>
             {tree ? (
@@ -899,7 +899,7 @@ export default function CadEditorShell({
                 operationIssues={operationIssues}
               />
             ) : (
-              <p className="p-3 text-xs text-zinc-500">
+              <p className="p-3 text-xs text-zinc-400">
                 Граф ещё не построен для этой генерации.
               </p>
             )}
@@ -1036,7 +1036,7 @@ export default function CadEditorShell({
           side="right"
         >
           <aside className="h-full overflow-y-auto border-l border-white/10 bg-zinc-900/60">
-            <div className="border-b border-white/10 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+            <div className="border-b border-white/10 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
               Свойства
             </div>
             {graphRevision && (

@@ -504,9 +504,9 @@ export function MailboxSection() {
       </div>
 
       {loading ? (
-        <p className="text-slate-500 text-sm">Загрузка...</p>
+        <p className="text-slate-400 text-sm">Загрузка...</p>
       ) : mailboxes.length === 0 ? (
-        <p className="text-slate-500 text-sm">Ящики не настроены</p>
+        <p className="text-slate-400 text-sm">Ящики не настроены</p>
       ) : (
         <div className="space-y-2">
           {mailboxes.map((mb) => (
@@ -537,7 +537,7 @@ export function MailboxSection() {
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-slate-500 truncate">
+                <p className="text-xs text-slate-400 truncate">
                   {mb.oauth_email || mb.imap_user} @ {mb.imap_host}
                   {mb.last_sync_at && (
                     <span className="ml-2">
@@ -696,7 +696,7 @@ export function MailboxSection() {
                   />
                   OAuth2 (рекомендуется)
                   {!preset?.oauth_configured && (
-                    <span className="text-slate-500">
+                    <span className="text-slate-400">
                       — не настроено администратором
                     </span>
                   )}
@@ -857,7 +857,7 @@ export function MailboxSection() {
                   className="rounded"
                 />
                 STARTTLS (обычно порт 587)
-                <span className="text-slate-500">
+                <span className="text-slate-400">
                   — выключите для порта 465 (неявный TLS/SSL)
                 </span>
               </label>
@@ -960,7 +960,7 @@ export function MailboxSection() {
               />
               <span>
                 Распознавать вложения автоматически
-                <span className="block text-[11px] text-slate-500">
+                <span className="block text-[11px] text-slate-400">
                   Счёт из письма попадает в раздел «Счета» со статусом «на
                   проверке». Для личного ящика работает только при включённом
                   разборе почты ассистентом.
@@ -977,7 +977,7 @@ export function MailboxSection() {
               />
               <span className={form.auto_process_attachments ? "" : "opacity-40"}>
                 Утверждать счета без человека при высокой уверенности
-                <span className="block text-[11px] text-slate-500">
+                <span className="block text-[11px] text-slate-400">
                   По умолчанию выключено: письмо доводится до «на проверке», а
                   утверждает человек. Включайте только для доверенного ящика.
                 </span>
@@ -996,7 +996,7 @@ export function MailboxSection() {
                 <option value="classify">Только распознавать тип письма</option>
                 <option value="full">Полный: метки, привязки, черновики ответов</option>
               </select>
-              <p className="mt-1 text-[11px] text-slate-500">
+              <p className="mt-1 text-[11px] text-slate-400">
                 Даже в полном режиме письма наружу не уходят: ответ готовится
                 черновиком и требует подтверждения.
               </p>
@@ -1013,7 +1013,7 @@ export function MailboxSection() {
                 value={form.body_retention_days}
                 onChange={(e) => f("body_retention_days", e.target.value)}
               />
-              <p className="mt-1 text-[11px] text-slate-500">
+              <p className="mt-1 text-[11px] text-slate-400">
                 0 — хранить бессрочно (по умолчанию). При заданном сроке у старых
                 писем стирается текст, а отправитель, тема, дата и связи со
                 счетами остаются: письмо не пропадает, пропадает его содержимое.
@@ -1086,7 +1086,7 @@ export function MailboxSection() {
                 onChange={(e) => f("ingress_allowed_senders", e.target.value)}
                 placeholder={"ivanov@example.com\nexample.com"}
               />
-              <p className="mt-1 text-[11px] text-slate-500">
+              <p className="mt-1 text-[11px] text-slate-400">
                 Пусто — разрешены адреса всех активных пользователей системы.
               </p>
             </div>

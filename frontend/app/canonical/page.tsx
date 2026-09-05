@@ -162,7 +162,7 @@ export default function CanonicalItemsPage() {
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-xl font-bold text-slate-100">Canonical Items</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-400 mt-0.5">
             Нормированный справочник позиций для сравнения цен и маппинга КП
           </p>
         </div>
@@ -199,7 +199,7 @@ export default function CanonicalItemsPage() {
         {suggestions && (
           <div className="mt-2">
             {suggestions.suggestions.length === 0 ? (
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-400">
                 Совпадений не найдено — создайте новую позицию
               </p>
             ) : (
@@ -215,7 +215,7 @@ export default function CanonicalItemsPage() {
                     <span className="text-slate-200 font-medium">
                       {s.canonical_item_name}
                     </span>
-                    <span className="text-slate-500 italic">
+                    <span className="text-slate-400 italic">
                       {s.match_reason}
                     </span>
                   </div>
@@ -244,7 +244,7 @@ export default function CanonicalItemsPage() {
           />
           Только подтверждённые
         </label>
-        <span className="text-xs text-slate-500">{items.length} позиций</span>
+        <span className="text-xs text-slate-400">{items.length} позиций</span>
       </div>
 
       {/* Create form */}
@@ -323,7 +323,7 @@ export default function CanonicalItemsPage() {
       )}
 
       {loading ? (
-        <div className="py-12 text-center text-slate-500 text-sm">
+        <div className="py-12 text-center text-slate-400 text-sm">
           Загрузка...
         </div>
       ) : items.length === 0 ? (
@@ -338,7 +338,7 @@ export default function CanonicalItemsPage() {
         <div className="space-y-5">
           {confirmed.length > 0 && (
             <section>
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
                 Подтверждённые ({confirmed.length})
               </h2>
               <CanonicalTable
@@ -429,7 +429,7 @@ function CanonicalTable({
                 <td className="px-4 py-2.5">
                   <div className="text-slate-200 font-medium">{item.name}</div>
                   {item.aliases && item.aliases.length > 0 && (
-                    <div className="text-xs text-slate-500 mt-0.5">
+                    <div className="text-xs text-slate-400 mt-0.5">
                       {item.aliases.slice(0, 3).join(", ")}
                     </div>
                   )}
@@ -453,7 +453,7 @@ function CanonicalTable({
                       className={`text-xs px-1.5 py-0.5 rounded ${
                         expandedId === item.id
                           ? "text-blue-400"
-                          : "text-slate-500 hover:text-blue-400"
+                          : "text-slate-400 hover:text-blue-400"
                       }`}
                       title="История цен"
                     >
@@ -463,7 +463,7 @@ function CanonicalTable({
                       onClick={() => onToggle(item)}
                       className={`text-xs px-1.5 py-0.5 rounded ${
                         item.is_confirmed
-                          ? "text-slate-500 hover:text-amber-400"
+                          ? "text-slate-400 hover:text-amber-400"
                           : "text-amber-400 hover:text-green-400"
                       }`}
                       title={
@@ -491,17 +491,17 @@ function CanonicalTable({
                     className="px-4 py-3 bg-slate-900/50 border-t border-slate-700/40"
                   >
                     {!priceHistory[item.id] ? (
-                      <span className="text-xs text-slate-500">
+                      <span className="text-xs text-slate-400">
                         Загрузка...
                       </span>
                     ) : priceHistory[item.id].length === 0 ? (
-                      <span className="text-xs text-slate-500">
+                      <span className="text-xs text-slate-400">
                         История цен отсутствует
                       </span>
                     ) : (
                       <div>
                         <div className="flex items-center gap-3 mb-2">
-                          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                          <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
                             История цен
                           </p>
                           <Sparkline
@@ -512,7 +512,7 @@ function CanonicalTable({
                         </div>
                         <table className="text-xs w-full max-w-md">
                           <thead>
-                            <tr className="text-slate-500">
+                            <tr className="text-slate-400">
                               <th className="text-left pb-1">Дата</th>
                               <th className="text-right pb-1">Цена</th>
                               <th className="text-left pb-1 pl-2">Валюта</th>
@@ -531,7 +531,7 @@ function CanonicalTable({
                                     minimumFractionDigits: 2,
                                   })}
                                 </td>
-                                <td className="py-1 pl-2 text-slate-500">
+                                <td className="py-1 pl-2 text-slate-400">
                                   {p.currency}
                                 </td>
                               </tr>

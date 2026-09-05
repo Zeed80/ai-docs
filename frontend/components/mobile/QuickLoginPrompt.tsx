@@ -90,7 +90,7 @@ export function QuickLoginPrompt() {
           </button>
           <button
             onClick={dismiss}
-            className="ml-auto text-xs text-slate-500 hover:text-slate-300"
+            className="ml-auto text-xs text-slate-400 hover:text-slate-300"
           >
             Позже
           </button>

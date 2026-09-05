@@ -39,7 +39,7 @@ export default function CommandLine({
 
   return (
     <div className="flex items-center gap-2 rounded border border-white/10 bg-zinc-900/80 px-2 py-1.5 font-mono text-xs">
-      <span className={prompt ? "text-amber-300" : "text-zinc-500"}>
+      <span className={prompt ? "text-amber-300" : "text-zinc-400"}>
         {prompt ? prompt.message : "›"}
       </span>
       <input

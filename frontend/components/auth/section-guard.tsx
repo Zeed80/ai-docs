@@ -31,7 +31,7 @@ export function SectionGuard({ children }: { children: React.ReactNode }) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-2 p-8 text-center">
         <p className="text-sm font-medium text-slate-300">Раздел недоступен</p>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-400">
           У вас нет доступа к этому разделу. Обратитесь к администратору.
         </p>
       </div>

@@ -149,7 +149,7 @@ export default function ValidationPanel({
         {ir.parameters.length > 0 && (
           <div className="space-y-1 pt-1">
             <div className="flex flex-wrap items-center gap-1">
-              <span className="text-[10px] text-zinc-500">
+              <span className="text-[10px] text-zinc-400">
                 {t("vector.configurations")}
               </span>
               {(ir.configurations ?? []).map((cfg) => (
@@ -184,7 +184,7 @@ export default function ValidationPanel({
                         },
                       ])
                     }
-                    className="pr-1 text-zinc-500 hover:text-red-300"
+                    className="pr-1 text-zinc-400 hover:text-red-300"
                   >
                     ✕
                   </button>
@@ -223,7 +223,7 @@ export default function ValidationPanel({
       </div>
       {levelGroups.map(([level, levelIssues]) => (
         <div key={level} className="space-y-1">
-          <div className="text-[10px] uppercase tracking-wide text-zinc-500">
+          <div className="text-[10px] uppercase tracking-wide text-zinc-400">
             {t(`vector.level_${level}`)}
           </div>
           {levelIssues.map((issue, idx) => (
@@ -250,12 +250,12 @@ export default function ValidationPanel({
               {/* C2: ЕСКД citation + concrete fix path from the versioned
                   rule profile, when the issue is standard-backed. */}
               {(issue.norm_ref || issue.fix_hint) && (
-                <div className="mt-0.5 pl-1 text-[10px] text-zinc-500">
+                <div className="mt-0.5 pl-1 text-[10px] text-zinc-400">
                   {issue.norm_ref && (
                     <span className="text-zinc-400">{issue.norm_ref}</span>
                   )}
                   {issue.fix_hint && (
-                    <span className="block text-zinc-500">
+                    <span className="block text-zinc-400">
                       → {issue.fix_hint}
                     </span>
                   )}
@@ -266,7 +266,7 @@ export default function ValidationPanel({
         </div>
       ))}
       {issues.length === 0 && (
-        <div className="text-[11px] text-zinc-500">
+        <div className="text-[11px] text-zinc-400">
           {t("vector.validation_no_issues")}
         </div>
       )}

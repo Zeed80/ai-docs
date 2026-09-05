@@ -68,7 +68,7 @@ export function GpuPanel({ status }: { status: AllStatus | null }) {
               key={label}
               className="bg-slate-900 rounded p-3 border border-slate-700 text-center"
             >
-              <div className="text-xs text-slate-500">{label}</div>
+              <div className="text-xs text-slate-400">{label}</div>
               <div className="text-lg font-mono text-slate-100">{value}</div>
             </div>
           ))}
@@ -114,7 +114,7 @@ export function GpuPanel({ status }: { status: AllStatus | null }) {
                   />
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-500 w-16">
+                  <span className="text-xs text-slate-400 w-16">
                     Лимит (GB)
                   </span>
                   <input
@@ -138,7 +138,7 @@ export function GpuPanel({ status }: { status: AllStatus | null }) {
                 {a.models.map((m) => (
                   <div
                     key={m.name}
-                    className="flex justify-between text-xs text-slate-500 pl-4"
+                    className="flex justify-between text-xs text-slate-400 pl-4"
                   >
                     <span className="truncate">{m.name}</span>
                     <span>{m.vram_gb.toFixed(1)} GB</span>
@@ -155,7 +155,7 @@ export function GpuPanel({ status }: { status: AllStatus | null }) {
         </div>
       </div>
 
-      <div className="text-xs text-slate-500 bg-slate-900 rounded p-3 border border-slate-800">
+      <div className="text-xs text-slate-400 bg-slate-900 rounded p-3 border border-slate-800">
         <b className="text-slate-400">Как работают мягкие лимиты:</b> при
         попытке активировать модель, которая превысит лимит, система показывает
         предупреждение, но не блокирует — вы сами решаете. Для жёсткого

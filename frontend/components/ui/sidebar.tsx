@@ -573,7 +573,7 @@ export function Sidebar() {
         <Link
           href="/auth/qr-login"
           title="Вход на телефоне по QR-коду"
-          className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors shrink-0"
+          className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-300 transition-colors shrink-0"
         >
           <svg
             className="w-3.5 h-3.5"
@@ -592,7 +592,7 @@ export function Sidebar() {
         <button
           onClick={handleLogout}
           title="Выйти"
-          className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors shrink-0"
+          className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-300 transition-colors shrink-0"
         >
           <svg
             className="w-3.5 h-3.5"

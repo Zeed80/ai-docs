@@ -505,7 +505,7 @@ export function AssignmentBoard() {
     key ? models.find((m) => m.key === key) : undefined;
   const providerCanDisableThinking = (provider?: string) =>
     !provider || THINKING_DISABLE_SUPPORTED_PROVIDERS.includes(provider);
-  if (loading) return <div className="text-sm text-slate-500">Загрузка…</div>;
+  if (loading) return <div className="text-sm text-slate-400">Загрузка…</div>;
 
   // Порядок групп берём из ответа сервера, а не из литерала: слот новой
   // группы (или переименованной) просто не отрисовывался, без единого следа.
@@ -524,7 +524,7 @@ export function AssignmentBoard() {
       <div className="flex items-center justify-between">
         <p className="text-xs text-slate-400">
           <span className="text-emerald-400">●</span> запущен ·{" "}
-          <span className="text-slate-500">○</span> остановлен — vLLM и
+          <span className="text-slate-400">○</span> остановлен — vLLM и
           llama.cpp стартуют по требованию. Изменения сначала попадают в
           черновик.
         </p>
@@ -582,7 +582,7 @@ export function AssignmentBoard() {
             <span className="text-sm font-semibold text-slate-100">
               Проверка черновика
             </span>
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               {diff.length} изменений · {warnings.length} предупреждений ·{" "}
               {errors.length} ошибок
             </span>
@@ -630,17 +630,17 @@ export function AssignmentBoard() {
                 {GROUP_ICON[g]} {g}
               </span>
               {gslots.every((s) => s.local_only) && (
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-slate-400">
                   🔒 конфиденциально — только локальные модели
                 </span>
               )}
               {g === "Агент" && (
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-slate-400">
                   можно облачные модели (на ваш выбор)
                 </span>
               )}
               {g === "Оцифровка" && (
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-slate-400">
                   🔒 конфиденциально — только локальные модели · метод «по
                   описанию»
                 </span>
@@ -690,7 +690,7 @@ export function AssignmentBoard() {
                   >
                     <div className="min-w-0">
                       <div className="text-sm text-slate-200">{s.label}</div>
-                      <div className="text-xs text-slate-500">{s.hint}</div>
+                      <div className="text-xs text-slate-400">{s.hint}</div>
                     </div>
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="flex-1 min-w-0">
@@ -757,7 +757,7 @@ export function AssignmentBoard() {
           <span className="text-sm font-semibold text-slate-100">
             Модели провайдеров
           </span>
-          <span className="text-xs text-slate-500">
+          <span className="text-xs text-slate-400">
             все загруженные модели · скачать новые — во вкладке «Библиотека»
           </span>
         </div>
@@ -790,7 +790,7 @@ export function AssignmentBoard() {
           {/* models of selected provider */}
           <div className="flex-1 p-2">
             {provModels.length === 0 && (
-              <div className="text-xs text-slate-500 px-2 py-3">
+              <div className="text-xs text-slate-400 px-2 py-3">
                 Нет загруженных моделей. Добавьте их во вкладке «Библиотека» или
                 подтяните облачные во вкладке «Провайдеры».
               </div>

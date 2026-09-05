@@ -172,7 +172,7 @@ export default function ComparePage() {
             </p>
             <div className="max-h-48 overflow-y-auto space-y-1 border border-slate-700 rounded p-2 bg-slate-900/50">
               {invoices.length === 0 ? (
-                <p className="text-xs text-slate-500 p-2">
+                <p className="text-xs text-slate-400 p-2">
                   Нет доступных счетов
                 </p>
               ) : (
@@ -254,7 +254,7 @@ export default function ComparePage() {
             >
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-slate-200">{s.name}</p>
-                <p className="text-xs text-slate-500 mt-0.5">
+                <p className="text-xs text-slate-400 mt-0.5">
                   {s.invoice_ids.length} предложений ·{" "}
                   {new Date(s.created_at).toLocaleDateString("ru-RU", { timeZone: tz() })}
                 </p>

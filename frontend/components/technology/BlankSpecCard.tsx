@@ -41,7 +41,7 @@ export default function BlankSpecCard({ spec, onEdit }: Props) {
   if (!spec) {
     return (
       <div className="rounded-lg border border-zinc-700 bg-zinc-800/50 p-3">
-        <p className="text-xs text-zinc-500">Заготовка не задана.</p>
+        <p className="text-xs text-zinc-400">Заготовка не задана.</p>
       </div>
     );
   }
@@ -76,7 +76,7 @@ export default function BlankSpecCard({ spec, onEdit }: Props) {
           )}
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-xs text-zinc-500 hover:text-zinc-300"
+            className="text-xs text-zinc-400 hover:text-zinc-300"
           >
             {expanded ? "▲" : "▼"}
           </button>
@@ -86,30 +86,30 @@ export default function BlankSpecCard({ spec, onEdit }: Props) {
       {/* Main info */}
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
         <div>
-          <span className="text-zinc-500">Материал:</span>{" "}
+          <span className="text-zinc-400">Материал:</span>{" "}
           <span className="text-zinc-200">{spec.material_grade}</span>
         </div>
         {spec.standard_gost && (
           <div>
-            <span className="text-zinc-500">ГОСТ:</span>{" "}
+            <span className="text-zinc-400">ГОСТ:</span>{" "}
             <span className="text-zinc-200">{spec.standard_gost}</span>
           </div>
         )}
         {spec.mass_blank_kg !== null && (
           <div>
-            <span className="text-zinc-500">Масса заготовки:</span>{" "}
+            <span className="text-zinc-400">Масса заготовки:</span>{" "}
             <span className="text-zinc-200">{spec.mass_blank_kg} кг</span>
           </div>
         )}
         {spec.mass_part_kg !== null && (
           <div>
-            <span className="text-zinc-500">Масса детали:</span>{" "}
+            <span className="text-zinc-400">Масса детали:</span>{" "}
             <span className="text-zinc-200">{spec.mass_part_kg} кг</span>
           </div>
         )}
         {spec.dimensions && (
           <div className="col-span-2">
-            <span className="text-zinc-500">Размеры:</span>{" "}
+            <span className="text-zinc-400">Размеры:</span>{" "}
             <span className="text-zinc-200 font-mono text-xs">
               {Object.entries(spec.dimensions)
                 .map(([k, v]) => `${k}=${v}`)

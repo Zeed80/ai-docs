@@ -167,7 +167,7 @@ function Field({
   if (!editing) {
     return (
       <div className={className}>
-        <span className="text-xs text-slate-500">{label}</span>
+        <span className="text-xs text-slate-400">{label}</span>
         <p className="text-sm text-slate-200 mt-0.5">{value || "—"}</p>
       </div>
     );
@@ -198,7 +198,7 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-lg p-3 text-center">
       <div className="text-lg font-bold text-slate-100">{value}</div>
-      <div className="text-xs text-slate-500">{label}</div>
+      <div className="text-xs text-slate-400">{label}</div>
     </div>
   );
 }
@@ -705,7 +705,7 @@ function CatalogTab({
           ) : (
             <>
               <svg
-                className="w-8 h-8 text-slate-500"
+                className="w-8 h-8 text-slate-400"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -914,7 +914,7 @@ function CatalogTab({
       {/* Uploaded catalog files with their processing stages */}
       {uploads.length > 0 && (
         <div className="rounded border border-slate-700 bg-slate-800/50">
-          <div className="px-3 py-2 text-xs uppercase tracking-wide text-slate-500">
+          <div className="px-3 py-2 text-xs uppercase tracking-wide text-slate-400">
             Загрузки каталогов
           </div>
           <div className="divide-y divide-slate-700">
@@ -931,7 +931,7 @@ function CatalogTab({
                         <span className="text-sm text-slate-200">
                           {upload.file_name}
                         </span>
-                        <span className="ml-2 text-xs text-slate-500">
+                        <span className="ml-2 text-xs text-slate-400">
                           {Math.max(1, Math.round(upload.file_size / 1024))} КБ
                           · {upload.entries_count.toLocaleString("ru")} позиций
                           {upload.is_archive ? " · архив" : ""}
@@ -970,7 +970,7 @@ function CatalogTab({
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-xs text-slate-300">
                             {member.file_name}
-                            <span className="ml-2 text-slate-500">
+                            <span className="ml-2 text-slate-400">
                               {member.entries_count.toLocaleString("ru")}{" "}
                               позиций
                             </span>
@@ -1005,7 +1005,7 @@ function CatalogTab({
         <>
           {catalogs.filter((c) => c.document_id).length > 1 && (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-slate-500">Искать в каталогах:</span>
+              <span className="text-xs text-slate-400">Искать в каталогах:</span>
               <button
                 onClick={() => setSelectedCatalogs(new Set())}
                 className={`rounded-full px-3 py-1 text-xs transition-colors ${
@@ -1069,7 +1069,7 @@ function CatalogTab({
                 </option>
               ))}
             </select>
-            <span className="text-xs text-slate-500 shrink-0">
+            <span className="text-xs text-slate-400 shrink-0">
               {total.toLocaleString("ru")} позиций
             </span>
             {/* Refresh button */}
@@ -1152,11 +1152,11 @@ function CatalogTab({
 
           {/* Table */}
           {loading ? (
-            <div className="py-8 text-center text-slate-500 text-sm">
+            <div className="py-8 text-center text-slate-400 text-sm">
               Загрузка...
             </div>
           ) : entries.length === 0 ? (
-            <div className="py-10 text-center text-slate-500 text-sm">
+            <div className="py-10 text-center text-slate-400 text-sm">
               {total === 0
                 ? "Каталог пуст. Загрузите файл каталога выше."
                 : "Ничего не найдено по фильтру."}
@@ -1297,7 +1297,7 @@ function CatalogTab({
 
               {/* Pagination */}
               {total > PAGE_SIZE && (
-                <div className="flex items-center justify-between text-xs text-slate-500">
+                <div className="flex items-center justify-between text-xs text-slate-400">
                   <span>
                     Показано {(page - 1) * PAGE_SIZE + 1}–
                     {Math.min(page * PAGE_SIZE, total)} из{" "}
@@ -1491,7 +1491,7 @@ export default function SupplierProfilePage() {
     <div className="p-6 max-w-5xl mx-auto">
       <button
         onClick={() => router.back()}
-        className="text-sm text-slate-500 hover:text-slate-300 mb-4 block"
+        className="text-sm text-slate-400 hover:text-slate-300 mb-4 block"
       >
         ← Назад
       </button>
@@ -1513,7 +1513,7 @@ export default function SupplierProfilePage() {
               {supplier.name}
             </h1>
           )}
-          <div className="text-sm text-slate-500 mt-1">
+          <div className="text-sm text-slate-400 mt-1">
             ИНН {supplier.inn ?? "—"} / КПП {supplier.kpp ?? "—"}
           </div>
           {supplier.address && !editing && (
@@ -1528,7 +1528,7 @@ export default function SupplierProfilePage() {
               <div className={`text-2xl font-bold ${trustColor}`}>
                 {(trust.trust_score * 100).toFixed(0)}%
               </div>
-              <div className="text-xs text-slate-500">
+              <div className="text-xs text-slate-400">
                 {trust.recommendation}
               </div>
             </div>
@@ -1624,7 +1624,7 @@ export default function SupplierProfilePage() {
               className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === key
                   ? "border-blue-500 text-blue-400"
-                  : "border-transparent text-slate-500 hover:text-slate-300"
+                  : "border-transparent text-slate-400 hover:text-slate-300"
               }`}
             >
               {label}
@@ -1748,13 +1748,13 @@ export default function SupplierProfilePage() {
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 mb-6 space-y-2">
               {supplier.user_rating ? (
                 <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-500">Оценка:</span>
+                  <span className="text-xs text-slate-400">Оценка:</span>
                   <StarRating value={supplier.user_rating} readonly />
                 </div>
               ) : null}
               {supplier.user_notes ? (
                 <div>
-                  <span className="text-xs text-slate-500 block mb-1">
+                  <span className="text-xs text-slate-400 block mb-1">
                     Заметки:
                   </span>
                   <p className="text-sm text-slate-300 whitespace-pre-wrap">
@@ -1838,7 +1838,7 @@ export default function SupplierProfilePage() {
                     </div>
                   ))}
                 </div>
-                <div className="mt-3 text-xs text-slate-500">
+                <div className="mt-3 text-xs text-slate-400">
                   Email: {supplier.contact_email ?? "—"} | Тел:{" "}
                   {supplier.contact_phone ?? "—"}
                 </div>
@@ -1854,7 +1854,7 @@ export default function SupplierProfilePage() {
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="text-xs text-slate-500 uppercase">
+                  <thead className="text-xs text-slate-400 uppercase">
                     <tr>
                       <th className="text-left px-3 py-1.5">Позиция</th>
                       <th className="text-right px-3 py-1.5">Текущая</th>

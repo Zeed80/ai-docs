@@ -214,7 +214,7 @@ export default function AppLockSettings() {
               {setup === "enter" ? "Далее" : busy ? "Сохранение…" : "Готово"}
             </button>
           </div>
-          <p className="text-[11px] text-slate-500">
+          <p className="text-[11px] text-slate-400">
             От {PIN_MIN_LEN} до {PIN_MAX_LEN} цифр
           </p>
         </div>
