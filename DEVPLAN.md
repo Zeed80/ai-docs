@@ -1,11 +1,11 @@
 # План разработки и To Do — AI Manufacturing Workspace
 
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).
-> Исполнимый roadmap `чертёж → EngineeringDrawingGraph → CadIR/DXF` находится в [`CAD_DRAWING_GRAPH_PLAN.md`](./CAD_DRAWING_GRAPH_PLAN.md).
+> Исполнимый roadmap `чертёж → EngineeringDrawingGraph → CadIR/DXF` находится в [`CAD_DRAWING_GRAPH_PLAN.md`](./docs/archive/CAD_DRAWING_GRAPH_PLAN.md).
 > Актуальный TODO исправления точности `чертёж → чтение → 3D → виды → DXF` находится в [`CAD_REDRAW_ACCURACY_TODO.md`](./CAD_REDRAW_ACCURACY_TODO.md).
 > Последовательный TO DO оставшихся mechanical/construction работ находится в [`CAD_UNIVERSAL_REMAINING_TODO.md`](./CAD_UNIVERSAL_REMAINING_TODO.md).
-> Единый roadmap автономной агентской системы с фактическими отметками находится в [`AGENT_SYSTEM_DEVELOPMENT_PLAN.md`](./AGENT_SYSTEM_DEVELOPMENT_PLAN.md).
-> Roadmap автономности агента (exploratory-режим, self-learning connector library, idle-reflection «подсознание», тон/характер) — все 7 фаз завершены — находится в [`AGENT_AUTONOMY_ROADMAP.md`](./AGENT_AUTONOMY_ROADMAP.md).
+> Единый roadmap автономной агентской системы с фактическими отметками находится в [`AGENT_SYSTEM_DEVELOPMENT_PLAN.md`](./docs/archive/AGENT_SYSTEM_DEVELOPMENT_PLAN.md).
+> Roadmap автономности агента (exploratory-режим, self-learning connector library, idle-reflection «подсознание», тон/характер) — все 7 фаз завершены — находится в [`AGENT_AUTONOMY_ROADMAP.md`](./docs/archive/AGENT_AUTONOMY_ROADMAP.md).
 
 ## Контекст
 

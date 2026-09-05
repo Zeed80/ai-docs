@@ -196,7 +196,7 @@
 - [x] Выполнить `make prod-build`, перезапустить stack и дождаться устойчивого `/health`: production images пересобраны, backend/cad-kernel и зависимости healthy, `GET /health` вернул `{"status":"ok"}`.
 - [x] Прогнать публичный рабочий URL, а не только health endpoint: `https://192.168.1.246/cad` через Traefik корректно переводит неавторизованного пользователя на login и заканчивается HTTP `200`; защищённый EMG download без сессии вернул ожидаемый `401`, а не утечку данных.
 - [x] Для live-кейсов сохранить исходник, audit trace, прочитанный graph, generator payload, 3D/BIM, 2D и validation report. `make emg-live-regression` сохраняет девять content-addressed bundles в `test-results/emg_live_artifacts`; каждый manifest имеет `complete=true`, mechanical/assembly/construction содержат по `7`, system — по `6` файлов. Все `9/9` live-кейсов прошли production runtime/reopen/release checks.
-- [x] Дать пользователю живые URL и точные шаги самостоятельной проверки: URL и границы accepted/rejected capability записаны в `CAD_FINAL_ACCEPTANCE_20260814.md`; после входа открыть `/cad`, а API без входа обязан отвечать `401`.
+- [x] Дать пользователю живые URL и точные шаги самостоятельной проверки: URL и границы accepted/rejected capability записаны в `docs/archive/CAD_FINAL_ACCEPTANCE_20260814.md`; после входа открыть `/cad`, а API без входа обязан отвечать `401`.
 - [x] Зафиксировать итоговый before/after отчёт, commit и push без generated/local noise: машиночитаемый one-shot receipt и человекочитаемый отчёт подготовлены; generated raw holdout/evidence остаются вне Git, в commit входит только компактная доказательная сводка.
 
 ## Definition of Done
