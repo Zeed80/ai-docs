@@ -143,3 +143,12 @@ infra/traefik/certs/*.key
 infra/traefik/certs/*.crt
 infra/traefik/certs/*.srl
 infra/traefik/certs/*.cnf
+
+# Черновики CapabilityBuilder. Агент пишет их в рантайме (в том числе на
+# каждом прогоне тестов), и они попадали в индекс с новым timestamp — шум в
+# каждом diff, который уже приходилось вычищать отдельным коммитом
+# «обновление timestamps сгенерированных skills». Это артефакт работы, а не
+# исходник: черновик не зарегистрирован и активируется только через
+# proposal → решение человека → promote.
+backend/app/ai/generated_skills/*.py
+!backend/app/ai/generated_skills/__init__.py
