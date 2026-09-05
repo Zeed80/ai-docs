@@ -211,3 +211,38 @@ export type ModelsTab =
   | "library"
   | "parameters"
   | "gpu";
+
+// ── Библиотека моделей ───────────────────────────────────────────────────────
+
+export type LocalProviderKind = "ollama" | "llamacpp" | "vllm";
+
+/** Откуда берётся список: локальный каталог или внешний реестр. */
+export type ModelSource = "local" | "huggingface" | "modelscope";
+
+export interface RepoFile {
+  filename?: string;
+  rfilename?: string;
+  size_human?: string;
+  quant?: string;
+  is_split?: boolean;
+}
+
+/** Запись библиотеки: и локальная модель, и найденная в реестре. */
+export interface ModelItem {
+  name?: string;
+  repo_id?: string;
+  model_name?: string;
+  author?: string;
+  path?: string;
+  size_bytes?: number;
+  size_human?: string;
+  format?: string;
+  active?: boolean;
+  downloads?: number;
+  likes?: number;
+  stars?: number;
+  tags?: string[];
+  gated?: boolean;
+  source?: string;
+  vram_gb_estimate?: number;
+}

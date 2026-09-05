@@ -72,3 +72,20 @@ export function formatBytes(bytes: number | null | undefined): string {
   }
   return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
+
+/**
+ * Ответ сервера в читаемую строку.
+ *
+ * Раньше ошибка показывалась через `JSON.stringify(detail)` — вместе с
+ * фигурными скобками и кавычками, а поле message тонуло среди служебных
+ * ключей.
+ */
+export function detailText(payload: unknown): string {
+  const d = (payload as { detail?: unknown })?.detail ?? payload;
+  if (typeof d === "string") return d;
+  if (d && typeof d === "object") {
+    const msg = (d as { message?: unknown }).message;
+    if (typeof msg === "string") return msg;
+  }
+  return JSON.stringify(d);
+}
