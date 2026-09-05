@@ -96,3 +96,41 @@ export const PROVIDER_BAR_COLOR: Record<string, string> = {
 
 export const providerBarColor = (kind: string): string =>
   PROVIDER_BAR_COLOR[kind] ?? "bg-slate-500";
+
+/**
+ * Значок группы слотов. Ключи совпадают с `group` из ответа /slots — если на
+ * бэкенде появится новая группа, она просто останется без значка, а не
+ * исчезнет с экрана (раньше список групп был захардкожен, и слот новой группы
+ * не отрисовывался вовсе).
+ */
+export const GROUP_ICON: Record<string, string> = {
+  Документы: "📄",
+  Агент: "🤖",
+  Поиск: "🔎",
+  Оцифровка: "📐",
+};
+
+export const groupIcon = (group: string): string => GROUP_ICON[group] ?? "•";
+
+/**
+ * Провайдеры, у которых рассуждение можно принудительно выключить. Копия
+ * `_THINKING_DISABLE_SUPPORTED_PROVIDERS` из providers_api.py — держим для
+ * подсказки в интерфейсе; настоящую проверку делает бэкенд, он же присылает
+ * `thinking_disable_supported` в ответе слота.
+ */
+export const THINKING_DISABLE_SUPPORTED_PROVIDERS = [
+  "ollama",
+  "llamacpp",
+  "vllm",
+  "openrouter",
+  "ollama_cloud",
+  "openai",
+  "groq",
+  "xai",
+  "dashscope",
+  "qwen",
+  "cerebras",
+] as const;
+
+export const providerCanDisableThinking = (kind: string): boolean =>
+  (THINKING_DISABLE_SUPPORTED_PROVIDERS as readonly string[]).includes(kind);
