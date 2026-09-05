@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
-import { ModelCombobox } from "@/components/models/picker/ModelCombobox";
+import { ProviderModelPicker } from "@/components/models/picker/ProviderModelPicker";
 import { providerBarColor, providerLabel } from "@/lib/models/labels";
 import { RoutingChains } from "@/components/models/telemetry/RoutingChains";
 import { ToastProvider, useToast } from "@/components/ui/primitives/Toast";
@@ -2550,6 +2550,9 @@ function AssignmentTab() {
   const [slots, setSlots] = useState<SlotItem[]>([]);
   const [health, setHealth] = useState<Record<string, SlotHealth>>({});
   const [draft, setDraft] = useState<Record<string, string | null>>({});
+  // Разрешение облака по слотам — часть черновика, а не отдельное
+  // немедленное действие: применяется вместе с моделью.
+  const [draftCloud, setDraftCloud] = useState<Record<string, boolean>>({});
   const [models, setModels] = useState<ProvModel[]>([]);
   // Nodes of each local provider kind — a kind can have several (e.g. the GPU
   // Ollama and the CPU-only one), and a model can be pinned to one of them.
@@ -2638,23 +2641,40 @@ function AssignmentTab() {
   // A physically loaded model is always selectable, even if the catalog marks it
   // disabled (the catalog "disabled" only declutters models that aren't present).
   const selectable = (c: ProvModel) => c.loaded || c.status !== "disabled";
-  // Show EVERY loaded model for the slot — never hide by capability. Models that
-  // lack the slot's required modality are still selectable but flagged with a
-  // warning (see ModelCombobox). local_only stays a hard rule: confidential
-  // slots must not offer cloud models.
-  const optsFor = (slot: SlotItem): CatalogEntry[] => {
-    return models.filter(
-      (c) => selectable(c) && (!slot.local_only || isLocal(c)),
-    );
-  };
 
-  const setDraftModel = (slot: string, model: string) => {
+  // Показываем модели ВСЕХ провайдеров, включая облачных: провайдер теперь
+  // выбирается явно первым шагом, и этот выбор сам означает решение об облаке.
+  // Прежний фильтр по local_only прятал облачные модели у конфиденциальных
+  // слотов — и человек не понимал, почему их нет в списке, пока не находил
+  // отдельную галочку «разрешить облако» под карточкой.
+  const allModelsFor = (_slot: SlotItem): CatalogEntry[] =>
+    models.filter(selectable);
+
+  // Решение об облаке едет вместе с моделью в черновике: применится вместе с
+  // ней, одним подтверждением, и попадёт в ту же ревизию.
+  const setDraftModel = (slot: string, model: string, cloud?: boolean) => {
     setDraft((prev) => ({ ...prev, [slot]: model || null }));
+    if (cloud !== undefined) {
+      setDraftCloud((prev) => ({ ...prev, [slot]: cloud }));
+    }
     setDirty(true);
     setDiff([]);
     setWarnings([]);
     setErrors([]);
   };
+
+  // Черновик в форме, которую ждёт сервер: слот теперь несёт не только модель,
+  // но и решение об облаке — раньше оно применялось отдельным немедленным
+  // запросом, из-за чего в одной карточке было два разных поведения.
+  const draftPayload = () =>
+    Object.fromEntries(
+      Object.entries(draft).map(([slot, model]) => [
+        slot,
+        draftCloud[slot] === undefined
+          ? { model }
+          : { model, allow_cloud: draftCloud[slot] },
+      ]),
+    );
 
   const validateDraft = async () => {
     setBusy("validate");
@@ -2666,7 +2686,7 @@ function AssignmentTab() {
           ...(await csrfHeaders()),
         },
         credentials: "include",
-        body: JSON.stringify({ slots: draft }),
+        body: JSON.stringify({ slots: draftPayload() }),
       });
       if (r.ok) {
         const d = await r.json();
@@ -2697,7 +2717,7 @@ function AssignmentTab() {
         },
         credentials: "include",
         body: JSON.stringify({
-          slots: draft,
+          slots: draftPayload(),
           confirm_warnings: confirmWarnings,
         }),
       });
@@ -2846,38 +2866,6 @@ function AssignmentTab() {
   };
 
   // Protected setting: opt a confidential slot into cloud models.
-  const setSlotCloud = async (slot: string, allowed: boolean) => {
-    if (
-      allowed &&
-      !confirm(
-        "Разрешить облачные модели для этого слота? Содержимое этой задачи " +
-          "(например, счета или чертежи) сможет уходить во внешний облачный " +
-          "провайдер. Это осознанное ослабление конфиденциальности.",
-      )
-    ) {
-      return;
-    }
-    try {
-      await fetch(`${API}/api/providers/slots/${slot}/allow-cloud`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          ...(await csrfHeaders()),
-        },
-        credentials: "include",
-        body: JSON.stringify({ allowed }),
-      });
-      flash(
-        allowed
-          ? "Облако разрешено для слота"
-          : "Слот снова только для локальных моделей",
-      );
-      load();
-    } catch (e) {
-      toast.error("Не удалось выполнить действие", String(e));
-    }
-  };
-
   const delModel = async (m: ProvModel) => {
     if (m.provider !== "ollama") {
       toast.error(
@@ -3086,20 +3074,22 @@ function AssignmentTab() {
                     </div>
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="flex-1 min-w-0">
-                        {/* Каскад «провайдер → модель» заменён одним списком с
-                            поиском: у OpenRouter это сотни опций, и найти
-                            нужную в нативном селекте можно было только
-                            прокруткой. Непригодные модели не прячутся, а
-                            объясняются — иначе человек ищет модель, которой не
-                            видит, и не понимает, почему её нет. */}
-                        <ModelCombobox
-                          models={optsFor(s) as unknown as CatalogModel[]}
+                        {/* Два шага: провайдер, затем его модель. Единый
+                            список всех моделей выглядел короче, но прятал
+                            главное решение — локально или в облако. Оно
+                            принималось отдельной галочкой сбоку, которую надо
+                            было заметить и связать с выбором. Теперь выбор
+                            облачного провайдера и есть это решение. */}
+                        <ProviderModelPicker
+                          models={allModelsFor(s) as unknown as CatalogModel[]}
                           value={draftValue || null}
-                          localOnly={Boolean(s.local_only)}
+                          confidential={Boolean(s.cloud_optionable)}
                           requiredModality={
                             (s.required_modality as Modality | null) ?? null
                           }
-                          onChange={(v) => setDraftModel(s.slot, v)}
+                          onChange={(v, opts) =>
+                            setDraftModel(s.slot, v, opts.cloud)
+                          }
                         />
                       </div>
                       {draftChosen?.key !== chosen?.key && (
@@ -3133,25 +3123,6 @@ function AssignmentTab() {
                     <div className="sm:col-span-2">
                       <SlotHealthStrip health={health[s.slot] ?? null} />
                     </div>
-                    {s.cloud_optionable && (
-                      <label className="sm:col-span-2 mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                        <input
-                          type="checkbox"
-                          checked={!!s.cloud_allowed}
-                          onChange={(e) =>
-                            setSlotCloud(s.slot, e.target.checked)
-                          }
-                        />
-                        <span
-                          className={s.cloud_allowed ? "text-amber-300" : ""}
-                        >
-                          разрешить облачные модели для этого слота
-                        </span>
-                        <span className="text-slate-500">
-                          — по умолчанию только локально (конфиденциально)
-                        </span>
-                      </label>
-                    )}
                   </div>
                 );
               })}
