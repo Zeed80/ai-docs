@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import structlog
@@ -1392,9 +1392,58 @@ class SlotWrite(BaseModel):
     model: str  # catalog key
 
 
+class SlotDraft(BaseModel):
+    """Черновик одного слота: модель и всё, что вместе с ней применяется.
+
+    Раньше черновик вмещал только имя модели, поэтому рассуждение, узел и
+    разрешение облака приходилось применять немедленно, отдельными запросами.
+    В одной карточке получалось два разных поведения: модель ждала кнопки
+    «Применить», а соседний переключатель срабатывал сразу — и понять, что
+    именно требует подтверждения, было нельзя.
+
+    Порядок тоже важен: `allow_cloud` расширяет множество допустимых моделей,
+    значит должен учитываться ДО валидации, а не после неё. А рассуждение
+    зависит от выбранной модели — включить его и следом сменить модель на
+    не-думающую означало молча потерять настройку.
+    """
+
+    model: str | None = None
+    thinking: bool | None = None
+    thinking_level: Literal["low", "medium", "high"] | None = None
+    allow_cloud: bool | None = None
+    preferred_instance: str | None = None
+
+
+def _as_slot_draft(value: SlotDraft | str | None) -> SlotDraft:
+    """Строка означает «только модель» — так выглядели все прежние вызовы."""
+    if isinstance(value, SlotDraft):
+        return value
+    return SlotDraft(model=value)
+
+
 class AssignmentDraftIn(BaseModel):
-    slots: dict[str, str | None]
+    # str | None принимается ради совместимости: так черновик выглядел раньше,
+    # и на этой форме держатся существующие тесты и внешние вызовы.
+    slots: dict[str, SlotDraft | str | None]
     confirm_warnings: bool = False
+
+    @property
+    def model_slots(self) -> dict[str, str | None]:
+        """Только модели — форма, которую ждёт валидация и применение."""
+        return {k: _as_slot_draft(v).model for k, v in self.slots.items()}
+
+    @property
+    def drafts(self) -> dict[str, SlotDraft]:
+        return {k: _as_slot_draft(v) for k, v in self.slots.items()}
+
+
+def _cloud_overrides(payload: "AssignmentDraftIn") -> dict[str, bool]:
+    """Слоты, которым черновик открывает или закрывает облако."""
+    return {
+        slot: draft.allow_cloud
+        for slot, draft in payload.drafts.items()
+        if draft.allow_cloud is not None
+    }
 
 
 class AssignmentIssue(BaseModel):
@@ -1785,6 +1834,7 @@ async def _validate_assignment_draft(
     registry,
     draft: dict[str, str | None],
     loaded: dict[tuple[str, str], str] | None = None,
+    cloud_overrides: dict[str, bool] | None = None,
 ) -> tuple[list[AssignmentDiffItem], list[AssignmentIssue], list[AssignmentIssue]]:
     warnings: list[AssignmentIssue] = []
     errors: list[AssignmentIssue] = []
@@ -1809,8 +1859,23 @@ async def _validate_assignment_draft(
         if cap is None:
             errors.append(AssignmentIssue(slot=slot, model=model_key, code="unknown_model", message="Модель не найдена в каталоге", severity="error"))
             continue
-        if bool(meta[4]) and not cap.local_only:
-            errors.append(AssignmentIssue(slot=slot, model=model_key, code="cloud_for_confidential", message="Конфиденциальный слот допускает только локальные модели", severity="error"))
+        # Проверка шла по БАЗОВОМУ local_only, то есть игнорировала выданное
+        # разрешение на облако: применение (_apply_slot_assignment) его
+        # учитывает, а валидация — нет, и она оказывалась строже. Слот, где
+        # облако разрешено осознанно, всё равно отвергался.
+        cloud_ok = (cloud_overrides or {}).get(slot)
+        slot_local_only = (
+            not cloud_ok if cloud_ok is not None else _slot_effective_local_only(slot)
+        )
+        if slot_local_only and not cap.local_only:
+            errors.append(AssignmentIssue(
+                slot=slot, model=model_key, code="cloud_for_confidential",
+                message=(
+                    "Слот работает с содержимым документов — облачную модель "
+                    "нужно разрешить для него отдельно"
+                ),
+                severity="error",
+            ))
         required = _SLOT_MODALITY.get(slot)
         if required and required not in {m.value for m in cap.modalities}:
             warnings.append(AssignmentIssue(slot=slot, model=model_key, code="modality_mismatch", message=f"Модель не заявляет capability '{required}'"))
@@ -2140,9 +2205,19 @@ async def validate_assignment_draft(
     db: AsyncSession = Depends(get_db),
 ) -> AssignmentDraftOut:
     registry = _registry()
-    diff, warnings, errors = await _validate_assignment_draft(registry, payload.slots)
+    # allow_cloud из черновика расширяет множество допустимых моделей, поэтому
+    # учитывается ДО проверки — иначе выбор облачной модели вместе с галочкой
+    # «разрешить облако» отвергался бы как ошибка.
+    diff, warnings, errors = await _validate_assignment_draft(
+        registry, payload.model_slots, cloud_overrides=_cloud_overrides(payload)
+    )
     return AssignmentDraftOut(
-        slots=_all_slots_out(lambda s: payload.slots.get(s, _slot_current_model(s, registry)), registry),
+        # model_slots, а не slots: в черновике теперь лежит объект, и его
+        # нельзя подставить туда, где ждут ключ модели.
+        slots=_all_slots_out(
+            lambda s: payload.model_slots.get(s, _slot_current_model(s, registry)),
+            registry,
+        ),
         diff=diff,
         warnings=warnings,
         errors=errors,
@@ -2158,14 +2233,42 @@ async def apply_assignment_draft(
 ) -> AssignmentDraftOut:
     registry = _registry()
     loaded = await _loaded_index()
-    diff, warnings, errors = await _validate_assignment_draft(registry, payload.slots, loaded)
+    diff, warnings, errors = await _validate_assignment_draft(
+        registry, payload.model_slots, loaded, cloud_overrides=_cloud_overrides(payload)
+    )
     if errors:
         raise HTTPException(400, {"errors": [e.model_dump() for e in errors]})
     if warnings and not payload.confirm_warnings:
         raise HTTPException(409, {"warnings": [w.model_dump() for w in warnings]})
 
     before = _assignment_snapshot(registry)
+    # Разрешение облака применяется ПЕРВЫМ: оно определяет, законно ли само
+    # назначение. Остальное — после того, как модель встала на место, потому
+    # что рассуждение и узел зависят от выбранной модели.
+    for slot, d in payload.drafts.items():
+        if d.allow_cloud is not None and _slot_base_local_only(slot):
+            _set_slot_cloud_allowed(slot, d.allow_cloud)
+
     await _apply_draft_atomic(db, diff, before, registry)  # rolls back Redis on error
+
+    for slot, d in payload.drafts.items():
+        if d.thinking is not None or d.thinking_level is not None:
+            try:
+                _apply_slot_thinking(slot, d.thinking, d.thinking_level)
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("slot_thinking_apply_failed", slot=slot, error=str(exc))
+        if d.preferred_instance is not None:
+            model_key = d.model or _slot_current_model(slot, registry)
+            if model_key:
+                pin = await _instance_id_for_pin(db, d.preferred_instance)
+                from app.ai.model_registry import set_preferred_instance
+
+                set_preferred_instance(model_key, pin)
+                await model_runtime_store.persist_model_override(
+                    db, model_key=model_key, preferred_instance=pin or ""
+                )
     after_registry = _registry()
     after = _assignment_snapshot(after_registry)
     revision = await model_runtime_store.create_assignment_revision(
@@ -2186,6 +2289,59 @@ async def apply_assignment_draft(
         ok_to_apply=True,
         revision_id=str(revision.id),
     )
+
+
+class AssignmentRevisionOut(BaseModel):
+    id: str
+    created_at: datetime
+    created_by: str
+    summary: list[dict]
+    warnings_count: int
+
+
+@router.get(
+    "/assignments/revisions",
+    response_model=list[AssignmentRevisionOut],
+    dependencies=_admin,
+)
+async def list_assignment_revisions(
+    limit: int = 20, db: AsyncSession = Depends(get_db)
+) -> list[AssignmentRevisionOut]:
+    """История назначений.
+
+    Ревизии писались с самого начала — с автором, снимками до и после, diff и
+    предупреждениями, — но прочитать их было нечем: существовал только откат
+    по id. Поэтому «Откатить» работал лишь для последнего изменения текущей
+    вкладки и исчезал при перезагрузке страницы, а узнать, кто и когда сменил
+    модель, было нельзя вовсе.
+    """
+    from app.db.models import ModelAssignmentRevision
+
+    rows = (
+        await db.execute(
+            select(ModelAssignmentRevision)
+            .order_by(ModelAssignmentRevision.created_at.desc())
+            .limit(max(1, min(limit, 100)))
+        )
+    ).scalars().all()
+
+    return [
+        AssignmentRevisionOut(
+            id=str(r.id),
+            created_at=r.created_at,
+            created_by=r.created_by,
+            summary=[
+                {
+                    "slot": d.get("slot"),
+                    "old_model": d.get("old_model"),
+                    "new_model": d.get("new_model"),
+                }
+                for d in (r.diff or [])
+            ],
+            warnings_count=len(r.warnings or []),
+        )
+        for r in rows
+    ]
 
 
 @router.post("/assignments/{revision_id}/rollback", response_model=AssignmentDraftOut, dependencies=_admin)
