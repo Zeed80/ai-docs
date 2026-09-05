@@ -2299,6 +2299,161 @@ async def apply_assignment_draft(
     )
 
 
+class ModelCandidateReason(BaseModel):
+    code: str
+    message: str
+    # Что нажать, чтобы это починить: подключить облако, включить узел,
+    # скачать модель. `none` — чинить нечем, это свойство самой модели.
+    fix_action: Literal[
+        "open_cloud_provider", "enable_node", "pull_model", "verify_model", "none"
+    ] = "none"
+    fix_target: str | None = None
+
+
+class ModelCandidateOut(BaseModel):
+    key: str
+    provider: str
+    provider_model: str
+    node: str | None = None
+    availability: str = "unknown"
+    modalities: list[str] = []
+    max_context_tokens: int | None = None
+    supports_tool_calling: bool = False
+    supports_structured_output: bool = False
+    cost_per_1k_input: float | None = None
+    cost_per_1k_output: float | None = None
+    vram_gb_estimate: float | None = None
+    thinking_supported: bool = False
+    thinking_levels: list[str] = []
+    local_only: bool = True
+    capabilities_unknown: bool = False
+    notes: str | None = None
+    # ok — можно назначать; needs_action — чинится действием человека;
+    # unsuitable — не подходит слоту, но выбор возможен с предупреждением;
+    # forbidden — выбор запрещён политикой.
+    eligibility: Literal["ok", "needs_action", "unsuitable", "forbidden"] = "ok"
+    reasons: list[ModelCandidateReason] = []
+
+
+def _model_eligibility(
+    slot: str,
+    cap: ModelCapability,
+    *,
+    is_loaded: bool,
+    slot_local_only: bool,
+) -> tuple[str, list[ModelCandidateReason]]:
+    """Пригодность модели для слота — по тем же правилам, что и валидация.
+
+    Правила жили только в _validate_assignment_draft, поэтому интерфейс держал
+    их вторую копию на TypeScript. Копии уже расходились: список локальных
+    провайдеров и набор умеющих выключать рассуждение отличались от серверных.
+    Здесь один источник для обоих.
+    """
+    reasons: list[ModelCandidateReason] = []
+    verdict = "ok"
+
+    if slot_local_only and not cap.local_only:
+        reasons.append(ModelCandidateReason(
+            code="cloud_for_confidential",
+            message="Слот работает с содержимым документов — выберите облако осознанно",
+            fix_action="open_cloud_provider",
+            fix_target=cap.provider.value,
+        ))
+        verdict = "forbidden"
+
+    if cap.provider in _LOCAL_KINDS and not is_loaded:
+        reasons.append(ModelCandidateReason(
+            code="not_loaded",
+            message="Модели нет ни на одном включённом узле",
+            fix_action="pull_model",
+            fix_target=cap.provider_model,
+        ))
+        if verdict == "ok":
+            verdict = "needs_action"
+
+    required = _SLOT_MODALITY.get(slot)
+    if required and required not in {m.value for m in cap.modalities}:
+        if getattr(cap, "capabilities_unknown", False):
+            reasons.append(ModelCandidateReason(
+                code="capabilities_unknown",
+                message="Провайдер не сообщает возможности модели — проверьте пробным запросом",
+                fix_action="verify_model",
+                fix_target=cap.name,
+            ))
+            if verdict == "ok":
+                verdict = "needs_action"
+        else:
+            reasons.append(ModelCandidateReason(
+                code="modality_mismatch",
+                message=f"Модель не заявляет «{required}»",
+            ))
+            if verdict == "ok":
+                verdict = "unsuitable"
+
+    return verdict, reasons
+
+
+@router.get(
+    "/slots/{slot}/candidates",
+    response_model=list[ModelCandidateOut],
+    dependencies=_admin,
+)
+async def slot_candidates(slot: str) -> list[ModelCandidateOut]:
+    """Модели для слота с готовым вердиктом пригодности.
+
+    Интерфейс раньше решал это сам и потому повторял серверные правила на
+    TypeScript. Здесь тот же расчёт, что и в валидации черновика, вместе с
+    подсказкой, каким действием чинится каждая помеха.
+    """
+    if _slot_meta(slot) is None:
+        raise HTTPException(404, f"Unknown slot: {slot}")
+
+    registry = _registry()
+    loaded = await _loaded_index()
+    slot_local_only = _slot_effective_local_only(slot)
+
+    try:
+        from app.ai.provider_registry import catalog_availability
+
+        avail = {
+            k: v.value
+            for k, v in (
+                await asyncio.to_thread(catalog_availability, registry.models)
+            ).items()
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("slot_candidates_availability_failed", error=str(exc))
+        avail = {}
+
+    out: list[ModelCandidateOut] = []
+    for key, cap in registry.models.items():
+        if cap.status == ModelStatus.DISABLED:
+            continue
+        node = _loaded_node_for(cap, loaded)
+        verdict, reasons = _model_eligibility(
+            slot, cap, is_loaded=node is not None, slot_local_only=slot_local_only
+        )
+        out.append(ModelCandidateOut(
+            key=key,
+            provider=cap.provider.value,
+            provider_model=cap.provider_model,
+            node=node,
+            availability=avail.get(key, "unknown"),
+            modalities=sorted(m.value for m in cap.modalities),
+            thinking_supported=cap.thinking_supported,
+            thinking_levels=effective_thinking_levels(
+                cap.thinking_supported, cap.provider.value, cap.thinking_levels
+            ),
+            local_only=cap.local_only,
+            capabilities_unknown=getattr(cap, "capabilities_unknown", False),
+            vram_gb_estimate=cap.vram_gb_estimate,
+            eligibility=verdict,
+            reasons=reasons,
+            **_capability_facts(cap),
+        ))
+    return out
+
+
 class SlotHealthOut(BaseModel):
     slot: str
     label: str

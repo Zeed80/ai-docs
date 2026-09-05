@@ -13,18 +13,34 @@ import {
   isLocalProvider,
   providerLabel,
 } from "@/lib/models/labels";
-import type { CatalogModel, Modality } from "@/lib/models/types";
+import type {
+  CatalogModel,
+  ModelCandidate,
+  Modality,
+} from "@/lib/models/types";
 import { ModelFacts } from "./ModelFacts";
 
 const GROUP_AVAILABLE = "Доступно";
 const GROUP_NEEDS_ACTION = "Требует внимания";
 const GROUP_ORDER = [GROUP_AVAILABLE, GROUP_NEEDS_ACTION];
 
-/** Почему модель не стоит назначать на этот слот. */
+/**
+ * Почему модель не стоит назначать на этот слот.
+ *
+ * Если сервер прислал вердикт (ModelCandidate), берём его: правила живут в
+ * одном месте — там же, где валидация черновика. Своя проверка остаётся
+ * запасной для случая, когда список пришёл из каталога без вердикта, и
+ * намеренно повторяет только самое очевидное.
+ */
 function checkModel(
-  model: CatalogModel,
+  model: CatalogModel | ModelCandidate,
   requiredModality?: Modality | null,
 ): string | null {
+  const verdict = (model as ModelCandidate).eligibility;
+  if (verdict) {
+    if (verdict === "ok") return null;
+    return (model as ModelCandidate).reasons?.[0]?.message ?? null;
+  }
   if (model.availability === "missing") {
     return "модели нет ни на одном включённом узле";
   }

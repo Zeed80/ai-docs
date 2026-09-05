@@ -16,6 +16,7 @@ import type {
   KnownKind,
   ProviderInstance,
   RoutingChain,
+  ModelCandidate,
   Slot,
   SlotSmokeResult,
   ThinkingLevel,
@@ -204,3 +205,7 @@ export const setModelThinking = (
     method: "PATCH",
     body: JSON.stringify(body),
   });
+
+/** Кандидаты для слота с вердиктом пригодности, посчитанным сервером. */
+export const listSlotCandidates = (slot: string) =>
+  request<ModelCandidate[]>(`/api/providers/slots/${slot}/candidates`);

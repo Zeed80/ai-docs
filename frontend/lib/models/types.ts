@@ -138,3 +138,29 @@ export interface SlotSmokeResult {
   error?: string | null;
   detail?: string | null;
 }
+
+/** Почему модель не стоит назначать на слот — и чем это чинится. */
+export interface CandidateReason {
+  code: string;
+  message: string;
+  fix_action:
+    | "open_cloud_provider"
+    | "enable_node"
+    | "pull_model"
+    | "verify_model"
+    | "none";
+  fix_target: string | null;
+}
+
+/**
+ * Модель-кандидат с готовым вердиктом сервера.
+ *
+ * Раньше интерфейс считал пригодность сам, повторяя серверные правила на
+ * TypeScript, и копии уже расходились.
+ */
+export interface ModelCandidate extends CatalogModel {
+  node: string | null;
+  capabilities_unknown: boolean;
+  eligibility: "ok" | "needs_action" | "unsuitable" | "forbidden";
+  reasons: CandidateReason[];
+}
