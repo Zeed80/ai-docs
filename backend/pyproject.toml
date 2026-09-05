@@ -122,6 +122,16 @@ ignore = [
 asyncio_mode = "auto"
 asyncio_loop_scope = "session"
 testpaths = ["tests"]
+# Потолок на тест. pytest-timeout поставили именно из-за зависаний (см.
+# комментарий к зависимости выше), но глобального лимита так и не задали —
+# только маркеры на отдельных тестах. Из-за этого один тест, ушедший в
+# неотвечающую Ollama, держал весь набор: 707 пройденных, дальше 30 минут
+# тишины на 41% и ручное прерывание, вместо честного падения с именем теста.
+# 300 с — с запасом: самый долгий не-live тест укладывается в ~100 с.
+timeout = 300
+# signal, а не thread: thread-метод убивает процесс pytest целиком вместо
+# того, чтобы завалить один виновный тест.
+timeout_method = "signal"
 markers = [
     "live: requires running Ollama at host-gateway:11434",
     "llamacpp: requires llama.cpp at llama-server:8080",

@@ -123,9 +123,11 @@ def test_read_sheet_text_entities_maps_tile_boxes_to_sheet(monkeypatch):
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
 
-    entities = asyncio.get_event_loop().run_until_complete(
-        vd.read_sheet_text_entities(buffer.getvalue(), router=_Router())
-    )
+    # asyncio.run, а не get_event_loop(): последний возвращает цикл
+    # pytest-asyncio, уже закрытый или занятый соседними тестами, — тест
+    # проходил в одиночку и падал в общем прогоне. Своей зависимости от
+    # внешнего цикла у него нет: только PIL и подставной роутер.
+    entities = asyncio.run(vd.read_sheet_text_entities(buffer.getvalue(), router=_Router()))
 
     assert len(entities) == 1
     entity = entities[0]

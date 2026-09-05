@@ -153,7 +153,15 @@ async def build_capability(
                 allow_cloud=True,
             )
         )
-        code = _extract_code(str(response.content))
+        # AIResponse отдаёт текст в .text; .content не существует, и обращение
+        # к нему всегда бросало AttributeError. Ошибку ловил except ниже, писал
+        # в лог и подставлял заглушку — то есть генерация кода не работала
+        # НИ РАЗУ, а выглядело это как «модель не справилась».
+        code = _extract_code(response.text or "")
+        if not code.strip():
+            # Пустой ответ — не повод записать пустой модуль: получился бы
+            # скилл без execute(), падающий при первом же вызове.
+            raise ValueError("модель вернула пустой ответ")
     except Exception as exc:
         logger.error("capability_builder_llm_failed", gap=gap_description[:200], error=str(exc))
         code = _fallback_stub(skill_name, gap_description, ts)
@@ -178,7 +186,7 @@ async def build_capability(
                     allow_cloud=True,
                 )
             )
-            return _extract_code(str(r.content))
+            return _extract_code(r.text or "")
 
         refine_result = await refine_code(code, gap_description, _gen, max_rounds=2)
         if refine_result.final_score > 6.0:

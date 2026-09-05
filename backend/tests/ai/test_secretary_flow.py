@@ -122,7 +122,17 @@ async def test_secretary_answers_flow_status_directly(monkeypatch):
         ollama_url="http://ollama",
         exposed_skills=[],
     )
+    # Тест про ход БЕЗ LLM, но LLM-роутер хода оставался включённым и уходил в
+    # живую Ollama: 100 секунд вместо 17, а когда та не отвечала — бесконечное
+    # ожидание, съедавшее весь прогон. Соседний тест в этом же файле глушит
+    # ai_router; здесь достаточно выключить роутер хода.
+    config.use_turn_router = False
     monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
+
+    async def _no_llm(request, *a, **k):
+        raise AssertionError("LLM must not be called for a flow-status question")
+
+    monkeypatch.setattr(orchestrator_module.ai_router, "run", _no_llm)
 
     async def fake_snapshot(cfg, **k):
         return {

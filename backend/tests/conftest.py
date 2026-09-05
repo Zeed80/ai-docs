@@ -194,3 +194,22 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _generated_skills_go_to_tmp(tmp_path, monkeypatch):
+    """CapabilityBuilder не должен писать черновики в исходники приложения.
+
+    В тестах он их пишет: любой ход агента, упершийся в нехватку возможности,
+    оставляет заглушку в ``app/ai/generated_skills``. Файлы накапливались от
+    прогона к прогону, попадали в индекс с новым timestamp — и, что хуже,
+    подхватывались следующими прогонами как настоящие скиллы. Из-за четырёх
+    таких заглушек `test_secretary_answers_flow_status_directly` начинал
+    уводить вопрос к исполнителю вместо прямого ответа: тест падал не там,
+    где ломалось, а прогон замедлялся с 17 до 110 секунд.
+    """
+    root = tmp_path / "generated_skills"
+    root.mkdir()
+    monkeypatch.setattr("app.ai.capability_builder._GENERATED_ROOT", root)
+    monkeypatch.setattr("app.api.dynamic_skill_runner._GENERATED_ROOT", root)
+    return root
