@@ -9,6 +9,7 @@ import { RoutingChains } from "@/components/models/telemetry/RoutingChains";
 import { ToastProvider, useToast } from "@/components/ui/primitives/Toast";
 import { SlotThinkingControl } from "@/components/models/assignment/SlotThinkingControl";
 import { RevisionHistory } from "@/components/models/assignment/RevisionHistory";
+import { DiffPanel } from "@/components/models/assignment/DiffPanel";
 import { CloudConnectSheet } from "@/components/models/infra/CloudConnectSheet";
 import {
   SlotHealthStrip,
@@ -2988,13 +2989,23 @@ function AssignmentTab() {
                 {w.slot}: {w.message}
               </div>
             ))}
-            {diff.map((d) => (
-              <div key={d.slot} className="text-slate-400">
-                <span className="text-slate-200">{d.slot}</span>:{" "}
-                {d.old_model ?? "—"} → {d.new_model ?? "—"} ·{" "}
-                {d.affected.join(", ")}
-              </div>
-            ))}
+            {/* Плоская строка «слот: старое → новое» не отвечала на главный
+                вопрос — заработает ли это. Панель прогоняет тот же пробный
+                вызов, что и проверка после применения, но в режиме dry_run:
+                он резолвит каталог, политику, узел и параметры рассуждения,
+                ничего не отправляя провайдеру. */}
+            <DiffPanel
+              diff={diff.map((d) => ({
+                ...d,
+                label: slots.find((s) => s.slot === d.slot)?.label,
+              }))}
+              draftFor={(slot) => ({
+                model: draft[slot] ?? undefined,
+                thinking: slots.find((s) => s.slot === slot)?.thinking_override,
+                thinking_level: slots.find((s) => s.slot === slot)
+                  ?.thinking_level_override,
+              })}
+            />
           </div>
         </div>
       )}
