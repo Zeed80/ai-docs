@@ -6,7 +6,7 @@ import { csrfHeaders } from "@/lib/auth";
 import { ProviderModelPicker } from "@/components/models/picker/ProviderModelPicker";
 import { providerBarColor, providerLabel } from "@/lib/models/labels";
 import { RoutingChains } from "@/components/models/telemetry/RoutingChains";
-import { ToastProvider, useToast } from "@/components/ui/primitives/Toast";
+import { useToast } from "@/components/ui/primitives/Toast";
 import { SlotThinkingControl } from "@/components/models/assignment/SlotThinkingControl";
 import { RevisionHistory } from "@/components/models/assignment/RevisionHistory";
 import { DiffPanel } from "@/components/models/assignment/DiffPanel";
@@ -339,6 +339,7 @@ function ServerControls({ provider }: { provider: Provider }) {
 // ── Tokens & server config ─────────────────────────────────────────────────────
 
 function TokensPanel() {
+  const toast = useToast();
   const [hf, setHf] = useState("");
   const [ms, setMs] = useState("");
   const [present, setPresent] = useState<{
@@ -375,7 +376,8 @@ function TokensPanel() {
         setMs("");
         load();
       }
-    } catch {
+    } catch (e) {
+      toast.error("Не удалось обновить состояние серверов", String(e));
       /* ignore */
     }
     setSaving(false);
@@ -902,6 +904,7 @@ async function provFetch(path: string, init?: RequestInit) {
 }
 
 function ProvidersConfigPanel() {
+  const toast = useToast();
   const [instances, setInstances] = useState<ProviderInstanceT[]>([]);
   const [kinds, setKinds] = useState<KnownKindT[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -920,7 +923,8 @@ function ProvidersConfigPanel() {
         setInstances(d.instances || []);
         setKinds(d.known_kinds || []);
       }
-    } catch {
+    } catch (e) {
+      toast.error("Список провайдеров не загрузился", String(e));
       /* ignore */
     }
   }, []);
@@ -1519,7 +1523,8 @@ function LibraryTab() {
           const data = await r.json();
           setLocalModels((prev) => ({ ...prev, [p]: data.models || [] }));
         }
-      } catch {
+      } catch (e) {
+        toast.error("Список локальных моделей не загрузился", String(e));
         /* ignore */
       }
     }
@@ -2039,6 +2044,7 @@ function LibraryTab() {
 }
 
 function ParametersTab() {
+  const toast = useToast();
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [selected, setSelected] = useState("anti_hallucination");
   const [editing, setEditing] = useState<Partial<Profile> | null>(null);
@@ -2092,7 +2098,8 @@ function ParametersTab() {
       setSelected(newName);
       setEditing(null);
       setNewName("");
-    } catch {
+    } catch (e) {
+      toast.error("Профиль не сохранён", String(e));
       /* ignore */
     }
     setSaving(false);
@@ -2302,6 +2309,7 @@ function ParametersTab() {
 // ── GPU Budget Tab ────────────────────────────────────────────────────────────
 
 function GPUTab({ status }: { status: AllStatus | null }) {
+  const toast = useToast();
   const [limits, setLimits] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
 
@@ -2326,7 +2334,8 @@ function GPUTab({ status }: { status: AllStatus | null }) {
         credentials: "include",
         body: JSON.stringify(limits),
       });
-    } catch {
+    } catch (e) {
+      toast.error("Лимиты не сохранены", String(e));
       /* ignore */
     }
     setSaving(false);
@@ -2629,7 +2638,8 @@ function AssignmentTab() {
         const d = await nd.json();
         setNodes(d.instances || []);
       }
-    } catch {
+    } catch (e) {
+      toast.error("Узлы провайдеров не загрузились", String(e));
       /* ignore */
     }
     setLoading(false);
@@ -3394,9 +3404,6 @@ function ModelsPageInner() {
 }
 
 export default function ModelsPage() {
-  return (
-    <ToastProvider>
-      <ModelsPageInner />
-    </ToastProvider>
-  );
+  // ToastProvider живёт в корневом layout — здесь он больше не нужен.
+  return <ModelsPageInner />;
 }

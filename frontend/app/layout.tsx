@@ -4,6 +4,7 @@ import { getLocale, getMessages } from "next-intl/server";
 import "./globals.css";
 import { KeyboardProvider } from "@/lib/keyboard-context";
 import { ClientLayout } from "@/components/ui/client-layout";
+import { ToastProvider } from "@/components/ui/primitives/Toast";
 import {
   ServiceWorkerRegistration,
   InstallPrompt,
@@ -42,9 +43,14 @@ export default async function RootLayout({
     <html lang={locale}>
       <body className="bg-slate-900 text-slate-100 antialiased">
         <NextIntlClientProvider messages={messages}>
-          <KeyboardProvider>
-            <ClientLayout>{children}</ClientLayout>
-          </KeyboardProvider>
+          {/* Провайдер сообщений на весь сайт: до этого об ошибке запроса
+              разделы либо молчали (`if (r.ok)` без ветки else), либо звали
+              alert() браузера. Теперь сообщить может любой экран. */}
+          <ToastProvider>
+            <KeyboardProvider>
+              <ClientLayout>{children}</ClientLayout>
+            </KeyboardProvider>
+          </ToastProvider>
           {/* Ctrl/⌘+K из любого места: поиск и переходы были разбросаны по
               разделам, хотя проект заявляет keyboard-first. */}
           <CommandPalette />
