@@ -10,11 +10,11 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
+    ConfidenceReason,
     Document,
     DocumentExtraction,
     DocumentStatus,
     ExtractionField,
-    ConfidenceReason,
 )
 
 # Ensure app.tasks.extraction module exists for patching (Celery autodiscover may fail in test env)

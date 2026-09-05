@@ -6,7 +6,7 @@ import re
 
 from pydantic import BaseModel, Field
 
-from app.db.models import Document, NTDCheckFinding, NTDCheckRun, NormativeRequirement
+from app.db.models import Document, NormativeRequirement, NTDCheckFinding, NTDCheckRun
 
 
 class SemanticNTDFindingCandidate(BaseModel):
@@ -95,12 +95,16 @@ async def build_semantic_ntd_findings(
         )
         data = response.data
         semantic_response = (
-            data if isinstance(data, SemanticNTDResponse) else SemanticNTDResponse.model_validate(data)
+            data
+            if isinstance(data, SemanticNTDResponse)
+            else SemanticNTDResponse.model_validate(data)
         )
     except Exception:
         return []
 
-    requirements_by_code = {requirement.requirement_code: requirement for requirement in requirements}
+    requirements_by_code = {
+        requirement.requirement_code: requirement for requirement in requirements
+    }
     findings: list[NTDCheckFinding] = []
     for candidate in semantic_response.findings:
         requirement = requirements_by_code.get(candidate.requirement_code or "")
@@ -115,7 +119,8 @@ async def build_semantic_ntd_findings(
                 finding_code=f"semantic:{candidate.finding_code}",
                 message=candidate.message,
                 evidence_text=excerpt(candidate.evidence_text or text),
-                recommendation=candidate.recommendation or (requirement.text if requirement else None),
+                recommendation=candidate.recommendation
+                or (requirement.text if requirement else None),
                 confidence=candidate.confidence,
                 metadata_={
                     "source": "semantic_ai",

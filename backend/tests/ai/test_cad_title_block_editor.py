@@ -92,14 +92,19 @@ def test_generated_stamp_is_eskd_text_height_clean():
     from app.ai.cad_validate import validate_ir
 
     ir = _sheet_ir()
-    apply_title_block(ir, {
-        "name": "Вал", "designation": "АБВГ.001", "material": "Сталь 45",
-        "scale": "1:2", "developer": "Иванов",
-    })
+    apply_title_block(
+        ir,
+        {
+            "name": "Вал",
+            "designation": "АБВГ.001",
+            "material": "Сталь 45",
+            "scale": "1:2",
+            "developer": "Иванов",
+        },
+    )
     label_ids = {e.id for e in _tb_texts(ir)}
     report = validate_ir(ir)
     offenders = [
-        i for i in report.issues
-        if i.code == "ESKD_TEXT_HEIGHT" and set(i.entity_ids) & label_ids
+        i for i in report.issues if i.code == "ESKD_TEXT_HEIGHT" and set(i.entity_ids) & label_ids
     ]
     assert offenders == []

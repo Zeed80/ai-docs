@@ -14,13 +14,15 @@ from app.ai.orchestrator_memory import SkillScore, rank_skills_by_success
 
 def _plan(skills):
     return OrchestratorPlan(
-        goal="g", intent="document_op",
+        goal="g",
+        intent="document_op",
         worker=WorkerAssignment(role="invoice_specialist", task="t", recommended_skills=skills),
         workspace=WorkspaceOutputSpec(channel="chat", output_type="text", required=False),
     )
 
 
 # ── Clarify on gated + ambiguous ───────────────────────────────────────────────
+
 
 def test_clarify_gated_vague_reference_asks():
     q = needs_clarification("отправь ему письмо", _plan(["email.send"]))
@@ -33,8 +35,10 @@ def test_clarify_gated_short_no_target_asks():
 
 def test_no_clarify_gated_with_concrete_target():
     # Names a concrete target → proceed (approval gate still confirms later).
-    assert needs_clarification(
-        'отправь письмо в ООО "Ромашка" по счёту 145', _plan(["email.send"])) is None
+    assert (
+        needs_clarification('отправь письмо в ООО "Ромашка" по счёту 145', _plan(["email.send"]))
+        is None
+    )
     assert needs_clarification("утверди счёт 145", _plan(["invoice.approve"])) is None
 
 
@@ -44,6 +48,7 @@ def test_no_clarify_for_cheap_action():
 
 
 # ── Skill ranking by learned success ───────────────────────────────────────────
+
 
 def test_rank_skills_by_success_promotes_reliable(monkeypatch):
     def fake_scores(skills):
@@ -60,8 +65,9 @@ def test_rank_skills_by_success_promotes_reliable(monkeypatch):
 
 def test_rank_skills_untracked_stay_neutral(monkeypatch):
     def fake_scores(skills):
-        return [SkillScore("bad", success=0, fail=5, avg_ms=0, last_at=0)
-                for s in skills if s == "bad"]
+        return [
+            SkillScore("bad", success=0, fail=5, avg_ms=0, last_at=0) for s in skills if s == "bad"
+        ]
 
     monkeypatch.setattr(om, "get_skill_scores", fake_scores)
     # 'new' has no history (neutral 0.5) → stays above the proven-bad skill,
@@ -85,12 +91,14 @@ from app.ai.orchestrator import AgentOrchestrator  # noqa: E402
 def _orchestrator():
     async def _noop(_m):
         return None
+
     return AgentOrchestrator(_noop)
 
 
 @pytest.mark.asyncio
 async def test_recipe_penalised_when_corrected(monkeypatch):
     import app.ai.recipes as recipes
+
     calls: list = []
 
     async def fake_outcome(recipe_id, *, success, retire=False):
@@ -108,6 +116,7 @@ async def test_recipe_penalised_when_corrected(monkeypatch):
 @pytest.mark.asyncio
 async def test_recipe_not_penalised_for_new_request(monkeypatch):
     import app.ai.recipes as recipes
+
     calls: list = []
 
     async def fake_outcome(recipe_id, *, success, retire=False):

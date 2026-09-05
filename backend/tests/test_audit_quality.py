@@ -4,14 +4,14 @@ Before this, a text turn had no blocking audit check, so an empty or
 hallucinated chat answer always passed.
 """
 
-import pytest
 from unittest.mock import AsyncMock
 
-from app.ai.orchestrator import AgentOrchestrator, _looks_like_chat_table
-from app.ai.audit import AuditCode
-from app.ai.turn_router import TurnDecision, RecommendedTool
-from app.ai.orchestrator import _decision_to_plan
+import pytest
+
 from app.ai.agent_config import get_builtin_agent_config
+from app.ai.audit import AuditCode
+from app.ai.orchestrator import AgentOrchestrator, _decision_to_plan, _looks_like_chat_table
+from app.ai.turn_router import RecommendedTool, TurnDecision
 
 
 def _orc_with_trace(text="", tools=None, workspace=False, tool_results=None):
@@ -20,7 +20,9 @@ def _orc_with_trace(text="", tools=None, workspace=False, tool_results=None):
     orc._trace.tool_calls = list(tools or [])
     orc._trace.tool_results = list(tool_results or [])
     if workspace:
-        orc._trace.workspace_events = [{"type": "workspace.updated", "canvas_id": "agent:spec-table"}]
+        orc._trace.workspace_events = [
+            {"type": "workspace.updated", "canvas_id": "agent:spec-table"}
+        ]
     return orc
 
 
@@ -57,7 +59,9 @@ async def test_tool_error_recorded_advisory():
     orc = _orc_with_trace(
         text="Готово",
         tools=["invoices"],
-        tool_results=[{"tool": "invoices", "result": {"error_code": "missing_args", "message": "x"}}],
+        tool_results=[
+            {"tool": "invoices", "result": {"error_code": "missing_args", "message": "x"}}
+        ],
     )
     audit = await orc._audit_turn(_chat_plan(intent="answer_self"), get_builtin_agent_config())
     assert AuditCode.TOOL_ERROR.value in audit.issue_codes
@@ -104,12 +108,14 @@ async def test_workspace_required_satisfied_by_not_found_tool_result():
     turn, not a WORKSPACE_NOT_PUBLISHED gap that triggers a capability-gap
     proposal for a tool the agent already has and used correctly."""
     orc = _orc_with_trace(
-        text='Поставщик «ЦНК» не найден в базе.',
+        text="Поставщик «ЦНК» не найден в базе.",
         tools=["workspace"],
-        tool_results=[{
-            "tool": "workspace",
-            "result": {"status": "not_found", "canvas_id": "agent:invoice-items"},
-        }],
+        tool_results=[
+            {
+                "tool": "workspace",
+                "result": {"status": "not_found", "canvas_id": "agent:invoice-items"},
+            }
+        ],
     )
     plan = _decision_to_plan(
         TurnDecision(intent="analytical_table", output_channel="workspace"),

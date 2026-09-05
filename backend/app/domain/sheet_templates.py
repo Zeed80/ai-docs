@@ -11,10 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 
-def _col(key: str, header: str, type_: str = "text",
-         formula: str | None = None) -> dict[str, Any]:
-    c: dict[str, Any] = {"key": key, "header": header, "type": type_,
-                         "editable": True}
+def _col(key: str, header: str, type_: str = "text", formula: str | None = None) -> dict[str, Any]:
+    c: dict[str, Any] = {"key": key, "header": header, "type": type_, "editable": True}
     if formula:
         c["formula"] = formula
     return c

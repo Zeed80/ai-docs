@@ -48,6 +48,7 @@ logger = structlog.get_logger()
 class FullCheckUnavailableError(RuntimeError):
     """The mandatory model-backed check did not actually run."""
 
+
 # Entities below this confidence are queued for human review.
 REVIEW_CONFIDENCE_THRESHOLD = 0.7
 # Only these entity types enter the review queue at low confidence — their
@@ -132,8 +133,27 @@ _CHECK_LEVEL: dict[str, int] = {
 
 # ГОСТ 2.302 standard scales (drawing:real), as scale factors
 _GOST_SCALES = (
-    0.01, 0.02, 0.025, 0.04, 0.05, 0.1, 0.2, 0.25, 0.4, 0.5, 1.0,
-    2.0, 2.5, 4.0, 5.0, 10.0, 20.0, 25.0, 40.0, 50.0, 100.0,
+    0.01,
+    0.02,
+    0.025,
+    0.04,
+    0.05,
+    0.1,
+    0.2,
+    0.25,
+    0.4,
+    0.5,
+    1.0,
+    2.0,
+    2.5,
+    4.0,
+    5.0,
+    10.0,
+    20.0,
+    25.0,
+    40.0,
+    50.0,
+    100.0,
 )
 
 
@@ -148,12 +168,17 @@ _NORM_REF: dict[str, str] = {
 }
 
 
-def _issue(code: CadCheckCode, severity: str, message: str, entity_ids: list[str] | None = None) -> ValidationIssueIR:
+def _issue(
+    code: CadCheckCode, severity: str, message: str, entity_ids: list[str] | None = None
+) -> ValidationIssueIR:
     """A non-profile issue (geometry, scale completeness, recognition
     signals). ЕСКД-profile checks use ``eskd_issue`` so their rule_id/
     fix_hint/citation travel from the single registry."""
     return ValidationIssueIR(
-        code=code.value, severity=severity, message_ru=message, entity_ids=entity_ids or [],
+        code=code.value,
+        severity=severity,
+        message_ru=message,
+        entity_ids=entity_ids or [],
         level=_CHECK_LEVEL.get(code.value, 0),
         norm_ref=_NORM_REF.get(code.value),
     )
@@ -191,17 +216,23 @@ def eskd_issue(
 
 def _check_scale(ir: CadIR) -> list[ValidationIssueIR]:
     if ir.scale is None:
-        return [_issue(
-            CadCheckCode.SCALE_UNKNOWN, "error",
-            "Масштаб не определён — размеры в DXF будут в условных единицах (пикселях). "
-            "Укажите масштаб вручную или добавьте рамку формата.",
-        )]
+        return [
+            _issue(
+                CadCheckCode.SCALE_UNKNOWN,
+                "error",
+                "Масштаб не определён — размеры в DXF будут в условных единицах (пикселях). "
+                "Укажите масштаб вручную или добавьте рамку формата.",
+            )
+        ]
     if ir.scale_source is None:
-        return [_issue(
-            CadCheckCode.SCALE_UNVERIFIED, "error",
-            "Метрический масштаб не имеет подтверждённого источника. "
-            "Укажите мм/px вручную или подтвердите формат листа.",
-        )]
+        return [
+            _issue(
+                CadCheckCode.SCALE_UNVERIFIED,
+                "error",
+                "Метрический масштаб не имеет подтверждённого источника. "
+                "Укажите мм/px вручную или подтвердите формат листа.",
+            )
+        ]
     return []
 
 
@@ -211,10 +242,14 @@ def _check_degenerate(ir: CadIR) -> list[ValidationIssueIR]:
         if isinstance(e, Segment):
             length = ((e.p1.x - e.p2.x) ** 2 + (e.p1.y - e.p2.y) ** 2) ** 0.5
             if length < _MIN_SEGMENT_LEN_PX:
-                issues.append(_issue(
-                    CadCheckCode.GEOM_DEGENERATE, "error",
-                    f"Вырожденный отрезок длиной {length:.1f}px", [e.id],
-                ))
+                issues.append(
+                    _issue(
+                        CadCheckCode.GEOM_DEGENERATE,
+                        "error",
+                        f"Вырожденный отрезок длиной {length:.1f}px",
+                        [e.id],
+                    )
+                )
     return issues
 
 
@@ -222,20 +257,27 @@ def _check_duplicates(ir: CadIR) -> list[ValidationIssueIR]:
     issues = []
     segments = [e for e in ir.entities if isinstance(e, Segment)]
     for i, a in enumerate(segments):
-        for b in segments[i + 1:]:
+        for b in segments[i + 1 :]:
             same = (
-                abs(a.p1.x - b.p1.x) <= _DUPLICATE_TOL_PX and abs(a.p1.y - b.p1.y) <= _DUPLICATE_TOL_PX
-                and abs(a.p2.x - b.p2.x) <= _DUPLICATE_TOL_PX and abs(a.p2.y - b.p2.y) <= _DUPLICATE_TOL_PX
+                abs(a.p1.x - b.p1.x) <= _DUPLICATE_TOL_PX
+                and abs(a.p1.y - b.p1.y) <= _DUPLICATE_TOL_PX
+                and abs(a.p2.x - b.p2.x) <= _DUPLICATE_TOL_PX
+                and abs(a.p2.y - b.p2.y) <= _DUPLICATE_TOL_PX
             ) or (
-                abs(a.p1.x - b.p2.x) <= _DUPLICATE_TOL_PX and abs(a.p1.y - b.p2.y) <= _DUPLICATE_TOL_PX
-                and abs(a.p2.x - b.p1.x) <= _DUPLICATE_TOL_PX and abs(a.p2.y - b.p1.y) <= _DUPLICATE_TOL_PX
+                abs(a.p1.x - b.p2.x) <= _DUPLICATE_TOL_PX
+                and abs(a.p1.y - b.p2.y) <= _DUPLICATE_TOL_PX
+                and abs(a.p2.x - b.p1.x) <= _DUPLICATE_TOL_PX
+                and abs(a.p2.y - b.p1.y) <= _DUPLICATE_TOL_PX
             )
             if same:
-                issues.append(_issue(
-                    CadCheckCode.GEOM_DUPLICATE, "error",
-                    "Дублирующиеся отрезки — в CAD останутся наложенные линии",
-                    [a.id, b.id],
-                ))
+                issues.append(
+                    _issue(
+                        CadCheckCode.GEOM_DUPLICATE,
+                        "error",
+                        "Дублирующиеся отрезки — в CAD останутся наложенные линии",
+                        [a.id, b.id],
+                    )
+                )
     return issues
 
 
@@ -252,10 +294,14 @@ def _check_self_intersections(ir: CadIR) -> list[ValidationIssueIR]:
                 coords.append(coords[0])
             line = LineString(coords)
             if not line.is_simple:
-                issues.append(_issue(
-                    CadCheckCode.GEOM_SELF_INTERSECTION, "error",
-                    "Полилиния самопересекается — контур некорректен", [e.id],
-                ))
+                issues.append(
+                    _issue(
+                        CadCheckCode.GEOM_SELF_INTERSECTION,
+                        "error",
+                        "Полилиния самопересекается — контур некорректен",
+                        [e.id],
+                    )
+                )
     return issues
 
 
@@ -266,10 +312,14 @@ def _check_closed_contours(ir: CadIR) -> list[ValidationIssueIR]:
     issues = []
     for e in ir.entities:
         if e.type == "hatch" and len(e.boundary) < 3:
-            issues.append(_issue(
-                CadCheckCode.GEOM_OPEN_CONTOUR, "error",
-                "Штриховка без замкнутой границы", [e.id],
-            ))
+            issues.append(
+                _issue(
+                    CadCheckCode.GEOM_OPEN_CONTOUR,
+                    "error",
+                    "Штриховка без замкнутой границы",
+                    [e.id],
+                )
+            )
     return issues
 
 
@@ -278,15 +328,18 @@ def _check_line_weights(ir: CadIR) -> list[ValidationIssueIR]:
     (axis/dim/hatch) with the thin one."""
     issues = []
     wrong = [
-        e.id for e in ir.entities
+        e.id
+        for e in ir.entities
         if e.line_class in ("axis", "dim", "hatch") and e.width_class == "main"
     ]
     if wrong:
-        issues.append(eskd_issue(
-            CadCheckCode.ESKD_LINE_WEIGHT,
-            "Осевые/размерные/штриховые линии должны быть тонкими (ГОСТ 2.303)",
-            wrong,
-        ))
+        issues.append(
+            eskd_issue(
+                CadCheckCode.ESKD_LINE_WEIGHT,
+                "Осевые/размерные/штриховые линии должны быть тонкими (ГОСТ 2.303)",
+                wrong,
+            )
+        )
     return issues
 
 
@@ -304,11 +357,14 @@ def _check_coverage(ir: CadIR) -> list[ValidationIssueIR]:
     if rec is None or prec is None:
         return []
     if rec < 0.85 or prec < 0.85:
-        return [_issue(
-            CadCheckCode.COVERAGE_LOW, "error",
-            f"Распознанная геометрия покрывает исходник недостаточно "
-            f"(recall {rec:.0%}, precision {prec:.0%}) — результат требует ручной проверки",
-        )]
+        return [
+            _issue(
+                CadCheckCode.COVERAGE_LOW,
+                "error",
+                f"Распознанная геометрия покрывает исходник недостаточно "
+                f"(recall {rec:.0%}, precision {prec:.0%}) — результат требует ручной проверки",
+            )
+        ]
     return []
 
 
@@ -317,28 +373,34 @@ def _check_unresolved_regions(ir: CadIR) -> list[ValidationIssueIR]:
     if not pending:
         return []
     ink = sum(region.ink_pixels for region in pending)
-    return [_issue(
-        CadCheckCode.UNRESOLVED_REGIONS,
-        "error",
-        f"В {len(pending)} областях осталось {ink} пикселей, не представленных "
-        "экспортируемыми CAD-сущностями. DXF является черновиком.",
-    )]
+    return [
+        _issue(
+            CadCheckCode.UNRESOLVED_REGIONS,
+            "error",
+            f"В {len(pending)} областях осталось {ink} пикселей, не представленных "
+            "экспортируемыми CAD-сущностями. DXF является черновиком.",
+        )
+    ]
 
 
 def _check_dxf_reopen(ir: CadIR) -> list[ValidationIssueIR]:
     if ir.validation.dxf_reopens is False:
-        return [_issue(
-            CadCheckCode.DXF_REOPEN_FAILED,
-            "error",
-            "Экспортированный DXF не прошёл независимое повторное открытие.",
-        )]
+        return [
+            _issue(
+                CadCheckCode.DXF_REOPEN_FAILED,
+                "error",
+                "Экспортированный DXF не прошёл независимое повторное открытие.",
+            )
+        ]
     return []
 
 
 def _check_dimension_chains(ir: CadIR) -> list[ValidationIssueIR]:
     from app.ai.cad_hypothesis import check_dimension_chains
 
-    return [_issue(CadCheckCode.DIM_CHAIN_MISMATCH, "warn", msg) for msg in check_dimension_chains(ir)]
+    return [
+        _issue(CadCheckCode.DIM_CHAIN_MISMATCH, "warn", msg) for msg in check_dimension_chains(ir)
+    ]
 
 
 def _check_constraints(ir: CadIR) -> list[ValidationIssueIR]:
@@ -350,10 +412,19 @@ def _check_constraints(ir: CadIR) -> list[ValidationIssueIR]:
             continue
         code = (
             CadCheckCode.CONSTRAINT_REFERENCE_INVALID
-            if "ссыл" in result.message or "не найден" in result.message or "применим" in result.message
+            if "ссыл" in result.message
+            or "не найден" in result.message
+            or "применим" in result.message
             else CadCheckCode.CONSTRAINT_UNSATISFIED
         )
-        issues.append(_issue(code, "error", f"Ограничение {result.constraint_id}: {result.message}", list(result.entity_ids)))
+        issues.append(
+            _issue(
+                code,
+                "error",
+                f"Ограничение {result.constraint_id}: {result.message}",
+                list(result.entity_ids),
+            )
+        )
     return issues
 
 
@@ -380,11 +451,13 @@ def _check_roughness_values(ir: CadIR) -> list[ValidationIssueIR]:
             continue
         nearest = tdref.nearest_ra(value)
         if abs(nearest - value) > 1e-6:
-            issues.append(eskd_issue(
-                CadCheckCode.RA_INVALID,
-                f"Ra {value:g} не входит в стандартный ряд ГОСТ 2789 (ближайшее — Ra {nearest:g})",
-                [e.id],
-            ))
+            issues.append(
+                eskd_issue(
+                    CadCheckCode.RA_INVALID,
+                    f"Ra {value:g} не входит в стандартный ряд ГОСТ 2789 (ближайшее — Ra {nearest:g})",
+                    [e.id],
+                )
+            )
     return issues
 
 
@@ -409,10 +482,12 @@ def _check_scale_standard(ir: CadIR) -> list[ValidationIssueIR]:
     ratio = num / den
     if any(abs(ratio - g) <= _SCALE_TOLERANCE * max(g, 1e-9) for g in _GOST_SCALES):
         return []
-    return [eskd_issue(
-        CadCheckCode.ESKD_SCALE_NONSTANDARD,
-        f"Масштаб {stated} не входит в стандартный ряд ГОСТ 2.302",
-    )]
+    return [
+        eskd_issue(
+            CadCheckCode.ESKD_SCALE_NONSTANDARD,
+            f"Масштаб {stated} не входит в стандартный ряд ГОСТ 2.302",
+        )
+    ]
 
 
 _GOST_SHEET_FORMATS = frozenset({"A0", "A1", "A2", "A3", "A4"})
@@ -427,10 +502,12 @@ def _check_sheet_format(ir: CadIR) -> list[ValidationIssueIR]:
         return []
     if ir.sheet.format in _GOST_SHEET_FORMATS:
         return []
-    return [eskd_issue(
-        CadCheckCode.ESKD_SHEET_FORMAT_UNKNOWN,
-        f"Формат листа {ir.sheet.format or 'не указан'} не входит в стандартный ряд ГОСТ 2.301 (A0-A4)",
-    )]
+    return [
+        eskd_issue(
+            CadCheckCode.ESKD_SHEET_FORMAT_UNKNOWN,
+            f"Формат листа {ir.sheet.format or 'не указан'} не входит в стандартный ряд ГОСТ 2.301 (A0-A4)",
+        )
+    ]
 
 
 def _check_title_block_complete(ir: CadIR) -> list[ValidationIssueIR]:
@@ -456,10 +533,12 @@ def _check_title_block_complete(ir: CadIR) -> list[ValidationIssueIR]:
     if isinstance(fields, dict):
         if str(fields.get("designation") or "").strip() and str(fields.get("name") or "").strip():
             return []
-        return [eskd_issue(
-            CadCheckCode.ESKD_TITLE_BLOCK_INCOMPLETE,
-            "Основная надпись: не заполнены обозначение и/или наименование",
-        )]
+        return [
+            eskd_issue(
+                CadCheckCode.ESKD_TITLE_BLOCK_INCOMPLETE,
+                "Основная надпись: не заполнены обозначение и/или наименование",
+            )
+        ]
     region = tb.get("region")
     if not isinstance(region, dict):
         return []
@@ -472,10 +551,12 @@ def _check_title_block_complete(ir: CadIR) -> list[ValidationIssueIR]:
     )
     if has_text:
         return []
-    return [eskd_issue(
-        CadCheckCode.ESKD_TITLE_BLOCK_INCOMPLETE,
-        "Основная надпись (штамп) пуста — не заполнены наименование/обозначение",
-    )]
+    return [
+        eskd_issue(
+            CadCheckCode.ESKD_TITLE_BLOCK_INCOMPLETE,
+            "Основная надпись (штамп) пуста — не заполнены наименование/обозначение",
+        )
+    ]
 
 
 def _check_contour_geometry(ir: CadIR) -> list[ValidationIssueIR]:
@@ -485,7 +566,8 @@ def _check_contour_geometry(ir: CadIR) -> list[ValidationIssueIR]:
     if not ir.entities:
         return []  # an untouched blank sheet isn't "malformed", just not started
     has_contour = any(
-        e.line_class == "contour" and e.width_class == "main"
+        e.line_class == "contour"
+        and e.width_class == "main"
         # A ГОСТ frame and stamp are sheet furniture, not the part. Counting
         # them made a frame-only refusal look like a complete drawing after the
         # next editor revalidation and could incorrectly unblock acceptance.
@@ -495,10 +577,12 @@ def _check_contour_geometry(ir: CadIR) -> list[ValidationIssueIR]:
     )
     if has_contour:
         return []
-    return [eskd_issue(
-        CadCheckCode.ESKD_NO_CONTOUR_GEOMETRY,
-        "На листе нет основной контурной геометрии — только вспомогательные элементы",
-    )]
+    return [
+        eskd_issue(
+            CadCheckCode.ESKD_NO_CONTOUR_GEOMETRY,
+            "На листе нет основной контурной геометрии — только вспомогательные элементы",
+        )
+    ]
 
 
 _TEXT_HEIGHT_TOL_MM = 0.35  # OCR/rounding slack around the nominal series
@@ -523,12 +607,14 @@ def _check_text_heights(ir: CadIR) -> list[ValidationIssueIR]:
             continue
         nearest = min(GOST_2304_TEXT_HEIGHTS_MM, key=lambda h: abs(h - height_mm))
         if abs(nearest - height_mm) > _TEXT_HEIGHT_TOL_MM:
-            issues.append(eskd_issue(
-                CadCheckCode.ESKD_TEXT_HEIGHT,
-                f"Высота шрифта {height_mm:.1f} мм не из ряда ГОСТ 2.304 "
-                f"(ближайшая — {nearest:g} мм)",
-                [e.id],
-            ))
+            issues.append(
+                eskd_issue(
+                    CadCheckCode.ESKD_TEXT_HEIGHT,
+                    f"Высота шрифта {height_mm:.1f} мм не из ряда ГОСТ 2.304 "
+                    f"(ближайшая — {nearest:g} мм)",
+                    [e.id],
+                )
+            )
     return issues
 
 
@@ -543,9 +629,13 @@ def _check_annotations(ir: CadIR) -> list[ValidationIssueIR]:
             continue
         ok, message = validate_annotation(e)
         if not ok:
-            issues.append(eskd_issue(
-                CadCheckCode.ESKD_ANNOTATION_INVALID, message or "Некорректная аннотация", [e.id],
-            ))
+            issues.append(
+                eskd_issue(
+                    CadCheckCode.ESKD_ANNOTATION_INVALID,
+                    message or "Некорректная аннотация",
+                    [e.id],
+                )
+            )
     return issues
 
 
@@ -560,11 +650,13 @@ def _check_dimension_complete(ir: CadIR) -> list[ValidationIssueIR]:
         has_value = getattr(e, "value_mm", None) is not None
         has_text = bool((getattr(e, "text", "") or "").strip())
         if not has_value and not has_text:
-            issues.append(eskd_issue(
-                CadCheckCode.ESKD_DIMENSION_INCOMPLETE,
-                "Размер без числового значения (ГОСТ 2.307)",
-                [e.id],
-            ))
+            issues.append(
+                eskd_issue(
+                    CadCheckCode.ESKD_DIMENSION_INCOMPLETE,
+                    "Размер без числового значения (ГОСТ 2.307)",
+                    [e.id],
+                )
+            )
     return issues
 
 
@@ -625,7 +717,11 @@ def validate_ir(ir: CadIR) -> ValidationReportIR:
     resolved = {r.entity_id for r in ir.review if r.resolved}
     # Sticky non-auto reasons (e.g. diffusion_modified from the provenance
     # mask) survive revalidation — only their producer or a human resolves them.
-    sticky = [r for r in ir.review if not r.resolved and r.reason not in ("low_confidence", "validation_error")]
+    sticky = [
+        r
+        for r in ir.review
+        if not r.resolved and r.reason not in ("low_confidence", "validation_error")
+    ]
     review: list[ReviewItem] = [r for r in ir.review if r.resolved] + sticky
     sticky_ids = {r.entity_id for r in sticky}
     for e in ir.entities:
@@ -640,19 +736,13 @@ def validate_ir(ir: CadIR) -> ValidationReportIR:
         # fresh digitize came back with 216 "review" items, all geometry).
         if e.type in _REVIEWABLE_TYPES and e.confidence < REVIEW_CONFIDENCE_THRESHOLD:
             review.append(ReviewItem(entity_id=e.id, reason="low_confidence"))
-    flagged = {
-        eid
-        for issue in issues
-        if issue.severity == "error"
-        for eid in issue.entity_ids
-    }
+    flagged = {eid for issue in issues if issue.severity == "error" for eid in issue.entity_ids}
     queued = {r.entity_id for r in review}
     for eid in flagged - queued - resolved:
         review.append(ReviewItem(entity_id=eid, reason="validation_error"))
     ir.review = review
     verified_entities = all(
-        entity.assurance in ("constraint_validated", "human_approved")
-        or entity.construction
+        entity.assurance in ("constraint_validated", "human_approved") or entity.construction
         for entity in ir.entities
     )
     ir.digitization_status = (
@@ -720,7 +810,9 @@ def _parse_llm_review(raw_text: str) -> list[ValidationIssueIR]:
             continue
         level = 7 if item.get("level") == 7 else 6
         code = CadCheckCode.VLM_CRITIC if level == 7 else CadCheckCode.NORMCONTROL_LLM
-        severity = item.get("severity") if item.get("severity") in ("error", "warn", "info") else "warn"
+        severity = (
+            item.get("severity") if item.get("severity") in ("error", "warn", "info") else "warn"
+        )
         out.append(_issue(code, severity, str(item["message"])[:500]))
     return out
 
@@ -729,7 +821,7 @@ async def run_llm_review_levels(
     png_bytes: bytes,
     *,
     source_png_bytes: bytes | None = None,
-    router: "object | None" = None,
+    router: object | None = None,
     confidential: bool = True,
     strict: bool = False,
 ) -> list[ValidationIssueIR]:
@@ -769,16 +861,15 @@ async def run_llm_review_levels(
             ChatMessage(
                 role="user",
                 content=(
-                    "Сравни исходный чертёж (изображение 0) с текущим рендером "
-                    "(изображение 1)." if paired else "Проверь этот чертёж."
+                    "Сравни исходный чертёж (изображение 0) с текущим рендером (изображение 1)."
+                    if paired
+                    else "Проверь этот чертёж."
                 ),
             ),
         ],
         images=[
             base64.b64encode(payload).decode()
-            for payload in (
-                [source_png_bytes, png_bytes] if paired else [png_bytes]
-            )
+            for payload in ([source_png_bytes, png_bytes] if paired else [png_bytes])
             if payload is not None
         ],
         confidential=confidential,

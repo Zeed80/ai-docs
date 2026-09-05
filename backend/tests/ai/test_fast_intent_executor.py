@@ -29,6 +29,7 @@ def _make_session(monkeypatch):
     # Disable the result cache so these skill-path tests are deterministic
     # regardless of a real Redis being available (avoids cross-test cache bleed).
     from app.ai import result_cache
+
     monkeypatch.setattr(result_cache, "cache_get", lambda key: None)
     monkeypatch.setattr(result_cache, "cache_set", lambda key, value, ttl=15: None)
 
@@ -41,7 +42,9 @@ def _make_session(monkeypatch):
 async def test_fast_intent_counts_invoices_without_llm(monkeypatch):
     """A count question is answered by one direct skill call — no LLM streaming."""
     session, sent = _make_session(monkeypatch)
-    session._skill_map = {"invoices": {"name": "invoices", "method": "POST", "path": "/api/agent/cap/invoices"}}
+    session._skill_map = {
+        "invoices": {"name": "invoices", "method": "POST", "path": "/api/agent/cap/invoices"}
+    }
 
     executed: list[dict] = []
 
@@ -71,7 +74,9 @@ async def test_fast_intent_counts_invoices_without_llm(monkeypatch):
 async def test_fast_intent_defers_on_skill_error(monkeypatch):
     """On a skill error the fast path defers (returns False) instead of lying."""
     session, sent = _make_session(monkeypatch)
-    session._skill_map = {"invoices": {"name": "invoices", "method": "POST", "path": "/api/agent/cap/invoices"}}
+    session._skill_map = {
+        "invoices": {"name": "invoices", "method": "POST", "path": "/api/agent/cap/invoices"}
+    }
 
     async def fake_execute_skill(skill, args, config):
         return {"error": "HTTP 500"}

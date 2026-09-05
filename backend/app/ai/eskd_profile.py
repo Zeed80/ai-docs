@@ -26,13 +26,13 @@ ESKD_PROFILE_VERSION = "1.0.0"
 
 @dataclass(frozen=True)
 class EskdRule:
-    rule_id: str          # stable key, e.g. "ESKD.2.303.line_weight"
-    code: str             # CadCheckCode value this rule is emitted under
-    gost: str             # citation with year, e.g. "ГОСТ 2.303-68"
-    clause: str           # specific clause/table, e.g. "п. 2, табл. 1"
-    level: int            # assurance-pipeline level (Ф7.1); ЕСКД = 4
+    rule_id: str  # stable key, e.g. "ESKD.2.303.line_weight"
+    code: str  # CadCheckCode value this rule is emitted under
+    gost: str  # citation with year, e.g. "ГОСТ 2.303-68"
+    clause: str  # specific clause/table, e.g. "п. 2, табл. 1"
+    level: int  # assurance-pipeline level (Ф7.1); ЕСКД = 4
     default_severity: str  # "error" | "warn" | "info"
-    fix_hint: str         # concrete path to fix the violation
+    fix_hint: str  # concrete path to fix the violation
 
 
 # Keyed by CadCheckCode value. Every ЕСКД-level check resolves through here.
@@ -45,7 +45,7 @@ _RULES: tuple[EskdRule, ...] = (
         level=4,
         default_severity="warn",
         fix_hint="Сделайте осевые/размерные/штриховые линии тонкими "
-                 "(тип линии в свойствах элемента).",
+        "(тип линии в свойствах элемента).",
     ),
     EskdRule(
         rule_id="ESKD.2.302.scale",
@@ -55,7 +55,7 @@ _RULES: tuple[EskdRule, ...] = (
         level=4,
         default_severity="warn",
         fix_hint="Приведите масштаб основной надписи к стандартному ряду "
-                 "(1:1, 1:2, 1:2,5, 1:5, 2:1, 5:1 …).",
+        "(1:1, 1:2, 1:2,5, 1:5, 2:1, 5:1 …).",
     ),
     EskdRule(
         rule_id="ESKD.2.301.format",
@@ -65,7 +65,7 @@ _RULES: tuple[EskdRule, ...] = (
         level=4,
         default_severity="info",
         fix_hint="Выберите формат листа из ряда A0–A4 (подтверждение формата "
-                 "в редакторе), либо задайте масштаб вручную.",
+        "в редакторе), либо задайте масштаб вручную.",
     ),
     EskdRule(
         rule_id="ESKD.2.104.title_block",
@@ -75,7 +75,7 @@ _RULES: tuple[EskdRule, ...] = (
         level=4,
         default_severity="info",
         fix_hint="Заполните основную надпись: обозначение, наименование, "
-                 "материал, масштаб, подписи.",
+        "материал, масштаб, подписи.",
     ),
     EskdRule(
         rule_id="ESKD.2.109.no_contour",
@@ -84,8 +84,7 @@ _RULES: tuple[EskdRule, ...] = (
         clause="п. 1.1",
         level=4,
         default_severity="warn",
-        fix_hint="Добавьте основную контурную геометрию — на чертеже нет "
-                 "линий видимого контура.",
+        fix_hint="Добавьте основную контурную геометрию — на чертеже нет линий видимого контура.",
     ),
     EskdRule(
         rule_id="ESKD.2789.roughness",
@@ -95,7 +94,7 @@ _RULES: tuple[EskdRule, ...] = (
         level=3,
         default_severity="warn",
         fix_hint="Приведите значение Ra к стандартному ряду ГОСТ 2789 "
-                 "(…0,8; 1,6; 3,2; 6,3; 12,5…).",
+        "(…0,8; 1,6; 3,2; 6,3; 12,5…).",
     ),
     EskdRule(
         rule_id="ESKD.2.304.text_height",
@@ -104,8 +103,7 @@ _RULES: tuple[EskdRule, ...] = (
         clause="п. 1, табл. 1",
         level=4,
         default_severity="info",
-        fix_hint="Приведите высоту шрифта к стандартному ряду "
-                 "(2,5; 3,5; 5; 7; 10; 14 мм).",
+        fix_hint="Приведите высоту шрифта к стандартному ряду (2,5; 3,5; 5; 7; 10; 14 мм).",
     ),
     EskdRule(
         rule_id="ESKD.2.307.dimension_value",
@@ -115,7 +113,7 @@ _RULES: tuple[EskdRule, ...] = (
         level=3,
         default_severity="warn",
         fix_hint="Проставьте числовое значение размера — размерная линия "
-                 "без величины не допускается.",
+        "без величины не допускается.",
     ),
     EskdRule(
         rule_id="ESKD.2.308.annotation",
@@ -125,8 +123,8 @@ _RULES: tuple[EskdRule, ...] = (
         level=3,
         default_severity="warn",
         fix_hint="Исправьте аннотацию: шероховатость — из ряда Ra ГОСТ 2789, "
-                 "резьба — по ГОСТ 8724, база — одна буква, символ допуска — "
-                 "из ГОСТ 2.308.",
+        "резьба — по ГОСТ 8724, база — одна буква, символ допуска — "
+        "из ГОСТ 2.308.",
     ),
 )
 

@@ -131,9 +131,7 @@ async def _visual_index_async(document_id: str | None, model: str | None) -> dic
                 # carry both, and a bare crop of a drill looks like every other
                 # drill until the article code is part of it.
                 caption = " ".join(
-                    part
-                    for part in (entry.part_number, entry.name, entry.description)
-                    if part
+                    part for part in (entry.part_number, entry.name, entry.description) if part
                 )
                 items.append({"text": caption, "image": image})
                 usable.append(entry)
@@ -193,9 +191,7 @@ async def _visual_index_async(document_id: str | None, model: str | None) -> dic
             )
         )
 
-    logger.info(
-        "catalog_visual_indexed", indexed=indexed, skipped=skipped, remaining=remaining
-    )
+    logger.info("catalog_visual_indexed", indexed=indexed, skipped=skipped, remaining=remaining)
     if remaining:
         visual_index_batch.apply_async(args=[document_id, model], countdown=1)
     return {

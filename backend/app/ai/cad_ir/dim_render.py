@@ -70,7 +70,9 @@ def dimension_arrows_for_points(
     ]
 
 
-def dimension_arrows(entity: DimensionEntity, scale: float | None) -> list[list[tuple[float, float]]]:
+def dimension_arrows(
+    entity: DimensionEntity, scale: float | None
+) -> list[list[tuple[float, float]]]:
     """SVG convenience wrapper: arrows in IR pixel space."""
     return dimension_arrows_for_points(
         (entity.p1.x, entity.p1.y), (entity.p2.x, entity.p2.y), entity.kind, arrow_len_px(scale)

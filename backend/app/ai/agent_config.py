@@ -233,11 +233,13 @@ def _all_registry_skill_names() -> list[str]:
             return _registry_skill_names_cache
         data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
         skills = data.get("skills") or data.get("tools") or []
-        names = sorted({
-            str(skill.get("name", "")).strip()
-            for skill in skills
-            if str(skill.get("name", "")).strip()
-        })
+        names = sorted(
+            {
+                str(skill.get("name", "")).strip()
+                for skill in skills
+                if str(skill.get("name", "")).strip()
+            }
+        )
         _registry_skill_names_cache = names
         _registry_skill_names_mtime = mtime
         return names
@@ -262,6 +264,7 @@ def _default_config() -> BuiltinAgentConfig:
 def _redis_get_agent_config() -> dict | None:
     try:
         from app.utils.redis_client import get_sync_redis
+
         r = get_sync_redis()
         raw = r.get(_REDIS_KEY)
         if raw:
@@ -274,6 +277,7 @@ def _redis_get_agent_config() -> dict | None:
 def _redis_set_agent_config(data: dict) -> None:
     try:
         from app.utils.redis_client import get_sync_redis
+
         r = get_sync_redis()
         r.set(_REDIS_KEY, json.dumps(data, ensure_ascii=False))
     except Exception:
@@ -425,9 +429,7 @@ def with_thinking_enabled_for(
     field = ROLE_THINKING_FIELDS.get(role)
     if field is None:
         return config
-    return config.model_copy(
-        update={field: None if enabled is None else (not enabled)}
-    )
+    return config.model_copy(update={field: None if enabled is None else (not enabled)})
 
 
 def thinking_level_for(config: BuiltinAgentConfig, role: str) -> str | None:

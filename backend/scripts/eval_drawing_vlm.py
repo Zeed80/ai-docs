@@ -29,15 +29,14 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 EVAL_MODELS = [
-    "qwen3.6:35b",          # Production model (baseline, installed)
-    "qwen3.5:9b",           # Candidate: smaller qwen3.5 (installed)
+    "qwen3.6:35b",  # Production model (baseline, installed)
+    "qwen3.5:9b",  # Candidate: smaller qwen3.5 (installed)
 ]
 
 # Confidence threshold: features below this are flagged as uncertain
@@ -59,7 +58,7 @@ MIN_FEATURES = {"detail": 2, "assembly": 1}
 class GroundTruth:
     filename: str
     drawing_type: str
-    expected_features: list[dict]   # [{feature_type, name, dimensions[{nominal}]}]
+    expected_features: list[dict]  # [{feature_type, name, dimensions[{nominal}]}]
 
 
 @dataclass
@@ -105,11 +104,13 @@ def load_ground_truth(gt_path: Path | None, drawings_dir: Path) -> list[GroundTr
     for ext in ("*.dxf", "*.pdf", "*.png", "*.jpg", "*.tiff"):
         for path in sorted(drawings_dir.glob(ext)):
             drawing_type = "assembly" if "assembly" in path.stem.lower() else "detail"
-            gt.append(GroundTruth(
-                filename=path.name,
-                drawing_type=drawing_type,
-                expected_features=[],  # no ground truth → measure count only
-            ))
+            gt.append(
+                GroundTruth(
+                    filename=path.name,
+                    drawing_type=drawing_type,
+                    expected_features=[],  # no ground truth → measure count only
+                )
+            )
     return gt
 
 
@@ -120,7 +121,8 @@ def _make_smoke_drawings() -> tuple[Path, list[GroundTruth]]:
     """Generate synthetic test drawings for smoke testing."""
     import io
     import tempfile
-    from PIL import Image, ImageDraw, ImageFont
+
+    from PIL import Image, ImageDraw
 
     tmp = Path(tempfile.mkdtemp(prefix="eval_drawings_"))
 
@@ -159,10 +161,14 @@ def _make_smoke_drawings() -> tuple[Path, list[GroundTruth]]:
         d.rectangle([650, 10, 990, 250], outline=(0, 0, 0))
         d.text((660, 15), "СПЕЦИФИКАЦИЯ", fill=(0, 0, 0))
         d.line([(650, 30), (990, 30)], fill=(0, 0, 0))
-        for i, (no, name, qty) in enumerate([
-            ("1", "Корпус", "1"), ("2", "Вал", "1"),
-            ("3", "Крышка", "2"), ("4", "Болт М8", "4"),
-        ]):
+        for i, (no, name, qty) in enumerate(
+            [
+                ("1", "Корпус", "1"),
+                ("2", "Вал", "1"),
+                ("3", "Крышка", "2"),
+                ("4", "Болт М8", "4"),
+            ]
+        ):
             y = 35 + i * 25
             d.text((655, y), no, fill=(0, 0, 0))
             d.text((680, y), name, fill=(0, 0, 0))
@@ -270,6 +276,7 @@ async def run_model_on_drawing(
 def _parse_features(text: str) -> list[dict]:
     """Extract features list from VLM response."""
     import re
+
     text = re.sub(r"```(?:json)?", "", text).strip()
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
@@ -313,10 +320,7 @@ def compute_metrics(
             # No ground truth — only count features
             continue
 
-        extracted_names = {
-            f.get("name", "").lower().strip()
-            for f in r.extracted_features
-        }
+        extracted_names = {f.get("name", "").lower().strip() for f in r.extracted_features}
         extracted_types = {f.get("feature_type", "").lower() for f in r.extracted_features}
 
         for expected in gt.expected_features:
@@ -324,8 +328,9 @@ def compute_metrics(
             exp_type = expected.get("feature_type", "").lower()
 
             # Match by name substring or type
-            matched = any(exp_name in name for name in extracted_names) or \
-                      (exp_type in extracted_types and exp_type not in ("other", ""))
+            matched = any(exp_name in name for name in extracted_names) or (
+                exp_type in extracted_types and exp_type not in ("other", "")
+            )
             if matched:
                 tp += 1
             else:
@@ -355,7 +360,9 @@ def compute_metrics(
 def print_report(metrics_list: list[EvalMetrics], results_path: Path) -> None:
     """Print Markdown table and save JSON results."""
     print("\n## Drawing VLM Benchmark Results\n")
-    print(f"{'Model':<25} {'Features':<10} {'Precision':<12} {'Recall':<10} {'F1':<8} {'Latency s':<12} {'Errors'}")
+    print(
+        f"{'Model':<25} {'Features':<10} {'Precision':<12} {'Recall':<10} {'F1':<8} {'Latency s':<12} {'Errors'}"
+    )
     print("-" * 90)
 
     best_f1 = max((m.f1 for m in metrics_list), default=0)
@@ -371,8 +378,10 @@ def print_report(metrics_list: list[EvalMetrics], results_path: Path) -> None:
 
     if best_f1 > 0:
         winner = max(metrics_list, key=lambda x: x.f1)
-        print(f"**Рекомендация**: установить `{winner.model}` → `status: production` "
-              f"в `model_registry.yaml` (F1={winner.f1:.3f})")
+        print(
+            f"**Рекомендация**: установить `{winner.model}` → `status: production` "
+            f"в `model_registry.yaml` (F1={winner.f1:.3f})"
+        )
 
     # Save JSON
     data = [m.__dict__ for m in metrics_list]
@@ -415,20 +424,22 @@ async def main_async(args: argparse.Namespace) -> None:
             print(f"  → {model} ...", end="", flush=True)
             features, latency = await run_model_on_drawing(model, image_bytes, gt.drawing_type)
             print(f" {len(features)} features, {latency:.1f}s")
-            all_results[model].append(ModelResult(
-                model=model,
-                filename=gt.filename,
-                extracted_features=features,
-                latency_s=latency,
-            ))
+            all_results[model].append(
+                ModelResult(
+                    model=model,
+                    filename=gt.filename,
+                    extracted_features=features,
+                    latency_s=latency,
+                )
+            )
 
     # Compute metrics per model
     metrics_list = [
-        compute_metrics(results, ground_truth)
-        for model, results in all_results.items()
+        compute_metrics(results, ground_truth) for model, results in all_results.items()
     ]
 
     import datetime
+
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     results_path = Path(f"eval_results_{ts}.json")
     print_report(metrics_list, results_path)
@@ -436,14 +447,19 @@ async def main_async(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Drawing VLM Benchmark (Sprint 5)")
-    parser.add_argument("--drawings", default="tests/fixtures/drawings/",
-                        help="Директория с чертежами для оценки")
-    parser.add_argument("--ground-truth", default=None,
-                        help="JSON-файл с ground truth разметкой")
-    parser.add_argument("--models", nargs="+", default=None,
-                        help=f"Модели для сравнения (по умолчанию: {EVAL_MODELS})")
-    parser.add_argument("--smoke", action="store_true",
-                        help="Быстрый тест на синтетических чертежах (без Ollama)")
+    parser.add_argument(
+        "--drawings", default="tests/fixtures/drawings/", help="Директория с чертежами для оценки"
+    )
+    parser.add_argument("--ground-truth", default=None, help="JSON-файл с ground truth разметкой")
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=None,
+        help=f"Модели для сравнения (по умолчанию: {EVAL_MODELS})",
+    )
+    parser.add_argument(
+        "--smoke", action="store_true", help="Быстрый тест на синтетических чертежах (без Ollama)"
+    )
     args = parser.parse_args()
 
     if args.smoke:
@@ -455,8 +471,6 @@ def main() -> None:
 
 def _patch_model_call() -> None:
     """Replace Ollama call with synthetic responses for CI/smoke testing."""
-    import unittest.mock as mock
-    import importlib
     import sys
 
     module = sys.modules[__name__]
@@ -465,10 +479,18 @@ def _patch_model_call() -> None:
         await asyncio.sleep(0.05)  # simulate latency
         if drawing_type == "detail":
             features = [
-                {"feature_type": "surface", "name": "Ø50h6", "confidence": 0.9,
-                 "dimensions": [{"nominal": 50.0, "fit_system": "h6"}]},
-                {"feature_type": "hole", "name": "Ø12H7", "confidence": 0.85,
-                 "dimensions": [{"nominal": 12.0, "fit_system": "H7"}]},
+                {
+                    "feature_type": "surface",
+                    "name": "Ø50h6",
+                    "confidence": 0.9,
+                    "dimensions": [{"nominal": 50.0, "fit_system": "h6"}],
+                },
+                {
+                    "feature_type": "hole",
+                    "name": "Ø12H7",
+                    "confidence": 0.85,
+                    "dimensions": [{"nominal": 12.0, "fit_system": "H7"}],
+                },
                 {"feature_type": "surface", "name": "Ra 1.6", "confidence": 0.8},
             ]
         else:

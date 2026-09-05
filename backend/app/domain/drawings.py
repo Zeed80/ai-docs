@@ -15,7 +15,6 @@ from app.db.models import (
     ToolSourceEnum,
 )
 
-
 # ── Contours ──────────────────────────────────────────────────────────────────
 
 

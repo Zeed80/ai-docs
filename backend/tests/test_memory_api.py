@@ -7,17 +7,19 @@ from httpx import AsyncClient
 
 from app.db.models import MemoryFact
 
-
 # ── Search ─────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Memory search uses pg_trgm/@@ — not supported by SQLite test DB")
 async def test_memory_search_empty(client: AsyncClient):
-    resp = await client.post("/api/memory/search", json={
-        "query": "счёт от АКМЕ",
-        "limit": 10,
-    })
+    resp = await client.post(
+        "/api/memory/search",
+        json={
+            "query": "счёт от АКМЕ",
+            "limit": 10,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "hits" in data
@@ -29,10 +31,13 @@ async def test_memory_search_empty(client: AsyncClient):
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Memory search uses pg_trgm/@@ — not supported by SQLite test DB")
 async def test_memory_search_returns_structure(client: AsyncClient):
-    resp = await client.post("/api/memory/search", json={
-        "query": "аномалия поставщик",
-        "limit": 5,
-    })
+    resp = await client.post(
+        "/api/memory/search",
+        json={
+            "query": "аномалия поставщик",
+            "limit": 5,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["retrieval_mode"] == "auto_hybrid"
@@ -45,13 +50,16 @@ async def test_memory_search_returns_structure(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_store_chat_turn(client: AsyncClient):
-    resp = await client.post("/api/memory/chat-turn", json={
-        "user_text": "Покажи счета от ООО АКМЕ",
-        "assistant_text": "Нашел 3 счёта от ООО АКМЕ на сумму 50 000 руб.",
-        "session_id": "test-session-001",
-        "scope": "project",
-        "confidence": 0.8,
-    })
+    resp = await client.post(
+        "/api/memory/chat-turn",
+        json={
+            "user_text": "Покажи счета от ООО АКМЕ",
+            "assistant_text": "Нашел 3 счёта от ООО АКМЕ на сумму 50 000 руб.",
+            "session_id": "test-session-001",
+            "scope": "project",
+            "confidence": 0.8,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "id" in data
@@ -63,12 +71,15 @@ async def test_store_chat_turn(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_store_chat_turn_project_scope_requires_trusted_metadata(client: AsyncClient):
-    resp = await client.post("/api/memory/chat-turn", json={
-        "user_text": "Это проверенный факт проекта",
-        "assistant_text": "Факт можно использовать повторно.",
-        "scope": "project",
-        "metadata": {"trusted": True},
-    })
+    resp = await client.post(
+        "/api/memory/chat-turn",
+        json={
+            "user_text": "Это проверенный факт проекта",
+            "assistant_text": "Факт можно использовать повторно.",
+            "scope": "project",
+            "metadata": {"trusted": True},
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["scope"] == "project"
@@ -77,10 +88,13 @@ async def test_store_chat_turn_project_scope_requires_trusted_metadata(client: A
 
 @pytest.mark.asyncio
 async def test_store_chat_turn_minimal(client: AsyncClient):
-    resp = await client.post("/api/memory/chat-turn", json={
-        "user_text": "Привет",
-        "assistant_text": "Здравствуйте!",
-    })
+    resp = await client.post(
+        "/api/memory/chat-turn",
+        json={
+            "user_text": "Привет",
+            "assistant_text": "Здравствуйте!",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "id" in data
@@ -91,13 +105,16 @@ async def test_store_chat_turn_minimal(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_pin_memory_fact(client: AsyncClient):
-    resp = await client.post("/api/memory/pin", json={
-        "title": "Договор с ООО АКМЕ",
-        "summary": "Годовой контракт на поставку болтов, сумма 2 млн руб.",
-        "scope": "project",
-        "kind": "pinned_fact",
-        "confidence": 1.0,
-    })
+    resp = await client.post(
+        "/api/memory/pin",
+        json={
+            "title": "Договор с ООО АКМЕ",
+            "summary": "Годовой контракт на поставку болтов, сумма 2 млн руб.",
+            "scope": "project",
+            "kind": "pinned_fact",
+            "confidence": 1.0,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "id" in data
@@ -108,16 +125,22 @@ async def test_pin_memory_fact(client: AsyncClient):
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Memory search uses pg_trgm/@@ — not supported by SQLite test DB")
 async def test_pin_appears_in_search(client: AsyncClient):
-    await client.post("/api/memory/pin", json={
-        "title": "Важный факт для поиска",
-        "summary": "Тестовый pinned факт для проверки поиска памяти",
-        "scope": "project",
-    })
+    await client.post(
+        "/api/memory/pin",
+        json={
+            "title": "Важный факт для поиска",
+            "summary": "Тестовый pinned факт для проверки поиска памяти",
+            "scope": "project",
+        },
+    )
 
-    resp = await client.post("/api/memory/search", json={
-        "query": "pinned факт",
-        "limit": 20,
-    })
+    resp = await client.post(
+        "/api/memory/search",
+        json={
+            "query": "pinned факт",
+            "limit": 20,
+        },
+    )
     assert resp.status_code == 200
     assert isinstance(resp.json()["hits"], list)
 
@@ -127,10 +150,13 @@ async def test_pin_appears_in_search(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_prune_memory_no_scope(client: AsyncClient):
-    resp = await client.post("/api/memory/prune", json={
-        "scope": "session",
-        "max_age_days": 1,
-    })
+    resp = await client.post(
+        "/api/memory/prune",
+        json={
+            "scope": "session",
+            "max_age_days": 1,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "deleted" in data or "deleted_count" in data
@@ -205,7 +231,8 @@ async def test_embeddings_rebuild_is_idempotent(client: AsyncClient, db_session)
     point UUID, so the surplus rows were invisible there but made the
     "indexed" counters meaningless.
     """
-    from sqlalchemy import func, select as sa_select
+    from sqlalchemy import func
+    from sqlalchemy import select as sa_select
 
     from app.db.models import (
         Document,
@@ -224,9 +251,7 @@ async def test_embeddings_rebuild_is_idempotent(client: AsyncClient, db_session)
     )
     db_session.add(doc)
     await db_session.flush()
-    db_session.add(
-        DocumentChunk(document_id=doc.id, chunk_index=0, text="Фреза концевая Ø12")
-    )
+    db_session.add(DocumentChunk(document_id=doc.id, chunk_index=0, text="Фреза концевая Ø12"))
     await db_session.commit()
 
     body = {

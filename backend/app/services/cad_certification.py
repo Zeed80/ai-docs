@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,7 +69,7 @@ async def approve_by_drafter(
     row.status = "drafter_approved"
     row.verification = _verification_payload(result)
     row.drafter_approved_by = actor_sub
-    row.drafter_approved_at = datetime.now(timezone.utc)
+    row.drafter_approved_at = datetime.now(UTC)
     row.normcontrol_approved_by = None
     row.normcontrol_approved_at = None
     row.manifest_hash = None
@@ -83,8 +83,12 @@ async def _project_revision(
     ir: CadIR,
     result: EngineeringVerification,
 ) -> None:
-    await db.execute(delete(CadElementRecord).where(CadElementRecord.cad_ir_revision_id == revision.id))
-    await db.execute(delete(CadRelationRecord).where(CadRelationRecord.cad_ir_revision_id == revision.id))
+    await db.execute(
+        delete(CadElementRecord).where(CadElementRecord.cad_ir_revision_id == revision.id)
+    )
+    await db.execute(
+        delete(CadRelationRecord).where(CadRelationRecord.cad_ir_revision_id == revision.id)
+    )
     for entity in ir.entities:
         payload = entity.model_dump(mode="json")
         db.add(
@@ -99,47 +103,57 @@ async def _project_revision(
             )
         )
     for relation in ir.relations:
-        db.add(CadRelationRecord(
-            cad_ir_revision_id=revision.id,
-            relation_id=relation.id,
-            relation_type=f"source_graph:{relation.kind}",
-            source_element_id=relation.source_entity_id,
-            target_element_ids=relation.target_entity_ids,
-            payload=relation.model_dump(mode="json"),
-            evidence=relation.evidence,
-        ))
+        db.add(
+            CadRelationRecord(
+                cad_ir_revision_id=revision.id,
+                relation_id=relation.id,
+                relation_type=f"source_graph:{relation.kind}",
+                source_element_id=relation.source_entity_id,
+                target_element_ids=relation.target_entity_ids,
+                payload=relation.model_dump(mode="json"),
+                evidence=relation.evidence,
+            )
+        )
     graph = result.graph
     for view in graph.views:
-        db.add(CadRelationRecord(
-            cad_ir_revision_id=revision.id,
-            relation_id=view.id,
-            relation_type="view",
-            target_element_ids=view.entity_ids,
-            payload=view.model_dump(mode="json"),
-            evidence=view.evidence,
-        ))
+        db.add(
+            CadRelationRecord(
+                cad_ir_revision_id=revision.id,
+                relation_id=view.id,
+                relation_type="view",
+                target_element_ids=view.entity_ids,
+                payload=view.model_dump(mode="json"),
+                evidence=view.evidence,
+            )
+        )
     for feature in graph.features:
-        db.add(CadRelationRecord(
-            cad_ir_revision_id=revision.id,
-            relation_id=feature.id,
-            relation_type=f"feature:{feature.kind}",
-            target_element_ids=feature.entity_ids,
-            payload=feature.model_dump(mode="json"),
-            evidence=feature.evidence,
-        ))
+        db.add(
+            CadRelationRecord(
+                cad_ir_revision_id=revision.id,
+                relation_id=feature.id,
+                relation_type=f"feature:{feature.kind}",
+                target_element_ids=feature.entity_ids,
+                payload=feature.model_dump(mode="json"),
+                evidence=feature.evidence,
+            )
+        )
     for dimension in graph.dimensions:
-        db.add(CadRelationRecord(
-            cad_ir_revision_id=revision.id,
-            relation_id=f"dimension:{dimension.dimension_id}",
-            relation_type=f"dimension:{dimension.relation}",
-            source_element_id=dimension.dimension_id,
-            target_element_ids=dimension.target_entity_ids,
-            payload=dimension.model_dump(mode="json"),
-            evidence=dimension.evidence,
-        ))
+        db.add(
+            CadRelationRecord(
+                cad_ir_revision_id=revision.id,
+                relation_id=f"dimension:{dimension.dimension_id}",
+                relation_type=f"dimension:{dimension.relation}",
+                source_element_id=dimension.dimension_id,
+                target_element_ids=dimension.target_entity_ids,
+                payload=dimension.model_dump(mode="json"),
+                evidence=dimension.evidence,
+            )
+        )
     await db.flush()
     projected = await db.scalar(
-        select(func.count(CadElementRecord.id)).where(CadElementRecord.cad_ir_revision_id == revision.id)
+        select(func.count(CadElementRecord.id)).where(
+            CadElementRecord.cad_ir_revision_id == revision.id
+        )
     )
     if projected != len(ir.entities):
         raise CertificationBlocked(
@@ -162,7 +176,7 @@ async def approve_by_normcontroller(
         raise CertificationBlocked("Чертёжник и нормоконтролёр должны быть разными пользователями.")
     result = verify_for_certification(ir, row.profile)
     await _project_revision(db, revision, ir, result)
-    signed_at = datetime.now(timezone.utc)
+    signed_at = datetime.now(UTC)
     row.status = "certified"
     row.verification = _verification_payload(result)
     row.normcontrol_approved_by = actor_sub

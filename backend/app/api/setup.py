@@ -3,17 +3,17 @@
 Available only when SETUP_TOKEN is set in env and has not been used yet.
 After the first successful call the token is invalidated (flag in Redis).
 """
+
 from __future__ import annotations
 
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import get_db
-from fastapi import Depends
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -44,6 +44,7 @@ async def bootstrap_admin(
     _redis = None
     try:
         from app.utils.redis_client import get_async_redis
+
         _redis = get_async_redis()
         if await _redis.get(_BOOTSTRAP_KEY):
             raise HTTPException(status_code=403, detail="Setup token already used")
@@ -57,10 +58,13 @@ async def bootstrap_admin(
         raise HTTPException(status_code=403, detail="Invalid setup token")
 
     from app.db.models import User
+
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
     if not user:
-        raise HTTPException(status_code=404, detail=f"User with email {payload.email!r} not found. Log in first.")
+        raise HTTPException(
+            status_code=404, detail=f"User with email {payload.email!r} not found. Log in first."
+        )
 
     user.role = "admin"
     await db.commit()

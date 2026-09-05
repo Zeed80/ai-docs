@@ -107,9 +107,7 @@ async def embed_multimodal(
         vectors.extend(result["embeddings"])
 
     if len(vectors) != len(items):
-        logger.warning(
-            "vl_embedding_count_mismatch", requested=len(items), returned=len(vectors)
-        )
+        logger.warning("vl_embedding_count_mismatch", requested=len(items), returned=len(vectors))
         return None
     return vectors
 
@@ -160,9 +158,7 @@ async def rerank_candidates(
         return None
     scores = result["scores"]
     if len(scores) != len(documents):
-        logger.warning(
-            "vl_rerank_count_mismatch", requested=len(documents), returned=len(scores)
-        )
+        logger.warning("vl_rerank_count_mismatch", requested=len(documents), returned=len(scores))
         return None
     return [float(score) for score in scores]
 
@@ -171,7 +167,5 @@ async def embed_query(text: str | None = None, image: bytes | None = None) -> li
     """Embed one search query — words, a photo, or both."""
     if not text and not image:
         return None
-    vectors = await embed_multimodal(
-        [{"text": text, "image": image}], prompt=QUERY_PROMPT
-    )
+    vectors = await embed_multimodal([{"text": text, "image": image}], prompt=QUERY_PROMPT)
     return vectors[0] if vectors else None

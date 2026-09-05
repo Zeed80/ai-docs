@@ -82,9 +82,7 @@ async def test_redeem_sets_cookie(client, db_session, fake_redis):
 @pytest.mark.asyncio
 async def test_redeem_wrong_secret_rejected(client, db_session, fake_redis):
     await _seed_user(db_session)
-    enroll = (
-        await client.post("/api/auth/device-unlock/enroll", json={})
-    ).json()
+    enroll = (await client.post("/api/auth/device-unlock/enroll", json={})).json()
 
     resp = await client.post(
         "/api/auth/device-unlock/redeem",
@@ -105,9 +103,7 @@ async def test_redeem_unknown_handle_rejected(client, db_session, fake_redis):
 @pytest.mark.asyncio
 async def test_redeem_inactive_user_rejected(client, db_session, fake_redis):
     await _seed_user(db_session, active=False)
-    enroll = (
-        await client.post("/api/auth/device-unlock/enroll", json={})
-    ).json()
+    enroll = (await client.post("/api/auth/device-unlock/enroll", json={})).json()
     resp = await client.post(
         "/api/auth/device-unlock/redeem",
         json={"handle": enroll["handle"], "secret": enroll["secret"]},
@@ -118,13 +114,9 @@ async def test_redeem_inactive_user_rejected(client, db_session, fake_redis):
 @pytest.mark.asyncio
 async def test_revoke_kills_quick_login(client, db_session, fake_redis):
     await _seed_user(db_session)
-    enroll = (
-        await client.post("/api/auth/device-unlock/enroll", json={})
-    ).json()
+    enroll = (await client.post("/api/auth/device-unlock/enroll", json={})).json()
 
-    revoke = await client.post(
-        "/api/auth/device-unlock/revoke", json={"handle": enroll["handle"]}
-    )
+    revoke = await client.post("/api/auth/device-unlock/revoke", json={"handle": enroll["handle"]})
     assert revoke.status_code == 200
     assert revoke.json()["revoked"] == 1
 

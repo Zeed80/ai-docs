@@ -44,8 +44,14 @@ async def test_dry_run_cad_digitize_release(client: AsyncClient):
     assert plan["missing_skills"] == []
     step_ids = [s["step_id"] for s in plan["steps"]]
     assert step_ids == [
-        "digitize", "wait_done", "review_summary", "full_check",
-        "create_project", "draft_revision", "link_cad", "validate_release",
+        "digitize",
+        "wait_done",
+        "review_summary",
+        "full_check",
+        "create_project",
+        "draft_revision",
+        "link_cad",
+        "validate_release",
     ]
     digitize = plan["steps"][0]
     assert digitize["skill"] == "image_studio"
@@ -85,9 +91,14 @@ async def test_step_polling_until_condition(monkeypatch):
     monkeypatch.setattr("asyncio.sleep", no_sleep)
     ctx = sr._Context({})
     result = await sr._run_step(
-        {"id": "wait", "skill": "image_studio",
-         "params": {"action": "get"}, "until": "last.status == 'done'",
-         "poll_interval_s": 0, "max_polls": 10},
+        {
+            "id": "wait",
+            "skill": "image_studio",
+            "params": {"action": "get"},
+            "until": "last.status == 'done'",
+            "poll_interval_s": 0,
+            "max_polls": 10,
+        },
         ctx,
     )
     assert result["status"] == "done"

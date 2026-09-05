@@ -63,17 +63,20 @@ def router(monkeypatch):
     r._stub = stub  # type: ignore[attr-defined]
 
     recorded: list[dict] = []
-    monkeypatch.setattr(
-        telemetry, "record_call", lambda **kw: recorded.append(kw)
-    )
+    monkeypatch.setattr(telemetry, "record_call", lambda **kw: recorded.append(kw))
     r._recorded = recorded  # type: ignore[attr-defined]
     return r
 
 
-def _route(monkeypatch, task: AITask, models, *, local_only=True, allow_cloud=False, profile="balanced"):
+def _route(
+    monkeypatch, task: AITask, models, *, local_only=True, allow_cloud=False, profile="balanced"
+):
     routing = tr.TaskRouting(
-        task=task.value, models=models, profile=profile,
-        local_only=local_only, allow_cloud=allow_cloud,
+        task=task.value,
+        models=models,
+        profile=profile,
+        local_only=local_only,
+        allow_cloud=allow_cloud,
     )
     monkeypatch.setattr(tr, "get_routing_for", lambda t, _r=routing: _r)
 
@@ -155,9 +158,7 @@ import re
 from pathlib import Path
 
 INVOICES_DIR = Path(
-    os.environ.get(
-        "INVOICES_DIR", "/home/project/document-invoices-ai_codex/example-invoices"
-    )
+    os.environ.get("INVOICES_DIR", "/home/project/document-invoices-ai_codex/example-invoices")
 )
 INVOICE_JPG = INVOICES_DIR / "Графит-Гарант № 276 от 23.09.2024.jpg"
 

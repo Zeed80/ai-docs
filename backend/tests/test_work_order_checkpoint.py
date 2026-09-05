@@ -22,7 +22,6 @@ from app.domain.work_orders import (
     create_single_step_plan,
     create_work_order,
     fail_attempt,
-    transition_step,
     utcnow,
 )
 from app.tasks.work_orders import (
@@ -32,7 +31,6 @@ from app.tasks.work_orders import (
     execute_claimed_step,
     verify_completed_step,
 )
-
 
 # ── Ф4-re: heartbeat renews leases without locking the shared WorkOrder ────
 
@@ -76,8 +74,13 @@ async def test_heartbeat_step_renews_leases_without_with_for_update_on_the_order
     stop = asyncio.Event()
     task = asyncio.create_task(
         _heartbeat_step(
-            work_order_id=order_id, step_id=step_id, attempt_id=attempt_id,
-            worker_id=worker_id, stop=stop, interval_seconds=0.05, lease_seconds=120,
+            work_order_id=order_id,
+            step_id=step_id,
+            attempt_id=attempt_id,
+            worker_id=worker_id,
+            stop=stop,
+            interval_seconds=0.05,
+            lease_seconds=120,
             session_factory=factory,
         )
     )
@@ -225,8 +228,12 @@ async def test_capability_step_gets_work_order_id_auto_filled_when_the_plan_omit
         captured.update(input_data)
         return {"text": "готово"}
 
-    with patch("app.tasks.work_orders._execute_step_kind", new=AsyncMock(side_effect=_capture_input)):
-        await execute_claimed_step(step_id, attempt_id, schedule_verification=False, session_factory=factory)
+    with patch(
+        "app.tasks.work_orders._execute_step_kind", new=AsyncMock(side_effect=_capture_input)
+    ):
+        await execute_claimed_step(
+            step_id, attempt_id, schedule_verification=False, session_factory=factory
+        )
 
     assert captured["work_order_id"] == str(order_id)
     assert captured["queries"] == ["q"]  # the plan's own input is untouched
@@ -262,8 +269,12 @@ async def test_capability_step_explicit_work_order_id_is_not_overridden(test_eng
         captured.update(input_data)
         return {"text": "готово"}
 
-    with patch("app.tasks.work_orders._execute_step_kind", new=AsyncMock(side_effect=_capture_input)):
-        await execute_claimed_step(step_id, attempt_id, schedule_verification=False, session_factory=factory)
+    with patch(
+        "app.tasks.work_orders._execute_step_kind", new=AsyncMock(side_effect=_capture_input)
+    ):
+        await execute_claimed_step(
+            step_id, attempt_id, schedule_verification=False, session_factory=factory
+        )
 
     assert captured["work_order_id"] == "explicit-value"
 
@@ -294,8 +305,12 @@ async def test_agent_turn_step_does_not_get_a_work_order_id_injected(test_engine
         captured.update(input_data)
         return {"text": "готово"}
 
-    with patch("app.tasks.work_orders._execute_step_kind", new=AsyncMock(side_effect=_capture_input)):
-        await execute_claimed_step(step_id, attempt_id, schedule_verification=False, session_factory=factory)
+    with patch(
+        "app.tasks.work_orders._execute_step_kind", new=AsyncMock(side_effect=_capture_input)
+    ):
+        await execute_claimed_step(
+            step_id, attempt_id, schedule_verification=False, session_factory=factory
+        )
 
     assert "work_order_id" not in captured
 

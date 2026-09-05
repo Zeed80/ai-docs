@@ -24,12 +24,12 @@ import shutil
 import tarfile
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -69,10 +69,10 @@ class RestoreResult(BaseModel):
 
 class JobStatus(BaseModel):
     id: str
-    kind: str                 # "backup" | "restore"
-    status: str               # "running" | "done" | "error"
-    step: str | None = None   # human-readable current step
-    target: str | None = None # archive name for restore
+    kind: str  # "backup" | "restore"
+    status: str  # "running" | "done" | "error"
+    step: str | None = None  # human-readable current step
+    target: str | None = None  # archive name for restore
     started_utc: str
     finished_utc: str | None = None
     error: str | None = None
@@ -91,7 +91,7 @@ _MAX_JOBS = 20  # keep a small history; prune oldest finished beyond this
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _active_job() -> dict[str, Any] | None:
@@ -125,9 +125,7 @@ def _create_job(kind: str, target: str | None = None) -> dict[str, Any]:
         _jobs[job["id"]] = job
         # Prune finished jobs beyond the history cap (oldest first).
         finished = [
-            (j["finished_utc"] or "", j["id"])
-            for j in _jobs.values()
-            if j["status"] != "running"
+            (j["finished_utc"] or "", j["id"]) for j in _jobs.values() if j["status"] != "running"
         ]
         finished.sort()
         while len(_jobs) > _MAX_JOBS and finished:
@@ -145,8 +143,12 @@ def _update_job(job_id: str, **fields: Any) -> None:
 
 def _safe_archive_name(name: str) -> str:
     """Reject path traversal; accept only our archive naming."""
-    if "/" in name or ".." in name or not name.startswith("aiw-backup-") \
-            or not name.endswith(".tar.gz"):
+    if (
+        "/" in name
+        or ".." in name
+        or not name.startswith("aiw-backup-")
+        or not name.endswith(".tar.gz")
+    ):
         raise HTTPException(400, "Некорректное имя архива.")
     return name
 
@@ -206,7 +208,9 @@ def _tar_volume(client, volume: str, work_subdir: str, out_name: str) -> bool:
             volume: {"bind": "/src", "mode": "ro"},
             f"{PROJECT}_backups_data": {"bind": "/out", "mode": "rw"},
         },
-        remove=True, stdout=True, stderr=True,
+        remove=True,
+        stdout=True,
+        stderr=True,
     )
     return True
 
@@ -217,7 +221,7 @@ def _tar_volume(client, volume: str, work_subdir: str, out_name: str) -> bool:
 def _run_backup(job_id: str) -> None:
     """Heavy backup work — runs in a background thread (never the event loop)."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"aiw-backup-{ts}"
     work = BACKUP_DIR / name
     archive = BACKUP_DIR / f"{name}.tar.gz"
@@ -232,9 +236,17 @@ def _run_backup(job_id: str) -> None:
         _update_job(job_id, step="PostgreSQL")
         pg = _container(client, "postgres")
         code, out = pg.exec_run(
-            ["pg_dump", "-U", settings.postgres_user, "-d", settings.postgres_db,
-             "--clean", "--if-exists"],
-            stdout=True, stderr=False,
+            [
+                "pg_dump",
+                "-U",
+                settings.postgres_user,
+                "-d",
+                settings.postgres_db,
+                "--clean",
+                "--if-exists",
+            ],
+            stdout=True,
+            stderr=False,
         )
         if code == 0 and out:
             (work / "postgres_app.sql").write_bytes(out)
@@ -253,10 +265,19 @@ def _run_backup(job_id: str) -> None:
         if _tar_volume(client, f"{PROJECT}_redis_data", name, "redis_data.tar.gz"):
             components.append("redis")
 
-        (work / "manifest.json").write_text(json.dumps({
-            "name": name, "created_utc": ts, "project": PROJECT,
-            "components": components, "source": "gui",
-        }, ensure_ascii=False, indent=2))
+        (work / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "name": name,
+                    "created_utc": ts,
+                    "project": PROJECT,
+                    "components": components,
+                    "source": "gui",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
 
         # Pack into a single archive, then drop the work dir.
         _update_job(job_id, step="Упаковка архива")
@@ -268,17 +289,18 @@ def _run_backup(job_id: str) -> None:
         size = archive.stat().st_size
         logger.info("backup_created", name=name, size=size, components=components)
         _update_job(
-            job_id, status="done", step=None, finished_utc=_now(),
-            result={"name": f"{name}.tar.gz", "size_bytes": size,
-                    "components": components},
+            job_id,
+            status="done",
+            step=None,
+            finished_utc=_now(),
+            result={"name": f"{name}.tar.gz", "size_bytes": size, "components": components},
         )
     except Exception as exc:
         logger.warning("backup_failed", name=name, error=str(exc))
         # Clean up any partial output so the backups list stays clean.
         shutil.rmtree(work, ignore_errors=True)
         archive.unlink(missing_ok=True)
-        _update_job(job_id, status="error", step=None, finished_utc=_now(),
-                    error=str(exc))
+        _update_job(job_id, status="error", step=None, finished_utc=_now(), error=str(exc))
 
 
 @router.post("/backup", response_model=JobStatus, status_code=202)
@@ -289,7 +311,9 @@ async def create_backup(
     poll GET /jobs/{id} for progress and the final result."""
     job = _create_job("backup")
     threading.Thread(
-        target=_run_backup, args=(job["id"],), name=f"backup-{job['id'][:8]}",
+        target=_run_backup,
+        args=(job["id"],),
+        name=f"backup-{job['id'][:8]}",
         daemon=True,
     ).start()
     return JobStatus(**job)
@@ -334,10 +358,13 @@ async def list_backups(
     items = []
     for f in sorted(BACKUP_DIR.glob("aiw-backup-*.tar.gz"), reverse=True):
         st = f.stat()
-        items.append(BackupInfo(
-            name=f.name, size_bytes=st.st_size,
-            created_utc=datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
-        ))
+        items.append(
+            BackupInfo(
+                name=f.name,
+                size_bytes=st.st_size,
+                created_utc=datetime.fromtimestamp(st.st_mtime, UTC).isoformat(),
+            )
+        )
     return items
 
 
@@ -381,8 +408,9 @@ async def upload_backup(
         raise HTTPException(400, f"Повреждённый архив: {exc}") from exc
     logger.info("backup_uploaded", name=name, size=size)
     return BackupInfo(
-        name=name, size_bytes=size,
-        created_utc=datetime.now(timezone.utc).isoformat(),
+        name=name,
+        size_bytes=size,
+        created_utc=datetime.now(UTC).isoformat(),
     )
 
 
@@ -412,13 +440,18 @@ def _restore_volume(client, volume: str, src_rel: str) -> None:
         client.volumes.create(volume)
     client.containers.run(
         HELPER_IMAGE,
-        command=["sh", "-c",
-                 f"rm -rf /dst/* /dst/..?* 2>/dev/null; tar xzf /src/{src_rel} -C /dst"],
+        command=[
+            "sh",
+            "-c",
+            f"rm -rf /dst/* /dst/..?* 2>/dev/null; tar xzf /src/{src_rel} -C /dst",
+        ],
         volumes={
             volume: {"bind": "/dst", "mode": "rw"},
             f"{PROJECT}_backups_data": {"bind": "/src", "mode": "ro"},
         },
-        remove=True, stdout=True, stderr=True,
+        remove=True,
+        stdout=True,
+        stderr=True,
     )
 
 
@@ -454,9 +487,9 @@ def _run_restore(job_id: str, name: str) -> None:
 
         # ── Volumes: stop owner → restore → start ──
         vol_map = [
-            ("minio_data.tar.gz",  f"{PROJECT}_minio_data",  "minio"),
+            ("minio_data.tar.gz", f"{PROJECT}_minio_data", "minio"),
             ("qdrant_data.tar.gz", f"{PROJECT}_qdrant_data", "qdrant"),
-            ("redis_data.tar.gz",  f"{PROJECT}_redis_data",  "redis"),
+            ("redis_data.tar.gz", f"{PROJECT}_redis_data", "redis"),
         ]
         for fname, volume, svc in vol_map:
             if not (workdir / fname).is_file():
@@ -485,16 +518,19 @@ def _run_restore(job_id: str, name: str) -> None:
 
         logger.info("backup_restored", name=name, restored=restored, skipped=skipped)
         _update_job(
-            job_id, status="done", step=None, finished_utc=_now(),
+            job_id,
+            status="done",
+            step=None,
+            finished_utc=_now(),
             result={
-                "restored": restored, "skipped": skipped,
+                "restored": restored,
+                "skipped": skipped,
                 "note": "Рекомендуется перезапустить backend после восстановления.",
             },
         )
     except Exception as exc:
         logger.warning("restore_failed", name=name, error=str(exc))
-        _update_job(job_id, status="error", step=None, finished_utc=_now(),
-                    error=str(exc))
+        _update_job(job_id, status="error", step=None, finished_utc=_now(), error=str(exc))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -507,11 +543,20 @@ def _restore_postgres(client, sql_path: Path) -> None:
     db = settings.postgres_db
     user = settings.postgres_user
     # Terminate other sessions so --clean DROPs aren't blocked.
-    pg.exec_run([
-        "psql", "-U", user, "-d", "postgres", "-c",
-        f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-        f"WHERE datname='{db}' AND pid<>pg_backend_pid();",
-    ], stdout=False, stderr=False)
+    pg.exec_run(
+        [
+            "psql",
+            "-U",
+            user,
+            "-d",
+            "postgres",
+            "-c",
+            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            f"WHERE datname='{db}' AND pid<>pg_backend_pid();",
+        ],
+        stdout=False,
+        stderr=False,
+    )
     # Copy the dump into the container, then run psql -f against it.
     sql_bytes = sql_path.read_bytes()
     stream = _io.BytesIO()
@@ -523,7 +568,8 @@ def _restore_postgres(client, sql_path: Path) -> None:
     pg.put_archive("/tmp", stream.getvalue())
     code, out = pg.exec_run(
         ["sh", "-c", f"psql -U {user} -d {db} -f /tmp/restore.sql"],
-        stdout=True, stderr=True,
+        stdout=True,
+        stderr=True,
     )
     pg.exec_run(["rm", "-f", "/tmp/restore.sql"], stdout=False, stderr=False)
     if code != 0:
@@ -548,7 +594,9 @@ async def restore_backup(
         raise HTTPException(404, "Архив не найден.")
     job = _create_job("restore", target=name)
     threading.Thread(
-        target=_run_restore, args=(job["id"], name),
-        name=f"restore-{job['id'][:8]}", daemon=True,
+        target=_run_restore,
+        args=(job["id"], name),
+        name=f"restore-{job['id'][:8]}",
+        daemon=True,
     ).start()
     return JobStatus(**job)

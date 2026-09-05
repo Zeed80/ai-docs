@@ -43,8 +43,13 @@ def test_confidential_task_rejects_cloud_model(mem_store):
     with pytest.raises(ValueError, match="non-local"):
         tr.save_task_routing(
             AITask.INVOICE_OCR,
-            tr.TaskRouting(task="invoice_ocr", models=[cloud_key], profile="anti_hallucination",
-                           local_only=False, allow_cloud=True),
+            tr.TaskRouting(
+                task="invoice_ocr",
+                models=[cloud_key],
+                profile="anti_hallucination",
+                local_only=False,
+                allow_cloud=True,
+            ),
         )
     # Default stays local-only.
     assert tr.get_routing_for(AITask.INVOICE_OCR).local_only is True
@@ -55,8 +60,13 @@ def test_confidential_task_accepts_local_and_locks_policy(mem_store):
     local_key = next(k for k in tr.known_model_keys() if k.endswith("_ollama"))
     saved = tr.save_task_routing(
         AITask.INVOICE_OCR,
-        tr.TaskRouting(task="invoice_ocr", models=[local_key], profile="anti_hallucination",
-                       local_only=False, allow_cloud=True),
+        tr.TaskRouting(
+            task="invoice_ocr",
+            models=[local_key],
+            profile="anti_hallucination",
+            local_only=False,
+            allow_cloud=True,
+        ),
     )
     assert saved.local_only is True
     assert saved.allow_cloud is False
@@ -102,8 +112,10 @@ def test_migration_from_ai_config(mem_store, monkeypatch):
         ai_settings,
         "get_ai_config",
         lambda: {
-            "model_ocr": "gemma4:e4b", "model_ocr_provider": "ollama",
-            "model_reasoning": "claude-sonnet-4-6", "model_reasoning_provider": "anthropic",
+            "model_ocr": "gemma4:e4b",
+            "model_ocr_provider": "ollama",
+            "model_reasoning": "claude-sonnet-4-6",
+            "model_reasoning_provider": "anthropic",
         },
     )
     result = tr.migrate_from_ai_config()
@@ -167,9 +179,7 @@ async def test_routing_change_survives_a_restart(mem_store, db_session, monkeypa
     assert base.models[0] != chosen
     tr.save_task_routing(
         task,
-        base.model_copy(
-            update={"models": [chosen, *[m for m in base.models if m != chosen]]}
-        ),
+        base.model_copy(update={"models": [chosen, *[m for m in base.models if m != chosen]]}),
     )
     await model_runtime_store.persist_routing_snapshot(db_session, [task.value])
     await db_session.commit()

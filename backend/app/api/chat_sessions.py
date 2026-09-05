@@ -90,11 +90,7 @@ async def get_sessions(
     sessions = await list_chat_sessions(db, user_key=user_key)
     fallback_titles = await _fallback_titles(
         db,
-        [
-            session.id
-            for session in sessions
-            if session.title.strip().lower() == "новый чат"
-        ],
+        [session.id for session in sessions if session.title.strip().lower() == "новый чат"],
     )
     return [
         ChatSessionRead(

@@ -5,25 +5,25 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-MONEY_KEYS = frozenset({
-    "amount",
-    "total_amount",
-    "subtotal",
-    "subtotal_amount",
-    "tax_amount",
-    "unit_price",
-    "line_total",
-    "paid_amount",
-    "open_invoices_amount",
-})
+MONEY_KEYS = frozenset(
+    {
+        "amount",
+        "total_amount",
+        "subtotal",
+        "subtotal_amount",
+        "tax_amount",
+        "unit_price",
+        "line_total",
+        "paid_amount",
+        "open_invoices_amount",
+    }
+)
 
 
 def is_money_key(key: str) -> bool:
     normalized = key.lower()
     return (
-        normalized in MONEY_KEYS
-        or normalized.endswith("_amount")
-        or normalized.endswith("_price")
+        normalized in MONEY_KEYS or normalized.endswith("_amount") or normalized.endswith("_price")
     )
 
 

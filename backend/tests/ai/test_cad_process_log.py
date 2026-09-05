@@ -1,5 +1,6 @@
-import pytest
 import uuid
+
+import pytest
 
 from app.ai.cad_process_log import (
     install_cad_process_recorder,
@@ -22,16 +23,12 @@ async def test_process_events_reach_installed_recorder_and_reset():
 
     token = install_cad_process_recorder(recorder)
     try:
-        await record_cad_process_event(
-            "kernel.compile", "started", "compile", {"sha256": "abc"}
-        )
+        await record_cad_process_event("kernel.compile", "started", "compile", {"sha256": "abc"})
     finally:
         reset_cad_process_recorder(token)
     await record_cad_process_event("kernel.compile", "completed", "ignored")
 
-    assert events == [
-        ("kernel.compile", "started", "compile", {"sha256": "abc"})
-    ]
+    assert events == [("kernel.compile", "started", "compile", {"sha256": "abc"})]
 
 
 @pytest.mark.asyncio
@@ -58,9 +55,7 @@ async def test_persisted_process_log_tracks_sequence_and_only_terminal_failure(
         async def commit(self):
             return None
 
-    monkeypatch.setattr(
-        "app.db.session._get_session_factory", lambda: lambda: Session()
-    )
+    monkeypatch.setattr("app.db.session._get_session_factory", lambda: lambda: Session())
     gen_id = uuid.uuid4()
 
     await _append_cad_process_event(
@@ -80,9 +75,7 @@ async def test_persisted_process_log_tracks_sequence_and_only_terminal_failure(
             },
         },
     )
-    await _append_cad_process_event(
-        gen_id, "pipeline", "failed", "terminal", {"terminal": True}
-    )
+    await _append_cad_process_event(gen_id, "pipeline", "failed", "terminal", {"terminal": True})
 
     process = gen.params["cad_process"]
     assert [event["sequence"] for event in process["events"]] == [1, 2]
@@ -110,9 +103,11 @@ async def test_load_cad_partial_spec_assigns_stable_feature_ids(monkeypatch):
     class Gen:
         params = {
             "cad_partial_spec": {
-                "main_view": {"chamfers": [
-                    {"size_mm": 1, "angle_deg": 45, "location": "left_end"},
-                ]},
+                "main_view": {
+                    "chamfers": [
+                        {"size_mm": 1, "angle_deg": 45, "location": "left_end"},
+                    ]
+                },
             },
         }
 
@@ -128,9 +123,7 @@ async def test_load_cad_partial_spec_assigns_stable_feature_ids(monkeypatch):
         async def get(self, _model, _key):
             return gen
 
-    monkeypatch.setattr(
-        "app.db.session._get_session_factory", lambda: lambda: Session()
-    )
+    monkeypatch.setattr("app.db.session._get_session_factory", lambda: lambda: Session())
 
     spec = await _load_cad_partial_spec(uuid.uuid4())
     assert spec["main_view"]["chamfers"][0]["id"] == "0:chamfers:0"
@@ -150,8 +143,6 @@ async def test_load_cad_partial_spec_tolerates_missing_generation(monkeypatch):
         async def get(self, _model, _key):
             return None
 
-    monkeypatch.setattr(
-        "app.db.session._get_session_factory", lambda: lambda: Session()
-    )
+    monkeypatch.setattr("app.db.session._get_session_factory", lambda: lambda: Session())
 
     assert await _load_cad_partial_spec(uuid.uuid4()) == {}

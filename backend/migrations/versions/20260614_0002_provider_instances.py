@@ -48,9 +48,7 @@ def upgrade() -> None:
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint("name", name="uq_provider_instances_name"),
         )
-        op.create_index(
-            "ix_provider_instances_kind", "provider_instances", ["kind"]
-        )
+        op.create_index("ix_provider_instances_kind", "provider_instances", ["kind"])
 
 
 def downgrade() -> None:

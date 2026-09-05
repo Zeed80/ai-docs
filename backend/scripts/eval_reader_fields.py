@@ -36,9 +36,7 @@ def corpus_provenance(rows: list[dict]) -> dict:
     for row in rows:
         source = str(row.get("source") or "unknown")
         by_source[source] = by_source.get(source, 0) + 1
-    real_sheets = sum(
-        count for source, count in by_source.items() if source in _REAL_SOURCES
-    )
+    real_sheets = sum(count for source, count in by_source.items() if source in _REAL_SOURCES)
     return {
         "sheets": len(rows),
         "real_sheets": real_sheets,
@@ -160,14 +158,19 @@ async def _run(drawings: pathlib.Path, out: pathlib.Path, *, min_real_sheets: in
             "spec_read": bool(spec),
         }
         for field, scorer in (
-            ("diameters", _numeric_recall), ("fits", _set_recall),
+            ("diameters", _numeric_recall),
+            ("fits", _set_recall),
             ("roughness", _numeric_recall),
         ):
             hits, total = scorer(truth[field], found[field])
             totals[field][0] += hits
             totals[field][1] += total
-            row[field] = {"found": hits, "expected": total,
-                          "truth": truth[field], "read": found[field]}
+            row[field] = {
+                "found": hits,
+                "expected": total,
+                "truth": truth[field],
+                "read": found[field],
+            }
         results.append(row)
         print(
             f"{name:32s} {elapsed:6.1f}s  "
@@ -178,8 +181,11 @@ async def _run(drawings: pathlib.Path, out: pathlib.Path, *, min_real_sheets: in
         )
 
     summary = {
-        field: {"found": hits, "expected": total,
-                "recall": round(hits / total, 3) if total else None}
+        field: {
+            "found": hits,
+            "expected": total,
+            "recall": round(hits / total, 3) if total else None,
+        }
         for field, (hits, total) in totals.items()
     }
     provenance = corpus_provenance(results)
@@ -204,8 +210,7 @@ async def _run(drawings: pathlib.Path, out: pathlib.Path, *, min_real_sheets: in
     print(f"записано в {out}")
     if not promotion_eligible:
         print(
-            f"PROMOTION BLOCKED: real sheets {provenance['real_sheets']}"
-            f"/{min_real_sheets}",
+            f"PROMOTION BLOCKED: real sheets {provenance['real_sheets']}/{min_real_sheets}",
             flush=True,
         )
     return 0 if promotion_eligible else 1

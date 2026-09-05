@@ -26,9 +26,7 @@ def main() -> int:
     args = parser.parse_args()
     payload = json.loads(args.manifest.read_text())
     baseline = json.loads(args.baseline.read_text()) if args.baseline else None
-    safety_report = (
-        json.loads(args.safety_report.read_text()) if args.safety_report else None
-    )
+    safety_report = json.loads(args.safety_report.read_text()) if args.safety_report else None
     evidence_reports = [json.loads(path.read_text()) for path in args.evidence_report]
     report = evaluate_class_balanced_manifest(
         payload,

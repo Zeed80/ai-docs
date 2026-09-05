@@ -4,17 +4,17 @@ Revision ID: 1b2c3d4e5f60
 Revises: 0a1b2c3d4e5f
 Create Date: 2026-04-28 00:00:00.000000
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-
 revision: str = "1b2c3d4e5f60"
-down_revision: Union[str, None] = "0a1b2c3d4e5f"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0a1b2c3d4e5f"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -33,19 +33,47 @@ def upgrade() -> None:
         sa.Column("activated_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_technology_learning_rules_rule_type"), "technology_learning_rules", ["rule_type"])
-    op.create_index(op.f("ix_technology_learning_rules_entity_type"), "technology_learning_rules", ["entity_type"])
-    op.create_index(op.f("ix_technology_learning_rules_field_name"), "technology_learning_rules", ["field_name"])
-    op.create_index(op.f("ix_technology_learning_rules_status"), "technology_learning_rules", ["status"])
+    op.create_index(
+        op.f("ix_technology_learning_rules_rule_type"), "technology_learning_rules", ["rule_type"]
+    )
+    op.create_index(
+        op.f("ix_technology_learning_rules_entity_type"),
+        "technology_learning_rules",
+        ["entity_type"],
+    )
+    op.create_index(
+        op.f("ix_technology_learning_rules_field_name"), "technology_learning_rules", ["field_name"]
+    )
+    op.create_index(
+        op.f("ix_technology_learning_rules_status"), "technology_learning_rules", ["status"]
+    )
 
 
 def downgrade() -> None:
-    op.drop_index(op.f("ix_technology_learning_rules_status"), table_name="technology_learning_rules")
-    op.drop_index(op.f("ix_technology_learning_rules_field_name"), table_name="technology_learning_rules")
-    op.drop_index(op.f("ix_technology_learning_rules_entity_type"), table_name="technology_learning_rules")
-    op.drop_index(op.f("ix_technology_learning_rules_rule_type"), table_name="technology_learning_rules")
+    op.drop_index(
+        op.f("ix_technology_learning_rules_status"), table_name="technology_learning_rules"
+    )
+    op.drop_index(
+        op.f("ix_technology_learning_rules_field_name"), table_name="technology_learning_rules"
+    )
+    op.drop_index(
+        op.f("ix_technology_learning_rules_entity_type"), table_name="technology_learning_rules"
+    )
+    op.drop_index(
+        op.f("ix_technology_learning_rules_rule_type"), table_name="technology_learning_rules"
+    )
     op.drop_table("technology_learning_rules")

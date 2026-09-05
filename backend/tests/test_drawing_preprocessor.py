@@ -1,10 +1,8 @@
 """Tests for drawing_preprocessor: CLAHE, deskew, view segmentation, PDF pages."""
 
 import io
-import math
-import pytest
-from unittest.mock import patch, MagicMock
 
+import pytest
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -12,6 +10,7 @@ from unittest.mock import patch, MagicMock
 def _make_png(width: int = 400, height: int = 300, color: tuple = (240, 240, 240)) -> bytes:
     """Generate a minimal solid-color PNG for testing."""
     from PIL import Image, ImageDraw
+
     img = Image.new("RGB", (width, height), color)
     draw = ImageDraw.Draw(img)
     # Draw a simple border and a circle to give the image some content
@@ -25,6 +24,7 @@ def _make_png(width: int = 400, height: int = 300, color: tuple = (240, 240, 240
 def _make_multiview_png(width: int = 800, height: int = 600) -> bytes:
     """Generate a PNG with visible separator lines for segmentation testing."""
     from PIL import Image, ImageDraw
+
     img = Image.new("RGB", (width, height), (240, 240, 240))
     draw = ImageDraw.Draw(img)
     # Vertical separator at mid-width
@@ -44,13 +44,15 @@ def _make_multiview_png(width: int = 800, height: int = 600) -> bytes:
 
 def test_viewcrop_defaults():
     from app.ai.drawing_preprocessor import ViewCrop
+
     vc = ViewCrop(view_type="front", image_bytes=b"data", bbox=(0, 0, 100, 100), label="front")
     assert vc.confidence == 1.0
     assert vc.view_type == "front"
 
 
 def test_preprocessed_drawing_defaults():
-    from app.ai.drawing_preprocessor import PreprocessedDrawing, ViewCrop
+    from app.ai.drawing_preprocessor import PreprocessedDrawing
+
     pd = PreprocessedDrawing(full_image=b"img", title_block=None)
     assert pd.views == []
     assert pd.dpi_effective == 200
@@ -62,7 +64,8 @@ def test_preprocessed_drawing_defaults():
 
 
 def test_preprocess_returns_preprocessed_drawing():
-    from app.ai.drawing_preprocessor import preprocess_drawing_image, PreprocessedDrawing
+    from app.ai.drawing_preprocessor import PreprocessedDrawing, preprocess_drawing_image
+
     png = _make_png()
     result = preprocess_drawing_image(png, fmt="png")
     assert isinstance(result, PreprocessedDrawing)
@@ -72,6 +75,7 @@ def test_preprocess_returns_preprocessed_drawing():
 
 def test_preprocess_full_image_is_png():
     from app.ai.drawing_preprocessor import preprocess_drawing_image
+
     png = _make_png()
     result = preprocess_drawing_image(png, fmt="png")
     # PNG magic bytes
@@ -81,6 +85,7 @@ def test_preprocess_full_image_is_png():
 def test_preprocess_single_view_fallback():
     """When segmentation finds no separators, returns one 'full' view."""
     from app.ai.drawing_preprocessor import preprocess_drawing_image
+
     png = _make_png(200, 150)  # Small image, no separator lines
     result = preprocess_drawing_image(png, fmt="png")
     assert len(result.views) >= 1
@@ -89,6 +94,7 @@ def test_preprocess_single_view_fallback():
 
 def test_preprocess_max_views_respected():
     from app.ai.drawing_preprocessor import preprocess_drawing_image
+
     png = _make_multiview_png()
     result = preprocess_drawing_image(png, fmt="png", max_views=2)
     assert len(result.views) <= 2
@@ -96,6 +102,7 @@ def test_preprocess_max_views_respected():
 
 def test_preprocess_title_block_detected():
     from app.ai.drawing_preprocessor import preprocess_drawing_image
+
     png = _make_png(600, 400)
     result = preprocess_drawing_image(png, fmt="png")
     # Title block crop should be non-empty bytes
@@ -105,7 +112,8 @@ def test_preprocess_title_block_detected():
 
 def test_preprocess_bad_bytes_returns_fallback():
     """Invalid bytes must not raise — returns PreprocessedDrawing with raw fallback."""
-    from app.ai.drawing_preprocessor import preprocess_drawing_image, PreprocessedDrawing
+    from app.ai.drawing_preprocessor import PreprocessedDrawing, preprocess_drawing_image
+
     result = preprocess_drawing_image(b"not_an_image", fmt="png")
     assert isinstance(result, PreprocessedDrawing)
     assert len(result.views) >= 1
@@ -116,7 +124,9 @@ def test_preprocess_bad_bytes_returns_fallback():
 
 def test_adaptive_scale_upsizes_small_image():
     from PIL import Image
-    from app.ai.drawing_preprocessor import _adaptive_scale, _MIN_LONG_EDGE
+
+    from app.ai.drawing_preprocessor import _MIN_LONG_EDGE, _adaptive_scale
+
     img = Image.new("RGB", (500, 300))
     scaled = _adaptive_scale(img)
     assert max(scaled.size) >= _MIN_LONG_EDGE
@@ -124,7 +134,9 @@ def test_adaptive_scale_upsizes_small_image():
 
 def test_adaptive_scale_no_op_for_optimal_image():
     from PIL import Image
-    from app.ai.drawing_preprocessor import _adaptive_scale, _TARGET_LONG_EDGE
+
+    from app.ai.drawing_preprocessor import _TARGET_LONG_EDGE, _adaptive_scale
+
     img = Image.new("RGB", (_TARGET_LONG_EDGE, 1500))
     scaled = _adaptive_scale(img, _TARGET_LONG_EDGE)
     assert scaled.size == img.size
@@ -132,7 +144,9 @@ def test_adaptive_scale_no_op_for_optimal_image():
 
 def test_adaptive_scale_downsizes_giant_image():
     from PIL import Image
-    from app.ai.drawing_preprocessor import _adaptive_scale, _MAX_LONG_EDGE
+
+    from app.ai.drawing_preprocessor import _MAX_LONG_EDGE, _adaptive_scale
+
     img = Image.new("RGB", (8000, 5000))
     scaled = _adaptive_scale(img)
     assert max(scaled.size) <= _MAX_LONG_EDGE
@@ -143,7 +157,9 @@ def test_adaptive_scale_downsizes_giant_image():
 
 def test_detect_title_block_returns_bytes_or_none():
     from PIL import Image
+
     from app.ai.drawing_preprocessor import _detect_title_block
+
     img = Image.new("RGB", (800, 600), (240, 240, 240))
     result = _detect_title_block(img)
     assert result is None or isinstance(result, bytes)
@@ -151,10 +167,13 @@ def test_detect_title_block_returns_bytes_or_none():
 
 def test_detect_title_block_crop_dimensions():
     from PIL import Image
+
     from app.ai.drawing_preprocessor import (
-        _detect_title_block, _img_to_png_bytes,
-        _TITLE_BLOCK_HEIGHT_RATIO, _TITLE_BLOCK_WIDTH_RATIO,
+        _TITLE_BLOCK_HEIGHT_RATIO,
+        _TITLE_BLOCK_WIDTH_RATIO,
+        _detect_title_block,
     )
+
     img = Image.new("RGB", (1000, 800), (240, 240, 240))
     result = _detect_title_block(img)
     if result:
@@ -170,14 +189,18 @@ def test_detect_title_block_crop_dimensions():
 
 def test_cluster_positions_empty():
     import numpy as np
+
     from app.ai.drawing_preprocessor import _cluster_positions
+
     result = _cluster_positions(np.array([]))
     assert result == []
 
 
 def test_cluster_positions_groups_nearby():
     import numpy as np
+
     from app.ai.drawing_preprocessor import _cluster_positions
+
     # Three nearby positions should merge into one cluster
     positions = np.array([100, 102, 104, 200, 202])
     result = _cluster_positions(positions, threshold=10)
@@ -191,10 +214,11 @@ def test_cluster_positions_groups_nearby():
 
 def test_assign_view_labels_first_is_front():
     from app.ai.drawing_preprocessor import _assign_view_labels
+
     rects = [
-        (0, 0, 400, 300, 120000),    # largest = front
-        (400, 0, 200, 150, 30000),   # upper-right = isometric
-        (0, 300, 200, 150, 30000),   # lower-left
+        (0, 0, 400, 300, 120000),  # largest = front
+        (400, 0, 200, 150, 30000),  # upper-right = isometric
+        (0, 300, 200, 150, 30000),  # lower-left
     ]
     labels = _assign_view_labels(rects, sheet_w=600, sheet_h=450)
     assert labels[0] == "front"
@@ -202,9 +226,10 @@ def test_assign_view_labels_first_is_front():
 
 def test_assign_view_labels_upper_right_is_isometric():
     from app.ai.drawing_preprocessor import _assign_view_labels
+
     rects = [
-        (0, 0, 400, 300, 120000),     # front
-        (500, 10, 200, 150, 30000),   # upper-right
+        (0, 0, 400, 300, 120000),  # front
+        (500, 10, 200, 150, 30000),  # upper-right
     ]
     labels = _assign_view_labels(rects, sheet_w=700, sheet_h=500)
     assert labels[1] == "isometric"
@@ -215,12 +240,14 @@ def test_assign_view_labels_upper_right_is_isometric():
 
 def test_estimate_dpi_reasonable_range():
     from app.ai.drawing_preprocessor import _estimate_dpi
+
     dpi = _estimate_dpi(4677, 6614)  # A1 at 200 DPI
     assert 150 <= dpi <= 250
 
 
 def test_estimate_dpi_clamped():
     from app.ai.drawing_preprocessor import _estimate_dpi
+
     assert _estimate_dpi(100, 100) >= 72
     assert _estimate_dpi(50000, 50000) <= 600
 
@@ -230,6 +257,7 @@ def test_estimate_dpi_clamped():
 
 def test_preprocess_pdf_pages_invalid_returns_empty():
     from app.ai.drawing_preprocessor import preprocess_pdf_pages
+
     result = preprocess_pdf_pages(b"not a pdf", max_pages=3)
     assert result == []
 
@@ -241,7 +269,8 @@ def test_preprocess_pdf_pages_invalid_returns_empty():
 def test_preprocess_pdf_pages_real_pdf():
     """If fitz is available, test with a minimal valid PDF."""
     import fitz
-    from app.ai.drawing_preprocessor import preprocess_pdf_pages, ViewCrop
+
+    from app.ai.drawing_preprocessor import ViewCrop, preprocess_pdf_pages
 
     # Create a minimal PDF with one blank page
     doc = fitz.open()
@@ -266,10 +295,12 @@ def test_preprocess_pdf_pages_real_pdf():
 )
 def test_detect_skew_angle_near_zero_for_upright_image():
     import numpy as np
+
     from app.ai.drawing_preprocessor import _detect_skew_angle
+
     # Horizontal lines → angle near 0
     img = np.ones((200, 400, 3), dtype=np.uint8) * 240
-    img[100, :] = 0   # horizontal line
+    img[100, :] = 0  # horizontal line
     angle = _detect_skew_angle(img)
     assert abs(angle) < 5.0
 
@@ -284,6 +315,7 @@ def test_detect_skew_angle_near_zero_for_upright_image():
 def test_segment_views_multiview_image():
     """Multi-view PNG with separator lines should produce >1 view."""
     from app.ai.drawing_preprocessor import preprocess_drawing_image
+
     png = _make_multiview_png(width=1200, height=900)
     result = preprocess_drawing_image(png, fmt="png", max_views=6)
     # With visible separator lines, should find multiple views or fall back to 1

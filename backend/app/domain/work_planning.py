@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -118,7 +117,7 @@ class PlannedStep(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def executor_is_complete(self) -> "PlannedStep":
+    def executor_is_complete(self) -> PlannedStep:
         if self.kind == "capability" and (not self.capability or not self.action):
             raise ValueError("capability step requires capability and action")
         if self.kind == "decompose":
@@ -191,8 +190,8 @@ async def generate_capability_plan(
     planner_error_context: str | None = None,
 ) -> PlannedWork:
     """Ask the reasoning model for a bounded DAG grounded in the live manifest."""
-    from app.ai.ollama_client import generate_json
     from app.ai.model_resolver import get_reasoning_model
+    from app.ai.ollama_client import generate_json
 
     model_config = get_reasoning_model()
     # Ф5 (AGENT_AUTONOMY_ROADMAP.md): self-learning connector hints — only
@@ -203,6 +202,7 @@ async def generate_capability_plan(
     connector_hints: list[dict[str, Any]] = []
     if is_exploratory(order):
         from app.ai.connectors import find_connector_hints
+
         connector_hints = await find_connector_hints(order.objective)
     prompt = json.dumps(
         {
@@ -401,7 +401,9 @@ async def plan_work_order(
             payload={"error": str(exc)[:1000]},
         )
         if use_model:
-            metadata["planner_fallback_streak"] = int(metadata.get("planner_fallback_streak", 0)) + 1
+            metadata["planner_fallback_streak"] = (
+                int(metadata.get("planner_fallback_streak", 0)) + 1
+            )
             metadata["last_planner_error"] = fallback_reason
             order.metadata_ = metadata
 

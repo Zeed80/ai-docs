@@ -36,14 +36,12 @@ def upgrade() -> None:
         if "base_family" not in cols:
             op.add_column(
                 "lora_training_runs",
-                sa.Column("base_family", sa.String(30), nullable=False,
-                          server_default="qwen"),
+                sa.Column("base_family", sa.String(30), nullable=False, server_default="qwen"),
             )
         if "control_paths" not in cols:
             op.add_column(
                 "lora_training_runs",
-                sa.Column("control_paths", sa.JSON(), nullable=False,
-                          server_default="[]"),
+                sa.Column("control_paths", sa.JSON(), nullable=False, server_default="[]"),
             )
         if "started_at" not in cols:
             op.add_column(
@@ -60,8 +58,7 @@ def upgrade() -> None:
         if "base_family" not in _columns(bind, "comfyui_workflows"):
             op.add_column(
                 "comfyui_workflows",
-                sa.Column("base_family", sa.String(30), nullable=False,
-                          server_default="qwen"),
+                sa.Column("base_family", sa.String(30), nullable=False, server_default="qwen"),
             )
 
 

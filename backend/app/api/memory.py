@@ -3,9 +3,10 @@
 import json
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, delete, func, or_, select
@@ -15,8 +16,6 @@ from app.api.web_search import WebSearchRequest, execute_web_search
 from app.auth.acting import get_effective_user
 from app.auth.jwt import require_human_role
 from app.auth.models import UserInfo, UserRole
-import structlog
-
 from app.db.models import (
     ChatMessage,
     ChatMessageAttachment,
@@ -26,8 +25,8 @@ from app.db.models import (
     EvidenceSpan,
     KnowledgeEdge,
     KnowledgeNode,
-    MemoryFact,
     MemoryEmbeddingRecord,
+    MemoryFact,
     MessageRating,
 )
 from app.db.session import get_db
@@ -38,9 +37,9 @@ from app.domain.graph import (
     MemoryEmbeddingRebuildRequest,
     MemoryEmbeddingRebuildResponse,
     MemoryEmbeddingStatsResponse,
+    MemoryEvidenceItem,
     MemoryExplainRequest,
     MemoryExplainResponse,
-    MemoryEvidenceItem,
     MemoryQueryRequest,
     MemoryQueryResponse,
     MemoryReindexItem,
@@ -201,7 +200,7 @@ async def list_learned_memory(
     if not include_inactive:
         stmt = stmt.where(
             MemoryFact.status == "active",
-            or_(MemoryFact.expires_at.is_(None), MemoryFact.expires_at > datetime.now(timezone.utc)),
+            or_(MemoryFact.expires_at.is_(None), MemoryFact.expires_at > datetime.now(UTC)),
         )
     return list(
         (
@@ -220,7 +219,7 @@ async def verify_learned_memory(
     user: UserInfo = Depends(get_effective_user),
 ) -> MemoryFact:
     fact = await _get_owned_learned_fact(db, fact_id, user)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     fact.status = "active"
     fact.confidence = payload.confidence
     fact.last_verified_at = now
@@ -239,7 +238,7 @@ async def dispute_learned_memory(
 ) -> MemoryFact:
     fact = await _get_owned_learned_fact(db, fact_id, user)
     fact.status = "disputed"
-    fact.expires_at = datetime.now(timezone.utc)
+    fact.expires_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(fact)
     return fact
@@ -253,7 +252,7 @@ async def supersede_learned_memory(
     user: UserInfo = Depends(get_effective_user),
 ) -> MemoryFact:
     old = await _get_owned_learned_fact(db, fact_id, user)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     provenance = {
         "supersedes": str(old.id),
         "reason": payload.reason,
@@ -302,7 +301,9 @@ def _normalize_chat_turn_scope(scope: str | None, metadata: dict | None) -> tupl
     """
     normalized_metadata = dict(metadata or {})
     requested_scope = (scope or "session").strip() or "session"
-    trusted = normalized_metadata.get("trusted") is True or normalized_metadata.get("promoted") is True
+    trusted = (
+        normalized_metadata.get("trusted") is True or normalized_metadata.get("promoted") is True
+    )
     if requested_scope in {"project", "global"} and not trusted:
         normalized_metadata["requested_scope"] = requested_scope
         normalized_metadata["scope_policy"] = "chat_turn_demoted_to_session"
@@ -341,9 +342,7 @@ async def search_memory(
         query_payload = search_payload.model_copy(update={"query": query_text})
         pattern = f"%{query_text}%"
         hits.extend(
-            await _search_memory_facts(
-                db, query_payload, pattern, department_id=user.department_id
-            )
+            await _search_memory_facts(db, query_payload, pattern, department_id=user.department_id)
         )
         hits.extend(await _search_graph_nodes(db, query_payload, pattern))
         hits.extend(await _search_sql_memory(db, query_payload, pattern, remaining=internal_limit))
@@ -367,7 +366,7 @@ async def search_memory(
 
     hits = _sort_memory_hits(payload.query, hits)
     total_available = len(hits)
-    page = hits[offset: offset + page_limit]
+    page = hits[offset : offset + page_limit]
     next_offset = offset + len(page)
     next_cursor = str(next_offset) if next_offset < total_available else None
     return MemorySearchResponse(
@@ -463,11 +462,13 @@ async def propose_memory_promotion(
         **(payload.metadata or {}),
     }
     if source_fact:
-        metadata.update({
-            "source_fact_id": str(source_fact.id),
-            "source_scope": source_fact.scope,
-            "source_kind": source_fact.kind,
-        })
+        metadata.update(
+            {
+                "source_fact_id": str(source_fact.id),
+                "source_scope": source_fact.scope,
+                "source_kind": source_fact.kind,
+            }
+        )
     fact = MemoryFact(
         scope="project",
         kind="proposed_fact",
@@ -541,48 +542,66 @@ async def evaluate_memory_promotion(
     metadata = dict(fact.metadata_ or {})
     checks: list[dict] = []
 
-    has_provenance = bool(metadata.get("source_fact_id") or metadata.get("source_document_id") or metadata.get("url"))
-    checks.append({
-        "name": "provenance",
-        "passed": has_provenance,
-        "message": "Has source_fact_id/source_document_id/url" if has_provenance else "Missing provenance",
-    })
+    has_provenance = bool(
+        metadata.get("source_fact_id") or metadata.get("source_document_id") or metadata.get("url")
+    )
+    checks.append(
+        {
+            "name": "provenance",
+            "passed": has_provenance,
+            "message": "Has source_fact_id/source_document_id/url"
+            if has_provenance
+            else "Missing provenance",
+        }
+    )
 
     summary_ok = 20 <= len((fact.summary or "").strip()) <= 4000
-    checks.append({
-        "name": "summary_length",
-        "passed": summary_ok,
-        "message": "Summary length is within bounds" if summary_ok else "Summary is too short or too long",
-    })
+    checks.append(
+        {
+            "name": "summary_length",
+            "passed": summary_ok,
+            "message": "Summary length is within bounds"
+            if summary_ok
+            else "Summary is too short or too long",
+        }
+    )
 
     confidence_ok = fact.confidence >= 0.5
-    checks.append({
-        "name": "confidence",
-        "passed": confidence_ok,
-        "message": "Confidence is acceptable" if confidence_ok else "Confidence is below 0.5",
-    })
+    checks.append(
+        {
+            "name": "confidence",
+            "passed": confidence_ok,
+            "message": "Confidence is acceptable" if confidence_ok else "Confidence is below 0.5",
+        }
+    )
 
-    duplicate_query = select(MemoryFact).where(
-        MemoryFact.id != fact.id,
-        MemoryFact.scope == "project",
-        MemoryFact.kind.in_(["verified_fact", "pinned_fact"]),
-        MemoryFact.title == fact.title,
-    ).limit(1)
+    duplicate_query = (
+        select(MemoryFact)
+        .where(
+            MemoryFact.id != fact.id,
+            MemoryFact.scope == "project",
+            MemoryFact.kind.in_(["verified_fact", "pinned_fact"]),
+            MemoryFact.title == fact.title,
+        )
+        .limit(1)
+    )
     duplicate = (await db.execute(duplicate_query)).scalars().first()
-    checks.append({
-        "name": "duplicate_title",
-        "passed": duplicate is None,
-        "message": "No verified duplicate title" if duplicate is None else f"Duplicate: {duplicate.id}",
-    })
+    checks.append(
+        {
+            "name": "duplicate_title",
+            "passed": duplicate is None,
+            "message": "No verified duplicate title"
+            if duplicate is None
+            else f"Duplicate: {duplicate.id}",
+        }
+    )
 
     passed = all(bool(item["passed"]) for item in checks)
-    diagnostics = [] if passed else [
-        str(item["name"]) for item in checks if not item["passed"]
-    ]
+    diagnostics = [] if passed else [str(item["name"]) for item in checks if not item["passed"]]
     metadata["last_evaluation"] = {
         "passed": passed,
         "checks": checks,
-        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+        "evaluated_at": datetime.now(UTC).isoformat(),
     }
     fact.metadata_ = metadata
     await db.commit()
@@ -610,17 +629,19 @@ async def decide_memory_promotion(
     if fact.kind not in {"proposed_fact", "verified_fact", "rejected_fact"}:
         raise HTTPException(status_code=400, detail="Memory fact is not a promotion")
     metadata = dict(fact.metadata_ or {})
-    metadata.update({
-        "promotion_status": "approved" if payload.approved else "rejected",
-        "decided_by": payload.decided_by,
-        "decision_comment": payload.comment,
-        "decided_at": datetime.now(timezone.utc).isoformat(),
-    })
+    metadata.update(
+        {
+            "promotion_status": "approved" if payload.approved else "rejected",
+            "decided_by": payload.decided_by,
+            "decision_comment": payload.comment,
+            "decided_at": datetime.now(UTC).isoformat(),
+        }
+    )
     fact.metadata_ = metadata
     if payload.approved:
         fact.kind = "verified_fact"
         fact.pinned = True
-        fact.last_verified_at = datetime.now(timezone.utc)
+        fact.last_verified_at = datetime.now(UTC)
     else:
         fact.kind = "rejected_fact"
         fact.pinned = False
@@ -735,8 +756,7 @@ async def discover_web_sources(
             "url": result.url,
             "supplier_name": payload.supplier_name,
             "source_type": payload.source_type,
-            "rationale": payload.rationale
-            or f"Discovered by web search for: {query}",
+            "rationale": payload.rationale or f"Discovered by web search for: {query}",
             "domains": [domain] if domain else [],
             "discovery_query": query,
             "discovery_provider": search.provider,
@@ -781,16 +801,18 @@ async def decide_web_source(
     if not fact or fact.kind != "web_source":
         raise HTTPException(status_code=404, detail="Web source proposal not found")
     metadata = dict(fact.metadata_ or {})
-    metadata.update({
-        "source_status": "approved" if payload.approved else "rejected",
-        "decided_by": payload.decided_by,
-        "decision_comment": payload.comment,
-        "decided_at": datetime.now(timezone.utc).isoformat(),
-    })
+    metadata.update(
+        {
+            "source_status": "approved" if payload.approved else "rejected",
+            "decided_by": payload.decided_by,
+            "decision_comment": payload.comment,
+            "decided_at": datetime.now(UTC).isoformat(),
+        }
+    )
     fact.metadata_ = metadata
     fact.pinned = bool(payload.approved)
     if payload.approved:
-        fact.last_verified_at = datetime.now(timezone.utc)
+        fact.last_verified_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(fact)
     return fact
@@ -821,7 +843,7 @@ async def prune_memory_facts(
     Only non-pinned facts are removed. Protected kinds (pinned_fact, verified_fact)
     are never deleted regardless of scope/kinds filter.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=payload.older_than_days)
+    cutoff = datetime.now(UTC) - timedelta(days=payload.older_than_days)
     protected_kinds = {"pinned_fact", "verified_fact"}
     safe_kinds = [k for k in payload.kinds if k not in protected_kinds]
     if not safe_kinds:
@@ -830,10 +852,14 @@ async def prune_memory_facts(
             detail=f"None of the requested kinds are pruneable. Protected: {sorted(protected_kinds)}",
         )
 
-    stmt = select(func.count()).select_from(MemoryFact).where(
-        MemoryFact.kind.in_(safe_kinds),
-        MemoryFact.pinned.is_(False),
-        MemoryFact.created_at < cutoff,
+    stmt = (
+        select(func.count())
+        .select_from(MemoryFact)
+        .where(
+            MemoryFact.kind.in_(safe_kinds),
+            MemoryFact.pinned.is_(False),
+            MemoryFact.created_at < cutoff,
+        )
     )
     if payload.scope:
         stmt = stmt.where(MemoryFact.scope == payload.scope)
@@ -940,15 +966,23 @@ async def _search_graph_nodes(
     rank_summary = _fts_rank(KnowledgeNode.summary, payload.query)
     if rank_title is not None and rank_summary is not None:
         rank_expr = rank_title + rank_summary
-        node_rows = (await db.execute(
-            node_query.add_columns(rank_expr.label("r"))
-            .order_by(rank_expr.desc()).limit(payload.limit)
-        )).all()
+        node_rows = (
+            await db.execute(
+                node_query.add_columns(rank_expr.label("r"))
+                .order_by(rank_expr.desc())
+                .limit(payload.limit)
+            )
+        ).all()
     else:
         node_rows = [
-            (n, None) for n in (await db.execute(
-                node_query.order_by(KnowledgeNode.created_at.desc()).limit(payload.limit)
-            )).scalars().all()
+            (n, None)
+            for n in (
+                await db.execute(
+                    node_query.order_by(KnowledgeNode.created_at.desc()).limit(payload.limit)
+                )
+            )
+            .scalars()
+            .all()
         ]
     for node, r in node_rows:
         overlap = _simple_score(payload.query, " ".join([node.title, node.summary or ""]))
@@ -1021,7 +1055,7 @@ async def _search_memory_facts(
     hits: list[MemorySearchHit] = []
     query = select(MemoryFact).where(
         MemoryFact.status == "active",
-        or_(MemoryFact.expires_at.is_(None), MemoryFact.expires_at > datetime.now(timezone.utc)),
+        or_(MemoryFact.expires_at.is_(None), MemoryFact.expires_at > datetime.now(UTC)),
         or_(
             MemoryFact.title.ilike(pattern),
             MemoryFact.summary.ilike(pattern),
@@ -1098,36 +1132,44 @@ async def _search_vector_memory(
 
     hits: list[MemorySearchHit] = []
     if chunk_ids:
-        rows = (await db.execute(
-            select(DocumentChunk).where(DocumentChunk.id.in_(chunk_ids))
-        )).scalars().all()
+        rows = (
+            (await db.execute(select(DocumentChunk).where(DocumentChunk.id.in_(chunk_ids))))
+            .scalars()
+            .all()
+        )
         for chunk in rows:
-            hits.append(MemorySearchHit(
-                kind="chunk",
-                id=chunk.id,
-                title=f"Document chunk #{chunk.chunk_index}",
-                summary=chunk.text[:500],
-                score=score_by_id.get(str(chunk.id), 0.0),
-                source="vector",
-                vector_score=score_by_id.get(str(chunk.id), 0.0),
-                source_document_id=chunk.document_id,
-            ))
+            hits.append(
+                MemorySearchHit(
+                    kind="chunk",
+                    id=chunk.id,
+                    title=f"Document chunk #{chunk.chunk_index}",
+                    summary=chunk.text[:500],
+                    score=score_by_id.get(str(chunk.id), 0.0),
+                    source="vector",
+                    vector_score=score_by_id.get(str(chunk.id), 0.0),
+                    source_document_id=chunk.document_id,
+                )
+            )
     if evidence_ids:
-        rows_e = (await db.execute(
-            select(EvidenceSpan).where(EvidenceSpan.id.in_(evidence_ids))
-        )).scalars().all()
+        rows_e = (
+            (await db.execute(select(EvidenceSpan).where(EvidenceSpan.id.in_(evidence_ids))))
+            .scalars()
+            .all()
+        )
         for evidence in rows_e:
-            hits.append(MemorySearchHit(
-                kind="evidence",
-                id=evidence.id,
-                title=evidence.field_name or "Evidence span",
-                summary=evidence.text[:500],
-                score=score_by_id.get(str(evidence.id), 0.0),
-                source="vector",
-                vector_score=score_by_id.get(str(evidence.id), 0.0),
-                source_document_id=evidence.document_id,
-                evidence=EvidenceSpanOut.model_validate(evidence),
-            ))
+            hits.append(
+                MemorySearchHit(
+                    kind="evidence",
+                    id=evidence.id,
+                    title=evidence.field_name or "Evidence span",
+                    summary=evidence.text[:500],
+                    score=score_by_id.get(str(evidence.id), 0.0),
+                    source="vector",
+                    vector_score=score_by_id.get(str(evidence.id), 0.0),
+                    source_document_id=evidence.document_id,
+                    evidence=EvidenceSpanOut.model_validate(evidence),
+                )
+            )
     return hits
 
 
@@ -1234,7 +1276,9 @@ def _rrf_fuse(hits: list[MemorySearchHit]) -> list[MemorySearchHit]:
     """
     # 1. Dedupe within each branch, keeping the best per-branch raw score.
     branch_best: dict[str, dict[tuple[str, uuid.UUID], float]] = {
-        "text": {}, "vector": {}, "graph": {},
+        "text": {},
+        "vector": {},
+        "graph": {},
     }
     for hit in hits:
         key = (hit.kind, hit.id)
@@ -1313,26 +1357,40 @@ async def _search_sql_memory(
         rows = (await db.execute(stmt.order_by(rank_expr.desc()).limit(remaining))).all()
         for chunk, r in rows:
             score = float(r or 0.0)
-            hits.append(MemorySearchHit(
-                kind="chunk", id=chunk.id,
-                title=f"Document chunk #{chunk.chunk_index}",
-                summary=chunk.text[:500], score=score, source="sql",
-                text_score=score, source_document_id=chunk.document_id,
-            ))
+            hits.append(
+                MemorySearchHit(
+                    kind="chunk",
+                    id=chunk.id,
+                    title=f"Document chunk #{chunk.chunk_index}",
+                    summary=chunk.text[:500],
+                    score=score,
+                    source="sql",
+                    text_score=score,
+                    source_document_id=chunk.document_id,
+                )
+            )
     else:
         stmt = select(DocumentChunk).where(chunk_cond)
         if payload.document_id:
             stmt = stmt.where(DocumentChunk.document_id == payload.document_id)
-        for chunk in (await db.execute(
-            stmt.order_by(DocumentChunk.created_at.desc()).limit(remaining)
-        )).scalars().all():
+        for chunk in (
+            (await db.execute(stmt.order_by(DocumentChunk.created_at.desc()).limit(remaining)))
+            .scalars()
+            .all()
+        ):
             score = _simple_score(payload.query, chunk.text)
-            hits.append(MemorySearchHit(
-                kind="chunk", id=chunk.id,
-                title=f"Document chunk #{chunk.chunk_index}",
-                summary=chunk.text[:500], score=score, source="sql",
-                text_score=score, source_document_id=chunk.document_id,
-            ))
+            hits.append(
+                MemorySearchHit(
+                    kind="chunk",
+                    id=chunk.id,
+                    title=f"Document chunk #{chunk.chunk_index}",
+                    summary=chunk.text[:500],
+                    score=score,
+                    source="sql",
+                    text_score=score,
+                    source_document_id=chunk.document_id,
+                )
+            )
 
     # ── Evidence spans ──
     remaining = remaining - len(hits)
@@ -1349,19 +1407,28 @@ async def _search_sql_memory(
             if payload.document_id:
                 stmt = stmt.where(EvidenceSpan.document_id == payload.document_id)
             ev_rows = [
-                (e, None) for e in (await db.execute(
-                    stmt.order_by(EvidenceSpan.created_at.desc()).limit(remaining)
-                )).scalars().all()
+                (e, None)
+                for e in (
+                    await db.execute(stmt.order_by(EvidenceSpan.created_at.desc()).limit(remaining))
+                )
+                .scalars()
+                .all()
             ]
         for evidence, r in ev_rows:
             score = float(r) if r is not None else _simple_score(payload.query, evidence.text)
-            hits.append(MemorySearchHit(
-                kind="evidence", id=evidence.id,
-                title=evidence.field_name or "Evidence span",
-                summary=evidence.text[:500], score=score, source="sql",
-                text_score=score, source_document_id=evidence.document_id,
-                evidence=EvidenceSpanOut.model_validate(evidence),
-            ))
+            hits.append(
+                MemorySearchHit(
+                    kind="evidence",
+                    id=evidence.id,
+                    title=evidence.field_name or "Evidence span",
+                    summary=evidence.text[:500],
+                    score=score,
+                    source="sql",
+                    text_score=score,
+                    source_document_id=evidence.document_id,
+                    evidence=EvidenceSpanOut.model_validate(evidence),
+                )
+            )
 
     # ── Chat messages ──
     remaining = remaining - len(hits)
@@ -1391,11 +1458,17 @@ async def _search_sql_memory(
             r = row[1] if rank_expr is not None else None
             content = message.content or ""
             score = float(r) if r is not None else _simple_score(payload.query, content)
-            hits.append(MemorySearchHit(
-                kind="chat_message", id=message.id,
-                title=f"Chat {message.role}",
-                summary=content[:500], score=score, source="chat", text_score=score,
-            ))
+            hits.append(
+                MemorySearchHit(
+                    kind="chat_message",
+                    id=message.id,
+                    title=f"Chat {message.role}",
+                    summary=content[:500],
+                    score=score,
+                    source="chat",
+                    text_score=score,
+                )
+            )
     return hits
 
 
@@ -1566,12 +1639,9 @@ async def rebuild_memory_embeddings(
         MemoryEmbeddingRecord.collection_name == payload.collection_name
     )
     if payload.document_id:
-        known_query = known_query.where(
-            MemoryEmbeddingRecord.document_id == payload.document_id
-        )
+        known_query = known_query.where(MemoryEmbeddingRecord.document_id == payload.document_id)
     known: dict[str, MemoryEmbeddingRecord] = {
-        record.point_id: record
-        for record in (await db.execute(known_query)).scalars().all()
+        record.point_id: record for record in (await db.execute(known_query)).scalars().all()
     }
 
     def _requeue(existing: MemoryEmbeddingRecord, template: MemoryEmbeddingRecord) -> None:
@@ -1634,8 +1704,7 @@ async def get_memory_embedding_stats(
 
     profile = get_active_embedding_profile()
     result = await db.execute(
-        select(MemoryEmbeddingRecord.status, func.count())
-        .group_by(MemoryEmbeddingRecord.status)
+        select(MemoryEmbeddingRecord.status, func.count()).group_by(MemoryEmbeddingRecord.status)
     )
     counts = {status: int(count) for status, count in result.all()}
     return MemoryEmbeddingStatsResponse(
@@ -1981,20 +2050,22 @@ async def rate_message(
     # какой инструмент вёл себя не так.
     if req.rating == -1 and req.comment:
         try:
-            db.add(MemoryFact(
-                scope=f"session:{req.session_id}"[:80],
-                kind="correction",
-                title="Замечание к ответу агента"[:500],
-                summary=req.comment[:2000],
-                source="user_rating",
-                confidence=1.0,
-                provenance={
-                    "session_id": req.session_id,
-                    "message_id": req.message_id,
-                    "tools_used": req.tools_used or [],
-                },
-                metadata_={"tools_used": req.tools_used or []},
-            ))
+            db.add(
+                MemoryFact(
+                    scope=f"session:{req.session_id}"[:80],
+                    kind="correction",
+                    title="Замечание к ответу агента"[:500],
+                    summary=req.comment[:2000],
+                    source="user_rating",
+                    confidence=1.0,
+                    provenance={
+                        "session_id": req.session_id,
+                        "message_id": req.message_id,
+                        "tools_used": req.tools_used or [],
+                    },
+                    metadata_={"tools_used": req.tools_used or []},
+                )
+            )
             await db.commit()
         except Exception as exc:  # noqa: BLE001
             logger.warning("rating_memory_fact_failed", error=str(exc))
@@ -2003,7 +2074,9 @@ async def rate_message(
     if req.rating == -1 and req.comment and req.tools_used:
         try:
             import httpx as _httpx
+
             from app.ai.gateway_config import gateway_config as _gw
+
             tools_label = ", ".join(req.tools_used[:3])
             await _httpx.AsyncClient(timeout=5.0).post(
                 f"{_gw.backend_url}/api/technology/learning-rules",
@@ -2032,7 +2105,6 @@ async def rate_message(
 @router.get("/tool-ratings")
 async def get_tool_ratings(db: AsyncSession = Depends(get_db)) -> dict:
     """Aggregated thumbs up/down per tool — used by admin UI."""
-    from sqlalchemy import case
     result = await db.execute(
         select(
             MessageRating.tools_used,
@@ -2043,7 +2115,7 @@ async def get_tool_ratings(db: AsyncSession = Depends(get_db)) -> dict:
 
     agg: dict[str, dict[str, int]] = {}
     for tools_used, rating in rows:
-        for tool in (tools_used or []):
+        for tool in tools_used or []:
             if tool not in agg:
                 agg[tool] = {"up": 0, "down": 0}
             if rating > 0:

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 # Codes that stop a send until a human explicitly overrides it. Everything else
 # is advisory: "внешний домен" is the normal case for supplier mail and must
@@ -28,7 +28,7 @@ BLOCKING_CODES = frozenset({"sensitive_content", "lookalike_domain"})
 @dataclass
 class RiskFlagData:
     code: str
-    severity: str          # "info" | "warning" | "error"
+    severity: str  # "info" | "warning" | "error"
     message: str
     can_override: bool = True
     details: dict = field(default_factory=dict)
@@ -39,8 +39,15 @@ class RiskFlagData:
 
 
 _ATTACHMENT_WORDS = (
-    "во вложении", "прилагаю", "прилагаем", "в приложении", "см. вложение",
-    "смотрите вложение", "attached", "attachment", "вложение:",
+    "во вложении",
+    "прилагаю",
+    "прилагаем",
+    "в приложении",
+    "см. вложение",
+    "смотрите вложение",
+    "attached",
+    "attachment",
+    "вложение:",
 )
 
 # Деньги — это ЧИСЛО с валютой, а не слово «руб» где-то в тексте. Подстрочный
@@ -148,7 +155,7 @@ def detect_lookalike_domain(recipients: list[str], known: set[str]) -> RiskFlagD
 
 
 def detect_promised_attachment(body: str, attachment_count: int) -> RiskFlagData | None:
-    """"Во вложении счёт" with nothing attached."""
+    """ "Во вложении счёт" with nothing attached."""
     if attachment_count:
         return None
     lowered = strip_quoted(body).lower()
@@ -220,7 +227,9 @@ def detect_language_mismatch(body: str, recipients: list[str]) -> RiskFlagData |
     return None
 
 
-def detect_first_time_recipient(recipients: list[str], known_correspondents: set[str]) -> RiskFlagData | None:
+def detect_first_time_recipient(
+    recipients: list[str], known_correspondents: set[str]
+) -> RiskFlagData | None:
     unseen = [a for a in recipients if a.strip().lower() not in known_correspondents]
     if not unseen:
         return None
@@ -236,8 +245,8 @@ def detect_stale_reply(parent_sent_at: datetime | None, days: int = 90) -> RiskF
     if parent_sent_at is None:
         return None
     if parent_sent_at.tzinfo is None:
-        parent_sent_at = parent_sent_at.replace(tzinfo=timezone.utc)
-    age = datetime.now(timezone.utc) - parent_sent_at
+        parent_sent_at = parent_sent_at.replace(tzinfo=UTC)
+    age = datetime.now(UTC) - parent_sent_at
     if age > timedelta(days=days):
         return RiskFlagData(
             code="stale_reply",
@@ -291,14 +300,13 @@ def evaluate_draft_data(draft_data: dict, ctx: DraftRiskInput) -> list[RiskFlagD
         flags.append(detect_stale_reply(ctx.parent_sent_at))
     if ctx.supplier_email:
         if not any(ctx.supplier_email.lower() in a.lower() for a in recipients):
-            flags.append(RiskFlagData(
-                code="recipient_mismatch",
-                severity="warning",
-                message=(
-                    f"Получатель не совпадает с email поставщика "
-                    f"({ctx.supplier_email})"
-                ),
-            ))
+            flags.append(
+                RiskFlagData(
+                    code="recipient_mismatch",
+                    severity="warning",
+                    message=(f"Получатель не совпадает с email поставщика ({ctx.supplier_email})"),
+                )
+            )
     return [f for f in flags if f is not None]
 
 
@@ -325,19 +333,27 @@ async def collect_risk_input(db, draft_data: dict) -> DraftRiskInput:
     lowered = _recipient_addresses(data)
     if lowered:
         seen = (
-            await db.execute(
-                select(func.lower(EmailMessage.from_address)).where(
-                    func.lower(EmailMessage.from_address).in_(lowered)
+            (
+                await db.execute(
+                    select(func.lower(EmailMessage.from_address)).where(
+                        func.lower(EmailMessage.from_address).in_(lowered)
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         parties = (
-            await db.execute(
-                select(func.lower(Party.contact_email)).where(
-                    func.lower(Party.contact_email).in_(lowered)
+            (
+                await db.execute(
+                    select(func.lower(Party.contact_email)).where(
+                        func.lower(Party.contact_email).in_(lowered)
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         ctx.known_correspondents = {a for a in [*seen, *parties] if a}
 
     raw_parent = data.get("in_reply_to_message_id")
@@ -375,16 +391,24 @@ def collect_risk_input_sync(db, draft_data: dict) -> DraftRiskInput:
 
     lowered = _recipient_addresses(data)
     if lowered:
-        seen = db.execute(
-            select(func.lower(EmailMessage.from_address)).where(
-                func.lower(EmailMessage.from_address).in_(lowered)
+        seen = (
+            db.execute(
+                select(func.lower(EmailMessage.from_address)).where(
+                    func.lower(EmailMessage.from_address).in_(lowered)
+                )
             )
-        ).scalars().all()
-        parties = db.execute(
-            select(func.lower(Party.contact_email)).where(
-                func.lower(Party.contact_email).in_(lowered)
+            .scalars()
+            .all()
+        )
+        parties = (
+            db.execute(
+                select(func.lower(Party.contact_email)).where(
+                    func.lower(Party.contact_email).in_(lowered)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         ctx.known_correspondents = {a for a in [*seen, *parties] if a}
 
     raw_parent = data.get("in_reply_to_message_id")

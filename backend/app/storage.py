@@ -1,7 +1,6 @@
 """MinIO object storage client — upload, download, presigned URLs."""
 
 import io
-from urllib.parse import urlparse
 
 import structlog
 from minio import Minio

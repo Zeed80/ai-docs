@@ -7,25 +7,25 @@ from pathlib import Path
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.db.base import Base
-from app.db.models import (
-    KnowledgeEdge,
-    KnowledgeNode,
-    ManufacturingNormEstimate,
-    ManufacturingOperation,
-    ManufacturingOperationTemplate,
-    ManufacturingProcessPlan,
-    ManufacturingResource,
-    ManufacturingCheckResult,
-    TechnologyCorrection,
-    TechnologyLearningRule,
-)
 from app.api.technology import (
     _build_process_plan_checks,
     _draft_operations,
     _estimate_operation_norm,
     _learning_suggestion,
     _operation_type,
+)
+from app.db.base import Base
+from app.db.models import (
+    KnowledgeEdge,
+    KnowledgeNode,
+    ManufacturingCheckResult,
+    ManufacturingNormEstimate,
+    ManufacturingOperation,
+    ManufacturingOperationTemplate,
+    ManufacturingProcessPlan,
+    ManufacturingResource,
+    TechnologyCorrection,
+    TechnologyLearningRule,
 )
 
 

@@ -103,9 +103,7 @@ SECTION_CATALOG: list[SectionGroup] = [
             SectionItem(key="canonical", label="Канонизация", href="/canonical"),
             SectionItem(key="search", label="Поиск", href="/search"),
             SectionItem(key="ntd", label="НТД", href="/settings/ntd"),
-            SectionItem(
-                key="normalization", label="Нормализация", href="/settings/norm-cards"
-            ),
+            SectionItem(key="normalization", label="Нормализация", href="/settings/norm-cards"),
         ],
     ),
     SectionGroup(
@@ -140,12 +138,7 @@ ALL_SECTION_KEYS: frozenset[str] = frozenset(
 # Keys an admin may assign via the GUI: everything except admin-only entries and
 # the always-on base sections.
 ASSIGNABLE_SECTION_KEYS: frozenset[str] = (
-    frozenset(
-        item.key
-        for group in SECTION_CATALOG
-        for item in group.items
-        if not item.admin_only
-    )
+    frozenset(item.key for group in SECTION_CATALOG for item in group.items if not item.admin_only)
     - BASE_SECTION_KEYS
 )
 
@@ -154,9 +147,7 @@ def _is_admin(roles: Iterable) -> bool:
     return any(str(getattr(r, "value", r)) == "admin" for r in roles)
 
 
-def visible_section_keys(
-    roles: Iterable, section_access: Iterable[str] | None
-) -> list[str]:
+def visible_section_keys(roles: Iterable, section_access: Iterable[str] | None) -> list[str]:
     """Resolve the set of section keys a user may see and use.
 
     Returns a sorted list. Admins get every section; everyone gets the base

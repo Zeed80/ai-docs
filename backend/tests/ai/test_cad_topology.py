@@ -37,11 +37,13 @@ def test_degenerate_specks_are_dropped():
     # A near-zero-length fragment is recognition noise the validator would flag
     # GEOM_DEGENERATE; consolidation drops it so it never becomes an IR entity
     # or an un-actionable review item. A real segment survives alongside it.
-    out, stats = consolidate_entities([
-        _seg(0, 0, 0.5, 0.5),   # ~0.7px — degenerate
-        _seg(10, 10, 10, 11),   # 1px — degenerate
-        _seg(0, 100, 200, 100),  # real
-    ])
+    out, stats = consolidate_entities(
+        [
+            _seg(0, 0, 0.5, 0.5),  # ~0.7px — degenerate
+            _seg(10, 10, 10, 11),  # 1px — degenerate
+            _seg(0, 100, 200, 100),  # real
+        ]
+    )
     assert stats["dropped_degenerate"] == 2
     assert len(out) == 1
     assert out[0].type == "segment"
@@ -60,11 +62,13 @@ def test_exact_duplicate_across_bucket_boundary_is_dropped():
 
 
 def test_overlapping_duplicates_collapse():
-    out, _ = consolidate_entities([
-        _seg(0, 50, 100, 50),
-        _seg(40, 50.5, 140, 50.5),
-        _seg(90, 50, 200, 50),
-    ])
+    out, _ = consolidate_entities(
+        [
+            _seg(0, 50, 100, 50),
+            _seg(40, 50.5, 140, 50.5),
+            _seg(90, 50, 200, 50),
+        ]
+    )
     assert len(out) == 1
     seg = out[0]
     assert seg.p1.x == pytest.approx(0, abs=2)
@@ -104,28 +108,34 @@ def test_dash_dot_run_recognized_as_axis():
 def test_irregular_broken_line_not_a_dash_pattern():
     # A wall broken by a single wide doorway gap is TWO real segments, not a
     # dash pattern — one huge gap breaks the regularity test.
-    out, stats = consolidate_entities([
-        _seg(0, 0, 100, 0),
-        _seg(400, 0, 500, 0),
-    ])
+    out, stats = consolidate_entities(
+        [
+            _seg(0, 0, 100, 0),
+            _seg(400, 0, 500, 0),
+        ]
+    )
     assert stats["dash_lines"] == 0
     assert all(e.line_class == "contour" for e in out)
     assert len(out) == 2
 
 
 def test_perpendicular_segments_do_not_merge():
-    out, _ = consolidate_entities([
-        _seg(0, 0, 100, 0),
-        _seg(100, 0, 100, 100),
-    ])
+    out, _ = consolidate_entities(
+        [
+            _seg(0, 0, 100, 0),
+            _seg(100, 0, 100, 100),
+        ]
+    )
     assert len(out) == 2
 
 
 def test_parallel_but_offset_segments_do_not_merge():
-    out, _ = consolidate_entities([
-        _seg(0, 0, 100, 0),
-        _seg(0, 8, 100, 8),  # a table border 8px away — separate stroke
-    ])
+    out, _ = consolidate_entities(
+        [
+            _seg(0, 0, 100, 0),
+            _seg(0, 8, 100, 8),  # a table border 8px away — separate stroke
+        ]
+    )
     assert len(out) == 2
 
 
@@ -135,10 +145,14 @@ def test_polygonal_circle_chain_becomes_circle():
     for i in range(n):
         a0 = 2 * math.pi * i / n
         a1 = 2 * math.pi * (i + 1) / n
-        ring.append(_seg(
-            cx + r * math.cos(a0), cy + r * math.sin(a0),
-            cx + r * math.cos(a1), cy + r * math.sin(a1),
-        ))
+        ring.append(
+            _seg(
+                cx + r * math.cos(a0),
+                cy + r * math.sin(a0),
+                cx + r * math.cos(a1),
+                cy + r * math.sin(a1),
+            )
+        )
     out, stats = consolidate_entities(ring)
     assert stats["arcs_fitted"] == 1
     circles = [e for e in out if e.type == "circle"]
@@ -155,10 +169,14 @@ def test_arc_chain_becomes_arc():
     for i in range(n):  # a 120-degree sweep
         a0 = math.radians(10 * i)
         a1 = math.radians(10 * (i + 1))
-        pieces.append(_seg(
-            cx + r * math.cos(a0), cy + r * math.sin(a0),
-            cx + r * math.cos(a1), cy + r * math.sin(a1),
-        ))
+        pieces.append(
+            _seg(
+                cx + r * math.cos(a0),
+                cy + r * math.sin(a0),
+                cx + r * math.cos(a1),
+                cy + r * math.sin(a1),
+            )
+        )
     out, stats = consolidate_entities(pieces)
     assert stats["arcs_fitted"] == 1
     arcs = [e for e in out if e.type == "arc"]
@@ -170,8 +188,10 @@ def test_rectangle_is_not_refit_into_circle():
     # Rectangle corners sit exactly on the circumcircle — edge midpoints
     # do not. The chain must stay segments.
     rect = [
-        _seg(0, 0, 200, 0), _seg(200, 0, 200, 120),
-        _seg(200, 120, 0, 120), _seg(0, 120, 0, 0),
+        _seg(0, 0, 200, 0),
+        _seg(200, 0, 200, 120),
+        _seg(200, 120, 0, 120),
+        _seg(0, 120, 0, 0),
     ]
     out, stats = consolidate_entities(rect)
     assert stats["arcs_fitted"] == 0
@@ -187,10 +207,23 @@ def test_non_segment_entities_pass_through():
 
 
 def test_merged_segment_inherits_anchor_metadata():
-    out, _ = consolidate_entities([
-        _seg(0, 0, 200, 0, line_class="axis", width_class="thin", confidence=0.9, origin="neural"),
-        _seg(202, 0, 240, 0, line_class="contour", width_class="main", confidence=0.5, origin="cv"),
-    ])
+    out, _ = consolidate_entities(
+        [
+            _seg(
+                0, 0, 200, 0, line_class="axis", width_class="thin", confidence=0.9, origin="neural"
+            ),
+            _seg(
+                202,
+                0,
+                240,
+                0,
+                line_class="contour",
+                width_class="main",
+                confidence=0.5,
+                origin="cv",
+            ),
+        ]
+    )
     assert len(out) == 1
     seg = out[0]
     # anchor = the longest member
@@ -201,6 +234,7 @@ def test_merged_segment_inherits_anchor_metadata():
 
 def _arc(cx, cy, r, a0, a1, **kw):
     from app.ai.cad_ir.schema import Arc
+
     return Arc(center=Point(x=cx, y=cy), radius=r, start_angle=a0, end_angle=a1, **kw)
 
 
@@ -220,11 +254,13 @@ def test_cocircular_arc_fragments_merge_to_circle():
 def test_cocircular_arcs_with_true_gap_stay_arcs():
     # Two arcs on one circle separated by ~90-degree gaps (a shaft with
     # keyway breaks) must merge runs but NOT close into a full circle.
-    out, _ = consolidate_entities([
-        _arc(100, 100, 40, 0, 80),
-        _arc(100, 100, 40, 81, 170),
-        _arc(100, 100, 40, 260, 350),
-    ])
+    out, _ = consolidate_entities(
+        [
+            _arc(100, 100, 40, 0, 80),
+            _arc(100, 100, 40, 81, 170),
+            _arc(100, 100, 40, 260, 350),
+        ]
+    )
     types = sorted(e.type for e in out)
     assert types == ["arc", "arc"]
     spans = sorted(round(abs(e.end_angle - e.start_angle)) for e in out)
@@ -232,10 +268,12 @@ def test_cocircular_arcs_with_true_gap_stay_arcs():
 
 
 def test_concentric_arcs_different_radius_untouched():
-    out, _ = consolidate_entities([
-        _arc(100, 100, 30, 0, 120),
-        _arc(100, 100, 60, 0, 120),
-    ])
+    out, _ = consolidate_entities(
+        [
+            _arc(100, 100, 30, 0, 120),
+            _arc(100, 100, 60, 0, 120),
+        ]
+    )
     assert sorted(e.radius for e in out) == [30, 60]
 
 
@@ -249,8 +287,8 @@ def test_single_segment_untouched():
 def test_fit_chain_ellipse_accepts_ellipse_rejects_polygon_and_circle():
     import math
 
-    from app.ai.cad_recognize.topology import _fit_chain_ellipse
     from app.ai.cad_ir.schema import Point, Segment
+    from app.ai.cad_recognize.topology import _fit_chain_ellipse
 
     def _chain(points):
         # members are only used for style/anchor; geometry comes from pts

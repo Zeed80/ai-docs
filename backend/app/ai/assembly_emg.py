@@ -52,12 +52,14 @@ def assembly_as_graph(
         GraphNode(id="document-set:root", type="DocumentSet", name="Assembly document set"),
         GraphNode(id="product:assembly", type="Product", name=name),
     ]
-    edges = [GraphEdge(
-        id="contains:root-assembly",
-        type="contains",
-        source_id="document-set:root",
-        target_id="product:assembly",
-    )]
+    edges = [
+        GraphEdge(
+            id="contains:root-assembly",
+            type="contains",
+            source_id="document-set:root",
+            target_id="product:assembly",
+        )
+    ]
     assertions: list[Assertion] = []
     required: list[str] = []
     for predicate, value, impacts in (
@@ -67,16 +69,18 @@ def assembly_as_graph(
         if value is None:
             continue
         assertion_id = _stable("assertion", f"product:assembly:{predicate}")
-        assertions.append(Assertion(
-            id=assertion_id,
-            subject_id="product:assembly",
-            predicate=predicate,
-            value=ExactValue(kind="exact", value=value),
-            origin="human",
-            assurance="human_approved",
-            confidence=1.0,
-            impacts=impacts,
-        ))
+        assertions.append(
+            Assertion(
+                id=assertion_id,
+                subject_id="product:assembly",
+                predicate=predicate,
+                value=ExactValue(kind="exact", value=value),
+                origin="human",
+                assurance="human_approved",
+                confidence=1.0,
+                impacts=impacts,
+            )
+        )
         required.append(assertion_id)
     definitions: dict[str, str] = {}
     instance_nodes: dict[str, str] = {}
@@ -88,38 +92,44 @@ def assembly_as_graph(
             _stable("component-definition", component_designation),
         )
         if not any(item.id == definition_id for item in nodes):
-            nodes.append(GraphNode(
-                id=definition_id,
-                type="Component",
-                name=component_designation,
-            ))
+            nodes.append(
+                GraphNode(
+                    id=definition_id,
+                    type="Component",
+                    name=component_designation,
+                )
+            )
         instance_id = _stable("component-instance", key)
         instance_nodes[key] = instance_id
         operation_id = _stable("operation-instance", key)
-        nodes.extend([
-            GraphNode(id=instance_id, type="Component", name=key),
-            GraphNode(id=operation_id, type="BuildOperation", name=f"Instance {key}"),
-        ])
-        edges.extend([
-            GraphEdge(
-                id=_stable("contains-instance", key),
-                type="contains",
-                source_id="product:assembly",
-                target_id=instance_id,
-            ),
-            GraphEdge(
-                id=_stable("instance-of", key),
-                type="instance_of",
-                source_id=instance_id,
-                target_id=definition_id,
-            ),
-            GraphEdge(
-                id=_stable("operation-depends", key),
-                type="depends_on",
-                source_id=operation_id,
-                target_id=instance_id,
-            ),
-        ])
+        nodes.extend(
+            [
+                GraphNode(id=instance_id, type="Component", name=key),
+                GraphNode(id=operation_id, type="BuildOperation", name=f"Instance {key}"),
+            ]
+        )
+        edges.extend(
+            [
+                GraphEdge(
+                    id=_stable("contains-instance", key),
+                    type="contains",
+                    source_id="product:assembly",
+                    target_id=instance_id,
+                ),
+                GraphEdge(
+                    id=_stable("instance-of", key),
+                    type="instance_of",
+                    source_id=instance_id,
+                    target_id=definition_id,
+                ),
+                GraphEdge(
+                    id=_stable("operation-depends", key),
+                    type="depends_on",
+                    source_id=operation_id,
+                    target_id=instance_id,
+                ),
+            ]
+        )
         values = [
             (PREDICATE.COMPONENT_INSTANCE_KEY, key, None, ["component_count"]),
             (
@@ -149,17 +159,19 @@ def assembly_as_graph(
         ]
         for predicate, value, unit, impacts in values:
             assertion_id = _stable("assertion", f"{instance_id}:{predicate}")
-            assertions.append(Assertion(
-                id=assertion_id,
-                subject_id=instance_id,
-                predicate=predicate,
-                value=ExactValue(kind="exact", value=value),
-                unit=unit,
-                origin="human",
-                assurance="human_approved",
-                confidence=1.0,
-                impacts=impacts,
-            ))
+            assertions.append(
+                Assertion(
+                    id=assertion_id,
+                    subject_id=instance_id,
+                    predicate=predicate,
+                    value=ExactValue(kind="exact", value=value),
+                    unit=unit,
+                    origin="human",
+                    assurance="human_approved",
+                    confidence=1.0,
+                    impacts=impacts,
+                )
+            )
             required.append(assertion_id)
         for predicate, value in (
             (PREDICATE.OPERATION_KIND, "assembly_instance"),
@@ -168,16 +180,18 @@ def assembly_as_graph(
             (f"{OPERATION_PARAM_PREFIX}transform", _value(component, "transform", {}) or {}),
         ):
             assertion_id = _stable("assertion", f"{operation_id}:{predicate}")
-            assertions.append(Assertion(
-                id=assertion_id,
-                subject_id=operation_id,
-                predicate=predicate,
-                value=ExactValue(kind="exact", value=value),
-                origin="derived",
-                assurance="constraint_validated",
-                confidence=1.0,
-                impacts=["component_count", "assembly_interface"],
-            ))
+            assertions.append(
+                Assertion(
+                    id=assertion_id,
+                    subject_id=operation_id,
+                    predicate=predicate,
+                    value=ExactValue(kind="exact", value=value),
+                    origin="derived",
+                    assurance="constraint_validated",
+                    confidence=1.0,
+                    impacts=["component_count", "assembly_interface"],
+                )
+            )
             required.append(assertion_id)
 
     for index, mate in enumerate(mates):
@@ -188,66 +202,74 @@ def assembly_as_graph(
         mate_key = str(_value(mate, "id", f"{index}:{first}:{second}"))
         constraint_id = _stable("constraint-mate", mate_key)
         nodes.append(GraphNode(id=constraint_id, type="Constraint", name=mate_key))
-        edges.extend([
-            GraphEdge(
-                id=_stable("mate-edge", mate_key),
-                type="mates_with",
-                source_id=instance_nodes[first],
-                target_id=instance_nodes[second],
-            ),
-            GraphEdge(
-                id=_stable("mate-applies-first", mate_key),
-                type="applies_to",
-                source_id=constraint_id,
-                target_id=instance_nodes[first],
-            ),
-            GraphEdge(
-                id=_stable("mate-applies-second", mate_key),
-                type="applies_to",
-                source_id=constraint_id,
-                target_id=instance_nodes[second],
-            ),
-        ])
+        edges.extend(
+            [
+                GraphEdge(
+                    id=_stable("mate-edge", mate_key),
+                    type="mates_with",
+                    source_id=instance_nodes[first],
+                    target_id=instance_nodes[second],
+                ),
+                GraphEdge(
+                    id=_stable("mate-applies-first", mate_key),
+                    type="applies_to",
+                    source_id=constraint_id,
+                    target_id=instance_nodes[first],
+                ),
+                GraphEdge(
+                    id=_stable("mate-applies-second", mate_key),
+                    type="applies_to",
+                    source_id=constraint_id,
+                    target_id=instance_nodes[second],
+                ),
+            ]
+        )
         for predicate, value in (
             (PREDICATE.MATE_TYPE, str(_value(mate, "mate_type"))),
             (PREDICATE.MATE_PARAMETERS, _value(mate, "parameters", {}) or {}),
         ):
             assertion_id = _stable("assertion", f"{constraint_id}:{predicate}")
-            assertions.append(Assertion(
-                id=assertion_id,
-                subject_id=constraint_id,
-                predicate=predicate,
-                value=ExactValue(kind="exact", value=value),
-                origin="human",
-                assurance="human_approved",
-                confidence=1.0,
-                impacts=["mate", "assembly_interface"],
-            ))
+            assertions.append(
+                Assertion(
+                    id=assertion_id,
+                    subject_id=constraint_id,
+                    predicate=predicate,
+                    value=ExactValue(kind="exact", value=value),
+                    origin="human",
+                    assurance="human_approved",
+                    confidence=1.0,
+                    impacts=["mate", "assembly_interface"],
+                )
+            )
             required.append(assertion_id)
 
     dof_payload = dof.model_dump(mode="json")
     dof_hash = hashlib.sha256(
         json.dumps(dof_payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    evidence = [Evidence(
-        id=f"evidence:assembly-dof:{dof_hash[:16]}",
-        kind="calculation",
-        payload={"solver": "declared-mate-rank-v1", "report": dof_payload},
-        sha256=dof_hash,
-    )]
+    evidence = [
+        Evidence(
+            id=f"evidence:assembly-dof:{dof_hash[:16]}",
+            kind="calculation",
+            payload={"solver": "declared-mate-rank-v1", "report": dof_payload},
+            sha256=dof_hash,
+        )
+    ]
     dof_assertion_id = "assertion:assembly:dof"
-    assertions.append(Assertion(
-        id=dof_assertion_id,
-        subject_id="product:assembly",
-        predicate=PREDICATE.ASSEMBLY_DEGREES_OF_FREEDOM,
-        value=ExactValue(kind="exact", value=dof.degrees_of_freedom),
-        unit="1",
-        origin="derived",
-        assurance="constraint_validated" if dof.fully_constrained else "proposed",
-        evidence_ids=[evidence[0].id],
-        confidence=1.0,
-        impacts=["mate", "operational_safety"],
-    ))
+    assertions.append(
+        Assertion(
+            id=dof_assertion_id,
+            subject_id="product:assembly",
+            predicate=PREDICATE.ASSEMBLY_DEGREES_OF_FREEDOM,
+            value=ExactValue(kind="exact", value=dof.degrees_of_freedom),
+            unit="1",
+            origin="derived",
+            assurance="constraint_validated" if dof.fully_constrained else "proposed",
+            evidence_ids=[evidence[0].id],
+            confidence=1.0,
+            impacts=["mate", "operational_safety"],
+        )
+    )
     required.append(dof_assertion_id)
 
     interference_payload = {
@@ -276,48 +298,56 @@ def assembly_as_graph(
         and set(exact_checked) == set(dof.active_instances)
     )
     interference_id = "assertion:assembly:interference"
-    assertions.append(Assertion(
-        id=interference_id,
-        subject_id="product:assembly",
-        predicate=PREDICATE.ASSEMBLY_INTERFERENCE_CLEAR,
-        value=(
-            ExactValue(kind="exact", value=True)
-            if exact_complete
-            else UnknownValue(
-                kind="unknown",
-                reason=interference_degraded
-                or "exact interference is incomplete or collisions exist",
-            )
-        ),
-        origin="derived",
-        assurance="constraint_validated" if exact_complete else "proposed",
-        evidence_ids=[interference_evidence.id],
-        confidence=1.0 if exact_complete else 0.0,
-        impacts=["assembly_interface", "operational_safety"],
-    ))
+    assertions.append(
+        Assertion(
+            id=interference_id,
+            subject_id="product:assembly",
+            predicate=PREDICATE.ASSEMBLY_INTERFERENCE_CLEAR,
+            value=(
+                ExactValue(kind="exact", value=True)
+                if exact_complete
+                else UnknownValue(
+                    kind="unknown",
+                    reason=interference_degraded
+                    or "exact interference is incomplete or collisions exist",
+                )
+            ),
+            origin="derived",
+            assurance="constraint_validated" if exact_complete else "proposed",
+            evidence_ids=[interference_evidence.id],
+            confidence=1.0 if exact_complete else 0.0,
+            impacts=["assembly_interface", "operational_safety"],
+        )
+    )
     reopen_id = "assertion:assembly:artifact-reopen"
     required_2d_id = "assertion:assembly:required-2d"
-    assertions.append(Assertion(
-        id=reopen_id,
-        subject_id="product:assembly",
-        predicate=PREDICATE.ASSEMBLY_ARTIFACT_REOPEN_VALID,
-        value=UnknownValue(kind="unknown", reason="assembly builder has not reopened an artifact"),
-        origin="derived",
-        assurance="proposed",
-        impacts=["base_topology", "operational_safety"],
-    ))
-    assertions.append(Assertion(
-        id=required_2d_id,
-        subject_id="product:assembly",
-        predicate=PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE,
-        value=UnknownValue(
-            kind="unknown",
-            reason="assembly drawing or exploded view has not been verified",
-        ),
-        origin="derived",
-        assurance="proposed",
-        impacts=["required_view"],
-    ))
+    assertions.append(
+        Assertion(
+            id=reopen_id,
+            subject_id="product:assembly",
+            predicate=PREDICATE.ASSEMBLY_ARTIFACT_REOPEN_VALID,
+            value=UnknownValue(
+                kind="unknown", reason="assembly builder has not reopened an artifact"
+            ),
+            origin="derived",
+            assurance="proposed",
+            impacts=["base_topology", "operational_safety"],
+        )
+    )
+    assertions.append(
+        Assertion(
+            id=required_2d_id,
+            subject_id="product:assembly",
+            predicate=PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE,
+            value=UnknownValue(
+                kind="unknown",
+                reason="assembly drawing or exploded view has not been verified",
+            ),
+            origin="derived",
+            assurance="proposed",
+            impacts=["required_view"],
+        )
+    )
     required.extend([interference_id, reopen_id, required_2d_id])
     requirement = Requirement(
         id="requirement:assembly-release",
@@ -403,8 +433,7 @@ def build_assembly_drawing_svg(
             raise ValueError(f"assembly drawing mate {mate_id!r} has invalid instances")
         normalized_mates.append((mate_id, first, second))
     max_extent = max(
-        max(item["width"], item["height"], abs(item["x"]), abs(item["y"]))
-        for item in normalized
+        max(item["width"], item["height"], abs(item["x"]), abs(item["y"])) for item in normalized
     )
     scale = min(1.0, 160.0 / max_extent) if max_extent else 1.0
     panel_width = max(360, 180 + len(normalized) * 150)
@@ -427,8 +456,7 @@ def build_assembly_drawing_svg(
                 )
             else:
                 shape = (
-                    f'<rect x="{x:.2f}" y="{y:.2f}" width="{width:.2f}" '
-                    f'height="{height_px:.2f}" />'
+                    f'<rect x="{x:.2f}" y="{y:.2f}" width="{width:.2f}" height="{height_px:.2f}" />'
                 )
             shapes.append(
                 f'<g data-view="{view}" data-instance-key="{html.escape(item["key"])}">'
@@ -454,13 +482,13 @@ def build_assembly_drawing_svg(
         '<?xml version="1.0" encoding="UTF-8"?>'
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{panel_width * 2}" '
         f'height="{height}" viewBox="0 0 {panel_width * 2} {height}">'
-        '<style>rect,ellipse{fill:#fff;stroke:#111;stroke-width:2}'
-        'line{stroke:#b45309;stroke-width:2;stroke-dasharray:6 4}'
-        'text{font:14px sans-serif;fill:#111}</style>'
+        "<style>rect,ellipse{fill:#fff;stroke:#111;stroke-width:2}"
+        "line{stroke:#b45309;stroke-width:2;stroke-dasharray:6 4}"
+        "text{font:14px sans-serif;fill:#111}</style>"
         f'<text x="20" y="28">{html.escape(name)}</text>'
-        f'{render_view("assembled", 0, 36, False)}'
-        f'{render_view("exploded", panel_width, 36, True)}'
-        '</svg>'
+        f"{render_view('assembled', 0, 36, False)}"
+        f"{render_view('exploded', panel_width, 36, True)}"
+        "</svg>"
     ).encode()
     root = ElementTree.fromstring(svg)
     namespace = {"svg": "http://www.w3.org/2000/svg"}
@@ -512,7 +540,8 @@ def assembly_drawing_patch(
     ):
         raise ValueError("assembly drawing report does not validate the supplied SVG")
     required = next(
-        item for item in graph.assertions
+        item
+        for item in graph.assertions
         if item.state == "active" and item.predicate == PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE
     )
     suffix = artifact_sha[:16]
@@ -544,12 +573,14 @@ def assembly_drawing_patch(
                 target_id=operation_id,
             ),
         ],
-        add_evidence=[Evidence(
-            id=evidence_id,
-            kind="projection_comparison",
-            payload=report,
-            sha256=report["canonical_report_sha256"],
-        )],
+        add_evidence=[
+            Evidence(
+                id=evidence_id,
+                kind="projection_comparison",
+                payload=report,
+                sha256=report["canonical_report_sha256"],
+            )
+        ],
         add_assertions=[
             Assertion(
                 id=f"assertion:assembly-drawing-media:{suffix}",
@@ -592,13 +623,9 @@ def assembly_revision_patch(
         for item in current.assertions
         if item.state == "active"
     }
-    desired_by_key = {
-        (item.subject_id, item.predicate): item for item in desired.assertions
-    }
+    desired_by_key = {(item.subject_id, item.predicate): item for item in desired.assertions}
     existing_evidence = {item.id for item in current.evidence}
-    add_evidence = [
-        item for item in desired.evidence if item.id not in existing_evidence
-    ]
+    add_evidence = [item for item in desired.evidence if item.id not in existing_evidence]
     reopen_key = ("product:assembly", PREDICATE.ASSEMBLY_ARTIFACT_REOPEN_VALID)
     drawing_key = ("product:assembly", PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE)
     contract_gate_keys = {
@@ -610,11 +637,8 @@ def assembly_revision_patch(
     def _same_value(existing: Assertion | None, wanted: Assertion) -> bool:
         return bool(
             existing
-            and existing.model_dump(
-                exclude={"id", "supersedes_assertion_id", "state"}
-            ) == wanted.model_dump(
-                exclude={"id", "supersedes_assertion_id", "state"}
-            )
+            and existing.model_dump(exclude={"id", "supersedes_assertion_id", "state"})
+            == wanted.model_dump(exclude={"id", "supersedes_assertion_id", "state"})
         )
 
     # A successful artifact patch is derived from the current editable
@@ -652,13 +676,12 @@ def assembly_revision_patch(
         if _same_value(existing, wanted):
             continue
         suffix = hashlib.sha256(f"{key}:{wanted.model_dump_json()}".encode()).hexdigest()[:16]
-        replacement = wanted.model_copy(update={
-            "id": (
-                f"assertion:r{current.revision + 1}:{suffix}"
-                if existing else wanted.id
-            ),
-            "supersedes_assertion_id": existing.id if existing else None,
-        })
+        replacement = wanted.model_copy(
+            update={
+                "id": (f"assertion:r{current.revision + 1}:{suffix}" if existing else wanted.id),
+                "supersedes_assertion_id": existing.id if existing else None,
+            }
+        )
         add_assertions.append(replacement)
         if existing:
             supersede.append(existing.id)
@@ -681,15 +704,17 @@ def assembly_revision_patch(
     ).hexdigest()
     requirements_changed = current.requirements != desired.requirements
     targets_changed = current.build_targets != desired.build_targets
-    if not any((
-        set(item.id for item in desired.nodes) - current_nodes,
-        set(item.id for item in desired.edges) - current_edges,
-        add_assertions,
-        retract,
-        add_evidence,
-        requirements_changed,
-        targets_changed,
-    )):
+    if not any(
+        (
+            set(item.id for item in desired.nodes) - current_nodes,
+            set(item.id for item in desired.edges) - current_edges,
+            add_assertions,
+            retract,
+            add_evidence,
+            requirements_changed,
+            targets_changed,
+        )
+    ):
         return None
     return GraphPatch(
         patch_id=f"assembly-sync:{digest[:20]}",

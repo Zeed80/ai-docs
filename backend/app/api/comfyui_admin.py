@@ -70,9 +70,7 @@ async def _find_container(name_hint: str) -> dict | None:
     filters = json.dumps({"label": [f"com.docker.compose.service={name_hint}"]})
     try:
         async with _docker_transport() as client:
-            r = await client.get(
-                "/containers/json", params={"filters": filters, "all": "true"}
-            )
+            r = await client.get("/containers/json", params={"filters": filters, "all": "true"})
             r.raise_for_status()
             containers = r.json()
             if containers:
@@ -209,7 +207,9 @@ async def update() -> dict:
 
 
 class DiscoverRequest(BaseModel):
-    cidr: str | None = Field(default=None, description="Подсеть для сканирования, напр. 192.168.1.0/24")
+    cidr: str | None = Field(
+        default=None, description="Подсеть для сканирования, напр. 192.168.1.0/24"
+    )
     ports: list[int] = Field(default_factory=lambda: [_DEFAULT_PORT])
     scan_network: bool = False
 
@@ -243,8 +243,11 @@ async def discover(body: DiscoverRequest) -> dict:
     # Always-cheap local candidates. ``host-gateway`` is the docker→host alias
     # this stack maps in extra_hosts; ``host.docker.internal`` covers other setups.
     local_hosts = [
-        "127.0.0.1", "localhost", _COMFY_SERVICE,
-        "host-gateway", "host.docker.internal",
+        "127.0.0.1",
+        "localhost",
+        _COMFY_SERVICE,
+        "host-gateway",
+        "host.docker.internal",
     ]
     for host in local_hosts:
         for port in ports:

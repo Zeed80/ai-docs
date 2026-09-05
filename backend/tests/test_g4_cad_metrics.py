@@ -7,8 +7,11 @@ def test_cad_metrics_declared():
     from app.core import metrics
 
     for name in (
-        "cad_digitize_total", "cad_digitize_duration_seconds",
-        "cad_export_total", "cad_solver_runs_total", "cad_kernel_compile_total",
+        "cad_digitize_total",
+        "cad_digitize_duration_seconds",
+        "cad_export_total",
+        "cad_solver_runs_total",
+        "cad_kernel_compile_total",
     ):
         assert hasattr(metrics, name), name
 
@@ -17,15 +20,31 @@ def test_cad_metrics_declared():
 async def test_solver_run_increments_metric(client):
     from app.core import metrics
 
-    material = (await client.post("/api/engineering/materials", json={
-        "designation": "G4 сталь", "yield_strength_mpa": 300,
-    })).json()
+    material = (
+        await client.post(
+            "/api/engineering/materials",
+            json={
+                "designation": "G4 сталь",
+                "yield_strength_mpa": 300,
+            },
+        )
+    ).json()
     project = (await client.post("/api/engineering/projects", json={"name": "G4"})).json()
-    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
-    case = (await client.post(f"/api/engineering/revisions/{revision['id']}/analysis-cases", json={
-        "name": "осевое", "material_id": material["id"],
-        "inputs": {"force_n": 100, "area_mm2": 10},
-    })).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    case = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/analysis-cases",
+            json={
+                "name": "осевое",
+                "material_id": material["id"],
+                "inputs": {"force_n": 100, "area_mm2": 10},
+            },
+        )
+    ).json()
 
     def _count() -> float:
         try:

@@ -6,6 +6,7 @@ try:
     from scripts.regression_manifest_check import validate_manifest
 except ImportError:
     import pytest
+
     pytest.skip("scripts.regression_manifest_check not yet implemented", allow_module_level=True)
 
 

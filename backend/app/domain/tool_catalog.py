@@ -6,8 +6,7 @@ from typing import Any
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
-from app.db.models import ToolTypeEnum, ToolSourceEnum
-
+from app.db.models import ToolTypeEnum
 
 # ── Tool Supplier ─────────────────────────────────────────────────────────────
 
@@ -22,8 +21,7 @@ def _reject_unresolved_placeholder(value: str | None) -> str | None:
     """
     if value and ("${" in value or "}" in value):
         raise ValueError(
-            "имя содержит неразрешённый плейсхолдер плана — "
-            "передайте настоящее название поставщика"
+            "имя содержит неразрешённый плейсхолдер плана — передайте настоящее название поставщика"
         )
     return value
 
@@ -217,6 +215,7 @@ class CatalogImportResult(BaseModel):
 
 class CatalogImportRow(BaseModel):
     """Normalized row from parsed catalog file."""
+
     part_number: str | None = None
     name: str
     tool_type: ToolTypeEnum
@@ -270,8 +269,8 @@ class SupplierRefRequest(BaseModel):
     without the model having to guess a UUID.
     """
 
-    supplier_id: uuid.UUID | None = None   # ToolSupplier.id
-    party_id: uuid.UUID | None = None      # Party.id (procurement supplier)
+    supplier_id: uuid.UUID | None = None  # ToolSupplier.id
+    party_id: uuid.UUID | None = None  # Party.id (procurement supplier)
     supplier_name: str | None = Field(default=None, max_length=500)
 
 

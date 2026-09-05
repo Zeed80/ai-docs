@@ -4,17 +4,17 @@ Revision ID: 9c0d1e2f3a4b
 Revises: 8b9c0d1e2f3a
 Create Date: 2026-05-06 12:00:00.000000
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-
 revision: str = "9c0d1e2f3a4b"
-down_revision: Union[str, None] = "8b9c0d1e2f3a"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "8b9c0d1e2f3a"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def _uuid() -> sa.types.TypeEngine:
@@ -37,11 +37,23 @@ def upgrade() -> None:
         sa.Column("decision_comment", sa.Text(), nullable=True),
         sa.Column("applied_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("id", _uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_agent_config_proposals_setting_path", "agent_config_proposals", ["setting_path"])
+    op.create_index(
+        "ix_agent_config_proposals_setting_path", "agent_config_proposals", ["setting_path"]
+    )
     op.create_index("ix_agent_config_proposals_status", "agent_config_proposals", ["status"])
 
     op.create_table(
@@ -51,8 +63,18 @@ def upgrade() -> None:
         sa.Column("purpose", sa.Text(), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", _uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_agent_teams_status", "agent_teams", ["status"])
@@ -67,8 +89,18 @@ def upgrade() -> None:
         sa.Column("output", sa.Text(), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", _uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["team_id"], ["agent_teams.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -85,8 +117,18 @@ def upgrade() -> None:
         sa.Column("run_count", sa.Integer(), nullable=False),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", _uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_agent_crons_enabled", "agent_crons", ["enabled"])
@@ -102,8 +144,18 @@ def upgrade() -> None:
         sa.Column("risk_level", sa.String(length=30), nullable=False),
         sa.Column("installed_by", sa.String(length=100), nullable=False),
         sa.Column("id", _uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("plugin_key"),
     )
@@ -129,8 +181,18 @@ def upgrade() -> None:
         sa.Column("decision_comment", sa.Text(), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", _uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_capability_proposals_status", "capability_proposals", ["status"])
@@ -147,8 +209,18 @@ def upgrade() -> None:
         sa.Column("last_verified_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", _uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_memory_facts_scope", "memory_facts", ["scope"])

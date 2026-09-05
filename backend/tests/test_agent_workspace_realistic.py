@@ -60,11 +60,20 @@ async def _seed_invoice(db, *, number, supplier_name, inn, total, lines):
     db.add(inv)
     await db.flush()
     for i, (desc, sku, qty, price) in enumerate(lines, start=1):
-        db.add(InvoiceLine(
-            invoice_id=inv.id, line_number=i, description=desc, sku=sku,
-            quantity=qty, unit="шт", unit_price=price, amount=qty * price,
-            tax_rate=0.2, tax_amount=qty * price * 0.2,
-        ))
+        db.add(
+            InvoiceLine(
+                invoice_id=inv.id,
+                line_number=i,
+                description=desc,
+                sku=sku,
+                quantity=qty,
+                unit="шт",
+                unit_price=price,
+                amount=qty * price,
+                tax_rate=0.2,
+                tax_amount=qty * price * 0.2,
+            )
+        )
     await db.commit()
     return inv
 
@@ -72,13 +81,19 @@ async def _seed_invoice(db, *, number, supplier_name, inn, total, lines):
 @pytest.fixture
 async def invoices(db_session):
     await _seed_invoice(
-        db_session, number="СЧ-1001", supplier_name='ООО "НВС Компани"',
-        inn="7707083893", total=22800.0,
+        db_session,
+        number="СЧ-1001",
+        supplier_name='ООО "НВС Компани"',
+        inn="7707083893",
+        total=22800.0,
         lines=[("Фреза концевая Ø10", "A-1", 10, 1500.0), ("Сверло Ø5", "B-2", 5, 800.0)],
     )
     await _seed_invoice(
-        db_session, number="СЧ-1002", supplier_name='ООО "Графит-Гарант"',
-        inn="7447286384", total=12000.0,
+        db_session,
+        number="СЧ-1002",
+        supplier_name='ООО "Графит-Гарант"',
+        inn="7447286384",
+        total=12000.0,
         lines=[("Графитовый блок", "G-7", 4, 2500.0)],
     )
     return 2
@@ -92,6 +107,7 @@ async def _clear_desktop(client: AsyncClient):
 
 
 # ── Tables ───────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_agent_table_query_returns_real_invoices(client: AsyncClient, invoices):
@@ -109,9 +125,13 @@ async def test_agent_table_query_returns_real_invoices(client: AsyncClient, invo
 
 @pytest.mark.asyncio
 async def test_agent_table_search_by_number(client: AsyncClient, invoices):
-    resp = await client.post("/api/tables/query", json={
-        "table": "invoices", "search": "1002",
-    })
+    resp = await client.post(
+        "/api/tables/query",
+        json={
+            "table": "invoices",
+            "search": "1002",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     numbers = {r["data"]["invoice_number"] for r in data["rows"]}
@@ -136,11 +156,15 @@ async def test_agent_export_xlsx_contains_invoice_data(client: AsyncClient, invo
 
 # ── Desktop (workspace blocks) ───────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_agent_publishes_invoice_table_to_desktop(client: AsyncClient, invoices):
-    pub = await client.post("/api/workspace/agent/invoices/table", json={
-        "canvas_id": "agent:invoice-list",
-    })
+    pub = await client.post(
+        "/api/workspace/agent/invoices/table",
+        json={
+            "canvas_id": "agent:invoice-list",
+        },
+    )
     assert pub.status_code == 200
     body = pub.json()
     assert body["status"] == "published"
@@ -156,9 +180,12 @@ async def test_agent_publishes_invoice_table_to_desktop(client: AsyncClient, inv
     assert 'ООО "НВС Компани"' in suppliers
 
     # The block is verifiable via the agent's verify-block tool.
-    verify = await client.post("/api/workspace/agent/verify-block", json={
-        "canvas_id": "agent:invoice-list",
-    })
+    verify = await client.post(
+        "/api/workspace/agent/verify-block",
+        json={
+            "canvas_id": "agent:invoice-list",
+        },
+    )
     assert verify.status_code == 200
     v = verify.json()
     assert v["exists"] is True
@@ -167,9 +194,12 @@ async def test_agent_publishes_invoice_table_to_desktop(client: AsyncClient, inv
 
 @pytest.mark.asyncio
 async def test_agent_publishes_invoice_items_to_desktop(client: AsyncClient, invoices):
-    pub = await client.post("/api/workspace/agent/invoices/items-table", json={
-        "canvas_id": "agent:invoice-items",
-    })
+    pub = await client.post(
+        "/api/workspace/agent/invoices/items-table",
+        json={
+            "canvas_id": "agent:invoice-items",
+        },
+    )
     assert pub.status_code == 200
     assert pub.json()["status"] == "published"
 
@@ -184,14 +214,18 @@ async def test_agent_publishes_invoice_items_to_desktop(client: AsyncClient, inv
 
 @pytest.mark.asyncio
 async def test_agent_items_table_nonexistent_supplier_skips_publish(
-    client: AsyncClient, invoices,
+    client: AsyncClient,
+    invoices,
 ):
     """See AGENT_LIVE_TEST_FINDINGS.md #5: a supplier name that matches no
     real party must not publish an empty/confusing 0-row table."""
-    pub = await client.post("/api/workspace/agent/invoices/items-table", json={
-        "canvas_id": "agent:invoice-items",
-        "supplier_query": "ЦНК",
-    })
+    pub = await client.post(
+        "/api/workspace/agent/invoices/items-table",
+        json={
+            "canvas_id": "agent:invoice-items",
+            "supplier_query": "ЦНК",
+        },
+    )
     assert pub.status_code == 200
     body = pub.json()
     assert body["status"] == "not_found"
@@ -203,7 +237,9 @@ async def test_agent_items_table_nonexistent_supplier_skips_publish(
 
 @pytest.mark.asyncio
 async def test_agent_items_table_real_supplier_zero_lines_still_publishes(
-    client: AsyncClient, invoices, db_session,
+    client: AsyncClient,
+    invoices,
+    db_session,
 ):
     """A supplier that genuinely exists but has no matching invoice lines
     is a real, useful empty state — unlike a name that resolves to nobody,
@@ -212,10 +248,13 @@ async def test_agent_items_table_real_supplier_zero_lines_still_publishes(
     db_session.add(extra_supplier)
     await db_session.commit()
 
-    pub = await client.post("/api/workspace/agent/invoices/items-table", json={
-        "canvas_id": "agent:invoice-items",
-        "supplier_query": "Пустографт",
-    })
+    pub = await client.post(
+        "/api/workspace/agent/invoices/items-table",
+        json={
+            "canvas_id": "agent:invoice-items",
+            "supplier_query": "Пустографт",
+        },
+    )
     assert pub.status_code == 200
     body = pub.json()
     assert body["status"] == "published"

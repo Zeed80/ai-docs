@@ -30,7 +30,17 @@ MAX_MEMBERS = 200
 MAX_TOTAL_MULTIPLIER = 20  # of settings.max_upload_size_mb
 MAX_COMPRESSION_RATIO = 100
 MEMBER_SUFFIXES = {
-    ".pdf", ".xlsx", ".xls", ".xlsm", ".csv", ".json", ".txt", ".docx", ".xml", ".html", ".htm",
+    ".pdf",
+    ".xlsx",
+    ".xls",
+    ".xlsm",
+    ".csv",
+    ".json",
+    ".txt",
+    ".docx",
+    ".xml",
+    ".html",
+    ".htm",
 }
 
 
@@ -99,8 +109,7 @@ def extract_catalog_archive(data: bytes, filename: str) -> list[ExtractedMember]
 
     if not members:
         raise ArchiveRejected(
-            "В архиве нет файлов, пригодных для каталога "
-            f"({', '.join(sorted(MEMBER_SUFFIXES))})."
+            f"В архиве нет файлов, пригодных для каталога ({', '.join(sorted(MEMBER_SUFFIXES))})."
         )
     return members
 
@@ -294,9 +303,7 @@ async def _unpack_async(document_id: str) -> dict:
             except Exception as exc:  # noqa: BLE001 — one bad member must not
                 # cost the other four; record it and continue.
                 failures.append(f"{member.name}: {exc}"[:200])
-                logger.warning(
-                    "catalog_archive_member_failed", member=member.name, error=str(exc)
-                )
+                logger.warning("catalog_archive_member_failed", member=member.name, error=str(exc))
             if job is not None:
                 pj.set_step_progress(job, "unpack", index, len(members), defs=CATALOG_STEPS)
 

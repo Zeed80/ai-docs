@@ -122,9 +122,7 @@ _FEATURES_SCHEMA = {
         "keyways": {"type": "array", "maxItems": 16, "items": {"type": "object"}},
         "cross_holes": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
         "axial_holes": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
-        "circular_hole_patterns": {
-            "type": "array", "maxItems": 32, "items": {"type": "object"}
-        },
+        "circular_hole_patterns": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
     },
 }
 
@@ -167,8 +165,8 @@ _COUNTERBORE_PROMPT = (
     "нашёл рядом верхнюю выноску Ø{counterbore:g}. Проверь по стрелкам, что это "
     "ступенчатое отверстие на одной оси, и прочитай глубину увеличенной входной "
     "ступени. Ответь одной строкой JSON: "
-    "{{\"same_axis\":true,\"counterbore_depth_mm\":3}}. Если связь или глубина "
-    "не видна, верни {{\"same_axis\":false,\"counterbore_depth_mm\":null}}. "
+    '{{"same_axis":true,"counterbore_depth_mm":3}}. Если связь или глубина '
+    'не видна, верни {{"same_axis":false,"counterbore_depth_mm":null}}. '
     "Не вычисляй глубину и не подставляй число из другого размера. Только JSON."
 )
 _COUNTERBORE_SCHEMA = {
@@ -189,8 +187,8 @@ _THREAD_CARRIER_PROMPT = (
     "одним явно написанным линейным размером из {lengths}. Не используй "
     "приблизительные границы контура как размеры. Если обе границы и размер "
     "не видны однозначно, верни confirmed=false и null. Ответ одной строкой "
-    "JSON: {{\"confirmed\":true,\"start_mm\":377,\"end_mm\":395,"
-    "\"length_mm\":18}}."
+    'JSON: {{"confirmed":true,"start_mm":377,"end_mm":395,'
+    '"length_mm":18}}.'
 )
 
 _THREAD_CARRIER_SCHEMA = {
@@ -301,10 +299,16 @@ _ASSIGN_SCHEMA = {
     "properties": {
         key: {"type": ["number", "null"]}
         for key in (
-            "outer_diameter_mm", "width_mm", "height_mm", "thickness_mm",
-            "bore_diameter_mm", "bolt_circle_diameter_mm", "bolt_hole_diameter_mm",
+            "outer_diameter_mm",
+            "width_mm",
+            "height_mm",
+            "thickness_mm",
+            "bore_diameter_mm",
+            "bolt_circle_diameter_mm",
+            "bolt_hole_diameter_mm",
         )
-    } | {"bolt_hole_count": {"type": ["integer", "null"]}},
+    }
+    | {"bolt_hole_count": {"type": ["integer", "null"]}},
 }
 
 
@@ -417,10 +421,14 @@ def _stamp_crop(image):
         title_block = None
     if title_block is not None and title_block.width > 40 and title_block.height > 20:
         pad_x, pad_y = int(width * 0.01), int(height * 0.01)
-        return image.crop((
-            max(0, title_block.x0 - pad_x), max(0, title_block.y0 - pad_y),
-            min(width, title_block.x1 + pad_x), min(height, title_block.y1 + pad_y),
-        ))
+        return image.crop(
+            (
+                max(0, title_block.x0 - pad_x),
+                max(0, title_block.y0 - pad_y),
+                min(width, title_block.x1 + pad_x),
+                min(height, title_block.y1 + pad_y),
+            )
+        )
     return image.crop((int(width * 0.55), int(height * 0.72), width, height))
 
 
@@ -438,9 +446,14 @@ _KIND_SCHEMA = {
         # "section" a dozen times, ran past the token budget and produced
         # nothing parseable at all — the schema turned a good answer into no
         # answer. Every array below carries a ceiling for the same reason.
-        "views": {"type": "array", "maxItems": 6, "items": {
-            "type": "string", "enum": ["front", "side", "top", "section", "detail", "removed_section"],
-        }},
+        "views": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+                "type": "string",
+                "enum": ["front", "side", "top", "section", "detail", "removed_section"],
+            },
+        },
     },
     "required": ["kind"],
 }
@@ -475,48 +488,96 @@ _PROFILE_SCHEMA = {
         "height_mm": {"type": ["number", "null"]},
         "diameter_mm": {"type": ["number", "null"]},
         "thickness_mm": {"type": ["number", "null"]},
-        "holes": {"type": "array", "maxItems": 64, "items": {"type": "object", "properties": {
-            "center_x_mm": {"type": ["number", "null"]},
-            "center_y_mm": {"type": ["number", "null"]},
-            "diameter_mm": {"type": ["number", "null"]},
-        }}},
-        "hole_patterns": {"type": "array", "maxItems": 12, "items": {"type": "object", "properties": {
-            "kind": {"type": "string"},
-            "count": {"type": ["integer", "null"]},
-            "bolt_circle_diameter_mm": {"type": ["number", "null"]},
-            "hole_diameter_mm": {"type": ["number", "null"]},
-            "start_angle_deg": {"type": ["number", "null"]},
-        }}},
+        "holes": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "center_x_mm": {"type": ["number", "null"]},
+                    "center_y_mm": {"type": ["number", "null"]},
+                    "diameter_mm": {"type": ["number", "null"]},
+                },
+            },
+        },
+        "hole_patterns": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string"},
+                    "count": {"type": ["integer", "null"]},
+                    "bolt_circle_diameter_mm": {"type": ["number", "null"]},
+                    "hole_diameter_mm": {"type": ["number", "null"]},
+                    "start_angle_deg": {"type": ["number", "null"]},
+                },
+            },
+        },
     },
     "required": ["shape"],
 }
 _CALLOUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "dimensions": {"type": "array", "maxItems": 80, "items": {"type": "object", "properties": {
-            "value": {"type": "string"},
-            "applies_to": {"type": ["string", "null"]},
-        }, "required": ["value"]}},
-        "annotations": {"type": "array", "maxItems": 40, "items": {"type": "object", "properties": {
-            "kind": {"type": "string", "enum": [
-                "roughness", "hardness", "tolerance", "datum", "thread",
-                "weld", "material", "other",
-            ]},
-            "text": {"type": "string"},
-            "value": {"type": ["string", "null"]},
-            "symbol": {"type": ["string", "null"]},
-            "datum_refs": {
-                "type": "array", "maxItems": 8, "items": {"type": "string"}
+        "dimensions": {
+            "type": "array",
+            "maxItems": 80,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "value": {"type": "string"},
+                    "applies_to": {"type": ["string", "null"]},
+                },
+                "required": ["value"],
             },
-        }, "required": ["text"]}},
+        },
+        "annotations": {
+            "type": "array",
+            "maxItems": 40,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": [
+                            "roughness",
+                            "hardness",
+                            "tolerance",
+                            "datum",
+                            "thread",
+                            "weld",
+                            "material",
+                            "other",
+                        ],
+                    },
+                    "text": {"type": "string"},
+                    "value": {"type": ["string", "null"]},
+                    "symbol": {"type": ["string", "null"]},
+                    "datum_refs": {"type": "array", "maxItems": 8, "items": {"type": "string"}},
+                },
+                "required": ["text"],
+            },
+        },
     },
 }
 
 _PMI_CHARACTERISTICS = (
-    "profile_surface", "profile_line", "flatness", "straightness",
-    "perpendicularity", "angularity", "position", "circularity",
-    "cylindricity", "concentricity", "symmetry", "circular_runout",
-    "total_runout", "parallelism", "unknown",
+    "profile_surface",
+    "profile_line",
+    "flatness",
+    "straightness",
+    "perpendicularity",
+    "angularity",
+    "position",
+    "circularity",
+    "cylindricity",
+    "concentricity",
+    "symmetry",
+    "circular_runout",
+    "total_runout",
+    "parallelism",
+    "unknown",
 )
 _PMI_SYMBOLS = {
     "profile_surface": "⌓",
@@ -560,7 +621,9 @@ _PMI_LOCATOR_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "bbox": {
-                        "type": "array", "minItems": 4, "maxItems": 4,
+                        "type": "array",
+                        "minItems": 4,
+                        "maxItems": 4,
                         "items": {"type": "number"},
                     },
                 },
@@ -590,9 +653,7 @@ _PMI_DIRECT_SCHEMA = {
                 "properties": {
                     "characteristic": {"type": "string", "enum": list(_PMI_CHARACTERISTICS)},
                     "tolerance_text": {"type": "string"},
-                    "datum_refs": {
-                        "type": "array", "maxItems": 8, "items": {"type": "string"}
-                    },
+                    "datum_refs": {"type": "array", "maxItems": 8, "items": {"type": "string"}},
                 },
                 "required": ["characteristic", "tolerance_text", "datum_refs"],
                 "additionalProperties": False,
@@ -614,9 +675,7 @@ _PMI_SCHEMA = {
                     "frame_id": {"type": "integer"},
                     "characteristic": {"type": "string", "enum": list(_PMI_CHARACTERISTICS)},
                     "tolerance_text": {"type": "string"},
-                    "datum_refs": {
-                        "type": "array", "maxItems": 8, "items": {"type": "string"}
-                    },
+                    "datum_refs": {"type": "array", "maxItems": 8, "items": {"type": "string"}},
                 },
                 "required": ["frame_id", "characteristic", "tolerance_text", "datum_refs"],
                 "additionalProperties": False,
@@ -642,18 +701,16 @@ def _structured_pmi_annotations(
         characteristic = str(frame.get("characteristic") or "unknown")
         tolerance = str(frame.get("tolerance_text") or "").strip()
         datum_refs = [
-            str(value).strip()
-            for value in frame.get("datum_refs") or []
-            if str(value).strip()
+            str(value).strip() for value in frame.get("datum_refs") or [] if str(value).strip()
         ]
         # Models often copy datum cells into tolerance_text and also return the
         # same cells in datum_refs. Strip only an exact trailing datum sequence;
         # the source order remains represented once, not duplicated in output.
         if datum_refs:
             suffix = re.compile(
-                r"(?:\s*\|?\s*" + r"\s*\|?\s*".join(
-                    re.escape(value) for value in datum_refs
-                ) + r")\s*$",
+                r"(?:\s*\|?\s*"
+                + r"\s*\|?\s*".join(re.escape(value) for value in datum_refs)
+                + r")\s*$",
                 re.IGNORECASE,
             )
             tolerance = suffix.sub("", tolerance).strip(" |")
@@ -715,8 +772,10 @@ def _pmi_contact_sheet(
         pad_x = max(8, int((right - left) * 0.25))
         pad_y = max(8, int((bottom - top) * 0.45))
         crop_box = (
-            max(0, left - pad_x), max(0, top - pad_y),
-            min(width, right + pad_x), min(height, bottom + pad_y),
+            max(0, left - pad_x),
+            max(0, top - pad_y),
+            min(width, right + pad_x),
+            min(height, bottom + pad_y),
         )
         original_bbox = [
             source_left + x0 / 1000 * source_width,
@@ -725,17 +784,19 @@ def _pmi_contact_sheet(
             source_top + y1 / 1000 * source_height,
         ]
         frame_id = len(regions) + 1
-        regions.append((
-            frame_id,
-            crop_box,
-            {
-                "image_index": 0,
-                "bbox": [round(value, 1) for value in original_bbox],
-                "raw_text": (
-                    f"{item.get('source', 'localized')} feature-control frame {frame_id}"
-                ),
-            },
-        ))
+        regions.append(
+            (
+                frame_id,
+                crop_box,
+                {
+                    "image_index": 0,
+                    "bbox": [round(value, 1) for value in original_bbox],
+                    "raw_text": (
+                        f"{item.get('source', 'localized')} feature-control frame {frame_id}"
+                    ),
+                },
+            )
+        )
     if not regions:
         return None, {}
 
@@ -772,9 +833,7 @@ def _detect_pmi_frame_regions(image) -> dict[str, Any]:
 
     grayscale = np.asarray(image.convert("L"))
     binary = cv2.threshold(grayscale, 210, 255, cv2.THRESH_BINARY_INV)[1]
-    contours, _hierarchy = cv2.findContours(
-        binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
-    )
+    contours, _hierarchy = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     cells = []
     for contour in contours:
         area = cv2.contourArea(contour)
@@ -793,13 +852,15 @@ def _detect_pmi_frame_regions(image) -> dict[str, Any]:
             continue
         long_angle = angle if width >= height else angle + 90
         radians = math.radians(long_angle)
-        cells.append({
-            "center": np.asarray((center_x, center_y), dtype=float),
-            "axis": np.asarray((math.cos(radians), math.sin(radians)), dtype=float),
-            "short": short_side,
-            "long": long_side,
-            "points": cv2.boxPoints(rect),
-        })
+        cells.append(
+            {
+                "center": np.asarray((center_x, center_y), dtype=float),
+                "axis": np.asarray((math.cos(radians), math.sin(radians)), dtype=float),
+                "short": short_side,
+                "long": long_side,
+                "points": cv2.boxPoints(rect),
+            }
+        )
 
     adjacency = [set() for _ in cells]
     for left in range(len(cells)):
@@ -839,15 +900,17 @@ def _detect_pmi_frame_regions(image) -> dict[str, Any]:
         points = np.concatenate([cells[index]["points"] for index in group])
         x0, y0 = points.min(axis=0)
         x1, y1 = points.max(axis=0)
-        boxes.append({
-            "bbox": [
-                float(x0 / image_width * 1000),
-                float(y0 / image_height * 1000),
-                float(x1 / image_width * 1000),
-                float(y1 / image_height * 1000),
-            ],
-            "source": "deterministic_cv",
-        })
+        boxes.append(
+            {
+                "bbox": [
+                    float(x0 / image_width * 1000),
+                    float(y0 / image_height * 1000),
+                    float(x1 / image_width * 1000),
+                    float(y1 / image_height * 1000),
+                ],
+                "source": "deterministic_cv",
+            }
+        )
     boxes.sort(key=lambda item: (item["bbox"][1], item["bbox"][0]))
     return {"frames": boxes[:24]}
 
@@ -885,10 +948,14 @@ def _dominant_view_crop(image):
         return _main_view_crop(image)
     x, y, box_w, box_h, _area = best
     pad_x, pad_y = int(width * 0.02), int(height * 0.02)
-    return image.crop((
-        max(x - pad_x, 0), max(y - pad_y, 0),
-        min(x + box_w + pad_x, width), min(y + box_h + pad_y, height),
-    ))
+    return image.crop(
+        (
+            max(x - pad_x, 0),
+            max(y - pad_y, 0),
+            min(x + box_w + pad_x, width),
+            min(y + box_h + pad_y, height),
+        )
+    )
 
 
 def _main_view_crop_box(image) -> tuple[int, int, int, int]:
@@ -911,8 +978,10 @@ def _main_view_crop_box(image) -> tuple[int, int, int, int]:
         return (0, 0, width, height)
     pad_x, pad_y = int(width * 0.02), int(height * 0.02)
     box = (
-        max(int(cols[0]) - pad_x, 0), max(int(rows[0]) - pad_y, 0),
-        min(int(cols[-1]) + pad_x, width), min(int(rows[-1]) + pad_y, height),
+        max(int(cols[0]) - pad_x, 0),
+        max(int(rows[0]) - pad_y, 0),
+        min(int(cols[-1]) + pad_x, width),
+        min(int(rows[-1]) + pad_y, height),
     )
     if box[2] - box[0] < width * 0.15 or box[3] - box[1] < height * 0.15:
         return (0, 0, width, height)
@@ -936,9 +1005,16 @@ def _main_view_crop(image):
 
 
 async def _ask(
-    prompt: str, image, *, router: Any, confidential: bool, num_predict: int,
-    schema: dict | None = None, audit: list[dict[str, Any]] | None = None,
-    thinking: bool | None = None, timeout_seconds: float = 75.0,
+    prompt: str,
+    image,
+    *,
+    router: Any,
+    confidential: bool,
+    num_predict: int,
+    schema: dict | None = None,
+    audit: list[dict[str, Any]] | None = None,
+    thinking: bool | None = None,
+    timeout_seconds: float = 75.0,
 ) -> dict:
     """One bounded question. A failure returns {} and never raises.
 
@@ -948,8 +1024,8 @@ async def _ask(
     a genuine reasoning pass on a dense sheet takes 30-110s, well past 75s.
     """
     import asyncio
-    import time
     import hashlib
+    import time
 
     from app.ai.cad_process_log import record_cad_process_event
     from app.ai.cad_recognize.spec_vectorize import (
@@ -1020,12 +1096,14 @@ async def _ask(
         )
         return {}
     if audit is not None:
-        audit.append({
-            "question": question,
-            "model": response.model or seeing_model,
-            "routing_preferred_model": seeing_model,
-            "raw_response": response.text or "",
-        })
+        audit.append(
+            {
+                "question": question,
+                "model": response.model or seeing_model,
+                "routing_preferred_model": seeing_model,
+                "raw_response": response.text or "",
+            }
+        )
     parsed = _parse_spec_json(response.text or "")
     result = _coerce_spec_containers(parsed) if parsed else {}
     raw = response.raw or {}
@@ -1037,8 +1115,7 @@ async def _ask(
         question,
         {
             "model": response.model or seeing_model,
-            "duration_ms": response.usage.latency_ms
-            or round((time.monotonic() - started) * 1000),
+            "duration_ms": response.usage.latency_ms or round((time.monotonic() - started) * 1000),
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
             "answer_chars": len(answer),
@@ -1147,6 +1224,7 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
     import time
 
     import httpx
+
     from app.ai.cad_process_log import record_cad_process_event
 
     model, ollama_url = _ocr_model_and_url()
@@ -1177,11 +1255,13 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
             response = await client.post(f"{ollama_url}/api/generate", json=payload)
             response.raise_for_status()
             raw_body = response.json()
-            text = (raw_body.get("response") or "")
+            text = raw_body.get("response") or ""
     except Exception as exc:  # noqa: BLE001 — one lost layer, not the sheet
         logger.warning("cad_ocr_layer_failed", error=str(exc)[:200])
         await record_cad_process_event(
-            "reader.text_ocr", "failed", "Текстовый OCR завершился ошибкой",
+            "reader.text_ocr",
+            "failed",
+            "Текстовый OCR завершился ошибкой",
             {
                 "model": model,
                 "duration_ms": round((time.monotonic() - started) * 1000),
@@ -1265,9 +1345,14 @@ def _matches_callout(value: float, candidates: list[float], tol: float = 0.02) -
 
 
 async def _read_cut_features(
-    image, outer: list[dict], *, router: Any, confidential: bool,
+    image,
+    outer: list[dict],
+    *,
+    router: Any,
+    confidential: bool,
     audit: list[dict[str, Any]] | None = None,
-    source_image=None, callouts: dict[str, Any] | None = None,
+    source_image=None,
+    callouts: dict[str, Any] | None = None,
     profile_evidence: dict[str, Any] | None = None,
     bore: list[dict] | None = None,
 ) -> dict[str, list[dict]]:
@@ -1286,10 +1371,7 @@ async def _read_cut_features(
             *_callout_numbers(callouts or {}, "linear"),
             *(
                 float(item["value_mm"])
-                for item in (
-                    (profile_evidence.get("axial_map") or {}).get("observations")
-                    or []
-                )
+                for item in ((profile_evidence.get("axial_map") or {}).get("observations") or [])
                 if isinstance(item.get("value_mm"), (int, float))
                 and not isinstance(item.get("value_mm"), bool)
             ),
@@ -1298,18 +1380,14 @@ async def _read_cut_features(
             source_image,
             profile_evidence.get("axial_map") or {},
             sorted(feature_linear_values, reverse=True),
-            profile_center_y_px=(
-                profile_evidence.get("diameter_map") or {}
-            ).get("profile_center_y_px"),
+            profile_center_y_px=(profile_evidence.get("diameter_map") or {}).get(
+                "profile_center_y_px"
+            ),
             known_diameter_values=_callout_numbers(callouts or {}, "diameter"),
             outer_diameter_values=[
                 float(item["value_mm"])
-                for item in (
-                    (profile_evidence.get("diameter_map") or {}).get("observations")
-                    or []
-                )
-                if item.get("role") == "outer"
-                and isinstance(item.get("value_mm"), (int, float))
+                for item in ((profile_evidence.get("diameter_map") or {}).get("observations") or [])
+                if item.get("role") == "outer" and isinstance(item.get("value_mm"), (int, float))
             ],
         )
         profile_evidence["feature_map"] = feature_evidence
@@ -1334,7 +1412,8 @@ async def _read_cut_features(
         for item in (callouts or {}).get("dimensions") or []
         if isinstance(item, dict)
         and re.search(
-            r"паз|шпон|гост\s*23360|гост\s*8790", str(item.get("value") or ""),
+            r"паз|шпон|гост\s*23360|гост\s*8790",
+            str(item.get("value") or ""),
             re.IGNORECASE,
         )
     ]
@@ -1344,43 +1423,44 @@ async def _read_cut_features(
             + "; ".join(keyway_texts)
             + ". Соответствующий вырез — keyway, а не groove, независимо от формы."
         )
-        if keyway_texts else ""
+        if keyway_texts
+        else ""
     )
     answer = await _ask(
         _FEATURES_PROMPT + evidence_prompt + keyway_hint,
-        image, num_predict=1500, schema=_FEATURES_SCHEMA,
-        router=router, confidential=confidential, audit=audit,
+        image,
+        num_predict=1500,
+        schema=_FEATURES_SCHEMA,
+        router=router,
+        confidential=confidential,
+        audit=audit,
     )
     if not answer and not feature_evidence:
         return {}
     answer = answer or {}
 
     total_length = sum(_num(s.get("length_mm")) or 0.0 for s in outer)
-    max_radius = max(
-        ((_num(s.get("diameter_mm")) or 0.0) / 2.0 for s in outer), default=0.0
-    )
+    max_radius = max(((_num(s.get("diameter_mm")) or 0.0) / 2.0 for s in outer), default=0.0)
 
     def _within(position: float | None) -> bool:
         return position is not None and -1e-6 <= position <= total_length + 1e-6
 
     result: dict[str, list[dict]] = {}
     chamfers = [
-        item for item in (answer.get("chamfers") or [])
+        item
+        for item in (answer.get("chamfers") or [])
         if isinstance(item, dict)
         and (_num(item.get("size_mm")) or 0) > 0
         and item.get("location") in ("left_end", "right_end", "shoulder", "bore_mouth")
     ]
     if source_image is not None and profile_evidence is not None:
         axial_map = profile_evidence.get("axial_map") or {}
-        center_y = _num((profile_evidence.get("diameter_map") or {}).get(
-            "profile_center_y_px"
-        ))
+        center_y = _num((profile_evidence.get("diameter_map") or {}).get("profile_center_y_px"))
         datum = axial_map.get("datum_line") or []
         mm_per_px = _num(axial_map.get("mm_per_px"))
         if len(datum) == 2 and center_y is not None and mm_per_px:
             max_radius_px = max(
-                (_num(item.get("diameter_mm")) or 0.0) / (2.0 * mm_per_px)
-                for item in outer
+                (_num(item.get("diameter_mm")) or 0.0) / (2.0 * mm_per_px) for item in outer
             )
             left_x = float(datum[0])
             bbox = [
@@ -1395,14 +1475,16 @@ async def _read_cut_features(
                     and abs((_num(item.get("size_mm")) or -1) - 1.0) <= 0.05
                     and abs((_num(item.get("angle_deg")) or -1) - 45.0) <= 0.2
                 ):
-                    item["evidence"] = [{
-                        "image_index": 0,
-                        "bbox": bbox,
-                        "raw_text": (
-                            "fragment VLM: 1×45° left_end; "
-                            "localized at measured left profile datum"
-                        ),
-                    }]
+                    item["evidence"] = [
+                        {
+                            "image_index": 0,
+                            "bbox": bbox,
+                            "raw_text": (
+                                "fragment VLM: 1×45° left_end; "
+                                "localized at measured left profile datum"
+                            ),
+                        }
+                    ]
     chamfers, chamfer_resolution = await _resolve_grouped_chamfers(
         source_image,
         callouts or {},
@@ -1420,7 +1502,8 @@ async def _read_cut_features(
         result["chamfers"] = chamfers
 
     grooves = [
-        item for item in (answer.get("grooves") or [])
+        item
+        for item in (answer.get("grooves") or [])
         if isinstance(item, dict)
         and _within(_num(item.get("axial_position_mm")))
         and (_num(item.get("width_mm")) or 0) > 0
@@ -1430,7 +1513,8 @@ async def _read_cut_features(
         result["grooves"] = grooves
 
     keyways = [
-        item for item in (answer.get("keyways") or [])
+        item
+        for item in (answer.get("keyways") or [])
         if isinstance(item, dict)
         and _within(_num(item.get("axial_start_mm")))
         and _within(
@@ -1472,14 +1556,16 @@ async def _read_cut_features(
                 "length_mm": expected_length,
                 "width_mm": expected_width,
                 "depth_mm": expected_depth,
-                "evidence": [{
-                    "image_index": 0,
-                    "bbox": candidate.get("bbox"),
-                    "raw_text": (
-                        f"vector contour {expected_length:g}×{expected_width:g}; "
-                        f"depth callout {expected_depth:g}"
-                    ),
-                }],
+                "evidence": [
+                    {
+                        "image_index": 0,
+                        "bbox": candidate.get("bbox"),
+                        "raw_text": (
+                            f"vector contour {expected_length:g}×{expected_width:g}; "
+                            f"depth callout {expected_depth:g}"
+                        ),
+                    }
+                ],
             }
             verified_keyways.append(verified)
         keyways = verified_keyways
@@ -1488,7 +1574,8 @@ async def _read_cut_features(
         result["keyways"] = keyways
 
     holes = [
-        item for item in (answer.get("cross_holes") or [])
+        item
+        for item in (answer.get("cross_holes") or [])
         if isinstance(item, dict)
         and _within(_num(item.get("axial_position_mm")))
         and 0 < (_num(item.get("diameter_mm")) or 0) < max(2.0 * max_radius, 1e-9)
@@ -1502,9 +1589,9 @@ async def _read_cut_features(
             max(item["bbox"][2] for item in radial_candidates) + 260,
         )
         center_y = int(
-            (profile_evidence or {}).get("diameter_map", {}).get(
-                "profile_center_y_px", source_image.height / 2
-            )
+            (profile_evidence or {})
+            .get("diameter_map", {})
+            .get("profile_center_y_px", source_image.height / 2)
         )
         y0 = max(0, center_y - 480)
         y1 = min(source_image.height, center_y + 330)
@@ -1522,7 +1609,8 @@ async def _read_cut_features(
             for item in radial_candidates
         ]
         small_callouts = [
-            text for text in (
+            text
+            for text in (
                 str((item or {}).get("value") or (item or {}).get("text") or "")
                 for item in (callouts or {}).get("dimensions", [])
                 + (callouts or {}).get("annotations", [])
@@ -1549,9 +1637,7 @@ async def _read_cut_features(
         ]
         radial_answer = await _ask(
             _RADIAL_FEATURES_PROMPT.format(
-                candidates=json.dumps(
-                    mapped_candidates, ensure_ascii=False, separators=(",", ":")
-                ),
+                candidates=json.dumps(mapped_candidates, ensure_ascii=False, separators=(",", ":")),
                 callouts=json.dumps(
                     {
                         "texts": small_callouts,
@@ -1584,8 +1670,13 @@ async def _read_cut_features(
                 _num(item.get("diameter_mm")) or -1000,
                 allowed_diameters,
             )
-            and item.get("kind") in {
-                "through", "to_bore", "blind", "counterbore", "threaded",
+            and item.get("kind")
+            in {
+                "through",
+                "to_bore",
+                "blind",
+                "counterbore",
+                "threaded",
             }
             and item.get("side") in {"top", "bottom", "both"}
             and (
@@ -1604,32 +1695,35 @@ async def _read_cut_features(
 
         labels = feature_evidence.get("diameter_label_observations") or []
         top_pilots = [
-            item for item in labels
+            item
+            for item in labels
             if item.get("side") == "top"
             and abs(float(item.get("value_mm") or -1000) - 10.0) <= 0.05
         ]
         top_counterbores = [
-            item for item in labels
+            item
+            for item in labels
             if item.get("side") == "top"
             and abs(float(item.get("value_mm") or -1000) - 24.0) <= 0.05
         ]
         pilot_candidates = [
-            item for item in radial_candidates
+            item
+            for item in radial_candidates
             if any(
                 abs(float(value) - 10.0) <= 0.05
                 for value in item.get("supported_diameters_mm") or []
-            ) or abs(float(item.get("measured_axial_span_mm") or -1000) - 10.0) <= 0.8
+            )
+            or abs(float(item.get("measured_axial_span_mm") or -1000) - 10.0) <= 0.8
         ]
-        if (
-            len(top_pilots) == 1
-            and len(top_counterbores) == 1
-            and len(pilot_candidates) == 1
-        ):
+        if len(top_pilots) == 1 and len(top_counterbores) == 1 and len(pilot_candidates) == 1:
             pilot_candidate = pilot_candidates[0]
             focused_box = [
                 max(0, pilot_candidate["bbox"][0] - 90),
                 max(0, min(top_counterbores[0]["bbox"][1], top_pilots[0]["bbox"][1]) - 90),
-                min(source_image.width, max(top_counterbores[0]["bbox"][2], pilot_candidate["bbox"][2]) + 70),
+                min(
+                    source_image.width,
+                    max(top_counterbores[0]["bbox"][2], pilot_candidate["bbox"][2]) + 70,
+                ),
                 min(source_image.height, center_y + 130),
             ]
             counterbore_answer = await _ask(
@@ -1654,14 +1748,16 @@ async def _read_cut_features(
                     _callout_numbers(callouts or {}, "linear"),
                 )
             ):
-                radial_hypotheses.append({
-                    "candidate_id": pilot_candidate["id"],
-                    "diameter_mm": 24.0,
-                    "kind": "counterbore",
-                    "side": "top",
-                    "depth_mm": counterbore_depth,
-                    "source_crop_bbox": focused_box,
-                })
+                radial_hypotheses.append(
+                    {
+                        "candidate_id": pilot_candidate["id"],
+                        "diameter_mm": 24.0,
+                        "kind": "counterbore",
+                        "side": "top",
+                        "depth_mm": counterbore_depth,
+                        "source_crop_bbox": focused_box,
+                    }
+                )
         if profile_evidence is not None:
             profile_evidence["radial_hypotheses"] = radial_hypotheses
 
@@ -1672,15 +1768,15 @@ async def _read_cut_features(
 
         def _diameter_at(role: str, station: float) -> float | None:
             matches = [
-                item for item in (
-                    (profile_evidence or {}).get("diameter_map", {}).get(
-                        "observations", []
-                    )
+                item
+                for item in (
+                    (profile_evidence or {}).get("diameter_map", {}).get("observations", [])
                 )
                 if item.get("role") == role
                 and item.get("source") == "vector_contour"
                 and len(item.get("axial_interval_mm") or []) == 2
-                and float(item["axial_interval_mm"][0]) - 1 <= station
+                and float(item["axial_interval_mm"][0]) - 1
+                <= station
                 <= float(item["axial_interval_mm"][1]) + 1
             ]
             return float(matches[0]["value_mm"]) if len(matches) == 1 else None
@@ -1691,7 +1787,8 @@ async def _read_cut_features(
             diameter = float(hypothesis["diameter_mm"])
             station = float(candidate["axial_position_mm"])
             matching_labels = [
-                item for item in labels
+                item
+                for item in labels
                 if abs(float(item.get("value_mm") or -1000) - diameter) <= 0.05
             ]
             side = hypothesis.get("side")
@@ -1715,9 +1812,7 @@ async def _read_cut_features(
                         "axial_position_mm": station,
                         "angle_deg": 0.0 if side == "top" else 180.0,
                         "through": False,
-                        "depth_mm": round(
-                            (outer_diameter - bore_diameter) / 2.0, 3
-                        ),
+                        "depth_mm": round((outer_diameter - bore_diameter) / 2.0, 3),
                         "count": int(hypothesis.get("count") or 1),
                     }
             if (
@@ -1729,20 +1824,24 @@ async def _read_cut_features(
                 continue
             if item is None:
                 continue
-            item["evidence"] = [{
-                "image_index": 0,
-                "bbox": candidate.get("bbox"),
-                "raw_text": (
-                    f"{hypothesis['candidate_id']} Ø{diameter:g} "
-                    f"{hypothesis.get('kind')} {side}"
-                ),
-            }]
-            if len(matching_labels) == 1:
-                item["evidence"].append({
+            item["evidence"] = [
+                {
                     "image_index": 0,
-                    "bbox": matching_labels[0]["bbox"],
-                    "raw_text": matching_labels[0]["raw_text"],
-                })
+                    "bbox": candidate.get("bbox"),
+                    "raw_text": (
+                        f"{hypothesis['candidate_id']} Ø{diameter:g} "
+                        f"{hypothesis.get('kind')} {side}"
+                    ),
+                }
+            ]
+            if len(matching_labels) == 1:
+                item["evidence"].append(
+                    {
+                        "image_index": 0,
+                        "bbox": matching_labels[0]["bbox"],
+                        "raw_text": matching_labels[0]["raw_text"],
+                    }
+                )
             compiled_radial.append(item)
 
         # A spatial OCR label can repair a missed model association only when
@@ -1754,16 +1853,15 @@ async def _read_cut_features(
                 continue
             side = label.get("side")
             candidates = [
-                item for item in radial_candidates
+                item
+                for item in radial_candidates
                 if any(
                     abs(float(value) - diameter) <= 0.05
                     for value in item.get("supported_diameters_mm") or []
                 )
                 or (
                     diameter == 10.0
-                    and abs(
-                        float(item.get("measured_axial_span_mm") or -1000) - 10.0
-                    ) <= 0.8
+                    and abs(float(item.get("measured_axial_span_mm") or -1000) - 10.0) <= 0.8
                 )
             ]
             if len(candidates) != 1 or side not in {"top", "bottom"}:
@@ -1771,81 +1869,88 @@ async def _read_cut_features(
             candidate = candidates[0]
             station = float(candidate["axial_position_mm"])
             angle = 0.0 if side == "top" else 180.0
-            if any(
-                abs(float(item["diameter_mm"]) - diameter) <= 0.05
-                for item in compiled_radial
-            ):
+            if any(abs(float(item["diameter_mm"]) - diameter) <= 0.05 for item in compiled_radial):
                 continue
             outer_diameter = _diameter_at("outer", station)
             bore_diameter = _diameter_at("bore", station)
             if outer_diameter is None or bore_diameter is None:
                 continue
-            compiled_radial.append({
-                "diameter_mm": diameter,
-                "axial_position_mm": station,
-                "angle_deg": angle,
-                "through": False,
-                "depth_mm": round((outer_diameter - bore_diameter) / 2.0, 3),
-                "count": 1,
-                "evidence": [{
-                    "image_index": 0,
-                    "bbox": candidate.get("bbox"),
-                    "raw_text": f"{candidate['id']} Ø{diameter:g} spatial label {side}",
-                }, {
-                    "image_index": 0,
-                    "bbox": label.get("bbox"),
-                    "raw_text": label.get("raw_text"),
-                }],
-            })
+            compiled_radial.append(
+                {
+                    "diameter_mm": diameter,
+                    "axial_position_mm": station,
+                    "angle_deg": angle,
+                    "through": False,
+                    "depth_mm": round((outer_diameter - bore_diameter) / 2.0, 3),
+                    "count": 1,
+                    "evidence": [
+                        {
+                            "image_index": 0,
+                            "bbox": candidate.get("bbox"),
+                            "raw_text": f"{candidate['id']} Ø{diameter:g} spatial label {side}",
+                        },
+                        {
+                            "image_index": 0,
+                            "bbox": label.get("bbox"),
+                            "raw_text": label.get("raw_text"),
+                        },
+                    ],
+                }
+            )
 
         for hypothesis, candidate, side in counterbores:
             station = float(candidate["axial_position_mm"])
             angle = 0.0 if side == "top" else 180.0
-            pilot = next((
-                item for item in compiled_radial
-                if abs(float(item["axial_position_mm"]) - station) <= 0.05
-                and abs(float(item.get("angle_deg") or 0.0) - angle) <= 0.05
-                and float(item["diameter_mm"]) < float(hypothesis["diameter_mm"])
-            ), None)
+            pilot = next(
+                (
+                    item
+                    for item in compiled_radial
+                    if abs(float(item["axial_position_mm"]) - station) <= 0.05
+                    and abs(float(item.get("angle_deg") or 0.0) - angle) <= 0.05
+                    and float(item["diameter_mm"]) < float(hypothesis["diameter_mm"])
+                ),
+                None,
+            )
             depth = float(hypothesis["depth_mm"])
             if pilot is None or depth > float(hypothesis["diameter_mm"]) / 2.0:
                 continue
             pilot["counterbore_diameter_mm"] = float(hypothesis["diameter_mm"])
             pilot["counterbore_depth_mm"] = depth
-            pilot.setdefault("evidence", []).append({
-                "image_index": 0,
-                "bbox": candidate.get("bbox"),
-                "raw_text": (
-                    f"{hypothesis['candidate_id']} Ø{float(hypothesis['diameter_mm']):g} "
-                    f"counterbore depth {depth:g} {side}"
-                ),
-            })
+            pilot.setdefault("evidence", []).append(
+                {
+                    "image_index": 0,
+                    "bbox": candidate.get("bbox"),
+                    "raw_text": (
+                        f"{hypothesis['candidate_id']} Ø{float(hypothesis['diameter_mm']):g} "
+                        f"counterbore depth {depth:g} {side}"
+                    ),
+                }
+            )
 
         compiled_values = {item["diameter_mm"] for item in compiled_radial}
         if 14.0 in compiled_values:
             missing_keyways = [
-                item for item in missing_keyways
+                item
+                for item in missing_keyways
                 if "Ø14: найдено несколько осевых положений" not in item
             ]
-        paired = [
-            item for item in compiled_radial
-            if item["diameter_mm"] in {9.0, 10.0}
-        ]
+        paired = [item for item in compiled_radial if item["diameter_mm"] in {9.0, 10.0}]
         if {item["diameter_mm"] for item in paired} == {9.0, 10.0} and {
             item["angle_deg"] for item in paired
         } == {0.0, 180.0}:
             missing_keyways = [
-                item for item in missing_keyways
-                if "radial-opening-3: контур допускает" not in item
+                item for item in missing_keyways if "radial-opening-3: контур допускает" not in item
             ]
     if radial_candidates:
         holes = [
-            item for item in holes
+            item
+            for item in holes
             if any(
                 abs(
                     (_num(item.get("axial_position_mm")) or -1000)
                     - float(candidate["axial_position_mm"])
-                ) <= 1.0
+                )
+                <= 1.0
                 and any(
                     abs((_num(item.get("diameter_mm")) or -1000) - float(value)) <= 0.2
                     for value in candidate.get("supported_diameters_mm") or []
@@ -1860,8 +1965,7 @@ async def _read_cut_features(
 
     texts = [
         str((item or {}).get("value") or (item or {}).get("text") or "")
-        for item in (callouts or {}).get("dimensions", [])
-        + (callouts or {}).get("annotations", [])
+        for item in (callouts or {}).get("dimensions", []) + (callouts or {}).get("annotations", [])
         if isinstance(item, dict)
     ]
     axial_patterns = feature_evidence.get("axial_hole_patterns") or []
@@ -1874,9 +1978,7 @@ async def _read_cut_features(
             re.IGNORECASE,
         )
         if match:
-            designation = (
-                match.group(2).replace(" ", "").upper().replace("М", "M")
-            )
+            designation = match.group(2).replace(" ", "").upper().replace("М", "M")
             axial_callouts.append((int(match.group(1)), designation))
     if len(axial_patterns) == 1 and len(set(axial_callouts)) == 1:
         pattern = axial_patterns[0]
@@ -1905,21 +2007,25 @@ async def _read_cut_features(
                     "nominal_diameter_mm": nominal,
                     "pitch_mm": None,
                     "internal": True,
-                    "evidence": [{
+                    "evidence": [
+                        {
+                            "image_index": 0,
+                            "bbox": pattern.get("bbox"),
+                            "raw_text": f"callout {count} holes {designation}",
+                        }
+                    ],
+                },
+                "evidence": [
+                    {
                         "image_index": 0,
                         "bbox": pattern.get("bbox"),
-                        "raw_text": f"callout {count} holes {designation}",
-                    }],
-                },
-                "evidence": [{
-                    "image_index": 0,
-                    "bbox": pattern.get("bbox"),
-                    "raw_text": (
-                        f"opposed end-view circles; measured PCD "
-                        f"{pattern.get('measured_bolt_circle_diameter_mm'):g} mm, "
-                        f"matched to stated Ø{pattern['bolt_circle_diameter_mm']:g}"
-                    ),
-                }],
+                        "raw_text": (
+                            f"opposed end-view circles; measured PCD "
+                            f"{pattern.get('measured_bolt_circle_diameter_mm'):g} mm, "
+                            f"matched to stated Ø{pattern['bolt_circle_diameter_mm']:g}"
+                        ),
+                    }
+                ],
             }
             resolved_axial = _resolve_axial_pattern_geometry(
                 axial_hole,
@@ -1950,9 +2056,12 @@ async def _read_cut_features(
     if auxiliary_patterns:
         result["circular_hole_patterns"] = auxiliary_patterns
     completeness_issues = _feature_completeness_issues(
-        callouts or {}, result, outer,
+        callouts or {},
+        result,
+        outer,
         (profile_evidence or {}).get("diameter_map") or {},
-        bore=bore, feature_evidence=feature_evidence,
+        bore=bore,
+        feature_evidence=feature_evidence,
     )
     missing_keyways.extend(completeness_issues)
     if profile_evidence is not None:
@@ -1996,26 +2105,27 @@ def _resolve_axial_pattern_geometry(
         return resolved
     from_face, relation = face
 
-    localized_depths = sorted({
-        float(item["value_mm"])
-        for item in axial_map.get("observations") or []
-        if isinstance(item, dict)
-        and item.get("relation") == relation
-        and isinstance(item.get("value_mm"), (int, float))
-        and not isinstance(item.get("value_mm"), bool)
-        and 2.0 <= float(item["value_mm"]) <= 80.0
-    })
-    stated_depths = sorted({
-        float(value)
-        for value in _callout_numbers(callouts, "linear")
-        if 2.0 <= float(value) <= 80.0
-    })
+    localized_depths = sorted(
+        {
+            float(item["value_mm"])
+            for item in axial_map.get("observations") or []
+            if isinstance(item, dict)
+            and item.get("relation") == relation
+            and isinstance(item.get("value_mm"), (int, float))
+            and not isinstance(item.get("value_mm"), bool)
+            and 2.0 <= float(item["value_mm"]) <= 80.0
+        }
+    )
+    stated_depths = sorted(
+        {
+            float(value)
+            for value in _callout_numbers(callouts, "linear")
+            if 2.0 <= float(value) <= 80.0
+        }
+    )
     pairs: list[tuple[float, float]] = []
     for drill_depth in localized_depths:
-        smaller = [
-            value for value in stated_depths
-            if 0.5 <= drill_depth - value <= 3.0
-        ]
+        smaller = [value for value in stated_depths if 0.5 <= drill_depth - value <= 3.0]
         if smaller:
             pairs.append((max(smaller), drill_depth))
     # Several plausible pairs mean the dimensions have not been associated
@@ -2024,13 +2134,15 @@ def _resolve_axial_pattern_geometry(
     if len(unique_pairs) != 1:
         return resolved
     thread_depth, drill_depth = unique_pairs[0]
-    resolved.update({
-        "from_face": from_face,
-        "through": False,
-        "depth_mm": drill_depth,
-        "thread_depth_mm": thread_depth,
-        "drill_depth_mm": drill_depth,
-    })
+    resolved.update(
+        {
+            "from_face": from_face,
+            "through": False,
+            "depth_mm": drill_depth,
+            "thread_depth_mm": thread_depth,
+            "drill_depth_mm": drill_depth,
+        }
+    )
     resolved["evidence"] = [
         *(resolved.get("evidence") or []),
         {
@@ -2045,9 +2157,7 @@ def _resolve_axial_pattern_geometry(
     return resolved
 
 
-def _axial_pattern_face(
-    pattern: dict[str, Any], outer: list[dict]
-) -> tuple[str, str] | None:
+def _axial_pattern_face(pattern: dict[str, Any], outer: list[dict]) -> tuple[str, str] | None:
     """Uniquely register an observed end-view envelope with one profile end."""
     if len(outer) < 2:
         return None
@@ -2066,11 +2176,7 @@ def _axial_pattern_face(
     right_match = matches(outer[-2:])
     if left_match == right_match:
         return None
-    return (
-        ("zmin", "from_left_datum")
-        if left_match
-        else ("zmax", "from_right_datum")
-    )
+    return ("zmin", "from_left_datum") if left_match else ("zmax", "from_right_datum")
 
 
 async def _resolve_axial_pattern_geometry_from_source(
@@ -2098,7 +2204,8 @@ async def _resolve_axial_pattern_geometry_from_source(
         return pattern
     from_face, relation = face
     observations = [
-        item for item in axial_map.get("observations") or []
+        item
+        for item in axial_map.get("observations") or []
         if isinstance(item, dict)
         and item.get("relation") == relation
         and isinstance(item.get("value_mm"), (int, float))
@@ -2107,11 +2214,13 @@ async def _resolve_axial_pattern_geometry_from_source(
         and isinstance(item.get("label_bbox"), list)
         and len(item["label_bbox"]) == 4
     ]
-    stated = sorted({
-        float(value)
-        for value in _callout_numbers(callouts, "linear")
-        if 2.0 <= float(value) <= 40.0
-    })
+    stated = sorted(
+        {
+            float(value)
+            for value in _callout_numbers(callouts, "linear")
+            if 2.0 <= float(value) <= 40.0
+        }
+    )
     plausible = [
         (thread, float(item["value_mm"]), item)
         for item in observations
@@ -2125,8 +2234,7 @@ async def _resolve_axial_pattern_geometry_from_source(
     y0 = min(float(item["label_bbox"][1]) for _t, _d, item in plausible)
     x1 = max(float(item["label_bbox"][2]) for _t, _d, item in plausible)
     y1 = max(
-        float((item.get("dimension_line") or item["label_bbox"])[1])
-        for _t, _d, item in plausible
+        float((item.get("dimension_line") or item["label_bbox"])[1]) for _t, _d, item in plausible
     )
     pad_x, pad_top, pad_bottom = 80, 35, 115
     crop_box = [
@@ -2171,13 +2279,15 @@ async def _resolve_axial_pattern_geometry_from_source(
     thread_depth, drill_depth = selected
     assert thread_depth is not None and drill_depth is not None
     resolved = dict(pattern)
-    resolved.update({
-        "from_face": from_face,
-        "through": False,
-        "depth_mm": drill_depth,
-        "thread_depth_mm": thread_depth,
-        "drill_depth_mm": drill_depth,
-    })
+    resolved.update(
+        {
+            "from_face": from_face,
+            "through": False,
+            "depth_mm": drill_depth,
+            "thread_depth_mm": thread_depth,
+            "drill_depth_mm": drill_depth,
+        }
+    )
     resolved["evidence"] = [
         *(resolved.get("evidence") or []),
         {
@@ -2228,11 +2338,7 @@ def _resolve_axial_pattern_entry_offset(
     import numpy as np
 
     rgb = np.asarray(source_image.convert("RGB"))
-    blue = (
-        (rgb[:, :, 2] >= 180)
-        & (rgb[:, :, 0] <= 60)
-        & (rgb[:, :, 1] <= 60)
-    )
+    blue = (rgb[:, :, 2] >= 180) & (rgb[:, :, 0] <= 60) & (rgb[:, :, 1] <= 60)
     datum_x = float(datum[0] if pattern["from_face"] == "zmin" else datum[1])
     direction = 1 if pattern["from_face"] == "zmin" else -1
     center_candidates = [center_y] if center_y is not None else []
@@ -2276,8 +2382,7 @@ def _resolve_axial_pattern_entry_offset(
     # A mouth is the first strong opposed vertical segment after the envelope.
     first_offset_px = min(item[0] for item in candidates)
     first_group = [
-        offset for offset, _score in candidates
-        if first_offset_px <= offset <= first_offset_px + 2
+        offset for offset, _score in candidates if first_offset_px <= offset <= first_offset_px + 2
     ]
     measured_offset_px = sum(first_group) / len(first_group)
     measured = measured_offset_px * mm_per_px
@@ -2304,9 +2409,7 @@ def _resolve_axial_pattern_entry_offset(
     return resolved
 
 
-def _chamfer_edge_candidates(
-    outer: list[dict], bore: list[dict]
-) -> list[dict[str, Any]]:
+def _chamfer_edge_candidates(outer: list[dict], bore: list[dict]) -> list[dict[str, Any]]:
     """Finite B-Rep edge vocabulary offered to the grouped-callout reader."""
     candidates: list[dict[str, Any]] = []
 
@@ -2316,13 +2419,15 @@ def _chamfer_edge_candidates(
         key = f"{profile}-z{z:g}-d{diameter:g}"
         if any(item["id"] == key for item in candidates):
             return
-        candidates.append({
-            "id": key,
-            "profile": profile,
-            "location": location,
-            "at_z_mm": round(z, 6),
-            "at_diameter_mm": round(diameter, 6),
-        })
+        candidates.append(
+            {
+                "id": key,
+                "profile": profile,
+                "location": location,
+                "at_z_mm": round(z, 6),
+                "at_diameter_mm": round(diameter, 6),
+            }
+        )
 
     if outer:
         add("outer", "left_end", 0.0, _num(outer[0].get("diameter_mm")))
@@ -2332,7 +2437,9 @@ def _chamfer_edge_candidates(
             if index + 1 < len(outer):
                 add("outer", "shoulder", z, _num(section.get("diameter_mm")))
                 add(
-                    "outer", "shoulder", z,
+                    "outer",
+                    "shoulder",
+                    z,
                     _num(outer[index + 1].get("diameter_mm")),
                 )
         add("outer", "right_end", z, _num(outer[-1].get("diameter_mm")))
@@ -2345,7 +2452,9 @@ def _chamfer_edge_candidates(
             if index + 1 < len(bore):
                 add("bore", "bore_mouth", z, _num(section.get("diameter_mm")))
                 add(
-                    "bore", "bore_mouth", z,
+                    "bore",
+                    "bore_mouth",
+                    z,
                     _num(bore[index + 1].get("diameter_mm")),
                 )
         add("bore", "bore_mouth", z, _num(bore[-1].get("diameter_mm")))
@@ -2403,9 +2512,7 @@ def _chamfer_candidate_contact_sheet(
             f"{token}  z={z:g}  d={diameter:g}  {item['profile']}",
             fill="black",
         )
-        for position, source_y in enumerate(
-            (center_y - radial_px, center_y + radial_px)
-        ):
+        for position, source_y in enumerate((center_y - radial_px, center_y + radial_px)):
             crop_box = (
                 max(0, int(source_x - half_width)),
                 max(0, int(source_y - half_height)),
@@ -2448,8 +2555,7 @@ async def _resolve_grouped_chamfers(
     """
     texts = [
         str((item or {}).get("value") or (item or {}).get("text") or "")
-        for item in (callouts.get("dimensions") or [])
-        + (callouts.get("annotations") or [])
+        for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or [])
         if isinstance(item, dict)
     ]
     counts = [
@@ -2479,8 +2585,10 @@ async def _resolve_grouped_chamfers(
         source_image, candidates, profile_evidence
     )
     offered = (
-        [{"token": token, "candidate_id": candidate_id}
-         for token, candidate_id in token_map.items()]
+        [
+            {"token": token, "candidate_id": candidate_id}
+            for token, candidate_id in token_map.items()
+        ]
         if token_map
         else candidates
     )
@@ -2516,9 +2624,9 @@ async def _resolve_grouped_chamfers(
         confidential=confidential,
         audit=audit,
     )
-    selected_ids = list(dict.fromkeys(
-        str(item) for item in (answer or {}).get("candidate_ids") or []
-    ))
+    selected_ids = list(
+        dict.fromkeys(str(item) for item in (answer or {}).get("candidate_ids") or [])
+    )
     by_id = {item["id"]: item for item in candidates}
     resolved_ids = [token_map.get(item, item) for item in selected_ids]
     valid = [by_id[item] for item in resolved_ids if item in by_id]
@@ -2575,21 +2683,26 @@ async def _resolve_grouped_chamfers(
             "accepted": [],
         }
 
-    resolved = [{
-        "size_mm": exemplar_size,
-        "angle_deg": _num(exemplar.get("angle_deg")) or 45.0,
-        "location": item["location"],
-        "at_z_mm": item["at_z_mm"],
-        "at_diameter_mm": item["at_diameter_mm"],
-        "evidence": [{
-            "image_index": 0,
-            "bbox": None,
-            "raw_text": (
-                f"group callout {expected} chamfers; source-visible edge "
-                f"{item['id']} selected from deterministic B-Rep catalogue"
-            ),
-        }],
-    } for item in valid]
+    resolved = [
+        {
+            "size_mm": exemplar_size,
+            "angle_deg": _num(exemplar.get("angle_deg")) or 45.0,
+            "location": item["location"],
+            "at_z_mm": item["at_z_mm"],
+            "at_diameter_mm": item["at_diameter_mm"],
+            "evidence": [
+                {
+                    "image_index": 0,
+                    "bbox": None,
+                    "raw_text": (
+                        f"group callout {expected} chamfers; source-visible edge "
+                        f"{item['id']} selected from deterministic B-Rep catalogue"
+                    ),
+                }
+            ],
+        }
+        for item in valid
+    ]
     return resolved, {
         "status": "resolved",
         "expected": expected,
@@ -2612,8 +2725,7 @@ def _feature_completeness_issues(
     """Refuse a smooth stand-in when the sheet explicitly names cut features."""
     texts = [
         str((item or {}).get("value") or (item or {}).get("text") or "")
-        for item in (callouts.get("dimensions") or [])
-        + (callouts.get("annotations") or [])
+        for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or [])
         if isinstance(item, dict)
     ]
     issues: list[str] = []
@@ -2621,8 +2733,7 @@ def _feature_completeness_issues(
     profile_diameters = [
         float(item["value_mm"])
         for item in (diameter_evidence.get("observations") or [])
-        if item.get("role") in {"outer", "bore"}
-        and isinstance(item.get("value_mm"), (int, float))
+        if item.get("role") in {"outer", "bore"} and isinstance(item.get("value_mm"), (int, float))
     ]
     named_small_holes: set[float] = set()
     for text in texts:
@@ -2642,9 +2753,7 @@ def _feature_completeness_issues(
     if (feature_evidence or {}).get("radial_opening_candidates"):
         named_small_holes = {
             float(item["value_mm"])
-            for item in (feature_evidence or {}).get(
-                "diameter_label_observations", []
-            )
+            for item in (feature_evidence or {}).get("diameter_label_observations", [])
             if isinstance(item.get("value_mm"), (int, float))
             and not isinstance(item.get("value_mm"), bool)
         }
@@ -2660,9 +2769,7 @@ def _feature_completeness_issues(
     )
     for diameter in sorted(named_small_holes):
         if not _matches_callout(diameter, [value for value in accepted_holes if value]):
-            issues.append(
-                f"поперечное отверстие Ø{diameter:g} указано, но не локализовано"
-            )
+            issues.append(f"поперечное отверстие Ø{diameter:g} указано, но не локализовано")
 
     chamfer_count = max(
         (
@@ -2675,19 +2782,20 @@ def _feature_completeness_issues(
     )
     if chamfer_count and len(features.get("chamfers") or []) < chamfer_count:
         issues.append(
-            f"указано {chamfer_count} фасок, локализовано "
-            f"{len(features.get('chamfers') or [])}"
+            f"указано {chamfer_count} фасок, локализовано {len(features.get('chamfers') or [])}"
         )
 
-    thread_callouts = sorted({
-        match.group(0).replace(" ", "")
-        for text in texts
-        for match in re.finditer(
-            r"\b[MМ]\s*\d+(?:[.,]\d+)?(?:\s*[xх×]\s*\d+(?:[.,]\d+)?)?",
-            text,
-            re.IGNORECASE,
-        )
-    })
+    thread_callouts = sorted(
+        {
+            match.group(0).replace(" ", "")
+            for text in texts
+            for match in re.finditer(
+                r"\b[MМ]\s*\d+(?:[.,]\d+)?(?:\s*[xх×]\s*\d+(?:[.,]\d+)?)?",
+                text,
+                re.IGNORECASE,
+            )
+        }
+    )
     assigned_threads = [
         item.get("thread")
         for item in [*outer, *(bore or [])]
@@ -2699,27 +2807,30 @@ def _feature_completeness_issues(
         if isinstance(item, dict) and item.get("thread")
     )
     assigned_designations = {
-        str(item.get("designation") or "").replace(" ", "").replace("×", "x")
-        .replace("х", "x").replace("М", "M").replace(",", ".").lower()
+        str(item.get("designation") or "")
+        .replace(" ", "")
+        .replace("×", "x")
+        .replace("х", "x")
+        .replace("М", "M")
+        .replace(",", ".")
+        .lower()
         for item in assigned_threads
         if isinstance(item, dict)
     }
     missing_threads = [
-        item for item in thread_callouts
-        if item.replace("×", "x").replace("х", "x").replace("М", "M")
-        .replace(",", ".").lower()
+        item
+        for item in thread_callouts
+        if item.replace("×", "x").replace("х", "x").replace("М", "M").replace(",", ".").lower()
         not in assigned_designations
     ]
     if missing_threads:
         candidate_notes: list[str] = []
         for designation in missing_threads:
             nominal_match = re.search(r"M\s*(\d+(?:[.,]\d+)?)", designation, re.IGNORECASE)
-            nominal = (
-                float(nominal_match.group(1).replace(",", "."))
-                if nominal_match else None
-            )
+            nominal = float(nominal_match.group(1).replace(",", ".")) if nominal_match else None
             candidates = [
-                item for item in diameter_evidence.get("outer_candidates") or []
+                item
+                for item in diameter_evidence.get("outer_candidates") or []
                 if nominal is not None
                 and abs(float(item.get("value_mm") or -1000) - nominal) <= 0.05
             ]
@@ -2729,7 +2840,8 @@ def _feature_completeness_issues(
                     f"{designation}: измерен наружный контур-кандидат Ø{nominal:g}"
                     + (
                         f" на приблизительном интервале {interval[0]:g}…{interval[1]:g} мм"
-                        if len(interval) == 2 else ""
+                        if len(interval) == 2
+                        else ""
                     )
                     + ", но его границы не привязаны к двум осевым размерам"
                 )
@@ -2743,20 +2855,16 @@ def _feature_completeness_issues(
         if item.get("through") is None:
             missing.append("сквозное/глухое исполнение")
         if item.get("through") is False and not (
-            _num(item.get("drill_depth_mm"))
-            or _num(item.get("depth_mm"))
+            _num(item.get("drill_depth_mm")) or _num(item.get("depth_mm"))
         ):
             missing.append("глубина сверления")
-        if (
-            (_num(item.get("entry_offset_mm")) or 0) > 0
-            and _num(item.get("entry_recess_diameter_mm")) is None
-        ):
+        if (_num(item.get("entry_offset_mm")) or 0) > 0 and _num(
+            item.get("entry_recess_diameter_mm")
+        ) is None:
             missing.append("Ø входной выборки")
         if missing:
             designation = str((item.get("thread") or {}).get("designation") or "резьба")
-            issues.append(
-                f"осевые отверстия {designation}: не определены " + ", ".join(missing)
-            )
+            issues.append(f"осевые отверстия {designation}: не определены " + ", ".join(missing))
     for item in features.get("circular_hole_patterns") or []:
         missing = []
         if item.get("from_face") not in {"zmin", "zmax"}:
@@ -2775,8 +2883,7 @@ def _feature_completeness_issues(
         if missing:
             issues.append(
                 f"массив {int(item.get('count') or 0)}×Ø"
-                f"{_num(item.get('hole_diameter_mm')) or 0:g}: не определены "
-                + ", ".join(missing)
+                f"{_num(item.get('hole_diameter_mm')) or 0:g}: не определены " + ", ".join(missing)
             )
     return issues
 
@@ -2790,17 +2897,15 @@ def _auxiliary_circular_hole_patterns(callouts: dict[str, Any]) -> list[dict[str
     angular phase or an entry face. Those build-critical fields remain null and
     are surfaced to the reviewer.
     """
-    entries = [
-        item for item in (callouts.get("dimensions") or [])
-        if isinstance(item, dict)
-    ]
+    entries = [item for item in (callouts.get("dimensions") or []) if isinstance(item, dict)]
     group_pattern = re.compile(
         r"\b(\d+)\s*(?:отв\.?|отверсти\w*|holes?)\s*[.,:]?\s*"
         r"[ØФ⌀]\s*(\d+(?:[.,]\d+)?)",
         re.IGNORECASE,
     )
     group_indexes = [
-        index for index, item in enumerate(entries)
+        index
+        for index, item in enumerate(entries)
         if group_pattern.search(str(item.get("value") or ""))
     ]
     patterns: list[dict[str, Any]] = []
@@ -2819,7 +2924,7 @@ def _auxiliary_circular_hole_patterns(callouts: dict[str, Any]) -> list[dict[str
         window_start = index if previous_group >= 0 else max(0, index - 3)
         window_end = min(next_group, index + 5)
         neighbours = entries[window_start:window_end]
-        following = entries[index + 1:window_end]
+        following = entries[index + 1 : window_end]
         neighbour_texts = [str(entry.get("value") or "") for entry in neighbours]
         following_texts = [str(entry.get("value") or "") for entry in following]
         diameter_values = [
@@ -2841,49 +2946,55 @@ def _auxiliary_circular_hole_patterns(callouts: dict[str, Any]) -> list[dict[str
         ]
         if pcd is None:
             continue
-        evidence = [{
-            "image_index": 0,
-            "bbox": None,
-            "raw_text": " | ".join([text, *neighbour_texts]),
-        }]
+        evidence = [
+            {
+                "image_index": 0,
+                "bbox": None,
+                "raw_text": " | ".join([text, *neighbour_texts]),
+            }
+        ]
         if any(abs(angle - 45.0) <= 0.1 for angle in exact_angles):
-            patterns.append({
+            patterns.append(
+                {
+                    "count": count,
+                    "hole_diameter_mm": hole_diameter,
+                    "bolt_circle_diameter_mm": pcd,
+                    "axis_mode": "inclined",
+                    "start_angle_deg": None,
+                    "spacing_deg": 360.0 / count,
+                    "from_face": None,
+                    "entry_offset_mm": 0.0,
+                    "through": True,
+                    "depth_mm": None,
+                    "inclination_deg": 45.0,
+                    "radial_direction": "outward",
+                    "connection_station_mm": None,
+                    "evidence": evidence,
+                }
+            )
+            continue
+        depth = max(linear_values, default=None)
+        connection = min(linear_values, default=None)
+        patterns.append(
+            {
                 "count": count,
                 "hole_diameter_mm": hole_diameter,
                 "bolt_circle_diameter_mm": pcd,
-                "axis_mode": "inclined",
+                "axis_mode": "axial",
                 "start_angle_deg": None,
                 "spacing_deg": 360.0 / count,
                 "from_face": None,
                 "entry_offset_mm": 0.0,
-                "through": True,
-                "depth_mm": None,
-                "inclination_deg": 45.0,
-                "radial_direction": "outward",
-                "connection_station_mm": None,
+                "through": False if depth is not None else None,
+                "depth_mm": depth,
+                "inclination_deg": None,
+                "radial_direction": None,
+                "connection_station_mm": (
+                    connection if connection is not None and connection != depth else None
+                ),
                 "evidence": evidence,
-            })
-            continue
-        depth = max(linear_values, default=None)
-        connection = min(linear_values, default=None)
-        patterns.append({
-            "count": count,
-            "hole_diameter_mm": hole_diameter,
-            "bolt_circle_diameter_mm": pcd,
-            "axis_mode": "axial",
-            "start_angle_deg": None,
-            "spacing_deg": 360.0 / count,
-            "from_face": None,
-            "entry_offset_mm": 0.0,
-            "through": False if depth is not None else None,
-            "depth_mm": depth,
-            "inclination_deg": None,
-            "radial_direction": None,
-            "connection_station_mm": (
-                connection if connection is not None and connection != depth else None
-            ),
-            "evidence": evidence,
-        })
+            }
+        )
     return patterns
 
 
@@ -2908,8 +3019,7 @@ async def _recover_external_thread_carrier(
     """
     texts = [
         str((item or {}).get("value") or (item or {}).get("text") or "")
-        for item in (callouts.get("dimensions") or [])
-        + (callouts.get("annotations") or [])
+        for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or [])
         if isinstance(item, dict)
     ]
     threads: list[tuple[str, float, float | None]] = []
@@ -2930,15 +3040,15 @@ async def _recover_external_thread_carrier(
             continue
         seen_threads.add(normalized)
         if not any(
-            abs(float(item.get("diameter_mm") or -1000) - nominal)
-            <= max(0.6, nominal * 0.01)
+            abs(float(item.get("diameter_mm") or -1000) - nominal) <= max(0.6, nominal * 0.01)
             for item in [*outer, *bore]
         ):
             threads.append((designation, nominal, pitch))
     recoverable: list[tuple[str, float, float | None, dict[str, Any]]] = []
     for designation, nominal, pitch in threads:
         candidates = [
-            item for item in diameter_evidence.get("outer_candidates") or []
+            item
+            for item in diameter_evidence.get("outer_candidates") or []
             if abs(float(item.get("value_mm") or -1000) - nominal) <= 0.05
             and len(item.get("axial_interval_mm") or []) == 2
             and len(item.get("profile_interval_px") or []) == 2
@@ -2959,20 +3069,20 @@ async def _recover_external_thread_carrier(
         for section in sections:
             station += float(section.get("length_mm") or 0.0)
             anchors.add(round(station, 3))
-    lengths = sorted({
-        round(float(value), 3)
-        for value in _callout_numbers(callouts, "linear")
-        if 1.0 <= float(value) <= 120.0
-    })
+    lengths = sorted(
+        {
+            round(float(value), 3)
+            for value in _callout_numbers(callouts, "linear")
+            if 1.0 <= float(value) <= 120.0
+        }
+    )
     search_lo, search_hi = approx_start - 18.0, approx_end + 18.0
     stations = set(anchors)
     for anchor in anchors:
         for length in lengths:
             stations.add(round(anchor - length, 3))
             stations.add(round(anchor + length, 3))
-    allowed_stations = sorted(
-        station for station in stations if search_lo <= station <= search_hi
-    )
+    allowed_stations = sorted(station for station in stations if search_lo <= station <= search_hi)
     if len(allowed_stations) < 2:
         return False
 
@@ -3005,7 +3115,9 @@ async def _recover_external_thread_carrier(
     length = _num(answer.get("length_mm"))
     if (
         answer.get("confirmed") is not True
-        or start is None or end is None or length is None
+        or start is None
+        or end is None
+        or length is None
         or not _matches_callout(start, allowed_stations)
         or not _matches_callout(end, allowed_stations)
         or not _matches_callout(length, lengths)
@@ -3031,39 +3143,45 @@ async def _recover_external_thread_carrier(
     split: list[dict[str, Any]] = []
     if start > section_start + 0.05:
         split.append({**original, "length_mm": round(start - section_start, 3)})
-    split.append({
-        **original,
-        "diameter_mm": nominal,
-        "length_mm": round(length, 3),
-        "note": "наружный резьбовой участок подтверждён контуром и размерной цепью",
-        "thread": {
-            "designation": designation,
-            "system": "metric",
-            "nominal_diameter_mm": nominal,
-            "pitch_mm": pitch,
+    split.append(
+        {
+            **original,
+            "diameter_mm": nominal,
             "length_mm": round(length, 3),
-            "internal": False,
-            "evidence": [{
-                "image_index": 0,
-                "bbox": crop_box,
-                "raw_text": (
-                    f"{designation}; carrier Ø{nominal:g}; "
-                    f"stations {start:g}…{end:g}; length {length:g}"
-                ),
-            }],
-        },
-        "evidence": [{
-            "image_index": 0,
-            "bbox": crop_box,
-            "raw_text": (
-                f"interrupted vector contour Ø{nominal:g}; "
-                f"dimension chain {start:g}…{end:g}"
-            ),
-        }],
-    })
+            "note": "наружный резьбовой участок подтверждён контуром и размерной цепью",
+            "thread": {
+                "designation": designation,
+                "system": "metric",
+                "nominal_diameter_mm": nominal,
+                "pitch_mm": pitch,
+                "length_mm": round(length, 3),
+                "internal": False,
+                "evidence": [
+                    {
+                        "image_index": 0,
+                        "bbox": crop_box,
+                        "raw_text": (
+                            f"{designation}; carrier Ø{nominal:g}; "
+                            f"stations {start:g}…{end:g}; length {length:g}"
+                        ),
+                    }
+                ],
+            },
+            "evidence": [
+                {
+                    "image_index": 0,
+                    "bbox": crop_box,
+                    "raw_text": (
+                        f"interrupted vector contour Ø{nominal:g}; "
+                        f"dimension chain {start:g}…{end:g}"
+                    ),
+                }
+            ],
+        }
+    )
     if end < section_end - 0.05:
         split.append({**original, "length_mm": round(section_end - end, 3)})
-    outer[carrier_index:carrier_index + 1] = split
+    outer[carrier_index : carrier_index + 1] = split
     return True
 
 
@@ -3081,8 +3199,7 @@ def _assign_profile_threads(
     """
     texts = [
         str((item or {}).get("value") or (item or {}).get("text") or "")
-        for item in (callouts.get("dimensions") or [])
-        + (callouts.get("annotations") or [])
+        for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or [])
         if isinstance(item, dict)
     ]
     unresolved: list[str] = []
@@ -3096,9 +3213,7 @@ def _assign_profile_threads(
         if not match:
             continue
         nominal = float(match.group(1).replace(",", "."))
-        pitch = (
-            float(match.group(2).replace(",", ".")) if match.group(2) else None
-        )
+        pitch = float(match.group(2).replace(",", ".")) if match.group(2) else None
         designation = f"M{match.group(1)}"
         if pitch is not None:
             designation += f"x{match.group(2)}"
@@ -3130,17 +3245,21 @@ def _assign_profile_threads(
             "pitch_mm": pitch,
             "length_mm": _num(section.get("length_mm")),
             "internal": internal,
-            "evidence": [{
-                "image_index": 0,
-                "bbox": None,
-                "raw_text": text,
-            }],
+            "evidence": [
+                {
+                    "image_index": 0,
+                    "bbox": None,
+                    "raw_text": text,
+                }
+            ],
         }
     return unresolved
 
 
 def _checked_bore(
-    bore: list[dict], outer: list[dict], callouts: dict,
+    bore: list[dict],
+    outer: list[dict],
+    callouts: dict,
     diameter_evidence: dict[str, Any] | None = None,
 ) -> tuple[list[dict], str | None]:
     """The bore, but only if the sheet supports it.
@@ -3162,7 +3281,8 @@ def _checked_bore(
 
     diameters_seen = _callout_numbers(callouts, "diameter")
     off_sheet = [
-        _num(item.get("diameter_mm")) for item in sections
+        _num(item.get("diameter_mm"))
+        for item in sections
         if _num(item.get("diameter_mm")) is not None
         and not _matches_callout(_num(item.get("diameter_mm")), diameters_seen)
     ]
@@ -3181,7 +3301,8 @@ def _checked_bore(
             and float(item.get("confidence") or 0.0) >= 0.6
         ]
         unsupported = [
-            value for value in (_num(item.get("diameter_mm")) for item in sections)
+            value
+            for value in (_num(item.get("diameter_mm")) for item in sections)
             if value is not None and not _matches_callout(value, supported)
         ]
         if unsupported:
@@ -3190,9 +3311,7 @@ def _checked_bore(
                 "контуром: " + ", ".join(f"Ø{value:g}" for value in unsupported[:6])
             )
 
-    outer_diameters = [
-        _num(item.get("diameter_mm")) for item in outer if isinstance(item, dict)
-    ]
+    outer_diameters = [_num(item.get("diameter_mm")) for item in outer if isinstance(item, dict)]
     largest_outer = max((value for value in outer_diameters if value), default=None)
     largest_bore = max(
         (value for value in (_num(item.get("diameter_mm")) for item in sections) if value),
@@ -3208,14 +3327,12 @@ def _checked_bore(
         value for value in (_num(item.get("length_mm")) for item in sections) if value
     )
     outer_length = sum(
-        value for value in
-        (_num(item.get("length_mm")) for item in outer if isinstance(item, dict))
+        value
+        for value in (_num(item.get("length_mm")) for item in outer if isinstance(item, dict))
         if value
     )
     if bore_length and outer_length and bore_length > outer_length * 1.02:
-        return [], (
-            f"расточка длиной {bore_length:g} мм длиннее детали ({outer_length:g} мм)"
-        )
+        return [], (f"расточка длиной {bore_length:g} мм длиннее детали ({outer_length:g} мм)")
     return sections, None
 
 
@@ -3302,9 +3419,7 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
             # code with no Ø to anchor on ("50h7" with OCR having dropped
             # the leading Ø).
             mark = _DIAMETER_MARK.search(text)
-            nominal = _re.search(
-                r"\d+(?:[.,]\d+)?", text[mark.end():] if mark else text
-            )
+            nominal = _re.search(r"\d+(?:[.,]\d+)?", text[mark.end() :] if mark else text)
             if nominal:
                 value = float(nominal.group().replace(",", "."))
                 if 0 < value <= 100_000:
@@ -3325,9 +3440,7 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
 # (малый) и Ø80 js6 ... (большой)"), and _callout_numbers's diameter branch
 # only reads the FIRST number after the mark in an item, so two diameters
 # sharing one dimensions[] entry would silently lose the second.
-_FREE_TEXT_DIAMETER_TOKEN = re.compile(
-    r"[ØøΦφ⌀]\s*\d+(?:[.,]\d+)?(?:\s*[A-Za-z]{1,2}\d{1,2}\b)?"
-)
+_FREE_TEXT_DIAMETER_TOKEN = re.compile(r"[ØøΦφ⌀]\s*\d+(?:[.,]\d+)?(?:\s*[A-Za-z]{1,2}\d{1,2}\b)?")
 _FREE_TEXT_FIT_TOKEN = re.compile(r"\b\d+(?:[.,]\d+)?\s*[A-Za-z]{1,2}[5-9]\b")
 
 
@@ -3402,7 +3515,11 @@ def _extract_python_code(text: str) -> str | None:
 
 
 async def _run_geometry_code_pass(
-    image, *, router: Any, confidential: bool, audit: list[dict[str, Any]] | None,
+    image,
+    *,
+    router: Any,
+    confidential: bool,
+    audit: list[dict[str, Any]] | None,
 ) -> dict[str, Any] | None:
     """Ask for, extract, and actually RUN a geometry-computing script.
 
@@ -3419,9 +3536,14 @@ async def _run_geometry_code_pass(
 
     describe_audit: list[dict[str, Any]] = []
     await _ask(
-        _GEOMETRY_CODE_PROMPT, image, num_predict=8000,
-        audit=describe_audit, thinking=True, timeout_seconds=150.0,
-        router=router, confidential=confidential,
+        _GEOMETRY_CODE_PROMPT,
+        image,
+        num_predict=8000,
+        audit=describe_audit,
+        thinking=True,
+        timeout_seconds=150.0,
+        router=router,
+        confidential=confidential,
     )
     raw_text = describe_audit[-1]["raw_response"] if describe_audit else ""
     code = _extract_python_code(raw_text)
@@ -3455,20 +3577,27 @@ async def _run_geometry_code_pass(
             'print(json.dumps({"outer": [...], "bore": [...]})).'
         )
         await _ask(
-            fix_prompt, image, num_predict=8000,
-            audit=describe_audit, thinking=True, timeout_seconds=150.0,
-            router=router, confidential=confidential,
+            fix_prompt,
+            image,
+            num_predict=8000,
+            audit=describe_audit,
+            thinking=True,
+            timeout_seconds=150.0,
+            router=router,
+            confidential=confidential,
         )
         retry_text = describe_audit[-1]["raw_response"] if describe_audit else ""
         retry_code = _extract_python_code(retry_text)
         outcome = await _run(retry_code) if retry_code else outcome
 
     if audit is not None:
-        audit.append({
-            "question": "geometry code pass",
-            "ok": bool(outcome.get("ok")),
-            "error": outcome.get("error"),
-        })
+        audit.append(
+            {
+                "question": "geometry code pass",
+                "ok": bool(outcome.get("ok")),
+                "error": outcome.get("error"),
+            }
+        )
     if not outcome.get("ok"):
         return None
     result = outcome.get("result")
@@ -3476,8 +3605,13 @@ async def _run_geometry_code_pass(
 
 
 async def _sections_from_chain(
-    image, callouts: dict, *, router: Any, confidential: bool,
-    audit: list[dict[str, Any]] | None = None, source_image=None,
+    image,
+    callouts: dict,
+    *,
+    router: Any,
+    confidential: bool,
+    audit: list[dict[str, Any]] | None = None,
+    source_image=None,
     evidence_context: dict[str, Any] | None = None,
 ) -> tuple[list[dict], str | None]:
     """Step lengths as DIFFERENCES of the axial chain the sheet draws.
@@ -3531,9 +3665,7 @@ async def _sections_from_chain(
             "profile_center_y_px": diameter_map.get("profile_center_y_px"),
             "px_per_mm": diameter_map.get("px_per_mm"),
             "observations": diameter_map.get("observations") or [],
-            "outer_transition_stations": (
-                diameter_map.get("outer_transition_stations") or []
-            ),
+            "outer_transition_stations": (diameter_map.get("outer_transition_stations") or []),
             "blockers": diameter_map.get("blockers") or [],
         },
     )
@@ -3544,8 +3676,15 @@ async def _sections_from_chain(
             {
                 key: item.get(key)
                 for key in (
-                    "id", "value_mm", "raw_text", "ocr_corrected", "relation",
-                    "station_from_left_mm", "label_bbox", "dimension_line", "confidence",
+                    "id",
+                    "value_mm",
+                    "raw_text",
+                    "ocr_corrected",
+                    "relation",
+                    "station_from_left_mm",
+                    "label_bbox",
+                    "dimension_line",
+                    "confidence",
                 )
             }
             for item in (axial_map.get("observations") or [])
@@ -3559,16 +3698,21 @@ async def _sections_from_chain(
                 {
                     key: item.get(key)
                     for key in (
-                        "id", "value_mm", "role", "source", "raw_text",
-                        "label_bbox", "profile_measurement_line",
-                        "profile_interval_px", "axial_interval_mm", "confidence",
+                        "id",
+                        "value_mm",
+                        "role",
+                        "source",
+                        "raw_text",
+                        "label_bbox",
+                        "profile_measurement_line",
+                        "profile_interval_px",
+                        "axial_interval_mm",
+                        "confidence",
                     )
                 }
                 for item in (diameter_map.get("observations") or [])
             ],
-            "outer_transition_stations": (
-                diameter_map.get("outer_transition_stations") or []
-            ),
+            "outer_transition_stations": (diameter_map.get("outer_transition_stations") or []),
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -3580,8 +3724,11 @@ async def _sections_from_chain(
             localized=localized or "[]",
             localized_diameters=localized_diameters or "[]",
         ),
-        image, num_predict=900,
-        schema=_CHAIN_SCHEMA, router=router, confidential=confidential,
+        image,
+        num_predict=900,
+        schema=_CHAIN_SCHEMA,
+        router=router,
+        confidential=confidential,
         audit=audit,
     )
     if not answer:
@@ -3589,7 +3736,8 @@ async def _sections_from_chain(
 
     def numbers(key: str) -> list[float]:
         return [
-            float(v) for v in (answer.get(key) or [])
+            float(v)
+            for v in (answer.get(key) or [])
             if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
         ]
 
@@ -3639,10 +3787,7 @@ async def _sections_from_chain(
         and float(item.get("confidence") or 0.0) >= 0.6
     )
     if axial_map.get("status") == "ok" and localized_stations:
-        unsupported = [
-            value for value in chain
-            if not _matches_callout(value, localized_stations)
-        ]
+        unsupported = [value for value in chain if not _matches_callout(value, localized_stations)]
         if unsupported:
             return [], (
                 "осевые позиции не подтверждены локализованными размерными "
@@ -3658,8 +3803,7 @@ async def _sections_from_chain(
             and float(item.get("confidence") or 0.0) >= 0.6
         ]
         unsupported_outer = [
-            value for value in diameters
-            if not _matches_callout(value, supported_outer)
+            value for value in diameters if not _matches_callout(value, supported_outer)
         ]
         if unsupported_outer:
             return [], (
@@ -3682,8 +3826,7 @@ async def _sections_from_chain(
     # matches a diameter is the reader crossing the two lists, which is the
     # failure this split exists to catch.
     off_sheet = [
-        value for value in chain
-        if not _matches_callout(value, lengths_seen or candidates)
+        value for value in chain if not _matches_callout(value, lengths_seen or candidates)
     ]
     if len(off_sheet) > len(chain) / 2:
         return [], (
@@ -3695,8 +3838,7 @@ async def _sections_from_chain(
     if isinstance(overall, (int, float)) and overall > 0:
         if abs(chain[-1] - float(overall)) > max(0.5, float(overall) * 0.02):
             return [], (
-                f"конец цепочки {chain[-1]:g} мм не совпадает с габаритом "
-                f"{float(overall):g} мм"
+                f"конец цепочки {chain[-1]:g} мм не совпадает с габаритом {float(overall):g} мм"
             )
 
     bores = numbers("bore_diameters_mm")
@@ -3708,10 +3850,7 @@ async def _sections_from_chain(
             and isinstance(item.get("value_mm"), (int, float))
             and float(item.get("confidence") or 0.0) >= 0.6
         ]
-        unsupported_bore = [
-            value for value in bores
-            if not _matches_callout(value, supported_bore)
-        ]
+        unsupported_bore = [value for value in bores if not _matches_callout(value, supported_bore)]
         if unsupported_bore:
             return [], (
                 "внутренние диаметры не подтверждены локализованным контуром: "
@@ -3729,16 +3868,22 @@ async def _sections_from_chain(
     sections: list[dict] = []
     previous = 0.0
     for diameter, position in zip(diameters, chain, strict=True):
-        sections.append({
-            "diameter_mm": diameter,
-            "length_mm": round(position - previous, 3),
-        })
+        sections.append(
+            {
+                "diameter_mm": diameter,
+                "length_mm": round(position - previous, 3),
+            }
+        )
         previous = position
     return sections, None
 
 
 async def _profile_by_assignment(
-    image, callouts: dict, *, router: Any, confidential: bool,
+    image,
+    callouts: dict,
+    *,
+    router: Any,
+    confidential: bool,
     audit: list[dict[str, Any]] | None = None,
 ) -> dict | None:
     """Build the outline by ASSIGNING already-read numbers to roles.
@@ -3759,8 +3904,11 @@ async def _profile_by_assignment(
 
     listed = ", ".join(f"{value:g}" for value in candidates[:24])
     answer = await _ask(
-        _ASSIGN_PROMPT.format(callouts=listed), image,
-        num_predict=400, schema=_ASSIGN_SCHEMA, **ask,
+        _ASSIGN_PROMPT.format(callouts=listed),
+        image,
+        num_predict=400,
+        schema=_ASSIGN_SCHEMA,
+        **ask,
     )
     if not answer:
         return None
@@ -3799,21 +3947,29 @@ async def _profile_by_assignment(
     bolt = taken("bolt_hole_diameter_mm")
     count = answer.get("bolt_hole_count")
     if pcd and bolt and isinstance(count, int) and 2 <= count <= 128:
-        patterns.append({
-            "kind": "bolt_circle", "count": count,
-            "bolt_circle_diameter_mm": pcd, "hole_diameter_mm": bolt,
-            "start_angle_deg": 0.0,
-        })
+        patterns.append(
+            {
+                "kind": "bolt_circle",
+                "count": count,
+                "bolt_circle_diameter_mm": pcd,
+                "hole_diameter_mm": bolt,
+                "start_angle_deg": 0.0,
+            }
+        )
     profile["hole_patterns"] = patterns
     return profile
 
 
 async def read_spec_by_fragments(
-    image_bytes: bytes, *, router: Any | None = None, confidential: bool = True,
+    image_bytes: bytes,
+    *,
+    router: Any | None = None,
+    confidential: bool = True,
     shared_layers: dict[str, Any] | None = None,
 ) -> dict:
     """Assemble a spec from several narrow reads of the same sheet."""
     from PIL import Image
+    from pydantic import ValidationError
 
     from app.ai.cad_recognize.spec_vectorize import (
         EngineeringDrawingSpec,
@@ -3823,7 +3979,6 @@ async def read_spec_by_fragments(
     )
     from app.ai.schemas import AITask
     from app.ai.task_routing import get_routing_for
-    from pydantic import ValidationError
 
     if router is None:
         from app.ai.router import ai_router
@@ -3867,19 +4022,21 @@ async def read_spec_by_fragments(
     kind = str(kind_answer.get("kind") or "").strip().lower()
     part = str(kind_answer.get("part") or "").strip()
 
-    stamp = await _ask(_STAMP_PROMPT, _stamp_crop(image), num_predict=600, schema=_STAMP_SCHEMA, **ask)
+    stamp = await _ask(
+        _STAMP_PROMPT, _stamp_crop(image), num_predict=600, schema=_STAMP_SCHEMA, **ask
+    )
 
     # Callouts are read BEFORE geometry: the outline of a flat part is then
     # assembled by assigning those numbers to roles instead of reading them a
     # second time, which is what let a flange come back as a "rectangle" whose
     # diameter was actually its bore.
-    callouts = await _ask(_CALLOUT_PROMPT, overview, num_predict=3000, schema=_CALLOUT_SCHEMA, **ask)
+    callouts = await _ask(
+        _CALLOUT_PROMPT, overview, num_predict=3000, schema=_CALLOUT_SCHEMA, **ask
+    )
     pmi_source_box = _main_view_crop_box(image)
     pmi_view = _overview(image.crop(pmi_source_box), side=2200)
     pmi_locator = _detect_pmi_frame_regions(pmi_view)
-    pmi_sheet, pmi_evidence = _pmi_contact_sheet(
-        pmi_view, pmi_locator, pmi_source_box
-    )
+    pmi_sheet, pmi_evidence = _pmi_contact_sheet(pmi_view, pmi_locator, pmi_source_box)
     pmi_answer = {}
     if pmi_sheet is not None:
         pmi_answer = await _ask(
@@ -3889,9 +4046,7 @@ async def read_spec_by_fragments(
             schema=_PMI_SCHEMA,
             **ask,
         )
-    localized_pmi, unresolved_pmi_count = _structured_pmi_annotations(
-        pmi_answer, pmi_evidence
-    )
+    localized_pmi, unresolved_pmi_count = _structured_pmi_annotations(pmi_answer, pmi_evidence)
     structured_pmi = list(localized_pmi)
     if localized_pmi:
         from app.ai.cad_process_log import record_cad_process_event
@@ -3917,7 +4072,8 @@ async def read_spec_by_fragments(
         # The bounded symbol question supersedes generic tolerance strings from
         # the broad callout pass. Keep other annotation classes unchanged.
         callouts["annotations"] = [
-            item for item in (callouts.get("annotations") or [])
+            item
+            for item in (callouts.get("annotations") or [])
             if not isinstance(item, dict) or item.get("kind") != "tolerance"
         ] + structured_pmi
     # The document model reads the sheet's text better than the general reader;
@@ -3930,16 +4086,22 @@ async def read_spec_by_fragments(
         if shared_layers is not None:
             shared_layers["ocr"] = ocr
     if ocr:
-        known = {str((d or {}).get("value") or "").strip().lower()
-                 for d in (callouts.get("dimensions") or [])}
+        known = {
+            str((d or {}).get("value") or "").strip().lower()
+            for d in (callouts.get("dimensions") or [])
+        }
         callouts.setdefault("dimensions", []).extend(
-            d for d in ocr.get("dimensions") or []
+            d
+            for d in ocr.get("dimensions") or []
             if str(d.get("value") or "").strip().lower() not in known
         )
-        known_notes = {str((a or {}).get("text") or "").strip().lower()
-                       for a in (callouts.get("annotations") or [])}
+        known_notes = {
+            str((a or {}).get("text") or "").strip().lower()
+            for a in (callouts.get("annotations") or [])
+        }
         callouts.setdefault("annotations", []).extend(
-            a for a in ocr.get("annotations") or []
+            a
+            for a in ocr.get("annotations") or []
             if str(a.get("text") or "").strip().lower() not in known_notes
         )
 
@@ -3954,19 +4116,24 @@ async def read_spec_by_fragments(
     else:
         describe_audit: list[dict[str, Any]] = []
         await _ask(
-            _FREE_DESCRIBE_PROMPT, overview, num_predict=8000,
-            audit=describe_audit, thinking=True, timeout_seconds=150.0,
-            router=router, confidential=confidential,
+            _FREE_DESCRIBE_PROMPT,
+            overview,
+            num_predict=8000,
+            audit=describe_audit,
+            thinking=True,
+            timeout_seconds=150.0,
+            router=router,
+            confidential=confidential,
         )
-        raw_describe_text = (
-            describe_audit[-1]["raw_response"] if describe_audit else ""
-        )
+        raw_describe_text = describe_audit[-1]["raw_response"] if describe_audit else ""
         free_text_entries = _numbers_from_free_text(raw_describe_text)
         if shared_layers is not None:
             shared_layers["free_describe"] = free_text_entries
     if free_text_entries:
-        known = {str((d or {}).get("value") or "").strip().lower()
-                 for d in (callouts.get("dimensions") or [])}
+        known = {
+            str((d or {}).get("value") or "").strip().lower()
+            for d in (callouts.get("dimensions") or [])
+        }
         callouts.setdefault("dimensions", []).extend(
             {"value": entry, "applies_to": None}
             for entry in free_text_entries
@@ -3983,28 +4150,33 @@ async def read_spec_by_fragments(
         geometry_code_result = shared_layers["geometry_code"]
     else:
         geometry_code_result = await _run_geometry_code_pass(
-            overview, router=router, confidential=confidential, audit=fragment_answers,
+            overview,
+            router=router,
+            confidential=confidential,
+            audit=fragment_answers,
         )
         if shared_layers is not None:
             shared_layers["geometry_code"] = geometry_code_result
     if geometry_code_result:
         code_entries: list[str] = []
-        for section in (geometry_code_result.get("outer") or []):
+        for section in geometry_code_result.get("outer") or []:
             diameter = _num((section or {}).get("diameter_mm"))
             if diameter is not None:
                 code_entries.append(f"Ø{diameter:g}")
             length = _num((section or {}).get("length_mm"))
             if length is not None:
                 code_entries.append(f"{length:g}")
-        for section in (geometry_code_result.get("bore") or []):
+        for section in geometry_code_result.get("bore") or []:
             diameter = _num((section or {}).get("diameter_mm"))
             if diameter is not None:
                 code_entries.append(f"Ø{diameter:g}")
             length = _num((section or {}).get("length_mm"))
             if length is not None:
                 code_entries.append(f"{length:g}")
-        known = {str((d or {}).get("value") or "").strip().lower()
-                 for d in (callouts.get("dimensions") or [])}
+        known = {
+            str((d or {}).get("value") or "").strip().lower()
+            for d in (callouts.get("dimensions") or [])
+        }
         callouts.setdefault("dimensions", []).extend(
             {"value": entry, "applies_to": None}
             for entry in code_entries
@@ -4017,12 +4189,10 @@ async def read_spec_by_fragments(
     # the text itself is unambiguous. Preserve the raw text but move it to its
     # semantic channel so users see it and its numbers cannot pollute axial
     # dimension candidates.
-    dimensions = [
-        item for item in (callouts.get("dimensions") or [])
-        if isinstance(item, dict)
-    ]
+    dimensions = [item for item in (callouts.get("dimensions") or []) if isinstance(item, dict)]
     hardness_dimensions = [
-        item for item in dimensions
+        item
+        for item in dimensions
         if re.search(
             r"\b(?:HRC|HRB|HB)\b",
             str(item.get("value") or ""),
@@ -4030,9 +4200,7 @@ async def read_spec_by_fragments(
         )
     ]
     if hardness_dimensions:
-        callouts["dimensions"] = [
-            item for item in dimensions if item not in hardness_dimensions
-        ]
+        callouts["dimensions"] = [item for item in dimensions if item not in hardness_dimensions]
         known_notes = {
             str((item or {}).get("text") or "").strip().lower()
             for item in (callouts.get("annotations") or [])
@@ -4046,29 +4214,33 @@ async def read_spec_by_fragments(
     body: dict[str, Any] = {"type": _type_label(kind)}
     unresolved: list[str] = []
     if unreadable_annotation_count:
-        unresolved.append(
-            f"PMI: {unreadable_annotation_count} обозначений без читаемого текста"
-        )
+        unresolved.append(f"PMI: {unreadable_annotation_count} обозначений без читаемого текста")
     if unresolved_pmi_count:
-        unresolved.append(
-            f"PMI: {unresolved_pmi_count} рамок с неразличимым знаком или значением"
-        )
+        unresolved.append(f"PMI: {unresolved_pmi_count} рамок с неразличимым знаком или значением")
     if kind == "rotation":
         # Chain first: the sheet states positions, not lengths.
         profile_evidence: dict[str, Any] = {}
         outer, chain_problem = await _sections_from_chain(
-            chain_view, callouts, router=router, confidential=confidential,
-            audit=fragment_answers, source_image=image,
+            chain_view,
+            callouts,
+            router=router,
+            confidential=confidential,
+            audit=fragment_answers,
+            source_image=image,
             evidence_context=profile_evidence,
         )
         geometry: dict = {}
         if not outer:
             if chain_problem:
                 unresolved.append(f"размерная цепочка: {chain_problem}")
-            geometry = await _ask(_ROTATION_PROMPT, geometry_view, num_predict=4000, schema=_ROTATION_SCHEMA, **ask)
+            geometry = await _ask(
+                _ROTATION_PROMPT, geometry_view, num_predict=4000, schema=_ROTATION_SCHEMA, **ask
+            )
             outer = [s for s in (geometry.get("outer") or []) if isinstance(s, dict)]
         else:
-            geometry = await _ask(_ROTATION_PROMPT, geometry_view, num_predict=4000, schema=_ROTATION_SCHEMA, **ask)
+            geometry = await _ask(
+                _ROTATION_PROMPT, geometry_view, num_predict=4000, schema=_ROTATION_SCHEMA, **ask
+            )
         # The bore answers a separate question, so it is checked against the
         # sheet the same way the outer chain is — an unchecked cavity is a hole
         # through a real part.
@@ -4076,9 +4248,7 @@ async def read_spec_by_fragments(
             bore_sections_from_diameter_evidence,
         )
 
-        bore = bore_sections_from_diameter_evidence(
-            profile_evidence.get("diameter_map") or {}
-        )
+        bore = bore_sections_from_diameter_evidence(profile_evidence.get("diameter_map") or {})
         if bore:
             bore_problem = None
             from app.ai.cad_process_log import record_cad_process_event
@@ -4094,7 +4264,9 @@ async def read_spec_by_fragments(
             )
         else:
             bore, bore_problem = _checked_bore(
-                geometry.get("bore") or [], outer, callouts,
+                geometry.get("bore") or [],
+                outer,
+                callouts,
                 diameter_evidence=profile_evidence.get("diameter_map"),
             )
         if outer:
@@ -4121,9 +4293,15 @@ async def read_spec_by_fragments(
             # are positions along a profile, and without the profile they have
             # nothing to be positioned against.
             feature_result = await _read_cut_features(
-                geometry_view, outer, router=router, confidential=confidential,
-                audit=fragment_answers, source_image=image, callouts=callouts,
-                profile_evidence=profile_evidence, bore=bore,
+                geometry_view,
+                outer,
+                router=router,
+                confidential=confidential,
+                audit=fragment_answers,
+                source_image=image,
+                callouts=callouts,
+                profile_evidence=profile_evidence,
+                bore=bore,
             )
             body.update(feature_result)
             unresolved.extend(
@@ -4132,24 +4310,28 @@ async def read_spec_by_fragments(
             )
     elif kind in ("plate", "flange"):
         profile = await _profile_by_assignment(
-            geometry_view, callouts, router=router, confidential=confidential,
+            geometry_view,
+            callouts,
+            router=router,
+            confidential=confidential,
             audit=fragment_answers,
         )
         if profile is None:
             # Fall back to reading the outline directly when the sheet's
             # callouts were not enough to assign roles from.
             profile = await _ask(
-                _PROFILE_PROMPT, geometry_view, num_predict=2000,
-                schema=_PROFILE_SCHEMA, **ask,
+                _PROFILE_PROMPT,
+                geometry_view,
+                num_predict=2000,
+                schema=_PROFILE_SCHEMA,
+                **ask,
             )
         if profile and profile.get("shape"):
             body["profile"] = profile
         else:
             unresolved.append("контур плоской детали не прочитан")
     else:
-        unresolved.append(
-            f"класс детали не определён (ответ модели: {kind or 'пусто'})"
-        )
+        unresolved.append(f"класс детали не определён (ответ модели: {kind or 'пусто'})")
 
     # Re-run the purely geometric mouth measurement after the feature result
     # has been attached to the body. This final assembly guard prevents an
@@ -4166,10 +4348,9 @@ async def read_spec_by_fragments(
             for item in body["axial_holes"]
         ]
         for item in body["axial_holes"]:
-            if (
-                (_num(item.get("entry_offset_mm")) or 0) > 0
-                and _num(item.get("entry_recess_diameter_mm")) is None
-            ):
+            if (_num(item.get("entry_offset_mm")) or 0) > 0 and _num(
+                item.get("entry_recess_diameter_mm")
+            ) is None:
                 issue = "малые элементы: осевые отверстия M8: не определён Ø входной выборки"
                 if issue not in unresolved:
                     unresolved.append(issue)
@@ -4184,14 +4365,11 @@ async def read_spec_by_fragments(
             for view in (kind_answer.get("views") or [])
             if view in ("front", "top", "side", "section", "detail", "removed_section")
         ],
-        "dimensions": [
-            d for d in (callouts.get("dimensions") or []) if isinstance(d, dict)
-        ],
-        "annotations": [
-            a for a in (callouts.get("annotations") or []) if isinstance(a, dict)
-        ],
+        "dimensions": [d for d in (callouts.get("dimensions") or []) if isinstance(d, dict)],
+        "annotations": [a for a in (callouts.get("annotations") or []) if isinstance(a, dict)],
         "title_block": {
-            key: value for key, value in (stamp or {}).items()
+            key: value
+            for key, value in (stamp or {}).items()
             if key in ("designation", "name", "material", "scale", "mass") and value
         },
         "unresolved": unresolved,
@@ -4199,7 +4377,8 @@ async def read_spec_by_fragments(
         # Which questions actually answered — a fragment read that lost the
         # stamp is a different result from one that lost the profile.
         "fragments": {
-            "kind": bool(kind_answer), "stamp": bool(stamp),
+            "kind": bool(kind_answer),
+            "stamp": bool(stamp),
             "geometry": bool(body.get("outer") or body.get("profile")),
             "callouts": bool(callouts),
             "pmi_regions": len(pmi_evidence),
@@ -4215,9 +4394,7 @@ async def read_spec_by_fragments(
     # take the sheet with them.
     assembled = _coerce_spec_containers(assembled)
     try:
-        validated = EngineeringDrawingSpec.model_validate(assembled).model_dump(
-            mode="json"
-        )
+        validated = EngineeringDrawingSpec.model_validate(assembled).model_dump(mode="json")
         # The schema drops unknown keys, so this telemetry is re-attached after
         # validation: knowing WHICH question failed is the point of reading in
         # fragments at all.
@@ -4243,14 +4420,17 @@ async def read_spec_by_fragments(
 
 
 def _observation_only_spec(
-    assembled: dict[str, Any], *, fragments: dict[str, Any],
-    fragment_answers: list[dict[str, Any]], invalid_fields: list[str],
+    assembled: dict[str, Any],
+    *,
+    fragments: dict[str, Any],
+    fragment_answers: list[dict[str, Any]],
+    invalid_fields: list[str],
 ) -> dict[str, Any]:
     """Preserve evidenced callouts when geometry cannot satisfy the schema."""
     from app.ai.cad_recognize.spec_vectorize import (
+        _ANNOTATION_KINDS,
         EngineeringDrawingSpec,
         SpecEvidence,
-        _ANNOTATION_KINDS,
     )
 
     def valid_evidence(value: Any) -> list[dict[str, Any]]:
@@ -4266,11 +4446,13 @@ def _observation_only_spec(
     for item in assembled.get("dimensions") or []:
         if not isinstance(item, dict) or not str(item.get("value") or "").strip():
             continue
-        dimensions.append({
-            "value": str(item["value"]).strip(),
-            "applies_to": str(item.get("applies_to") or ""),
-            "evidence": valid_evidence(item.get("evidence")),
-        })
+        dimensions.append(
+            {
+                "value": str(item["value"]).strip(),
+                "applies_to": str(item.get("applies_to") or ""),
+                "evidence": valid_evidence(item.get("evidence")),
+            }
+        )
 
     annotations = []
     for item in assembled.get("annotations") or []:
@@ -4282,14 +4464,18 @@ def _observation_only_spec(
         kind = str(item.get("kind") or "other")
         if kind not in _ANNOTATION_KINDS:
             kind = "other"
-        annotations.append({
-            "kind": kind,
-            "text": text,
-            "value": item.get("value"),
-            "symbol": item.get("symbol"),
-            "datum_refs": item.get("datum_refs") if isinstance(item.get("datum_refs"), list) else [],
-            "evidence": valid_evidence(item.get("evidence")),
-        })
+        annotations.append(
+            {
+                "kind": kind,
+                "text": text,
+                "value": item.get("value"),
+                "symbol": item.get("symbol"),
+                "datum_refs": item.get("datum_refs")
+                if isinstance(item.get("datum_refs"), list)
+                else [],
+                "evidence": valid_evidence(item.get("evidence")),
+            }
+        )
 
     unresolved = [str(item) for item in assembled.get("unresolved") or [] if str(item)]
     unresolved.extend(f"geometry_schema_invalid:{field}" for field in invalid_fields)
@@ -4301,7 +4487,9 @@ def _observation_only_spec(
         "views": [],
         "dimensions": dimensions,
         "annotations": annotations,
-        "title_block": assembled.get("title_block") if isinstance(assembled.get("title_block"), dict) else {},
+        "title_block": assembled.get("title_block")
+        if isinstance(assembled.get("title_block"), dict)
+        else {},
         "unresolved": sorted(set(unresolved)),
         "optional_unresolved": assembled.get("optional_unresolved") or [],
         "observation_only": True,
@@ -4379,16 +4567,11 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
     merged = copy.deepcopy(whole)
     fragment_body = fragments.get("main_view") or {}
     merged_body = merged.setdefault("main_view", {})
-    fragment_outer = [
-        item for item in (fragment_body.get("outer") or []) if isinstance(item, dict)
-    ]
+    fragment_outer = [item for item in (fragment_body.get("outer") or []) if isinstance(item, dict)]
     verified_outer = bool(fragment_outer) and all(
-        bool(item.get("evidence"))
-        for item in fragment_outer
+        bool(item.get("evidence")) for item in fragment_outer
     )
-    current_outer = [
-        item for item in (merged_body.get("outer") or []) if isinstance(item, dict)
-    ]
+    current_outer = [item for item in (merged_body.get("outer") or []) if isinstance(item, dict)]
     # "evidence" is populated only when outer[] was built from LOCALIZED
     # diameter measurements (outer_sections_from_diameter_evidence) — the
     # ROTATION_PROMPT schema that produces a plain VLM-described profile has
@@ -4405,16 +4588,11 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
     prefer_fragment_outer = verified_outer or len(fragment_outer) > len(current_outer)
     if prefer_fragment_outer:
         merged_body["outer"] = copy.deepcopy(fragment_body["outer"])
-    fragment_bore = [
-        item for item in (fragment_body.get("bore") or []) if isinstance(item, dict)
-    ]
+    fragment_bore = [item for item in (fragment_body.get("bore") or []) if isinstance(item, dict)]
     verified_bore = bool(fragment_bore) and all(
-        bool(item.get("evidence"))
-        for item in fragment_bore
+        bool(item.get("evidence")) for item in fragment_bore
     )
-    current_bore = [
-        item for item in (merged_body.get("bore") or []) if isinstance(item, dict)
-    ]
+    current_bore = [item for item in (merged_body.get("bore") or []) if isinstance(item, dict)]
     # Same reasoning as outer above, applied to bore: prefer fragments when
     # it found more (or the whole-sheet fallback found none).
     prefer_fragment_bore = verified_bore or (
@@ -4425,11 +4603,14 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
     if (fragment_body.get("profile") or {}).get("shape"):
         merged_body["profile"] = copy.deepcopy(fragment_body["profile"])
 
-    fragment_unresolved = [
-        str(item) for item in (fragments.get("unresolved") or []) if str(item)
-    ]
+    fragment_unresolved = [str(item) for item in (fragments.get("unresolved") or []) if str(item)]
     feature_fields = (
-        "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
+        "chamfers",
+        "fillets",
+        "grooves",
+        "keyways",
+        "cross_holes",
+        "axial_holes",
         "circular_hole_patterns",
     )
     # Only clear the specific feature_fields a "малые элементы: ..." message
@@ -4447,9 +4628,7 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
         fragment_field = [
             item for item in (fragment_body.get(field) or []) if isinstance(item, dict)
         ]
-        verified_features = [
-            item for item in fragment_field if item.get("evidence")
-        ]
+        verified_features = [item for item in fragment_field if item.get("evidence")]
         if verified_features:
             merged_body[field] = copy.deepcopy(verified_features)
         elif fragment_field and not (merged_body.get(field) or []):
@@ -4468,18 +4647,19 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
     unresolved = [str(item) for item in (merged.get("unresolved") or []) if str(item)]
     if prefer_fragment_outer:
         unresolved = [
-            item for item in unresolved
+            item
+            for item in unresolved
             if not re.match(r"^body:\d+:outer:\d+:length-missing$", item)
         ]
         if all(_num(item.get("length_mm")) for item in fragment_outer):
             unresolved = [
-                item for item in unresolved
+                item
+                for item in unresolved
                 if "невозможно вычислить точные длины ступеней" not in item
             ]
     if prefer_fragment_bore:
         unresolved = [
-            item for item in unresolved
-            if not re.match(r"^body:\d+:bore:\d+:length-missing$", item)
+            item for item in unresolved if not re.match(r"^body:\d+:bore:\d+:length-missing$", item)
         ]
     for item in fragment_unresolved:
         if item not in unresolved:
@@ -4530,21 +4710,16 @@ def _enrich_post_consensus_source_geometry(
     from app.ai.cad_recognize.diameter_dimensions import localize_diameter_dimensions
 
     axial_map = localize_axial_dimensions(image, linear)
-    diameter_map = localize_diameter_dimensions(
-        image, diameters, axial_map, linear
-    )
+    diameter_map = localize_diameter_dimensions(image, diameters, axial_map, linear)
     body["axial_holes"] = [
-        _resolve_axial_pattern_entry_offset(
-            item, image, callouts, axial_map, diameter_map
-        )
+        _resolve_axial_pattern_entry_offset(item, image, callouts, axial_map, diameter_map)
         for item in body["axial_holes"]
     ]
     unresolved = spec.setdefault("unresolved", [])
     for item in body["axial_holes"]:
-        if (
-            (_num(item.get("entry_offset_mm")) or 0) > 0
-            and _num(item.get("entry_recess_diameter_mm")) is None
-        ):
+        if (_num(item.get("entry_offset_mm")) or 0) > 0 and _num(
+            item.get("entry_recess_diameter_mm")
+        ) is None:
             issue = "малые элементы: осевые отверстия M8: не определён Ø входной выборки"
             if issue not in unresolved:
                 unresolved.append(issue)
@@ -4552,7 +4727,10 @@ def _enrich_post_consensus_source_geometry(
 
 
 async def read_fragments_consensus(
-    image_bytes: bytes, *, passes: int, router: Any | None = None,
+    image_bytes: bytes,
+    *,
+    passes: int,
+    router: Any | None = None,
     confidential: bool = True,
     deadline_monotonic: float | None = None,
 ) -> dict:
@@ -4569,9 +4747,9 @@ async def read_fragments_consensus(
     invent a part; at worst it declines to build one a single lucky pass would
     have built, and says which value the passes disagreed on.
     """
-    from app.ai.cad_recognize.spec_consensus import consensus_spec
-
     import time
+
+    from app.ai.cad_recognize.spec_consensus import consensus_spec
 
     shared_layers: dict[str, Any] = {}
     reads: list[dict] = []
@@ -4580,12 +4758,10 @@ async def read_fragments_consensus(
 
     for _attempt in range(max(1, passes)):
         remaining = (
-            deadline_monotonic - time.monotonic()
-            if deadline_monotonic is not None else None
+            deadline_monotonic - time.monotonic() if deadline_monotonic is not None else None
         )
         predicted = (
-            max(90.0, sum(pass_durations) / len(pass_durations) * 1.15)
-            if pass_durations else 90.0
+            max(90.0, sum(pass_durations) / len(pass_durations) * 1.15) if pass_durations else 90.0
         )
         if _attempt > 0 and remaining is not None and remaining < predicted:
             await record_cad_process_event(
@@ -4669,8 +4845,7 @@ async def read_fragments_consensus(
     if richest.get("fragments"):
         merged["fragments"] = richest["fragments"]
     merged["reader_attempts"] = [
-        {"pass": index + 1, "mode": "fragments", "spec": spec}
-        for index, spec in enumerate(reads)
+        {"pass": index + 1, "mode": "fragments", "spec": spec} for index, spec in enumerate(reads)
     ]
     return merged
 
@@ -4733,7 +4908,10 @@ def _finalize_spec(spec: dict, image_bytes: bytes) -> dict:
 
 
 async def read_spec_best_effort(
-    image_bytes: bytes, *, passes: int = 5, router: Any | None = None,
+    image_bytes: bytes,
+    *,
+    passes: int = 5,
+    router: Any | None = None,
     confidential: bool = True,
     budget_seconds: float = 750.0,
 ) -> dict:
@@ -4767,13 +4945,13 @@ async def read_spec_best_effort(
         confidential=confidential,
         deadline_monotonic=deadline,
     )
-    fragment_unresolved = [
-        str(item) for item in (fragments.get("unresolved") or []) if str(item)
-    ] if fragments else []
-    remaining_seconds = deadline - time.monotonic()
-    fragment_ready = bool(
-        fragments and _has_geometry(fragments) and not fragment_unresolved
+    fragment_unresolved = (
+        [str(item) for item in (fragments.get("unresolved") or []) if str(item)]
+        if fragments
+        else []
     )
+    remaining_seconds = deadline - time.monotonic()
+    fragment_ready = bool(fragments and _has_geometry(fragments) and not fragment_unresolved)
     budget_requires_partial = bool(
         fragments and _has_geometry(fragments) and remaining_seconds < 150
     )
@@ -4815,7 +4993,10 @@ async def read_spec_best_effort(
         "diameter",
     )
     whole = await read_drawing_spec_consensus(
-        image_bytes, passes=passes, router=router, confidential=confidential,
+        image_bytes,
+        passes=passes,
+        router=router,
+        confidential=confidential,
         known_diameters_mm=known_diameters_mm or None,
     )
     if not whole:
@@ -4835,8 +5016,8 @@ async def read_spec_best_effort(
             "completed",
             "Проверенная fragment-геометрия сохранена поверх whole-sheet fallback",
             {
-                "outer_sections": len(((whole.get("main_view") or {}).get("outer") or [])),
-                "bore_sections": len(((whole.get("main_view") or {}).get("bore") or [])),
+                "outer_sections": len((whole.get("main_view") or {}).get("outer") or []),
+                "bore_sections": len((whole.get("main_view") or {}).get("bore") or []),
                 "unresolved": whole.get("unresolved") or [],
             },
         )

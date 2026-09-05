@@ -57,9 +57,7 @@ async def test_role_capability_dispatch(role_case, monkeypatch):
         assert action in _DISPATCH[cap], f"unknown action '{cap}.{action}'"
 
     gates = _gate_actions()
-    expected_gates = [
-        [cap, action] for cap, action in dispatch if action in gates.get(cap, set())
-    ]
+    expected_gates = [[cap, action] for cap, action in dispatch if action in gates.get(cap, set())]
 
     config = BuiltinAgentConfig(
         enabled=True,
@@ -80,8 +78,12 @@ async def test_role_capability_dispatch(role_case, monkeypatch):
         return None
 
     for name in (
-        "_log_action", "_init_mcp", "_append_memory_context",
-        "_inject_rating_hint", "_inject_learning_rules", "_remember_latest_turn",
+        "_log_action",
+        "_init_mcp",
+        "_append_memory_context",
+        "_inject_rating_hint",
+        "_inject_learning_rules",
+        "_remember_latest_turn",
     ):
         monkeypatch.setattr(agent_loop.AgentSession, name, _noop, raising=False)
 
@@ -113,19 +115,28 @@ async def test_role_capability_dispatch(role_case, monkeypatch):
     step = {"i": 0}
 
     async def fake_call_provider_streaming(
-        messages, tools, system_prompt, config, on_token,
-        model_override=None, provider_override=None,
-        disable_thinking_override=None, on_thinking=None, **kwargs,
+        messages,
+        tools,
+        system_prompt,
+        config,
+        on_token,
+        model_override=None,
+        provider_override=None,
+        disable_thinking_override=None,
+        on_thinking=None,
+        **kwargs,
     ):
         i = step["i"]
         step["i"] += 1
         if i < len(dispatch):
             cap, action = dispatch[i]
             return {
-                "tool_calls": [{
-                    "type": "function",
-                    "function": {"name": cap, "arguments": {"action": action}},
-                }],
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {"name": cap, "arguments": {"action": action}},
+                    }
+                ],
             }
         await on_token("Готово.")
         return {"tool_calls": None}

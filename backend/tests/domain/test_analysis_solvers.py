@@ -59,9 +59,7 @@ def test_thermal_expansion_free_and_constrained():
     free = solve_thermal_expansion({"length_mm": 500, "delta_t_c": 80}, STEEL)
     assert free.results["elongation_mm"] == pytest.approx(1.2e-5 * 500 * 80)
     assert free.passed is None  # nothing to fail against when unconstrained
-    fixed = solve_thermal_expansion(
-        {"length_mm": 500, "delta_t_c": 80, "constrained": True}, STEEL
-    )
+    fixed = solve_thermal_expansion({"length_mm": 500, "delta_t_c": 80, "constrained": True}, STEEL)
     # σ = E·α·ΔT = 2e5 · 1.2e-5 · 80 = 192 MPa < 300 → passes
     assert fixed.results["thermal_stress_mpa"] == pytest.approx(192)
     assert fixed.passed is True
@@ -75,7 +73,11 @@ def test_no_material_limit_means_computed_not_passed():
 
 def test_registry_covers_all_documented_types():
     assert set(SOLVERS) == {
-        "axial_stress", "bending", "torsion", "buckling", "thermal_expansion",
+        "axial_stress",
+        "bending",
+        "torsion",
+        "buckling",
+        "thermal_expansion",
         "fea_beam",
     }
 
@@ -86,9 +88,12 @@ def test_fea_beam_cantilever_matches_analytics():
     from app.domain.analysis_solvers import solve_fea_beam
 
     out = solve_fea_beam(
-        {"length_mm": 1000, "diameter_mm": 40,
-         "supports": "cantilever",
-         "loads": [{"type": "point", "force_n": 1000, "position_mm": 1000}]},
+        {
+            "length_mm": 1000,
+            "diameter_mm": 40,
+            "supports": "cantilever",
+            "loads": [{"type": "point", "force_n": 1000, "position_mm": 1000}],
+        },
         STEEL,
     )
     inertia = math.pi * 40**4 / 64
@@ -106,9 +111,12 @@ def test_fea_beam_simply_supported_udl():
     from app.domain.analysis_solvers import solve_fea_beam
 
     out = solve_fea_beam(
-        {"length_mm": 2000, "diameter_mm": 50,
-         "supports": "simply_supported",
-         "loads": [{"type": "udl", "force_n_per_mm": 2.0}]},
+        {
+            "length_mm": 2000,
+            "diameter_mm": 50,
+            "supports": "simply_supported",
+            "loads": [{"type": "udl", "force_n_per_mm": 2.0}],
+        },
         STEEL,
     )
     inertia = math.pi * 50**4 / 64
@@ -123,6 +131,8 @@ def test_fea_beam_requires_material_and_loads():
     from app.domain.analysis_solvers import solve_fea_beam
 
     with pytest.raises(AnalysisInputError):
-        solve_fea_beam({"length_mm": 100, "diameter_mm": 10, "loads": [{"type": "point", "force_n": 1}]}, None)
+        solve_fea_beam(
+            {"length_mm": 100, "diameter_mm": 10, "loads": [{"type": "point", "force_n": 1}]}, None
+        )
     with pytest.raises(AnalysisInputError):
         solve_fea_beam({"length_mm": 100, "diameter_mm": 10}, STEEL)

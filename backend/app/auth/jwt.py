@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
+from datetime import UTC
 
 import structlog
 from fastapi import Cookie, Depends, HTTPException, status
@@ -41,16 +42,15 @@ async def _get_jwks() -> dict:
         if _jwks_cache is not None and (now - _jwks_fetched_at) < _JWKS_TTL:
             return _jwks_cache
         import httpx
-        jwks_uri = (
-            f"{settings.authentik_url}/application/o"
-            f"/{settings.authentik_slug}/jwks/"
-        )
+
+        jwks_uri = f"{settings.authentik_url}/application/o/{settings.authentik_slug}/jwks/"
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(jwks_uri)
             resp.raise_for_status()
             _jwks_cache = resp.json()
             _jwks_fetched_at = time.monotonic()
         return _jwks_cache
+
 
 _DEV_USER = UserInfo(
     sub="dev-user",
@@ -128,7 +128,7 @@ async def get_current_user_optional(
 
 _LOCAL_ISS = "sveta-local"
 _LOCAL_TOKEN_USE = "local_session"
-_LSEPOCH_PREFIX = "auth:lsepoch:"      # per-user local-session epoch (bump = revoke all)
+_LSEPOCH_PREFIX = "auth:lsepoch:"  # per-user local-session epoch (bump = revoke all)
 _LSREVOKED_PREFIX = "auth:lsrevoked:"  # per-jti denylist (single-session revoke)
 
 
@@ -347,7 +347,7 @@ async def _verify_token(token: str) -> UserInfo:
 
 async def _verify_api_key(raw_key: str) -> UserInfo:
     """Verify API key and return a minimal UserInfo for service accounts."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from sqlalchemy import select
 
@@ -376,7 +376,7 @@ async def _verify_api_key(raw_key: str) -> UserInfo:
         if key is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if key.expires_at and key.expires_at < now:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="API key expired")
 
@@ -459,9 +459,7 @@ async def _db_role_for_sub(sub: str) -> UserRole | None:
         from app.db.session import _get_session_factory
 
         async with _get_session_factory()() as db:
-            row = (
-                await db.execute(select(User.role).where(User.sub == sub))
-            ).scalar_one_or_none()
+            row = (await db.execute(select(User.role).where(User.sub == sub))).scalar_one_or_none()
     except Exception as e:
         logger.warning("role_lookup_db_failed", error=str(e))
         return None

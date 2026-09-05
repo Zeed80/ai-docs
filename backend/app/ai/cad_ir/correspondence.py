@@ -98,9 +98,9 @@ class CorrespondenceGraph:
 _X_ALIGNED = {("front", "top"), ("top", "front")}
 _Y_ALIGNED = {("front", "side"), ("side", "front")}
 
-_SCALE_REL_TOL = 0.05        # 5% between view scales
-_DIAMETER_REL_TOL = 0.08     # circle Ø vs labelled Ø
-_AXIS_ALIGN_REL_TOL = 0.06   # shared-axis centre alignment, fraction of span
+_SCALE_REL_TOL = 0.05  # 5% between view scales
+_DIAMETER_REL_TOL = 0.08  # circle Ø vs labelled Ø
+_AXIS_ALIGN_REL_TOL = 0.06  # shared-axis centre alignment, fraction of span
 
 
 def _bbox_center(bbox: tuple[float, float, float, float]) -> tuple[float, float]:
@@ -123,11 +123,14 @@ def build_correspondence_graph(views: list[ViewGeometry]) -> CorrespondenceGraph
             a, b = scaled[i], scaled[j]
             rel = abs(a.scale - b.scale) / max(a.scale, b.scale)
             if rel <= _SCALE_REL_TOL:
-                graph.correspondences.append(Correspondence(
-                    "scale", (a.label, b.label),
-                    f"масштабы согласованы ({a.scale:.4g}≈{b.scale:.4g} мм/px)",
-                    round(1.0 - rel, 3),
-                ))
+                graph.correspondences.append(
+                    Correspondence(
+                        "scale",
+                        (a.label, b.label),
+                        f"масштабы согласованы ({a.scale:.4g}≈{b.scale:.4g} мм/px)",
+                        round(1.0 - rel, 3),
+                    )
+                )
             else:
                 graph.issues.append(
                     f"Масштабы видов «{a.label}» и «{b.label}» расходятся "
@@ -144,15 +147,23 @@ def build_correspondence_graph(views: list[ViewGeometry]) -> CorrespondenceGraph
                 ca, cb = _bbox_center(a.bbox), _bbox_center(b.bbox)
                 span = max(_bbox_span(a.bbox), _bbox_span(b.bbox))
                 if pair in _X_ALIGNED and abs(ca[0] - cb[0]) <= _AXIS_ALIGN_REL_TOL * span:
-                    graph.correspondences.append(Correspondence(
-                        "axis_alignment", (a.label, b.label),
-                        "виды выровнены по вертикальной оси проекции", 0.9,
-                    ))
+                    graph.correspondences.append(
+                        Correspondence(
+                            "axis_alignment",
+                            (a.label, b.label),
+                            "виды выровнены по вертикальной оси проекции",
+                            0.9,
+                        )
+                    )
                 elif pair in _Y_ALIGNED and abs(ca[1] - cb[1]) <= _AXIS_ALIGN_REL_TOL * span:
-                    graph.correspondences.append(Correspondence(
-                        "axis_alignment", (a.label, b.label),
-                        "виды выровнены по горизонтальной оси проекции", 0.9,
-                    ))
+                    graph.correspondences.append(
+                        Correspondence(
+                            "axis_alignment",
+                            (a.label, b.label),
+                            "виды выровнены по горизонтальной оси проекции",
+                            0.9,
+                        )
+                    )
                 elif pair in _X_ALIGNED or pair in _Y_ALIGNED:
                     graph.issues.append(
                         f"Виды «{a.label}» и «{b.label}» должны быть выровнены "
@@ -171,14 +182,18 @@ def build_correspondence_graph(views: list[ViewGeometry]) -> CorrespondenceGraph
                             continue
                         circle_d = 2 * c.r * dst.scale
                         if abs(circle_d - d) <= _DIAMETER_REL_TOL * max(d, 1e-6):
-                            graph.correspondences.append(Correspondence(
-                                "diameter", (src.label, dst.label),
-                                f"Ø{d:g} мм подтверждён окружностью в «{dst.label}»",
-                                0.85,
-                                feature_ids=(
-                                    src.diameter_feature_id(d_index), c.feature_id,
-                                ),
-                            ))
+                            graph.correspondences.append(
+                                Correspondence(
+                                    "diameter",
+                                    (src.label, dst.label),
+                                    f"Ø{d:g} мм подтверждён окружностью в «{dst.label}»",
+                                    0.85,
+                                    feature_ids=(
+                                        src.diameter_feature_id(d_index),
+                                        c.feature_id,
+                                    ),
+                                )
+                            )
                             break
 
             # 3b. Diameter ↔ diameter: two views each state a matching Ø
@@ -189,27 +204,33 @@ def build_correspondence_graph(views: list[ViewGeometry]) -> CorrespondenceGraph
             for a_index, d_a in enumerate(a.diameters_mm):
                 for b_index, d_b in enumerate(b.diameters_mm):
                     if abs(d_a - d_b) <= _DIAMETER_REL_TOL * max(d_a, d_b, 1e-6):
-                        graph.correspondences.append(Correspondence(
-                            "diameter", (a.label, b.label),
-                            f"Ø{d_a:g} мм совпадает в «{a.label}» и «{b.label}»",
-                            0.8,
-                            feature_ids=(
-                                a.diameter_feature_id(a_index),
-                                b.diameter_feature_id(b_index),
-                            ),
-                        ))
+                        graph.correspondences.append(
+                            Correspondence(
+                                "diameter",
+                                (a.label, b.label),
+                                f"Ø{d_a:g} мм совпадает в «{a.label}» и «{b.label}»",
+                                0.8,
+                                feature_ids=(
+                                    a.diameter_feature_id(a_index),
+                                    b.diameter_feature_id(b_index),
+                                ),
+                            )
+                        )
                         break
 
             # 4. Hidden ↔ visible: a hidden (dashed) contour in one view is a
             #    feature read as a visible circle in the orthogonal view.
             for src, dst in ((a, b), (b, a)):
                 if src.has_hidden and dst.circles:
-                    graph.correspondences.append(Correspondence(
-                        "hidden_visible", (src.label, dst.label),
-                        f"скрытый контур в «{src.label}» соответствует "
-                        f"отверстию, видимому в «{dst.label}»",
-                        0.7,
-                    ))
+                    graph.correspondences.append(
+                        Correspondence(
+                            "hidden_visible",
+                            (src.label, dst.label),
+                            f"скрытый контур в «{src.label}» соответствует "
+                            f"отверстию, видимому в «{dst.label}»",
+                            0.7,
+                        )
+                    )
 
     # de-duplicate identical hidden_visible edges (both directions add one)
     seen: set[tuple[str, tuple[str, str], str]] = set()

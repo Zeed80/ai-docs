@@ -8,7 +8,6 @@ from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, Field
 
-
 NTDControlMode = Literal["manual", "auto"]
 NTDFindingDecision = Literal["accept", "reject", "mark_not_applicable", "create_correction_task"]
 
@@ -32,7 +31,9 @@ class NormativeDocumentCreate(BaseModel):
     status: str = Field("active", pattern="^(draft|active|obsolete)$")
     scope: str | None = None
     source_document_id: uuid.UUID | None = None
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
 
 
 class NormativeDocumentOut(BaseModel):
@@ -44,7 +45,9 @@ class NormativeDocumentOut(BaseModel):
     current_version_id: uuid.UUID | None = None
     scope: str | None = None
     source_document_id: uuid.UUID | None = None
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -57,7 +60,9 @@ class NormativeClauseCreate(BaseModel):
     title: str | None = None
     text: str = Field(..., min_length=1)
     parent_clause_id: uuid.UUID | None = None
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
 
 
 class NormativeClauseOut(BaseModel):
@@ -68,7 +73,9 @@ class NormativeClauseOut(BaseModel):
     title: str | None = None
     text: str
     parent_clause_id: uuid.UUID | None = None
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -84,7 +91,9 @@ class NormativeRequirementCreate(BaseModel):
     required_keywords: list[str] = Field(default_factory=list)
     severity: str = Field("warning", pattern="^(info|warning|error|critical)$")
     is_active: bool = True
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
 
 
 class NormativeRequirementOut(BaseModel):
@@ -98,7 +107,9 @@ class NormativeRequirementOut(BaseModel):
     required_keywords: list | None = None
     severity: str
     is_active: bool
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -160,7 +171,9 @@ class NTDCheckRunOut(BaseModel):
     summary: str | None = None
     findings_total: int
     findings_open: int
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -192,7 +205,9 @@ class NTDFindingOut(BaseModel):
     decided_by: str | None = None
     decided_at: datetime | None = None
     decision_comment: str | None = None
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}

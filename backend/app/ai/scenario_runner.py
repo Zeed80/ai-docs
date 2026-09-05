@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -27,8 +27,8 @@ logger = structlog.get_logger()
 async def _persist_trace(trace_data: dict) -> None:
     """Write scenario trace to DB — fire-and-forget, never raises."""
     try:
-        from app.db.session import _get_session_factory
         from app.db.models import ScenarioTrace
+        from app.db.session import _get_session_factory
 
         async with _get_session_factory()() as db:
             trace = ScenarioTrace(
@@ -51,6 +51,7 @@ async def _persist_trace(trace_data: dict) -> None:
 
 
 # ── Template engine ───────────────────────────────────────────────────────────
+
 
 class _Context:
     """Resolves {{ expr }} templates against accumulated step results."""
@@ -132,6 +133,7 @@ class _Context:
 
 # ── Skill caller ──────────────────────────────────────────────────────────────
 
+
 def _skill_catalog() -> dict[str, dict]:
     """Skills visible to scenarios: the active registry PLUS the capability
     catalog. Scenarios must resolve capability names (image_studio,
@@ -171,6 +173,7 @@ async def _call_skill(skill_name: str, params: dict) -> dict:
 
 # ── Step executor ─────────────────────────────────────────────────────────────
 
+
 class _StopScenario(Exception):
     """Raised by a step with action: complete to halt the scenario early."""
 
@@ -208,11 +211,16 @@ async def _run_step(step: dict, ctx: _Context) -> Any:
                 result = await _call_skill(skill_name, ctx.resolve_dict(params))
                 ctx.set("last", result)
                 if ctx.evaluate(until):
-                    return {**(result if isinstance(result, dict) else {"value": result}),
-                            "_polls": attempt + 1}
+                    return {
+                        **(result if isinstance(result, dict) else {"value": result}),
+                        "_polls": attempt + 1,
+                    }
                 await asyncio.sleep(poll_interval_s)
-            return {"error": f"until-условие не выполнено за {max_polls} попыток",
-                    "last": result, "_polls": max_polls}
+            return {
+                "error": f"until-условие не выполнено за {max_polls} попыток",
+                "last": result,
+                "_polls": max_polls,
+            }
         if for_each:
             items = ctx.resolve(for_each)
             if not isinstance(items, list):
@@ -234,6 +242,7 @@ async def _run_step(step: dict, ctx: _Context) -> Any:
 
 
 # ── Scenario runner ───────────────────────────────────────────────────────────
+
 
 class ScenarioRunner:
     """Execute AiAgent YAML scenarios."""
@@ -261,7 +270,7 @@ class ScenarioRunner:
         steps: list[dict] = scenario.get("steps", [])
         timeout: int = scenario.get("timeout", 300)
         step_traces: list[dict] = []
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
         t0 = time.monotonic()
         status = "ok"
         error_msg: str | None = None
@@ -274,6 +283,7 @@ class ScenarioRunner:
         )
 
         import asyncio
+
         try:
             async with asyncio.timeout(timeout):
                 for idx, step in enumerate(steps):
@@ -311,14 +321,18 @@ class ScenarioRunner:
                             error_msg = f"Step {step_id}: {exc}"
                             raise
                     finally:
-                        step_traces.append({
-                            "step_id": step_id,
-                            "skill": step.get("skill", ""),
-                            "status": step_status,
-                            "duration_ms": int((time.monotonic() - step_t0) * 1000),
-                            "error": step_error,
-                            "result_keys": list(result.keys()) if isinstance(result, dict) else None,
-                        })
+                        step_traces.append(
+                            {
+                                "step_id": step_id,
+                                "skill": step.get("skill", ""),
+                                "status": step_status,
+                                "duration_ms": int((time.monotonic() - step_t0) * 1000),
+                                "error": step_error,
+                                "result_keys": list(result.keys())
+                                if isinstance(result, dict)
+                                else None,
+                            }
+                        )
         except TimeoutError:
             status = "timeout"
             error_msg = f"Scenario timed out after {timeout}s"
@@ -329,7 +343,7 @@ class ScenarioRunner:
                 status = "error"
                 error_msg = str(exc)
 
-        finished_at = datetime.now(timezone.utc)
+        finished_at = datetime.now(UTC)
         duration_ms = int((time.monotonic() - t0) * 1000)
         logger.info("scenario_done", name=scenario_name, status=status, duration_ms=duration_ms)
         metrics.scenario_runs_total.labels(scenario=scenario_name).inc()
@@ -338,19 +352,24 @@ class ScenarioRunner:
             metrics.scenario_errors_total.labels(scenario=scenario_name, reason=status).inc()
 
         import asyncio as _asyncio
-        _asyncio.create_task(_persist_trace({
-            "scenario_name": scenario_name,
-            "status": status,
-            "trigger": trigger,
-            "steps_total": len(steps),
-            "steps_done": len(step_traces),
-            "step_traces": step_traces,
-            "error": error_msg,
-            "duration_ms": duration_ms,
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "triggered_by": triggered_by,
-        }))
+
+        _asyncio.create_task(
+            _persist_trace(
+                {
+                    "scenario_name": scenario_name,
+                    "status": status,
+                    "trigger": trigger,
+                    "steps_total": len(steps),
+                    "steps_done": len(step_traces),
+                    "step_traces": step_traces,
+                    "error": error_msg,
+                    "duration_ms": duration_ms,
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                    "triggered_by": triggered_by,
+                }
+            )
+        )
 
         return dict(ctx._data)
 
@@ -387,18 +406,20 @@ class ScenarioRunner:
             requires_approval = bool(gate_actions and resolved.get("action") in gate_actions)
             if requires_approval:
                 gated.append(step_id)
-            planned.append({
-                "step_id": step_id,
-                "name": step.get("name"),
-                "skill": skill_name or None,
-                "skill_found": skill is not None if skill_name else None,
-                "params": resolved,
-                "condition": step.get("condition"),
-                "until": step.get("until"),
-                "for_each": step.get("for_each"),
-                "on_error": step.get("on_error", "continue"),
-                "requires_approval": requires_approval,
-            })
+            planned.append(
+                {
+                    "step_id": step_id,
+                    "name": step.get("name"),
+                    "skill": skill_name or None,
+                    "skill_found": skill is not None if skill_name else None,
+                    "params": resolved,
+                    "condition": step.get("condition"),
+                    "until": step.get("until"),
+                    "for_each": step.get("for_each"),
+                    "on_error": step.get("on_error", "continue"),
+                    "requires_approval": requires_approval,
+                }
+            )
         plan = {
             "scenario": scenario_name,
             "description": scenario.get("description"),
@@ -410,25 +431,34 @@ class ScenarioRunner:
         }
         import asyncio as _asyncio
 
-        started = datetime.now(timezone.utc)
-        _asyncio.create_task(_persist_trace({
-            "scenario_name": scenario_name,
-            "status": "dry_run",
-            "trigger": trigger,
-            "steps_total": len(planned),
-            "steps_done": 0,
-            "step_traces": [
-                {"step_id": p["step_id"], "skill": p["skill"] or "",
-                 "status": "planned", "duration_ms": 0, "error": None,
-                 "result_keys": None}
-                for p in planned
-            ],
-            "error": None,
-            "duration_ms": 0,
-            "started_at": started,
-            "finished_at": started,
-            "triggered_by": "dry_run",
-        }))
+        started = datetime.now(UTC)
+        _asyncio.create_task(
+            _persist_trace(
+                {
+                    "scenario_name": scenario_name,
+                    "status": "dry_run",
+                    "trigger": trigger,
+                    "steps_total": len(planned),
+                    "steps_done": 0,
+                    "step_traces": [
+                        {
+                            "step_id": p["step_id"],
+                            "skill": p["skill"] or "",
+                            "status": "planned",
+                            "duration_ms": 0,
+                            "error": None,
+                            "result_keys": None,
+                        }
+                        for p in planned
+                    ],
+                    "error": None,
+                    "duration_ms": 0,
+                    "started_at": started,
+                    "finished_at": started,
+                    "triggered_by": "dry_run",
+                }
+            )
+        )
         return plan
 
     def list_scenarios(self) -> list[dict]:

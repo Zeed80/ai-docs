@@ -27,9 +27,13 @@ class ModelEvalHarness:
             )
         )
         text = response.text or ""
-        missing = [needle for needle in case.expected_contains if needle.lower() not in text.lower()]
+        missing = [
+            needle for needle in case.expected_contains if needle.lower() not in text.lower()
+        ]
         passed = not missing
-        score = 1.0 if passed else max(0.0, 1.0 - len(missing) / max(len(case.expected_contains), 1))
+        score = (
+            1.0 if passed else max(0.0, 1.0 - len(missing) / max(len(case.expected_contains), 1))
+        )
         reason = "ok" if passed else f"missing expected fragments: {', '.join(missing)}"
         return EvalResult(
             case_id=case.id,
@@ -43,4 +47,3 @@ class ModelEvalHarness:
 
     async def run(self, cases: list[EvalCase], model: str | None = None) -> list[EvalResult]:
         return [await self.run_case(case, model=model) for case in cases]
-

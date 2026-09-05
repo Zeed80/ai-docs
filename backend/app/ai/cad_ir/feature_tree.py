@@ -59,16 +59,26 @@ class Feature3D(BaseModel):
     # Kept in lockstep with infra/cad-kernel/server.py Feature.kind (the
     # kernel boundary is extra="forbid" — a mismatch breaks every 3D build).
     kind: Literal[
-        "extrude", "hole", "boss", "pocket", "fillet", "chamfer",
+        "extrude",
+        "hole",
+        "boss",
+        "pocket",
+        "fillet",
+        "chamfer",
         # Ф2.4: sweep — a profile (circle or the sketch_profile below) swept
         # along a real 3D path (params.path, [x,y,z] points), the tube/rail
         # class of parts neither extrude nor revolve can express.
-        "revolve", "loft", "sweep", "shell", "thread",
+        "revolve",
+        "loft",
+        "sweep",
+        "shell",
+        "thread",
         # A pocket is cut from the top face straight down; an annular groove
         # runs all the way round a turned surface and a keyway is milled into
         # it from the side. Neither is expressible as a pocket, and both are on
         # every real shaft drawing.
-        "groove", "keyway",
+        "groove",
+        "keyway",
         # Ф2.5: rib — a thin reinforcing wall, fused exactly like a boss.
         "rib",
     ]
@@ -199,27 +209,39 @@ def _hole_features(
         # that matches a named sketch parameter propagated from it.
         propagated = _propagated_parameter(ir, diameter_mm)
         dia_prov = (
-            ParamProvenance(origin="propagated", detail=f"параметр эскиза «{propagated}»",
-                            source_entity_id=e.id, source_parameter=propagated)
-            if propagated else
-            ParamProvenance(origin="measured", detail="измерено по окружности", source_entity_id=e.id)
+            ParamProvenance(
+                origin="propagated",
+                detail=f"параметр эскиза «{propagated}»",
+                source_entity_id=e.id,
+                source_parameter=propagated,
+            )
+            if propagated
+            else ParamProvenance(
+                origin="measured", detail="измерено по окружности", source_entity_id=e.id
+            )
         )
-        features.append(Feature3D(
-            kind="hole",
-            source_entity_ids=[e.id],
-            params={
-                "diameter_mm": diameter_mm,
-                "center_x_mm": center_x_mm,
-                "center_y_mm": center_y_mm,
-                "through": through if through else None,
-            },
-            param_provenance={
-                "diameter_mm": dia_prov,
-                "center_x_mm": ParamProvenance(origin="measured", detail="центр окружности", source_entity_id=e.id),
-                "center_y_mm": ParamProvenance(origin="measured", detail="центр окружности", source_entity_id=e.id),
-            },
-            confidence=0.8 if through else 0.5,
-        ))
+        features.append(
+            Feature3D(
+                kind="hole",
+                source_entity_ids=[e.id],
+                params={
+                    "diameter_mm": diameter_mm,
+                    "center_x_mm": center_x_mm,
+                    "center_y_mm": center_y_mm,
+                    "through": through if through else None,
+                },
+                param_provenance={
+                    "diameter_mm": dia_prov,
+                    "center_x_mm": ParamProvenance(
+                        origin="measured", detail="центр окружности", source_entity_id=e.id
+                    ),
+                    "center_y_mm": ParamProvenance(
+                        origin="measured", detail="центр окружности", source_entity_id=e.id
+                    ),
+                },
+                confidence=0.8 if through else 0.5,
+            )
+        )
     return features
 
 
@@ -243,10 +265,15 @@ def generate_feature_tree_candidates(ir: CadIR) -> list[FeatureTreeCandidate]:
         return []
     x0_mm, y0_mm, width_mm, height_mm = footprint
     holes = _hole_features(ir, footprint)
-    hole_missing = [] if not holes else [
-        f"глубина отверстия {h.params['diameter_mm']:g}мм не указана на чертеже (сквозное/глухое)"
-        for h in holes if h.params.get("through") is None
-    ]
+    hole_missing = (
+        []
+        if not holes
+        else [
+            f"глубина отверстия {h.params['diameter_mm']:g}мм не указана на чертеже (сквозное/глухое)"
+            for h in holes
+            if h.params.get("through") is None
+        ]
+    )
 
     stated = _stated_depth_mm(ir)
     candidates: list[FeatureTreeCandidate] = []
@@ -255,13 +282,20 @@ def generate_feature_tree_candidates(ir: CadIR) -> list[FeatureTreeCandidate]:
         stated_depth, depth_src = stated
         propagated = _propagated_parameter(ir, stated_depth)
         depth_prov = (
-            ParamProvenance(origin="propagated", detail=f"параметр эскиза «{propagated}»",
-                            source_parameter=propagated)
-            if propagated else
-            ParamProvenance(origin="stated", detail="указана на чертеже", source_entity_id=depth_src)
+            ParamProvenance(
+                origin="propagated",
+                detail=f"параметр эскиза «{propagated}»",
+                source_parameter=propagated,
+            )
+            if propagated
+            else ParamProvenance(
+                origin="stated", detail="указана на чертеже", source_entity_id=depth_src
+            )
         )
         base = Feature3D(
-            kind="extrude", source_entity_ids=[], confidence=0.9,
+            kind="extrude",
+            source_entity_ids=[],
+            confidence=0.9,
             params={
                 "depth_mm": stated_depth,
                 "width_mm": width_mm,
@@ -271,16 +305,21 @@ def generate_feature_tree_candidates(ir: CadIR) -> list[FeatureTreeCandidate]:
             },
             param_provenance={"depth_mm": depth_prov, **_footprint_provenance()},
         )
-        candidates.append(FeatureTreeCandidate(
-            features=[base, *holes], score=0.9,
-            label=f"глубина {stated_depth:g}мм — указана на чертеже",
-            missing_data=hole_missing,
-        ))
+        candidates.append(
+            FeatureTreeCandidate(
+                features=[base, *holes],
+                score=0.9,
+                label=f"глубина {stated_depth:g}мм — указана на чертеже",
+                missing_data=hole_missing,
+            )
+        )
 
     for name, ratio, label in _DEPTH_HEURISTICS:
         depth = min(width_mm, height_mm) * ratio if name == "square" else width_mm * ratio
         base = Feature3D(
-            kind="extrude", source_entity_ids=[], confidence=0.2,
+            kind="extrude",
+            source_entity_ids=[],
+            confidence=0.2,
             params={
                 "depth_mm": depth,
                 "width_mm": width_mm,
@@ -293,10 +332,17 @@ def generate_feature_tree_candidates(ir: CadIR) -> list[FeatureTreeCandidate]:
                 **_footprint_provenance(),
             },
         )
-        candidates.append(FeatureTreeCandidate(
-            features=[base, *holes], score=0.2, label=label,
-            missing_data=["нет бокового вида/разреза — глубина выдавливания не измерена, это эвристика", *hole_missing],
-        ))
+        candidates.append(
+            FeatureTreeCandidate(
+                features=[base, *holes],
+                score=0.2,
+                label=label,
+                missing_data=[
+                    "нет бокового вида/разреза — глубина выдавливания не измерена, это эвристика",
+                    *hole_missing,
+                ],
+            )
+        )
 
     candidates.sort(key=lambda c: c.score, reverse=True)
     return candidates

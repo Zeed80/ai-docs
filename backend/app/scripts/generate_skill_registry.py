@@ -225,7 +225,7 @@ def generate_markdown(registry: dict) -> str:
         "",
         f"*Auto-generated from FastAPI Pydantic schemas. Version 2. Total: {total} skills.*",
         "",
-        "> **Usage**: agent calls `POST /api/agent/cap/{capability}` with `{\"action\": \"...\"}`. See [ADR 001](adrs/001-capability-routing.md).",
+        '> **Usage**: agent calls `POST /api/agent/cap/{capability}` with `{"action": "..."}`. See [ADR 001](adrs/001-capability-routing.md).',
         "",
         "## Table of Contents",
         "",
@@ -234,7 +234,15 @@ def generate_markdown(registry: dict) -> str:
     for cat_key in sorted(by_cat):
         label = cat_labels.get(cat_key, cat_key.title())
         count = len(by_cat[cat_key])
-        anchor = label.lower().replace(" ", "-").replace("(", "").replace(")", "").replace("/", "").replace("&", "").strip("-")
+        anchor = (
+            label.lower()
+            .replace(" ", "-")
+            .replace("(", "")
+            .replace(")", "")
+            .replace("/", "")
+            .replace("&", "")
+            .strip("-")
+        )
         lines.append(f"- [{label} ({count})](#{anchor})")
 
     for cat_key in sorted(by_cat):
@@ -263,9 +271,16 @@ def generate_markdown(registry: dict) -> str:
                     "|-------|------|----------|-------------|",
                 ]
                 for field, schema in sorted(props.items()):
-                    ftype = schema.get("type", schema.get("anyOf", [{}])[0].get("type", "any") if schema.get("anyOf") else "any")
+                    ftype = schema.get(
+                        "type",
+                        schema.get("anyOf", [{}])[0].get("type", "any")
+                        if schema.get("anyOf")
+                        else "any",
+                    )
                     req = "✓" if field in required_fields else ""
-                    fdesc = schema.get("description", schema.get("title", "").replace("_", " ").title())
+                    fdesc = schema.get(
+                        "description", schema.get("title", "").replace("_", " ").title()
+                    )
                     lines.append(f"| `{field}` | `{ftype}` | {req} | {fdesc} |")
                 lines.append("")
 
@@ -276,10 +291,7 @@ def main():
     registry = generate_registry()
 
     output_path = (
-        Path(__file__).parent.parent.parent.parent
-        / "aiagent"
-        / "skills"
-        / "_registry.yml"
+        Path(__file__).parent.parent.parent.parent / "aiagent" / "skills" / "_registry.yml"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -296,9 +308,7 @@ def main():
     print(f"JSON copy → {json_path}")
 
     # Generate Markdown reference
-    md_path = (
-        Path(__file__).parent.parent.parent.parent / "docs" / "skills-api-reference.md"
-    )
+    md_path = Path(__file__).parent.parent.parent.parent / "docs" / "skills-api-reference.md"
     md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text(generate_markdown(registry), encoding="utf-8")
     print(f"Markdown reference → {md_path}")

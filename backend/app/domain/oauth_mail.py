@@ -17,6 +17,7 @@ Flow (app/api/oauth.py drives it):
      cached access token if still fresh, else refreshes it via the stored
      refresh token and persists the new one.
 """
+
 from __future__ import annotations
 
 import base64
@@ -25,7 +26,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
@@ -118,30 +119,39 @@ def _email_from_id_token(id_token: str) -> str | None:
         return None
 
 
-def _to_result(provider: str, body: dict, fallback_refresh_token: str | None, email: str | None) -> TokenResult:
+def _to_result(
+    provider: str, body: dict, fallback_refresh_token: str | None, email: str | None
+) -> TokenResult:
     expires_in = int(body.get("expires_in", 3600))
     return TokenResult(
         access_token=body["access_token"],
         refresh_token=body.get("refresh_token") or fallback_refresh_token,
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=expires_in),
+        expires_at=datetime.now(UTC) + timedelta(seconds=expires_in),
         email=email,
         scope=body.get("scope"),
     )
 
 
 async def exchange_code(
-    provider: str, client_id: str, client_secret: str, redirect_uri: str, code: str,
+    provider: str,
+    client_id: str,
+    client_secret: str,
+    redirect_uri: str,
+    code: str,
 ) -> TokenResult:
     """First leg of the flow: authorization code -> tokens + account email."""
     cfg = PROVIDERS[provider]
     async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(cfg["token_url"], data={
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "code": code,
-            "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri,
-        })
+        resp = await client.post(
+            cfg["token_url"],
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": redirect_uri,
+            },
+        )
         resp.raise_for_status()
         body = resp.json()
 
@@ -162,16 +172,22 @@ async def exchange_code(
 
 
 async def refresh_access_token_async(
-    provider: str, client_id: str, client_secret: str, refresh_token: str,
+    provider: str,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
 ) -> TokenResult:
     cfg = PROVIDERS[provider]
     async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(cfg["token_url"], data={
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "refresh_token": refresh_token,
-            "grant_type": "refresh_token",
-        })
+        resp = await client.post(
+            cfg["token_url"],
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+        )
     resp.raise_for_status()
     # Providers commonly omit refresh_token on a refresh response (it doesn't
     # rotate) — keep using the one we already had in that case.
@@ -179,16 +195,22 @@ async def refresh_access_token_async(
 
 
 def refresh_access_token_sync(
-    provider: str, client_id: str, client_secret: str, refresh_token: str,
+    provider: str,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
 ) -> TokenResult:
     cfg = PROVIDERS[provider]
     with httpx.Client(timeout=15.0) as client:
-        resp = client.post(cfg["token_url"], data={
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "refresh_token": refresh_token,
-            "grant_type": "refresh_token",
-        })
+        resp = client.post(
+            cfg["token_url"],
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+        )
     resp.raise_for_status()
     return _to_result(provider, resp.json(), fallback_refresh_token=refresh_token, email=None)
 
@@ -354,7 +376,7 @@ def _cached_token_if_fresh(mailbox) -> str | None:
     if (
         mailbox.oauth_access_token_encrypted
         and mailbox.oauth_token_expires_at
-        and mailbox.oauth_token_expires_at > datetime.now(timezone.utc) + timedelta(seconds=60)
+        and mailbox.oauth_token_expires_at > datetime.now(UTC) + timedelta(seconds=60)
     ):
         return decrypt_password(mailbox.oauth_access_token_encrypted)
     return None
@@ -372,6 +394,7 @@ async def get_valid_access_token(db, mailbox) -> str:
     """Async version — FastAPI (mailbox connection test) and the Celery send
     task (which already runs its own asyncio loop, see email_sender.py)."""
     from sqlalchemy import select
+
     from app.ai.secret_box import decrypt as decrypt_client_secret
     from app.db.models import OAuthAppConfig
     from app.utils.crypto import decrypt_password, encrypt_password
@@ -393,7 +416,9 @@ async def get_valid_access_token(db, mailbox) -> str:
                 return cached
 
         app_cfg = (
-            await db.execute(select(OAuthAppConfig).where(OAuthAppConfig.provider == mailbox.oauth_provider))
+            await db.execute(
+                select(OAuthAppConfig).where(OAuthAppConfig.provider == mailbox.oauth_provider)
+            )
         ).scalar_one_or_none()
         if not app_cfg or not app_cfg.client_id or not app_cfg.client_secret_encrypted:
             raise OAuthAppNotConfigured(
@@ -418,6 +443,7 @@ def get_valid_access_token_sync(db, mailbox) -> str:
     """Sync version — Celery's IMAP poll task (app/tasks/imap_client.py) runs
     on a plain sync SQLAlchemy session, no event loop available."""
     from sqlalchemy import select
+
     from app.ai.secret_box import decrypt as decrypt_client_secret
     from app.db.models import OAuthAppConfig
     from app.utils.crypto import decrypt_password, encrypt_password

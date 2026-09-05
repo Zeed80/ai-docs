@@ -27,7 +27,11 @@ def test_tech_capability_declares_material_domain():
     domain = manifest.by_name["tech"].domain
     assert domain is not None
     assert set(domain["materials"]) == {
-        "steel_carbon", "steel_alloy", "stainless", "aluminum", "cast_iron",
+        "steel_carbon",
+        "steel_alloy",
+        "stainless",
+        "aluminum",
+        "cast_iron",
     }
 
 
@@ -42,9 +46,7 @@ def test_capability_without_domain_defaults_to_none(tmp_path: Path):
 def test_capability_manifest_rejects_duplicate_names(tmp_path: Path):
     path = tmp_path / "capabilities.yml"
     path.write_text(
-        "version: 2\ncapabilities:\n"
-        "  - name: invoices\n"
-        "  - name: invoices\n",
+        "version: 2\ncapabilities:\n  - name: invoices\n  - name: invoices\n",
         encoding="utf-8",
     )
 

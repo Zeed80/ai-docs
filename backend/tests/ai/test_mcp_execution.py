@@ -19,7 +19,9 @@ from app.ai.agent_config import BuiltinAgentConfig
 
 def _config() -> BuiltinAgentConfig:
     return BuiltinAgentConfig(
-        model="mock", backend_url="http://backend", ollama_url="http://ollama",
+        model="mock",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
     )
 
 
@@ -123,7 +125,8 @@ async def test_mcp_capability_registry_caches_across_calls(monkeypatch):
 
     monkeypatch.setattr("app.ai.mcp_client.load_mcp_tools", fake_load_mcp_tools)
     monkeypatch.setattr(
-        "app.ai.agent_config.get_builtin_agent_config", lambda: _config(),
+        "app.ai.agent_config.get_builtin_agent_config",
+        lambda: _config(),
     )
 
     names1 = await mcp_capability.list_mcp_tool_names()
@@ -148,7 +151,8 @@ async def test_mcp_capability_unknown_tool_returns_none(monkeypatch):
 
     monkeypatch.setattr("app.ai.mcp_client.load_mcp_tools", fake_load_mcp_tools)
     monkeypatch.setattr(
-        "app.ai.agent_config.get_builtin_agent_config", lambda: _config(),
+        "app.ai.agent_config.get_builtin_agent_config",
+        lambda: _config(),
     )
 
     assert await mcp_capability.get_mcp_tool_handler("does_not_exist") is None

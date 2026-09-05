@@ -7,19 +7,33 @@ from app.tasks.proactive import _format_briefing
 
 def test_empty_stats_produce_no_briefing():
     assert _format_briefing({}) == ""
-    assert _format_briefing({k: 0 for k in (
-        "overdue_payments", "pending_approvals", "open_anomalies",
-        "payments_due_soon", "documents_needs_review", "quarantine_count",
-        "unread_emails",
-    )}) == ""
+    assert (
+        _format_briefing(
+            {
+                k: 0
+                for k in (
+                    "overdue_payments",
+                    "pending_approvals",
+                    "open_anomalies",
+                    "payments_due_soon",
+                    "documents_needs_review",
+                    "quarantine_count",
+                    "unread_emails",
+                )
+            }
+        )
+        == ""
+    )
 
 
 def test_urgent_items_go_red():
-    text = _format_briefing({
-        "overdue_payments": 2,
-        "pending_approvals": 3,
-        "open_anomalies": 1,
-    })
+    text = _format_briefing(
+        {
+            "overdue_payments": 2,
+            "pending_approvals": 3,
+            "open_anomalies": 1,
+        }
+    )
     assert "🔴" in text
     assert "просроченные платежи: 2" in text
     assert "ждут согласования: 3" in text
@@ -30,12 +44,14 @@ def test_urgent_items_go_red():
 
 
 def test_today_and_info_buckets():
-    text = _format_briefing({
-        "payments_due_soon": 4,
-        "documents_needs_review": 5,
-        "quarantine_count": 1,
-        "unread_emails": 7,
-    })
+    text = _format_briefing(
+        {
+            "payments_due_soon": 4,
+            "documents_needs_review": 5,
+            "quarantine_count": 1,
+            "unread_emails": 7,
+        }
+    )
     assert "🟡 На сегодня:" in text
     assert "оплаты в ближайшие 3 дня: 4" in text
     assert "документы на проверке: 5" in text
@@ -50,11 +66,13 @@ def test_custom_opener_is_used():
 
 
 def test_all_buckets_ordered_red_yellow_green():
-    text = _format_briefing({
-        "overdue_payments": 1,
-        "payments_due_soon": 1,
-        "unread_emails": 1,
-    })
+    text = _format_briefing(
+        {
+            "overdue_payments": 1,
+            "payments_due_soon": 1,
+            "unread_emails": 1,
+        }
+    )
     lines = text.splitlines()
     assert lines[1].startswith("🔴")
     assert lines[2].startswith("🟡")

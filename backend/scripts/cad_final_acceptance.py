@@ -18,7 +18,6 @@ import sys
 from collections import defaultdict
 from typing import Any
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PROMOTION_THRESHOLDS = {
     "entity_precision": 0.995,
@@ -92,25 +91,23 @@ def audit_leakage(
     selected = {
         "mechanical": _load_jsonl(mechanical_manifest),
         "construction": [
-            row for row in _load_jsonl(construction_manifest)
-            if row.get("split") == "holdout"
+            row for row in _load_jsonl(construction_manifest) if row.get("split") == "holdout"
         ],
     }
     holdout_groups = {
-        domain: {str(row["source_group_id"]) for row in rows}
-        for domain, rows in selected.items()
+        domain: {str(row["source_group_id"]) for row in rows} for domain, rows in selected.items()
     }
     issues: list[dict[str, Any]] = []
-    registry = {
-        row["id"]: row for row in _load_json(source_registry).get("sources", [])
-    }
+    registry = {row["id"]: row for row in _load_json(source_registry).get("sources", [])}
     for domain, rows in selected.items():
         for row in rows:
             source_id = str(row.get("source_id") or row["source_group_id"].split(":", 1)[0])
             source = registry.get(source_id)
             license_name = row.get("license") or (source or {}).get("license")
             if not source or not str(source.get("status", "")).startswith("approved"):
-                issues.append({"code": "source_not_approved", "domain": domain, "source_id": source_id})
+                issues.append(
+                    {"code": "source_not_approved", "domain": domain, "source_id": source_id}
+                )
             if not license_name:
                 issues.append({"code": "license_missing", "domain": domain, "source_id": source_id})
     source_rows = _load_jsonl(source_manifest)
@@ -123,9 +120,7 @@ def audit_leakage(
 
     selected_groups = set().union(*holdout_groups.values())
     non_holdout_groups = {
-        str(row["source_group_id"])
-        for row in source_rows
-        if row.get("split") != "holdout"
+        str(row["source_group_id"]) for row in source_rows if row.get("split") != "holdout"
     }
     for group in sorted(selected_groups & non_holdout_groups):
         issues.append({"code": "selected_holdout_in_non_holdout_split", "group": group})
@@ -141,11 +136,13 @@ def audit_leakage(
             text = path.read_text(errors="replace")
             for group in sorted(selected_groups):
                 if group in text:
-                    issues.append({
-                        "code": "holdout_group_in_tuning_surface",
-                        "group": group,
-                        "path": str(path.relative_to(ROOT)),
-                    })
+                    issues.append(
+                        {
+                            "code": "holdout_group_in_tuning_surface",
+                            "group": group,
+                            "path": str(path.relative_to(ROOT)),
+                        }
+                    )
 
     return {
         "schema_version": "cad-holdout-leakage-audit/1.0",
@@ -205,7 +202,8 @@ def finalize(
         failures.append("holdout_leakage_audit_failed")
     failures.extend(
         f"{domain}_promotion_gate_failed"
-        for domain, result in domains.items() if not result["passed"]
+        for domain, result in domains.items()
+        if not result["passed"]
     )
     return {
         "schema_version": "cad-final-acceptance/1.0",
@@ -271,14 +269,21 @@ def main() -> int:
         ok = True
     elif args.command == "audit":
         payload = audit_leakage(
-            args.mechanical_manifest, args.construction_manifest,
-            args.source_manifest, args.source_registry, args.tuning_root,
+            args.mechanical_manifest,
+            args.construction_manifest,
+            args.source_manifest,
+            args.source_registry,
+            args.tuning_root,
         )
         _write(args.out, payload)
         ok = payload["ok"]
     else:
         payload = finalize(
-            args.freeze, args.leakage, args.mechanical, args.construction, args.out,
+            args.freeze,
+            args.leakage,
+            args.mechanical,
+            args.construction,
+            args.out,
         )
         _write(args.out, payload, exclusive=True)
         ok = payload["promotion_eligible"]

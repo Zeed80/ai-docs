@@ -427,7 +427,11 @@ async def verify_completed_step(step_id: uuid.UUID, *, session_factory: Any | No
         # (called from _dispatch_ready_work, same periodic-housekeeping
         # pattern as reclaim_expired_leases/enforce_budgets) completes the
         # parent once every child reaches a terminal state.
-        if step.kind == "decompose" and isinstance(step.output, dict) and step.output.get("child_order_ids"):
+        if (
+            step.kind == "decompose"
+            and isinstance(step.output, dict)
+            and step.output.get("child_order_ids")
+        ):
             await enter_waiting_for_children(db, order=order, actor="scheduler")
             await db.commit()
             return False
@@ -520,7 +524,12 @@ async def verify_semantic_criteria(
             "description": order.description,
             "constraints": order.constraints,
             "criteria": [
-                {"id": str(row.id), "key": row.criterion_key, "description": row.description, "predicate": row.predicate}
+                {
+                    "id": str(row.id),
+                    "key": row.criterion_key,
+                    "description": row.description,
+                    "predicate": row.predicate,
+                }
                 for row in criteria
             ],
             "outputs": [{"step": row.step_key, "output": row.output} for row in steps],
@@ -663,7 +672,12 @@ async def execute_claimed_step(
             order.id,
             "tool_call.prepared",
             actor="executor",
-            payload={"tool_call_id": str(call.id), "digest": digest, "capability": capability, "action": action},
+            payload={
+                "tool_call_id": str(call.id),
+                "digest": digest,
+                "capability": capability,
+                "action": action,
+            },
         )
         await db.commit()
 

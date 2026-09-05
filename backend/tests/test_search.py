@@ -29,12 +29,15 @@ async def document(db_session):
 
 @pytest.mark.asyncio
 async def test_create_saved_query(client: AsyncClient):
-    resp = await client.post("/api/search/saved-queries", json={
-        "nl_text": "счета от ООО АКМЕ за последний месяц",
-        "structured_query": {"supplier_name": "АКМЕ", "doc_type": "invoice"},
-        "result_count": 15,
-        "is_alert": False,
-    })
+    resp = await client.post(
+        "/api/search/saved-queries",
+        json={
+            "nl_text": "счета от ООО АКМЕ за последний месяц",
+            "structured_query": {"supplier_name": "АКМЕ", "doc_type": "invoice"},
+            "result_count": 15,
+            "is_alert": False,
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["nl_text"] == "счета от ООО АКМЕ за последний месяц"
@@ -44,12 +47,15 @@ async def test_create_saved_query(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_saved_query_as_alert(client: AsyncClient):
-    resp = await client.post("/api/search/saved-queries", json={
-        "nl_text": "новые аномалии",
-        "structured_query": {"status": "anomaly"},
-        "is_alert": True,
-        "alert_cron": "0 9 * * *",
-    })
+    resp = await client.post(
+        "/api/search/saved-queries",
+        json={
+            "nl_text": "новые аномалии",
+            "structured_query": {"status": "anomaly"},
+            "is_alert": True,
+            "alert_cron": "0 9 * * *",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["is_alert"] is True
@@ -58,14 +64,20 @@ async def test_create_saved_query_as_alert(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_list_saved_queries(client: AsyncClient):
-    await client.post("/api/search/saved-queries", json={
-        "nl_text": "list query 1",
-        "structured_query": {},
-    })
-    await client.post("/api/search/saved-queries", json={
-        "nl_text": "list query 2",
-        "structured_query": {},
-    })
+    await client.post(
+        "/api/search/saved-queries",
+        json={
+            "nl_text": "list query 1",
+            "structured_query": {},
+        },
+    )
+    await client.post(
+        "/api/search/saved-queries",
+        json={
+            "nl_text": "list query 2",
+            "structured_query": {},
+        },
+    )
 
     resp = await client.get("/api/search/saved-queries")
     assert resp.status_code == 200
@@ -77,10 +89,13 @@ async def test_list_saved_queries(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_delete_saved_query(client: AsyncClient):
-    create_resp = await client.post("/api/search/saved-queries", json={
-        "nl_text": "query to delete",
-        "structured_query": {},
-    })
+    create_resp = await client.post(
+        "/api/search/saved-queries",
+        json={
+            "nl_text": "query to delete",
+            "structured_query": {},
+        },
+    )
     query_id = create_resp.json()["id"]
 
     resp = await client.delete(f"/api/search/saved-queries/{query_id}")
@@ -121,10 +136,13 @@ async def test_search_documents_empty_results(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_nl_search(client: AsyncClient):
-    resp = await client.post("/api/search/nl", json={
-        "query": "счета на оплату",
-        "limit": 10,
-    })
+    resp = await client.post(
+        "/api/search/nl",
+        json={
+            "query": "счета на оплату",
+            "limit": 10,
+        },
+    )
     # NL search may require LLM; accept 200 or 503
     assert resp.status_code in (200, 503, 500)
     if resp.status_code == 200:

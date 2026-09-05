@@ -32,9 +32,15 @@ def _line_edge(index: int, length: float) -> dict:
 def _report() -> dict:
     return {
         "edges": [
-            _circle_edge(1, 30.0), _circle_edge(2, 16.0), _circle_edge(3, 30.0),
-            _line_edge(4, 40.0), _circle_edge(5, 16.0), _line_edge(6, 90.0),
-            _circle_edge(7, 50.0), _circle_edge(8, 50.0), _line_edge(9, 60.0),
+            _circle_edge(1, 30.0),
+            _circle_edge(2, 16.0),
+            _circle_edge(3, 30.0),
+            _line_edge(4, 40.0),
+            _circle_edge(5, 16.0),
+            _line_edge(6, 90.0),
+            _circle_edge(7, 50.0),
+            _circle_edge(8, 50.0),
+            _line_edge(9, 60.0),
         ],
         "bounds_mm": {"x": 50.0, "y": 50.0, "z": 100.0},
         "volume_mm3": 127988.0,
@@ -151,10 +157,12 @@ def test_roughness_never_enters_the_dimension_bindings():
 
 
 def test_part_properties_carry_what_cam_needs():
-    spec = _spec(annotations=[
-        {"kind": "roughness", "text": "Ra 1,6"},
-        {"kind": "hardness", "text": "HRC 58...62"},
-    ])
+    spec = _spec(
+        annotations=[
+            {"kind": "roughness", "text": "Ra 1,6"},
+            {"kind": "hardness", "text": "HRC 58...62"},
+        ]
+    )
     properties = collect_part_properties(spec, _report())
     assert properties["material"] == "Сталь 45 ГОСТ 1050-2013"
     assert properties["round_stock_diameter_mm"] == 50.0

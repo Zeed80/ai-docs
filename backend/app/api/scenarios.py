@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -87,7 +85,12 @@ async def run_scenario(
     if body.case_id:
         gate_tools = set(body.requested_tools) & _APPROVAL_GATE_TOOLS
         if gate_tools:
-            from app.db.models import Approval, ApprovalActionType, ApprovalStatus, AuditTimelineEvent
+            from app.db.models import (
+                Approval,
+                ApprovalActionType,
+                ApprovalStatus,
+                AuditTimelineEvent,
+            )
 
             for tool_name in gate_tools:
                 # Map tool name to enum value (fallback: email_send)
@@ -106,23 +109,33 @@ async def run_scenario(
                 db.add(approval)
                 await db.flush()
 
-                db.add(AuditTimelineEvent(
-                    entity_type="case",
-                    entity_id=body.case_id,
-                    event_type="approval_gate_created",
-                    actor="agent",
-                    summary=f"Требуется подтверждение: {tool_name}",
-                    details={"approval_id": str(approval.id), "tool": tool_name, "scenario": name},
-                ))
+                db.add(
+                    AuditTimelineEvent(
+                        entity_type="case",
+                        entity_id=body.case_id,
+                        event_type="approval_gate_created",
+                        actor="agent",
+                        summary=f"Требуется подтверждение: {tool_name}",
+                        details={
+                            "approval_id": str(approval.id),
+                            "tool": tool_name,
+                            "scenario": name,
+                        },
+                    )
+                )
 
-                gates.append({
-                    "id": str(approval.id),
-                    "action_type": tool_name,
-                    "status": "pending",
-                    "requested_by": "agent",
-                    "context": approval.context,
-                    "created_at": approval.created_at.isoformat() if approval.created_at else None,
-                })
+                gates.append(
+                    {
+                        "id": str(approval.id),
+                        "action_type": tool_name,
+                        "status": "pending",
+                        "requested_by": "agent",
+                        "context": approval.context,
+                        "created_at": approval.created_at.isoformat()
+                        if approval.created_at
+                        else None,
+                    }
+                )
 
             await db.commit()
 

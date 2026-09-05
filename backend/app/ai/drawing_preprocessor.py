@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import io
 import math
-import structlog
 from dataclasses import dataclass, field
 from typing import Any
+
+import structlog
 
 logger = structlog.get_logger()
 
@@ -36,21 +37,21 @@ _SEPARATOR_LINE_MIN_FRACTION = 0.65
 
 @dataclass
 class ViewCrop:
-    view_type: str          # "front"|"side"|"top"|"section"|"isometric"|"detail"|"page_N"
+    view_type: str  # "front"|"side"|"top"|"section"|"isometric"|"detail"|"page_N"
     image_bytes: bytes
     bbox: tuple[int, int, int, int]  # (x, y, w, h) in pixels on the full sheet
-    label: str              # "front", "A-A", "page_2", etc.
+    label: str  # "front", "A-A", "page_2", etc.
     confidence: float = 1.0
 
 
 @dataclass
 class PreprocessedDrawing:
-    full_image: bytes           # Enhanced full drawing image (PNG)
-    title_block: bytes | None   # Cropped title block / stamp (ГОСТ: bottom-right corner)
+    full_image: bytes  # Enhanced full drawing image (PNG)
+    title_block: bytes | None  # Cropped title block / stamp (ГОСТ: bottom-right corner)
     views: list[ViewCrop] = field(default_factory=list)
     dpi_effective: int = 200
     was_enhanced: bool = False  # Whether CLAHE/deskew was applied
-    page_count: int = 1         # For multi-page PDFs
+    page_count: int = 1  # For multi-page PDFs
 
 
 def preprocess_drawing_image(
@@ -86,7 +87,7 @@ def preprocess_drawing_image(
 
         # Step 2: CLAHE + deskew (only if OpenCV available and image looks like a scan)
         try:
-            import cv2
+            import cv2  # noqa: F401 — проба доступности пакета
             import numpy as np
 
             img_np = np.array(img)
@@ -114,13 +115,15 @@ def preprocess_drawing_image(
 
         # If segmentation failed or found nothing, use full image as single view
         if not views:
-            views = [ViewCrop(
-                view_type="front",
-                image_bytes=full_bytes,
-                bbox=(0, 0, img.width, img.height),
-                label="full",
-                confidence=1.0,
-            )]
+            views = [
+                ViewCrop(
+                    view_type="front",
+                    image_bytes=full_bytes,
+                    bbox=(0, 0, img.width, img.height),
+                    label="full",
+                    confidence=1.0,
+                )
+            ]
 
         return PreprocessedDrawing(
             full_image=full_bytes,
@@ -136,13 +139,15 @@ def preprocess_drawing_image(
         return PreprocessedDrawing(
             full_image=raw_bytes,
             title_block=None,
-            views=[ViewCrop(
-                view_type="front",
-                image_bytes=raw_bytes,
-                bbox=(0, 0, 0, 0),
-                label="full",
-                confidence=0.5,
-            )],
+            views=[
+                ViewCrop(
+                    view_type="front",
+                    image_bytes=raw_bytes,
+                    bbox=(0, 0, 0, 0),
+                    label="full",
+                    confidence=0.5,
+                )
+            ],
         )
 
 
@@ -176,13 +181,15 @@ def preprocess_pdf_pages(
             label = "page_1" if n_pages == 1 else f"page_{page_idx + 1}"
             view_type = "front" if page_idx == 0 else f"page_{page_idx + 1}"
 
-            pages.append(ViewCrop(
-                view_type=view_type,
-                image_bytes=enhanced,
-                bbox=(0, 0, 0, 0),
-                label=label,
-                confidence=1.0,
-            ))
+            pages.append(
+                ViewCrop(
+                    view_type=view_type,
+                    image_bytes=enhanced,
+                    bbox=(0, 0, 0, 0),
+                    label=label,
+                    confidence=1.0,
+                )
+            )
 
         doc.close()
         logger.info("pdf_pages_preprocessed", count=len(pages))
@@ -220,7 +227,6 @@ def _clahe_and_deskew(img_np: Any) -> tuple[Any, bool]:
     Returns (enhanced_np_array, was_deskewed).
     """
     import cv2
-    import numpy as np
 
     # Convert to LAB for CLAHE on L channel only (preserves color info)
     if img_np.ndim == 3 and img_np.shape[2] == 3:
@@ -302,7 +308,9 @@ def _rotate_image(img_np: Any, angle: float) -> Any:
     center = (w // 2, h // 2)
     M = cv2.getRotationMatrix2D(center, angle, 1.0)
     rotated = cv2.warpAffine(
-        img_np, M, (w, h),
+        img_np,
+        M,
+        (w, h),
         flags=cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=(255, 255, 255),
@@ -353,15 +361,11 @@ def _segment_views_opencv(img: Any, max_views: int = 6) -> list[ViewCrop]:
 
     # Find long lines using morphological operations
     # Horizontal lines: elements spanning >65% of width
-    h_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT, (int(w * _SEPARATOR_LINE_MIN_FRACTION), 1)
-    )
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (int(w * _SEPARATOR_LINE_MIN_FRACTION), 1))
     h_lines_mask = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_kernel)
 
     # Vertical lines: elements spanning >65% of height
-    v_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT, (1, int(h * _SEPARATOR_LINE_MIN_FRACTION))
-    )
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(h * _SEPARATOR_LINE_MIN_FRACTION)))
     v_lines_mask = cv2.morphologyEx(binary, cv2.MORPH_OPEN, v_kernel)
 
     # Find y-coordinates of horizontal separators
@@ -406,13 +410,15 @@ def _segment_views_opencv(img: Any, max_views: int = 6) -> list[ViewCrop]:
         crop = img.crop((rx, ry, rx + rw, ry + rh))
         crop_bytes = _img_to_png_bytes(crop)
         view_type = _label_to_type(label)
-        views.append(ViewCrop(
-            view_type=view_type,
-            image_bytes=crop_bytes,
-            bbox=(rx, ry, rw, rh),
-            label=label,
-            confidence=0.8 if idx == 0 else 0.7,
-        ))
+        views.append(
+            ViewCrop(
+                view_type=view_type,
+                image_bytes=crop_bytes,
+                bbox=(rx, ry, rw, rh),
+                label=label,
+                confidence=0.8 if idx == 0 else 0.7,
+            )
+        )
 
     logger.info(
         "drawing_views_segmented",
@@ -459,9 +465,9 @@ def _assign_view_labels(
         elif cy < sheet_h * 0.5 and cx > sheet_w * 0.5:
             label = "isometric"  # Upper right — often isometric/3D
         elif cy < sheet_h * 0.5:
-            label = "top"    # Upper half
+            label = "top"  # Upper half
         elif cx > sheet_w * 0.6:
-            label = "side"   # Right half
+            label = "side"  # Right half
         else:
             label = f"view_{idx + 1}"
 

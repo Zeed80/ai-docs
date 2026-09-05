@@ -14,6 +14,7 @@ Visibility rules (for a user with read permission):
                             in their department subtree, or where they are the
                             owner via `created_by`/`owner_sub`.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -81,7 +82,5 @@ async def apply_visibility(
     department_col: ColumnElement | None = None,
 ) -> Select:
     """Convenience wrapper: append visibility_filter() to a SELECT if one applies."""
-    clause = await visibility_filter(
-        db, user, owner_col=owner_col, department_col=department_col
-    )
+    clause = await visibility_filter(db, user, owner_col=owner_col, department_col=department_col)
     return query if clause is None else query.where(clause)

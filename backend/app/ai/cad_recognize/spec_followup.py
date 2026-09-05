@@ -127,11 +127,7 @@ def _missing_values(spec: dict) -> list[tuple[str, str, dict, dict]]:
 
 
 def _positive(value: Any) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and value > 0
-    )
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 
 def _neighbour_context(body: dict, group: str, index: int) -> str:
@@ -200,9 +196,7 @@ async def resolve_missing_dimensions(
     except Exception:  # noqa: BLE001 — no image, no follow-up, no crash
         return spec, []
 
-    callouts = {
-        "dimensions": [d for d in (spec.get("dimensions") or []) if isinstance(d, dict)]
-    }
+    callouts = {"dimensions": [d for d in (spec.get("dimensions") or []) if isinstance(d, dict)]}
     linear_seen = _callout_numbers(callouts, "linear")
     diameters_seen = _callout_numbers(callouts, "diameter")
     shaft_view = _overview(_dominant_view_crop(image))
@@ -245,8 +239,12 @@ async def resolve_missing_dimensions(
 
         entry = FollowupAnswer(path=path, field=name, question=prompt.split("\n\n")[0])
         answer = await _ask(
-            prompt, view, router=router, confidential=confidential,
-            num_predict=200, schema=_NUMBER_SCHEMA,
+            prompt,
+            view,
+            router=router,
+            confidential=confidential,
+            num_predict=200,
+            schema=_NUMBER_SCHEMA,
         )
         value = answer.get(key) if isinstance(answer, dict) else None
         if not _positive(value):

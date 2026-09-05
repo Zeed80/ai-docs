@@ -47,8 +47,15 @@ def _write_progress(gen_id: str, value, maximum, node=None) -> None:
         pct = int(round(100 * value / maximum)) if value and maximum else 0
         get_sync_redis().set(
             _progress_key(gen_id),
-            json.dumps({"value": value, "max": maximum, "pct": pct,
-                        "node": node, "ts": __import__("time").time()}),
+            json.dumps(
+                {
+                    "value": value,
+                    "max": maximum,
+                    "pct": pct,
+                    "node": node,
+                    "ts": __import__("time").time(),
+                }
+            ),
             ex=180,
         )
     except Exception:  # noqa: BLE001
@@ -294,8 +301,9 @@ def _pick_upscale_model(object_info: dict) -> str | None:
     return models[0]
 
 
-async def _run_upscale(client, image_bytes: bytes, factor: int,
-                       object_info: dict, generation_id: str) -> bytes:
+async def _run_upscale(
+    client, image_bytes: bytes, factor: int, object_info: dict, generation_id: str
+) -> bytes:
     """Model-based high-quality upscale of the FINAL result — mode-agnostic
     (runs on the produced image, so it works for generate/edit/cleanup/
     inpaint/techdraw alike). The ESRGAN model upscales at its native factor
@@ -316,22 +324,39 @@ async def _run_upscale(client, image_bytes: bytes, factor: int,
     graph = {
         "1": {"class_type": "LoadImage", "inputs": {"image": name}},
         "2": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": model_name}},
-        "3": {"class_type": "ImageUpscaleWithModel",
-              "inputs": {"upscale_model": ["2", 0], "image": ["1", 0]}},
+        "3": {
+            "class_type": "ImageUpscaleWithModel",
+            "inputs": {"upscale_model": ["2", 0], "image": ["1", 0]},
+        },
         # Lanczos-resize the model output to the EXACT requested size (the
         # model's native factor may be 4x; this lands 2x/3x precisely and
         # trims any rounding).
-        "4": {"class_type": "ImageScale",
-              "inputs": {"image": ["3", 0], "upscale_method": "lanczos",
-                         "width": target_w, "height": target_h, "crop": "disabled"}},
-        "5": {"class_type": "SaveImage",
-              "inputs": {"images": ["4", 0], "filename_prefix": "upscaled"}},
+        "4": {
+            "class_type": "ImageScale",
+            "inputs": {
+                "image": ["3", 0],
+                "upscale_method": "lanczos",
+                "width": target_w,
+                "height": target_h,
+                "crop": "disabled",
+            },
+        },
+        "5": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["4", 0], "filename_prefix": "upscaled"},
+        },
     }
     prompt_id = await client.queue_workflow(graph)
     outputs = await client.wait_for_result(prompt_id)
     upscaled = await client.fetch_image(outputs[0])
-    logger.info("upscaled", generation_id=generation_id, model=model_name,
-                factor=factor, from_size=[w, h], to=[target_w, target_h])
+    logger.info(
+        "upscaled",
+        generation_id=generation_id,
+        model=model_name,
+        factor=factor,
+        from_size=[w, h],
+        to=[target_w, target_h],
+    )
     return upscaled
 
 
@@ -380,8 +405,7 @@ async def _mark_failed(gen_uuid: uuid.UUID, err: str, owner_sub: str | None = No
     """Persist a final (non-retryable) failure + best-effort push notification."""
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.db.session import _get_session_factory
-    from app.services import studio_queue
-    from app.services import push
+    from app.services import push, studio_queue
 
     factory = _get_session_factory()
     async with factory() as db:
@@ -423,10 +447,14 @@ async def _is_cancelled(gen_uuid: uuid.UUID) -> bool:
         if gen and gen.status == ImageGenStatus.cancelled:
             return True
         job = await studio_queue.job_for_generation(db, gen_uuid)
-        return bool(job and job.status in {StudioJobStatus.cancel_requested, StudioJobStatus.cancelled})
+        return bool(
+            job and job.status in {StudioJobStatus.cancel_requested, StudioJobStatus.cancelled}
+        )
 
 
-async def _mark_cancelled(gen_uuid: uuid.UUID, reason: str = "Задача отменена пользователем.") -> None:
+async def _mark_cancelled(
+    gen_uuid: uuid.UUID, reason: str = "Задача отменена пользователем."
+) -> None:
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.db.session import _get_session_factory
     from app.services import studio_queue
@@ -443,28 +471,34 @@ async def _mark_cancelled(gen_uuid: uuid.UUID, reason: str = "Задача от�
         _clear_progress(str(gen_uuid))
 
 
-async def _run_hd_tiles(client, graph_template: dict, inject_map: dict, values: dict,
-                        source_bytes: bytes, object_info: dict,
-                        generation_id: str) -> tuple[bytes, str]:
+async def _run_hd_tiles(
+    client,
+    graph_template: dict,
+    inject_map: dict,
+    values: dict,
+    source_bytes: bytes,
+    object_info: dict,
+    generation_id: str,
+) -> tuple[bytes, str]:
     """Upscale the sheet, diffuse it tile by tile through the SAME workflow
     graph and stitch with seam blending. Returns (png_bytes, last_prompt_id)."""
     import io as _io
 
     from PIL import Image as _PILImage
 
-    from app.ai.comfyui_models import auto_resolve_models
     from app.ai.comfyui_client import build_workflow
+    from app.ai.comfyui_models import auto_resolve_models
     from app.ai.hd_tiles import split_tiles, stitch_tiles
 
     src = _PILImage.open(_io.BytesIO(source_bytes)).convert("RGB")
     scale = min(2.0, _HD_MAX_LONG_SIDE / max(src.size))
     if scale > 1.0:
-        src = src.resize((round(src.width * scale), round(src.height * scale)),
-                         _PILImage.LANCZOS)
+        src = src.resize((round(src.width * scale), round(src.height * scale)), _PILImage.LANCZOS)
     width, height = src.size
     boxes = split_tiles(width, height)
-    logger.info("hd_tiles_start", generation_id=generation_id,
-                size=[width, height], tiles=len(boxes))
+    logger.info(
+        "hd_tiles_start", generation_id=generation_id, size=[width, height], tiles=len(boxes)
+    )
 
     rendered = []
     prompt_id = ""
@@ -472,8 +506,7 @@ async def _run_hd_tiles(client, graph_template: dict, inject_map: dict, values: 
         crop = src.crop(box)
         buf = _io.BytesIO()
         crop.save(buf, format="PNG")
-        tile_name = await client.upload_image(buf.getvalue(),
-                                              f"hd_{generation_id}_{idx}.png")
+        tile_name = await client.upload_image(buf.getvalue(), f"hd_{generation_id}_{idx}.png")
         tile_values = dict(values)
         tile_values["image"] = tile_name
         graph = build_workflow(graph_template, inject_map, tile_values)
@@ -484,8 +517,7 @@ async def _run_hd_tiles(client, graph_template: dict, inject_map: dict, values: 
         outputs = await client.wait_for_result(prompt_id)
         tile_png = await client.fetch_image(outputs[0])
         rendered.append((box, _PILImage.open(_io.BytesIO(tile_png))))
-        logger.info("hd_tile_done", generation_id=generation_id,
-                    tile=idx + 1, total=len(boxes))
+        logger.info("hd_tile_done", generation_id=generation_id, tile=idx + 1, total=len(boxes))
 
     stitched = stitch_tiles(width, height, rendered)
     out = _io.BytesIO()
@@ -514,7 +546,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if not gen:
             return {"error": "generation not found"}
         job = await studio_queue.job_for_generation(db, gen_uuid)
-        job_status = job.status.value if job and hasattr(job.status, "value") else (str(job.status) if job else None)
+        job_status = (
+            job.status.value
+            if job and hasattr(job.status, "value")
+            else (str(job.status) if job else None)
+        )
         if gen.status == ImageGenStatus.cancelled or (
             job_status in {"cancel_requested", "cancelled"}
         ):
@@ -616,7 +652,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
                     content = enhance_source_for_diffusion(content)
                 except Exception as exc:  # noqa: BLE001 — best-effort
-                    logger.warning("enhance_source_failed", generation_id=generation_id, error=str(exc))
+                    logger.warning(
+                        "enhance_source_failed", generation_id=generation_id, error=str(exc)
+                    )
                 if idx == 0:
                     # Text preservation below must OCR THIS image, not the raw
                     # original: dewarp/deskew change the geometry, so boxes
@@ -704,8 +742,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             values["mask"] = mask_name
         if controlnet_name:
             values["controlnet_image"] = controlnet_name
-        for key in ("width", "height", "steps", "cfg", "denoise",
-                    "lora_strength", "guidance"):
+        for key in ("width", "height", "steps", "cfg", "denoise", "lora_strength", "guidance"):
             if params.get(key) is not None:
                 values[key] = params[key]
         if params.get("controlnet_strength") is not None:
@@ -735,8 +772,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             # no single ~1MP pass can render (VAE 8x latent compression).
             hd_source = enhanced_source or download_file(source_paths[0])
             result_bytes, prompt_id = await _run_hd_tiles(
-                client, graph_template, inject_map, dict(values), hd_source,
-                object_info, generation_id,
+                client,
+                graph_template,
+                inject_map,
+                dict(values),
+                hd_source,
+                object_info,
+                generation_id,
             )
         else:
             import asyncio as _asyncio
@@ -775,14 +817,20 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     result_bytes, ref_bytes
                 )
                 if changed:
-                    logger.info("result_resized_to_source", generation_id=generation_id,
-                                out=list(before_size or ()), reason=reason)
+                    logger.info(
+                        "result_resized_to_source",
+                        generation_id=generation_id,
+                        out=list(before_size or ()),
+                        reason=reason,
+                    )
                 elif reason == "aspect-mismatch":
-                    logger.info("result_resize_skipped_aspect_mismatch", generation_id=generation_id,
-                                out=list(before_size or ()))
+                    logger.info(
+                        "result_resize_skipped_aspect_mismatch",
+                        generation_id=generation_id,
+                        out=list(before_size or ()),
+                    )
             except Exception as exc:  # noqa: BLE001 — best-effort
-                logger.warning("result_resize_failed", generation_id=generation_id,
-                               error=str(exc))
+                logger.warning("result_resize_failed", generation_id=generation_id, error=str(exc))
 
         # Affine layout estimation (cleanup only): diffusion re-layouts the
         # sheet slightly, while the proportional text paste below assumes the
@@ -818,7 +866,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     result_bytes, vectorize=params.get("vectorize") is not False
                 )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("regularize_drawing_failed", generation_id=generation_id, error=str(exc))
+                logger.warning(
+                    "regularize_drawing_failed", generation_id=generation_id, error=str(exc)
+                )
         elif operation == "cleanup" and postprocess == "text_only":
             try:
                 from PIL import Image as _PILImage
@@ -848,7 +898,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
                     src_w, src_h = _PILImage.open(io.BytesIO(source_for_ocr)).size
                     result_bytes = composite_text_regions(
-                        result_bytes, source_for_ocr, regions, src_w, src_h,
+                        result_bytes,
+                        source_for_ocr,
+                        regions,
+                        src_w,
+                        src_h,
                         # Always crisp for cleanup: soft photo-toned pastes on
                         # a dense sheet read as dozens of dirty gray patches
                         # (user-confirmed "франкенштейн"); after autocontrast
@@ -872,10 +926,10 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if factor > 1:
             try:
                 result_bytes = await _run_upscale(
-                    client, result_bytes, min(factor, 4), object_info, generation_id)
+                    client, result_bytes, min(factor, 4), object_info, generation_id
+                )
             except Exception as exc:  # noqa: BLE001 — keep the base result
-                logger.warning("upscale_failed", generation_id=generation_id,
-                               error=str(exc)[:200])
+                logger.warning("upscale_failed", generation_id=generation_id, error=str(exc)[:200])
 
         result_path = f"{_RESULT_BUCKET_PREFIX}/{owner_sub or 'shared'}/{generation_id}.png"
         upload_file(result_bytes, result_path, "image/png")
@@ -883,7 +937,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         thumb_path = None
         thumb_bytes = _make_thumbnail(result_bytes)
         if thumb_bytes:
-            thumb_path = f"{_RESULT_BUCKET_PREFIX}/{owner_sub or 'shared'}/{generation_id}_thumb.png"
+            thumb_path = (
+                f"{_RESULT_BUCKET_PREFIX}/{owner_sub or 'shared'}/{generation_id}_thumb.png"
+            )
             upload_file(thumb_bytes, thumb_path, "image/png")
 
     except ComfyUITransientError:
@@ -908,7 +964,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if gen:
             if gen.status == ImageGenStatus.cancelled:
                 job = await studio_queue.job_for_generation(db, gen_uuid)
-                await studio_queue.mark_job_cancelled(db, job, error="Задача отменена пользователем.")
+                await studio_queue.mark_job_cancelled(
+                    db, job, error="Задача отменена пользователем."
+                )
                 await db.commit()
                 return {"cancelled": True}
             gen.status = ImageGenStatus.done
@@ -926,7 +984,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         user_sub=owner_sub,
                         title="Изображение готово",
                         body="Результат доступен в Графической студии.",
-                        action_url=f"/studio?job={job.id}" if job else f"/studio?id={generation_id}",
+                        action_url=f"/studio?job={job.id}"
+                        if job
+                        else f"/studio?id={generation_id}",
                         notification_type="image_ready",
                     )
                 except Exception:  # noqa: BLE001

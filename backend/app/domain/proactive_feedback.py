@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import structlog
@@ -114,7 +114,7 @@ async def get_proactive_task_acceptance_rate(
     into either side of the ratio would just add noise to the deciding
     signal, not information.
     """
-    since = datetime.now(timezone.utc) - timedelta(days=window_days)
+    since = datetime.now(UTC) - timedelta(days=window_days)
     rows = (
         await db.execute(
             select(ProactiveTaskFeedback.action, func.count())
@@ -217,7 +217,7 @@ async def is_snoozed(
     for invoice X is stale" nudge — they call for different actions (pay vs.
     approve) and a user snoozing one has not said anything about the other.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     query = select(ProactiveTaskFeedback.id).where(
         ProactiveTaskFeedback.action == "snoozed",
         ProactiveTaskFeedback.beat_task_name == beat_task_name,

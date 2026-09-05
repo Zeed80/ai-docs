@@ -33,13 +33,15 @@ def _assembly_graph(*, shaft_quantity: int = 1):
             "transform": {"x": 12.0},
         },
     ]
-    mates = [{
-        "id": "mate-1",
-        "mate_type": "fixed",
-        "first_instance_key": "housing",
-        "second_instance_key": "shaft",
-        "parameters": {},
-    }]
+    mates = [
+        {
+            "id": "mate-1",
+            "mate_type": "fixed",
+            "first_instance_key": "housing",
+            "second_instance_key": "shaft",
+            "parameters": {},
+        }
+    ]
     return assembly_as_graph(
         graph_id="assembly:test",
         name="Test assembly",
@@ -64,13 +66,15 @@ def test_assembly_dof_requires_a_ground_path_for_every_instance():
     ]
     report = analyze_assembly_dof(
         components,
-        [{
-            "id": "mate-1",
-            "mate_type": "fixed",
-            "first_instance_key": "housing",
-            "second_instance_key": "shaft",
-            "parameters": {},
-        }],
+        [
+            {
+                "id": "mate-1",
+                "mate_type": "fixed",
+                "first_instance_key": "housing",
+                "second_instance_key": "shaft",
+                "parameters": {},
+            }
+        ],
     )
 
     assert report.degrees_of_freedom == 0
@@ -90,12 +94,14 @@ def test_assembly_dof_reports_floating_grouped_and_unknown_mates():
     ]
     report = analyze_assembly_dof(
         components,
-        [{
-            "id": "mate-unknown",
-            "mate_type": "custom_magic",
-            "first_instance_key": "base",
-            "second_instance_key": "bolt-group",
-        }],
+        [
+            {
+                "id": "mate-unknown",
+                "mate_type": "custom_magic",
+                "first_instance_key": "base",
+                "second_instance_key": "bolt-group",
+            }
+        ],
     )
 
     assert report.degrees_of_freedom == 6
@@ -154,8 +160,10 @@ def test_assembly_graph_projects_instances_bom_mates_and_release_gate():
 def test_assembly_generator_admission_allows_only_declared_pending_outputs():
     graph = _assembly_graph()
     pending = {
-        item.id for item in graph.assertions
-        if item.predicate in {
+        item.id
+        for item in graph.assertions
+        if item.predicate
+        in {
             "assembly.artifact_reopen_valid",
             "assembly.required_2d_complete",
         }
@@ -178,9 +186,7 @@ def test_assembly_generator_admission_allows_only_declared_pending_outputs():
         pending_output_assertion_ids={next(iter(graph.assertions)).id},
     )
     assert bypass.allowed is False
-    assert "invalid_pending_output_assertion" in {
-        item.code for item in bypass.blockers
-    }
+    assert "invalid_pending_output_assertion" in {item.code for item in bypass.blockers}
 
 
 def test_deterministic_assembly_drawing_covers_instances_mates_and_views():
@@ -196,11 +202,13 @@ def test_deterministic_assembly_drawing_covers_instances_mates_and_views():
             "transform": {"translate": [120, 25, 0]},
         },
     ]
-    mates = [{
-        "id": "mate-1",
-        "first_instance_key": "housing",
-        "second_instance_key": "shaft",
-    }]
+    mates = [
+        {
+            "id": "mate-1",
+            "first_instance_key": "housing",
+            "second_instance_key": "shaft",
+        }
+    ]
     first_svg, first_report = build_assembly_drawing_svg(
         components=components, mates=mates, name="Test assembly"
     )
@@ -223,18 +231,21 @@ def test_deterministic_assembly_drawing_covers_instances_mates_and_views():
     state, issues = verify_graph(patched)
     assert "required_2d_artifacts_missing" not in state.issue_codes
     assert not [item for item in issues if item["severity"] == "error"]
-    assert "assertion:assembly:required-2d" not in compile_build_plan(
-        patched, "production"
-    ).critical_assumption_ids
+    assert (
+        "assertion:assembly:required-2d"
+        not in compile_build_plan(patched, "production").critical_assumption_ids
+    )
 
 
 def test_tampered_assembly_drawing_cannot_be_admitted():
     svg, report = build_assembly_drawing_svg(
-        components=[{
-            "key": "base",
-            "shape": {"kind": "box", "width_mm": 100, "height_mm": 80, "depth_mm": 20},
-            "transform": {},
-        }],
+        components=[
+            {
+                "key": "base",
+                "shape": {"kind": "box", "width_mm": 100, "height_mm": 80, "depth_mm": 20},
+                "transform": {},
+            }
+        ],
         mates=[],
         name="Base",
     )
@@ -270,20 +281,17 @@ def test_assembly_revision_patch_upgrades_legacy_release_contract():
     payload = desired.model_dump(mode="json")
     payload["canonical_sha256"] = ""
     payload["assertions"] = [
-        item for item in payload["assertions"]
-        if item["id"] != "assertion:assembly:required-2d"
+        item for item in payload["assertions"] if item["id"] != "assertion:assembly:required-2d"
     ]
     payload["requirements"] = [
-        item for item in payload["requirements"]
-        if item["id"] != "requirement:assembly-2d"
+        item for item in payload["requirements"] if item["id"] != "requirement:assembly-2d"
     ]
     payload["requirements"][0]["assertion_ids"] = [
-        item for item in payload["requirements"][0]["assertion_ids"]
+        item
+        for item in payload["requirements"][0]["assertion_ids"]
         if item != "assertion:assembly:required-2d"
     ]
-    payload["build_targets"][1]["requirement_ids"] = [
-        "requirement:assembly-release"
-    ]
+    payload["build_targets"][1]["requirement_ids"] = ["requirement:assembly-release"]
     legacy = type(desired).model_validate(payload).sealed()
 
     patch = assembly_revision_patch(legacy, desired)
@@ -292,7 +300,8 @@ def test_assembly_revision_patch_upgrades_legacy_release_contract():
     upgraded = apply_graph_patch(legacy, patch)
     assert any(
         item.predicate == "assembly.required_2d_complete"
-        for item in upgraded.assertions if item.state == "active"
+        for item in upgraded.assertions
+        if item.state == "active"
     )
     assert "requirement:assembly-2d" in upgraded.build_targets[1].requirement_ids
 
@@ -348,8 +357,9 @@ def test_assembly_sync_preserves_reopen_only_for_unchanged_snapshot():
     active_reopen = next(
         assertion
         for assertion in merged.assertions
-        if assertion.state == "active"
-        and assertion.predicate == "assembly.artifact_reopen_valid"
+        if assertion.state == "active" and assertion.predicate == "assembly.artifact_reopen_valid"
     )
     assert active_reopen.value.kind == "unknown"
+
+
 import pytest

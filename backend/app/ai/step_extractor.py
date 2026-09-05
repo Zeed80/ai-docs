@@ -10,40 +10,40 @@ Fallback: text-only parsing of STEP entity list (always available).
 
 from __future__ import annotations
 
-import io
 import re
-import structlog
 from dataclasses import dataclass, field
 from typing import Any
+
+import structlog
 
 logger = structlog.get_logger()
 
 
 @dataclass
 class CylFace:
-    axis: list[float]          # [x, y, z] direction vector
+    axis: list[float]  # [x, y, z] direction vector
     diameter_mm: float
     length_mm: float
 
 
 @dataclass
 class PlanarFace:
-    normal: list[float]        # [x, y, z]
+    normal: list[float]  # [x, y, z]
     area_mm2: float
 
 
 @dataclass
 class StepGeometryResult:
-    bounding_box_mm: dict[str, float]     # {x_min, x_max, y_min, y_max, z_min, z_max}
+    bounding_box_mm: dict[str, float]  # {x_min, x_max, y_min, y_max, z_min, z_max}
     face_count: int
     cylindrical_faces: list[CylFace] = field(default_factory=list)
     planar_faces: list[PlanarFace] = field(default_factory=list)
     edge_count: int = 0
     product_names: list[str] = field(default_factory=list)
     view_images: dict[str, bytes] = field(default_factory=dict)  # {"front": png, ...}
-    shape_class: str = "block"       # "shaft"|"plate"|"block"
+    shape_class: str = "block"  # "shaft"|"plate"|"block"
     volume_mm3: float = 0.0
-    source: str = "text_fallback"    # "pythonocc"|"text_fallback"
+    source: str = "text_fallback"  # "pythonocc"|"text_fallback"
 
 
 def extract_step_geometry(
@@ -76,18 +76,17 @@ def _extract_via_pythonocc(
     import os
     import tempfile
 
-    from OCC.Core.STEPControl import STEPControl_Reader
-    from OCC.Core.IGESControl import IGESControl_Reader
-    from OCC.Core.BRep import BRep_Builder
-    from OCC.Core.BRepBndLib import brepbndlib
     from OCC.Core.Bnd import Bnd_Box
-    from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
-    from OCC.Core.TopExp import TopExp_Explorer
-    from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_EDGE
     from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+    from OCC.Core.BRepBndLib import brepbndlib
+    from OCC.Core.BRepGProp import brepgprop
+    from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
     from OCC.Core.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
     from OCC.Core.GProp import GProp_GProps
-    from OCC.Core.BRepGProp import brepgprop
+    from OCC.Core.IGESControl import IGESControl_Reader
+    from OCC.Core.STEPControl import STEPControl_Reader
+    from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCC.Core.TopExp import TopExp_Explorer
     from OCC.Core.TopoDS import topods
 
     is_iges = filename.lower().endswith((".igs", ".iges"))
@@ -120,9 +119,12 @@ def _extract_via_pythonocc(
         x_min, y_min, z_min, x_max, y_max, z_max = bbox.Get()
 
         bounding_box_mm = {
-            "x_min": round(x_min, 3), "x_max": round(x_max, 3),
-            "y_min": round(y_min, 3), "y_max": round(y_max, 3),
-            "z_min": round(z_min, 3), "z_max": round(z_max, 3),
+            "x_min": round(x_min, 3),
+            "x_max": round(x_max, 3),
+            "y_min": round(y_min, 3),
+            "y_max": round(y_max, 3),
+            "z_min": round(z_min, 3),
+            "z_max": round(z_max, 3),
         }
 
         # Volume
@@ -151,11 +153,13 @@ def _extract_via_pythonocc(
                     brepgprop.SurfaceProperties(face, fp_props)
                     area = fp_props.Mass()
                     length = area / (2 * 3.14159 * r) if r > 0 else 0
-                    cylindrical_faces.append(CylFace(
-                        axis=[axis_dir.X(), axis_dir.Y(), axis_dir.Z()],
-                        diameter_mm=round(r * 2, 4),
-                        length_mm=round(length, 4),
-                    ))
+                    cylindrical_faces.append(
+                        CylFace(
+                            axis=[axis_dir.X(), axis_dir.Y(), axis_dir.Z()],
+                            diameter_mm=round(r * 2, 4),
+                            length_mm=round(length, 4),
+                        )
+                    )
 
                 elif surf_type == GeomAbs_Plane:
                     pln = adaptor.Plane()
@@ -163,10 +167,12 @@ def _extract_via_pythonocc(
                     fp_props = GProp_GProps()
                     brepgprop.SurfaceProperties(face, fp_props)
                     area = fp_props.Mass()
-                    planar_faces.append(PlanarFace(
-                        normal=[round(n.X(), 4), round(n.Y(), 4), round(n.Z(), 4)],
-                        area_mm2=round(area, 4),
-                    ))
+                    planar_faces.append(
+                        PlanarFace(
+                            normal=[round(n.X(), 4), round(n.Y(), 4), round(n.Z(), 4)],
+                            area_mm2=round(area, 4),
+                        )
+                    )
             except Exception:
                 pass
             face_exp.Next()
@@ -220,13 +226,12 @@ def _extract_via_pythonocc(
 
 def _render_views(shape: Any) -> dict[str, bytes]:
     """Render front/side/top orthographic views using pythonocc offscreen renderer."""
-    from OCC.Core.gp import gp_Dir, gp_Pnt, gp_Vec, gp_Ax2
-    from OCC.Display.SimpleGui import init_display  # type: ignore
     from OCC.Core.V3d import V3d_DirectionalLight  # noqa — not used directly
 
     # Attempt headless rendering via offscreen viewer
     try:
         from OCC.Display.OCCViewer import Viewer3d  # type: ignore
+
         viewer = Viewer3d()
         viewer.Create()
         viewer.SetModeShaded()
@@ -283,15 +288,21 @@ def _extract_via_text(file_bytes: bytes, filename: str) -> StepGeometryResult:
 
     if xs:
         bounding_box_mm = {
-            "x_min": round(min(xs), 3), "x_max": round(max(xs), 3),
-            "y_min": round(min(ys), 3), "y_max": round(max(ys), 3),
-            "z_min": round(min(zs), 3), "z_max": round(max(zs), 3),
+            "x_min": round(min(xs), 3),
+            "x_max": round(max(xs), 3),
+            "y_min": round(min(ys), 3),
+            "y_max": round(max(ys), 3),
+            "z_min": round(min(zs), 3),
+            "z_max": round(max(zs), 3),
         }
     else:
         bounding_box_mm = {
-            "x_min": 0.0, "x_max": 0.0,
-            "y_min": 0.0, "y_max": 0.0,
-            "z_min": 0.0, "z_max": 0.0,
+            "x_min": 0.0,
+            "x_max": 0.0,
+            "y_min": 0.0,
+            "y_max": 0.0,
+            "z_min": 0.0,
+            "z_max": 0.0,
         }
 
     shape_class = _classify_shape(bounding_box_mm, volume_mm3=0.0)
@@ -400,7 +411,9 @@ def recommend_blank_from_geometry(result: StepGeometryResult, density_g_cm3: flo
     else:
         kim = None
 
-    mass_blank_kg = round(volume_blank_cm3 * density_g_cm3 / 1000, 3) if volume_blank_cm3 > 0 else None
+    mass_blank_kg = (
+        round(volume_blank_cm3 * density_g_cm3 / 1000, 3) if volume_blank_cm3 > 0 else None
+    )
 
     return {
         "shape_class": result.shape_class,

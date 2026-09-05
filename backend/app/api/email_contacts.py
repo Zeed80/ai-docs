@@ -11,7 +11,7 @@ GET /api/email/{email_id} that would otherwise shadow these.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -124,8 +124,13 @@ async def autocomplete(
         or_(EmailContact.owner_sub.is_(None), EmailContact.owner_sub == user.sub)
     )
     if q:
-        cq = cq.where(or_(EmailContact.email.ilike(like), EmailContact.name.ilike(like),
-                          EmailContact.organization.ilike(like)))
+        cq = cq.where(
+            or_(
+                EmailContact.email.ilike(like),
+                EmailContact.name.ilike(like),
+                EmailContact.organization.ilike(like),
+            )
+        )
     cq = cq.order_by(
         EmailContact.is_favorite.desc(),
         EmailContact.use_count.desc(),
@@ -133,21 +138,30 @@ async def autocomplete(
     ).limit(limit)
     for c in (await db.execute(cq)).scalars().all():
         seen[c.email.lower()] = ContactOut(
-            email=c.email, name=c.name, organization=c.organization,
-            id=c.id, is_favorite=c.is_favorite, source="book",
+            email=c.email,
+            name=c.name,
+            organization=c.organization,
+            id=c.id,
+            is_favorite=c.is_favorite,
+            source="book",
         )
 
     # 2. suppliers
     if len(seen) < limit and q:
-        pq = select(Party).where(
-            Party.contact_email.isnot(None),
-            or_(Party.contact_email.ilike(like), Party.name.ilike(like)),
-        ).limit(limit)
+        pq = (
+            select(Party)
+            .where(
+                Party.contact_email.isnot(None),
+                or_(Party.contact_email.ilike(like), Party.name.ilike(like)),
+            )
+            .limit(limit)
+        )
         for p in (await db.execute(pq)).scalars().all():
             key = (p.contact_email or "").lower()
             if key and key not in seen:
-                seen[key] = ContactOut(email=p.contact_email, name=p.name,
-                                       organization=p.name, source="party")
+                seen[key] = ContactOut(
+                    email=p.contact_email, name=p.name, organization=p.name, source="party"
+                )
 
     # 3. history — everyone we have corresponded with, keeping the display name.
     # Filter in Python (ё/е-insensitive) over the recent window rather than in
@@ -197,16 +211,21 @@ async def list_book(
     )
     if q:
         like = f"%{q}%"
-        query = query.where(or_(
-            EmailContact.email.ilike(like), EmailContact.name.ilike(like),
-            EmailContact.organization.ilike(like), EmailContact.phone.ilike(like),
-        ))
+        query = query.where(
+            or_(
+                EmailContact.email.ilike(like),
+                EmailContact.name.ilike(like),
+                EmailContact.organization.ilike(like),
+                EmailContact.phone.ilike(like),
+            )
+        )
     if favorites:
         query = query.where(EmailContact.is_favorite == True)  # noqa: E712
     if tag:
         query = query.where(cast(EmailContact.tags, String).ilike(f'%"{tag}"%'))
-    query = query.order_by(EmailContact.is_favorite.desc(), EmailContact.name.nullslast(),
-                           EmailContact.email).limit(limit)
+    query = query.order_by(
+        EmailContact.is_favorite.desc(), EmailContact.name.nullslast(), EmailContact.email
+    ).limit(limit)
     return list((await db.execute(query)).scalars().all())
 
 
@@ -225,13 +244,19 @@ async def create_contact(
     # общий контакт, иначе получал вторую, личную карточку — и в подсказках
     # один и тот же человек начинал двоиться.
     existing = (
-        await db.execute(
-            select(EmailContact).where(
-                EmailContact.email == email,
-                or_(EmailContact.owner_sub == owner, EmailContact.owner_sub.is_(None)),
-            ).order_by(EmailContact.owner_sub.is_(None))
+        (
+            await db.execute(
+                select(EmailContact)
+                .where(
+                    EmailContact.email == email,
+                    or_(EmailContact.owner_sub == owner, EmailContact.owner_sub.is_(None)),
+                )
+                .order_by(EmailContact.owner_sub.is_(None))
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if existing and payload.upsert:
         # Дополняем пустые поля, ничего не затирая: карточка могла быть
         # заведена автоматически и с тех пор отредактирована человеком.
@@ -251,10 +276,16 @@ async def create_contact(
     if existing:
         raise HTTPException(409, "Контакт с таким адресом уже есть")
     c = EmailContact(
-        email=email, name=payload.name, organization=payload.organization,
-        phone=payload.phone, notes=payload.notes, tags=payload.tags or [],
-        is_favorite=payload.is_favorite, trust_images=payload.trust_images,
-        owner_sub=owner, source="manual",
+        email=email,
+        name=payload.name,
+        organization=payload.organization,
+        phone=payload.phone,
+        notes=payload.notes,
+        tags=payload.tags or [],
+        is_favorite=payload.is_favorite,
+        trust_images=payload.trust_images,
+        owner_sub=owner,
+        source="manual",
     )
     db.add(c)
     await db.commit()
@@ -292,7 +323,10 @@ async def set_sender_image_trust(
     ).scalar_one_or_none()
     if c is None:
         c = EmailContact(
-            email=email, name=payload.name, owner_sub=user.sub, source="auto",
+            email=email,
+            name=payload.name,
+            owner_sub=user.sub,
+            source="auto",
             tags=[],
         )
         db.add(c)
@@ -314,7 +348,9 @@ async def update_contact(
     c = await db.get(EmailContact, contact_id)
     if not c:
         raise HTTPException(404, "Contact not found")
-    if c.owner_sub not in (None, user.sub) or (c.owner_sub is None and UserRole.admin not in (user.roles or [])):
+    if c.owner_sub not in (None, user.sub) or (
+        c.owner_sub is None and UserRole.admin not in (user.roles or [])
+    ):
         raise HTTPException(403, "Нет прав на этот контакт")
     for k, v in payload.model_dump(exclude_none=True).items():
         setattr(c, k, v)
@@ -334,7 +370,9 @@ async def delete_contact(
     c = await db.get(EmailContact, contact_id)
     if not c:
         raise HTTPException(404, "Contact not found")
-    if c.owner_sub not in (None, user.sub) or (c.owner_sub is None and UserRole.admin not in (user.roles or [])):
+    if c.owner_sub not in (None, user.sub) or (
+        c.owner_sub is None and UserRole.admin not in (user.roles or [])
+    ):
         raise HTTPException(403, "Нет прав на этот контакт")
     await db.delete(c)
     await db.commit()
@@ -346,16 +384,20 @@ async def list_tags(
     db: AsyncSession = Depends(get_db),
 ):
     rows = (
-        await db.execute(
-            select(EmailContact.tags).where(
-                or_(EmailContact.owner_sub.is_(None), EmailContact.owner_sub == user.sub),
-                EmailContact.tags.isnot(None),
+        (
+            await db.execute(
+                select(EmailContact.tags).where(
+                    or_(EmailContact.owner_sub.is_(None), EmailContact.owner_sub == user.sub),
+                    EmailContact.tags.isnot(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     tags: set[str] = set()
     for t in rows:
-        for x in (t or []):
+        for x in t or []:
             if x:
                 tags.add(str(x))
     return sorted(tags)
@@ -373,22 +415,35 @@ async def export_contacts(
     from fastapi.responses import StreamingResponse
 
     rows = (
-        await db.execute(
-            select(EmailContact).where(
-                or_(EmailContact.owner_sub.is_(None), EmailContact.owner_sub == user.sub)
-            ).order_by(EmailContact.name.nullslast(), EmailContact.email)
+        (
+            await db.execute(
+                select(EmailContact)
+                .where(or_(EmailContact.owner_sub.is_(None), EmailContact.owner_sub == user.sub))
+                .order_by(EmailContact.name.nullslast(), EmailContact.email)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["name", "email", "organization", "phone", "tags", "notes", "favorite"])
     for c in rows:
-        w.writerow([c.name or "", c.email, c.organization or "", c.phone or "",
-                    ";".join(c.tags or []), (c.notes or "").replace("\n", " "),
-                    "1" if c.is_favorite else ""])
+        w.writerow(
+            [
+                c.name or "",
+                c.email,
+                c.organization or "",
+                c.phone or "",
+                ";".join(c.tags or []),
+                (c.notes or "").replace("\n", " "),
+                "1" if c.is_favorite else "",
+            ]
+        )
     buf.seek(0)
     return StreamingResponse(
-        iter([buf.getvalue()]), media_type="text/csv",
+        iter([buf.getvalue()]),
+        media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="contacts.csv"'},
     )
 
@@ -426,11 +481,15 @@ async def import_contacts(
         if not email or "@" not in email:
             skipped += 1
             if len(skipped_rows) < 50:
-                skipped_rows.append({
-                    "line": line_no,
-                    "value": (row.get("email") or row.get("e-mail") or row.get("адрес") or "")[:120],
-                    "reason": "нет адреса" if not email else "адрес без @",
-                })
+                skipped_rows.append(
+                    {
+                        "line": line_no,
+                        "value": (row.get("email") or row.get("e-mail") or row.get("адрес") or "")[
+                            :120
+                        ],
+                        "reason": "нет адреса" if not email else "адрес без @",
+                    }
+                )
             continue
         existing = (
             await db.execute(
@@ -442,7 +501,9 @@ async def import_contacts(
         name = row.get("name") or row.get("имя") or row.get("фио") or None
         org = row.get("organization") or row.get("company") or row.get("организация") or None
         phone = row.get("phone") or row.get("телефон") or None
-        tags = [t.strip() for t in (row.get("tags") or "").replace(",", ";").split(";") if t.strip()]
+        tags = [
+            t.strip() for t in (row.get("tags") or "").replace(",", ";").split(";") if t.strip()
+        ]
         if existing:
             existing.name = existing.name or name
             existing.organization = existing.organization or org
@@ -451,20 +512,32 @@ async def import_contacts(
                 existing.tags = sorted(set((existing.tags or []) + tags))
             updated += 1
         else:
-            db.add(EmailContact(
-                email=email, name=name, organization=org, phone=phone,
-                tags=tags or None, notes=row.get("notes") or row.get("заметки") or None,
-                is_favorite=row.get("favorite") in ("1", "true", "yes", "да"),
-                owner_sub=user.sub, source="manual",
-            ))
+            db.add(
+                EmailContact(
+                    email=email,
+                    name=name,
+                    organization=org,
+                    phone=phone,
+                    tags=tags or None,
+                    notes=row.get("notes") or row.get("заметки") or None,
+                    is_favorite=row.get("favorite") in ("1", "true", "yes", "да"),
+                    owner_sub=user.sub,
+                    source="manual",
+                )
+            )
             added += 1
     await db.commit()
     return ImportResult(
-        added=added, updated=updated, skipped=skipped, skipped_rows=skipped_rows,
+        added=added,
+        updated=updated,
+        skipped=skipped,
+        skipped_rows=skipped_rows,
     )
 
 
-async def remember_recipients(db: AsyncSession, *, owner_sub: str | None, addresses: list[str]) -> None:
+async def remember_recipients(
+    db: AsyncSession, *, owner_sub: str | None, addresses: list[str]
+) -> None:
     """Upsert 'auto' contacts for freshly-used recipient addresses. Best-effort."""
     try:
         for raw in addresses or []:
@@ -473,23 +546,36 @@ async def remember_recipients(db: AsyncSession, *, owner_sub: str | None, addres
             if not email or "@" not in email:
                 continue
             existing = (
-                await db.execute(
-                    select(EmailContact).where(
-                        EmailContact.email == email,
-                        or_(EmailContact.owner_sub == owner_sub, EmailContact.owner_sub.is_(None)),
+                (
+                    await db.execute(
+                        select(EmailContact).where(
+                            EmailContact.email == email,
+                            or_(
+                                EmailContact.owner_sub == owner_sub,
+                                EmailContact.owner_sub.is_(None),
+                            ),
+                        )
                     )
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
             if existing:
                 existing.use_count = (existing.use_count or 0) + 1
-                existing.last_used_at = datetime.now(timezone.utc)
+                existing.last_used_at = datetime.now(UTC)
                 if name and not existing.name:
                     existing.name = name
             else:
-                db.add(EmailContact(
-                    email=email, name=name or None, owner_sub=owner_sub, source="auto",
-                    use_count=1, last_used_at=datetime.now(timezone.utc),
-                ))
+                db.add(
+                    EmailContact(
+                        email=email,
+                        name=name or None,
+                        owner_sub=owner_sub,
+                        source="auto",
+                        use_count=1,
+                        last_used_at=datetime.now(UTC),
+                    )
+                )
         await db.flush()
     except Exception as exc:  # noqa: BLE001
         logger.warning("remember_recipients_failed", error=str(exc))

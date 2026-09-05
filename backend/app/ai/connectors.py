@@ -47,8 +47,8 @@ from app.ai.recipes import capabilities_schema_hash
 
 logger = structlog.get_logger()
 
-_CONNECTOR_ACTIVATE_AFTER = 3       # successful uses before draft -> active
-_CONNECTOR_RETIRE_FAIL_RATE = 0.5   # retired when fail rate exceeds this (>= min uses)
+_CONNECTOR_ACTIVATE_AFTER = 3  # successful uses before draft -> active
+_CONNECTOR_RETIRE_FAIL_RATE = 0.5  # retired when fail rate exceeds this (>= min uses)
 _CONNECTOR_RETIRE_MIN_USES = 4
 _MAX_TRIGGER_EXAMPLES = 5
 # A fetch worth learning from: real content, not an empty/error page. Same
@@ -100,13 +100,18 @@ async def _index_trigger(connector_id: str, example_idx: int, text: str) -> None
     profile = get_active_embedding_profile()
     vector = await embed_text(text, task_type="passage")
     collection = _collection_name()
-    ensure_collection(collection, vector_size=profile.dimension,
-                      distance_metric=profile.distance_metric)
+    ensure_collection(
+        collection, vector_size=profile.dimension, distance_metric=profile.distance_metric
+    )
     upsert_memory_embedding(
         point_id=f"connector:{connector_id}:{example_idx}",
         vector=vector,
         collection_name=collection,
-        payload={"connector_id": connector_id, "content_type": "connector_trigger", "text": text[:500]},
+        payload={
+            "connector_id": connector_id,
+            "content_type": "connector_trigger",
+            "text": text[:500],
+        },
     )
 
 
@@ -147,8 +152,9 @@ async def record_connector_success(db: Any, *, url: str, queries: list[str]) -> 
     if not domain:
         return None
     try:
-        from app.db.models import SourceConnector
         from sqlalchemy import select
+
+        from app.db.models import SourceConnector
 
         existing = (
             await db.execute(
@@ -222,8 +228,9 @@ async def record_connector_failure(db: Any, *, url: str) -> None:
     if not domain:
         return
     try:
-        from app.db.models import SourceConnector
         from sqlalchemy import select
+
+        from app.db.models import SourceConnector
 
         existing = (
             await db.execute(
@@ -327,16 +334,20 @@ async def find_active_connector(domain_pattern: str):
     overdue for revalidation (Ф5.C) is still returned here (it is still the
     best known strategy) — actual re-attempt scheduling is Ф6's concern, not
     a reason to withhold it from use now."""
+    from sqlalchemy import select
+
     from app.db.models import SourceConnector
     from app.db.session import _get_session_factory
-    from sqlalchemy import select
 
     factory = _get_session_factory()
     async with factory() as db:
         return (
             await db.execute(
                 select(SourceConnector)
-                .where(SourceConnector.domain_pattern == domain_pattern, SourceConnector.status == "active")
+                .where(
+                    SourceConnector.domain_pattern == domain_pattern,
+                    SourceConnector.status == "active",
+                )
                 .order_by(SourceConnector.last_validated_at.desc())
                 .limit(1)
             )
@@ -369,12 +380,14 @@ async def find_connector_hints(text: str, limit: int = 3) -> list[dict]:
                 continue
             if connector is None or connector.status == "retired":
                 continue
-            hints.append({
-                "domain_pattern": connector.domain_pattern,
-                "strategy": connector.strategy,
-                "status": connector.status,
-                "score": match["score"],
-            })
+            hints.append(
+                {
+                    "domain_pattern": connector.domain_pattern,
+                    "strategy": connector.strategy,
+                    "status": connector.status,
+                    "score": match["score"],
+                }
+            )
     return hints
 
 
@@ -411,6 +424,12 @@ async def reindex_all_triggers(db) -> dict[str, int]:
                 indexed += 1
             except Exception as exc:  # noqa: BLE001
                 failed += 1
-                logger.warning("connector_trigger_reindex_failed", connector=str(connector.id), error=str(exc)[:200])
-    logger.info("connector_triggers_reindexed", connectors=len(rows), indexed=indexed, failed=failed)
+                logger.warning(
+                    "connector_trigger_reindex_failed",
+                    connector=str(connector.id),
+                    error=str(exc)[:200],
+                )
+    logger.info(
+        "connector_triggers_reindexed", connectors=len(rows), indexed=indexed, failed=failed
+    )
     return {"connectors": len(rows), "triggers_indexed": indexed, "triggers_failed": failed}

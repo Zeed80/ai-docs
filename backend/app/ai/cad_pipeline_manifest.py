@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app.ai.schemas import AITask
@@ -40,11 +40,13 @@ def _route(task: AITask) -> dict[str, Any]:
         registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
         for key in routing.models:
             capability = registry.models.get(key)
-            models.append({
-                "key": key,
-                "provider": capability.provider.value if capability else None,
-                "provider_model": capability.provider_model if capability else None,
-            })
+            models.append(
+                {
+                    "key": key,
+                    "provider": capability.provider.value if capability else None,
+                    "provider_model": capability.provider_model if capability else None,
+                }
+            )
     except Exception:  # pragma: no cover - snapshot remains useful without catalog
         models = [{"key": key, "provider": None, "provider_model": None} for key in routing.models]
     return {
@@ -69,9 +71,7 @@ def build_cad_pipeline_manifest(
 
     type_decision = resolve_digitization_type(digitization_type)
     normalized_profile = "mechanical" if profile == "mechanical_eskd" else profile
-    normalized_profile = (
-        normalized_profile if normalized_profile in PROFILE_GATES else "auto"
-    )
+    normalized_profile = normalized_profile if normalized_profile in PROFILE_GATES else "auto"
     components = {
         "preprocessor": {"kind": "deterministic", "version": "dewarp-binarize-v2"},
         "geometry": {
@@ -166,7 +166,7 @@ def build_cad_pipeline_manifest(
         **reproducible,
         "config_sha256": config_sha256,
         "source_sha256": source_sha256,
-        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "captured_at": datetime.now(UTC).isoformat(),
         "user_extensible_via": {
             "model_assignments": "/settings/models",
             "profiles": sorted(PROFILE_GATES),

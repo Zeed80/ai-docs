@@ -44,18 +44,12 @@ def telemetry_rows(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_health_counts_only_the_model_the_slot_uses_now(
-    telemetry_rows, monkeypatch
-):
+async def test_health_counts_only_the_model_the_slot_uses_now(telemetry_rows, monkeypatch):
     """Схлопывание строк по одной задаче приписывало слоту чужие цифры: на
     стенде embedding показывал 100% ошибок от модели, которой в каталоге уже
     нет, вместо 0.7% у назначенной."""
-    monkeypatch.setattr(
-        p, "_slot_current_model", lambda slot, reg: "qwen3_embedding_4b_ollama"
-    )
-    monkeypatch.setattr(
-        "app.ai.provider_registry.catalog_availability", lambda models: {}
-    )
+    monkeypatch.setattr(p, "_slot_current_model", lambda slot, reg: "qwen3_embedding_4b_ollama")
+    monkeypatch.setattr("app.ai.provider_registry.catalog_availability", lambda models: {})
 
     rows = await p.slots_health()
     embedding = next(r for r in rows if r.slot == "embedding")
@@ -69,9 +63,7 @@ async def test_health_counts_only_the_model_the_slot_uses_now(
 @pytest.mark.asyncio
 async def test_every_slot_is_reported_even_without_traffic(monkeypatch):
     monkeypatch.setattr("app.ai.telemetry.get_summary", lambda: {"by_model": []})
-    monkeypatch.setattr(
-        "app.ai.provider_registry.catalog_availability", lambda models: {}
-    )
+    monkeypatch.setattr("app.ai.provider_registry.catalog_availability", lambda models: {})
 
     rows = await p.slots_health()
     assert len(rows) == len(p._SLOTS)
@@ -83,9 +75,7 @@ async def test_unknown_price_is_not_reported_as_free(monkeypatch):
     """cost_per_1k_* в каталоге не заполнена почти нигде. Ноль вместо «не
     знаем» превратил бы неизвестный расход в уверенное «ничего не потрачено»."""
     monkeypatch.setattr("app.ai.telemetry.get_summary", lambda: {"by_model": []})
-    monkeypatch.setattr(
-        "app.ai.provider_registry.catalog_availability", lambda models: {}
-    )
+    monkeypatch.setattr("app.ai.provider_registry.catalog_availability", lambda models: {})
 
     rows = await p.slots_health()
     for r in rows:
@@ -99,9 +89,7 @@ async def test_telemetry_failure_does_not_take_the_whole_report_down(monkeypatch
         raise RuntimeError("redis is down")
 
     monkeypatch.setattr("app.ai.telemetry.get_summary", boom)
-    monkeypatch.setattr(
-        "app.ai.provider_registry.catalog_availability", lambda models: {}
-    )
+    monkeypatch.setattr("app.ai.provider_registry.catalog_availability", lambda models: {})
 
     rows = await p.slots_health()
     assert len(rows) == len(p._SLOTS)

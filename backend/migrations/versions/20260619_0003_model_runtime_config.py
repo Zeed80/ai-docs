@@ -27,11 +27,25 @@ def upgrade() -> None:
             sa.Column("model_key", sa.String(240), nullable=False),
             sa.Column("provider", sa.String(50), nullable=False),
             sa.Column("provider_model", sa.String(500), nullable=False),
-            sa.Column("capability", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
+            sa.Column(
+                "capability", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")
+            ),
             sa.Column("source", sa.String(50), nullable=False, server_default="discovered"),
-            sa.Column("verification_status", sa.String(40), nullable=False, server_default="discovered"),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "verification_status", sa.String(40), nullable=False, server_default="discovered"
+            ),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint("model_key", name="uq_model_catalog_runtime_entries_key"),
         )
@@ -48,10 +62,22 @@ def upgrade() -> None:
             sa.Column("model_key", sa.String(240), nullable=False),
             sa.Column("thinking_enabled", sa.Boolean(), nullable=True),
             sa.Column("preferred_instance", sa.String(150), nullable=True),
-            sa.Column("verification_status", sa.String(40), nullable=False, server_default="discovered"),
+            sa.Column(
+                "verification_status", sa.String(40), nullable=False, server_default="discovered"
+            ),
             sa.Column("notes", sa.Text(), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint("model_key", name="uq_model_runtime_overrides_key"),
         )
@@ -66,12 +92,26 @@ def upgrade() -> None:
             "model_assignment_revisions",
             sa.Column("id", sa.Uuid(), nullable=False),
             sa.Column("created_by", sa.String(255), nullable=False, server_default="system"),
-            sa.Column("before_snapshot", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
-            sa.Column("after_snapshot", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
+            sa.Column(
+                "before_snapshot", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")
+            ),
+            sa.Column(
+                "after_snapshot", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")
+            ),
             sa.Column("diff", sa.JSON(), nullable=False, server_default=sa.text("'[]'::json")),
             sa.Column("warnings", sa.JSON(), nullable=False, server_default=sa.text("'[]'::json")),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.PrimaryKeyConstraint("id"),
         )
         op.create_index(
@@ -89,12 +129,18 @@ def upgrade() -> None:
 def downgrade() -> None:
     insp = sa_inspect(op.get_bind())
     if insp.has_table("model_assignment_revisions"):
-        op.drop_index("ix_model_assignment_revisions_created_by", table_name="model_assignment_revisions")
-        op.drop_index("ix_model_assignment_revisions_created_at", table_name="model_assignment_revisions")
+        op.drop_index(
+            "ix_model_assignment_revisions_created_by", table_name="model_assignment_revisions"
+        )
+        op.drop_index(
+            "ix_model_assignment_revisions_created_at", table_name="model_assignment_revisions"
+        )
         op.drop_table("model_assignment_revisions")
     if insp.has_table("model_runtime_overrides"):
         op.drop_index("ix_model_runtime_overrides_status", table_name="model_runtime_overrides")
         op.drop_table("model_runtime_overrides")
     if insp.has_table("model_catalog_runtime_entries"):
-        op.drop_index("ix_model_catalog_runtime_entries_provider", table_name="model_catalog_runtime_entries")
+        op.drop_index(
+            "ix_model_catalog_runtime_entries_provider", table_name="model_catalog_runtime_entries"
+        )
         op.drop_table("model_catalog_runtime_entries")

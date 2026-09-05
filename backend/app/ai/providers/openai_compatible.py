@@ -12,8 +12,8 @@ from app.ai.schemas import (
     AIResponse,
     AIUsage,
     ChatMessage,
-    ProviderKind,
     ProposedToolCall,
+    ProviderKind,
 )
 
 
@@ -42,18 +42,16 @@ def _inference_params(request: AIRequest, default_temperature: float = 0.2) -> d
     # to a handful of tokens — a structured-JSON read (spec / graph) then comes
     # back as an unparseable stub. Honor an explicit budget, else a generous
     # default big enough for a full spec.
-    max_tokens = (
-        params.get("max_tokens")
-        or (request.metadata or {}).get("num_predict")
-        or 4096
-    )
+    max_tokens = params.get("max_tokens") or (request.metadata or {}).get("num_predict") or 4096
     result["max_tokens"] = int(max_tokens)
     if "top_p" in params:
         result["top_p"] = params["top_p"]
     if "top_k" in params:
         result["top_k"] = params["top_k"]
     if "repeat_penalty" in params:
-        result["frequency_penalty"] = params["repeat_penalty"] - 1.0  # OpenAI uses frequency_penalty
+        result["frequency_penalty"] = (
+            params["repeat_penalty"] - 1.0
+        )  # OpenAI uses frequency_penalty
     return result
 
 

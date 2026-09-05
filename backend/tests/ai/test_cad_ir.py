@@ -24,13 +24,23 @@ def _sample_ir() -> CadIR:
         scale=0.25,
         entities=[
             Segment(p1=Point(x=10, y=20), p2=Point(x=410, y=20)),
-            Segment(p1=Point(x=10, y=20), p2=Point(x=10, y=320), line_class="thin", width_class="thin"),
-            Arc(center=Point(x=200, y=150), radius=50, start_angle=0, end_angle=90, line_class="axis"),
+            Segment(
+                p1=Point(x=10, y=20), p2=Point(x=10, y=320), line_class="thin", width_class="thin"
+            ),
+            Arc(
+                center=Point(x=200, y=150),
+                radius=50,
+                start_angle=0,
+                end_angle=90,
+                line_class="axis",
+            ),
             Circle(center=Point(x=400, y=300), radius=40),
             Polyline(points=[Point(x=1, y=1), Point(x=5, y=9), Point(x=20, y=9)], closed=True),
             HatchRegion(boundary=[Point(x=0, y=0), Point(x=10, y=0), Point(x=5, y=8)]),
             TextEntity(position=Point(x=100, y=90), text="Ø40H7", height=5),
-            DimensionEntity(p1=Point(x=10, y=340), p2=Point(x=410, y=340), text="400", value_mm=100.0),
+            DimensionEntity(
+                p1=Point(x=10, y=340), p2=Point(x=410, y=340), text="400", value_mm=100.0
+            ),
         ],
     )
 

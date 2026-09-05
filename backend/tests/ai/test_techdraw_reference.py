@@ -47,42 +47,22 @@ def test_js6_symmetric():
 
 
 def test_f_and_g_clearance_fields_match_iso_286_tables_20_and_21():
-    assert ref.tolerance_band("f7", 25) == ref.ToleranceBand(
-        es_um=-20.0, ei_um=-41.0
-    )
-    assert ref.tolerance_band("g6", 80) == ref.ToleranceBand(
-        es_um=-10.0, ei_um=-29.0
-    )
-    assert ref.tolerance_band("f7", 400) == ref.ToleranceBand(
-        es_um=-62.0, ei_um=-119.0
-    )
-    assert ref.tolerance_band("g9", 180) == ref.ToleranceBand(
-        es_um=-14.0, ei_um=-114.0
-    )
+    assert ref.tolerance_band("f7", 25) == ref.ToleranceBand(es_um=-20.0, ei_um=-41.0)
+    assert ref.tolerance_band("g6", 80) == ref.ToleranceBand(es_um=-10.0, ei_um=-29.0)
+    assert ref.tolerance_band("f7", 400) == ref.ToleranceBand(es_um=-62.0, ei_um=-119.0)
+    assert ref.tolerance_band("g9", 180) == ref.ToleranceBand(es_um=-14.0, ei_um=-114.0)
 
 
 def test_F_and_G_hole_fields_are_reflected_clearance_deviations():
-    assert ref.tolerance_band("F7", 25) == ref.ToleranceBand(
-        es_um=41.0, ei_um=20.0
-    )
-    assert ref.tolerance_band("G6", 80) == ref.ToleranceBand(
-        es_um=29.0, ei_um=10.0
-    )
+    assert ref.tolerance_band("F7", 25) == ref.ToleranceBand(es_um=41.0, ei_um=20.0)
+    assert ref.tolerance_band("G6", 80) == ref.ToleranceBand(es_um=29.0, ei_um=10.0)
 
 
 def test_zero_line_and_symmetric_fields_cover_additional_it_grades():
-    assert ref.tolerance_band("h5", 25) == ref.ToleranceBand(
-        es_um=0.0, ei_um=-9.0
-    )
-    assert ref.tolerance_band("H12", 80) == ref.ToleranceBand(
-        es_um=300.0, ei_um=0.0
-    )
-    assert ref.tolerance_band("js10", 40) == ref.ToleranceBand(
-        es_um=50.0, ei_um=-50.0
-    )
-    assert ref.tolerance_band("JS16", 400) == ref.ToleranceBand(
-        es_um=1800.0, ei_um=-1800.0
-    )
+    assert ref.tolerance_band("h5", 25) == ref.ToleranceBand(es_um=0.0, ei_um=-9.0)
+    assert ref.tolerance_band("H12", 80) == ref.ToleranceBand(es_um=300.0, ei_um=0.0)
+    assert ref.tolerance_band("js10", 40) == ref.ToleranceBand(es_um=50.0, ei_um=-50.0)
+    assert ref.tolerance_band("JS16", 400) == ref.ToleranceBand(es_um=1800.0, ei_um=-1800.0)
 
 
 def test_tolerance_band_unknown_symbol():

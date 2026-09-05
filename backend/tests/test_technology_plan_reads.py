@@ -10,7 +10,6 @@ import pytest
 from httpx import AsyncClient
 
 from app.db.models import (
-    BlankSpec,
     ManufacturingOperation,
     ManufacturingProcessPlan,
     NormControlCheck,
@@ -51,21 +50,35 @@ async def operation(db_session, plan):
 
 @pytest.mark.asyncio
 async def test_normcontrol_result_reads_saved_findings(client: AsyncClient, db_session, plan):
-    db_session.add_all([
-        NormControlCheck(
-            process_plan_id=plan.id, gost_code="ГОСТ 3.1118", check_code="ESTD_MK_001",
-            severity="error", status="open", message="Не заполнено поле «Материал»",
-        ),
-        NormControlCheck(
-            process_plan_id=plan.id, gost_code="ГОСТ 3.1404", check_code="ESTD_NC_002",
-            severity="warning", status="open", message="Не указан режим резания",
-        ),
-        # Закрытое замечание не должно попадать в счётчики открытых.
-        NormControlCheck(
-            process_plan_id=plan.id, gost_code="ГОСТ 3.1102", check_code="ESTD_MK_009",
-            severity="error", status="resolved", message="Исправлено",
-        ),
-    ])
+    db_session.add_all(
+        [
+            NormControlCheck(
+                process_plan_id=plan.id,
+                gost_code="ГОСТ 3.1118",
+                check_code="ESTD_MK_001",
+                severity="error",
+                status="open",
+                message="Не заполнено поле «Материал»",
+            ),
+            NormControlCheck(
+                process_plan_id=plan.id,
+                gost_code="ГОСТ 3.1404",
+                check_code="ESTD_NC_002",
+                severity="warning",
+                status="open",
+                message="Не указан режим резания",
+            ),
+            # Закрытое замечание не должно попадать в счётчики открытых.
+            NormControlCheck(
+                process_plan_id=plan.id,
+                gost_code="ГОСТ 3.1102",
+                check_code="ESTD_MK_009",
+                severity="error",
+                status="resolved",
+                message="Исправлено",
+            ),
+        ]
+    )
     await db_session.commit()
 
     resp = await client.get(f"/api/technology/process-plans/{plan.id}/normcontrol-result")
@@ -139,9 +152,7 @@ async def test_operation_edit_actually_persists(client: AsyncClient, db_session,
 
 
 @pytest.mark.asyncio
-async def test_operation_edit_refuses_fields_outside_the_allowlist(
-    client: AsyncClient, operation
-):
+async def test_operation_edit_refuses_fields_outside_the_allowlist(client: AsyncClient, operation):
     resp = await client.patch(
         f"/api/technology/operations/{operation.id}",
         json={"process_plan_id": "00000000-0000-0000-0000-000000000002"},

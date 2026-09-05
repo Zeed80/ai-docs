@@ -82,8 +82,18 @@ def _plain(html: str | None, text: str | None) -> str:
 # Действия, которые нельзя отменить: письмо ушло, деньги отмечены, файл удалён.
 # Для них «подтвердить всё» не действует — решение принимается по каждому.
 IRREVERSIBLE_ACTIONS = {
-    "send", "send_rfq", "mark_paid", "delete", "bulk_delete", "delete_template",
-    "approve", "reject", "resolve", "export_1c", "issue_stock", "promote",
+    "send",
+    "send_rfq",
+    "mark_paid",
+    "delete",
+    "bulk_delete",
+    "delete_template",
+    "approve",
+    "reject",
+    "resolve",
+    "export_1c",
+    "issue_stock",
+    "promote",
 }
 
 
@@ -166,8 +176,9 @@ async def _build(skill_name: str, args: dict, db=None) -> ApprovalPreview | None
 
 async def _email_send(args: dict, db=None) -> ApprovalPreview | None:
     """Письмо целиком: кому, о чём, из какого ящика и что в теле."""
-    from app.db.models import DraftAction, EmailAttachment
     from sqlalchemy import select
+
+    from app.db.models import DraftAction, EmailAttachment
 
     draft_id = _uuid(args.get("draft_id") or args.get("id"))
     if draft_id is None:
@@ -183,10 +194,14 @@ async def _email_send(args: dict, db=None) -> ApprovalPreview | None:
         raw_ids = [i for i in (_uuid(a) for a in data.get("attachment_ids") or []) if i]
         if raw_ids:
             rows = (
-                await db.execute(
-                    select(EmailAttachment.filename).where(EmailAttachment.id.in_(raw_ids))
+                (
+                    await db.execute(
+                        select(EmailAttachment.filename).where(EmailAttachment.id.in_(raw_ids))
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             names = [n for n in rows if n]
 
     to = [a for a in (data.get("to_addresses") or []) if a]
@@ -226,6 +241,7 @@ async def _email_send(args: dict, db=None) -> ApprovalPreview | None:
 
 async def _invoice_decision(args: dict, action: str, db=None) -> ApprovalPreview | None:
     from app.db.models import Invoice
+
     invoice_id = _uuid(args.get("invoice_id") or args.get("id"))
     if invoice_id is None:
         return None
@@ -262,6 +278,7 @@ async def _invoice_decision(args: dict, action: str, db=None) -> ApprovalPreview
 
 async def _payment(args: dict, db=None) -> ApprovalPreview | None:
     from app.db.models import PaymentSchedule
+
     schedule_id = _uuid(args.get("schedule_id") or args.get("id"))
     if schedule_id is None:
         return None
@@ -288,6 +305,7 @@ async def _payment(args: dict, db=None) -> ApprovalPreview | None:
 
 async def _rfq(args: dict, db=None) -> ApprovalPreview | None:
     from app.db.models import PurchaseRequest
+
     request_id = _uuid(args.get("request_id") or args.get("id"))
     if request_id is None:
         return None
@@ -303,9 +321,7 @@ async def _rfq(args: dict, db=None) -> ApprovalPreview | None:
     if items is not None:
         fields.append(PreviewField(label="Позиций", value=str(items)))
     if suppliers:
-        fields.append(
-            PreviewField(label="Поставщиков", value=str(len(suppliers)), emphasis=True)
-        )
+        fields.append(PreviewField(label="Поставщиков", value=str(len(suppliers)), emphasis=True))
     return ApprovalPreview(title="Разослать запрос коммерческих предложений", fields=fields)
 
 

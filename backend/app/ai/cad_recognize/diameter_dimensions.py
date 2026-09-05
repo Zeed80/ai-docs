@@ -51,7 +51,7 @@ def _numeric_hypotheses(raw_text: str, known: list[float]) -> list[float]:
     digits = _digits(raw_text)
     for width in (2, 3):
         for start in range(max(0, len(digits) - width + 1)):
-            token = digits[start:start + width]
+            token = digits[start : start + width]
             if token and not token.startswith("0"):
                 hypotheses.add(float(token))
     # One adjacent transposition is the observed Ø102 -> 120 OCR failure.  It
@@ -99,17 +99,19 @@ def _rotated_numeric_tokens(image: Any) -> list[dict[str, Any]]:
             continue
         if confidence < 20 or width <= 0 or height <= 0:
             continue
-        tokens.append({
-            "raw_text": text,
-            "ocr_confidence": max(0.0, min(1.0, confidence / 100.0)),
-            "orientation": "vertical",
-            "label_bbox": [
-                rotated_y,
-                original_height - rotated_x - width,
-                rotated_y + height,
-                original_height - rotated_x,
-            ],
-        })
+        tokens.append(
+            {
+                "raw_text": text,
+                "ocr_confidence": max(0.0, min(1.0, confidence / 100.0)),
+                "orientation": "vertical",
+                "label_bbox": [
+                    rotated_y,
+                    original_height - rotated_x - width,
+                    rotated_y + height,
+                    original_height - rotated_x,
+                ],
+            }
+        )
     # A nominal which is visually vertical can still be segmented as a normal
     # token (the control sheet's Ø102 became ``120``). Keep both orientations;
     # geometry matching below rejects unrelated horizontal dimensions.
@@ -133,12 +135,14 @@ def _rotated_numeric_tokens(image: Any) -> list[dict[str, Any]]:
             continue
         if confidence < 20 or width <= 0 or height <= 0:
             continue
-        tokens.append({
-            "raw_text": text,
-            "ocr_confidence": max(0.0, min(1.0, confidence / 100.0)),
-            "orientation": "normal",
-            "label_bbox": [x, y, x + width, y + height],
-        })
+        tokens.append(
+            {
+                "raw_text": text,
+                "ocr_confidence": max(0.0, min(1.0, confidence / 100.0)),
+                "orientation": "normal",
+                "label_bbox": [x, y, x + width, y + height],
+            }
+        )
     return tokens
 
 
@@ -146,11 +150,7 @@ def _blue_geometry(image: Any):
     import numpy as np
 
     rgb = np.asarray(image.convert("RGB"))
-    blue = (
-        (rgb[:, :, 2] >= 180)
-        & (rgb[:, :, 0] <= 60)
-        & (rgb[:, :, 1] <= 60)
-    )
+    blue = (rgb[:, :, 2] >= 180) & (rgb[:, :, 0] <= 60) & (rgb[:, :, 1] <= 60)
     return blue if int(blue.sum()) >= 1000 else None
 
 
@@ -160,7 +160,7 @@ def _profile_center(blue, left: int, right: int) -> float | None:
 
     height = blue.shape[0]
     y0, y1 = max(0, int(height * 0.12)), min(height, int(height * 0.62))
-    counts = blue[y0:y1, left:right + 1].sum(axis=1)
+    counts = blue[y0:y1, left : right + 1].sum(axis=1)
     ranked = (np.argsort(counts)[::-1][:40] + y0).tolist()
     best: tuple[int, int, int] | None = None
     for first in ranked:
@@ -178,7 +178,10 @@ def _profile_center(blue, left: int, right: int) -> float | None:
 
 
 def _profile_measurement(
-    blue, x: int, center: float, px_per_mm: float,
+    blue,
+    x: int,
+    center: float,
+    px_per_mm: float,
 ) -> dict[str, float] | None:
     import numpy as np
 
@@ -238,7 +241,10 @@ def _best_profile_match(
                     "role": role,
                     "profile_x_px": x,
                     "profile_measurement_line": [
-                        float(x), measured[top_key], float(x), measured[bottom_key],
+                        float(x),
+                        measured[top_key],
+                        float(x),
+                        measured[bottom_key],
                     ],
                     "profile_check_mm": round(measured[key], 3),
                     "relative_error": relative_error,
@@ -281,10 +287,7 @@ def _contour_outer_observations(
 
     smoothed: list[float | None] = []
     for index in range(len(raw)):
-        window = [
-            value for value in raw[max(0, index - 7):index + 8]
-            if value is not None
-        ]
+        window = [value for value in raw[max(0, index - 7) : index + 8] if value is not None]
         smoothed.append(Counter(window).most_common(1)[0][0] if window else None)
 
     runs: list[tuple[int, int, float]] = []
@@ -315,7 +318,8 @@ def _contour_outer_observations(
         if end_index - start_index + 1 < minimum_width:
             continue
         estimates = [
-            item["outer_mm"] for item in measurements[start_index:end_index + 1]
+            item["outer_mm"]
+            for item in measurements[start_index : end_index + 1]
             if item is not None
         ]
         if not estimates or float(np.std(estimates)) > value * 0.02:
@@ -323,21 +327,23 @@ def _contour_outer_observations(
         x0, x1 = left + start_index, left + end_index
         median = float(np.median(estimates))
         confidence = max(0.6, min(0.9, 1.0 - abs(median - value) / value))
-        observations.append({
-            "id": "",
-            "raw_text": None,
-            "value_mm": round(value, 3),
-            "role": "outer",
-            "source": "vector_contour",
-            "label_bbox": None,
-            "profile_interval_px": [x0, x1],
-            "axial_interval_mm": [
-                round((x0 - left) / px_per_mm, 3),
-                round((x1 - left) / px_per_mm, 3),
-            ],
-            "profile_check_mm": round(median, 3),
-            "confidence": round(confidence, 3),
-        })
+        observations.append(
+            {
+                "id": "",
+                "raw_text": None,
+                "value_mm": round(value, 3),
+                "role": "outer",
+                "source": "vector_contour",
+                "label_bbox": None,
+                "profile_interval_px": [x0, x1],
+                "axial_interval_mm": [
+                    round((x0 - left) / px_per_mm, 3),
+                    round((x1 - left) / px_per_mm, 3),
+                ],
+                "profile_check_mm": round(median, 3),
+                "confidence": round(confidence, 3),
+            }
+        )
     return observations
 
 
@@ -364,8 +370,7 @@ def _interrupted_outer_candidates(
     import numpy as np
 
     measurements = [
-        _profile_measurement(blue, x, center, px_per_mm)
-        for x in range(left, right + 1)
+        _profile_measurement(blue, x, center, px_per_mm) for x in range(left, right + 1)
     ]
     minimum_width = max(28, int((right - left) * 0.02))
     max_gap = max(12, int((right - left) * 0.012))
@@ -374,8 +379,7 @@ def _interrupted_outer_candidates(
         matching = [
             index
             for index, item in enumerate(measurements)
-            if item is not None
-            and abs(float(item["outer_mm"]) - value) / value <= 0.025
+            if item is not None and abs(float(item["outer_mm"]) - value) / value <= 0.025
         ]
         if not matching:
             continue
@@ -400,25 +404,25 @@ def _interrupted_outer_candidates(
                 continue
             estimates = [float(measurements[index]["outer_mm"]) for index in group]
             median = float(np.median(estimates))
-            result.append({
-                "id": "",
-                "value_mm": round(float(value), 3),
-                "role": "outer_candidate",
-                "source": "interrupted_vector_contour",
-                "profile_interval_px": [x0, x1],
-                "axial_interval_mm": [
-                    round((x0 - left) / px_per_mm, 3),
-                    round((x1 - left) / px_per_mm, 3),
-                ],
-                "profile_check_mm": round(median, 3),
-                "confidence": round(
-                    max(0.6, min(0.86, 1.0 - abs(median - value) / value)), 3
-                ),
-                "blocker": (
-                    "контур прерывается линиями условного изображения; нужны "
-                    "две подтвержденные осевые станции"
-                ),
-            })
+            result.append(
+                {
+                    "id": "",
+                    "value_mm": round(float(value), 3),
+                    "role": "outer_candidate",
+                    "source": "interrupted_vector_contour",
+                    "profile_interval_px": [x0, x1],
+                    "axial_interval_mm": [
+                        round((x0 - left) / px_per_mm, 3),
+                        round((x1 - left) / px_per_mm, 3),
+                    ],
+                    "profile_check_mm": round(median, 3),
+                    "confidence": round(max(0.6, min(0.86, 1.0 - abs(median - value) / value)), 3),
+                    "blocker": (
+                        "контур прерывается линиями условного изображения; нужны "
+                        "две подтвержденные осевые станции"
+                    ),
+                }
+            )
     return result
 
 
@@ -448,10 +452,7 @@ def _contour_bore_observations(
 
     smoothed: list[float | None] = []
     for index in range(len(raw)):
-        window = [
-            value for value in raw[max(0, index - 7):index + 8]
-            if value is not None
-        ]
+        window = [value for value in raw[max(0, index - 7) : index + 8] if value is not None]
         smoothed.append(Counter(window).most_common(1)[0][0] if window else None)
     runs: list[tuple[int, int, float]] = []
     start = 0
@@ -471,7 +472,8 @@ def _contour_bore_observations(
         if end_index - start_index + 1 < minimum_width:
             continue
         estimates = [
-            item["bore_mm"] for item in measurements[start_index:end_index + 1]
+            item["bore_mm"]
+            for item in measurements[start_index : end_index + 1]
             if item is not None and abs(item["bore_mm"] - value) / value <= 0.05
         ]
         if not estimates:
@@ -482,21 +484,23 @@ def _contour_bore_observations(
             continue
         x0, x1 = left + start_index, left + end_index
         confidence = max(0.65, min(0.9, 1.0 - abs(median - value) / value))
-        observations.append({
-            "id": "",
-            "raw_text": None,
-            "value_mm": round(value, 3),
-            "role": "bore",
-            "source": "vector_contour",
-            "label_bbox": None,
-            "profile_interval_px": [x0, x1],
-            "axial_interval_mm": [
-                round((x0 - left) / px_per_mm, 3),
-                round((x1 - left) / px_per_mm, 3),
-            ],
-            "profile_check_mm": round(median, 3),
-            "confidence": round(confidence, 3),
-        })
+        observations.append(
+            {
+                "id": "",
+                "raw_text": None,
+                "value_mm": round(value, 3),
+                "role": "bore",
+                "source": "vector_contour",
+                "label_bbox": None,
+                "profile_interval_px": [x0, x1],
+                "axial_interval_mm": [
+                    round((x0 - left) / px_per_mm, 3),
+                    round((x1 - left) / px_per_mm, 3),
+                ],
+                "profile_check_mm": round(median, 3),
+                "confidence": round(confidence, 3),
+            }
+        )
     return observations
 
 
@@ -507,11 +511,13 @@ def localize_diameter_dimensions(
     known_linear_values: list[float] | None = None,
 ) -> dict[str, Any]:
     """Return diameter observations classified as ``outer`` or ``bore``."""
-    known = sorted({
-        round(float(value), 3)
-        for value in known_diameter_values
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
-    })
+    known = sorted(
+        {
+            round(float(value), 3)
+            for value in known_diameter_values
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+        }
+    )
     datum = axial_map.get("datum_line") or []
     mm_per_px = axial_map.get("mm_per_px")
     if len(datum) != 2 or not isinstance(mm_per_px, (int, float)) or mm_per_px <= 0:
@@ -560,9 +566,9 @@ def localize_diameter_dimensions(
     # segmentation; every other diameter candidate must come from the rotated
     # pass. Geometry agreement is still mandatory for that repair.
     eligible_tokens = [
-        token for token in tokens
-        if token.get("orientation") == "vertical"
-        or _digits(token.get("raw_text")) == "120"
+        token
+        for token in tokens
+        if token.get("orientation") == "vertical" or _digits(token.get("raw_text")) == "120"
     ]
     contour_candidates = set(known)
     for token in eligible_tokens:
@@ -592,16 +598,18 @@ def localize_diameter_dimensions(
         confidence = 0.45 * float(token["ocr_confidence"]) + 0.55 * geometry_confidence
         if confidence < 0.4:
             continue
-        observations.append({
-            "id": "",
-            "raw_text": token["raw_text"],
-            "value_mm": round(float(matched.pop("value_mm")), 3),
-            "role": matched.pop("role"),
-            "source": "vertical_callout_and_vector_contour",
-            "label_bbox": token["label_bbox"],
-            **matched,
-            "confidence": round(confidence, 3),
-        })
+        observations.append(
+            {
+                "id": "",
+                "raw_text": token["raw_text"],
+                "value_mm": round(float(matched.pop("value_mm")), 3),
+                "role": matched.pop("role"),
+                "source": "vertical_callout_and_vector_contour",
+                "label_bbox": token["label_bbox"],
+                **matched,
+                "confidence": round(confidence, 3),
+            }
+        )
 
     contour_outer = _contour_outer_observations(
         blue,
@@ -630,9 +638,7 @@ def localize_diameter_dimensions(
     stated_stations = {
         round(float(value), 3)
         for value in (known_linear_values or [])
-        if isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and value > 0
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
     }
     preferred_candidates: list[dict[str, Any]] = []
     for candidate in outer_candidates:
@@ -658,9 +664,7 @@ def localize_diameter_dimensions(
             (start, end)
             for start in stated_stations
             for end in stated_stations
-            if end > start
-            and abs(start - measured_start) <= 2.0
-            and abs(end - measured_end) <= 2.0
+            if end > start and abs(start - measured_start) <= 2.0 and abs(end - measured_end) <= 2.0
         ]
         ranked_pairs = sorted(
             station_pairs,
@@ -673,13 +677,15 @@ def localize_diameter_dimensions(
         if not ranked_pairs:
             continue
         matched_ends = list(ranked_pairs[0])
-        promoted_outer.append({
-            **candidate,
-            "role": "outer",
-            "source": "vector_contour",
-            "confidence": min(0.86, float(candidate["confidence"])),
-            "station_crosscheck_mm": matched_ends,
-        })
+        promoted_outer.append(
+            {
+                **candidate,
+                "role": "outer",
+                "source": "vector_contour",
+                "confidence": min(0.86, float(candidate["confidence"])),
+                "station_crosscheck_mm": matched_ends,
+            }
+        )
     if promoted_outer:
         contour_outer.extend(promoted_outer)
         observations.extend(promoted_outer)
@@ -698,17 +704,21 @@ def localize_diameter_dimensions(
     seen: set[tuple[Any, ...]] = set()
     for item in observations:
         key = (
-            item["role"], item["value_mm"], item.get("raw_text"),
+            item["role"],
+            item["value_mm"],
+            item.get("raw_text"),
             tuple(item.get("profile_interval_px") or []),
         )
         if key in seen:
             continue
         seen.add(key)
         accepted.append(item)
-    accepted.sort(key=lambda item: (
-        (item.get("label_bbox") or item.get("profile_interval_px") or [0])[0],
-        item["role"],
-    ))
+    accepted.sort(
+        key=lambda item: (
+            (item.get("label_bbox") or item.get("profile_interval_px") or [0])[0],
+            item["role"],
+        )
+    )
     for index, item in enumerate(accepted, start=1):
         item["id"] = f"diameter-dim-{index}"
     blockers = [ocr_blocker] if ocr_blocker else []
@@ -744,13 +754,13 @@ def localize_diameter_dimensions(
             # the one nearest the ending plateau, never invent the midpoint.
             upper = float(next_interval[0]) + 2.0
             candidates = [
-                station for station in observed_stations
+                station
+                for station in observed_stations
                 if measured_station - 2.0 <= station <= upper
             ]
         else:
             candidates = [
-                station for station in observed_stations
-                if abs(station - measured_station) <= 2.0
+                station for station in observed_stations if abs(station - measured_station) <= 2.0
             ]
         # Short contour plateaus at the left face are not dimensioned by the
         # unrelated 12/15 mm slot and M8 callouts. With the overall 470 mm
@@ -763,36 +773,40 @@ def localize_diameter_dimensions(
         if not candidates:
             if index + 1 < len(ordered_outer):
                 candidates = [
-                    station for station in station_candidates
+                    station
+                    for station in station_candidates
                     if measured_station - 2.0 <= station <= upper
                 ]
             else:
                 candidates = [
-                    station for station in station_candidates
+                    station
+                    for station in station_candidates
                     if abs(station - measured_station) <= 2.0
                 ]
         if not candidates:
             continue
         station = min(candidates, key=lambda value: abs(value - measured_station))
-        transitions.append({
-            "station_from_left_mm": station,
-            "measured_station_mm": round(measured_station, 3),
-            "from_diameter_mm": item["value_mm"],
-            "to_diameter_mm": (
-                ordered_outer[index + 1]["value_mm"]
-                if index + 1 < len(ordered_outer) else None
-            ),
-            "profile_x_px": item["profile_interval_px"][1],
-            "confidence": round(min(float(item["confidence"]), 0.82), 3),
-            "source": "vector_contour_transition",
-        })
+        transitions.append(
+            {
+                "station_from_left_mm": station,
+                "measured_station_mm": round(measured_station, 3),
+                "from_diameter_mm": item["value_mm"],
+                "to_diameter_mm": (
+                    ordered_outer[index + 1]["value_mm"] if index + 1 < len(ordered_outer) else None
+                ),
+                "profile_x_px": item["profile_interval_px"][1],
+                "confidence": round(min(float(item["confidence"]), 0.82), 3),
+                "source": "vector_contour_transition",
+            }
+        )
     taper_observation = None
     ordered_bore = sorted(
         contour_bore,
         key=lambda item: item["axial_interval_mm"][0],
     )
     bore_callouts = [
-        item for item in accepted
+        item
+        for item in accepted
         if item.get("role") == "bore"
         and item.get("source") == "vertical_callout_and_vector_contour"
         and isinstance(item.get("profile_x_px"), int)
@@ -801,8 +815,7 @@ def localize_diameter_dimensions(
         first_plateau = ordered_bore[0]
         plateau_start = float(first_plateau["axial_interval_mm"][0])
         taper_station_candidates = [
-            station for station in station_candidates
-            if abs(station - plateau_start) <= 2.0
+            station for station in station_candidates if abs(station - plateau_start) <= 2.0
         ]
         start_callout = min(bore_callouts, key=lambda item: item["profile_x_px"])
         start_diameter = float(start_callout["value_mm"])
@@ -852,7 +865,8 @@ def outer_sections_from_diameter_evidence(diameter_map: dict[str, Any]) -> list[
     """
     outer = sorted(
         [
-            item for item in (diameter_map.get("observations") or [])
+            item
+            for item in (diameter_map.get("observations") or [])
             if item.get("role") == "outer"
             and item.get("source") == "vector_contour"
             and float(item.get("confidence") or 0.0) >= 0.8
@@ -877,26 +891,34 @@ def outer_sections_from_diameter_evidence(diameter_map: dict[str, Any]) -> list[
         if abs(float(transition.get("from_diameter_mm") or 0.0) - float(item["value_mm"])) > 0.05:
             return []
         station = transition.get("station_from_left_mm")
-        if not isinstance(station, (int, float)) or isinstance(station, bool) or station <= previous:
+        if (
+            not isinstance(station, (int, float))
+            or isinstance(station, bool)
+            or station <= previous
+        ):
             return []
-        sections.append({
-            "diameter_mm": float(item["value_mm"]),
-            "length_mm": round(float(station) - previous, 3),
-            "note": "контур и осевая станция подтверждены OCR+CV",
-            "evidence": [{
-                "image_index": 0,
-                "bbox": [
-                    float(item["profile_interval_px"][0]),
-                    round(center - float(item["value_mm"]) * px_per_mm / 2.0, 1),
-                    float(item["profile_interval_px"][1]),
-                    round(center + float(item["value_mm"]) * px_per_mm / 2.0, 1),
+        sections.append(
+            {
+                "diameter_mm": float(item["value_mm"]),
+                "length_mm": round(float(station) - previous, 3),
+                "note": "контур и осевая станция подтверждены OCR+CV",
+                "evidence": [
+                    {
+                        "image_index": 0,
+                        "bbox": [
+                            float(item["profile_interval_px"][0]),
+                            round(center - float(item["value_mm"]) * px_per_mm / 2.0, 1),
+                            float(item["profile_interval_px"][1]),
+                            round(center + float(item["value_mm"]) * px_per_mm / 2.0, 1),
+                        ],
+                        "raw_text": (
+                            f"vector outer contour Ø{float(item['value_mm']):g}; "
+                            f"station {float(station):g}"
+                        ),
+                    }
                 ],
-                "raw_text": (
-                    f"vector outer contour Ø{float(item['value_mm']):g}; "
-                    f"station {float(station):g}"
-                ),
-            }],
-        })
+            }
+        )
         previous = float(station)
     return sections
 
@@ -913,7 +935,8 @@ def bore_sections_from_diameter_evidence(diameter_map: dict[str, Any]) -> list[d
         return []
     bore = sorted(
         [
-            item for item in (diameter_map.get("observations") or [])
+            item
+            for item in (diameter_map.get("observations") or [])
             if item.get("role") == "bore"
             and item.get("source") == "vector_contour"
             and float(item.get("confidence") or 0.0) >= 0.8
@@ -931,17 +954,19 @@ def bore_sections_from_diameter_evidence(diameter_map: dict[str, Any]) -> list[d
         if (
             merged
             and merged[-1]["value_mm"] == item["value_mm"]
-            and float(item["axial_interval_mm"][0])
-            - float(merged[-1]["axial_interval_mm"][1]) <= 4.0
+            and float(item["axial_interval_mm"][0]) - float(merged[-1]["axial_interval_mm"][1])
+            <= 4.0
         ):
             merged[-1]["axial_interval_mm"][1] = item["axial_interval_mm"][1]
             merged[-1]["profile_interval_px"][1] = item["profile_interval_px"][1]
         else:
-            merged.append({
-                **item,
-                "axial_interval_mm": list(item["axial_interval_mm"]),
-                "profile_interval_px": list(item["profile_interval_px"]),
-            })
+            merged.append(
+                {
+                    **item,
+                    "axial_interval_mm": list(item["axial_interval_mm"]),
+                    "profile_interval_px": list(item["profile_interval_px"]),
+                }
+            )
 
     previous = float(taper.get("length_mm") or 0.0)
     if previous <= 0 or abs(float(merged[0]["axial_interval_mm"][0]) - previous) > 2.0:
@@ -949,28 +974,32 @@ def bore_sections_from_diameter_evidence(diameter_map: dict[str, Any]) -> list[d
     center = float(diameter_map.get("profile_center_y_px") or 0.0)
     px_per_mm = float(diameter_map.get("px_per_mm") or 0.0)
     taper_interval = taper.get("profile_interval_px") or [0.0, 0.0]
-    sections: list[dict] = [{
-        "diameter_mm": float(taper["start_diameter_mm"]),
-        "length_mm": round(previous, 3),
-        "note": "конус подтверждён контуром и отношением 7:24",
-        "taper": {
-            "kind": "ratio",
-            "ratio": "7:24",
-        },
-        "evidence": [{
-            "image_index": 0,
-            "bbox": [
-                float(taper_interval[0]),
-                round(center - float(taper["start_diameter_mm"]) * px_per_mm / 2.0, 1),
-                float(taper_interval[1]),
-                round(center + float(taper["start_diameter_mm"]) * px_per_mm / 2.0, 1),
+    sections: list[dict] = [
+        {
+            "diameter_mm": float(taper["start_diameter_mm"]),
+            "length_mm": round(previous, 3),
+            "note": "конус подтверждён контуром и отношением 7:24",
+            "taper": {
+                "kind": "ratio",
+                "ratio": "7:24",
+            },
+            "evidence": [
+                {
+                    "image_index": 0,
+                    "bbox": [
+                        float(taper_interval[0]),
+                        round(center - float(taper["start_diameter_mm"]) * px_per_mm / 2.0, 1),
+                        float(taper_interval[1]),
+                        round(center + float(taper["start_diameter_mm"]) * px_per_mm / 2.0, 1),
+                    ],
+                    "raw_text": (
+                        f"vector bore taper Ø{float(taper['start_diameter_mm']):g}; "
+                        f"7:24; station {previous:g}"
+                    ),
+                }
             ],
-            "raw_text": (
-                f"vector bore taper Ø{float(taper['start_diameter_mm']):g}; "
-                f"7:24; station {previous:g}"
-            ),
-        }],
-    }]
+        }
+    ]
     for index, item in enumerate(merged):
         measured_end = float(item["axial_interval_mm"][1])
         if index == len(merged) - 1 and abs(float(overall) - measured_end) <= 2.0:
@@ -981,24 +1010,27 @@ def bore_sections_from_diameter_evidence(diameter_map: dict[str, Any]) -> list[d
                 return []
         if abs(float(item["axial_interval_mm"][0]) - previous) > 2.0 or station <= previous:
             return []
-        sections.append({
-            "diameter_mm": float(item["value_mm"]),
-            "length_mm": round(station - previous, 3),
-            "note": "внутренний контур измерен и привязан к осевой станции",
-            "evidence": [{
-                "image_index": 0,
-                "bbox": [
-                    float(item["profile_interval_px"][0]),
-                    round(center - float(item["value_mm"]) * px_per_mm / 2.0, 1),
-                    float(item["profile_interval_px"][1]),
-                    round(center + float(item["value_mm"]) * px_per_mm / 2.0, 1),
+        sections.append(
+            {
+                "diameter_mm": float(item["value_mm"]),
+                "length_mm": round(station - previous, 3),
+                "note": "внутренний контур измерен и привязан к осевой станции",
+                "evidence": [
+                    {
+                        "image_index": 0,
+                        "bbox": [
+                            float(item["profile_interval_px"][0]),
+                            round(center - float(item["value_mm"]) * px_per_mm / 2.0, 1),
+                            float(item["profile_interval_px"][1]),
+                            round(center + float(item["value_mm"]) * px_per_mm / 2.0, 1),
+                        ],
+                        "raw_text": (
+                            f"vector bore contour Ø{float(item['value_mm']):g}; station {station:g}"
+                        ),
+                    }
                 ],
-                "raw_text": (
-                    f"vector bore contour Ø{float(item['value_mm']):g}; "
-                    f"station {station:g}"
-                ),
-            }],
-        })
+            }
+        )
         previous = station
     if abs(previous - float(overall)) > 0.05:
         return []

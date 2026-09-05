@@ -1,7 +1,7 @@
 """Export Celery tasks — Excel and 1C payload generation."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 
 import structlog
@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
-from app.db.models import ExportJob, Invoice, InvoiceLine, Party
+from app.db.models import ExportJob, Invoice
 from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
@@ -17,16 +17,19 @@ logger = structlog.get_logger()
 
 def _get_sync_session() -> Session:
     from sqlalchemy import create_engine
+
     engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
     return Session(engine)
 
 
 def _run_async(coro):
     import asyncio
+
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
             import concurrent.futures
+
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 return pool.submit(asyncio.run, coro).result()
         return loop.run_until_complete(coro)
@@ -48,14 +51,18 @@ def generate_excel_export(self, job_id: str) -> dict:
         db.commit()
 
         try:
-            invoice = db.execute(
-                select(Invoice)
-                .where(Invoice.id == job.entity_id)
-                .options(
-                    joinedload(Invoice.lines),
-                    joinedload(Invoice.supplier),
+            invoice = (
+                db.execute(
+                    select(Invoice)
+                    .where(Invoice.id == job.entity_id)
+                    .options(
+                        joinedload(Invoice.lines),
+                        joinedload(Invoice.supplier),
+                    )
                 )
-            ).unique().scalar_one_or_none()
+                .unique()
+                .scalar_one_or_none()
+            )
 
             if not invoice:
                 job.status = "failed"
@@ -70,13 +77,16 @@ def generate_excel_export(self, job_id: str) -> dict:
             storage_path = f"exports/{job_id}/{filename}"
 
             from app.storage import upload_file
-            upload_file(buf.getvalue(), storage_path, content_type=(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ))
+
+            upload_file(
+                buf.getvalue(),
+                storage_path,
+                content_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            )
 
             job.storage_path = storage_path
             job.status = "ready"
-            job.ready_at = datetime.now(timezone.utc)
+            job.ready_at = datetime.now(UTC)
             db.commit()
 
             logger.info("excel_export_done", job_id=job_id, path=storage_path)
@@ -105,14 +115,18 @@ def generate_1c_export(self, job_id: str) -> dict:
         db.commit()
 
         try:
-            invoice = db.execute(
-                select(Invoice)
-                .where(Invoice.id == job.entity_id)
-                .options(
-                    joinedload(Invoice.lines),
-                    joinedload(Invoice.supplier),
+            invoice = (
+                db.execute(
+                    select(Invoice)
+                    .where(Invoice.id == job.entity_id)
+                    .options(
+                        joinedload(Invoice.lines),
+                        joinedload(Invoice.supplier),
+                    )
                 )
-            ).unique().scalar_one_or_none()
+                .unique()
+                .scalar_one_or_none()
+            )
 
             if not invoice:
                 job.status = "failed"
@@ -125,11 +139,12 @@ def generate_1c_export(self, job_id: str) -> dict:
             storage_path = f"exports/{job_id}/{filename}"
 
             from app.storage import upload_file
+
             upload_file(xml_content.encode("utf-8"), storage_path, content_type="application/xml")
 
             job.storage_path = storage_path
             job.status = "ready"
-            job.ready_at = datetime.now(timezone.utc)
+            job.ready_at = datetime.now(UTC)
             db.commit()
 
             logger.info("1c_export_done", job_id=job_id, path=storage_path)
@@ -148,7 +163,7 @@ def _build_excel(invoice: Invoice) -> BytesIO:
     """Build Excel workbook for an invoice."""
     try:
         import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.styles import Alignment, Font, PatternFill
     except ImportError:
         raise RuntimeError("openpyxl not installed")
 
@@ -225,7 +240,6 @@ def _build_1c_xml(invoice: Invoice) -> str:
     Structure: КоммерческаяИнформация / Документ / ТаблицаЧасти / Контрагент
     following the standard used by 1C:Бухгалтерия exchange format.
     """
-    from datetime import timezone as _tz
 
     supplier = invoice.supplier
     s_name = _xml_escape(supplier.name if supplier else "")
@@ -241,8 +255,7 @@ def _build_1c_xml(invoice: Invoice) -> str:
     due_date = invoice.due_date.strftime("%Y%m%d") if invoice.due_date else ""
     currency = _xml_escape(invoice.currency or "RUB")
     created_at = (
-        invoice.created_at.astimezone(_tz.utc).strftime("%Y%m%dT%H%M%S")
-        if invoice.created_at else ""
+        invoice.created_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S") if invoice.created_at else ""
     )
 
     # TabularSection rows — one <СтрокаТаблицыЧасти> per line item
@@ -253,11 +266,11 @@ def _build_1c_xml(invoice: Invoice) -> str:
         <СтрокаТаблицыЧасти>
           <НомерСтроки>{line.line_number or idx}</НомерСтроки>
           <Номенклатура>
-            <Наименование>{_xml_escape(line.description or '')}</Наименование>
-            <Артикул>{_xml_escape(str(line.canonical_item_id or ''))}</Артикул>
+            <Наименование>{_xml_escape(line.description or "")}</Наименование>
+            <Артикул>{_xml_escape(str(line.canonical_item_id or ""))}</Артикул>
           </Номенклатура>
           <ЕдиницаИзмерения>
-            <НаименованиеПолное>{_xml_escape(line.unit or 'шт')}</НаименованиеПолное>
+            <НаименованиеПолное>{_xml_escape(line.unit or "шт")}</НаименованиеПолное>
           </ЕдиницаИзмерения>
           <Количество>{line.quantity or 0}</Количество>
           <Цена>{_fmt_amount(line.unit_price)}</Цена>
@@ -287,7 +300,7 @@ def _build_1c_xml(invoice: Invoice) -> str:
     <СуммаНДС>{_fmt_amount(invoice.tax_amount)}</СуммаНДС>
     <Контрагенты>
       <Контрагент>
-        <Ид>{supplier.id if supplier else ''}</Ид>
+        <Ид>{supplier.id if supplier else ""}</Ид>
         <Наименование>{s_name}</Наименование>
         <ИНН>{s_inn}</ИНН>
         <КПП>{s_kpp}</КПП>

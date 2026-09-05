@@ -44,15 +44,17 @@ def upgrade() -> None:
         op.create_index("uq_parties_inn", "parties", ["inn"], unique=True)
         return
 
-    dupes = conn.execute(sa.text(
-        """
+    dupes = conn.execute(
+        sa.text(
+            """
         SELECT inn, array_agg(id ORDER BY created_at ASC) AS ids
         FROM parties
         WHERE inn IS NOT NULL
         GROUP BY inn
         HAVING count(*) > 1
         """
-    )).fetchall()
+        )
+    ).fetchall()
 
     for _inn, ids in dupes:
         keep, drops = ids[0], ids[1:]
@@ -68,15 +70,18 @@ def upgrade() -> None:
                 {"keep": keep},
             ).first()
             if keep_has_profile:
-                conn.execute(sa.text(
-                    """
+                conn.execute(
+                    sa.text(
+                        """
                     UPDATE supplier_profiles k SET
                         total_invoices = COALESCE(k.total_invoices, 0) + COALESCE(d.total_invoices, 0),
                         total_amount   = COALESCE(k.total_amount, 0)   + COALESCE(d.total_amount, 0)
                     FROM supplier_profiles d
                     WHERE k.party_id = :keep AND d.party_id = :drop
                     """
-                ), {"keep": keep, "drop": drop})
+                    ),
+                    {"keep": keep, "drop": drop},
+                )
                 conn.execute(
                     sa.text("DELETE FROM supplier_profiles WHERE party_id = :drop"),
                     {"drop": drop},

@@ -29,17 +29,23 @@ def upgrade() -> None:
         sa.Column("user_sub", sa.String(255), nullable=False),
         sa.Column("action", sa.String(20), nullable=False),
         sa.Column("snoozed_until", sa.DateTime(timezone=True)),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["notification_id"], ["notifications.id"], ondelete="SET NULL"
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
         ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(["notification_id"], ["notifications.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
     for column in ("beat_task_name", "notification_id", "user_sub"):
-        op.create_index(
-            f"ix_proactive_task_feedback_{column}", "proactive_task_feedback", [column]
-        )
+        op.create_index(f"ix_proactive_task_feedback_{column}", "proactive_task_feedback", [column])
     # Calibration queries filter by task + recency together.
     op.create_index(
         "ix_proactive_task_feedback_calibration",
@@ -49,13 +55,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_proactive_task_feedback_calibration", table_name="proactive_task_feedback"
-    )
+    op.drop_index("ix_proactive_task_feedback_calibration", table_name="proactive_task_feedback")
     for column in ("beat_task_name", "notification_id", "user_sub"):
-        op.drop_index(
-            f"ix_proactive_task_feedback_{column}", table_name="proactive_task_feedback"
-        )
+        op.drop_index(f"ix_proactive_task_feedback_{column}", table_name="proactive_task_feedback")
     op.drop_table("proactive_task_feedback")
     op.drop_index("ix_notifications_source_task", table_name="notifications")
     op.drop_column("notifications", "source_task")

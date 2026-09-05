@@ -51,8 +51,18 @@ def upgrade() -> None:
         sa.Column("extraction_attempts", sa.Integer(), server_default="0", nullable=False),
         sa.Column("last_error", sa.JSON()),
         sa.Column("processed_at", sa.DateTime(timezone=True)),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["work_order_id"], ["work_orders.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["memory_fact_id"], ["memory_facts.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["recipe_skill_id"], ["recipe_skills.id"], ondelete="SET NULL"),
@@ -67,9 +77,7 @@ def upgrade() -> None:
         "processed_at",
     ):
         op.create_index(f"ix_work_learnings_{column}", "work_learnings", [column])
-    op.create_index(
-        "ix_work_learnings_process", "work_learnings", ["status", "created_at"]
-    )
+    op.create_index("ix_work_learnings_process", "work_learnings", ["status", "created_at"])
     op.execute(
         """
         INSERT INTO work_learnings (

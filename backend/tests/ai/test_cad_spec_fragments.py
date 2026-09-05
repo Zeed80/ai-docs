@@ -9,15 +9,15 @@ import pytest
 from app.ai.cad_recognize.spec_fragments import (
     _clean_callout_observations,
     _detect_pmi_frame_regions,
+    _enrich_post_consensus_source_geometry,
     _flag_unconfirmed_outer_bore_diameters,
-    _observation_only_spec,
     _has_geometry,
     _is_sheet_metadata_line,
     _mark_observation_only_if_no_geometry,
+    _observation_only_spec,
     _pmi_contact_sheet,
-    _structured_pmi_annotations,
-    _enrich_post_consensus_source_geometry,
     _stamp_crop,
+    _structured_pmi_annotations,
     _type_label,
     read_spec_best_effort,
 )
@@ -25,19 +25,22 @@ from app.ai.cad_recognize.spec_fragments import (
 
 def test_post_consensus_restores_measured_m8_entry_plane_from_source():
     image = (
-        Path(__file__).resolve().parents[3]
-        / "test_vector_files" / "detal_126.png"
+        Path(__file__).resolve().parents[3] / "test_vector_files" / "detal_126.png"
     ).read_bytes()
     spec = {
-        "main_view": {"axial_holes": [{
-            "count": 2,
-            "bolt_circle_diameter_mm": 80,
-            "from_face": "zmin",
-            "entry_offset_mm": None,
-            "entry_recess_diameter_mm": None,
-            "thread": {"nominal_diameter_mm": 8},
-            "evidence": [{"bbox": [2126, 465, 2146, 722]}],
-        }]},
+        "main_view": {
+            "axial_holes": [
+                {
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 80,
+                    "from_face": "zmin",
+                    "entry_offset_mm": None,
+                    "entry_recess_diameter_mm": None,
+                    "thread": {"nominal_diameter_mm": 8},
+                    "evidence": [{"bbox": [2126, 465, 2146, 722]}],
+                }
+            ]
+        },
         "dimensions": [{"value": "470"}, {"value": "Ø80"}],
         "annotations": [],
         "unresolved": [],
@@ -73,18 +76,20 @@ def test_geometry_presence_covers_both_supported_classes():
 
 
 def test_sheet_metadata_is_not_a_dimension_and_empty_pmi_does_not_kill_reading():
-    callouts, dropped = _clean_callout_observations({
-        "dimensions": [
-            {"value": "Ø25 ±0.15"},
-            {"value": "NIST PMI Test Models - 2012"},
-            {"value": "Test Model 1"},
-            {"value": "Масштаб 1:2"},
-        ],
-        "annotations": [
-            {"kind": "tolerance", "text": "", "datum_refs": ["A"]},
-            {"kind": "tolerance", "text": "0.75 | A | B | C"},
-        ],
-    })
+    callouts, dropped = _clean_callout_observations(
+        {
+            "dimensions": [
+                {"value": "Ø25 ±0.15"},
+                {"value": "NIST PMI Test Models - 2012"},
+                {"value": "Test Model 1"},
+                {"value": "Масштаб 1:2"},
+            ],
+            "annotations": [
+                {"kind": "tolerance", "text": "", "datum_refs": ["A"]},
+                {"kind": "tolerance", "text": "0.75 | A | B | C"},
+            ],
+        }
+    )
     assert [item["value"] for item in callouts["dimensions"]] == ["Ø25 ±0.15"]
     assert [item["text"] for item in callouts["annotations"]] == ["0.75 | A | B | C"]
     assert dropped == 1
@@ -98,21 +103,23 @@ def test_geometry_free_valid_spec_is_explicitly_observation_only():
 
 
 def test_structured_pmi_preserves_characteristic_value_and_datum_order():
-    annotations, unresolved = _structured_pmi_annotations({
-        "frames": [
-            {
-                "characteristic": "profile_surface",
-                "tolerance_text": "0.75 A B C",
-                "datum_refs": ["A", "B", "C"],
-            },
-            {
-                "characteristic": "perpendicularity",
-                "tolerance_text": "Ø0.02Ⓜ | A",
-                "datum_refs": ["A"],
-            },
-            {"characteristic": "unknown", "tolerance_text": "0.5", "datum_refs": []},
-        ]
-    })
+    annotations, unresolved = _structured_pmi_annotations(
+        {
+            "frames": [
+                {
+                    "characteristic": "profile_surface",
+                    "tolerance_text": "0.75 A B C",
+                    "datum_refs": ["A", "B", "C"],
+                },
+                {
+                    "characteristic": "perpendicularity",
+                    "tolerance_text": "Ø0.02Ⓜ | A",
+                    "datum_refs": ["A"],
+                },
+                {"characteristic": "unknown", "tolerance_text": "0.5", "datum_refs": []},
+            ]
+        }
+    )
     assert annotations == [
         {
             "kind": "tolerance",
@@ -146,20 +153,22 @@ def test_pmi_contact_sheet_maps_normalized_box_to_original_evidence():
     assert evidence[1]["bbox"] == [140.0, 100.0, 320.0, 180.0]
 
     annotations, unresolved = _structured_pmi_annotations(
-        {"frames": [
-            {
-                "frame_id": 1,
-                "characteristic": "flatness",
-                "tolerance_text": "0.2",
-                "datum_refs": [],
-            },
-            {
-                "frame_id": 99,
-                "characteristic": "position",
-                "tolerance_text": "Ø0.5",
-                "datum_refs": ["A"],
-            },
-        ]},
+        {
+            "frames": [
+                {
+                    "frame_id": 1,
+                    "characteristic": "flatness",
+                    "tolerance_text": "0.2",
+                    "datum_refs": [],
+                },
+                {
+                    "frame_id": 99,
+                    "characteristic": "position",
+                    "tolerance_text": "Ø0.5",
+                    "datum_refs": ["A"],
+                },
+            ]
+        },
         evidence,
     )
 
@@ -173,11 +182,13 @@ def test_pmi_contact_sheet_rejects_degenerate_locator_boxes():
 
     sheet, evidence = _pmi_contact_sheet(
         Image.new("RGB", (1000, 500), "white"),
-        {"frames": [
-            {"bbox": [100, 100, 100, 200]},
-            {"bbox": [200, 200, 204, 202]},
-            {"bbox": ["bad", 0, 10, 10]},
-        ]},
+        {
+            "frames": [
+                {"bbox": [100, 100, 100, 200]},
+                {"bbox": [200, 200, 204, 202]},
+                {"bbox": ["bad", 0, 10, 10]},
+            ]
+        },
         (0, 0, 1000, 500),
     )
 
@@ -208,7 +219,11 @@ def test_invalid_geometry_preserves_pmi_as_unresolved_observations():
         "part": "test part",
         "main_view": {"type": "prismatic", "profile": {"shape": "rectangle"}},
         "dimensions": [
-            {"value": "⌀25 ±0.15", "applies_to": None, "evidence": [{"image_index": 1, "bbox": [1, 2, 3, 4]}]},
+            {
+                "value": "⌀25 ±0.15",
+                "applies_to": None,
+                "evidence": [{"image_index": 1, "bbox": [1, 2, 3, 4]}],
+            },
             {"value": ""},
         ],
         "annotations": [
@@ -280,14 +295,22 @@ async def test_fragments_win_when_they_produced_geometry(monkeypatch):
 async def test_fragment_passes_that_disagree_do_not_ship_a_lucky_read(monkeypatch):
     """The value that changes between passes is exactly the one to withhold."""
     reads = [
-        {"main_view": {"outer": [
-            {"diameter_mm": 30, "length_mm": 40},
-            {"diameter_mm": 50, "length_mm": 60},
-        ]}},
-        {"main_view": {"outer": [
-            {"diameter_mm": 30, "length_mm": 40},
-            {"diameter_mm": 50, "length_mm": 95},
-        ]}},
+        {
+            "main_view": {
+                "outer": [
+                    {"diameter_mm": 30, "length_mm": 40},
+                    {"diameter_mm": 50, "length_mm": 60},
+                ]
+            }
+        },
+        {
+            "main_view": {
+                "outer": [
+                    {"diameter_mm": 30, "length_mm": 40},
+                    {"diameter_mm": 50, "length_mm": 95},
+                ]
+            }
+        },
         {"main_view": {"outer": [{"diameter_mm": 30, "length_mm": 40}]}},
     ]
     order = iter(reads)
@@ -321,10 +344,12 @@ async def test_the_fallback_runs_for_missing_geometry(monkeypatch):
 
     async def fake_whole(*_a, **_k):
         return {
-            "main_view": {"outer": [
-                {"diameter_mm": 30, "length_mm": 40},
-                {"diameter_mm": 50, "length_mm": 60},
-            ]},
+            "main_view": {
+                "outer": [
+                    {"diameter_mm": 30, "length_mm": 40},
+                    {"diameter_mm": 50, "length_mm": 60},
+                ]
+            },
             "title_block": {},
         }
 
@@ -358,7 +383,9 @@ async def test_fallback_grounds_whole_sheet_in_fragments_own_confirmed_diameters
         return {
             "main_view": {},
             "dimensions": [
-                {"value": "Ø50h6"}, {"value": "Ø30h6"}, {"value": "Ø30k6"},
+                {"value": "Ø50h6"},
+                {"value": "Ø30h6"},
+                {"value": "Ø30k6"},
                 {"value": "220"},  # not Ø-marked -- must not be treated as a diameter
             ],
             "fragments": {"geometry": False},
@@ -447,11 +474,13 @@ async def test_dimension_chain_question_uses_the_parent_reader_audit(monkeypatch
     audit: list[dict] = []
 
     async def fake_ask(*_a, **kwargs):
-        kwargs["audit"].append({
-            "question": "dimension chain",
-            "model": "test-reader",
-            "raw_response": '{"diameters_mm":[30,40],"chain_mm":[20,50]}',
-        })
+        kwargs["audit"].append(
+            {
+                "question": "dimension chain",
+                "model": "test-reader",
+                "raw_response": '{"diameters_mm":[30,40],"chain_mm":[20,50]}',
+            }
+        )
         return {
             "diameters_mm": [30, 40],
             "chain_mm": [20, 50],
@@ -480,6 +509,8 @@ async def test_dimension_chain_receives_localized_datum_evidence(monkeypatch):
     from app.ai.cad_recognize import (
         axial_dimensions,
         diameter_dimensions,
+    )
+    from app.ai.cad_recognize import (
         spec_fragments as fragments,
     )
 
@@ -561,6 +592,8 @@ async def test_dimension_chain_rejects_diameter_assigned_to_wrong_contour(monkey
     from app.ai.cad_recognize import (
         axial_dimensions,
         diameter_dimensions,
+    )
+    from app.ai.cad_recognize import (
         spec_fragments as fragments,
     )
 
@@ -599,8 +632,10 @@ async def test_dimension_chain_rejects_diameter_assigned_to_wrong_contour(monkey
         object(),
         {
             "dimensions": [
-                {"value": "Ø30"}, {"value": "Ø40"},
-                {"value": "20"}, {"value": "50"},
+                {"value": "Ø30"},
+                {"value": "Ø40"},
+                {"value": "20"},
+                {"value": "50"},
             ]
         },
         router=object(),
@@ -615,7 +650,8 @@ async def test_dimension_chain_rejects_diameter_assigned_to_wrong_contour(monkey
 
 @pytest.mark.asyncio
 async def test_dimension_chain_rejects_station_without_localized_line(monkeypatch):
-    from app.ai.cad_recognize import axial_dimensions, spec_fragments as fragments
+    from app.ai.cad_recognize import axial_dimensions
+    from app.ai.cad_recognize import spec_fragments as fragments
 
     monkeypatch.setattr(
         axial_dimensions,
@@ -644,8 +680,12 @@ async def test_dimension_chain_rejects_station_without_localized_line(monkeypatc
         object(),
         {
             "dimensions": [
-                {"value": "Ø30"}, {"value": "Ø35"}, {"value": "Ø40"},
-                {"value": "20"}, {"value": "30"}, {"value": "50"},
+                {"value": "Ø30"},
+                {"value": "Ø35"},
+                {"value": "Ø40"},
+                {"value": "20"},
+                {"value": "30"},
+                {"value": "50"},
             ]
         },
         router=object(),
@@ -693,15 +733,24 @@ def test_whole_fallback_cannot_overwrite_verified_fragment_outer_or_restore_bore
     fragments = {
         "main_view": {
             "outer": [
-                {"diameter_mm": 102, "length_mm": 14,
-                 "note": "контур и осевая станция подтверждены OCR+CV",
-                 "evidence": [{"image_index": 0, "bbox": [1, 2, 3, 4]}]},
-                {"diameter_mm": 80, "length_mm": 357,
-                 "note": "контур и осевая станция подтверждены OCR+CV",
-                 "evidence": [{"image_index": 0, "bbox": [2, 2, 4, 4]}]},
-                {"diameter_mm": 72, "length_mm": 99,
-                 "note": "наружный резьбовой участок подтверждён размерной цепью",
-                 "evidence": [{"image_index": 0, "bbox": [3, 2, 5, 4]}]},
+                {
+                    "diameter_mm": 102,
+                    "length_mm": 14,
+                    "note": "контур и осевая станция подтверждены OCR+CV",
+                    "evidence": [{"image_index": 0, "bbox": [1, 2, 3, 4]}],
+                },
+                {
+                    "diameter_mm": 80,
+                    "length_mm": 357,
+                    "note": "контур и осевая станция подтверждены OCR+CV",
+                    "evidence": [{"image_index": 0, "bbox": [2, 2, 4, 4]}],
+                },
+                {
+                    "diameter_mm": 72,
+                    "length_mm": 99,
+                    "note": "наружный резьбовой участок подтверждён размерной цепью",
+                    "evidence": [{"image_index": 0, "bbox": [3, 2, 5, 4]}],
+                },
             ],
         },
         "unresolved": [
@@ -818,10 +867,12 @@ def test_unverified_fragment_outer_wins_when_it_found_more_steps_than_whole():
     ]
     fragments = {"main_view": {"outer": fragment_outer}, "unresolved": []}
     whole = {
-        "main_view": {"outer": [
-            {"diameter_mm": 50, "length_mm": 220, "note": "ступень Ø50h6"},
-            {"diameter_mm": 30, "length_mm": 840, "note": "ступень Ø30k6, Ø30h6"},
-        ]},
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 50, "length_mm": 220, "note": "ступень Ø50h6"},
+                {"diameter_mm": 30, "length_mm": 840, "note": "ступень Ø30k6, Ø30h6"},
+            ]
+        },
         "unresolved": [],
     }
 
@@ -984,7 +1035,12 @@ def test_feature_fields_cast_into_doubt_maps_real_captured_messages():
     from app.ai.cad_recognize.spec_fragments import _feature_fields_cast_into_doubt
 
     feature_fields = (
-        "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
+        "chamfers",
+        "fillets",
+        "grooves",
+        "keyways",
+        "cross_holes",
+        "axial_holes",
         "circular_hole_patterns",
     )
     assert _feature_fields_cast_into_doubt(
@@ -996,11 +1052,16 @@ def test_feature_fields_cast_into_doubt_maps_real_captured_messages():
         feature_fields,
     ) == ("cross_holes",)
     assert _feature_fields_cast_into_doubt(
-        "малые элементы: осевое отверстие M8 не найдено", feature_fields,
+        "малые элементы: осевое отверстие M8 не найдено",
+        feature_fields,
     ) == ("axial_holes",)
-    assert _feature_fields_cast_into_doubt(
-        "малые элементы: неизвестная причина", feature_fields,
-    ) == feature_fields
+    assert (
+        _feature_fields_cast_into_doubt(
+            "малые элементы: неизвестная причина",
+            feature_fields,
+        )
+        == feature_fields
+    )
 
 
 def test_flags_outer_diameter_the_model_invented():
@@ -1018,8 +1079,11 @@ def test_flags_outer_diameter_the_model_invented():
             ],
         },
         "dimensions": [
-            {"value": "Ø50h6"}, {"value": "Ø30h6"}, {"value": "Ø30k6"},
-            {"value": "220"}, {"value": "840"},
+            {"value": "Ø50h6"},
+            {"value": "Ø30h6"},
+            {"value": "Ø30k6"},
+            {"value": "220"},
+            {"value": "840"},
         ],
         "annotations": [],
         "unresolved": [],
@@ -1078,8 +1142,12 @@ def test_callouts_split_by_the_sheets_own_diameter_mark():
 
     callouts = {
         "dimensions": [
-            {"value": "Ø80js6"}, {"value": "Ø102h6"}, {"value": "Ø44H7"},
-            {"value": "150"}, {"value": "240"}, {"value": "470"},
+            {"value": "Ø80js6"},
+            {"value": "Ø102h6"},
+            {"value": "Ø44H7"},
+            {"value": "150"},
+            {"value": "240"},
+            {"value": "470"},
         ]
     }
 
@@ -1309,7 +1377,10 @@ async def test_geometry_code_pass_merges_a_successful_result(monkeypatch):
     monkeypatch.setattr("httpx.AsyncClient", FakeClient)
 
     result = await sf._run_geometry_code_pass(
-        object(), router=object(), confidential=True, audit=[],
+        object(),
+        router=object(),
+        confidential=True,
+        audit=[],
     )
     assert result == {
         "outer": [{"diameter_mm": 80, "length_mm": 100}],
@@ -1332,10 +1403,12 @@ async def test_geometry_code_pass_retries_once_on_execution_error_then_succeeds(
             audit.append({"raw_response": "```python\nprint('{}')\n```"})
         return {}
 
-    responses = iter([
-        {"ok": False, "error": "AssertionError: lengths do not sum"},
-        {"ok": True, "result": {"outer": [{"diameter_mm": 50, "length_mm": 10}], "bore": []}},
-    ])
+    responses = iter(
+        [
+            {"ok": False, "error": "AssertionError: lengths do not sum"},
+            {"ok": True, "result": {"outer": [{"diameter_mm": 50, "length_mm": 10}], "bore": []}},
+        ]
+    )
 
     class FakeResponse:
         def __init__(self, payload):
@@ -1364,7 +1437,10 @@ async def test_geometry_code_pass_retries_once_on_execution_error_then_succeeds(
     monkeypatch.setattr("httpx.AsyncClient", FakeClient)
 
     result = await sf._run_geometry_code_pass(
-        object(), router=object(), confidential=True, audit=[],
+        object(),
+        router=object(),
+        confidential=True,
+        audit=[],
     )
     assert calls["n"] == 2, "must ask again with the concrete execution error"
     assert result == {"outer": [{"diameter_mm": 50, "length_mm": 10}], "bore": []}
@@ -1404,7 +1480,10 @@ async def test_geometry_code_pass_gives_up_after_one_failed_retry(monkeypatch):
     monkeypatch.setattr("httpx.AsyncClient", FakeClient)
 
     result = await sf._run_geometry_code_pass(
-        object(), router=object(), confidential=True, audit=[],
+        object(),
+        router=object(),
+        confidential=True,
+        audit=[],
     )
     assert result is None
 
@@ -1422,6 +1501,9 @@ async def test_geometry_code_pass_none_when_no_code_extracted(monkeypatch):
     monkeypatch.setattr(sf, "_ask", fake_ask)
 
     result = await sf._run_geometry_code_pass(
-        object(), router=object(), confidential=True, audit=[],
+        object(),
+        router=object(),
+        confidential=True,
+        audit=[],
     )
     assert result is None

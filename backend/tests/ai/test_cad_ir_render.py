@@ -28,7 +28,9 @@ def _ir(scale: float | None = 0.5) -> CadIR:
         scale=scale,
         entities=[
             Segment(p1=Point(x=20, y=280), p2=Point(x=380, y=280)),
-            Segment(p1=Point(x=20, y=280), p2=Point(x=20, y=40), line_class="axis", width_class="thin"),
+            Segment(
+                p1=Point(x=20, y=280), p2=Point(x=20, y=40), line_class="axis", width_class="thin"
+            ),
             Circle(center=Point(x=200, y=150), radius=60, confidence=0.62),
             Arc(center=Point(x=300, y=100), radius=30, start_angle=0, end_angle=90),
             Polyline(points=[Point(x=50, y=50), Point(x=90, y=50), Point(x=90, y=90)]),
@@ -60,7 +62,15 @@ def test_dxf_readback_layers_and_geometry() -> None:
 
     axis_line = [e for e in msp if e.dxftype() == "LINE" and e.dxf.layer == "CENTER"]
     assert len(axis_line) == 1
-    assert {e.dxf.layer for e in msp} <= {"OBJECT", "OBJECT_THIN", "CENTER", "HIDDEN", "DIM", "HATCH", "ANNOTATION"}
+    assert {e.dxf.layer for e in msp} <= {
+        "OBJECT",
+        "OBJECT_THIN",
+        "CENTER",
+        "HIDDEN",
+        "DIM",
+        "HATCH",
+        "ANNOTATION",
+    }
 
 
 def test_dxf_semantic_roundtrip_matches_ir_entities_and_layers() -> None:
@@ -130,8 +140,12 @@ def test_svg_diameter_and_radial_labels_get_gost_prefix() -> None:
         source=SourceInfo(image_width=400, image_height=300),
         scale=0.5,
         entities=[
-            DimensionEntity(p1=Point(x=140, y=150), p2=Point(x=260, y=150), text="40", kind="diameter"),
-            DimensionEntity(p1=Point(x=300, y=100), p2=Point(x=330, y=100), text="30", kind="radial"),
+            DimensionEntity(
+                p1=Point(x=140, y=150), p2=Point(x=260, y=150), text="40", kind="diameter"
+            ),
+            DimensionEntity(
+                p1=Point(x=300, y=100), p2=Point(x=330, y=100), text="30", kind="radial"
+            ),
         ],
     )
     svg = render_ir_to_svg(ir).decode("utf-8")
@@ -146,7 +160,9 @@ def test_dxf_dimension_is_native_editable_entity() -> None:
 
     data = render_ir_to_dxf(_ir())
     doc = ezdxf.read(io.StringIO(data.decode("utf-8")))
-    dimensions = [e for e in doc.modelspace() if e.dxftype() == "DIMENSION" and e.dxf.layer == "DIM"]
+    dimensions = [
+        e for e in doc.modelspace() if e.dxftype() == "DIMENSION" and e.dxf.layer == "DIM"
+    ]
     assert len(dimensions) == 1
 
 
@@ -159,7 +175,9 @@ def test_dxf_radial_dimension_is_native_editable_entity() -> None:
         source=SourceInfo(image_width=400, image_height=300),
         scale=0.5,
         entities=[
-            DimensionEntity(p1=Point(x=300, y=100), p2=Point(x=330, y=100), text="30", kind="radial"),
+            DimensionEntity(
+                p1=Point(x=300, y=100), p2=Point(x=330, y=100), text="30", kind="radial"
+            ),
         ],
     )
     doc = ezdxf.read(io.StringIO(render_ir_to_dxf(ir).decode("utf-8")))

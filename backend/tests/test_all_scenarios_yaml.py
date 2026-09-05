@@ -8,7 +8,6 @@ Each test:
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -155,14 +154,18 @@ async def test_email_triage_runs_to_completion() -> None:
 @pytest.mark.asyncio
 async def test_assisted_review_runs_to_completion() -> None:
     data = _load("assisted-review.yml")
-    result = await _run_scenario(data, trigger={"document_id": "00000000-0000-0000-0000-000000000001"})
+    result = await _run_scenario(
+        data, trigger={"document_id": "00000000-0000-0000-0000-000000000001"}
+    )
     assert isinstance(result, dict)
 
 
 @pytest.mark.asyncio
 async def test_draft_email_runs_to_completion() -> None:
     data = _load("draft-email.yml")
-    result = await _run_scenario(data, trigger={"supplier_id": "00000000-0000-0000-0000-000000000001"})
+    result = await _run_scenario(
+        data, trigger={"supplier_id": "00000000-0000-0000-0000-000000000001"}
+    )
     assert isinstance(result, dict)
 
 
@@ -176,7 +179,9 @@ async def test_smart_ingest_runs_to_completion() -> None:
 @pytest.mark.asyncio
 async def test_anomaly_resolution_runs_to_completion() -> None:
     data = _load("anomaly-resolution.yml")
-    result = await _run_scenario(data, trigger={"anomaly_id": "00000000-0000-0000-0000-000000000001"})
+    result = await _run_scenario(
+        data, trigger={"anomaly_id": "00000000-0000-0000-0000-000000000001"}
+    )
     assert isinstance(result, dict)
 
 
@@ -204,21 +209,27 @@ async def test_memory_maintenance_runs_to_completion() -> None:
 @pytest.mark.asyncio
 async def test_warehouse_receipt_runs_to_completion() -> None:
     data = _load("warehouse-receipt.yml")
-    result = await _run_scenario(data, trigger={"invoice_id": "00000000-0000-0000-0000-000000000002"})
+    result = await _run_scenario(
+        data, trigger={"invoice_id": "00000000-0000-0000-0000-000000000002"}
+    )
     assert isinstance(result, dict)
 
 
 @pytest.mark.asyncio
 async def test_tp_from_drawing_runs_to_completion() -> None:
     data = _load("tp_from_drawing.yml")
-    result = await _run_scenario(data, trigger={"drawing_id": "00000000-0000-0000-0000-000000000006"})
+    result = await _run_scenario(
+        data, trigger={"drawing_id": "00000000-0000-0000-0000-000000000006"}
+    )
     assert isinstance(result, dict)
 
 
 @pytest.mark.asyncio
 async def test_drawing_tooling_workflow_runs_to_completion() -> None:
     data = _load("drawing_tooling_workflow.yml")
-    result = await _run_scenario(data, trigger={"drawing_id": "00000000-0000-0000-0000-000000000006"})
+    result = await _run_scenario(
+        data, trigger={"drawing_id": "00000000-0000-0000-0000-000000000006"}
+    )
     assert isinstance(result, dict)
 
 
@@ -242,6 +253,7 @@ async def test_warehouse_low_stock_reorder_early_exit_when_no_stock() -> None:
         patch("asyncio.create_task", side_effect=lambda coro, **kw: type("T", (), {})()),
     ):
         from app.ai.scenario_runner import ScenarioRunner
+
         runner = ScenarioRunner()
         result = await runner.run(scenario_name=data["name"], trigger={})
 
@@ -270,7 +282,10 @@ async def test_anomaly_resolution_critical_path() -> None:
 
     # Mock: has_critical returns total > 0 to trigger chain path
     critical_result: dict[str, Any] = {
-        "status": "ok", "total": 1, "items": [], "count": 1,
+        "status": "ok",
+        "total": 1,
+        "items": [],
+        "count": 1,
         "chain_root_id": "00000000-0000-0000-0000-000000000099",
         "decisions": [],
         "supplier_id": "00000000-0000-0000-0000-000000000001",
@@ -284,6 +299,7 @@ async def test_anomaly_resolution_critical_path() -> None:
         patch("asyncio.create_task", side_effect=lambda coro, **kw: type("T", (), {})()),
     ):
         from app.ai.scenario_runner import ScenarioRunner
+
         runner = ScenarioRunner()
         result = await runner.run(
             scenario_name=data["name"],
@@ -301,7 +317,10 @@ async def test_anomaly_resolution_standard_path() -> None:
     data = _load("anomaly-resolution.yml")
 
     standard_result: dict[str, Any] = {
-        "status": "ok", "total": 0, "items": [], "count": 0,
+        "status": "ok",
+        "total": 0,
+        "items": [],
+        "count": 0,
         "decisions": [],
         "supplier_id": "00000000-0000-0000-0000-000000000001",
         "invoice_number": "INV-002",
@@ -314,6 +333,7 @@ async def test_anomaly_resolution_standard_path() -> None:
         patch("asyncio.create_task", side_effect=lambda coro, **kw: type("T", (), {})()),
     ):
         from app.ai.scenario_runner import ScenarioRunner
+
         runner = ScenarioRunner()
         result = await runner.run(
             scenario_name=data["name"],

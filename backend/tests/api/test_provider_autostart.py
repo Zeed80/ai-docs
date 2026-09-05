@@ -12,7 +12,9 @@ from app.api import providers_api
 
 def _cap(provider: ProviderKind, provider_model: str = "some/model", vram: float = 5.0):
     return types.SimpleNamespace(
-        provider=provider, provider_model=provider_model, vram_gb_estimate=vram,
+        provider=provider,
+        provider_model=provider_model,
+        vram_gb_estimate=vram,
         local_only=True,
     )
 
@@ -32,6 +34,7 @@ async def test_vllm_assignment_triggers_ensure_model_active(monkeypatch):
     monkeypatch.setattr(
         "app.ai.providers.vllm_manager.ensure_model_active", _fake_ensure_model_active
     )
+
     # VRAM pre-check is advisory — stub it so the test needs no GPU.
     async def _noop_vram(*a, **k):
         return True, ""
@@ -97,6 +100,7 @@ async def test_llamacpp_assignment_triggers_ensure_server_running(monkeypatch):
 @pytest.mark.asyncio
 async def test_ollama_and_cloud_models_are_noops(monkeypatch):
     """Always-on / remote providers must not attempt a container start."""
+
     def _boom(*a, **k):  # pragma: no cover - must never be called
         raise AssertionError("no server start for ollama/cloud")
 
@@ -119,12 +123,14 @@ async def test_scheduler_starts_one_model_per_lazy_kind(monkeypatch):
 
     monkeypatch.setattr(providers_api, "_autostart_assigned_provider", _record)
 
-    reg = _registry({
-        "v1": _cap(ProviderKind.VLLM, "a"),
-        "v2": _cap(ProviderKind.VLLM, "b"),
-        "l1": _cap(ProviderKind.LLAMACPP, "local"),
-        "o1": _cap(ProviderKind.OLLAMA),
-    })
+    reg = _registry(
+        {
+            "v1": _cap(ProviderKind.VLLM, "a"),
+            "v2": _cap(ProviderKind.VLLM, "b"),
+            "l1": _cap(ProviderKind.LLAMACPP, "local"),
+            "o1": _cap(ProviderKind.OLLAMA),
+        }
+    )
     providers_api._schedule_provider_autostart(["v1", "v2", "l1", "o1"], reg)
     await asyncio.sleep(0)  # let the fire-and-forget tasks run
 

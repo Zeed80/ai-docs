@@ -63,9 +63,7 @@ def test_config_store_masks_secret_and_defaults_searxng(monkeypatch):
     assert cfg.provider == "searxng"
     assert cfg.resolved_endpoint() == "http://searxng:8080/search"
 
-    wsc.update_config(
-        wsc.WebSearchConfigUpdate(provider="tavily", api_key="sk-secret-123456")
-    )
+    wsc.update_config(wsc.WebSearchConfigUpdate(provider="tavily", api_key="sk-secret-123456"))
     view = wsc.to_view(wsc.get_config())
     assert view.provider == "tavily"
     assert view.api_key_set is True
@@ -109,15 +107,11 @@ async def test_execute_falls_back_when_primary_empty(monkeypatch):
 
 
 def test_browse_action_registered():
-    assert capability_router._DISPATCH["search"]["browse"][1] == (
-        "/api/web-search/fetch"
-    )
+    assert capability_router._DISPATCH["search"]["browse"][1] == ("/api/web-search/fetch")
 
 
 def test_research_action_registered():
-    assert capability_router._DISPATCH["search"]["research"][1] == (
-        "/api/web-search/research"
-    )
+    assert capability_router._DISPATCH["search"]["research"][1] == ("/api/web-search/research")
 
 
 def test_dedupe_urls_normalizes_and_caps():
@@ -175,11 +169,17 @@ async def test_research_reads_many_sources_and_publishes(monkeypatch):
     async def fake_fetch(payload):
         if payload.url.endswith(".pdf"):
             return ws.WebFetchResponse(
-                url=payload.url, status=200, title="Каталог",
-                text="PDF позиции 1..50", diagnostics=["pdf_extracted"],
+                url=payload.url,
+                status=200,
+                title="Каталог",
+                text="PDF позиции 1..50",
+                diagnostics=["pdf_extracted"],
             )
         return ws.WebFetchResponse(
-            url=payload.url, status=200, title="Стр", text="Текст страницы",
+            url=payload.url,
+            status=200,
+            title="Стр",
+            text="Текст страницы",
         )
 
     published: dict = {}
@@ -251,7 +251,8 @@ async def test_fetch_page_passes_include_links_and_returns_them(monkeypatch):
 
     monkeypatch.setattr(ws.httpx, "AsyncClient", _Client)
     monkeypatch.setattr(
-        ws.wsc, "get_config",
+        ws.wsc,
+        "get_config",
         lambda: type("C", (), {"browsing_enabled": True, "browser_url": "http://browser"})(),
     )
 
@@ -259,6 +260,4 @@ async def test_fetch_page_passes_include_links_and_returns_them(monkeypatch):
         ws.WebFetchRequest(url="https://supplier.example/catalog/", include_links=True)
     )
     assert captured["body"]["include_links"] is True
-    assert [link.url for link in result.links] == [
-        "https://supplier.example/files/price.pdf"
-    ]
+    assert [link.url for link in result.links] == ["https://supplier.example/files/price.pdf"]

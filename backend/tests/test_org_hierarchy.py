@@ -7,9 +7,9 @@ import pytest
 from app.db.models import Department, User
 from app.domain.org import (
     get_department_descendants,
+    get_department_manager_sub,
     get_subordinate_subs,
     is_manager_of,
-    get_department_manager_sub,
 )
 
 
@@ -28,7 +28,14 @@ async def org_tree(db_session):
     proc_sub.parent_id = proc.id
 
     boss = User(sub="u:boss", email="b@x", name="Boss", role="manager", department_id=proc.id)
-    buyer1 = User(sub="u:b1", email="b1@x", name="B1", role="buyer", manager_sub="u:boss", department_id=proc.id)
+    buyer1 = User(
+        sub="u:b1",
+        email="b1@x",
+        name="B1",
+        role="buyer",
+        manager_sub="u:boss",
+        department_id=proc.id,
+    )
     buyer2 = User(sub="u:b2", email="b2@x", name="B2", role="buyer", manager_sub="u:b1")
     db_session.add_all([boss, buyer1, buyer2])
     await db_session.commit()

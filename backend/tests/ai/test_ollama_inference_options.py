@@ -4,9 +4,15 @@ from app.ai.schemas import AIRequest, AITask
 
 def test_recovered_text_passes_through_a_normal_answer():
     request = AIRequest(task=AITask.CAD_SPEC_READ)
-    assert _recovered_text(
-        '{"kind":"rotation"}', "some reasoning", model="m", request=request,
-    ) == '{"kind":"rotation"}'
+    assert (
+        _recovered_text(
+            '{"kind":"rotation"}',
+            "some reasoning",
+            model="m",
+            request=request,
+        )
+        == '{"kind":"rotation"}'
+    )
 
 
 def test_recovered_text_falls_back_to_thinking_when_the_answer_field_is_empty():
@@ -18,8 +24,10 @@ def test_recovered_text_falls_back_to_thinking_when_the_answer_field_is_empty():
     must recover it rather than report "the model said nothing"."""
     request = AIRequest(task=AITask.CAD_SPEC_READ)
     recovered = _recovered_text(
-        "", '{"part":"Вал ступенчатый","kind":"rotation","bodies":1}',
-        model="qwen3-vl:32b", request=request,
+        "",
+        '{"part":"Вал ступенчатый","kind":"rotation","bodies":1}',
+        model="qwen3-vl:32b",
+        request=request,
     )
     assert recovered == '{"part":"Вал ступенчатый","kind":"rotation","bodies":1}'
 

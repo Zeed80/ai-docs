@@ -135,9 +135,11 @@ async def test_apply_config_forwards_only_provided_fields(sidecar, presets):
     payload = cooling_api.FanConfigUpdate(
         enabled=True,
         preset="silent",
-        channels={"gpu:0:fan0": cooling_api.FanChannelConfig(
-            mode="curve", curve=[cooling_api.FanCurvePoint(t=40, pct=30)]
-        )},
+        channels={
+            "gpu:0:fan0": cooling_api.FanChannelConfig(
+                mode="curve", curve=[cooling_api.FanCurvePoint(t=40, pct=30)]
+            )
+        },
     )
     await cooling_api.apply_fan_config(payload)
     sent = _sent(sidecar, "apply_fan_config")
@@ -147,9 +149,7 @@ async def test_apply_config_forwards_only_provided_fields(sidecar, presets):
 
 @pytest.mark.asyncio
 async def test_manual_is_proxied_verbatim(sidecar, presets):
-    await cooling_api.set_fan_manual(
-        cooling_api.FanManualUpdate(channel_id="gpu:0:fan0", pct=55)
-    )
+    await cooling_api.set_fan_manual(cooling_api.FanManualUpdate(channel_id="gpu:0:fan0", pct=55))
     assert ("set_fan_manual", ("gpu:0:fan0", 55.0)) in sidecar
 
 
@@ -162,9 +162,7 @@ async def test_revert_defaults_to_every_channel(sidecar, presets):
 # --- presets --------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_builtin_preset_name_cannot_be_overwritten(sidecar, presets):
-    payload = cooling_api.FanPresetSave(
-        name="silent", config=cooling_api.FanConfigUpdate()
-    )
+    payload = cooling_api.FanPresetSave(name="silent", config=cooling_api.FanConfigUpdate())
     with pytest.raises(cooling_api.HTTPException) as exc:
         await cooling_api.save_preset(payload)
     assert exc.value.status_code == 409
@@ -221,10 +219,7 @@ def test_cooling_is_a_protected_setting():
 def test_every_mutating_route_requires_admin():
     from app.api.cooling_api import router
 
-    mutating = [
-        r for r in router.routes
-        if set(r.methods) & {"POST", "DELETE", "PATCH", "PUT"}
-    ]
+    mutating = [r for r in router.routes if set(r.methods) & {"POST", "DELETE", "PATCH", "PUT"}]
     assert mutating, "expected mutating routes"
     for route in mutating:
         rendered = [repr(d) for d in route.dependencies]
@@ -249,7 +244,7 @@ async def test_control_is_proxied(monkeypatch, presets):
 
     monkeypatch.setattr(cooling_api.gpu_manager, "set_fan_control", set_fan_control)
     await cooling_api.set_fan_control(cooling_api.FanControlUpdate(enabled=True))
-    assert seen == [(True, None)]   # an untouched switch stays untouched
+    assert seen == [(True, None)]  # an untouched switch stays untouched
 
 
 @pytest.mark.asyncio

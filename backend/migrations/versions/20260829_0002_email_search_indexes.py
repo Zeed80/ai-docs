@@ -12,15 +12,15 @@ list orders by.
 Revision ID: 20260829_0002
 Revises: 20260829_0001
 """
-from typing import Sequence, Union
 
-import sqlalchemy as sa
+from collections.abc import Sequence
+
 from alembic import op
 
 revision: str = "20260829_0002"
-down_revision: Union[str, None] = "20260829_0001"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260829_0001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _INDEXES = (
     # Substring search over subject/body — the ILIKE branch of /api/email/search.
@@ -39,8 +39,7 @@ def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
     for name, table, column in _INDEXES:
         op.execute(
-            f"CREATE INDEX IF NOT EXISTS {name} ON {table} "
-            f"USING gin ({column} gin_trgm_ops)"
+            f"CREATE INDEX IF NOT EXISTS {name} ON {table} USING gin ({column} gin_trgm_ops)"
         )
     # The thread list is ordered by (last_message_at, id) inside a folder;
     # keyset pagination without this walks the whole table per page.

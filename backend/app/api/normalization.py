@@ -1,28 +1,28 @@
 """Normalization API — skills: norm.list_rules, norm.suggest_rule, norm.apply_rules, norm.activate_rule,
-                               norm.list_norm_cards, norm.create_norm_card, norm.update_canonical_item"""
+norm.list_norm_cards, norm.create_norm_card, norm.update_canonical_item"""
 
 import re
 import uuid
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.db.session import get_db
+from app.audit.service import log_action
 from app.db.models import (
+    CanonicalItem,
     DocumentExtraction,
     ExtractionField,
     NormalizationRule,
-    NormRuleStatus,
-    CanonicalItem,
     NormCard,
+    NormRuleStatus,
 )
+from app.db.session import get_db
 from app.domain.normalization import (
     NormApplyRequest,
     NormApplyResult,
@@ -33,7 +33,6 @@ from app.domain.normalization import (
     NormRuleSuggestRequest,
     NormRuleSuggestResponse,
 )
-from app.audit.service import log_action
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -150,9 +149,7 @@ async def activate_rule(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: norm.activate_rule — Activate a proposed rule (approval gate)."""
-    result = await db.execute(
-        select(NormalizationRule).where(NormalizationRule.id == rule_id)
-    )
+    result = await db.execute(select(NormalizationRule).where(NormalizationRule.id == rule_id))
     rule = result.scalar_one_or_none()
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
@@ -162,7 +159,7 @@ async def activate_rule(
 
     rule.status = NormRuleStatus.active
     rule.activated_by = payload.activated_by
-    rule.activated_at = datetime.now(timezone.utc)
+    rule.activated_at = datetime.now(UTC)
 
     await log_action(
         db,
@@ -187,9 +184,7 @@ async def disable_rule(
     db: AsyncSession = Depends(get_db),
 ):
     """Disable a normalization rule (rollback)."""
-    result = await db.execute(
-        select(NormalizationRule).where(NormalizationRule.id == rule_id)
-    )
+    result = await db.execute(select(NormalizationRule).where(NormalizationRule.id == rule_id))
     rule = result.scalar_one_or_none()
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
@@ -235,9 +230,7 @@ async def apply_rules(
 
     # Get active rules
     result = await db.execute(
-        select(NormalizationRule).where(
-            NormalizationRule.status == NormRuleStatus.active
-        )
+        select(NormalizationRule).where(NormalizationRule.status == NormRuleStatus.active)
     )
     active_rules = result.scalars().all()
 
@@ -268,14 +261,16 @@ async def apply_rules(
                 field.field_value = new_val
                 field.confidence_reason = "normalization_applied"
                 rule.apply_count += 1
-                rule.last_applied_at = datetime.now(timezone.utc)
+                rule.last_applied_at = datetime.now(UTC)
                 rules_applied += 1
-                modifications.append({
-                    "field_name": field.field_name,
-                    "old_value": old_val,
-                    "new_value": new_val,
-                    "rule_id": str(rule.id),
-                })
+                modifications.append(
+                    {
+                        "field_name": field.field_name,
+                        "old_value": old_val,
+                        "new_value": new_val,
+                        "rule_id": str(rule.id),
+                    }
+                )
 
     if modifications:
         await log_action(
@@ -419,7 +414,11 @@ async def list_norm_cards(
     if canonical_item_id:
         q = q.where(NormCard.canonical_item_id == canonical_item_id)
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
-    items = (await db.execute(q.order_by(NormCard.created_at.desc()).offset(offset).limit(limit))).scalars().all()
+    items = (
+        (await db.execute(q.order_by(NormCard.created_at.desc()).offset(offset).limit(limit)))
+        .scalars()
+        .all()
+    )
     return NormCardListResponse(items=items, total=total, offset=offset, limit=limit)
 
 
@@ -436,8 +435,13 @@ async def create_norm_card(
     db.add(card)
     await db.commit()
     await db.refresh(card)
-    await log_action(db, action="norm.create_norm_card", entity_type="norm_card",
-                     entity_id=card.id, details={"canonical_item_id": str(payload.canonical_item_id)})
+    await log_action(
+        db,
+        action="norm.create_norm_card",
+        entity_type="norm_card",
+        entity_id=card.id,
+        details={"canonical_item_id": str(payload.canonical_item_id)},
+    )
     return card
 
 
@@ -512,7 +516,11 @@ async def list_canonical_items(
     if needle:
         q = q.where(CanonicalItem.name.ilike(f"%{needle}%"))
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
-    items = (await db.execute(q.order_by(CanonicalItem.name).offset(offset).limit(limit))).scalars().all()
+    items = (
+        (await db.execute(q.order_by(CanonicalItem.name).offset(offset).limit(limit)))
+        .scalars()
+        .all()
+    )
     return CanonicalItemListResponse(items=items, total=total, offset=offset, limit=limit)
 
 
@@ -540,8 +548,13 @@ async def update_canonical_item_classification(
         raise HTTPException(status_code=404, detail="Canonical item not found")
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(item, k, v)
-    await log_action(db, action="norm.update_canonical_item", entity_type="canonical_item",
-                     entity_id=item.id, details=payload.model_dump(exclude_unset=True))
+    await log_action(
+        db,
+        action="norm.update_canonical_item",
+        entity_type="canonical_item",
+        entity_id=item.id,
+        details=payload.model_dump(exclude_unset=True),
+    )
     await db.commit()
     await db.refresh(item)
     return item
@@ -570,25 +583,31 @@ async def normalization_stats(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Return aggregated normalization metrics for the training widget."""
-    total_rules = (await db.scalar(
-        select(func.count()).select_from(NormalizationRule)
-    )) or 0
-    active_rules = (await db.scalar(
-        select(func.count()).select_from(NormalizationRule).where(
-            NormalizationRule.status == NormRuleStatus.active
+    total_rules = (await db.scalar(select(func.count()).select_from(NormalizationRule))) or 0
+    active_rules = (
+        await db.scalar(
+            select(func.count())
+            .select_from(NormalizationRule)
+            .where(NormalizationRule.status == NormRuleStatus.active)
         )
-    )) or 0
-    proposed_rules = (await db.scalar(
-        select(func.count()).select_from(NormalizationRule).where(
-            NormalizationRule.status == NormRuleStatus.proposed
+    ) or 0
+    proposed_rules = (
+        await db.scalar(
+            select(func.count())
+            .select_from(NormalizationRule)
+            .where(NormalizationRule.status == NormRuleStatus.proposed)
         )
-    )) or 0
-    total_applications = (await db.scalar(
-        select(func.sum(NormalizationRule.apply_count)).select_from(NormalizationRule)
-    )) or 0
-    total_source_corrections = (await db.scalar(
-        select(func.sum(NormalizationRule.source_corrections)).select_from(NormalizationRule)
-    )) or 0
+    ) or 0
+    total_applications = (
+        await db.scalar(
+            select(func.sum(NormalizationRule.apply_count)).select_from(NormalizationRule)
+        )
+    ) or 0
+    total_source_corrections = (
+        await db.scalar(
+            select(func.sum(NormalizationRule.source_corrections)).select_from(NormalizationRule)
+        )
+    ) or 0
 
     # Top 5 most-applied rules
     top_result = await db.execute(

@@ -77,8 +77,12 @@ def test_circle_survives_as_a_circle():
     # Every redrawn pixel sits on the original radius (within stroke width).
     assert r.min() > 92 and r.max() < 108, "circle geometry was corrupted"
     # And it's still a full ring, not an arc fragment: ink in all quadrants.
-    for qy, qx in ((slice(0, 150), slice(0, 150)), (slice(0, 150), slice(150, 300)),
-                   (slice(150, 300), slice(0, 150)), (slice(150, 300), slice(150, 300))):
+    for qy, qx in (
+        (slice(0, 150), slice(0, 150)),
+        (slice(0, 150), slice(150, 300)),
+        (slice(150, 300), slice(0, 150)),
+        (slice(150, 300), slice(150, 300)),
+    ):
         assert _ink_of(out)[qy, qx].any(), "circle lost a quadrant"
 
 

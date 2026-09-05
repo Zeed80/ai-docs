@@ -1,5 +1,3 @@
-import pytest
-
 from app.ai.model_registry import ModelRegistry
 from app.ai.schemas import AITask
 from app.ai.task_routing import TaskRouting

@@ -17,16 +17,17 @@ Revision ID: 20260826_0002
 Revises: 20260826_0001
 Create Date: 2026-08-26
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect as sa_inspect
 
 revision: str = "20260826_0002"
-down_revision: Union[str, None] = "20260826_0001"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260826_0001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -40,8 +41,18 @@ def downgrade() -> None:
     op.create_table(
         "draft_emails",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("thread_id", sa.Uuid(), nullable=True),
         sa.Column("related_entity_type", sa.String(50), nullable=True),
         sa.Column("related_entity_id", sa.Uuid(), nullable=True),

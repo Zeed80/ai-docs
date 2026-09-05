@@ -34,6 +34,8 @@ import sys
 
 
 async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
+    import hashlib
+
     import numpy as np
     from sqlalchemy import func, select
 
@@ -42,8 +44,6 @@ async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
     from app.db.models import CadCertification, CadIrRevision, ImageGeneration
     from app.db.session import _get_session_factory
     from app.storage import download_file
-
-    import hashlib
 
     (out_dir / "sequences" / "self_learning").mkdir(parents=True, exist_ok=True)
     (out_dir / "images" / "self_learning").mkdir(parents=True, exist_ok=True)
@@ -71,12 +71,16 @@ async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
 
         for gen_id in gen_ids:
             revisions = (
-                await db.execute(
-                    select(CadIrRevision)
-                    .where(CadIrRevision.generation_id == gen_id)
-                    .order_by(CadIrRevision.revision.asc())
+                (
+                    await db.execute(
+                        select(CadIrRevision)
+                        .where(CadIrRevision.generation_id == gen_id)
+                        .order_by(CadIrRevision.revision.asc())
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if not revisions or revisions[0].revision != 0 or revisions[0].origin != "auto":
                 skipped += 1
                 continue
@@ -135,10 +139,9 @@ async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
                 continue
 
             try:
-                source_path = (
-                    (gen.params or {}).get("normalized_source_path")
-                    or gen.source_image_paths[0]
-                )
+                source_path = (gen.params or {}).get(
+                    "normalized_source_path"
+                ) or gen.source_image_paths[0]
                 image_bytes = download_file(source_path)
             except Exception as exc:  # noqa: BLE001
                 print(f"SKIP {gen_id}: source image unavailable ({exc})", file=sys.stderr)
@@ -154,26 +157,28 @@ async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
             # tools/cad-dataset/build_vlm_sft.py directly (generative retrain).
             local_ir = out_dir / "ir" / "self_learning" / f"{gen_id}.json"
             local_ir.write_text(corrected_ir.model_dump_json())
-            rows_out.append({
-                "image": str(image_path.resolve()),
-                "sequence": str(seq_path.resolve()),
-                "ir": str(local_ir.resolve()),
-                "storage_ir": accepted.ir_path,
-                "split": _split_for(gen_id),
-                "generation_id": str(gen_id),
-                "auto_revision_ir": revisions[0].ir_path,
-                "correction_origin": accepted.origin,
-                "accepted_revision": accepted.revision,
-                "accepted_by": gen.accepted_by,
-                "domain_profile": (gen.params or {}).get("digitization_profile", "unknown"),
-                "source_kind": corrected_ir.source.kind,
-                "model_version": (gen.params or {}).get("recognizer_version"),
-                "dataset_provenance": "two_person_certified_production_revision",
-                "drafter_approved_by": certificate.drafter_approved_by,
-                "normcontrol_approved_by": certificate.normcontrol_approved_by,
-                "certification_manifest_hash": certificate.manifest_hash,
-                "revisions_span": accepted.revision,
-            })
+            rows_out.append(
+                {
+                    "image": str(image_path.resolve()),
+                    "sequence": str(seq_path.resolve()),
+                    "ir": str(local_ir.resolve()),
+                    "storage_ir": accepted.ir_path,
+                    "split": _split_for(gen_id),
+                    "generation_id": str(gen_id),
+                    "auto_revision_ir": revisions[0].ir_path,
+                    "correction_origin": accepted.origin,
+                    "accepted_revision": accepted.revision,
+                    "accepted_by": gen.accepted_by,
+                    "domain_profile": (gen.params or {}).get("digitization_profile", "unknown"),
+                    "source_kind": corrected_ir.source.kind,
+                    "model_version": (gen.params or {}).get("recognizer_version"),
+                    "dataset_provenance": "two_person_certified_production_revision",
+                    "drafter_approved_by": certificate.drafter_approved_by,
+                    "normcontrol_approved_by": certificate.normcontrol_approved_by,
+                    "certification_manifest_hash": certificate.manifest_hash,
+                    "revisions_span": accepted.revision,
+                }
+            )
 
     manifest_path = out_dir / "self_learning.jsonl"
     with open(manifest_path, "w") as fh:
@@ -188,7 +193,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True, type=pathlib.Path)
     ap.add_argument("--min-revision", type=int, default=1)
-    ap.add_argument("--repo", type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[1])
+    ap.add_argument(
+        "--repo", type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[1]
+    )
     args = ap.parse_args()
     sys.path.insert(0, str(args.repo))
     args.out.mkdir(parents=True, exist_ok=True)

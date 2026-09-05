@@ -6,8 +6,8 @@ Does NOT depend on the polling bot — works standalone via Bot.send_message().
 
 from __future__ import annotations
 
-import re
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 try:
     from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.constants import ParseMode
+
     TELEGRAM_AVAILABLE = True
 except ImportError:
     TELEGRAM_AVAILABLE = False
@@ -23,12 +24,12 @@ except ImportError:
     InlineKeyboardMarkup = Any  # type: ignore[assignment, misc]
     ParseMode = None  # type: ignore[assignment]
 
-_MDV2_RE = re.compile(r'([_*\[\]()~`>#\+\-=|{}.!\\])')
+_MDV2_RE = re.compile(r"([_*\[\]()~`>#\+\-=|{}.!\\])")
 
 
 def _escape(text: str) -> str:
     """Escape text for Telegram MarkdownV2."""
-    return _MDV2_RE.sub(r'\\\1', str(text))
+    return _MDV2_RE.sub(r"\\\1", str(text))
 
 
 class TelegramNotifier:
@@ -70,9 +71,7 @@ class TelegramNotifier:
     ) -> None:
         icon = "🔴" if severity == "high" else "🟡"
         text = (
-            f"{icon} *Аномалия обнаружена*\n"
-            f"{_escape(description)}\n"
-            f"Уровень: `{_escape(severity)}`"
+            f"{icon} *Аномалия обнаружена*\n{_escape(description)}\nУровень: `{_escape(severity)}`"
         )
         await self._send(text)
 
@@ -83,17 +82,19 @@ class TelegramNotifier:
         approval_id: str,
     ) -> None:
         """Send an approval request with inline Approve/Reject buttons."""
-        text = (
-            f"⏳ *Требуется подтверждение*\n"
-            f"Действие: `{_escape(skill)}`\n"
-            f"{_escape(description)}"
-        )
-        keyboard = InlineKeyboardMarkup([
+        text = f"⏳ *Требуется подтверждение*\nДействие: `{_escape(skill)}`\n{_escape(description)}"
+        keyboard = InlineKeyboardMarkup(
             [
-                InlineKeyboardButton("✅ Подтвердить", callback_data=f"appr:approve:{approval_id}"),
-                InlineKeyboardButton("❌ Отклонить", callback_data=f"appr:reject:{approval_id}"),
+                [
+                    InlineKeyboardButton(
+                        "✅ Подтвердить", callback_data=f"appr:approve:{approval_id}"
+                    ),
+                    InlineKeyboardButton(
+                        "❌ Отклонить", callback_data=f"appr:reject:{approval_id}"
+                    ),
+                ]
             ]
-        ])
+        )
         await self._send(text, reply_markup=keyboard)
 
     async def notify_text(self, text: str) -> None:
@@ -114,12 +115,18 @@ class TelegramNotifier:
             f"Объект: {_escape(entity_label)}\n"
             f"ID: `{_escape(approval_id[:16])}`"
         )
-        keyboard = InlineKeyboardMarkup([
+        keyboard = InlineKeyboardMarkup(
             [
-                InlineKeyboardButton("✅ Подтвердить", callback_data=f"appr:approve:{approval_id}"),
-                InlineKeyboardButton("❌ Отклонить", callback_data=f"appr:reject:{approval_id}"),
+                [
+                    InlineKeyboardButton(
+                        "✅ Подтвердить", callback_data=f"appr:approve:{approval_id}"
+                    ),
+                    InlineKeyboardButton(
+                        "❌ Отклонить", callback_data=f"appr:reject:{approval_id}"
+                    ),
+                ]
             ]
-        ])
+        )
         await self._send(text, reply_markup=keyboard)
 
     async def notify_due_date(

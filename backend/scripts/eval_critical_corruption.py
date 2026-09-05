@@ -102,8 +102,13 @@ def _corrupt_digit_change(ink, image_bytes: bytes):
     corrupted[y0:y1, x0:x1] = 0
     new_digit_canvas = np.zeros_like(ink)
     cv2.putText(
-        new_digit_canvas, _DIGIT_TEXT, (region.x, region.y + region.h - 2),
-        cv2.FONT_HERSHEY_SIMPLEX, max(0.4, region.h / 30), 255, max(1, region.h // 12),
+        new_digit_canvas,
+        _DIGIT_TEXT,
+        (region.x, region.y + region.h - 2),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        max(0.4, region.h / 30),
+        255,
+        max(1, region.h // 12),
     )
     corrupted = cv2.bitwise_or(corrupted, new_digit_canvas)
     new_digit_mask = new_digit_canvas > 0
@@ -163,9 +168,7 @@ def evaluate_file(path: pathlib.Path) -> dict:
 
     original_bytes = path.read_bytes()
     ink, w, h = _prepare(original_bytes)
-    text_boxes = [
-        (r.x, r.y, r.x + r.w, r.y + r.h) for r in detect_text_regions(original_bytes)
-    ]
+    text_boxes = [(r.x, r.y, r.x + r.w, r.y + r.h) for r in detect_text_regions(original_bytes)]
 
     results: dict[str, dict] = {}
 
@@ -180,7 +183,9 @@ def evaluate_file(path: pathlib.Path) -> dict:
             removed_hit = _own_overlap(removed, old_text_mask)
         caught = max(added_hit, removed_hit) >= _HIT_FRACTION
         results["digit_change"] = {
-            "caught": caught, "added_hit": round(added_hit, 3), "removed_hit": round(removed_hit, 3),
+            "caught": caught,
+            "added_hit": round(added_hit, 3),
+            "removed_hit": round(removed_hit, 3),
         }
 
     corrupted_ink, own_line_mask = _corrupt_added_line(ink, w, h)
@@ -194,7 +199,8 @@ def evaluate_file(path: pathlib.Path) -> dict:
         masks = diffusion_change_masks(corrupted_ink, original_bytes)
         removed_hit = _own_overlap(masks[1], own_removed_mask) if masks is not None else 0.0
         results["removed_stroke"] = {
-            "caught": removed_hit >= _HIT_FRACTION, "removed_hit": round(removed_hit, 3),
+            "caught": removed_hit >= _HIT_FRACTION,
+            "removed_hit": round(removed_hit, 3),
         }
 
     return results
@@ -241,7 +247,9 @@ def main() -> int:
     summary["overall"] = {
         "instances": total_instances,
         "missed": total_missed,
-        "missed_critical_rate": round(total_missed / total_instances, 4) if total_instances else None,
+        "missed_critical_rate": round(total_missed / total_instances, 4)
+        if total_instances
+        else None,
     }
 
     out = {"per_file": per_file, "summary": summary}

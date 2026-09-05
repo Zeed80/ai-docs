@@ -30,7 +30,7 @@ SPECIAL_USE_MAP = {
     "\\Trash": "trash",
     "\\Junk": "spam",
     "\\Archive": "archive",
-    "\\All": None,          # Gmail's "All Mail" duplicates everything
+    "\\All": None,  # Gmail's "All Mail" duplicates everything
     "\\Flagged": None,
     "\\Important": None,
 }
@@ -67,8 +67,7 @@ class RemoteFolder:
             return SPECIAL_USE_MAP[self.special_use]
         decoded = decode_mailbox_name(self.name)
         leaf = (
-            decoded.split(self.delimiter)[-1].strip().lower()
-            if self.delimiter else decoded.lower()
+            decoded.split(self.delimiter)[-1].strip().lower() if self.delimiter else decoded.lower()
         )
         if leaf == "inbox" or decoded.upper() == "INBOX":
             return "inbox"
@@ -110,8 +109,8 @@ def decode_mailbox_name(raw: str) -> str:
             out.append(ch)
             i += 1
             continue
-        chunk = raw[i + 1:end]
-        if not chunk:                       # "&-" is a literal ampersand
+        chunk = raw[i + 1 : end]
+        if not chunk:  # "&-" is a literal ampersand
             out.append("&")
         else:
             try:
@@ -121,7 +120,7 @@ def decode_mailbox_name(raw: str) -> str:
 
                 out.append(base64.b64decode(b64).decode("utf-16-be"))
             except Exception:  # noqa: BLE001 — leave anything unparsable as-is
-                out.append(raw[i:end + 1])
+                out.append(raw[i : end + 1])
         i = end + 1
     return "".join(out)
 
@@ -166,20 +165,19 @@ def parse_list_response(lines) -> list[RemoteFolder]:
         match = _LIST_RE.match(line.strip())
         if not match:
             continue
-        flags = tuple(
-            f.decode(errors="replace")
-            for f in match.group("flags").split()
-        )
+        flags = tuple(f.decode(errors="replace") for f in match.group("flags").split())
         delimiter = match.group("delim").decode(errors="replace")
         name = match.group("name").decode(errors="replace").strip().strip('"')
         special = next((f for f in flags if f in SPECIAL_USE_MAP), None)
-        folders.append(RemoteFolder(
-            name=name,
-            flags=flags,
-            delimiter=delimiter,
-            special_use=special,
-            selectable="\\Noselect" not in flags,
-        ))
+        folders.append(
+            RemoteFolder(
+                name=name,
+                flags=flags,
+                delimiter=delimiter,
+                special_use=special,
+                selectable="\\Noselect" not in flags,
+            )
+        )
     return folders
 
 
@@ -233,10 +231,7 @@ def parse_flags_response(data) -> dict[int, set[str]]:
             continue
         flags = set()
         if flag_match:
-            flags = {
-                f.decode(errors="replace")
-                for f in flag_match.group(1).split()
-            }
+            flags = {f.decode(errors="replace") for f in flag_match.group(1).split()}
         out[int(uid_match.group(1))] = flags
     return out
 

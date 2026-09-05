@@ -81,8 +81,11 @@ def _spec_block() -> dict:
 
 def _config() -> BuiltinAgentConfig:
     cfg = BuiltinAgentConfig(
-        department_enabled=True, audit_enabled=True,
-        model="mock", backend_url="http://backend", ollama_url="http://ollama",
+        department_enabled=True,
+        audit_enabled=True,
+        model="mock",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
         exposed_skills=[],
     )
     cfg.use_turn_router = False
@@ -165,19 +168,22 @@ async def test_table_edit_applies_without_llm(monkeypatch):
 @pytest.mark.asyncio
 async def test_active_sheet_edit_uses_sheet_endpoint(monkeypatch):
     clear_workspace_blocks()
-    upsert_workspace_block("sheet:11111111-1111-1111-1111-111111111111", {
-        "id": "sheet:11111111-1111-1111-1111-111111111111",
-        "type": "sheet",
-        "title": "Лист",
-        "sheet_id": "11111111-1111-1111-1111-111111111111",
-        "columns": [
-            {"key": "A", "header": "A", "type": "text"},
-            {"key": "B", "header": "B", "type": "text"},
-        ],
-        "rows": [{"A": "x", "B": "y"}],
-        "raw_rows": [{"A": "x", "B": "y"}],
-        "layout": {"merges": []},
-    })
+    upsert_workspace_block(
+        "sheet:11111111-1111-1111-1111-111111111111",
+        {
+            "id": "sheet:11111111-1111-1111-1111-111111111111",
+            "type": "sheet",
+            "title": "Лист",
+            "sheet_id": "11111111-1111-1111-1111-111111111111",
+            "columns": [
+                {"key": "A", "header": "A", "type": "text"},
+                {"key": "B", "header": "B", "type": "text"},
+            ],
+            "rows": [{"A": "x", "B": "y"}],
+            "raw_rows": [{"A": "x", "B": "y"}],
+            "layout": {"merges": []},
+        },
+    )
     monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", _legacy_config)
 
     posted: list[tuple[str, dict]] = []
@@ -239,19 +245,22 @@ async def test_gated_sheet_edit_never_applies_directly(monkeypatch):
     execute it directly. Regression guard for A1 (sibling of
     test_gated_patch_never_applies_directly for the spec-table fast-path)."""
     clear_workspace_blocks()
-    upsert_workspace_block("sheet:11111111-1111-1111-1111-111111111111", {
-        "id": "sheet:11111111-1111-1111-1111-111111111111",
-        "type": "sheet",
-        "title": "Лист",
-        "sheet_id": "11111111-1111-1111-1111-111111111111",
-        "columns": [
-            {"key": "A", "header": "A", "type": "text"},
-            {"key": "B", "header": "B", "type": "text"},
-        ],
-        "rows": [{"A": "x", "B": "y"}],
-        "raw_rows": [{"A": "x", "B": "y"}],
-        "layout": {"merges": []},
-    })
+    upsert_workspace_block(
+        "sheet:11111111-1111-1111-1111-111111111111",
+        {
+            "id": "sheet:11111111-1111-1111-1111-111111111111",
+            "type": "sheet",
+            "title": "Лист",
+            "sheet_id": "11111111-1111-1111-1111-111111111111",
+            "columns": [
+                {"key": "A", "header": "A", "type": "text"},
+                {"key": "B", "header": "B", "type": "text"},
+            ],
+            "rows": [{"A": "x", "B": "y"}],
+            "raw_rows": [{"A": "x", "B": "y"}],
+            "layout": {"merges": []},
+        },
+    )
     config = _legacy_config()
     config.approval_gates = ["workspace__sheet_patch"]
     monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)

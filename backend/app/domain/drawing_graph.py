@@ -4,14 +4,15 @@ Integrates with KnowledgeNode/KnowledgeEdge (PostgreSQL graph) and Qdrant vector
 """
 
 import uuid
+
 import structlog
-from sqlalchemy import delete as sa_delete, select
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
     Drawing,
     DrawingFeature,
-    FeatureToolBinding,
     KnowledgeEdge,
     KnowledgeNode,
     ToolCatalogEntry,
@@ -24,20 +25,18 @@ logger = structlog.get_logger()
 async def ingest_drawing_graph(drawing_id: uuid.UUID, db: AsyncSession) -> dict:
     """
     Build graph nodes for a drawing and all its features.
-    
+
     Creates:
       KnowledgeNode(drawing) → KnowledgeNode(feature) edges via has_feature
       KnowledgeNode(drawing) → KnowledgeNode(document) edges via derived_from (if linked)
-    
+
     Returns summary dict.
     """
     drawing = await db.get(Drawing, drawing_id)
     if not drawing:
         raise ValueError(f"Drawing {drawing_id} not found")
 
-    result = await db.execute(
-        select(DrawingFeature).where(DrawingFeature.drawing_id == drawing_id)
-    )
+    result = await db.execute(select(DrawingFeature).where(DrawingFeature.drawing_id == drawing_id))
     features = result.scalars().all()
 
     drawing_node = await _upsert_node(
@@ -137,7 +136,7 @@ async def _ingest_feature_node(
 async def ingest_tool_catalog_graph(entry_id: uuid.UUID, db: AsyncSession) -> dict:
     """
     Build graph nodes for a tool catalog entry.
-    
+
     Creates:
       KnowledgeNode(tool_catalog_entry) with supplier edge
     """
@@ -207,10 +206,7 @@ async def delete_drawing_graph(drawing_id: uuid.UUID, db: AsyncSession) -> int:
             KnowledgeNode.entity_id.in_(
                 select(DrawingFeature.id).where(DrawingFeature.drawing_id == drawing_id)
             )
-            | (
-                (KnowledgeNode.entity_type == "drawing")
-                & (KnowledgeNode.entity_id == drawing_id)
-            ),
+            | ((KnowledgeNode.entity_type == "drawing") & (KnowledgeNode.entity_id == drawing_id)),
         )
     )
     node_ids = list(result.scalars().all())
@@ -220,8 +216,7 @@ async def delete_drawing_graph(drawing_id: uuid.UUID, db: AsyncSession) -> int:
 
     await db.execute(
         sa_delete(KnowledgeEdge).where(
-            KnowledgeEdge.source_node_id.in_(node_ids)
-            | KnowledgeEdge.target_node_id.in_(node_ids)
+            KnowledgeEdge.source_node_id.in_(node_ids) | KnowledgeEdge.target_node_id.in_(node_ids)
         )
     )
     await db.execute(sa_delete(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids)))
@@ -248,8 +243,7 @@ async def delete_tool_catalog_graph(entry_id: uuid.UUID, db: AsyncSession) -> in
 
     await db.execute(
         sa_delete(KnowledgeEdge).where(
-            KnowledgeEdge.source_node_id.in_(node_ids)
-            | KnowledgeEdge.target_node_id.in_(node_ids)
+            KnowledgeEdge.source_node_id.in_(node_ids) | KnowledgeEdge.target_node_id.in_(node_ids)
         )
     )
     await db.execute(sa_delete(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids)))
@@ -267,9 +261,9 @@ async def delete_party_graph(party_id: uuid.UUID, db: AsyncSession) -> int:
     result = await db.execute(
         select(KnowledgeNode.id).where(
             KnowledgeNode.entity_id.in_(
-                select(ToolCatalogEntry.id).join(
-                    ToolSupplier, ToolSupplier.id == ToolCatalogEntry.supplier_id
-                ).where(ToolSupplier.main_supplier_id == party_id)
+                select(ToolCatalogEntry.id)
+                .join(ToolSupplier, ToolSupplier.id == ToolCatalogEntry.supplier_id)
+                .where(ToolSupplier.main_supplier_id == party_id)
             )
             | KnowledgeNode.entity_id.in_(
                 select(ToolSupplier.id).where(ToolSupplier.main_supplier_id == party_id)
@@ -283,8 +277,7 @@ async def delete_party_graph(party_id: uuid.UUID, db: AsyncSession) -> int:
 
     await db.execute(
         sa_delete(KnowledgeEdge).where(
-            KnowledgeEdge.source_node_id.in_(node_ids)
-            | KnowledgeEdge.target_node_id.in_(node_ids)
+            KnowledgeEdge.source_node_id.in_(node_ids) | KnowledgeEdge.target_node_id.in_(node_ids)
         )
     )
     await db.execute(sa_delete(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids)))
@@ -307,8 +300,7 @@ async def delete_invoice_graph(invoice_id: uuid.UUID, db: AsyncSession) -> int:
 
     await db.execute(
         sa_delete(KnowledgeEdge).where(
-            KnowledgeEdge.source_node_id.in_(node_ids)
-            | KnowledgeEdge.target_node_id.in_(node_ids)
+            KnowledgeEdge.source_node_id.in_(node_ids) | KnowledgeEdge.target_node_id.in_(node_ids)
         )
     )
     await db.execute(sa_delete(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids)))

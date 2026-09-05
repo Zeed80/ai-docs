@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ logger = structlog.get_logger()
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
+
 
 class EmailTemplateCreate(BaseModel):
     name: str
@@ -82,6 +83,7 @@ class EmailTemplateRenderResponse(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _slugify(name: str) -> str:
     slug = name.lower().strip()
     slug = re.sub(r"[^a-zа-яё0-9\s_-]", "", slug)
@@ -96,7 +98,9 @@ def _detect_variables(text: str) -> list[str]:
     return sorted(set(re.findall(r"\{(\w+)\}", text)))
 
 
-async def _ensure_unique_slug(db: AsyncSession, base_slug: str, exclude_id: uuid.UUID | None = None) -> str:
+async def _ensure_unique_slug(
+    db: AsyncSession, base_slug: str, exclude_id: uuid.UUID | None = None
+) -> str:
     slug = base_slug
     suffix = 0
     while True:
@@ -111,6 +115,7 @@ async def _ensure_unique_slug(db: AsyncSession, base_slug: str, exclude_id: uuid
 
 
 # ── CRUD endpoints ────────────────────────────────────────────────────────────
+
 
 @router.get("/", response_model=list[EmailTemplateOut])
 async def list_templates(
@@ -139,7 +144,9 @@ async def create_template(
     """Skill: email.templates.create — Create a new email template."""
     base_slug = _slugify(payload.slug or payload.name)
     slug = await _ensure_unique_slug(db, base_slug)
-    variables = payload.variables or _detect_variables(payload.body_html + " " + (payload.body_text or ""))
+    variables = payload.variables or _detect_variables(
+        payload.body_html + " " + (payload.body_text or "")
+    )
 
     tpl = EmailTemplateDB(
         name=payload.name,
@@ -189,9 +196,7 @@ async def update_template(
 
     # Re-detect variables if body changed but variables not provided
     if (payload.body_html or payload.body_text) and payload.variables is None:
-        tpl.variables = _detect_variables(
-            (tpl.body_html or "") + " " + (tpl.body_text or "")
-        )
+        tpl.variables = _detect_variables((tpl.body_html or "") + " " + (tpl.body_text or ""))
 
     await db.commit()
     await db.refresh(tpl)
@@ -274,7 +279,7 @@ async def render_template(
 
     # Increment usage counter
     tpl.use_count = (tpl.use_count or 0) + 1
-    tpl.last_used_at = datetime.now(timezone.utc)
+    tpl.last_used_at = datetime.now(UTC)
     await db.commit()
 
     def _substitute(text: str | None) -> str | None:
@@ -294,6 +299,7 @@ async def render_template(
 
 # ── AI variable extraction ─────────────────────────────────────────────────────
 
+
 async def _ai_extract_variables(text: str) -> list[str]:
     """Ask AI to identify parameterisable fields in an email body."""
     try:
@@ -307,6 +313,7 @@ async def _ai_extract_variables(text: str) -> list[str]:
         )
         result = await ai_router.complete(prompt)
         import json
+
         parsed = json.loads(result)
         if isinstance(parsed, list):
             return [str(v) for v in parsed if isinstance(v, str)]

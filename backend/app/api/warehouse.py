@@ -11,27 +11,26 @@ Skills: warehouse.list_inventory, warehouse.get_item, warehouse.create_item,
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func, delete as sa_delete
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.session import get_db
+from app.audit.service import add_timeline_event, log_action
 from app.db.models import (
     InventoryItem,
+    Invoice,
+    StockMovement,
     WarehouseReceipt,
     WarehouseReceiptLine,
-    StockMovement,
-    Invoice,
-    InvoiceLine,
-    Party,
 )
-from app.audit.service import log_action, add_timeline_event
+from app.db.session import get_db
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -179,22 +178,22 @@ class BulkReceiptAcceptResult(BaseModel):
 # ── State machine ─────────────────────────────────────────────────────────────
 
 _RECEIPT_TRANSITIONS: dict[str, set[str]] = {
-    "pending":  {"received", "cancelled"},
-    "draft":    {"expected", "received", "cancelled"},
+    "pending": {"received", "cancelled"},
+    "draft": {"expected", "received", "cancelled"},
     "expected": {"partial", "received", "cancelled"},
-    "partial":  {"received", "cancelled"},
+    "partial": {"received", "cancelled"},
     "received": {"issued"},
-    "issued":   set(),
+    "issued": set(),
     "cancelled": set(),
 }
 
 RECEIPT_STATUS_LABELS = {
-    "pending":  "Ожидание",
-    "draft":    "Черновик",
+    "pending": "Ожидание",
+    "draft": "Черновик",
     "expected": "Ожидается",
-    "partial":  "Частично получен",
+    "partial": "Частично получен",
     "received": "Получен",
-    "issued":   "Выдан",
+    "issued": "Выдан",
     "cancelled": "Отменён",
 }
 
@@ -226,7 +225,11 @@ async def list_inventory(
         q = q.where(InventoryItem.name.ilike(f"%{search}%"))
 
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
-    items = (await db.execute(q.order_by(InventoryItem.name).offset(offset).limit(limit))).scalars().all()
+    items = (
+        (await db.execute(q.order_by(InventoryItem.name).offset(offset).limit(limit)))
+        .scalars()
+        .all()
+    )
 
     result = []
     for item in items:
@@ -264,7 +267,11 @@ async def low_stock_items(
         InventoryItem.current_qty < InventoryItem.min_qty,
     )
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
-    items = (await db.execute(q.order_by(InventoryItem.current_qty).offset(offset).limit(limit))).scalars().all()
+    items = (
+        (await db.execute(q.order_by(InventoryItem.current_qty).offset(offset).limit(limit)))
+        .scalars()
+        .all()
+    )
     result = [InventoryItemOut.model_validate(i) for i in items]
     for r in result:
         r.is_low_stock = True
@@ -321,6 +328,7 @@ async def delete_inventory_item(
     await db.execute(sa_delete(StockMovement).where(StockMovement.inventory_item_id == item_id))
     # Nullify receipt line references to this item
     from sqlalchemy import update as sa_update
+
     await db.execute(
         sa_update(WarehouseReceiptLine)
         .where(WarehouseReceiptLine.inventory_item_id == item_id)
@@ -329,8 +337,13 @@ async def delete_inventory_item(
     await db.flush()
 
     await db.delete(item)
-    await log_action(db, action="warehouse.delete_item", entity_type="inventory_item",
-                     entity_id=item_id, details={"name": item_name, "qty_at_delete": item_qty})
+    await log_action(
+        db,
+        action="warehouse.delete_item",
+        entity_type="inventory_item",
+        entity_id=item_id,
+        details={"name": item_name, "qty_at_delete": item_qty},
+    )
     await db.commit()
     return {"deleted": str(item_id), "name": item_name, "qty_was": item_qty}
 
@@ -363,12 +376,17 @@ async def issue_stock(
         balance_after=new_balance,
         reference_type="manual",
         performed_by=payload.performed_by,
-        performed_at=datetime.now(timezone.utc),
+        performed_at=datetime.now(UTC),
         notes=payload.reason,
     )
     db.add(movement)
-    await log_action(db, action="warehouse.issue_stock", entity_type="inventory_item",
-                     entity_id=item.id, details={"qty": payload.quantity, "reason": payload.reason})
+    await log_action(
+        db,
+        action="warehouse.issue_stock",
+        entity_type="inventory_item",
+        entity_id=item.id,
+        details={"qty": payload.quantity, "reason": payload.reason},
+    )
     await db.commit()
     await db.refresh(movement)
     out = StockMovementOut.model_validate(movement)
@@ -402,12 +420,17 @@ async def adjust_stock(
         balance_after=new_balance,
         reference_type="manual",
         performed_by=payload.performed_by,
-        performed_at=datetime.now(timezone.utc),
+        performed_at=datetime.now(UTC),
         notes=payload.reason,
     )
     db.add(movement)
-    await log_action(db, action="warehouse.adjust_stock", entity_type="inventory_item",
-                     entity_id=item.id, details={"qty": payload.quantity, "reason": payload.reason})
+    await log_action(
+        db,
+        action="warehouse.adjust_stock",
+        entity_type="inventory_item",
+        entity_id=item.id,
+        details={"qty": payload.quantity, "reason": payload.reason},
+    )
     await db.commit()
     await db.refresh(movement)
     out = StockMovementOut.model_validate(movement)
@@ -460,10 +483,14 @@ async def list_movements(
 
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     movements = (
-        await db.execute(
-            q.order_by(StockMovement.performed_at.desc()).offset(offset).limit(limit)
+        (
+            await db.execute(
+                q.order_by(StockMovement.performed_at.desc()).offset(offset).limit(limit)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     # Fetch item names in one query
     item_ids = list({m.inventory_item_id for m in movements if m.inventory_item_id})
@@ -501,7 +528,15 @@ async def list_receipts(
     if exclude_status:
         q = q.where(WarehouseReceipt.status != exclude_status)
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
-    items = (await db.execute(q.order_by(WarehouseReceipt.created_at.desc()).offset(offset).limit(limit))).scalars().all()
+    items = (
+        (
+            await db.execute(
+                q.order_by(WarehouseReceipt.created_at.desc()).offset(offset).limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
     return ReceiptListResponse(items=items, total=total, offset=offset, limit=limit)
 
 
@@ -517,15 +552,25 @@ async def bulk_confirm_receipts(
     for receipt_id in payload.receipt_ids:
         try:
             result = await db.execute(
-                select(WarehouseReceipt).where(WarehouseReceipt.id == receipt_id)
-                .options(selectinload(WarehouseReceipt.lines).selectinload(WarehouseReceiptLine.inventory_item))
+                select(WarehouseReceipt)
+                .where(WarehouseReceipt.id == receipt_id)
+                .options(
+                    selectinload(WarehouseReceipt.lines).selectinload(
+                        WarehouseReceiptLine.inventory_item
+                    )
+                )
             )
             receipt = result.scalar_one_or_none()
             if not receipt:
                 failed.append({"id": str(receipt_id), "error": "not found"})
                 continue
             if receipt.status not in _CONFIRMABLE_STATUSES:
-                failed.append({"id": str(receipt_id), "error": f"status '{receipt.status}' cannot be confirmed"})
+                failed.append(
+                    {
+                        "id": str(receipt_id),
+                        "error": f"status '{receipt.status}' cannot be confirmed",
+                    }
+                )
                 continue
 
             await _do_confirm_receipt(db, receipt, received_by=payload.received_by)
@@ -568,9 +613,9 @@ async def create_receipt(
     for il in invoice.lines:
         inv_item_id = None
         if il.sku:
-            existing = (await db.execute(
-                select(InventoryItem).where(InventoryItem.sku == il.sku)
-            )).scalar_one_or_none()
+            existing = (
+                await db.execute(select(InventoryItem).where(InventoryItem.sku == il.sku))
+            ).scalar_one_or_none()
             inv_item_id = existing.id if existing else None
 
         line = WarehouseReceiptLine(
@@ -584,15 +629,26 @@ async def create_receipt(
         )
         db.add(line)
 
-    await log_action(db, action="warehouse.create_receipt", entity_type="warehouse_receipt",
-                     entity_id=receipt.id, details={"invoice_id": str(invoice.id)})
-    await add_timeline_event(db, entity_type="invoice", entity_id=invoice.id,
-                             event_type="receipt_created", actor="user",
-                             summary=f"Создан приходный ордер {receipt_number}")
+    await log_action(
+        db,
+        action="warehouse.create_receipt",
+        entity_type="warehouse_receipt",
+        entity_id=receipt.id,
+        details={"invoice_id": str(invoice.id)},
+    )
+    await add_timeline_event(
+        db,
+        entity_type="invoice",
+        entity_id=invoice.id,
+        event_type="receipt_created",
+        actor="user",
+        summary=f"Создан приходный ордер {receipt_number}",
+    )
     await db.commit()
 
     result = await db.execute(
-        select(WarehouseReceipt).where(WarehouseReceipt.id == receipt.id)
+        select(WarehouseReceipt)
+        .where(WarehouseReceipt.id == receipt.id)
         .options(selectinload(WarehouseReceipt.lines))
     )
     return result.scalar_one()
@@ -605,7 +661,8 @@ async def get_receipt(
 ):
     """Skill: warehouse.get_receipt — Get receipt with lines."""
     result = await db.execute(
-        select(WarehouseReceipt).where(WarehouseReceipt.id == receipt_id)
+        select(WarehouseReceipt)
+        .where(WarehouseReceipt.id == receipt_id)
         .options(selectinload(WarehouseReceipt.lines))
     )
     receipt = result.scalar_one_or_none()
@@ -641,19 +698,25 @@ async def confirm_receipt(
 ):
     """Skill: warehouse.confirm_receipt — Confirm receipt, update stock (approval gate)."""
     result = await db.execute(
-        select(WarehouseReceipt).where(WarehouseReceipt.id == receipt_id)
-        .options(selectinload(WarehouseReceipt.lines).selectinload(WarehouseReceiptLine.inventory_item))
+        select(WarehouseReceipt)
+        .where(WarehouseReceipt.id == receipt_id)
+        .options(
+            selectinload(WarehouseReceipt.lines).selectinload(WarehouseReceiptLine.inventory_item)
+        )
     )
     receipt = result.scalar_one_or_none()
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found")
     if receipt.status not in _CONFIRMABLE_STATUSES:
-        raise HTTPException(status_code=400, detail=f"Cannot confirm receipt with status '{receipt.status}'")
+        raise HTTPException(
+            status_code=400, detail=f"Cannot confirm receipt with status '{receipt.status}'"
+        )
 
     await _do_confirm_receipt(db, receipt)
 
     result = await db.execute(
-        select(WarehouseReceipt).where(WarehouseReceipt.id == receipt_id)
+        select(WarehouseReceipt)
+        .where(WarehouseReceipt.id == receipt_id)
         .options(selectinload(WarehouseReceipt.lines))
     )
     return result.scalar_one()
@@ -685,8 +748,13 @@ async def update_receipt_status(
     if payload.notes:
         receipt.notes = (receipt.notes or "") + f"\n[{payload.status}] {payload.notes}"
 
-    await log_action(db, action="warehouse.status_change", entity_type="warehouse_receipt",
-                     entity_id=receipt.id, details={"from": old_status, "to": payload.status})
+    await log_action(
+        db,
+        action="warehouse.status_change",
+        entity_type="warehouse_receipt",
+        entity_id=receipt.id,
+        details={"from": old_status, "to": payload.status},
+    )
     await db.commit()
     await db.refresh(receipt)
     return {
@@ -707,7 +775,9 @@ async def cancel_receipt(
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found")
     if receipt.status in {"received", "issued", "cancelled"}:
-        raise HTTPException(status_code=400, detail=f"Cannot cancel receipt with status '{receipt.status}'")
+        raise HTTPException(
+            status_code=400, detail=f"Cannot cancel receipt with status '{receipt.status}'"
+        )
     receipt.status = "cancelled"
     await db.commit()
     return {"status": "cancelled", "receipt_id": str(receipt_id)}
@@ -754,7 +824,7 @@ async def _do_confirm_receipt(
             reference_type="warehouse_receipt",
             reference_id=receipt.id,
             performed_by=received_by or receipt.received_by or "user",
-            performed_at=datetime.now(timezone.utc),
+            performed_at=datetime.now(UTC),
         )
         db.add(movement)
 
@@ -762,9 +832,19 @@ async def _do_confirm_receipt(
     if received_by and not receipt.received_by:
         receipt.received_by = received_by
 
-    await log_action(db, action="warehouse.confirm_receipt", entity_type="warehouse_receipt",
-                     entity_id=receipt.id, details={"lines": len(receipt.lines)})
-    await add_timeline_event(db, entity_type="warehouse_receipt", entity_id=receipt.id,
-                             event_type="confirmed", actor="user",
-                             summary=f"Приходный ордер {receipt.receipt_number} подтверждён, остатки обновлены")
+    await log_action(
+        db,
+        action="warehouse.confirm_receipt",
+        entity_type="warehouse_receipt",
+        entity_id=receipt.id,
+        details={"lines": len(receipt.lines)},
+    )
+    await add_timeline_event(
+        db,
+        entity_type="warehouse_receipt",
+        entity_id=receipt.id,
+        event_type="confirmed",
+        actor="user",
+        summary=f"Приходный ордер {receipt.receipt_number} подтверждён, остатки обновлены",
+    )
     await db.commit()

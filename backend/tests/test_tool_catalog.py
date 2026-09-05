@@ -1,12 +1,12 @@
 """Tests for Tool Catalog API — suppliers and catalog entries CRUD."""
 
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from httpx import AsyncClient
 
-from app.db.models import ToolSupplier, ToolCatalogEntry, ToolTypeEnum
+from app.db.models import ToolCatalogEntry, ToolSupplier, ToolTypeEnum
 
 
 @pytest.fixture
@@ -45,11 +45,14 @@ async def catalog_entry(db_session, supplier):
 
 @pytest.mark.asyncio
 async def test_create_supplier(client: AsyncClient):
-    resp = await client.post("/api/tool-catalog/suppliers", json={
-        "name": "Новый поставщик инструмента",
-        "country": "RU",
-        "is_active": True,
-    })
+    resp = await client.post(
+        "/api/tool-catalog/suppliers",
+        json={
+            "name": "Новый поставщик инструмента",
+            "country": "RU",
+            "is_active": True,
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Новый поставщик инструмента"
@@ -91,10 +94,13 @@ async def test_get_supplier_not_found(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_supplier(client: AsyncClient, supplier):
-    resp = await client.patch(f"/api/tool-catalog/suppliers/{supplier.id}", json={
-        "website": "https://new-tool-plus.ru",
-        "notes": "Обновлён адрес сайта",
-    })
+    resp = await client.patch(
+        f"/api/tool-catalog/suppliers/{supplier.id}",
+        json={
+            "website": "https://new-tool-plus.ru",
+            "notes": "Обновлён адрес сайта",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["website"] == "https://new-tool-plus.ru"
@@ -103,9 +109,12 @@ async def test_update_supplier(client: AsyncClient, supplier):
 
 @pytest.mark.asyncio
 async def test_delete_supplier(client: AsyncClient):
-    create_resp = await client.post("/api/tool-catalog/suppliers", json={
-        "name": "Временный поставщик",
-    })
+    create_resp = await client.post(
+        "/api/tool-catalog/suppliers",
+        json={
+            "name": "Временный поставщик",
+        },
+    )
     supplier_id = create_resp.json()["id"]
 
     resp = await client.delete(f"/api/tool-catalog/suppliers/{supplier_id}")
@@ -117,18 +126,21 @@ async def test_delete_supplier(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_catalog_entry(client: AsyncClient, supplier):
-    resp = await client.post("/api/tool-catalog/entries", json={
-        "supplier_id": str(supplier.id),
-        "part_number": "EM-6MM-TiN",
-        "tool_type": "endmill",
-        "name": "Фреза концевая Ø6мм TiN",
-        "diameter_mm": 6.0,
-        "length_mm": 52.0,
-        "material": "HSS-Co",
-        "coating": "TiN",
-        "price_value": 1200.0,
-        "price_currency": "RUB",
-    })
+    resp = await client.post(
+        "/api/tool-catalog/entries",
+        json={
+            "supplier_id": str(supplier.id),
+            "part_number": "EM-6MM-TiN",
+            "tool_type": "endmill",
+            "name": "Фреза концевая Ø6мм TiN",
+            "diameter_mm": 6.0,
+            "length_mm": 52.0,
+            "material": "HSS-Co",
+            "coating": "TiN",
+            "price_value": 1200.0,
+            "price_currency": "RUB",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["tool_type"] == "endmill"
@@ -148,7 +160,9 @@ async def test_search_catalog_entries(client: AsyncClient, catalog_entry):
 
 @pytest.mark.asyncio
 async def test_search_catalog_filter_by_type(client: AsyncClient, catalog_entry):
-    resp = await client.get("/api/tool-catalog/search", params={"tool_type": "drill", "semantic": False})
+    resp = await client.get(
+        "/api/tool-catalog/search", params={"tool_type": "drill", "semantic": False}
+    )
     assert resp.status_code == 200
     for entry in resp.json()["items"]:
         assert entry["tool_type"] == "drill"
@@ -171,10 +185,13 @@ async def test_get_catalog_entry_not_found(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_catalog_entry(client: AsyncClient, catalog_entry):
-    resp = await client.patch(f"/api/tool-catalog/entries/{catalog_entry.id}", json={
-        "price_value": 380.0,
-        "notes": "Новая цена 2026",
-    })
+    resp = await client.patch(
+        f"/api/tool-catalog/entries/{catalog_entry.id}",
+        json={
+            "price_value": 380.0,
+            "notes": "Новая цена 2026",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["price_value"] == 380.0

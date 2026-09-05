@@ -12,8 +12,8 @@ Revision ID: 20260903_0001
 Revises: 20260829_0007
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "20260903_0001"
 down_revision = "20260829_0007"
@@ -37,12 +37,16 @@ def upgrade() -> None:
         sa.Column("digest_hour", sa.Integer(), nullable=False, server_default="9"),
         sa.Column("last_digest_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
-            "created_at", sa.DateTime(timezone=True),
-            server_default=sa.func.now(), nullable=False,
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
         ),
         sa.Column(
-            "updated_at", sa.DateTime(timezone=True),
-            server_default=sa.func.now(), nullable=False,
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
         ),
     )
 

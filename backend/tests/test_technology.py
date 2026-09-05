@@ -57,12 +57,15 @@ async def test_list_resources(client: AsyncClient, resource):
 
 @pytest.mark.asyncio
 async def test_create_resource(client: AsyncClient):
-    resp = await client.post("/api/technology/resources", json={
-        "resource_type": "tool",
-        "name": "Резец проходной Т15К6",
-        "code": "RP-001",
-        "status": "active",
-    })
+    resp = await client.post(
+        "/api/technology/resources",
+        json={
+            "resource_type": "tool",
+            "name": "Резец проходной Т15К6",
+            "code": "RP-001",
+            "status": "active",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Резец проходной Т15К6"
@@ -83,12 +86,15 @@ async def test_list_operation_templates(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_operation_template(client: AsyncClient):
-    resp = await client.post("/api/technology/operation-templates", json={
-        "name": "Токарная обработка наружная",
-        "operation_type": "turning",
-        "default_operation_code": "T010",
-        "is_active": True,
-    })
+    resp = await client.post(
+        "/api/technology/operation-templates",
+        json={
+            "name": "Токарная обработка наружная",
+            "operation_type": "turning",
+            "default_operation_code": "T010",
+            "is_active": True,
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Токарная обработка наружная"
@@ -118,13 +124,16 @@ async def test_list_process_plans(client: AsyncClient, process_plan):
 
 @pytest.mark.asyncio
 async def test_create_process_plan(client: AsyncClient):
-    resp = await client.post("/api/technology/process-plans", json={
-        "product_name": "Шестерня коническая",
-        "product_code": "ShK-002",
-        "version": "1.0",
-        "material": "Сталь 40Х",
-        "blank_type": "Поковка",
-    })
+    resp = await client.post(
+        "/api/technology/process-plans",
+        json={
+            "product_name": "Шестерня коническая",
+            "product_code": "ShK-002",
+            "version": "1.0",
+            "material": "Сталь 40Х",
+            "blank_type": "Поковка",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["product_name"] == "Шестерня коническая"
@@ -169,13 +178,16 @@ async def test_list_learning_rules(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_learning_rule(client: AsyncClient):
-    resp = await client.post("/api/technology/learning-rules", json={
-        "entity_type": "manufacturing_resource",
-        "field_name": "material",
-        "match_old_value": "Сталь 40Х ГОСТ",
-        "replacement_value": "Сталь 40Х",
-        "confidence": 0.9,
-    })
+    resp = await client.post(
+        "/api/technology/learning-rules",
+        json={
+            "entity_type": "manufacturing_resource",
+            "field_name": "material",
+            "match_old_value": "Сталь 40Х ГОСТ",
+            "replacement_value": "Сталь 40Х",
+            "confidence": 0.9,
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert "id" in data
@@ -183,12 +195,15 @@ async def test_create_learning_rule(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_reject_learning_rule(client: AsyncClient):
-    created = await client.post("/api/technology/learning-rules", json={
-        "entity_type": "agent",
-        "field_name": "behavior",
-        "replacement_value": "Не применять это правило.",
-        "confidence": 0.7,
-    })
+    created = await client.post(
+        "/api/technology/learning-rules",
+        json={
+            "entity_type": "agent",
+            "field_name": "behavior",
+            "replacement_value": "Не применять это правило.",
+            "confidence": 0.7,
+        },
+    )
     assert created.status_code == 201
 
     rejected = await client.post(
@@ -223,10 +238,13 @@ async def test_reflect_learning_rule_creates_proposed_then_activates(client: Asy
     assert data["occurrences"] == 1
     rule_id = data["id"]
 
-    second = await client.post("/api/technology/learning-rules/reflect", json={
-        **payload,
-        "trigger_keywords": ["товар"],  # merged with the first call's keywords, not replaced
-    })
+    second = await client.post(
+        "/api/technology/learning-rules/reflect",
+        json={
+            **payload,
+            "trigger_keywords": ["товар"],  # merged with the first call's keywords, not replaced
+        },
+    )
     assert second.status_code == 200
     data2 = second.json()
     # Same row reinforced, not a duplicate.
@@ -240,16 +258,22 @@ async def test_reflect_learning_rule_creates_proposed_then_activates(client: Asy
 @pytest.mark.asyncio
 async def test_reflect_learning_rule_distinct_field_name_is_separate_row(client: AsyncClient):
     """Different AuditCode (field_name) never merges into another lesson's row."""
-    a = await client.post("/api/technology/learning-rules/reflect", json={
-        "entity_type": "agent_turn",
-        "field_name": "filter_missing",
-        "lesson": "Передавай все фильтры из запроса.",
-    })
-    b = await client.post("/api/technology/learning-rules/reflect", json={
-        "entity_type": "agent_turn",
-        "field_name": "empty_answer",
-        "lesson": "Не возвращай пустой ответ.",
-    })
+    a = await client.post(
+        "/api/technology/learning-rules/reflect",
+        json={
+            "entity_type": "agent_turn",
+            "field_name": "filter_missing",
+            "lesson": "Передавай все фильтры из запроса.",
+        },
+    )
+    b = await client.post(
+        "/api/technology/learning-rules/reflect",
+        json={
+            "entity_type": "agent_turn",
+            "field_name": "empty_answer",
+            "lesson": "Не возвращай пустой ответ.",
+        },
+    )
     assert a.status_code == 200 and b.status_code == 200
     assert a.json()["id"] != b.json()["id"]
     assert a.json()["occurrences"] == 1

@@ -1,11 +1,9 @@
 """Tests for NTD API — normative documents, settings, requirements, checks."""
 
-import uuid
-
 import pytest
 from httpx import AsyncClient
 
-from app.db.models import NormativeDocument, Document, DocumentStatus
+from app.db.models import Document, DocumentStatus, NormativeDocument
 
 
 @pytest.fixture
@@ -49,10 +47,13 @@ async def test_get_ntd_control_settings(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_ntd_control_settings(client: AsyncClient):
-    resp = await client.patch("/api/settings/ntd-control", json={
-        "mode": "auto",
-        "updated_by": "engineer",
-    })
+    resp = await client.patch(
+        "/api/settings/ntd-control",
+        json={
+            "mode": "auto",
+            "updated_by": "engineer",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["mode"] == "auto"
@@ -80,13 +81,16 @@ async def test_list_normative_documents(client: AsyncClient, normative_doc):
 
 @pytest.mark.asyncio
 async def test_create_normative_document(client: AsyncClient):
-    resp = await client.post("/api/ntd/documents", json={
-        "code": "ГОСТ 2.104-2006",
-        "title": "Основная надпись",
-        "document_type": "ГОСТ",
-        "status": "active",
-        "version": "1.0",
-    })
+    resp = await client.post(
+        "/api/ntd/documents",
+        json={
+            "code": "ГОСТ 2.104-2006",
+            "title": "Основная надпись",
+            "document_type": "ГОСТ",
+            "status": "active",
+            "version": "1.0",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["code"] == "ГОСТ 2.104-2006"
@@ -96,12 +100,15 @@ async def test_create_normative_document(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_normative_clause(client: AsyncClient, normative_doc):
-    resp = await client.post("/api/ntd/clauses", json={
-        "normative_document_id": str(normative_doc.id),
-        "clause_number": "1.1",
-        "title": "Общие положения",
-        "text": "Настоящий стандарт распространяется на...",
-    })
+    resp = await client.post(
+        "/api/ntd/clauses",
+        json={
+            "normative_document_id": str(normative_doc.id),
+            "clause_number": "1.1",
+            "title": "Общие положения",
+            "text": "Настоящий стандарт распространяется на...",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["clause_number"] == "1.1"
@@ -110,13 +117,16 @@ async def test_create_normative_clause(client: AsyncClient, normative_doc):
 
 @pytest.mark.asyncio
 async def test_create_normative_requirement(client: AsyncClient, normative_doc):
-    resp = await client.post("/api/ntd/requirements", json={
-        "normative_document_id": str(normative_doc.id),
-        "requirement_code": "P-4.2",
-        "requirement_type": "surface",
-        "text": "Чистота поверхности Ra ≤ 1.6",
-        "severity": "warning",
-    })
+    resp = await client.post(
+        "/api/ntd/requirements",
+        json={
+            "normative_document_id": str(normative_doc.id),
+            "requirement_code": "P-4.2",
+            "requirement_type": "surface",
+            "text": "Чистота поверхности Ra ≤ 1.6",
+            "severity": "warning",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["text"] == "Чистота поверхности Ra ≤ 1.6"
@@ -128,7 +138,9 @@ async def test_create_normative_requirement(client: AsyncClient, normative_doc):
 
 @pytest.mark.asyncio
 async def test_search_requirements_empty(client: AsyncClient):
-    resp = await client.get("/api/ntd/requirements/search", params={"query": "нет такого требования xyz123"})
+    resp = await client.get(
+        "/api/ntd/requirements/search", params={"query": "нет такого требования xyz123"}
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "results" in data or "hits" in data or isinstance(data, dict)

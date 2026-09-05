@@ -53,8 +53,7 @@ def upgrade() -> None:
         # being swept without consent — turn them off, let their owners opt in.
         if "mailbox_type" in columns:
             op.execute(
-                "UPDATE mailbox_configs SET sweep_enabled = false "
-                "WHERE mailbox_type = 'personal'"
+                "UPDATE mailbox_configs SET sweep_enabled = false WHERE mailbox_type = 'personal'"
             )
 
     if "last_seen_uid" not in columns:

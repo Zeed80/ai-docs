@@ -7,19 +7,19 @@ Skills: bom.list, bom.get, bom.create, bom.approve,
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.audit.service import add_timeline_event, log_action
+from app.db.models import BOM, BOMLine, InventoryItem, PurchaseRequest
 from app.db.session import get_db
-from app.db.models import BOM, BOMLine, InventoryItem, CanonicalItem, PurchaseRequest
-from app.audit.service import log_action, add_timeline_event
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -139,7 +139,11 @@ async def list_boms(
     if status:
         q = q.where(BOM.status == status)
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
-    items = (await db.execute(q.order_by(BOM.created_at.desc()).offset(offset).limit(limit))).scalars().all()
+    items = (
+        (await db.execute(q.order_by(BOM.created_at.desc()).offset(offset).limit(limit)))
+        .scalars()
+        .all()
+    )
     return BOMListResponse(items=items, total=total, offset=offset, limit=limit)
 
 
@@ -165,13 +169,16 @@ async def create_bom(
         line = BOMLine(bom_id=bom.id, **line_data.model_dump())
         db.add(line)
 
-    await log_action(db, action="bom.create", entity_type="bom", entity_id=bom.id,
-                     details={"product_name": bom.product_name, "lines": len(payload.lines)})
+    await log_action(
+        db,
+        action="bom.create",
+        entity_type="bom",
+        entity_id=bom.id,
+        details={"product_name": bom.product_name, "lines": len(payload.lines)},
+    )
     await db.commit()
 
-    result = await db.execute(
-        select(BOM).where(BOM.id == bom.id).options(selectinload(BOM.lines))
-    )
+    result = await db.execute(select(BOM).where(BOM.id == bom.id).options(selectinload(BOM.lines)))
     return result.scalar_one()
 
 
@@ -237,9 +244,7 @@ async def get_bom(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: bom.get — Get BOM with all lines."""
-    result = await db.execute(
-        select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines))
-    )
+    result = await db.execute(select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines)))
     bom = result.scalar_one_or_none()
     if not bom:
         raise HTTPException(status_code=404, detail="BOM not found")
@@ -253,9 +258,7 @@ async def update_bom(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: bom.update — Update BOM metadata."""
-    result = await db.execute(
-        select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines))
-    )
+    result = await db.execute(select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines)))
     bom = result.scalar_one_or_none()
     if not bom:
         raise HTTPException(status_code=404, detail="BOM not found")
@@ -264,9 +267,7 @@ async def update_bom(
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(bom, k, v)
     await db.commit()
-    result2 = await db.execute(
-        select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines))
-    )
+    result2 = await db.execute(select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines)))
     return result2.scalar_one()
 
 
@@ -320,9 +321,7 @@ async def approve_bom(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: bom.approve — Approve BOM (approval gate)."""
-    result = await db.execute(
-        select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines))
-    )
+    result = await db.execute(select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines)))
     bom = result.scalar_one_or_none()
     if not bom:
         raise HTTPException(status_code=404, detail="BOM not found")
@@ -333,17 +332,25 @@ async def approve_bom(
 
     bom.status = "approved"
     bom.approved_by = approved_by
-    bom.approved_at = datetime.now(timezone.utc)
+    bom.approved_at = datetime.now(UTC)
 
-    await log_action(db, action="bom.approve", entity_type="bom", entity_id=bom.id,
-                     details={"approved_by": approved_by})
-    await add_timeline_event(db, entity_type="bom", entity_id=bom.id,
-                             event_type="approved", actor=approved_by,
-                             summary=f"Спецификация {bom.product_name} v{bom.version} утверждена")
-    await db.commit()
-    result2 = await db.execute(
-        select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines))
+    await log_action(
+        db,
+        action="bom.approve",
+        entity_type="bom",
+        entity_id=bom.id,
+        details={"approved_by": approved_by},
     )
+    await add_timeline_event(
+        db,
+        entity_type="bom",
+        entity_id=bom.id,
+        event_type="approved",
+        actor=approved_by,
+        summary=f"Спецификация {bom.product_name} v{bom.version} утверждена",
+    )
+    await db.commit()
+    result2 = await db.execute(select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines)))
     return result2.scalar_one()
 
 
@@ -357,9 +364,7 @@ async def bom_stock_check(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: bom.stock_check — Check inventory availability for BOM production."""
-    result = await db.execute(
-        select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines))
-    )
+    result = await db.execute(select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines)))
     bom = result.scalar_one_or_none()
     if not bom:
         raise HTTPException(status_code=404, detail="BOM not found")
@@ -387,18 +392,20 @@ async def bom_stock_check(
         if shortage and shortage > 0:
             shortage_count += 1
 
-        check_lines.append(StockCheckLine(
-            line_number=line.line_number,
-            description=line.description,
-            required_qty=required,
-            unit=line.unit,
-            available_qty=available,
-            shortage=shortage,
-            inventory_item_id=inv_item_id,
-            canonical_item_id=line.canonical_item_id,
-        ))
+        check_lines.append(
+            StockCheckLine(
+                line_number=line.line_number,
+                description=line.description,
+                required_qty=required,
+                unit=line.unit,
+                available_qty=available,
+                shortage=shortage,
+                inventory_item_id=inv_item_id,
+                canonical_item_id=line.canonical_item_id,
+            )
+        )
 
-    can_produce = shortage_count == 0 and all(l.available_qty is not None for l in check_lines)
+    can_produce = shortage_count == 0 and all(ln.available_qty is not None for ln in check_lines)
 
     return StockCheckResult(
         bom_id=bom_id,
@@ -420,9 +427,7 @@ async def create_purchase_request_from_bom(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: bom.create_purchase_request — Create purchase request from BOM shortage (approval gate)."""
-    result = await db.execute(
-        select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines))
-    )
+    result = await db.execute(select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines)))
     bom = result.scalar_one_or_none()
     if not bom:
         raise HTTPException(status_code=404, detail="BOM not found")
@@ -445,12 +450,16 @@ async def create_purchase_request_from_bom(
 
         shortage = required - available
         if shortage > 0:
-            items_needed.append({
-                "name": line.description,
-                "qty": round(shortage, 3),
-                "unit": line.unit,
-                "canonical_item_id": str(line.canonical_item_id) if line.canonical_item_id else None,
-            })
+            items_needed.append(
+                {
+                    "name": line.description,
+                    "qty": round(shortage, 3),
+                    "unit": line.unit,
+                    "canonical_item_id": str(line.canonical_item_id)
+                    if line.canonical_item_id
+                    else None,
+                }
+            )
 
     if not items_needed:
         return {"message": "Все материалы в наличии, заявка не нужна", "purchase_request_id": None}
@@ -462,11 +471,21 @@ async def create_purchase_request_from_bom(
     )
     db.add(pr)
 
-    await log_action(db, action="bom.create_purchase_request", entity_type="purchase_request",
-                     entity_id=pr.id, details={"bom_id": str(bom_id), "items_count": len(items_needed)})
-    await add_timeline_event(db, entity_type="bom", entity_id=bom_id,
-                             event_type="purchase_request_created", actor="sveta",
-                             summary=f"Создана заявка на {len(items_needed)} позиций для партии {batch_qty}")
+    await log_action(
+        db,
+        action="bom.create_purchase_request",
+        entity_type="purchase_request",
+        entity_id=pr.id,
+        details={"bom_id": str(bom_id), "items_count": len(items_needed)},
+    )
+    await add_timeline_event(
+        db,
+        entity_type="bom",
+        entity_id=bom_id,
+        event_type="purchase_request_created",
+        actor="sveta",
+        summary=f"Создана заявка на {len(items_needed)} позиций для партии {batch_qty}",
+    )
     await db.commit()
 
     return {
@@ -488,9 +507,7 @@ async def derive_mbom(
     engineering BOM. The MBOM starts as an exact draft copy linked back to its
     source (technology then edits it: workshop materials, process consumables);
     the EBOM itself stays untouched."""
-    result = await db.execute(
-        select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines))
-    )
+    result = await db.execute(select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines)))
     source = result.scalar_one_or_none()
     if not source:
         raise HTTPException(status_code=404, detail="BOM not found")
@@ -511,26 +528,36 @@ async def derive_mbom(
     db.add(mbom)
     await db.flush()
     for line in source.lines:
-        db.add(BOMLine(
-            bom_id=mbom.id,
-            line_number=line.line_number,
-            canonical_item_id=line.canonical_item_id,
-            norm_card_id=line.norm_card_id,
-            description=line.description,
-            quantity=line.quantity,
-            unit=line.unit,
-            notes=line.notes,
-            position=line.position,
-            reference_designator=line.reference_designator,
-            variant=line.variant,
-            substitutes=list(line.substitutes or []),
-        ))
-    await log_action(db, action="bom.derive_mbom", entity_type="bom", entity_id=mbom.id,
-                     details={"source_bom_id": str(source.id)})
-    await add_timeline_event(db, entity_type="bom", entity_id=mbom.id, event_type="derived",
-                             summary=f"MBOM выведена из EBOM {source.product_name} v{source.version}")
-    await db.commit()
-    result = await db.execute(
-        select(BOM).where(BOM.id == mbom.id).options(selectinload(BOM.lines))
+        db.add(
+            BOMLine(
+                bom_id=mbom.id,
+                line_number=line.line_number,
+                canonical_item_id=line.canonical_item_id,
+                norm_card_id=line.norm_card_id,
+                description=line.description,
+                quantity=line.quantity,
+                unit=line.unit,
+                notes=line.notes,
+                position=line.position,
+                reference_designator=line.reference_designator,
+                variant=line.variant,
+                substitutes=list(line.substitutes or []),
+            )
+        )
+    await log_action(
+        db,
+        action="bom.derive_mbom",
+        entity_type="bom",
+        entity_id=mbom.id,
+        details={"source_bom_id": str(source.id)},
     )
+    await add_timeline_event(
+        db,
+        entity_type="bom",
+        entity_id=mbom.id,
+        event_type="derived",
+        summary=f"MBOM выведена из EBOM {source.product_name} v{source.version}",
+    )
+    await db.commit()
+    result = await db.execute(select(BOM).where(BOM.id == mbom.id).options(selectinload(BOM.lines)))
     return result.scalar_one()

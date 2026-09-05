@@ -42,13 +42,9 @@ def evaluate_candidate(
     if int(new["entity_evaluated_files"]) <= 0:
         failures.append("no held-out drawings were evaluated")
     if float(new["false_exact_rate"]) != 0.0:
-        failures.append(
-            f"false_exact_rate must be 0, got {new['false_exact_rate']}"
-        )
+        failures.append(f"false_exact_rate must be 0, got {new['false_exact_rate']}")
     if float(new["dxf_reopen_rate"]) != 1.0:
-        failures.append(
-            f"dxf_reopen_rate must be 1, got {new['dxf_reopen_rate']}"
-        )
+        failures.append(f"dxf_reopen_rate must be 1, got {new['dxf_reopen_rate']}")
     thresholds = {
         "entity_precision": min_precision,
         "entity_recall": min_recall,
@@ -69,9 +65,7 @@ def evaluate_candidate(
         "dxf_reopen_rate",
     ):
         if metric in old and float(new[metric]) + 1e-6 < float(old[metric]):
-            failures.append(
-                f"{metric} regressed: {old[metric]} -> {new[metric]}"
-            )
+            failures.append(f"{metric} regressed: {old[metric]} -> {new[metric]}")
     return failures
 
 

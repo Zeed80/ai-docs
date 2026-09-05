@@ -1,6 +1,5 @@
 """Tests for Tables & Export API."""
 
-
 import pytest
 from httpx import AsyncClient
 
@@ -65,11 +64,14 @@ async def sample_invoice(db_session):
 
 @pytest.mark.asyncio
 async def test_table_query_invoices(client: AsyncClient, sample_invoice):
-    resp = await client.post("/api/tables/query", json={
-        "table": "invoices",
-        "search": "T-100",
-        "limit": 10,
-    })
+    resp = await client.post(
+        "/api/tables/query",
+        json={
+            "table": "invoices",
+            "search": "T-100",
+            "limit": 10,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] >= 1
@@ -83,30 +85,39 @@ async def test_table_query_invoices(client: AsyncClient, sample_invoice):
 
 @pytest.mark.asyncio
 async def test_table_query_with_filter(client: AsyncClient, sample_invoice):
-    resp = await client.post("/api/tables/query", json={
-        "table": "invoices",
-        "filters": [{"column": "status", "operator": "eq", "value": "needs_review"}],
-    })
+    resp = await client.post(
+        "/api/tables/query",
+        json={
+            "table": "invoices",
+            "filters": [{"column": "status", "operator": "eq", "value": "needs_review"}],
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["total"] >= 1
 
 
 @pytest.mark.asyncio
 async def test_table_query_documents(client: AsyncClient, sample_invoice):
-    resp = await client.post("/api/tables/query", json={
-        "table": "documents",
-        "limit": 10,
-    })
+    resp = await client.post(
+        "/api/tables/query",
+        json={
+            "table": "documents",
+            "limit": 10,
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["total"] >= 1
 
 
 @pytest.mark.asyncio
 async def test_export_xlsx(client: AsyncClient, sample_invoice):
-    resp = await client.post("/api/tables/export", json={
-        "table": "invoices",
-        "format": "xlsx",
-    })
+    resp = await client.post(
+        "/api/tables/export",
+        json={
+            "table": "invoices",
+            "format": "xlsx",
+        },
+    )
     assert resp.status_code == 200
     assert "spreadsheetml" in resp.headers["content-type"]
     assert len(resp.content) > 100  # non-trivial file
@@ -114,10 +125,13 @@ async def test_export_xlsx(client: AsyncClient, sample_invoice):
 
 @pytest.mark.asyncio
 async def test_export_csv(client: AsyncClient, sample_invoice):
-    resp = await client.post("/api/tables/export", json={
-        "table": "invoices",
-        "format": "csv",
-    })
+    resp = await client.post(
+        "/api/tables/export",
+        json={
+            "table": "invoices",
+            "format": "csv",
+        },
+    )
     assert resp.status_code == 200
     text = resp.content.decode("utf-8-sig")
     assert "Номер счёта" in text
@@ -128,9 +142,12 @@ async def test_export_csv(client: AsyncClient, sample_invoice):
 
 @pytest.mark.asyncio
 async def test_export_1c(client: AsyncClient, sample_invoice):
-    resp = await client.post("/api/tables/export-1c", json={
-        "invoice_ids": [str(sample_invoice.id)],
-    })
+    resp = await client.post(
+        "/api/tables/export-1c",
+        json={
+            "invoice_ids": [str(sample_invoice.id)],
+        },
+    )
     assert resp.status_code == 200
     xml = resp.content.decode("utf-8")
     assert "КоммерческаяИнформация" in xml
@@ -171,11 +188,14 @@ async def test_workspace_invoice_items_by_supplier_table(client: AsyncClient, sa
 
 @pytest.mark.asyncio
 async def test_inline_edit(client: AsyncClient, sample_invoice):
-    resp = await client.post("/api/tables/inline-edit", json={
-        "entity_id": str(sample_invoice.id),
-        "field": "invoice_number",
-        "value": "T-200",
-    })
+    resp = await client.post(
+        "/api/tables/inline-edit",
+        json={
+            "entity_id": str(sample_invoice.id),
+            "field": "invoice_number",
+            "value": "T-200",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["old_value"] == "T-100"
@@ -184,31 +204,40 @@ async def test_inline_edit(client: AsyncClient, sample_invoice):
 
 @pytest.mark.asyncio
 async def test_inline_edit_numeric(client: AsyncClient, sample_invoice):
-    resp = await client.post("/api/tables/inline-edit", json={
-        "entity_id": str(sample_invoice.id),
-        "field": "total_amount",
-        "value": 15000.0,
-    })
+    resp = await client.post(
+        "/api/tables/inline-edit",
+        json={
+            "entity_id": str(sample_invoice.id),
+            "field": "total_amount",
+            "value": 15000.0,
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["new_value"] == 15000.0
 
 
 @pytest.mark.asyncio
 async def test_inline_edit_forbidden_field(client: AsyncClient, sample_invoice):
-    resp = await client.post("/api/tables/inline-edit", json={
-        "entity_id": str(sample_invoice.id),
-        "field": "status",
-        "value": "approved",
-    })
+    resp = await client.post(
+        "/api/tables/inline-edit",
+        json={
+            "entity_id": str(sample_invoice.id),
+            "field": "status",
+            "value": "approved",
+        },
+    )
     assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_batch_approve(client: AsyncClient, sample_invoice):
-    resp = await client.post("/api/tables/batch", json={
-        "action": "approve",
-        "entity_ids": [str(sample_invoice.id)],
-    })
+    resp = await client.post(
+        "/api/tables/batch",
+        json={
+            "action": "approve",
+            "entity_ids": [str(sample_invoice.id)],
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["succeeded"] == 1
@@ -218,16 +247,22 @@ async def test_batch_approve(client: AsyncClient, sample_invoice):
 @pytest.mark.asyncio
 async def test_batch_reject_wrong_status(client: AsyncClient, sample_invoice):
     # First approve
-    await client.post("/api/tables/batch", json={
-        "action": "approve",
-        "entity_ids": [str(sample_invoice.id)],
-    })
+    await client.post(
+        "/api/tables/batch",
+        json={
+            "action": "approve",
+            "entity_ids": [str(sample_invoice.id)],
+        },
+    )
     # Then try to reject — should fail (already approved)
-    resp = await client.post("/api/tables/batch", json={
-        "action": "reject",
-        "entity_ids": [str(sample_invoice.id)],
-        "reason": "test",
-    })
+    resp = await client.post(
+        "/api/tables/batch",
+        json={
+            "action": "reject",
+            "entity_ids": [str(sample_invoice.id)],
+            "reason": "test",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["succeeded"] == 0
@@ -237,12 +272,15 @@ async def test_batch_reject_wrong_status(client: AsyncClient, sample_invoice):
 @pytest.mark.asyncio
 async def test_saved_view_crud(client: AsyncClient):
     # Create
-    resp = await client.post("/api/tables/views", json={
-        "name": "Мой вид",
-        "table": "invoices",
-        "filters": [{"column": "status", "operator": "eq", "value": "needs_review"}],
-        "sort": [{"column": "total_amount", "direction": "desc"}],
-    })
+    resp = await client.post(
+        "/api/tables/views",
+        json={
+            "name": "Мой вид",
+            "table": "invoices",
+            "filters": [{"column": "status", "operator": "eq", "value": "needs_review"}],
+            "sort": [{"column": "total_amount", "direction": "desc"}],
+        },
+    )
     assert resp.status_code == 200
     view = resp.json()
     assert view["name"] == "Мой вид"

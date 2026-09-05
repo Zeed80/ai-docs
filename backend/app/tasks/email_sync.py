@@ -15,7 +15,7 @@ this client left it unread in Outlook forever.
 from __future__ import annotations
 
 import imaplib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import func, select
@@ -25,9 +25,8 @@ from app.core.metrics import (
     email_sync_ops_pending,
     email_sync_ops_total,
 )
-from app.tasks.celery_app import celery_app
-
 from app.domain.email_counts import invalidate_mailbox_counts_sync
+from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
 
@@ -108,9 +107,9 @@ def discover_folders(self, mailbox: str) -> dict:
 
         existing = {
             row.remote_name: row
-            for row in db.execute(
-                select(MailboxFolder).where(MailboxFolder.mailbox == mailbox)
-            ).scalars().all()
+            for row in db.execute(select(MailboxFolder).where(MailboxFolder.mailbox == mailbox))
+            .scalars()
+            .all()
         }
 
         created = 0
@@ -163,9 +162,7 @@ def push_ops(self, mailbox: str | None = None, limit: int = 200) -> dict:
         query = select(EmailSyncOp).where(EmailSyncOp.state == "pending")
         if mailbox:
             query = query.where(EmailSyncOp.mailbox == mailbox)
-        ops = db.execute(
-            query.order_by(EmailSyncOp.created_at.asc()).limit(limit)
-        ).scalars().all()
+        ops = db.execute(query.order_by(EmailSyncOp.created_at.asc()).limit(limit)).scalars().all()
         if not ops:
             return {"status": "ok", "applied": 0, "failed": 0}
 
@@ -203,9 +200,7 @@ def push_ops(self, mailbox: str | None = None, limit: int = 200) -> dict:
             try:
                 selected: str | None = None
                 for op in box_ops:
-                    msg = (
-                        db.get(EmailMessage, op.message_id) if op.message_id else None
-                    )
+                    msg = db.get(EmailMessage, op.message_id) if op.message_id else None
                     if msg is None or not msg.imap_uid or not msg.imap_folder:
                         # Nothing to say to the server about a message we never
                         # got a UID for — mark it done rather than retrying
@@ -228,19 +223,20 @@ def push_ops(self, mailbox: str | None = None, limit: int = 200) -> dict:
                         _apply_one(conn, db, op, msg)
                         email_sync_ops_total.labels(op=op.op, outcome="done").inc()
                         op.state = "done"
-                        op.applied_at = datetime.now(timezone.utc)
+                        op.applied_at = datetime.now(UTC)
                         applied += 1
                     except Exception as exc:  # noqa: BLE001
                         op.attempts += 1
                         op.last_error = str(exc)[:300]
                         if op.attempts >= _MAX_OP_ATTEMPTS:
                             op.state = "failed"
-                            email_sync_ops_total.labels(
-                                op=op.op, outcome="failed"
-                            ).inc()
+                            email_sync_ops_total.labels(op=op.op, outcome="failed").inc()
                             logger.error(
-                                "imap_op_gave_up", op=op.op, mailbox=box,
-                                message_id=str(op.message_id), error=str(exc),
+                                "imap_op_gave_up",
+                                op=op.op,
+                                mailbox=box,
+                                message_id=str(op.message_id),
+                                error=str(exc),
                             )
                         failed += 1
             finally:
@@ -252,9 +248,12 @@ def push_ops(self, mailbox: str | None = None, limit: int = 200) -> dict:
 
     # The number that matters operationally: how far behind the server we are.
     with sync_session() as db:
-        pending = db.execute(
-            select(func.count(EmailSyncOp.id)).where(EmailSyncOp.state == "pending")
-        ).scalar() or 0
+        pending = (
+            db.execute(
+                select(func.count(EmailSyncOp.id)).where(EmailSyncOp.state == "pending")
+            ).scalar()
+            or 0
+        )
     email_sync_ops_pending.set(pending)
 
     logger.info("imap_ops_pushed", applied=applied, failed=failed, pending=pending)
@@ -292,7 +291,7 @@ def _apply_one(conn, db, op, msg) -> None:
         conn.uid("store", uid, "+FLAGS", "\\Deleted")
         conn.expunge()
         msg.imap_folder = target
-        msg.imap_uid = None          # the UID belongs to the old folder
+        msg.imap_uid = None  # the UID belongs to the old folder
 
 
 @celery_app.task(name="email.sync_flags", bind=True, max_retries=2, queue="mail")
@@ -357,8 +356,10 @@ def sync_flags(self, mailbox: str, folder: str | None = None, window: int = 500)
                         and meta["uid_validity"] != row.uid_validity
                     ):
                         logger.warning(
-                            "imap_uidvalidity_changed", mailbox=mailbox,
-                            folder=row.remote_name, was=row.uid_validity,
+                            "imap_uidvalidity_changed",
+                            mailbox=mailbox,
+                            folder=row.remote_name,
+                            was=row.uid_validity,
                             now=meta["uid_validity"],
                         )
                         db.query(EmailMessage).filter(
@@ -373,11 +374,15 @@ def sync_flags(self, mailbox: str, folder: str | None = None, window: int = 500)
                     # end of the block: an empty folder returns early below and
                     # would otherwise stay marked as failing forever.
                     row.sync_error = None
-                    row.last_sync_at = datetime.now(timezone.utc)
+                    row.last_sync_at = datetime.now(UTC)
 
                     known = db.execute(
-                        select(EmailMessage.id, EmailMessage.imap_uid,
-                               EmailMessage.is_read, EmailMessage.is_starred)
+                        select(
+                            EmailMessage.id,
+                            EmailMessage.imap_uid,
+                            EmailMessage.is_read,
+                            EmailMessage.is_starred,
+                        )
                         .where(
                             EmailMessage.mailbox == mailbox,
                             EmailMessage.imap_folder == row.remote_name,
@@ -403,12 +408,14 @@ def sync_flags(self, mailbox: str, folder: str | None = None, window: int = 500)
                                 EmailSyncOp.state == "pending",
                                 EmailSyncOp.mailbox == mailbox,
                             )
-                        ).scalars().all()
+                        )
+                        .scalars()
+                        .all()
                     }
 
                     for msg_id, uid, is_read, is_starred in known:
                         if msg_id in pending:
-                            continue          # our own change is still in flight
+                            continue  # our own change is still in flight
                         flags = server_flags.get(int(uid))
                         if flags is None:
                             continue
@@ -421,15 +428,17 @@ def sync_flags(self, mailbox: str, folder: str | None = None, window: int = 500)
                             continue
                         msg.is_read = seen
                         msg.is_starred = starred
-                        msg.flags_synced_at = datetime.now(timezone.utc)
+                        msg.flags_synced_at = datetime.now(UTC)
                         updated += 1
 
                 except Exception as exc:  # noqa: BLE001
                     row.sync_error = str(exc)[:300]
                     email_imap_errors_total.labels(mailbox=mailbox, stage="flags").inc()
                     logger.warning(
-                        "imap_folder_sync_failed", mailbox=mailbox,
-                        folder=row.remote_name, error=str(exc),
+                        "imap_folder_sync_failed",
+                        mailbox=mailbox,
+                        folder=row.remote_name,
+                        error=str(exc),
                     )
         finally:
             try:
@@ -476,11 +485,15 @@ def sync_flags_all(self) -> dict:
     from app.db.sync_session import sync_session
 
     with sync_session() as db:
-        names = list(db.execute(
-            select(MailboxConfig.name).where(
-                MailboxConfig.is_active == True  # noqa: E712
+        names = list(
+            db.execute(
+                select(MailboxConfig.name).where(
+                    MailboxConfig.is_active == True  # noqa: E712
+                )
             )
-        ).scalars().all())
+            .scalars()
+            .all()
+        )
     for name in names:
         sync_flags.apply_async(args=[name], queue="mail")
     return {"status": "ok", "dispatched": names}
@@ -493,11 +506,15 @@ def discover_folders_all(self) -> dict:
     from app.db.sync_session import sync_session
 
     with sync_session() as db:
-        names = list(db.execute(
-            select(MailboxConfig.name).where(
-                MailboxConfig.is_active == True  # noqa: E712
+        names = list(
+            db.execute(
+                select(MailboxConfig.name).where(
+                    MailboxConfig.is_active == True  # noqa: E712
+                )
             )
-        ).scalars().all())
+            .scalars()
+            .all()
+        )
     for name in names:
         discover_folders.apply_async(args=[name], queue="mail")
     return {"status": "ok", "dispatched": names}

@@ -70,7 +70,7 @@ class ImageCandidate:
         }
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "ImageCandidate":
+    def from_dict(cls, raw: dict[str, Any]) -> ImageCandidate:
         bbox = tuple(int(v) for v in (raw.get("bbox") or [0, 0, 0, 0]))  # type: ignore[assignment]
         return cls(
             key=str(raw.get("k") or ""),
@@ -209,9 +209,7 @@ def extract_page_image_candidates(
     # 3. Vector line art — a machine-tool catalog draws the tool with paths;
     #    without this branch most positions would fall back to a page preview.
     try:
-        drawing_boxes = [
-            tuple(d["rect"]) for d in page.get_drawings() if d.get("rect") is not None
-        ]
+        drawing_boxes = [tuple(d["rect"]) for d in page.get_drawings() if d.get("rect") is not None]
         if drawing_boxes:
             gap = 8.0  # points; parts of one drawing sit close together
             for box in _merge_boxes(drawing_boxes, gap):

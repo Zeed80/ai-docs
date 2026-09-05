@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import or_, select
@@ -50,6 +50,7 @@ def pick_primary_role(roles: list[UserRole]) -> str:
 async def _any_admin_exists(db: AsyncSession) -> bool:
     """Return True if at least one active admin user exists in the DB."""
     from sqlalchemy import func as sa_func
+
     result = await db.execute(
         select(sa_func.count()).where(User.role == "admin", User.is_active == True)  # noqa: E712
     )
@@ -117,7 +118,7 @@ async def upsert_user(db: AsyncSession, info: UserInfo) -> User:
     ):
         canonical_role = "admin"
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     if user is None:
         user = User(

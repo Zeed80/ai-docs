@@ -68,9 +68,7 @@ def downgrade() -> None:
     cols = {c["name"] for c in sa_inspect(bind).get_columns("image_generations")}
 
     if "case_id" in cols:
-        op.drop_constraint(
-            "fk_image_generations_case_id", "image_generations", type_="foreignkey"
-        )
+        op.drop_constraint("fk_image_generations_case_id", "image_generations", type_="foreignkey")
         op.drop_index("ix_image_generations_case_id", table_name="image_generations")
         op.drop_column("image_generations", "case_id")
 

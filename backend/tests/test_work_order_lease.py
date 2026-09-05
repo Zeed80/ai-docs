@@ -48,9 +48,7 @@ async def test_expired_lease_is_reclaimed_and_retried(db_session):
         input_data={"prompt": order.objective},
         max_attempts=2,
     )
-    claimed = await claim_ready_step(
-        db_session, worker_id="dead-worker", work_order_id=order.id
-    )
+    claimed = await claim_ready_step(db_session, worker_id="dead-worker", work_order_id=order.id)
     assert claimed is not None
     claimed_order, claimed_step, attempt = claimed
     claimed_order.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
@@ -272,8 +270,12 @@ async def test_reclaim_expired_leases_still_blocks_order_when_it_already_left_ru
     # verify_completed_step invokes it) frees the dependent step and flips
     # the order back to "ready" while B is still running.
     await complete_attempt(
-        db_session, order=order_a, step=claimed_step_a, attempt=attempt_a,
-        output={"text": "ok"}, actor="w1",
+        db_session,
+        order=order_a,
+        step=claimed_step_a,
+        attempt=attempt_a,
+        output={"text": "ok"},
+        actor="w1",
     )
     await promote_ready_dependents(db_session, order=order_a, plan_id=plan.id, actor="scheduler")
     await db_session.flush()
@@ -344,8 +346,12 @@ async def test_find_active_plan_succeeded_steps_excludes_superseded_plans(db_ses
     order_ref, claimed_old_step, old_attempt = claimed_old
     assert claimed_old_step.id == old_done.id
     await complete_attempt(
-        db_session, order=order_ref, step=claimed_old_step, attempt=old_attempt,
-        output={"text": "ok"}, actor="w1",
+        db_session,
+        order=order_ref,
+        step=claimed_old_step,
+        attempt=old_attempt,
+        output={"text": "ok"},
+        actor="w1",
     )
     # old_stuck is left in "ready", never claimed — old_plan stays "unfinished"
     # forever, exactly like a permanently-failed sibling would.
@@ -414,8 +420,12 @@ async def test_unstick_ready_orders_recovers_order_whose_only_step_already_succe
     assert claimed is not None
     order_ref, step, attempt = claimed
     await complete_attempt(
-        db_session, order=order_ref, step=step, attempt=attempt,
-        output={"text": "ok"}, actor="w1",
+        db_session,
+        order=order_ref,
+        step=step,
+        attempt=attempt,
+        output={"text": "ok"},
+        actor="w1",
     )
     await db_session.flush()
     assert order_ref.status == "running"  # complete_attempt itself never touches order.status
@@ -470,10 +480,16 @@ async def test_unstick_ready_orders_leaves_order_with_real_pending_work_untouche
     assert claimed is not None
     order_ref, step, attempt = claimed
     await complete_attempt(
-        db_session, order=order_ref, step=step, attempt=attempt,
-        output={"text": "ok"}, actor="w1",
+        db_session,
+        order=order_ref,
+        step=step,
+        attempt=attempt,
+        output={"text": "ok"},
+        actor="w1",
     )
-    await promote_ready_dependents(db_session, order=order_ref, plan_id=step.plan_id, actor="scheduler")
+    await promote_ready_dependents(
+        db_session, order=order_ref, plan_id=step.plan_id, actor="scheduler"
+    )
     await db_session.flush()
     assert order_ref.status == "ready"  # the other step ("still_pending") is genuinely unclaimed
 
@@ -494,7 +510,11 @@ async def test_enforce_budgets_blocks_order_that_overspent_cost_usd(db_session):
         budgets={"max_cost_usd": 1.0},
     )
     await create_single_step_plan(
-        db_session, order, kind="agent_turn", title="Execute", input_data={"prompt": order.objective}
+        db_session,
+        order,
+        kind="agent_turn",
+        title="Execute",
+        input_data={"prompt": order.objective},
     )
     claimed = await claim_ready_step(db_session, worker_id="w1", work_order_id=order.id)
     assert claimed is not None
@@ -528,7 +548,11 @@ async def test_enforce_budgets_blocks_order_that_ran_past_wall_clock_budget(db_s
         budgets={"max_wall_clock_seconds": 60},
     )
     await create_single_step_plan(
-        db_session, order, kind="agent_turn", title="Execute", input_data={"prompt": order.objective}
+        db_session,
+        order,
+        kind="agent_turn",
+        title="Execute",
+        input_data={"prompt": order.objective},
     )
     claimed = await claim_ready_step(db_session, worker_id="w1", work_order_id=order.id)
     assert claimed is not None
@@ -554,7 +578,11 @@ async def test_enforce_budgets_ignores_order_within_wall_clock_budget(db_session
         budgets={"max_wall_clock_seconds": 3600},
     )
     await create_single_step_plan(
-        db_session, order, kind="agent_turn", title="Execute", input_data={"prompt": order.objective}
+        db_session,
+        order,
+        kind="agent_turn",
+        title="Execute",
+        input_data={"prompt": order.objective},
     )
     claimed = await claim_ready_step(db_session, worker_id="w1", work_order_id=order.id)
     assert claimed is not None
@@ -637,7 +665,11 @@ async def test_enforce_budgets_first_exceeded_budget_wins_the_blocker_reason(db_
         budgets={"token_budget": 10, "max_wall_clock_seconds": 60},
     )
     await create_single_step_plan(
-        db_session, order, kind="agent_turn", title="Execute", input_data={"prompt": order.objective}
+        db_session,
+        order,
+        kind="agent_turn",
+        title="Execute",
+        input_data={"prompt": order.objective},
     )
     claimed = await claim_ready_step(db_session, worker_id="w1", work_order_id=order.id)
     assert claimed is not None
@@ -673,9 +705,7 @@ async def test_concurrent_claim_only_one_worker_gets_the_ready_step(test_engine)
     """
     factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as setup_db:
-        order = await create_work_order(
-            setup_db, owner_key="tester", objective="Race for one step"
-        )
+        order = await create_work_order(setup_db, owner_key="tester", objective="Race for one step")
         await create_single_step_plan(
             setup_db, order, kind="agent_turn", title="Execute", input_data={"prompt": "x"}
         )

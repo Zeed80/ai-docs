@@ -8,9 +8,8 @@ import email
 import hashlib
 import imaplib
 import re
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 
@@ -106,9 +105,13 @@ def get_mailbox_configs() -> list[MailboxConfig]:
 
     try:
         with sync_session() as db:
-            rows = db.execute(
-                select(MailboxConfigDB).where(MailboxConfigDB.is_active == True)  # noqa: E712
-            ).scalars().all()
+            rows = (
+                db.execute(
+                    select(MailboxConfigDB).where(MailboxConfigDB.is_active == True)  # noqa: E712
+                )
+                .scalars()
+                .all()
+            )
             configs = [
                 MailboxConfig(
                     name=row.name,
@@ -162,7 +165,8 @@ def parse_auth_results(msg) -> dict:
     """
     verdicts: dict[str, str] = {}
     raw = " ".join(
-        str(v) for k, v in msg.items()
+        str(v)
+        for k, v in msg.items()
         if k.lower() in ("authentication-results", "received-spf", "arc-authentication-results")
     )
     for name, value in _AUTH_RESULT.findall(raw):
@@ -237,7 +241,7 @@ def parse_email_message(raw_bytes: bytes) -> ParsedEmail:
         except Exception:
             pass
     if sent_at is None:
-        sent_at = datetime.now(timezone.utc)
+        sent_at = datetime.now(UTC)
 
     # Body
     body_text = ""
@@ -263,15 +267,17 @@ def parse_email_message(raw_bytes: bytes) -> ParsedEmail:
                         f"inline-{content_id}" if content_id else "attachment"
                     )
                     sha256 = hashlib.sha256(payload).hexdigest()
-                    attachments.append(ParsedAttachment(
-                        filename=filename,
-                        content=payload,
-                        content_type=content_type,
-                        size=len(payload),
-                        sha256=sha256,
-                        content_id=content_id or None,
-                        is_inline=is_inline,
-                    ))
+                    attachments.append(
+                        ParsedAttachment(
+                            filename=filename,
+                            content=payload,
+                            content_type=content_type,
+                            size=len(payload),
+                            sha256=sha256,
+                            content_id=content_id or None,
+                            is_inline=is_inline,
+                        )
+                    )
             elif content_type == "text/plain" and not body_text:
                 payload = part.get_payload(decode=True)
                 if payload:
@@ -366,23 +372,29 @@ def _known_max_uid(mailbox_name: str, remote_folder: str) -> int:
     бы целиком: защита по message_id_header спасла бы от дублей в базе, но
     правила автоответа успели бы отработать на всей истории.
     """
-    from sqlalchemy import func as _f, select as sa_select
+    from sqlalchemy import func as _f
+    from sqlalchemy import select as sa_select
 
     from app.db.models import EmailMessage
     from app.db.sync_session import sync_session
 
     try:
         with sync_session() as db:
-            return int(db.execute(
-                sa_select(_f.max(EmailMessage.imap_uid)).where(
-                    EmailMessage.mailbox == mailbox_name,
-                    EmailMessage.imap_folder == remote_folder,
-                )
-            ).scalar() or 0)
+            return int(
+                db.execute(
+                    sa_select(_f.max(EmailMessage.imap_uid)).where(
+                        EmailMessage.mailbox == mailbox_name,
+                        EmailMessage.imap_folder == remote_folder,
+                    )
+                ).scalar()
+                or 0
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "imap_known_max_uid_failed",
-            mailbox=mailbox_name, folder=remote_folder, error=str(exc),
+            mailbox=mailbox_name,
+            folder=remote_folder,
+            error=str(exc),
         )
         return 0
 
@@ -406,7 +418,9 @@ def _folder_state(mailbox_name: str, remote_folder: str) -> tuple[int, int | Non
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "imap_folder_state_failed",
-            mailbox=mailbox_name, folder=remote_folder, error=str(exc),
+            mailbox=mailbox_name,
+            folder=remote_folder,
+            error=str(exc),
         )
         return 0, None
 
@@ -432,7 +446,9 @@ def _save_folder_uid_validity(mailbox_name: str, remote_folder: str, validity: i
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "imap_uid_validity_save_failed",
-            mailbox=mailbox_name, folder=remote_folder, error=str(exc),
+            mailbox=mailbox_name,
+            folder=remote_folder,
+            error=str(exc),
         )
 
 
@@ -457,7 +473,8 @@ def _save_folder_last_seen_uid(mailbox_name: str, remote_name: str, uid: int) ->
                 # просто не сохранится — молчать об этом нельзя.
                 logger.warning(
                     "imap_folder_row_missing_for_watermark",
-                    mailbox=mailbox_name, folder=remote_name,
+                    mailbox=mailbox_name,
+                    folder=remote_name,
                 )
                 return
             if (row.last_seen_uid or 0) < uid:
@@ -468,7 +485,9 @@ def _save_folder_last_seen_uid(mailbox_name: str, remote_name: str, uid: int) ->
         # unique index makes that a no-op, so it must not fail the poll.
         logger.warning(
             "imap_folder_watermark_save_failed",
-            mailbox=mailbox_name, folder=remote_name, error=str(exc),
+            mailbox=mailbox_name,
+            folder=remote_name,
+            error=str(exc),
         )
 
 
@@ -480,12 +499,15 @@ def folder_last_seen_uid(mailbox_name: str, remote_name: str) -> int:
 
     try:
         with sync_session() as db:
-            return int(db.execute(
-                sa_select(MailboxFolder.last_seen_uid).where(
-                    MailboxFolder.mailbox == mailbox_name,
-                    MailboxFolder.remote_name == remote_name,
-                )
-            ).scalar_one_or_none() or 0)
+            return int(
+                db.execute(
+                    sa_select(MailboxFolder.last_seen_uid).where(
+                        MailboxFolder.mailbox == mailbox_name,
+                        MailboxFolder.remote_name == remote_name,
+                    )
+                ).scalar_one_or_none()
+                or 0
+            )
     except Exception:  # noqa: BLE001
         return 0
 
@@ -542,7 +564,9 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
     это его состояние обработки, но уже не критерий отбора.
     """
     logger.info(
-        "imap_connecting", mailbox=config.name, host=config.host,
+        "imap_connecting",
+        mailbox=config.name,
+        host=config.host,
         mode="peek" if config.is_personal else "seen-marking",
     )
 
@@ -557,10 +581,11 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
             conn = imaplib.IMAP4(config.host, config.port, timeout=timeout)
 
         if config.auth_method == "oauth2":
-            from app.db.sync_session import sync_session
-            from app.db.models import MailboxConfig as MailboxConfigDB
-            from app.domain.oauth_mail import get_valid_access_token_sync, imap_xoauth2_authobject
             from sqlalchemy import select as sa_select
+
+            from app.db.models import MailboxConfig as MailboxConfigDB
+            from app.db.sync_session import sync_session
+            from app.domain.oauth_mail import get_valid_access_token_sync, imap_xoauth2_authobject
 
             with sync_session() as oauth_db:
                 row = oauth_db.execute(
@@ -595,8 +620,11 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
             # Сервер пересоздал папку: прежние UID указывают на другие письма,
             # продолжать с них нельзя — папка переиндексируется целиком.
             logger.warning(
-                "imap_uid_validity_changed", mailbox=config.name,
-                folder=remote_folder, was=stored_validity, now=validity,
+                "imap_uid_validity_changed",
+                mailbox=config.name,
+                folder=remote_folder,
+                was=stored_validity,
+                now=validity,
             )
             stored_uid = 0
         if validity and validity != stored_validity:
@@ -612,7 +640,9 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
             if watermark:
                 logger.info(
                     "imap_watermark_seeded_from_history",
-                    mailbox=config.name, folder=remote_folder, uid=watermark,
+                    mailbox=config.name,
+                    folder=remote_folder,
+                    uid=watermark,
                 )
 
         status, message_ids = conn.uid("search", None, f"UID {watermark + 1}:*")
@@ -633,7 +663,9 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
             # остаток заберёт следующий тик.
             ids = ids[:max_per_poll]
         logger.info(
-            "imap_found_messages", mailbox=config.name, count=len(ids),
+            "imap_found_messages",
+            mailbox=config.name,
+            count=len(ids),
             truncated=truncated,
         )
 
@@ -657,7 +689,9 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
 
             if _message_too_big(conn, msg_id, max_bytes, uid=True):
                 logger.warning(
-                    "imap_message_oversized", mailbox=config.name, uid=uid_value,
+                    "imap_message_oversized",
+                    mailbox=config.name,
+                    uid=uid_value,
                 )
                 max_uid = max(max_uid, uid_value)
                 continue
@@ -684,7 +718,9 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
                         # ничего не ломает — но молчать о ней не нужно.
                         logger.warning(
                             "imap_seen_flag_failed",
-                            mailbox=config.name, uid=uid_value, error=str(exc),
+                            mailbox=config.name,
+                            uid=uid_value,
+                            error=str(exc),
                         )
 
         conn.logout()

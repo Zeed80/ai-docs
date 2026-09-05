@@ -102,13 +102,13 @@ class ExtractResult:
     """Primitives plus everything needed to re-render/verify the sheet."""
 
     primitives: list[RawPrimitive]
-    keep_raster: "object"  # bool HxW mask: solid fills + exclusion regions
+    keep_raster: object  # bool HxW mask: solid fills + exclusion regions
     # Solid-fill component of keep_raster ALONE (arrowheads, section fills,
     # weld symbols — density-detected, not caller-supplied exclusion boxes).
     # Exposed separately so callers can turn genuine hatching/fills into
     # structured HatchRegion entities (Ф4.4) without also contour-tracing
     # excluded TEXT regions, which are unrelated raster passthrough.
-    solid_mask: "object"
+    solid_mask: object
     thin_px: int
     thick_px: int
     width: int
@@ -145,7 +145,7 @@ def extract_primitives(
 
     excl = np.zeros((h, w), dtype=bool)
     for x0, y0, x1, y1 in exclusion_boxes or []:
-        excl[max(0, y0):max(0, y1), max(0, x0):max(0, x1)] = True
+        excl[max(0, y0) : max(0, y1), max(0, x0) : max(0, x1)] = True
 
     keep_raster = ink_bool & (solid | excl)
     skel = skel_full & ~solid & ~excl
@@ -155,9 +155,7 @@ def extract_primitives(
         logger.info("vectorize_declined_no_paths")
         return None
 
-    widths = [
-        2.0 * float(np.median(dist[pts[:, 1], pts[:, 0]])) for pts in paths
-    ]
+    widths = [2.0 * float(np.median(dist[pts[:, 1], pts[:, 0]])) for pts in paths]
     thin_px, thick_px, split = _width_classes(widths, [len(p) for p in paths])
 
     primitives = []
@@ -234,11 +232,11 @@ def _zhang_suen(img):
         # Clockwise from north: P2..P9 per the original paper's notation.
         return [
             padded[0:-2, 1:-1],  # P2 N
-            padded[0:-2, 2:],    # P3 NE
-            padded[1:-1, 2:],    # P4 E
-            padded[2:, 2:],      # P5 SE
-            padded[2:, 1:-1],    # P6 S
-            padded[2:, 0:-2],    # P7 SW
+            padded[0:-2, 2:],  # P3 NE
+            padded[1:-1, 2:],  # P4 E
+            padded[2:, 2:],  # P5 SE
+            padded[2:, 1:-1],  # P6 S
+            padded[2:, 0:-2],  # P7 SW
             padded[1:-1, 0:-2],  # P8 W
             padded[0:-2, 0:-2],  # P9 NW
         ]
@@ -299,7 +297,6 @@ def _trace_paths(skel):
     import cv2
     import numpy as np
 
-    skel_u8 = skel.astype(np.uint8)
     # Crossing number: junctions are pixels with ≥3 distinct 0→1 transitions
     # around their 8-neighborhood. A raw neighbor count (≥3) falsely marks
     # staircase corners of discretized circles/diagonals as junctions and
@@ -307,11 +304,11 @@ def _trace_paths(skel):
     padded = np.pad(skel.astype(bool), 1)
     nb = [
         padded[0:-2, 1:-1],  # N
-        padded[0:-2, 2:],    # NE
-        padded[1:-1, 2:],    # E
-        padded[2:, 2:],      # SE
-        padded[2:, 1:-1],    # S
-        padded[2:, 0:-2],    # SW
+        padded[0:-2, 2:],  # NE
+        padded[1:-1, 2:],  # E
+        padded[2:, 2:],  # SE
+        padded[2:, 1:-1],  # S
+        padded[2:, 0:-2],  # SW
         padded[1:-1, 0:-2],  # W
         padded[0:-2, 0:-2],  # NW
     ]
@@ -478,13 +475,15 @@ def _fit_path(pts, thickness: int, is_thick: bool, junction_points) -> list[RawP
 
     n = len(pts)
     if n == 1:
-        return [RawPrimitive(
-            kind="dot",
-            thickness_px=thickness,
-            is_thick=is_thick,
-            confidence=0.6,
-            p1=(float(pts[0][0]), float(pts[0][1])),
-        )]
+        return [
+            RawPrimitive(
+                kind="dot",
+                thickness_px=thickness,
+                is_thick=is_thick,
+                confidence=0.6,
+                p1=(float(pts[0][0]), float(pts[0][1])),
+            )
+        ]
     ptsf = pts.astype(np.float32)
 
     line = _fit_straight(ptsf)
@@ -492,17 +491,22 @@ def _fit_path(pts, thickness: int, is_thick: bool, junction_points) -> list[RawP
         p1, p2, dev, cap = line
         p1 = _snap_to_junction(p1, junction_points)
         p2 = _snap_to_junction(p2, junction_points)
-        return [RawPrimitive(
-            kind="segment",
-            thickness_px=thickness,
-            is_thick=is_thick,
-            confidence=_fit_confidence(dev, cap),
-            p1=(float(p1[0]), float(p1[1])),
-            p2=(float(p2[0]), float(p2[1])),
-        )]
+        return [
+            RawPrimitive(
+                kind="segment",
+                thickness_px=thickness,
+                is_thick=is_thick,
+                confidence=_fit_confidence(dev, cap),
+                p1=(float(p1[0]), float(p1[1])),
+                p2=(float(p2[0]), float(p2[1])),
+            )
+        ]
 
-    closed = bool(n > 8 and abs(int(pts[0][0]) - int(pts[-1][0])) <= 1
-                  and abs(int(pts[0][1]) - int(pts[-1][1])) <= 1)
+    closed = bool(
+        n > 8
+        and abs(int(pts[0][0]) - int(pts[-1][0])) <= 1
+        and abs(int(pts[0][1]) - int(pts[-1][1])) <= 1
+    )
     if n >= 20:
         circ = _fit_circle_or_arc(ptsf, closed)
         if circ is not None:
@@ -513,7 +517,10 @@ def _fit_path(pts, thickness: int, is_thick: bool, junction_points) -> list[RawP
     approx = cv2.approxPolyDP(pts.reshape(-1, 1, 2), _POLYLINE_SIMPLIFY_EPS, closed)
     vertices = [(float(p[0][0]), float(p[0][1])) for p in approx]
     if len(vertices) < 2:
-        vertices = [(float(ptsf[0][0]), float(ptsf[0][1])), (float(ptsf[-1][0]), float(ptsf[-1][1]))]
+        vertices = [
+            (float(ptsf[0][0]), float(ptsf[0][1])),
+            (float(ptsf[-1][0]), float(ptsf[-1][1])),
+        ]
 
     # Corner chain vs genuine curve: straight edges between simplified
     # vertices are long; a smooth curve simplifies into many short edges.
@@ -534,14 +541,16 @@ def _fit_path(pts, thickness: int, is_thick: bool, junction_points) -> list[RawP
             for a, b in edges
         ]
 
-    return [RawPrimitive(
-        kind="polyline",
-        thickness_px=thickness,
-        is_thick=is_thick,
-        confidence=0.5,
-        points=vertices,
-        closed=closed,
-    )]
+    return [
+        RawPrimitive(
+            kind="polyline",
+            thickness_px=thickness,
+            is_thick=is_thick,
+            confidence=0.5,
+            points=vertices,
+            closed=closed,
+        )
+    ]
 
 
 def _draw_primitive(canvas, prim: RawPrimitive) -> None:
@@ -553,14 +562,19 @@ def _draw_primitive(canvas, prim: RawPrimitive) -> None:
         cv2.circle(
             canvas,
             (int(round(prim.p1[0])), int(round(prim.p1[1]))),
-            max(1, t // 2), 0, -1, cv2.LINE_AA,
+            max(1, t // 2),
+            0,
+            -1,
+            cv2.LINE_AA,
         )
     elif prim.kind == "segment":
         cv2.line(
             canvas,
             (int(round(prim.p1[0])), int(round(prim.p1[1]))),
             (int(round(prim.p2[0])), int(round(prim.p2[1]))),
-            0, t, cv2.LINE_AA,
+            0,
+            t,
+            cv2.LINE_AA,
         )
     elif prim.kind == "circle":
         center = (int(round(prim.center[0])), int(round(prim.center[1])))
@@ -569,8 +583,15 @@ def _draw_primitive(canvas, prim: RawPrimitive) -> None:
         center = (int(round(prim.center[0])), int(round(prim.center[1])))
         radius = int(round(prim.radius))
         cv2.ellipse(
-            canvas, center, (radius, radius), 0.0,
-            prim.start_angle, prim.end_angle, 0, t, cv2.LINE_AA,
+            canvas,
+            center,
+            (radius, radius),
+            0.0,
+            prim.start_angle,
+            prim.end_angle,
+            0,
+            t,
+            cv2.LINE_AA,
         )
     elif prim.kind == "polyline":
         arr = np.array([[int(round(x)), int(round(y))] for x, y in prim.points], dtype=np.int32)
@@ -783,7 +804,5 @@ def _verify_coverage(ink_bool, redrawn) -> bool:
             precision=round(precision, 3),
         )
         return False
-    logger.info(
-        "vectorize_verified", recall=round(recall, 3), precision=round(precision, 3)
-    )
+    logger.info("vectorize_verified", recall=round(recall, 3), precision=round(precision, 3))
     return True

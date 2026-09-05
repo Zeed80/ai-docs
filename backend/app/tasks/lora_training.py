@@ -77,7 +77,7 @@ def _name_seed(seed: int, stem: str, variant: int) -> int:
 
 
 def _is_holdout(name: str) -> bool:
-    return zlib.crc32(f"holdout:{name}".encode("utf-8")) % _HOLDOUT_MOD == 0
+    return zlib.crc32(f"holdout:{name}".encode()) % _HOLDOUT_MOD == 0
 
 
 # ── Dataset preparation ──────────────────────────────────────────────────────
@@ -155,20 +155,38 @@ async def _prepare(dataset_id: str) -> dict:
 
     threading.Thread(target=_hb_refresher, daemon=True).start()
 
-    stats: dict = {"sources": len(source_paths), "rendered": 0, "synthetic": 0,
-                   "captioned": 0, "caption_rejected": 0, "pairs": 0,
-                   "holdout": 0, "page_skipped": 0,
-                   "pair_rejected": [], "render_failed": []}
+    stats: dict = {
+        "sources": len(source_paths),
+        "rendered": 0,
+        "synthetic": 0,
+        "captioned": 0,
+        "caption_rejected": 0,
+        "pairs": 0,
+        "holdout": 0,
+        "page_skipped": 0,
+        "pair_rejected": [],
+        "render_failed": [],
+    }
     try:
         if preset == "drawing_edit":
             return await _prepare_edit_preset(
-                factory, ds_uuid, root, targets_dir, controls_dir,
-                images_dir, control_dir, holdout_images_dir, holdout_control_dir,
-                params, stats,
+                factory,
+                ds_uuid,
+                root,
+                targets_dir,
+                controls_dir,
+                images_dir,
+                control_dir,
+                holdout_images_dir,
+                holdout_control_dir,
+                params,
+                stats,
             )
         if preset not in (None, "", "drawing_cleanup"):
-            raise ValueError(f"Пресет «{preset}» пока не поддерживается "
-                             "(доступны: drawing_cleanup, drawing_edit).")
+            raise ValueError(
+                f"Пресет «{preset}» пока не поддерживается "
+                "(доступны: drawing_cleanup, drawing_edit)."
+            )
 
         # ── drawing_cleanup preset ───────────────────────────────────────────
         # 1. Targets from uploaded sources.
@@ -183,8 +201,7 @@ async def _prepare(dataset_id: str) -> dict:
                 # A scanned album: every page is its own target (framed
                 # sheets already — no ЕСКД wrapping needed). Resumable and
                 # with the non-drawing-page filter inside.
-                pages, skipped = core.render_pdf_targets(
-                    p, targets_dir, long_side=target_side)
+                pages, skipped = core.render_pdf_targets(p, targets_dir, long_side=target_side)
                 stats["rendered"] += pages
                 stats["page_skipped"] += skipped
                 if not pages and not skipped:
@@ -204,8 +221,9 @@ async def _prepare(dataset_id: str) -> dict:
                     try:
                         core.wrap_in_eskd_sheet(out, {"name": p.stem})
                     except Exception as exc:  # noqa: BLE001
-                        logger.warning("lora_dataset_wrap_failed", file=p.name,
-                                       error=str(exc)[:120])
+                        logger.warning(
+                            "lora_dataset_wrap_failed", file=p.name, error=str(exc)[:120]
+                        )
             else:
                 stats["render_failed"].append(f"{p.name}: {reason}")
 
@@ -214,7 +232,9 @@ async def _prepare(dataset_id: str) -> dict:
         synth_count = int(params.get("synth_count", 0))
         if synth_count > 0:
             stats["synthetic"] = core.generate_synthetic_targets(
-                targets_dir, synth_count, seed=int(params.get("seed", 42)),
+                targets_dir,
+                synth_count,
+                seed=int(params.get("seed", 42)),
                 long_side=target_side,
             )
 
@@ -235,8 +255,7 @@ async def _prepare(dataset_id: str) -> dict:
             if spec_path.exists():
                 from app.ai import lora_synth_specs as specs
 
-                caption = specs.spec_caption(json.loads(
-                    spec_path.read_text(encoding="utf-8")))
+                caption = specs.spec_caption(json.loads(spec_path.read_text(encoding="utf-8")))
             else:
                 try:
                     if gpu_lock.is_locked():
@@ -245,8 +264,7 @@ async def _prepare(dataset_id: str) -> dict:
                     raise
                 except Exception:  # noqa: BLE001 — Redis hiccup must not block
                     pass
-                caption = core.caption_image(target, caption_model,
-                                             settings.ollama_url, fallback)
+                caption = core.caption_image(target, caption_model, settings.ollama_url, fallback)
             if caption:
                 caption_path.write_text(caption, encoding="utf-8")
                 stats["captioned"] += 1
@@ -275,10 +293,12 @@ async def _prepare(dataset_id: str) -> dict:
                     accepted.append((control, target))
                     continue
                 if not control.exists() and not core.degrade_target(
-                        target, control, _name_seed(seed, target.stem, i)):
+                    target, control, _name_seed(seed, target.stem, i)
+                ):
                     continue
-                reason = core.build_pair(target, control, caption, img_dir, ctl_dir,
-                                         name, preset_instruction)
+                reason = core.build_pair(
+                    target, control, caption, img_dir, ctl_dir, name, preset_instruction
+                )
                 if reason:
                     stats["pair_rejected"].append(f"{name}: {reason}")
                 else:
@@ -322,8 +342,9 @@ async def _prepare(dataset_id: str) -> dict:
             pass
 
 
-def _make_previews(core, upload_file, accepted: list, dataset_id, seed: int,
-                   count: int = 6) -> list[str]:
+def _make_previews(
+    core, upload_file, accepted: list, dataset_id, seed: int, count: int = 6
+) -> list[str]:
     """Random sample over ALL accepted pairs — the first-6-alphabetical
     previews only ever showed one homogeneous slice of the dataset."""
     import random
@@ -343,10 +364,20 @@ def _make_previews(core, upload_file, accepted: list, dataset_id, seed: int,
     return previews
 
 
-async def _prepare_edit_preset(factory, ds_uuid, root, targets_dir, controls_dir,
-                               images_dir, control_dir, holdout_images_dir,
-                               holdout_control_dir, params: dict, stats: dict) -> dict:
-    """"drawing_edit": synthetic (before → after-edit) pairs; the exact RU
+async def _prepare_edit_preset(
+    factory,
+    ds_uuid,
+    root,
+    targets_dir,
+    controls_dir,
+    images_dir,
+    control_dir,
+    holdout_images_dir,
+    holdout_control_dir,
+    params: dict,
+    stats: dict,
+) -> dict:
+    """ "drawing_edit": synthetic (before → after-edit) pairs; the exact RU
     edit instruction is the training prompt, no VLM captions needed."""
     from app.ai import lora_dataset as core
     from app.db.models import LoraDataset, LoraDatasetStatus
@@ -370,8 +401,7 @@ async def _prepare_edit_preset(factory, ds_uuid, root, targets_dir, controls_dir
             continue
         instruction = target.with_suffix(".txt").read_text(encoding="utf-8").strip()
         # The instruction IS the whole prompt (no cleanup-style prefix).
-        reason = core.build_pair(target, control, instruction, img_dir, ctl_dir,
-                                 name, "{caption}")
+        reason = core.build_pair(target, control, instruction, img_dir, ctl_dir, name, "{caption}")
         if reason:
             stats["pair_rejected"].append(f"{name}: {reason}")
         else:
@@ -432,15 +462,15 @@ def _friendly_error(tail: str, base_model: str | None) -> str:
     from app.ai.lora_base_models import HF_GATED_HELP, base_model_info
 
     low = tail.lower()
-    if "gatedrepoerror" in low or ("gated repo" in low) or (
-        "401" in tail and "huggingface" in low
-    ):
+    if "gatedrepoerror" in low or ("gated repo" in low) or ("401" in tail and "huggingface" in low):
         hf = base_model_info(base_model).get("hf", base_model or "")
         return HF_GATED_HELP.format(hf=hf) + "\n\n— — —\n" + tail[-800:]
     if "out of memory" in low or "cuda out of memory" in low:
-        return ("Недостаточно памяти GPU для этой модели/разрешения. Попробуйте "
-                "меньшее разрешение, модель поменьше (например FLUX.2 klein 4B) "
-                "или меньший rank.\n\n— — —\n" + tail[-800:])
+        return (
+            "Недостаточно памяти GPU для этой модели/разрешения. Попробуйте "
+            "меньшее разрешение, модель поменьше (например FLUX.2 klein 4B) "
+            "или меньший rank.\n\n— — —\n" + tail[-800:]
+        )
     return tail[-2000:]
 
 
@@ -459,55 +489,63 @@ def _build_train_config(run_id: str, dataset_dir: str, config: dict) -> dict:
         "job": "extension",
         "config": {
             "name": f"run_{run_id}",
-            "process": [{
-                "type": "sd_trainer",
-                "training_folder": f"/lora-data/runs/{run_id}/output",
-                "device": "cuda:0",
-                "network": {
-                    "type": "lora",
-                    "linear": int(config.get("rank", 32)),
-                    "linear_alpha": int(config.get("rank", 32)),
-                },
-                "save": {"dtype": "float16",
-                         "save_every": int(config.get("save_every", 500)),
-                         "max_step_saves_to_keep": 6},
-                "datasets": [{
-                    "folder_path": f"{dataset_dir}/images",
-                    "control_path": f"{dataset_dir}/control",
-                    "caption_ext": "txt",
-                    "caption_dropout_rate": 0.05,
-                    "cache_latents_to_disk": True,
-                    "resolution": [int(config.get("resolution", 768))],
-                }],
-                "train": {
-                    "batch_size": 1,
-                    "steps": steps,
-                    "gradient_accumulation_steps": 2,
-                    "gradient_checkpointing": True,
-                    "train_unet": True,
-                    "train_text_encoder": False,
-                    "noise_scheduler": "flowmatch",
-                    "optimizer": "adamw8bit",
-                    "lr": float(config.get("lr", 1e-4)),
-                    "lr_scheduler": "cosine",
-                    "dtype": "bf16",
-                    "cache_text_embeddings": True,
-                },
-                "model": {
-                    "name_or_path": info["hf"],
-                    "arch": info["arch"],
-                    "low_vram": True,
-                    **info["quantize"],
-                },
-                "sample": {
-                    "sampler": "flowmatch",
-                    "sample_every": int(config.get("sample_every", 250)),
-                    "width": 768, "height": 576, "seed": 42,
-                    "neg": "",  # bool default upstream crashes edit_plus encode
-                    "guidance_scale": 1.0,
-                    "samples": config.get("samples", []),
-                },
-            }],
+            "process": [
+                {
+                    "type": "sd_trainer",
+                    "training_folder": f"/lora-data/runs/{run_id}/output",
+                    "device": "cuda:0",
+                    "network": {
+                        "type": "lora",
+                        "linear": int(config.get("rank", 32)),
+                        "linear_alpha": int(config.get("rank", 32)),
+                    },
+                    "save": {
+                        "dtype": "float16",
+                        "save_every": int(config.get("save_every", 500)),
+                        "max_step_saves_to_keep": 6,
+                    },
+                    "datasets": [
+                        {
+                            "folder_path": f"{dataset_dir}/images",
+                            "control_path": f"{dataset_dir}/control",
+                            "caption_ext": "txt",
+                            "caption_dropout_rate": 0.05,
+                            "cache_latents_to_disk": True,
+                            "resolution": [int(config.get("resolution", 768))],
+                        }
+                    ],
+                    "train": {
+                        "batch_size": 1,
+                        "steps": steps,
+                        "gradient_accumulation_steps": 2,
+                        "gradient_checkpointing": True,
+                        "train_unet": True,
+                        "train_text_encoder": False,
+                        "noise_scheduler": "flowmatch",
+                        "optimizer": "adamw8bit",
+                        "lr": float(config.get("lr", 1e-4)),
+                        "lr_scheduler": "cosine",
+                        "dtype": "bf16",
+                        "cache_text_embeddings": True,
+                    },
+                    "model": {
+                        "name_or_path": info["hf"],
+                        "arch": info["arch"],
+                        "low_vram": True,
+                        **info["quantize"],
+                    },
+                    "sample": {
+                        "sampler": "flowmatch",
+                        "sample_every": int(config.get("sample_every", 250)),
+                        "width": 768,
+                        "height": 576,
+                        "seed": 42,
+                        "neg": "",  # bool default upstream crashes edit_plus encode
+                        "guidance_scale": 1.0,
+                        "samples": config.get("samples", []),
+                    },
+                }
+            ],
         },
     }
 
@@ -524,8 +562,9 @@ def _pick_sample_controls(dataset_dir: str, limit: int = 2) -> list[pathlib.Path
     ):
         if not control_dir.exists():
             continue
-        picked = [c for c in sorted(control_dir.glob("*.png"))
-                  if (images_dir / f"{c.stem}.txt").exists()][:limit]
+        picked = [
+            c for c in sorted(control_dir.glob("*.png")) if (images_dir / f"{c.stem}.txt").exists()
+        ][:limit]
         if picked:
             return picked
     return []
@@ -551,17 +590,20 @@ async def _train(run_id: str) -> dict:
         run = await db.get(LoraTrainingRun, run_uuid)
         if not run:
             return {"error": "run not found"}
-        if run.status in (LoraRunStatus.cancelled, LoraRunStatus.done,
-                          LoraRunStatus.failed):
+        if run.status in (LoraRunStatus.cancelled, LoraRunStatus.done, LoraRunStatus.failed):
             # Stopped/decided while queued (stop_run revokes best-effort; this
             # is the second line of defense) or a stale redelivery.
             job = await studio_queue.job_for_lora_run(db, run_uuid)
             if run.status == LoraRunStatus.cancelled:
-                await studio_queue.mark_job_cancelled(db, job, error="Задача отменена пользователем.")
+                await studio_queue.mark_job_cancelled(
+                    db, job, error="Задача отменена пользователем."
+                )
             elif run.status == LoraRunStatus.done:
                 await studio_queue.mark_job_done(db, job)
             else:
-                await studio_queue.mark_job_failed(db, job, error=run.error or "LoRA training failed")
+                await studio_queue.mark_job_failed(
+                    db, job, error=run.error or "LoRA training failed"
+                )
             await db.commit()
             return {"skipped": run.status.value}
         if run.status == LoraRunStatus.stopping:
@@ -613,7 +655,7 @@ async def _train(run_id: str) -> dict:
     async with factory() as db:
         run = await db.get(LoraTrainingRun, run_uuid)
         run.status = LoraRunStatus.running
-        run.started_at = run.started_at or _dt.datetime.now(tz=_dt.timezone.utc)
+        run.started_at = run.started_at or _dt.datetime.now(tz=_dt.UTC)
         run.output_dir = str(_data_dir() / "runs" / run_id / "output")
         job = await studio_queue.job_for_lora_run(db, run_uuid)
         await studio_queue.mark_job_running(db, job, task_id=run.celery_task_id)
@@ -649,10 +691,12 @@ async def _train(run_id: str) -> dict:
             # images/x.txt — both are parent.parent/images.
             prompt_file = ctrl.parent.parent / "images" / f"{ctrl.stem}.txt"
             if prompt_file.exists():
-                samples.append({
-                    "prompt": prompt_file.read_text(encoding="utf-8").strip(),
-                    "ctrl_img_1": str(ctrl),
-                })
+                samples.append(
+                    {
+                        "prompt": prompt_file.read_text(encoding="utf-8").strip(),
+                        "ctrl_img_1": str(ctrl),
+                    }
+                )
         config["samples"] = samples
     for i, sample in enumerate(config.get("samples") or []):
         ctrl = pathlib.Path(str(sample.get("ctrl_img_1", "")))
@@ -678,8 +722,9 @@ async def _train(run_id: str) -> dict:
 
     cfg_path = run_dir / "config.yaml"
     cfg_path.write_text(
-        yaml.safe_dump(_build_train_config(run_id, dataset_dir, config),
-                       allow_unicode=True, sort_keys=False),
+        yaml.safe_dump(
+            _build_train_config(run_id, dataset_dir, config), allow_unicode=True, sort_keys=False
+        ),
         encoding="utf-8",
     )
 
@@ -721,16 +766,19 @@ async def _train(run_id: str) -> dict:
         for stale in client.containers.list(
             all=True, filters={"label": f"aidocs.lora_run={run_id}"}
         ):
-            logger.warning("lora_training_reaping_stale_container",
-                           run_id=run_id, container=stale.id[:12])
+            logger.warning(
+                "lora_training_reaping_stale_container", run_id=run_id, container=stale.id[:12]
+            )
             try:
                 stale.remove(force=True)
             except Exception:  # noqa: BLE001
                 pass
 
-        environment = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-                       "HF_HUB_OFFLINE": "0",
-                       "PYTHONUNBUFFERED": "1"}
+        environment = {
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "HF_HUB_OFFLINE": "0",
+            "PYTHONUNBUFFERED": "1",
+        }
         # Token resolved from the encrypted UI setting (Redis) with .env
         # fallback — never hardcoded in the container definition.
         from app.ai.lora_base_models import get_hf_token
@@ -759,9 +807,15 @@ async def _train(run_id: str) -> dict:
             run.container_id = container.id[:12]
             await db.commit()
 
-        progress: dict = {"step": 0, "total": total_steps, "loss": None,
-                          "eta": None, "phase": "загрузка модели", "history": [],
-                          "ts": time.time()}
+        progress: dict = {
+            "step": 0,
+            "total": total_steps,
+            "loss": None,
+            "eta": None,
+            "phase": "загрузка модели",
+            "history": [],
+            "ts": time.time(),
+        }
         known_samples: set[str] = set()
         history_stride = max(1, total_steps // 200)  # ≤~200 sparkline points
 
@@ -776,9 +830,13 @@ async def _train(run_id: str) -> dict:
                 if m:
                     step = int(m.group(1))
                     loss = float(m.group(5))
-                    progress.update(step=step, total=int(m.group(2)),
-                                    eta=m.group(4), loss=loss,
-                                    phase="обучение")
+                    progress.update(
+                        step=step,
+                        total=int(m.group(2)),
+                        eta=m.group(4),
+                        loss=loss,
+                        phase="обучение",
+                    )
                     hist = progress["history"]
                     # Monotonic-by-step: tail polling re-reads old lines, so
                     # only append genuinely NEW steps (never re-add / reorder).
@@ -811,15 +869,15 @@ async def _train(run_id: str) -> dict:
                 for chunk in text.replace("\r", "\n").splitlines():
                     _parse_chunk(chunk)
                 gpu_lock.refresh(run_id)
-                await _flush_progress(factory, run_uuid, run_dir, progress,
-                                      known_samples, upload_file, run_id)
+                await _flush_progress(
+                    factory, run_uuid, run_dir, progress, known_samples, upload_file, run_id
+                )
                 async with factory() as db:
                     run = await db.get(LoraTrainingRun, run_uuid)
                     if run and run.status == LoraRunStatus.stopping:
                         container.stop(timeout=60)
             except Exception as exc:  # noqa: BLE001 — a poll hiccup, not job failure
-                logger.info("lora_training_log_poll_hiccup", run_id=run_id,
-                            error=str(exc)[:100])
+                logger.info("lora_training_log_poll_hiccup", run_id=run_id, error=str(exc)[:100])
             container.reload()
             if container.status != "running":
                 break
@@ -827,8 +885,9 @@ async def _train(run_id: str) -> dict:
 
         result = container.wait(timeout=600)
         exit_code = int(result.get("StatusCode", 1))
-        await _flush_progress(factory, run_uuid, run_dir, progress,
-                              known_samples, upload_file, run_id)
+        await _flush_progress(
+            factory, run_uuid, run_dir, progress, known_samples, upload_file, run_id
+        )
         final_status = None
         job_id: str | None = None
         async with factory() as db:
@@ -841,15 +900,19 @@ async def _train(run_id: str) -> dict:
                 run.status = LoraRunStatus.failed
                 tail = container.logs(tail=30).decode("utf-8", "replace")
                 run.error = _friendly_error(tail, config.get("base_model"))
-            run.finished_at = _dt.datetime.now(tz=_dt.timezone.utc)
+            run.finished_at = _dt.datetime.now(tz=_dt.UTC)
             job = await studio_queue.job_for_lora_run(db, run_uuid)
             job_id = str(job.id) if job else None
             if run.status == LoraRunStatus.done:
                 await studio_queue.mark_job_done(db, job)
             elif run.status == LoraRunStatus.cancelled:
-                await studio_queue.mark_job_cancelled(db, job, error="Задача отменена пользователем.")
+                await studio_queue.mark_job_cancelled(
+                    db, job, error="Задача отменена пользователем."
+                )
             else:
-                await studio_queue.mark_job_failed(db, job, error=run.error or "LoRA training failed")
+                await studio_queue.mark_job_failed(
+                    db, job, error=run.error or "LoRA training failed"
+                )
             final_status = run.status
             owner = run.owner_sub
             run_name = run.name
@@ -880,7 +943,7 @@ async def _train(run_id: str) -> dict:
             if run:
                 run.status = LoraRunStatus.failed
                 run.error = str(exc)[:2000]
-                run.finished_at = _dt.datetime.now(tz=_dt.timezone.utc)
+                run.finished_at = _dt.datetime.now(tz=_dt.UTC)
                 job = await studio_queue.job_for_lora_run(db, run_uuid)
                 await studio_queue.mark_job_failed(db, job, error=run.error)
                 await db.commit()
@@ -902,8 +965,15 @@ async def _train(run_id: str) -> dict:
             pass
 
 
-async def _flush_progress(factory, run_uuid, run_dir: pathlib.Path, progress: dict,
-                          known_samples: set, upload_file, run_id: str) -> None:
+async def _flush_progress(
+    factory,
+    run_uuid,
+    run_dir: pathlib.Path,
+    progress: dict,
+    known_samples: set,
+    upload_file,
+    run_id: str,
+) -> None:
     from app.db.models import LoraTrainingRun
     from app.services import studio_queue
 

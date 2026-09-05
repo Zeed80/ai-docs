@@ -37,7 +37,10 @@ def test_profile_is_two_points_per_step_so_shoulders_stay_square():
     points = candidate.features[0].params["profile_points"]
     # enter+leave for each of the two sections
     assert [(p["r"], p["z"]) for p in points] == [
-        (15.0, 0.0), (15.0, 40.0), (25.0, 40.0), (25.0, 100.0),
+        (15.0, 0.0),
+        (15.0, 40.0),
+        (25.0, 40.0),
+        (25.0, 100.0),
     ]
 
 
@@ -49,20 +52,22 @@ def test_every_solid_parameter_declares_it_came_from_the_sheet():
 
 
 def test_read_thread_is_carried_to_the_kernel_feature_tree():
-    spec = _shaft_spec(main_view={
-        "outer": [
-            {"diameter_mm": 30, "length_mm": 40},
-            {
-                "diameter_mm": 50,
-                "length_mm": 60,
-                "thread": {
-                    "designation": "M50x1,5",
-                    "nominal_diameter_mm": 50,
-                    "pitch_mm": 1.5,
+    spec = _shaft_spec(
+        main_view={
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {
+                    "diameter_mm": 50,
+                    "length_mm": 60,
+                    "thread": {
+                        "designation": "M50x1,5",
+                        "nominal_diameter_mm": 50,
+                        "pitch_mm": 1.5,
+                    },
                 },
-            },
-        ],
-    })
+            ],
+        }
+    )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
     thread = next(feature for feature in candidate.features if feature.kind == "thread")
@@ -72,16 +77,22 @@ def test_read_thread_is_carried_to_the_kernel_feature_tree():
 
 
 def test_incomplete_axial_thread_pattern_is_visible_but_not_built():
-    spec = _shaft_spec(main_view={"axial_holes": [{
-        "count": 2,
-        "bolt_circle_diameter_mm": 40,
-        "start_angle_deg": 90,
-        "spacing_deg": 180,
-        "from_face": None,
-        "through": None,
-        "pilot_diameter_mm": None,
-        "thread": {"designation": "M8", "nominal_diameter_mm": 8, "internal": True},
-    }]})
+    spec = _shaft_spec(
+        main_view={
+            "axial_holes": [
+                {
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 40,
+                    "start_angle_deg": 90,
+                    "spacing_deg": 180,
+                    "from_face": None,
+                    "through": None,
+                    "pilot_diameter_mm": None,
+                    "thread": {"designation": "M8", "nominal_diameter_mm": 8, "internal": True},
+                }
+            ]
+        }
+    )
 
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
@@ -91,22 +102,28 @@ def test_incomplete_axial_thread_pattern_is_visible_but_not_built():
 
 
 def test_complete_axial_thread_pattern_expands_to_exact_holes_and_threads():
-    spec = _shaft_spec(main_view={"axial_holes": [{
-        "count": 2,
-        "bolt_circle_diameter_mm": 40,
-        "start_angle_deg": 90,
-        "spacing_deg": 180,
-        "from_face": "zmax",
-        "through": False,
-        "depth_mm": 12,
-        "pilot_diameter_mm": 6.8,
-        "thread": {
-            "designation": "M8",
-            "nominal_diameter_mm": 8,
-            "pitch_mm": 1.25,
-            "internal": True,
-        },
-    }]})
+    spec = _shaft_spec(
+        main_view={
+            "axial_holes": [
+                {
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 40,
+                    "start_angle_deg": 90,
+                    "spacing_deg": 180,
+                    "from_face": "zmax",
+                    "through": False,
+                    "depth_mm": 12,
+                    "pilot_diameter_mm": 6.8,
+                    "thread": {
+                        "designation": "M8",
+                        "nominal_diameter_mm": 8,
+                        "pitch_mm": 1.25,
+                        "internal": True,
+                    },
+                }
+            ]
+        }
+    )
 
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
@@ -114,7 +131,8 @@ def test_complete_axial_thread_pattern_expands_to_exact_holes_and_threads():
     threads = [feature for feature in candidate.features if feature.kind == "thread"]
     assert len(holes) == len(threads) == 2
     assert [(hole.params["center_x_mm"], hole.params["center_y_mm"]) for hole in holes] == [
-        (0.0, 20.0), (-0.0, -20.0)
+        (0.0, 20.0),
+        (-0.0, -20.0),
     ]
     assert all(hole.params["diameter_mm"] == 6.8 for hole in holes)
     assert all(hole.params["depth_mm"] == 12 for hole in holes)
@@ -122,21 +140,27 @@ def test_complete_axial_thread_pattern_expands_to_exact_holes_and_threads():
 
 
 def test_metric_thread_uses_finished_standard_minor_diameter_not_tap_drill():
-    spec = _shaft_spec(main_view={"axial_holes": [{
-        "count": 2,
-        "bolt_circle_diameter_mm": 40,
-        "from_face": "zmin",
-        "through": False,
-        "thread_depth_mm": 15,
-        "drill_depth_mm": 17,
-        "pilot_diameter_mm": None,
-        "thread": {
-            "designation": "M8",
-            "nominal_diameter_mm": 8,
-            "pitch_mm": None,
-            "internal": True,
-        },
-    }]})
+    spec = _shaft_spec(
+        main_view={
+            "axial_holes": [
+                {
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 40,
+                    "from_face": "zmin",
+                    "through": False,
+                    "thread_depth_mm": 15,
+                    "drill_depth_mm": 17,
+                    "pilot_diameter_mm": None,
+                    "thread": {
+                        "designation": "M8",
+                        "nominal_diameter_mm": 8,
+                        "pitch_mm": None,
+                        "internal": True,
+                    },
+                }
+            ]
+        }
+    )
 
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
@@ -153,17 +177,23 @@ def test_metric_thread_uses_finished_standard_minor_diameter_not_tap_drill():
 
 
 def test_recessed_axial_pattern_preserves_entry_plane_for_hole_and_thread():
-    spec = _shaft_spec(main_view={"axial_holes": [{
-        "count": 2,
-        "bolt_circle_diameter_mm": 40,
-        "from_face": "zmin",
-        "entry_offset_mm": 6,
-        "entry_recess_diameter_mm": 12,
-        "through": False,
-        "thread_depth_mm": 15,
-        "drill_depth_mm": 17,
-        "thread": {"designation": "M8", "nominal_diameter_mm": 8},
-    }]})
+    spec = _shaft_spec(
+        main_view={
+            "axial_holes": [
+                {
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 40,
+                    "from_face": "zmin",
+                    "entry_offset_mm": 6,
+                    "entry_recess_diameter_mm": 12,
+                    "through": False,
+                    "thread_depth_mm": 15,
+                    "drill_depth_mm": 17,
+                    "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+                }
+            ]
+        }
+    )
 
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
@@ -180,16 +210,22 @@ def test_recessed_axial_pattern_preserves_entry_plane_for_hole_and_thread():
 
 
 def test_recessed_axial_pattern_without_recess_diameter_is_not_built():
-    spec = _shaft_spec(main_view={"axial_holes": [{
-        "count": 2,
-        "bolt_circle_diameter_mm": 40,
-        "from_face": "zmin",
-        "entry_offset_mm": 5.6,
-        "through": False,
-        "thread_depth_mm": 15,
-        "drill_depth_mm": 17,
-        "thread": {"designation": "M8", "nominal_diameter_mm": 8},
-    }]})
+    spec = _shaft_spec(
+        main_view={
+            "axial_holes": [
+                {
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 40,
+                    "from_face": "zmin",
+                    "entry_offset_mm": 5.6,
+                    "through": False,
+                    "thread_depth_mm": 15,
+                    "drill_depth_mm": 17,
+                    "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+                }
+            ]
+        }
+    )
 
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
@@ -198,29 +234,33 @@ def test_recessed_axial_pattern_without_recess_diameter_is_not_built():
 
 
 def test_complete_circular_patterns_expand_to_axial_and_inclined_holes():
-    spec = _shaft_spec(main_view={"circular_hole_patterns": [
-        {
-            "count": 4,
-            "hole_diameter_mm": 4,
-            "bolt_circle_diameter_mm": 30,
-            "axis_mode": "axial",
-            "start_angle_deg": 0,
-            "from_face": "zmin",
-            "through": False,
-            "depth_mm": 20,
-        },
-        {
-            "count": 2,
-            "hole_diameter_mm": 1,
-            "bolt_circle_diameter_mm": 20,
-            "axis_mode": "inclined",
-            "start_angle_deg": 90,
-            "from_face": "zmax",
-            "through": True,
-            "inclination_deg": 45,
-            "radial_direction": "outward",
-        },
-    ]})
+    spec = _shaft_spec(
+        main_view={
+            "circular_hole_patterns": [
+                {
+                    "count": 4,
+                    "hole_diameter_mm": 4,
+                    "bolt_circle_diameter_mm": 30,
+                    "axis_mode": "axial",
+                    "start_angle_deg": 0,
+                    "from_face": "zmin",
+                    "through": False,
+                    "depth_mm": 20,
+                },
+                {
+                    "count": 2,
+                    "hole_diameter_mm": 1,
+                    "bolt_circle_diameter_mm": 20,
+                    "axis_mode": "inclined",
+                    "start_angle_deg": 90,
+                    "from_face": "zmax",
+                    "through": True,
+                    "inclination_deg": 45,
+                    "radial_direction": "outward",
+                },
+            ]
+        }
+    )
 
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
@@ -233,16 +273,22 @@ def test_complete_circular_patterns_expand_to_axial_and_inclined_holes():
 
 
 def test_incomplete_circular_pattern_is_a_visible_build_blocker():
-    spec = _shaft_spec(main_view={"circular_hole_patterns": [{
-        "count": 12,
-        "hole_diameter_mm": 4,
-        "bolt_circle_diameter_mm": 70,
-        "axis_mode": "axial",
-        "start_angle_deg": None,
-        "from_face": None,
-        "through": False,
-        "depth_mm": 82,
-    }]})
+    spec = _shaft_spec(
+        main_view={
+            "circular_hole_patterns": [
+                {
+                    "count": 12,
+                    "hole_diameter_mm": 4,
+                    "bolt_circle_diameter_mm": 70,
+                    "axis_mode": "axial",
+                    "start_angle_deg": None,
+                    "from_face": None,
+                    "through": False,
+                    "depth_mm": 82,
+                }
+            ]
+        }
+    )
 
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
@@ -253,18 +299,20 @@ def test_incomplete_circular_pattern_is_a_visible_build_blocker():
 
 def test_missing_tap_drill_alone_is_a_warning_not_a_geometry_blocker():
     spec = _shaft_spec(
-        main_view={"axial_holes": [{
-            "count": 2,
-            "bolt_circle_diameter_mm": 40,
-            "from_face": "zmin",
-            "through": False,
-            "thread_depth_mm": 15,
-            "drill_depth_mm": 17,
-            "thread": {"designation": "M8", "nominal_diameter_mm": 8},
-        }]},
-        unresolved=[
-            "осевые отверстия M8: не определены Ø подготовительного отверстия"
-        ],
+        main_view={
+            "axial_holes": [
+                {
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 40,
+                    "from_face": "zmin",
+                    "through": False,
+                    "thread_depth_mm": 15,
+                    "drill_depth_mm": 17,
+                    "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+                }
+            ]
+        },
+        unresolved=["осевые отверстия M8: не определены Ø подготовительного отверстия"],
     )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
@@ -287,12 +335,14 @@ def test_bore_becomes_a_coaxial_cut_not_a_guess():
 
 
 def test_offset_bore_is_shifted_from_the_stated_end_face():
-    spec = _shaft_spec(main_view={
-        "bore": [{"diameter_mm": 16, "length_mm": 30}],
-        "bore_start_mm": 10,
-        "bore_from_end": "right",
-        "bore_blind": True,
-    })
+    spec = _shaft_spec(
+        main_view={
+            "bore": [{"diameter_mm": 16, "length_mm": 30}],
+            "bore_start_mm": 10,
+            "bore_from_end": "right",
+            "bore_blind": True,
+        }
+    )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
     points = candidate.features[0].params["bore_points"]
@@ -313,14 +363,18 @@ def _two_body_spec() -> dict:
     return {
         "part": "Вал и втулка",
         "parts": [
-            {"outer": [
-                {"diameter_mm": 30, "length_mm": 40},
-                {"diameter_mm": 50, "length_mm": 60},
-            ]},
-            {"outer": [
-                {"diameter_mm": 10, "length_mm": 20},
-                {"diameter_mm": 16, "length_mm": 25},
-            ]},
+            {
+                "outer": [
+                    {"diameter_mm": 30, "length_mm": 40},
+                    {"diameter_mm": 50, "length_mm": 60},
+                ]
+            },
+            {
+                "outer": [
+                    {"diameter_mm": 10, "length_mm": 20},
+                    {"diameter_mm": 16, "length_mm": 25},
+                ]
+            },
         ],
     }
 
@@ -346,8 +400,7 @@ def test_multi_body_spec_warns_positions_are_unread_not_guessed():
     candidate = feature_tree_from_spec(_two_body_spec())
     assert candidate is not None
     assert any(
-        "2" in item and "тел" in item and "не прочитано" in item
-        for item in candidate.missing_data
+        "2" in item and "тел" in item and "не прочитано" in item for item in candidate.missing_data
     )
 
 
@@ -355,10 +408,17 @@ def test_single_qualifying_part_keeps_body_index_zero_by_default():
     # A lone part still goes through _rotation_parts' offset+1 numbering —
     # confirms the default Feature3D.body_index=0 path is for main_view-only
     # specs, not silently reused for a single explicit part.
-    spec = {"part": "Вал", "parts": [{"outer": [
-        {"diameter_mm": 30, "length_mm": 40},
-        {"diameter_mm": 50, "length_mm": 60},
-    ]}]}
+    spec = {
+        "part": "Вал",
+        "parts": [
+            {
+                "outer": [
+                    {"diameter_mm": 30, "length_mm": 40},
+                    {"diameter_mm": 50, "length_mm": 60},
+                ]
+            }
+        ],
+    }
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
     assert {f.body_index for f in candidate.features} == {1}
@@ -431,11 +491,13 @@ def test_review_preview_allows_only_explicitly_omitted_cut_features():
 
 
 def test_review_preview_accepts_live_small_feature_blocker_wording():
-    spec = _shaft_spec(unresolved=[
-        "малые элементы: массив 8×Ø1: не определены торец/входная поверхность, угловая фаза массива",
-        "малые элементы: осевые отверстия M8: не определён Ø входной выборки",
-        "малые элементы: указано 6 фасок, локализовано 0",
-    ])
+    spec = _shaft_spec(
+        unresolved=[
+            "малые элементы: массив 8×Ø1: не определены торец/входная поверхность, угловая фаза массива",
+            "малые элементы: осевые отверстия M8: не определён Ø входной выборки",
+            "малые элементы: указано 6 фасок, локализовано 0",
+        ]
+    )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
 
@@ -452,11 +514,13 @@ def test_review_preview_accepts_unplaced_callout_wording_from_a_real_run():
     place has no cross_holes[]/thread entry to build wrong in the first
     place, so it is excludable, same as the other "малые элементы" wordings
     above."""
-    spec = _shaft_spec(unresolved=[
-        "малые элементы: поперечное отверстие Ø0.6 указано, но не локализовано",
-        "малые элементы: резьбы указаны, но не привязаны к участкам: "
-        "M18×1,5: несущий участок не локализован",
-    ])
+    spec = _shaft_spec(
+        unresolved=[
+            "малые элементы: поперечное отверстие Ø0.6 указано, но не локализовано",
+            "малые элементы: резьбы указаны, но не привязаны к участкам: "
+            "M18×1,5: несущий участок не локализован",
+        ]
+    )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
 
@@ -470,9 +534,11 @@ def test_review_preview_accepts_unplaced_callout_wording_from_a_real_run():
 def test_review_preview_still_refuses_an_evidence_reliability_note():
     """Doubt about the READ ITSELF (geometry vs annotations not separable by
     colour) is not a scoped placement gap — stays a hard blocker."""
-    spec = _shaft_spec(unresolved=[
-        "малые элементы: evidence: геометрия не отделена от аннотаций по цвету",
-    ])
+    spec = _shaft_spec(
+        unresolved=[
+            "малые элементы: evidence: геометрия не отделена от аннотаций по цвету",
+        ]
+    )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
 
@@ -628,9 +694,11 @@ def test_verification_survives_a_real_bore_with_no_stated_length():
 
 
 def test_hollow_spec_rejects_solid_outer_profile_volume():
-    spec = _shaft_spec(main_view={
-        "bore": [{"diameter_mm": 20, "length_mm": 100}],
-    })
+    spec = _shaft_spec(
+        main_view={
+            "bore": [{"diameter_mm": 20, "length_mm": 100}],
+        }
+    )
     solid_outer_volume = math.pi * 15**2 * 40 + math.pi * 25**2 * 60
     report = _report(100.0, 50.0, volume=solid_outer_volume)
     result = verify_solid_against_spec(report, spec)
@@ -640,18 +708,12 @@ def test_hollow_spec_rejects_solid_outer_profile_volume():
 
 def test_verification_fails_when_kernel_rolled_back_a_requested_feature():
     spec = _shaft_spec(
-        main_view={
-            "cross_holes": [
-                {"diameter_mm": 9, "axial_position_mm": 50, "through": True}
-            ]
-        }
+        main_view={"cross_holes": [{"diameter_mm": 9, "axial_position_mm": 50, "through": True}]}
     )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
     report = _report(100.0, 50.0)
-    report["warnings"] = [
-        "cross hole Ø9 @ 50 not built: OpenCascade returned invalid geometry"
-    ]
+    report["warnings"] = ["cross hole Ø9 @ 50 not built: OpenCascade returned invalid geometry"]
     result = verify_solid_against_spec(report, spec, candidate)
     assert not result.ok
     assert result.checks["feature_complete"] is False
@@ -676,9 +738,7 @@ def test_verification_rejects_a_built_feature_without_brep_localization():
 
     assert not result.ok
     assert result.checks["feature_complete"] is False
-    assert result.checks["unlocalized_features"] == [
-        "revolve[0]: изменение B-Rep не локализовано"
-    ]
+    assert result.checks["unlocalized_features"] == ["revolve[0]: изменение B-Rep не локализовано"]
 
 
 def test_verification_window_is_half_a_percent():
@@ -707,7 +767,10 @@ def test_unknown_material_yields_no_mass_rather_than_a_steel_guess():
 
 def _plate_spec(**profile_extra) -> dict:
     profile = {
-        "shape": "rectangle", "width_mm": 120, "height_mm": 60, "thickness_mm": 10,
+        "shape": "rectangle",
+        "width_mm": 120,
+        "height_mm": 60,
+        "thickness_mm": 10,
     }
     profile.update(profile_extra)
     return {"part": "Планка", "main_view": {"type": "пластина", "profile": profile}}
@@ -751,10 +814,15 @@ def test_hole_centres_move_from_sheet_frame_to_the_extrude_corner():
 def test_a_flange_is_turned_and_keeps_the_sheet_frame():
     spec = {
         "part": "Фланец",
-        "main_view": {"type": "фланец", "profile": {
-            "shape": "circle", "diameter_mm": 140, "thickness_mm": 20,
-            "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 40}],
-        }},
+        "main_view": {
+            "type": "фланец",
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 140,
+                "thickness_mm": 20,
+                "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 40}],
+            },
+        },
     }
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
@@ -812,7 +880,8 @@ def test_a_sketch_loop_off_by_more_than_tolerance_builds_no_solid():
 
 def test_sketch_hole_centres_stay_in_the_profiles_own_frame_no_corner_shift():
     spec = _sketch_plate_spec(
-        _SKETCH_SQUARE, holes=[{"center_x_mm": 20, "center_y_mm": 15, "diameter_mm": 6}],
+        _SKETCH_SQUARE,
+        holes=[{"center_x_mm": 20, "center_y_mm": 15, "diameter_mm": 6}],
     )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
@@ -833,30 +902,46 @@ def test_sketch_without_thickness_builds_nothing():
 def test_a_bolt_circle_expands_into_real_holes():
     spec = {
         "part": "Фланец",
-        "main_view": {"type": "фланец", "profile": {
-            "shape": "circle", "diameter_mm": 140, "thickness_mm": 20,
-            "hole_patterns": [{
-                "kind": "bolt_circle", "count": 6, "bolt_circle_diameter_mm": 110,
-                "hole_diameter_mm": 14, "start_angle_deg": 0,
-            }],
-        }},
+        "main_view": {
+            "type": "фланец",
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 140,
+                "thickness_mm": 20,
+                "hole_patterns": [
+                    {
+                        "kind": "bolt_circle",
+                        "count": 6,
+                        "bolt_circle_diameter_mm": 110,
+                        "hole_diameter_mm": 14,
+                        "start_angle_deg": 0,
+                    }
+                ],
+            },
+        },
     }
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
     holes = [f for f in candidate.features if f.kind == "hole"]
     assert len(holes) == 6
-    radii = {
-        round(math.hypot(h.params["center_x_mm"], h.params["center_y_mm"]), 3)
-        for h in holes
-    }
+    radii = {round(math.hypot(h.params["center_x_mm"], h.params["center_y_mm"]), 3) for h in holes}
     assert radii == {55.0}
 
 
 def test_a_linear_pattern_expands_into_evenly_spaced_holes():
-    spec = _plate_spec(hole_patterns=[{
-        "kind": "linear", "count": 4, "hole_diameter_mm": 6,
-        "spacing_mm": 20, "direction_deg": 0, "start_x_mm": -30, "start_y_mm": 0,
-    }])
+    spec = _plate_spec(
+        hole_patterns=[
+            {
+                "kind": "linear",
+                "count": 4,
+                "hole_diameter_mm": 6,
+                "spacing_mm": 20,
+                "direction_deg": 0,
+                "start_x_mm": -30,
+                "start_y_mm": 0,
+            }
+        ]
+    )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
     holes = sorted(
@@ -871,10 +956,20 @@ def test_a_linear_pattern_expands_into_evenly_spaced_holes():
 
 
 def test_a_rectangular_pattern_expands_into_a_grid():
-    spec = _plate_spec(hole_patterns=[{
-        "kind": "rectangular", "rows": 2, "columns": 3, "hole_diameter_mm": 5,
-        "spacing_x_mm": 20, "spacing_y_mm": 15, "start_x_mm": -20, "start_y_mm": -7.5,
-    }])
+    spec = _plate_spec(
+        hole_patterns=[
+            {
+                "kind": "rectangular",
+                "rows": 2,
+                "columns": 3,
+                "hole_diameter_mm": 5,
+                "spacing_x_mm": 20,
+                "spacing_y_mm": 15,
+                "start_x_mm": -20,
+                "start_y_mm": -7.5,
+            }
+        ]
+    )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
     holes = [f for f in candidate.features if f.kind == "hole"]
@@ -888,18 +983,33 @@ def test_a_rectangular_pattern_expands_into_a_grid():
 def test_an_incomplete_linear_pattern_refuses_the_whole_candidate():
     # Missing direction_deg — the whole prismatic candidate must refuse,
     # exactly like an incomplete bolt_circle already does (no partial guess).
-    spec = _plate_spec(hole_patterns=[{
-        "kind": "linear", "count": 4, "hole_diameter_mm": 6,
-        "spacing_mm": 20, "start_x_mm": -30, "start_y_mm": 0,
-    }])
+    spec = _plate_spec(
+        hole_patterns=[
+            {
+                "kind": "linear",
+                "count": 4,
+                "hole_diameter_mm": 6,
+                "spacing_mm": 20,
+                "start_x_mm": -30,
+                "start_y_mm": 0,
+            }
+        ]
+    )
     assert feature_tree_from_spec(spec) is None
 
 
 def test_a_slot_is_built_as_a_true_capsule():
-    spec = _plate_spec(slots=[{
-        "center_x_mm": 0, "center_y_mm": 0, "length_mm": 40, "width_mm": 12,
-        "rotation_deg": 0,
-    }])
+    spec = _plate_spec(
+        slots=[
+            {
+                "center_x_mm": 0,
+                "center_y_mm": 0,
+                "length_mm": 40,
+                "width_mm": 12,
+                "rotation_deg": 0,
+            }
+        ]
+    )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
     pocket = next(f for f in candidate.features if f.kind == "pocket")
@@ -910,10 +1020,17 @@ def test_a_slot_is_built_as_a_true_capsule():
 
 
 def test_a_rotated_slot_is_built_as_one_sketch_profile_pocket():
-    spec = _plate_spec(slots=[{
-        "center_x_mm": 0, "center_y_mm": 0, "length_mm": 40, "width_mm": 12,
-        "rotation_deg": 30,
-    }])
+    spec = _plate_spec(
+        slots=[
+            {
+                "center_x_mm": 0,
+                "center_y_mm": 0,
+                "length_mm": 40,
+                "width_mm": 12,
+                "rotation_deg": 30,
+            }
+        ]
+    )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
     pockets = [f for f in candidate.features if f.kind == "pocket"]
@@ -934,10 +1051,17 @@ def test_a_rotated_slot_is_built_as_one_sketch_profile_pocket():
 def test_a_round_slot_rotation_is_a_no_op_but_still_builds():
     # length_mm == width_mm (straight == 0) is legitimately a round slot —
     # rotating a circle changes nothing geometrically, but must not refuse.
-    spec = _plate_spec(slots=[{
-        "center_x_mm": 5, "center_y_mm": -5, "length_mm": 12, "width_mm": 12,
-        "rotation_deg": 45,
-    }])
+    spec = _plate_spec(
+        slots=[
+            {
+                "center_x_mm": 5,
+                "center_y_mm": -5,
+                "length_mm": 12,
+                "width_mm": 12,
+                "rotation_deg": 45,
+            }
+        ]
+    )
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None
     pocket = next(f for f in candidate.features if f.kind == "pocket")
@@ -964,7 +1088,9 @@ def test_plate_verification_checks_all_three_read_extents():
     spec = _plate_spec()
     report = {
         "bounds_mm": {"x": 120.0, "y": 60.0, "z": 10.0},
-        "brep_valid": True, "manifold": True, "solid_count": 1,
+        "brep_valid": True,
+        "manifold": True,
+        "solid_count": 1,
         "volume_mm3": 72_000.0,
     }
     assert verify_solid_against_spec(report, spec).ok

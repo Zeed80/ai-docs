@@ -52,13 +52,15 @@ async def _run() -> dict:
 
         if merged > 0:
             await db.commit()
-            await chat_bus.publish({
-                "type": "notification",
-                "level": "info",
-                "title": "Канонический справочник",
-                "message": f"Авто-кластеризация: объединено {merged} позиций.",
-                "entity_type": "canonical",
-            })
+            await chat_bus.publish(
+                {
+                    "type": "notification",
+                    "level": "info",
+                    "title": "Канонический справочник",
+                    "message": f"Авто-кластеризация: объединено {merged} позиций.",
+                    "entity_type": "canonical",
+                }
+            )
 
     logger.info("canonical_auto_cluster_done", merged=merged)
     return {"merged": merged}

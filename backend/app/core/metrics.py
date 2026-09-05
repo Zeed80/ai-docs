@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 try:
-    from prometheus_client import Counter, Histogram, Gauge, REGISTRY
+    from prometheus_client import (  # noqa: F401 — REGISTRY здесь только проба
+        REGISTRY,
+        Counter,
+        Gauge,
+        Histogram,
+    )
+
     _PROMETHEUS_AVAILABLE = True
 except ImportError:
     _PROMETHEUS_AVAILABLE = False
@@ -280,7 +286,7 @@ if _PROMETHEUS_AVAILABLE:
     email_sent_total = Counter(
         "aiworkspace_email_sent_total",
         "Outbound e-mail attempts by outcome",
-        ["outcome"],          # sent | error | cancelled | sent_mock
+        ["outcome"],  # sent | error | cancelled | sent_mock
     )
     email_sync_ops_pending = Gauge(
         "aiworkspace_email_sync_ops_pending",
@@ -294,7 +300,7 @@ if _PROMETHEUS_AVAILABLE:
     email_imap_errors_total = Counter(
         "aiworkspace_email_imap_errors_total",
         "IMAP failures by mailbox and stage",
-        ["mailbox", "stage"], # poll | flags | push | discover | idle
+        ["mailbox", "stage"],  # poll | flags | push | discover | idle
     )
     email_poll_duration_seconds = Histogram(
         "aiworkspace_email_poll_duration_seconds",
@@ -323,11 +329,19 @@ else:
     class _Noop:
         def labels(self, **_kw):
             return self
-        def inc(self, *a, **kw): pass
-        def observe(self, *a, **kw): pass
-        def set(self, *a, **kw): pass
+
+        def inc(self, *a, **kw):
+            pass
+
+        def observe(self, *a, **kw):
+            pass
+
+        def set(self, *a, **kw):
+            pass
+
         def time(self):
             import contextlib
+
             return contextlib.nullcontext()
 
     _noop = _Noop()

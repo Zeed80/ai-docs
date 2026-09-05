@@ -126,8 +126,14 @@ def test_measured_dimensions_carry_the_kernel_value():
     from app.ai.cad_projection import dimensions_from_kernel
 
     entities = dimensions_from_kernel(
-        [{"view_index": 0, "anchors_mm": [[2.5, -20.0], [2.5, 20.0]],
-          "value_mm": 80.0, "label": "Ø"}],
+        [
+            {
+                "view_index": 0,
+                "anchors_mm": [[2.5, -20.0], [2.5, 20.0]],
+                "value_mm": 80.0,
+                "label": "Ø",
+            }
+        ],
         {"front": {"offset_u": 100.0, "offset_v": 50.0}},
         ["front"],
         px_per_mm=2.0,
@@ -162,8 +168,7 @@ def test_dimension_label_does_not_duplicate_a_value_already_in_label(
     from app.ai.cad_projection import dimensions_from_kernel
 
     entities = dimensions_from_kernel(
-        [{"view_index": 0, "anchors_mm": [[0, 0], [10, 0]],
-          "value_mm": value, "label": label}],
+        [{"view_index": 0, "anchors_mm": [[0, 0], [10, 0]], "value_mm": value, "label": label}],
         {"front": {"offset_u": 0.0, "offset_v": 0.0}},
         ["front"],
         px_per_mm=1.0,
@@ -190,12 +195,14 @@ def test_dimension_keeps_structured_semantics_bound_to_its_geometry(
     from app.ai.cad_projection import dimensions_from_kernel
 
     entities = dimensions_from_kernel(
-        [{
-            "view_index": 0,
-            "anchors_mm": [[0, 0], [10, 0]],
-            "value_mm": value,
-            "label": label,
-        }],
+        [
+            {
+                "view_index": 0,
+                "anchors_mm": [[0, 0], [10, 0]],
+                "value_mm": value,
+                "label": label,
+            }
+        ],
         {"front": {"offset_u": 0.0, "offset_v": 0.0}},
         ["front"],
         px_per_mm=1.0,

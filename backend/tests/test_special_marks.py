@@ -27,7 +27,6 @@ from app.db.models import (
     InvoiceStatus,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -109,9 +108,7 @@ async def test_invoice_can_have_special_marks_without_notes(db_session: AsyncSes
 
 
 @pytest.mark.asyncio
-async def test_patch_notes_preserves_special_marks(
-    client: AsyncClient, db_session: AsyncSession
-):
+async def test_patch_notes_preserves_special_marks(client: AsyncClient, db_session: AsyncSession):
     """PATCH /api/invoices/{id} with notes must not overwrite special_marks."""
     _, inv_id = await _create_invoice(
         db_session,
@@ -126,9 +123,7 @@ async def test_patch_notes_preserves_special_marks(
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["notes"] == "Мой комментарий"
-    assert data["special_marks"] == "Срочная поставка", (
-        "PATCH notes must not erase special_marks"
-    )
+    assert data["special_marks"] == "Срочная поставка", "PATCH notes must not erase special_marks"
 
 
 @pytest.mark.asyncio
@@ -186,10 +181,11 @@ def test_extraction_mapping_uses_special_marks_not_notes():
 def test_extraction_task_maps_special_marks(monkeypatch):
     """extraction.py writes extracted['special_marks'] to Invoice.special_marks (not notes)."""
     import inspect
+
     import app.tasks.extraction as ext_module
 
     src = inspect.getsource(ext_module)
-    assert "special_marks=extracted.get(\"special_marks\")" in src, (
+    assert 'special_marks=extracted.get("special_marks")' in src, (
         "extraction.py must map extracted['special_marks'] → Invoice.special_marks"
     )
     assert "notes=extracted.get(" not in src, (
@@ -217,9 +213,7 @@ async def test_auto_process_false_creates_embedding_job(
     doc_id = uuid.UUID(resp.json()["id"])
 
     result = await db_session.execute(
-        select(DocumentProcessingJob).where(
-            DocumentProcessingJob.document_id == doc_id
-        )
+        select(DocumentProcessingJob).where(DocumentProcessingJob.document_id == doc_id)
     )
     job = result.scalar_one_or_none()
     assert job is not None

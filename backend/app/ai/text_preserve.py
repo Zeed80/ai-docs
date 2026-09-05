@@ -21,10 +21,9 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import structlog
-
-from typing import TYPE_CHECKING
 
 # Только для аннотаций: имена стоят в строковых типах, поэтому в рантайме
 # не вычисляются — но без импорта их не видят ни type checker, ни IDE, и
@@ -46,7 +45,7 @@ class TextRegion:
 
 
 _OCR_UPSCALE = 3  # CAD dimension text is small relative to sheet size — tesseract
-                   # misses most of it without upscaling first.
+# misses most of it without upscaling first.
 
 
 def detect_text_regions(
@@ -102,7 +101,10 @@ def detect_text_regions(
             for r in _ocr_pass(rotated, lang, min_conf, glyphs_only):
                 mapped = TextRegion(
                     text=r.text,
-                    x=r.y, y=h_orig - r.x - r.w, w=r.h, h=r.w,
+                    x=r.y,
+                    y=h_orig - r.x - r.w,
+                    w=r.h,
+                    h=r.w,
                     conf=r.conf,
                 )
                 # The rotated pass sees horizontal text too, and shipping it
@@ -127,7 +129,7 @@ def _overlaps(a: TextRegion, b: TextRegion, threshold: float = 0.5) -> bool:
     return smaller > 0 and (ix * iy) / smaller >= threshold
 
 
-def isolate_glyphs(img: "Image.Image") -> "Image.Image":
+def isolate_glyphs(img: Image.Image) -> Image.Image:
     """Keep only glyph-sized ink, dropping the linework around it.
 
     Tesseract's layout analysis is defeated by a technical drawing: handed a
@@ -174,7 +176,7 @@ def isolate_glyphs(img: "Image.Image") -> "Image.Image":
 
 
 def _ocr_pass(
-    img: "Image.Image", lang: str, min_conf: float, glyphs_only: bool = False
+    img: Image.Image, lang: str, min_conf: float, glyphs_only: bool = False
 ) -> list[TextRegion]:
     import cv2
     import numpy as np
@@ -205,7 +207,9 @@ def _ocr_pass(
             continue
         key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
         x, y, w, h = data["left"][i], data["top"][i], data["width"][i], data["height"][i]
-        line = lines.setdefault(key, {"texts": [], "x0": x, "y0": y, "x1": x + w, "y1": y + h, "confs": []})
+        line = lines.setdefault(
+            key, {"texts": [], "x0": x, "y0": y, "x1": x + w, "y1": y + h, "confs": []}
+        )
         line["texts"].append(text)
         line["x0"] = min(line["x0"], x)
         line["y0"] = min(line["y0"], y)
@@ -217,8 +221,10 @@ def _ocr_pass(
     return [
         TextRegion(
             text=" ".join(line["texts"]),
-            x=round(line["x0"] / s), y=round(line["y0"] / s),
-            w=round((line["x1"] - line["x0"]) / s), h=round((line["y1"] - line["y0"]) / s),
+            x=round(line["x0"] / s),
+            y=round(line["y0"] / s),
+            w=round((line["x1"] - line["x0"]) / s),
+            h=round((line["y1"] - line["y0"]) / s),
             conf=sum(line["confs"]) / len(line["confs"]),
         )
         for line in lines.values()
@@ -226,7 +232,7 @@ def _ocr_pass(
 
 
 def _extract_ink_alpha(
-    crop_rgb: "Image.Image", dark_threshold: int = 235, binarize_ink: bool = False
+    crop_rgb: Image.Image, dark_threshold: int = 235, binarize_ink: bool = False
 ):
     """RGBA crop where dark ink strokes are opaque, near-white background is
     fully transparent — so compositing only paints the actual glyphs, not a
@@ -260,7 +266,9 @@ def _extract_ink_alpha(
         alpha = np.clip((float(otsu_thr) - arr) / 25.0 * 255.0, 0, 255).astype("uint8")
         rgba = Image.new("RGBA", sharpened.size, (0, 0, 0, 255))
     else:
-        alpha = np.clip((dark_threshold - arr) / dark_threshold * 255.0 * 1.6, 0, 255).astype("uint8")
+        alpha = np.clip((dark_threshold - arr) / dark_threshold * 255.0 * 1.6, 0, 255).astype(
+            "uint8"
+        )
         alpha[arr > dark_threshold] = 0
         rgba = sharpened.convert("RGBA")
     rgba.putalpha(Image.fromarray(alpha))
@@ -273,7 +281,7 @@ _MAX_TEXT_SATURATION = 45  # 0-255; real dimension/label ink is near-monochrome
 _MAX_DARK_FRACTION = 0.35  # text is sparse strokes on white — not a solid dark fill
 
 
-def _looks_like_text(crop_rgb: "Image.Image") -> bool:
+def _looks_like_text(crop_rgb: Image.Image) -> bool:
     """Reject OCR false positives that aren't actually text lines.
 
     Two independent tells catch different failure modes seen on real
@@ -296,7 +304,7 @@ def _looks_like_text(crop_rgb: "Image.Image") -> bool:
     return dark_fraction <= _MAX_DARK_FRACTION
 
 
-def _upscale_crop(crop_rgb: "Image.Image", factor: int = 2):
+def _upscale_crop(crop_rgb: Image.Image, factor: int = 2):
     """Deterministic super-resolution of a text crop before pasting: photo
     glyphs at 8-15px are the sharpness bottleneck of the whole hybrid result.
     Lanczos ×2 + edge-aware unsharp visibly crispens strokes and CANNOT
@@ -317,7 +325,7 @@ _REDUNDANT_RECALL = 0.60  # crop ink covered by output ink ≥ this → already 
 _REDUNDANT_DILATE_PX = 4
 
 
-def _already_drawn(out_rgba: "Image.Image", dest: tuple[int, int], crop_rgb: "Image.Image") -> bool:
+def _already_drawn(out_rgba: Image.Image, dest: tuple[int, int], crop_rgb: Image.Image) -> bool:
     """True when the output already contains the crop's ink structure at the
     paste location. Measured as recall of the crop's ink under the (slightly
     dilated) output ink. Line structures the model redrew (window frames,
@@ -353,7 +361,7 @@ def _already_drawn(out_rgba: "Image.Image", dest: tuple[int, int], crop_rgb: "Im
         return False
 
 
-def _dominant_light_color(crop_rgb: "Image.Image") -> tuple[int, int, int]:
+def _dominant_light_color(crop_rgb: Image.Image) -> tuple[int, int, int]:
     """Median color among the crop's lighter half — a robust stand-in for
     "the paper/background color behind this text" on a lightly toned/aged
     scan, ignoring the dark ink pixels themselves (which would otherwise pull
@@ -489,7 +497,9 @@ def composite_text_regions(
     return buf.getvalue()
 
 
-def text_fidelity_score(source_bytes: bytes, result_bytes: bytes, regions: list[TextRegion] | None = None) -> dict:
+def text_fidelity_score(
+    source_bytes: bytes, result_bytes: bytes, regions: list[TextRegion] | None = None
+) -> dict:
     """Quantify how faithfully the result reproduces the source's text pixels.
 
     NOT an OCR-word comparison: tesseract's *character recognition* is

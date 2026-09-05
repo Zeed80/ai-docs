@@ -5,18 +5,17 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.jwt import get_current_user, require_role
+from app.auth.jwt import require_role
 from app.auth.models import ROLE_PERMISSIONS, UserInfo, UserRole
 from app.db.models import ApiKey, AuditLog, Department, MailboxConfig, User
 from app.db.session import get_db
-from app.utils.crypto import encrypt_password
 from app.domain.admin import (
     ApiKeyCreate,
     ApiKeyCreatedOut,
@@ -49,6 +48,7 @@ from app.domain.admin import (
     UserOut,
     UserUpdate,
 )
+from app.utils.crypto import encrypt_password
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 logger = structlog.get_logger()
@@ -77,7 +77,9 @@ async def create_user(
     if payload.password and len(payload.password) < 8:
         raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
 
-    existing = (await db.execute(select(User).where(User.email == payload.email))).scalar_one_or_none()
+    existing = (
+        await db.execute(select(User).where(User.email == payload.email))
+    ).scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=409, detail="User with this email already exists")
 
@@ -87,9 +89,11 @@ async def create_user(
     authentik_pk: int | None = None
     sub = f"local:{_uuid.uuid4()}"
     from app.services.integration_config import get_authentik_token
+
     if settings.auth_enabled and get_authentik_token():
         try:
             from app.services.authentik_api import provision_user
+
             authentik_pk = await provision_user(
                 email=payload.email,
                 username=preferred_username,
@@ -127,7 +131,9 @@ async def create_user(
     await db.commit()
     await db.refresh(user)
 
-    logger.info("admin_create_user", admin=admin.sub, email=payload.email, authentik_pk=authentik_pk)
+    logger.info(
+        "admin_create_user", admin=admin.sub, email=payload.email, authentik_pk=authentik_pk
+    )
     return UserOut.model_validate(user)
 
 
@@ -166,7 +172,9 @@ async def set_user_password(
         authentik_pk = await find_user_by_email(user.email)
 
     if authentik_pk is None:
-        raise HTTPException(status_code=404, detail="User not found in Authentik; they must log in via SSO first")
+        raise HTTPException(
+            status_code=404, detail="User not found in Authentik; they must log in via SSO first"
+        )
 
     try:
         await set_password(authentik_pk, payload.password)
@@ -193,11 +201,39 @@ async def set_user_password(
 # (not agent-gated) — same trust level as set_user_password above.
 
 _TRANSLIT = {
-    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
-    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
-    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
-    "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "",
-    "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    "а": "a",
+    "б": "b",
+    "в": "v",
+    "г": "g",
+    "д": "d",
+    "е": "e",
+    "ё": "e",
+    "ж": "zh",
+    "з": "z",
+    "и": "i",
+    "й": "y",
+    "к": "k",
+    "л": "l",
+    "м": "m",
+    "н": "n",
+    "о": "o",
+    "п": "p",
+    "р": "r",
+    "с": "s",
+    "т": "t",
+    "у": "u",
+    "ф": "f",
+    "х": "h",
+    "ц": "ts",
+    "ч": "ch",
+    "ш": "sh",
+    "щ": "sch",
+    "ъ": "",
+    "ы": "y",
+    "ь": "",
+    "э": "e",
+    "ю": "yu",
+    "я": "ya",
 }
 
 
@@ -240,9 +276,13 @@ async def get_user_mailbox(
 
     mail_cfg = await get_mail_server_config()
     return UserMailboxOut(
-        address=cfg.name, is_active=cfg.is_active, webmail_url=mail_cfg.webmail_url,
-        last_sync_at=cfg.last_sync_at, sync_error=cfg.sync_error,
-        sweep_enabled=cfg.sweep_enabled, quota_mb=cfg.quota_mb,
+        address=cfg.name,
+        is_active=cfg.is_active,
+        webmail_url=mail_cfg.webmail_url,
+        last_sync_at=cfg.last_sync_at,
+        sync_error=cfg.sync_error,
+        sweep_enabled=cfg.sweep_enabled,
+        quota_mb=cfg.quota_mb,
     )
 
 
@@ -273,7 +313,10 @@ async def provision_user_mailbox(
 
     mail_cfg = await get_mail_server_config()
     if not mail_cfg.configured:
-        raise HTTPException(status_code=503, detail="Mail server is not configured (см. /api/admin/integrations/mail-server)")
+        raise HTTPException(
+            status_code=503,
+            detail="Mail server is not configured (см. /api/admin/integrations/mail-server)",
+        )
 
     local_part = (payload.local_part or _suggest_local_part(user)).strip().lower()
     if not local_part:
@@ -284,7 +327,9 @@ async def provision_user_mailbox(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=mailcow_api.explain_api_failure(exc))
     if not available:
-        raise HTTPException(status_code=409, detail=f"{local_part}@{mail_cfg.mail_domain} уже занят")
+        raise HTTPException(
+            status_code=409, detail=f"{local_part}@{mail_cfg.mail_domain} уже занят"
+        )
 
     full_address = f"{local_part}@{mail_cfg.mail_domain}"
     password = secrets.token_urlsafe(18)
@@ -292,8 +337,11 @@ async def provision_user_mailbox(
 
     try:
         await mailcow_api.create_mailbox(
-            local_part=local_part, domain=mail_cfg.mail_domain, password=password,
-            full_name=user.name or user.preferred_username, quota_mb=quota_mb,
+            local_part=local_part,
+            domain=mail_cfg.mail_domain,
+            password=password,
+            full_name=user.name or user.preferred_username,
+            quota_mb=quota_mb,
         )
     except Exception as exc:
         logger.error("mailcow_provision_failed", error=str(exc), user_sub=user_sub)
@@ -328,10 +376,14 @@ async def provision_user_mailbox(
         sweep_enabled=False,
     )
     db.add(cfg)
-    db.add(AuditLog(
-        user_id=admin.sub, action="admin.provision_mailbox", entity_type="user",
-        details={"target_sub": user_sub, "address": full_address, "quota_mb": quota_mb},
-    ))
+    db.add(
+        AuditLog(
+            user_id=admin.sub,
+            action="admin.provision_mailbox",
+            entity_type="user",
+            details={"target_sub": user_sub, "address": full_address, "quota_mb": quota_mb},
+        )
+    )
     await db.commit()
     logger.info("admin_provision_mailbox", admin=admin.sub, target=user_sub, address=full_address)
     return UserMailboxProvisionedOut(address=full_address, generated_password=password)
@@ -357,10 +409,14 @@ async def reset_user_mailbox_password(
 
     cfg.imap_password_encrypted = encrypt_password(password)
     cfg.smtp_password_encrypted = encrypt_password(password)
-    db.add(AuditLog(
-        user_id=admin.sub, action="admin.reset_mailbox_password", entity_type="user",
-        details={"target_sub": user_sub, "address": cfg.name},
-    ))
+    db.add(
+        AuditLog(
+            user_id=admin.sub,
+            action="admin.reset_mailbox_password",
+            entity_type="user",
+            details={"target_sub": user_sub, "address": cfg.name},
+        )
+    )
     await db.commit()
     logger.info("admin_reset_mailbox_password", admin=admin.sub, target=user_sub)
     return UserMailboxProvisionedOut(address=cfg.name, generated_password=password)
@@ -413,18 +469,25 @@ async def revoke_user_mailbox(
 
     cfg.is_active = False
     cfg.sweep_enabled = False
-    db.add(AuditLog(
-        user_id=admin.sub, action=action, entity_type="user",
-        details={
-            "target_sub": user_sub,
-            "address": cfg.name,
-            "deleted_on_server": payload.delete_on_server,
-        },
-    ))
+    db.add(
+        AuditLog(
+            user_id=admin.sub,
+            action=action,
+            entity_type="user",
+            details={
+                "target_sub": user_sub,
+                "address": cfg.name,
+                "deleted_on_server": payload.delete_on_server,
+            },
+        )
+    )
     await db.commit()
     logger.info(
-        "admin_revoke_mailbox", admin=admin.sub, target=user_sub,
-        address=cfg.name, deleted=payload.delete_on_server,
+        "admin_revoke_mailbox",
+        admin=admin.sub,
+        target=user_sub,
+        address=cfg.name,
+        deleted=payload.delete_on_server,
     )
 
 
@@ -455,10 +518,14 @@ async def set_user_mailbox_sweep(
     from app.services.notifications import create_notification
 
     if payload.sweep_enabled and not cfg.sweep_enabled:
-        db.add(AuditLog(
-            user_id=admin.sub, action="admin.mailbox_sweep_requested", entity_type="user",
-            details={"target_sub": user_sub, "address": cfg.name},
-        ))
+        db.add(
+            AuditLog(
+                user_id=admin.sub,
+                action="admin.mailbox_sweep_requested",
+                entity_type="user",
+                details={"target_sub": user_sub, "address": cfg.name},
+            )
+        )
         await create_notification(
             db,
             user_sub=user_sub,
@@ -477,13 +544,18 @@ async def set_user_mailbox_sweep(
     else:
         was_enabled = cfg.sweep_enabled
         cfg.sweep_enabled = payload.sweep_enabled
-        db.add(AuditLog(
-            user_id=admin.sub, action="admin.mailbox_sweep", entity_type="user",
-            details={
-                "target_sub": user_sub, "address": cfg.name,
-                "sweep_enabled": payload.sweep_enabled,
-            },
-        ))
+        db.add(
+            AuditLog(
+                user_id=admin.sub,
+                action="admin.mailbox_sweep",
+                entity_type="user",
+                details={
+                    "target_sub": user_sub,
+                    "address": cfg.name,
+                    "sweep_enabled": payload.sweep_enabled,
+                },
+            )
+        )
         if was_enabled != payload.sweep_enabled:
             await create_notification(
                 db,
@@ -497,16 +569,22 @@ async def set_user_mailbox_sweep(
             )
         await db.commit()
         logger.info(
-            "admin_mailbox_sweep", admin=admin.sub, target=user_sub,
+            "admin_mailbox_sweep",
+            admin=admin.sub,
+            target=user_sub,
             enabled=payload.sweep_enabled,
         )
     from app.services.integration_config import get_mail_server_config
 
     mail_cfg = await get_mail_server_config()
     return UserMailboxOut(
-        address=cfg.name, is_active=cfg.is_active, webmail_url=mail_cfg.webmail_url,
-        last_sync_at=cfg.last_sync_at, sync_error=cfg.sync_error,
-        sweep_enabled=cfg.sweep_enabled, quota_mb=cfg.quota_mb,
+        address=cfg.name,
+        is_active=cfg.is_active,
+        webmail_url=mail_cfg.webmail_url,
+        last_sync_at=cfg.last_sync_at,
+        sync_error=cfg.sync_error,
+        sweep_enabled=cfg.sweep_enabled,
+        quota_mb=cfg.quota_mb,
     )
 
 
@@ -527,9 +605,7 @@ async def list_users(
         stmt = stmt.where(User.is_active == is_active)
     if q:
         like = f"%{q.lower()}%"
-        stmt = stmt.where(
-            (func.lower(User.name).like(like)) | (func.lower(User.email).like(like))
-        )
+        stmt = stmt.where((func.lower(User.name).like(like)) | (func.lower(User.email).like(like)))
 
     total_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(total_stmt)).scalar_one()
@@ -666,6 +742,7 @@ async def update_user(
             if user_sub == admin.sub:
                 raise HTTPException(status_code=400, detail="Cannot remove your own admin role")
             from app.config import settings
+
             admin_count_result = await db.execute(
                 select(func.count()).where(User.role == "admin", User.is_active == True)  # noqa: E712
             )
@@ -677,6 +754,7 @@ async def update_user(
         # Prevent deactivating the last admin
         if not payload.is_active and user.role == "admin":
             from app.config import settings
+
             admin_count_result = await db.execute(
                 select(func.count()).where(User.role == "admin", User.is_active == True)  # noqa: E712
             )
@@ -699,15 +777,23 @@ async def update_user(
                     # a silently live mailbox is a real security gap.
                     logger.error(
                         "mailbox_deactivate_failed_on_user_deactivate",
-                        address=mailbox.name, error=str(exc),
+                        address=mailbox.name,
+                        error=str(exc),
                     )
                 mailbox.sweep_enabled = False
                 mailbox.is_active = False
-                db.add(AuditLog(
-                    user_id=admin.sub, action="admin.deactivate_mailbox", entity_type="user",
-                    details={"target_sub": user_sub, "address": mailbox.name,
-                             "reason": "user deactivated"},
-                ))
+                db.add(
+                    AuditLog(
+                        user_id=admin.sub,
+                        action="admin.deactivate_mailbox",
+                        entity_type="user",
+                        details={
+                            "target_sub": user_sub,
+                            "address": mailbox.name,
+                            "reason": "user deactivated",
+                        },
+                    )
+                )
     if payload.preferences is not None:
         user.preferences = payload.preferences
     if "section_access" in payload.model_fields_set:
@@ -750,7 +836,10 @@ async def update_user(
         action="admin.update_user",
         entity_type="user",
         entity_id=user.id,
-        details={"target_sub": user_sub, "changes": payload.model_dump(mode="json", exclude_none=True)},
+        details={
+            "target_sub": user_sub,
+            "changes": payload.model_dump(mode="json", exclude_none=True),
+        },
     )
     db.add(log)
     await db.commit()
@@ -894,9 +983,7 @@ async def delete_department(
         raise HTTPException(status_code=404, detail="Department not found")
 
     # Block deletion while users or child departments still reference it.
-    in_use = await db.execute(
-        select(func.count()).where(User.department_id == department_id)
-    )
+    in_use = await db.execute(select(func.count()).where(User.department_id == department_id))
     if (in_use.scalar() or 0) > 0:
         raise HTTPException(status_code=409, detail="Department still has assigned users")
     has_children = await db.execute(
@@ -932,7 +1019,11 @@ async def get_authentik_integration(
     admin: UserInfo = _admin_dep,
 ) -> IntegrationAuthentikOut:
     from app.config import settings
-    from app.services.integration_config import get_authentik_external_url, get_authentik_token, mask_token
+    from app.services.integration_config import (
+        get_authentik_external_url,
+        get_authentik_token,
+        mask_token,
+    )
 
     token = get_authentik_token()
     ext = get_authentik_external_url()
@@ -975,7 +1066,6 @@ async def test_authentik_integration(
     admin: UserInfo = _admin_dep,
 ) -> IntegrationTestResult:
     """Validate the stored token by calling the Authentik API."""
-    from app.config import settings
     from app.services.integration_config import get_authentik_token
 
     if not get_authentik_token():
@@ -1010,7 +1100,9 @@ async def _get_mail_server_row(db: AsyncSession):
     from app.db.models import MailServerConfig
 
     return (
-        await db.execute(select(MailServerConfig).where(MailServerConfig.singleton_key == "default"))
+        await db.execute(
+            select(MailServerConfig).where(MailServerConfig.singleton_key == "default")
+        )
     ).scalar_one_or_none()
 
 
@@ -1024,7 +1116,11 @@ async def get_mail_server_integration(
     row = await _get_mail_server_row(db)
     if row is None:
         return IntegrationMailServerOut(
-            configured=False, api_key_set=False, api_key_hint="", imap_port=993, smtp_port=465,
+            configured=False,
+            api_key_set=False,
+            api_key_hint="",
+            imap_port=993,
+            smtp_port=465,
             default_quota_mb=1024,
         )
     api_key = decrypt(row.api_key_encrypted)
@@ -1087,7 +1183,9 @@ async def update_mail_server_integration(
     if "api_url" in fields:
         row.api_url = _normalize_api_url(payload.api_url or "") or None
     if "api_key" in fields:
-        row.api_key_encrypted = encrypt((payload.api_key or "").strip()) if payload.api_key else None
+        row.api_key_encrypted = (
+            encrypt((payload.api_key or "").strip()) if payload.api_key else None
+        )
     if "mail_domain" in fields:
         row.mail_domain = (payload.mail_domain or "").strip().lower() or None
     if "webmail_url" in fields:
@@ -1159,10 +1257,7 @@ async def list_oauth_apps(
 ) -> list[OAuthAppOut]:
     from app.db.models import OAuthAppConfig
 
-    rows = {
-        row.provider: row
-        for row in (await db.execute(select(OAuthAppConfig))).scalars().all()
-    }
+    rows = {row.provider: row for row in (await db.execute(select(OAuthAppConfig))).scalars().all()}
     return [_oauth_app_out(p, rows.get(p)) for p in _OAUTH_PROVIDERS]
 
 
@@ -1190,7 +1285,9 @@ async def update_oauth_app(
     if "client_id" in fields:
         row.client_id = (payload.client_id or "").strip() or None
     if "client_secret" in fields:
-        row.client_secret_encrypted = encrypt(payload.client_secret.strip()) if payload.client_secret else None
+        row.client_secret_encrypted = (
+            encrypt(payload.client_secret.strip()) if payload.client_secret else None
+        )
     if "redirect_uri" in fields:
         row.redirect_uri = (payload.redirect_uri or "").strip().rstrip("/") or None
     row.updated_by = admin.sub
@@ -1207,9 +1304,7 @@ async def update_oauth_app(
 async def get_permission_matrix(
     _user: UserInfo = _admin_dep,
 ) -> PermissionMatrixOut:
-    matrix = {
-        role.value: sorted(perms) for role, perms in ROLE_PERMISSIONS.items()
-    }
+    matrix = {role.value: sorted(perms) for role, perms in ROLE_PERMISSIONS.items()}
     return PermissionMatrixOut(matrix=matrix)
 
 
@@ -1366,6 +1461,7 @@ async def system_status(
     # Redis check
     try:
         from app.utils.redis_client import get_async_redis
+
         await get_async_redis().ping()
         redis_status = "ok"
     except Exception as exc:

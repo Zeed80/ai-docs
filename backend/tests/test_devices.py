@@ -21,9 +21,7 @@ async def test_register_creates_device_with_topic(client):
 @pytest.mark.asyncio
 async def test_register_is_idempotent_per_topic(client):
     first = (await client.post("/api/devices/register", json={})).json()
-    again = await client.post(
-        "/api/devices/register", json={"ntfy_topic": first["ntfy_topic"]}
-    )
+    again = await client.post("/api/devices/register", json={"ntfy_topic": first["ntfy_topic"]})
     assert again.status_code == 200
     # same topic → same device row
     assert again.json()["id"] == first["id"]

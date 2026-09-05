@@ -62,13 +62,11 @@ def aggregate(records: list[dict]) -> dict:
         "entity_recall": round(recall, 6),
         "entity_f1": round(f1, 6),
         "exact_sheet_rate": round(
-            sum(record.get("exact_sheet", False) for record in evaluated)
-            / max(len(evaluated), 1),
+            sum(record.get("exact_sheet", False) for record in evaluated) / max(len(evaluated), 1),
             6,
         ),
         "false_exact_rate": round(
-            sum(record.get("false_exact", False) for record in evaluated)
-            / max(len(evaluated), 1),
+            sum(record.get("false_exact", False) for record in evaluated) / max(len(evaluated), 1),
             6,
         ),
         "per_type": per_type,
@@ -86,11 +84,7 @@ def evaluate(
     from app.ai.cad_ir.schema import CadIR
     from scripts.eval_vectorize import _recognize
 
-    rows = [
-        json.loads(line)
-        for line in manifest_path.read_text().splitlines()
-        if line.strip()
-    ]
+    rows = [json.loads(line) for line in manifest_path.read_text().splitlines() if line.strip()]
     rows = [row for row in rows if row.get("split") == split]
     if limit:
         rows = rows[:limit]
@@ -129,12 +123,12 @@ def evaluate(
         for domain in sorted({record.get("domain", "unknown") for record in records})
     }
     summary["by_class"] = {
-        drawing_class: aggregate([
-            record for record in records if record.get("drawing_class") == drawing_class
-        ])
-        for drawing_class in sorted({
-            record.get("drawing_class", "unclassified") for record in records
-        })
+        drawing_class: aggregate(
+            [record for record in records if record.get("drawing_class") == drawing_class]
+        )
+        for drawing_class in sorted(
+            {record.get("drawing_class", "unclassified") for record in records}
+        )
     }
     return {
         "schema_version": 1,

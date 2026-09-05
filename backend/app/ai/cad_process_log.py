@@ -14,14 +14,9 @@ from collections.abc import Awaitable, Callable
 from contextvars import ContextVar, Token
 from typing import Any
 
+CadProcessRecorder = Callable[[str, str, str, dict[str, Any] | None], Awaitable[None]]
 
-CadProcessRecorder = Callable[
-    [str, str, str, dict[str, Any] | None], Awaitable[None]
-]
-
-_recorder: ContextVar[CadProcessRecorder | None] = ContextVar(
-    "cad_process_recorder", default=None
-)
+_recorder: ContextVar[CadProcessRecorder | None] = ContextVar("cad_process_recorder", default=None)
 
 
 def install_cad_process_recorder(recorder: CadProcessRecorder) -> Token:

@@ -168,12 +168,19 @@ def _check_operation_checkpoints() -> None:
     base = _feature("extrude", width_mm=40.0, height_mm=30.0, depth_mm=10.0)
     base["source_entity_ids"] = [f"{nonce}:base"]
     boss = _feature(
-        "boss", profile="circle", center_x_mm=20.0, center_y_mm=15.0,
-        diameter_mm=10.0, depth_mm=5.0,
+        "boss",
+        profile="circle",
+        center_x_mm=20.0,
+        center_y_mm=15.0,
+        diameter_mm=10.0,
+        depth_mm=5.0,
     )
     hole = _feature(
-        "hole", center_x_mm=20.0, center_y_mm=15.0,
-        diameter_mm=4.0, through=True,
+        "hole",
+        center_x_mm=20.0,
+        center_y_mm=15.0,
+        diameter_mm=4.0,
+        through=True,
     )
     first_candidate = _candidate(base, boss, hole, label="operation checkpoint smoke")
     first_status, first_payload = _compile(first_candidate)
@@ -194,13 +201,19 @@ def _check_operation_checkpoints() -> None:
     first_body = (first_incremental.get("operation_checkpoints") or [{}])[0]
     second_body = (second_incremental.get("operation_checkpoints") or [{}])[0]
     first_boss = next(
-        (item for item in first_body.get("checkpoints") or []
-         if item.get("checkpoint_id") == "profile_operations:0:1"),
+        (
+            item
+            for item in first_body.get("checkpoints") or []
+            if item.get("checkpoint_id") == "profile_operations:0:1"
+        ),
         {},
     )
     second_hit = next(
-        (item for item in second_body.get("checkpoints") or []
-         if item.get("source") == "cache_hit"),
+        (
+            item
+            for item in second_body.get("checkpoints") or []
+            if item.get("source") == "cache_hit"
+        ),
         {},
     )
 
@@ -333,17 +346,9 @@ def _check_full_application_pipeline() -> None:
     roundtrip = verify_dxf_roundtrip(sheet.ir)
     entity_types = {entity.type for entity in sheet.ir.entities}
     visible_views = sheet.verification.get("view_coverage", {}).get("visible_views", [])
-    dimension_texts = [
-        entity.text
-        for entity in sheet.ir.entities
-        if entity.type == "dimension"
-    ]
+    dimension_texts = [entity.text for entity in sheet.ir.entities if entity.type == "dimension"]
     expected_dimensions = {"40", "100", "Ø80g6", "Ø60", "Ø30"}
-    annotation_texts = {
-        entity.text
-        for entity in sheet.ir.entities
-        if entity.type == "annotation"
-    }
+    annotation_texts = {entity.text for entity in sheet.ir.entities if entity.type == "annotation"}
     expected_annotations = {"Ra 1,6", "Д", "↗ 0,008 Д"}
     ok = (
         bool(artifacts.report.get("brep_valid"))
@@ -389,9 +394,10 @@ def main() -> int:
         base_report["brep_valid"]
         and base_report["manifold"]
         and base_report["solid_count"] == 1
-        and all(base_report.get(key, 0) > 0 for key in (
-            "shell_count", "face_count", "edge_count", "vertex_count"
-        ))
+        and all(
+            base_report.get(key, 0) > 0
+            for key in ("shell_count", "face_count", "edge_count", "vertex_count")
+        )
         # The base itself is also localized as the full initial B-Rep.
         and _localized(base_report, "revolve"),
         (
@@ -423,13 +429,17 @@ def main() -> int:
     # A rounded plate is a different base B-Rep, not a square box whose read R
     # disappeared before OpenCascade. Its volume is the rounded-rectangle area
     # times depth.
-    status, payload = _compile(_candidate(_feature(
-        "extrude",
-        width_mm=100.0,
-        height_mm=60.0,
-        depth_mm=10.0,
-        corner_radius_mm=8.0,
-    )))
+    status, payload = _compile(
+        _candidate(
+            _feature(
+                "extrude",
+                width_mm=100.0,
+                height_mm=60.0,
+                depth_mm=10.0,
+                corner_radius_mm=8.0,
+            )
+        )
+    )
     if status == 200:
         rounded = _report_from_zip(payload)
         expected = (100.0 * 60.0 - (4.0 - math.pi) * 8.0**2) * 10.0
@@ -491,8 +501,13 @@ def main() -> int:
             _candidate(
                 _base(),
                 _feature(
-                    "keyway", axial_start_mm=40.0, length_mm=85.0, width_mm=12.0,
-                    depth_mm=5.0, angle_deg=angle, end_type="closed",
+                    "keyway",
+                    axial_start_mm=40.0,
+                    length_mm=85.0,
+                    width_mm=12.0,
+                    depth_mm=5.0,
+                    angle_deg=angle,
+                    end_type="closed",
                 ),
             )
         )
@@ -515,8 +530,13 @@ def main() -> int:
         _candidate(
             _base(),
             _feature(
-                "hole", axis="radial", diameter_mm=14.0, axial_position_mm=250.0,
-                center_x_mm=0.0, center_y_mm=0.0, through=True,
+                "hole",
+                axis="radial",
+                diameter_mm=14.0,
+                axial_position_mm=250.0,
+                center_x_mm=0.0,
+                center_y_mm=0.0,
+                through=True,
             ),
         )
     )
@@ -537,12 +557,22 @@ def main() -> int:
         _candidate(
             _base(),
             _feature(
-                "thread", spec="M75x1,5", diameter_mm=75.0, pitch_mm=1.5,
-                axial_start_mm=377.0, length_mm=18.0, internal=False,
+                "thread",
+                spec="M75x1,5",
+                diameter_mm=75.0,
+                pitch_mm=1.5,
+                axial_start_mm=377.0,
+                length_mm=18.0,
+                internal=False,
             ),
             _feature(
-                "thread", spec="M54,5x2", diameter_mm=54.5, pitch_mm=2.0,
-                axial_start_mm=445.0, length_mm=25.0, internal=True,
+                "thread",
+                spec="M54,5x2",
+                diameter_mm=54.5,
+                pitch_mm=2.0,
+                axial_start_mm=445.0,
+                length_mm=25.0,
+                internal=True,
             ),
         )
     )
@@ -550,14 +580,23 @@ def main() -> int:
         report = _report_from_zip(payload)
         check(
             "external and internal threads keep exact localization",
-            report.get("cosmetic_threads") == [
+            report.get("cosmetic_threads")
+            == [
                 {
-                    "spec": "M75x1,5", "diameter_mm": 75.0, "pitch_mm": 1.5,
-                    "axial_start_mm": 377.0, "length_mm": 18.0, "internal": False,
+                    "spec": "M75x1,5",
+                    "diameter_mm": 75.0,
+                    "pitch_mm": 1.5,
+                    "axial_start_mm": 377.0,
+                    "length_mm": 18.0,
+                    "internal": False,
                 },
                 {
-                    "spec": "M54,5x2", "diameter_mm": 54.5, "pitch_mm": 2.0,
-                    "axial_start_mm": 445.0, "length_mm": 25.0, "internal": True,
+                    "spec": "M54,5x2",
+                    "diameter_mm": 54.5,
+                    "pitch_mm": 2.0,
+                    "axial_start_mm": 445.0,
+                    "length_mm": 25.0,
+                    "internal": True,
                 },
             ],
             f"threads={report.get('cosmetic_threads')}",
@@ -574,30 +613,45 @@ def main() -> int:
     # centre and source face in report.json.
     axial_features = [_base()]
     for center_y in (20.0, -20.0):
-        axial_features.extend([
-            _feature(
-                "hole", axis="z", diameter_mm=6.8,
-                center_x_mm=0.0, center_y_mm=center_y,
-                through=False, depth_mm=12.0, from_face="zmax",
-            ),
-            _feature(
-                "thread", spec="M8", diameter_mm=8.0, pitch_mm=1.25,
-                center_x_mm=0.0, center_y_mm=center_y,
-                from_face="zmax", length_mm=12.0, internal=True,
-            ),
-        ])
+        axial_features.extend(
+            [
+                _feature(
+                    "hole",
+                    axis="z",
+                    diameter_mm=6.8,
+                    center_x_mm=0.0,
+                    center_y_mm=center_y,
+                    through=False,
+                    depth_mm=12.0,
+                    from_face="zmax",
+                ),
+                _feature(
+                    "thread",
+                    spec="M8",
+                    diameter_mm=8.0,
+                    pitch_mm=1.25,
+                    center_x_mm=0.0,
+                    center_y_mm=center_y,
+                    from_face="zmax",
+                    length_mm=12.0,
+                    internal=True,
+                ),
+            ]
+        )
     status, payload = _compile(_candidate(*axial_features))
     if status == 200:
         report = _report_from_zip(payload)
-        holes = [
-            item for item in report.get("feature_results", [])
-            if item.get("kind") == "hole"
-        ]
+        holes = [item for item in report.get("feature_results", []) if item.get("kind") == "hole"]
         expected_threads = [
             {
-                "spec": "M8", "diameter_mm": 8.0, "pitch_mm": 1.25,
-                "length_mm": 12.0, "center_x_mm": 0.0,
-                "center_y_mm": center_y, "from_face": "zmax", "internal": True,
+                "spec": "M8",
+                "diameter_mm": 8.0,
+                "pitch_mm": 1.25,
+                "length_mm": 12.0,
+                "center_x_mm": 0.0,
+                "center_y_mm": center_y,
+                "from_face": "zmax",
+                "internal": True,
             }
             for center_y in (20.0, -20.0)
         ]
@@ -624,7 +678,8 @@ def main() -> int:
         _candidate(
             _base(),
             _feature(
-                "chamfer", size_mm=1.0,
+                "chamfer",
+                size_mm=1.0,
                 edge_selector={"curve": "Circle", "at_z_mm": 0.0, "diameter_mm": 80.0},
             ),
         )
@@ -649,7 +704,8 @@ def main() -> int:
     if status == 200:
         report = _report_from_zip(payload)
         failed = [
-            item for item in report.get("feature_results", [])
+            item
+            for item in report.get("feature_results", [])
             if item.get("kind") == "chamfer" and item.get("status") == "failed"
         ]
         detail = " | ".join(report.get("warnings", []))[:240]
@@ -661,7 +717,11 @@ def main() -> int:
             f"HTTP 200, kept body, failed={len(failed)}: {detail}",
         )
     else:
-        detail = json.dumps(payload, ensure_ascii=False)[:240] if isinstance(payload, dict) else str(payload)[:240]
+        detail = (
+            json.dumps(payload, ensure_ascii=False)[:240]
+            if isinstance(payload, dict)
+            else str(payload)[:240]
+        )
         check(
             "ambiguous selector is refused with candidates",
             status == 422 and "matches" in detail,
@@ -676,7 +736,8 @@ def main() -> int:
             _candidate(
                 _base(),
                 _feature(
-                    "chamfer", size_mm=size,
+                    "chamfer",
+                    size_mm=size,
                     edge_selector={"curve": "Circle", "at_z_mm": 0.0, "diameter_mm": 80.0},
                 ),
             )
@@ -692,15 +753,17 @@ def main() -> int:
                 f"V={float(report['volume_mm3']):.0f}, warnings={report.get('warnings')}",
             )
         else:
-            check(
-                f"a refused chamfer keeps the part ({how})", False, f"HTTP {status}: {payload}"
-            )
+            check(f"a refused chamfer keeps the part ({how})", False, f"HTTP {status}: {payload}")
 
     # 7. The flange path still works — hole after the phase reorder.
     flange = _candidate(
-        _feature("revolve", profile_points=[
-            {"r": 280.0, "z": 0.0}, {"r": 280.0, "z": 20.0},
-        ]),
+        _feature(
+            "revolve",
+            profile_points=[
+                {"r": 280.0, "z": 0.0},
+                {"r": 280.0, "z": 20.0},
+            ],
+        ),
         _feature("hole", diameter_mm=80.0, center_x_mm=0.0, center_y_mm=0.0, through=True),
         _feature("hole", diameter_mm=14.0, center_x_mm=140.0, center_y_mm=0.0, through=True),
         label="flange",
@@ -740,7 +803,8 @@ def main() -> int:
         # 9. And a dimension can actually be placed on one of them.
         if indexed:
             horizontal = [
-                item for item in indexed
+                item
+                for item in indexed
                 if item.get("type") == "line" and len(item.get("points") or []) == 2
             ]
             target = (horizontal or indexed)[0]
@@ -830,9 +894,7 @@ def main() -> int:
     detail_views = detailed.get("views") if isinstance(detailed, dict) else None
     detail_view = detail_views[1] if detail_views and len(detail_views) > 1 else {}
     detail_bounds = detail_view.get("bounds_mm") or {}
-    detail_width = (
-        float(detail_bounds.get("u_max", 0.0)) - float(detail_bounds.get("u_min", 0.0))
-    )
+    detail_width = float(detail_bounds.get("u_max", 0.0)) - float(detail_bounds.get("u_min", 0.0))
     check(
         "detail view crops and magnifies its parent projection",
         status == 200

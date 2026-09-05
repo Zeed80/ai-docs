@@ -63,7 +63,9 @@ def main() -> int:
         if dict(counts) != expected_counts:
             errors.append(f"counts={dict(counts)} expected={expected_counts}")
         dxf_expected = {
-            {"segment": "line", "circle": "circle", "arc": "arc", "dimension": "dimension"}[kind]: value
+            {"segment": "line", "circle": "circle", "arc": "arc", "dimension": "dimension"}[
+                kind
+            ]: value
             for kind, value in expected_counts.items()
             if kind in {"segment", "circle", "arc", "dimension"}
         }
@@ -75,16 +77,18 @@ def main() -> int:
             errors.append(f"dimensions={values} expected={expected_values}")
         if not dxf_reopens:
             errors.append("dxf_reopens=false")
-        results.append({
-            "id": case["id"],
-            "profile": case["profile"],
-            "passed": not errors,
-            "errors": errors,
-            "entity_counts": dict(counts),
-            "dimension_values_mm": values,
-            "dxf_reopens": dxf_reopens,
-            "dxf_entity_counts": dict(dxf_counts),
-        })
+        results.append(
+            {
+                "id": case["id"],
+                "profile": case["profile"],
+                "passed": not errors,
+                "errors": errors,
+                "entity_counts": dict(counts),
+                "dimension_values_mm": values,
+                "dxf_reopens": dxf_reopens,
+                "dxf_entity_counts": dict(dxf_counts),
+            }
+        )
 
     passed = sum(result["passed"] for result in results)
     report = {

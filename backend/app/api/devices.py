@@ -3,10 +3,11 @@
 The mobile shell obtains/keeps a per-device random ntfy topic and registers it
 here (authenticated via the WebView cookie). Pushes carry no document content.
 """
+
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -64,7 +65,7 @@ async def register_device(
         await db.execute(select(DeviceRegistration).where(DeviceRegistration.ntfy_topic == topic))
     ).scalar_one_or_none()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if existing:
         if existing.user_sub != user.sub:
             raise HTTPException(status_code=409, detail="Topic already registered to another user")
@@ -103,12 +104,16 @@ async def list_devices(
     db: AsyncSession = Depends(get_db),
 ) -> list[DeviceOut]:
     rows = (
-        await db.execute(
-            select(DeviceRegistration)
-            .where(DeviceRegistration.user_sub == user.sub)
-            .order_by(DeviceRegistration.created_at.desc())
+        (
+            await db.execute(
+                select(DeviceRegistration)
+                .where(DeviceRegistration.user_sub == user.sub)
+                .order_by(DeviceRegistration.created_at.desc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [DeviceOut.model_validate(r) for r in rows]
 
 

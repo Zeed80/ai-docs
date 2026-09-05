@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 _NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
 _SYMMETRIC_TOLERANCE = re.compile(r"±\s*(\d+(?:[.,]\d+)?)")
 
@@ -85,12 +84,14 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
             diameter = _number(item.get("diameter_mm", item.get("d")))
             length = _number(item.get("length_mm", item.get("l")))
             for field, value in (("diameter_mm", diameter), ("length_mm", length)):
-                nodes.append({
-                    "id": f"main_view.{group}.{index}.{field}",
-                    "value_mm": value,
-                    "evidence": item.get("evidence") or [],
-                    "status": "read" if value is not None else "missing",
-                })
+                nodes.append(
+                    {
+                        "id": f"main_view.{group}.{index}.{field}",
+                        "value_mm": value,
+                        "evidence": item.get("evidence") or [],
+                        "status": "read" if value is not None else "missing",
+                    }
+                )
             tolerance = item.get("tolerance")
             if diameter is not None and tolerance:
                 upper, lower, source = _tolerance_interval(diameter, tolerance)
@@ -99,33 +100,35 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
                 # located around nominal. They are valid, explicitly partial
                 # constraints — not contradictions and not invented limits.
                 grade_only = source.startswith("grade_only_it")
-                ok = grade_only or (
-                    upper is not None and lower is not None and lower <= upper
+                ok = grade_only or (upper is not None and lower is not None and lower <= upper)
+                constraints.append(
+                    {
+                        "kind": "tolerance_interval",
+                        "target": f"main_view.{group}.{index}.diameter_mm",
+                        "nominal_mm": diameter,
+                        "tolerance": tolerance,
+                        "upper_deviation_mm": upper,
+                        "lower_deviation_mm": lower,
+                        "source": source,
+                        "interval_complete": not grade_only,
+                        "ok": ok,
+                    }
                 )
-                constraints.append({
-                    "kind": "tolerance_interval",
-                    "target": f"main_view.{group}.{index}.diameter_mm",
-                    "nominal_mm": diameter,
-                    "tolerance": tolerance,
-                    "upper_deviation_mm": upper,
-                    "lower_deviation_mm": lower,
-                    "source": source,
-                    "interval_complete": not grade_only,
-                    "ok": ok,
-                })
                 if ok and not grade_only:
-                    nodes.extend([
-                        {
-                            "id": f"main_view.{group}.{index}.diameter_min_mm",
-                            "value_mm": diameter + float(lower),
-                            "status": "derived",
-                        },
-                        {
-                            "id": f"main_view.{group}.{index}.diameter_max_mm",
-                            "value_mm": diameter + float(upper),
-                            "status": "derived",
-                        },
-                    ])
+                    nodes.extend(
+                        [
+                            {
+                                "id": f"main_view.{group}.{index}.diameter_min_mm",
+                                "value_mm": diameter + float(lower),
+                                "status": "derived",
+                            },
+                            {
+                                "id": f"main_view.{group}.{index}.diameter_max_mm",
+                                "value_mm": diameter + float(upper),
+                                "status": "derived",
+                            },
+                        ]
+                    )
                 elif not ok:
                     errors.append(
                         f"{group}[{index}] содержит неподдержанный или неполный допуск {tolerance!r}"
@@ -133,10 +136,20 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
             if length is not None:
                 start = total
                 total += length
-                nodes.extend([
-                    {"id": f"main_view.{group}.{index}.z_start_mm", "value_mm": start, "status": "derived"},
-                    {"id": f"main_view.{group}.{index}.z_end_mm", "value_mm": total, "status": "derived"},
-                ])
+                nodes.extend(
+                    [
+                        {
+                            "id": f"main_view.{group}.{index}.z_start_mm",
+                            "value_mm": start,
+                            "status": "derived",
+                        },
+                        {
+                            "id": f"main_view.{group}.{index}.z_end_mm",
+                            "value_mm": total,
+                            "status": "derived",
+                        },
+                    ]
+                )
                 taper = item.get("taper") or {}
                 if taper:
                     end_diameter = _number(taper.get("end_diameter_mm"))
@@ -144,25 +157,33 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
                     ratio_parts = [_number(value) for value in ratio.split(":", 1)]
                     if end_diameter is not None:
                         ok = end_diameter > 0
-                        constraints.append({
-                            "kind": "positive_taper_end",
-                            "section": f"main_view.{group}.{index}",
-                            "value_mm": end_diameter,
-                            "ok": ok,
-                        })
+                        constraints.append(
+                            {
+                                "kind": "positive_taper_end",
+                                "section": f"main_view.{group}.{index}",
+                                "value_mm": end_diameter,
+                                "ok": ok,
+                            }
+                        )
                         if not ok:
-                            errors.append(f"{group}[{index}] задаёт неположительный конечный диаметр конуса")
+                            errors.append(
+                                f"{group}[{index}] задаёт неположительный конечный диаметр конуса"
+                            )
                     elif len(ratio_parts) == 2 and None not in ratio_parts:
                         numerator, denominator = ratio_parts
                         ok = bool(numerator and denominator and numerator > 0 and denominator > 0)
-                        constraints.append({
-                            "kind": "valid_taper_ratio",
-                            "section": f"main_view.{group}.{index}",
-                            "ratio": ratio,
-                            "ok": ok,
-                        })
+                        constraints.append(
+                            {
+                                "kind": "valid_taper_ratio",
+                                "section": f"main_view.{group}.{index}",
+                                "ratio": ratio,
+                                "ok": ok,
+                            }
+                        )
                         if not ok:
-                            errors.append(f"{group}[{index}] содержит недопустимое обозначение конусности {ratio!r}")
+                            errors.append(
+                                f"{group}[{index}] содержит недопустимое обозначение конусности {ratio!r}"
+                            )
         return total
 
     def outer_diameter_at(position: float) -> float | None:
@@ -179,44 +200,50 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
 
     outer_total = sections("outer", outer)
     bore_total = sections("bore", bore)
-    constraints.append({
-        "kind": "sum",
-        "target": "outer_total_length_mm",
-        "value_mm": outer_total,
-        "members": [f"main_view.outer.{i}.length_mm" for i in range(len(outer))],
-        "ok": bool(outer) and outer_total > 0,
-    })
+    constraints.append(
+        {
+            "kind": "sum",
+            "target": "outer_total_length_mm",
+            "value_mm": outer_total,
+            "members": [f"main_view.outer.{i}.length_mm" for i in range(len(outer))],
+            "ok": bool(outer) and outer_total > 0,
+        }
+    )
 
     stated_overall = None
     internal_callouts: list[tuple[int, float, str]] = []
     for index, dimension in enumerate(spec.get("dimensions") or []):
         applies_to = str(dimension.get("applies_to") or "").lower()
         value = _number(dimension.get("value"))
-        nodes.append({
-            "id": f"dimensions.{index}",
-            "value_mm": value,
-            "raw": dimension.get("value"),
-            "applies_to": dimension.get("applies_to"),
-            "evidence": dimension.get("evidence") or [],
-            "status": "read" if value is not None else "unparsed",
-        })
-        if value is not None and any(word in applies_to for word in ("габарит", "overall", "общая длина")):
-            stated_overall = value
+        nodes.append(
+            {
+                "id": f"dimensions.{index}",
+                "value_mm": value,
+                "raw": dimension.get("value"),
+                "applies_to": dimension.get("applies_to"),
+                "evidence": dimension.get("evidence") or [],
+                "status": "read" if value is not None else "unparsed",
+            }
+        )
         if value is not None and any(
-            word in applies_to for word in ("расточ", "внутрен", "конус")
+            word in applies_to for word in ("габарит", "overall", "общая длина")
         ):
+            stated_overall = value
+        if value is not None and any(word in applies_to for word in ("расточ", "внутрен", "конус")):
             internal_callouts.append((index, value, applies_to))
 
     if stated_overall is not None and outer_total > 0:
         ok = abs(stated_overall - outer_total) <= max(0.05, stated_overall * 0.005)
-        constraints.append({
-            "kind": "equal",
-            "left": "outer_total_length_mm",
-            "right": "stated_overall_length_mm",
-            "left_value_mm": outer_total,
-            "right_value_mm": stated_overall,
-            "ok": ok,
-        })
+        constraints.append(
+            {
+                "kind": "equal",
+                "left": "outer_total_length_mm",
+                "right": "stated_overall_length_mm",
+                "left_value_mm": outer_total,
+                "right_value_mm": stated_overall,
+                "ok": ok,
+            }
+        )
         if not ok:
             errors.append(
                 f"габаритная длина {stated_overall:g} мм не равна сумме наружных ступеней {outer_total:g} мм"
@@ -225,14 +252,16 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
     if bore and outer_total > 0:
         bore_start = _number(body.get("bore_start_mm")) or 0.0
         ok = bore_start + bore_total <= outer_total + 0.05
-        constraints.append({
-            "kind": "less_or_equal",
-            "left": "bore_start_plus_length_mm",
-            "right": "outer_total_length_mm",
-            "left_value_mm": bore_start + bore_total,
-            "right_value_mm": outer_total,
-            "ok": ok,
-        })
+        constraints.append(
+            {
+                "kind": "less_or_equal",
+                "left": "bore_start_plus_length_mm",
+                "right": "outer_total_length_mm",
+                "left_value_mm": bore_start + bore_total,
+                "right_value_mm": outer_total,
+                "ok": ok,
+            }
+        )
         if not ok:
             errors.append(
                 f"расточка {bore_start:g}..{bore_start + bore_total:g} мм выходит за длину детали {outer_total:g} мм"
@@ -244,21 +273,21 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
 
     for group in ("cross_holes", "keyways", "grooves"):
         for index, feature in enumerate(body.get(group) or []):
-            position = _number(
-                feature.get("axial_position_mm", feature.get("axial_start_mm"))
-            )
+            position = _number(feature.get("axial_position_mm", feature.get("axial_start_mm")))
             if position is None:
                 continue
             length = _number(feature.get("length_mm")) or 0.0
             ok = 0 <= position and position + length <= outer_total + 0.05
-            constraints.append({
-                "kind": "inside",
-                "feature": f"main_view.{group}.{index}",
-                "start_mm": position,
-                "end_mm": position + length,
-                "body_length_mm": outer_total,
-                "ok": ok,
-            })
+            constraints.append(
+                {
+                    "kind": "inside",
+                    "feature": f"main_view.{group}.{index}",
+                    "start_mm": position,
+                    "end_mm": position + length,
+                    "body_length_mm": outer_total,
+                    "ok": ok,
+                }
+            )
             if not ok:
                 errors.append(
                     f"{group}[{index}] расположен вне длины детали: {position:g}..{position + length:g} мм"
@@ -271,20 +300,23 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
                     and local_diameter is not None
                     and feature_diameter <= local_diameter + 0.05
                 )
-                constraints.append({
-                    "kind": "diameter_inside",
-                    "feature": f"main_view.{group}.{index}",
-                    "feature_diameter_mm": feature_diameter,
-                    "local_body_diameter_mm": local_diameter,
-                    "ok": fits,
-                })
+                constraints.append(
+                    {
+                        "kind": "diameter_inside",
+                        "feature": f"main_view.{group}.{index}",
+                        "feature_diameter_mm": feature_diameter,
+                        "local_body_diameter_mm": local_diameter,
+                        "ok": fits,
+                    }
+                )
                 if not fits:
                     errors.append(
                         f"cross_holes[{index}] Ø{feature_diameter or 0:g} не помещается в локальный диаметр Ø{local_diameter or 0:g}"
                     )
 
     outer_diameters = [
-        value for item in outer
+        value
+        for item in outer
         if (value := _number(item.get("diameter_mm", item.get("d")))) is not None
     ]
     for index, pattern in enumerate(body.get("axial_holes") or []):
@@ -292,22 +324,22 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
         pilot = _number(pattern.get("pilot_diameter_mm"))
         # The finished threaded-hole envelope is its nominal major diameter.
         # A tap-drill diameter is a manufacturing choice and may be absent.
-        thread_nominal = _number(
-            (pattern.get("thread") or {}).get("nominal_diameter_mm")
-        )
+        thread_nominal = _number((pattern.get("thread") or {}).get("nominal_diameter_mm"))
         hole_envelope = pilot or thread_nominal or 0.0
         envelope = max(outer_diameters, default=0.0)
         fits = pcd is not None and pcd + hole_envelope <= envelope + 0.05
-        constraints.append({
-            "kind": "pitch_circle_inside",
-            "feature": f"main_view.axial_holes.{index}",
-            "bolt_circle_diameter_mm": pcd,
-            "pilot_diameter_mm": pilot or None,
-            "finished_hole_envelope_diameter_mm": hole_envelope or None,
-            "diameter_source": "stated_pilot" if pilot else "thread_nominal",
-            "outer_envelope_diameter_mm": envelope or None,
-            "ok": fits,
-        })
+        constraints.append(
+            {
+                "kind": "pitch_circle_inside",
+                "feature": f"main_view.axial_holes.{index}",
+                "bolt_circle_diameter_mm": pcd,
+                "pilot_diameter_mm": pilot or None,
+                "finished_hole_envelope_diameter_mm": hole_envelope or None,
+                "diameter_source": "stated_pilot" if pilot else "thread_nominal",
+                "outer_envelope_diameter_mm": envelope or None,
+                "ok": fits,
+            }
+        )
         if not fits:
             errors.append(
                 f"axial_holes[{index}] делительная окружность Ø{pcd or 0:g} "
@@ -337,32 +369,47 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
         elif at_diameter is not None:
             boundary_index = next(
                 (
-                    item_index for _z, item_index in boundaries
-                    if abs((_number(outer[item_index].get("diameter_mm", outer[item_index].get("d"))) or 0.0) - at_diameter) <= 0.05
+                    item_index
+                    for _z, item_index in boundaries
+                    if abs(
+                        (
+                            _number(
+                                outer[item_index].get("diameter_mm", outer[item_index].get("d"))
+                            )
+                            or 0.0
+                        )
+                        - at_diameter
+                    )
+                    <= 0.05
                 ),
                 None,
             )
         if boundary_index is None:
             continue
         left, right = outer[boundary_index], outer[boundary_index + 1]
-        radial_step = abs(
-            (_number(left.get("diameter_mm", left.get("d"))) or 0.0)
-            - (_number(right.get("diameter_mm", right.get("d"))) or 0.0)
-        ) / 2.0
+        radial_step = (
+            abs(
+                (_number(left.get("diameter_mm", left.get("d"))) or 0.0)
+                - (_number(right.get("diameter_mm", right.get("d"))) or 0.0)
+            )
+            / 2.0
+        )
         max_radius = min(
             radial_step,
             _number(left.get("length_mm", left.get("l"))) or 0.0,
             _number(right.get("length_mm", right.get("l"))) or 0.0,
         )
         ok = max_radius > 0 and radius <= max_radius + 0.05
-        constraints.append({
-            "kind": "fillet_fits_shoulder",
-            "feature": f"main_view.fillets.{index}",
-            "radius_mm": radius,
-            "max_radius_mm": max_radius,
-            "shoulder_z_mm": boundaries[boundary_index][0],
-            "ok": ok,
-        })
+        constraints.append(
+            {
+                "kind": "fillet_fits_shoulder",
+                "feature": f"main_view.fillets.{index}",
+                "radius_mm": radius,
+                "max_radius_mm": max_radius,
+                "shoulder_z_mm": boundaries[boundary_index][0],
+                "ok": ok,
+            }
+        )
         if not ok:
             errors.append(
                 f"fillets[{index}] R{radius:g} не помещается на уступе: максимум R{max_radius:g}"
@@ -376,13 +423,15 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
         height = _number(profile.get("height_mm")) or 0.0
         max_corner_radius = min(width, height) / 2.0
         radius_ok = max_corner_radius > 0 and corner_radius <= max_corner_radius + 0.05
-        constraints.append({
-            "kind": "corner_radius_fits_profile",
-            "target": "main_view.profile.corner_radius_mm",
-            "radius_mm": corner_radius,
-            "max_radius_mm": max_corner_radius,
-            "ok": radius_ok,
-        })
+        constraints.append(
+            {
+                "kind": "corner_radius_fits_profile",
+                "target": "main_view.profile.corner_radius_mm",
+                "radius_mm": corner_radius,
+                "max_radius_mm": max_corner_radius,
+                "ok": radius_ok,
+            }
+        )
         if not radius_ok:
             errors.append(
                 f"profile.corner_radius_mm R{corner_radius:g} не помещается в "
@@ -403,21 +452,21 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
             if shape == "rectangle":
                 width = _number(profile.get("width_mm")) or 0.0
                 height = _number(profile.get("height_mm")) or 0.0
-                fits = _circle_fits_rounded_rectangle(
-                    x, y, radius, width, height, corner_radius
-                )
+                fits = _circle_fits_rounded_rectangle(x, y, radius, width, height, corner_radius)
             elif shape == "circle":
                 profile_radius = (_number(profile.get("diameter_mm")) or 0.0) / 2.0
                 fits = (x * x + y * y) ** 0.5 + radius <= profile_radius + 0.05
             else:
                 continue
-            constraints.append({
-                "kind": "inside_profile",
-                "feature": f"main_view.profile.{group}.{index}",
-                "center_mm": [x, y],
-                "radius_mm": radius,
-                "ok": fits,
-            })
+            constraints.append(
+                {
+                    "kind": "inside_profile",
+                    "feature": f"main_view.profile.{group}.{index}",
+                    "center_mm": [x, y],
+                    "radius_mm": radius,
+                    "ok": fits,
+                }
+            )
             if not fits:
                 errors.append(
                     f"profile.{group}[{index}] с центром ({x:g}, {y:g}) мм выходит за контур детали"

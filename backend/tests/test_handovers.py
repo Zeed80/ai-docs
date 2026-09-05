@@ -44,12 +44,15 @@ async def pending_handover(db_session, source_doc):
 
 @pytest.mark.asyncio
 async def test_create_handover(client: AsyncClient, source_doc):
-    resp = await client.post("/api/handovers", json={
-        "entity_type": "document",
-        "entity_id": str(source_doc.id),
-        "to_user": "manager",
-        "comment": "Требует проверки руководителем",
-    })
+    resp = await client.post(
+        "/api/handovers",
+        json={
+            "entity_type": "document",
+            "entity_id": str(source_doc.id),
+            "to_user": "manager",
+            "comment": "Требует проверки руководителем",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert "id" in data
@@ -83,11 +86,14 @@ async def test_get_outbox(client: AsyncClient, pending_handover):
 
 @pytest.mark.asyncio
 async def test_accept_handover(client: AsyncClient, source_doc):
-    create_resp = await client.post("/api/handovers", json={
-        "entity_type": "document",
-        "entity_id": str(source_doc.id),
-        "to_user": "dev-user",
-    })
+    create_resp = await client.post(
+        "/api/handovers",
+        json={
+            "entity_type": "document",
+            "entity_id": str(source_doc.id),
+            "to_user": "dev-user",
+        },
+    )
     handover_id = create_resp.json()["id"]
 
     resp = await client.post(f"/api/handovers/{handover_id}/accept")
@@ -107,19 +113,25 @@ async def test_accept_handover_not_found(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_forward_handover(client: AsyncClient, source_doc):
-    create_resp = await client.post("/api/handovers", json={
-        "entity_type": "document",
-        "entity_id": str(source_doc.id),
-        "to_user": "dev-user",
-    })
+    create_resp = await client.post(
+        "/api/handovers",
+        json={
+            "entity_type": "document",
+            "entity_id": str(source_doc.id),
+            "to_user": "dev-user",
+        },
+    )
     handover_id = create_resp.json()["id"]
 
-    resp = await client.post(f"/api/handovers/{handover_id}/forward", json={
-        "entity_type": "document",
-        "entity_id": str(source_doc.id),
-        "to_user": "accountant",
-        "comment": "Переадресовано в бухгалтерию",
-    })
+    resp = await client.post(
+        f"/api/handovers/{handover_id}/forward",
+        json={
+            "entity_type": "document",
+            "entity_id": str(source_doc.id),
+            "to_user": "accountant",
+            "comment": "Переадресовано в бухгалтерию",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     # forward returns the new handover (pending), original becomes "forwarded"
@@ -131,11 +143,14 @@ async def test_forward_handover(client: AsyncClient, source_doc):
 
 @pytest.mark.asyncio
 async def test_return_handover(client: AsyncClient, source_doc):
-    create_resp = await client.post("/api/handovers", json={
-        "entity_type": "document",
-        "entity_id": str(source_doc.id),
-        "to_user": "dev-user",
-    })
+    create_resp = await client.post(
+        "/api/handovers",
+        json={
+            "entity_type": "document",
+            "entity_id": str(source_doc.id),
+            "to_user": "dev-user",
+        },
+    )
     handover_id = create_resp.json()["id"]
 
     resp = await client.post(f"/api/handovers/{handover_id}/return")

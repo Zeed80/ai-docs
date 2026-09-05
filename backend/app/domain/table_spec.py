@@ -24,7 +24,17 @@ from typing import TYPE_CHECKING, Any, Literal
 import structlog
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import (
-    Numeric, Select, Text, and_, case, cast, distinct, func, literal, or_, select,
+    Numeric,
+    Select,
+    Text,
+    and_,
+    case,
+    cast,
+    distinct,
+    func,
+    literal,
+    or_,
+    select,
 )
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,9 +79,17 @@ class ColumnSpec(BaseModel):
     @classmethod
     def _lenient_agg(cls, value: Any) -> str | None:
         v = str(value).strip().lower() if value is not None else None
-        aliases = {"average": "avg", "mean": "avg", "minimum": "min",
-                   "maximum": "max", "summa": "sum", "сумма": "sum",
-                   "средн": "avg", "минимум": "min", "максимум": "max"}
+        aliases = {
+            "average": "avg",
+            "mean": "avg",
+            "minimum": "min",
+            "maximum": "max",
+            "summa": "sum",
+            "сумма": "sum",
+            "средн": "avg",
+            "минимум": "min",
+            "максимум": "max",
+        }
         if v in {"sum", "avg", "min", "max", "count"}:
             return v
         return aliases.get(v)
@@ -172,29 +190,41 @@ SOURCES: dict[str, SourceDef] = {
         title="Счета",
         synonyms=("счет", "счета", "счетов", "инвойс", "invoice"),
         fields=_fields(
-            FieldDef("invoice_number", "Номер счета", "text",
-                     ("номер", "номер счета", "№")),
-            FieldDef("invoice_date", "Дата счета", "date",
-                     ("дата", "дата счета")),
-            FieldDef("due_date", "Срок оплаты", "date",
-                     ("срок", "срок оплаты", "оплатить до")),
-            FieldDef("supplier_name", "Поставщик", "text",
-                     ("поставщик", "контрагент", "продавец"), primary_text=True),
-            FieldDef("supplier_inn", "ИНН поставщика", "text",
-                     ("инн",)),
-            FieldDef("subtotal", "Сумма без НДС", "number",
-                     ("без ндс", "сумма без ндс", "подытог")),
-            FieldDef("tax_amount", "НДС", "number",
-                     ("ндс", "налог", "сумма ндс")),
-            FieldDef("total_amount", "Сумма", "number",
-                     ("сумма", "итого", "общая сумма", "сумма счета", "стоимость")),
+            FieldDef("invoice_number", "Номер счета", "text", ("номер", "номер счета", "№")),
+            FieldDef("invoice_date", "Дата счета", "date", ("дата", "дата счета")),
+            FieldDef("due_date", "Срок оплаты", "date", ("срок", "срок оплаты", "оплатить до")),
+            FieldDef(
+                "supplier_name",
+                "Поставщик",
+                "text",
+                ("поставщик", "контрагент", "продавец"),
+                primary_text=True,
+            ),
+            FieldDef("supplier_inn", "ИНН поставщика", "text", ("инн",)),
+            FieldDef(
+                "subtotal", "Сумма без НДС", "number", ("без ндс", "сумма без ндс", "подытог")
+            ),
+            FieldDef("tax_amount", "НДС", "number", ("ндс", "налог", "сумма ндс")),
+            FieldDef(
+                "total_amount",
+                "Сумма",
+                "number",
+                ("сумма", "итого", "общая сумма", "сумма счета", "стоимость"),
+            ),
             FieldDef("currency", "Валюта", "text", ("валюта",)),
             FieldDef("status", "Статус", "text", ("статус",)),
-            FieldDef("items_list", "Перечень товаров", "text",
-                     ("товары", "перечень товаров", "позиции", "состав",
-                      "перечень", "номенклатура")),
-            FieldDef("items_count", "Кол-во позиций", "number",
-                     ("количество позиций", "кол-во позиций", "число позиций")),
+            FieldDef(
+                "items_list",
+                "Перечень товаров",
+                "text",
+                ("товары", "перечень товаров", "позиции", "состав", "перечень", "номенклатура"),
+            ),
+            FieldDef(
+                "items_count",
+                "Кол-во позиций",
+                "number",
+                ("количество позиций", "кол-во позиций", "число позиций"),
+            ),
         ),
         default_columns=("supplier_name", "invoice_number", "invoice_date", "total_amount"),
     ),
@@ -203,31 +233,48 @@ SOURCES: dict[str, SourceDef] = {
         title="Позиции счетов",
         synonyms=("товар", "товары", "позиции", "строки", "номенклатура", "items"),
         fields=_fields(
-            FieldDef("description", "Наименование", "text",
-                     ("товар", "наименование", "позиция", "описание"), primary_text=True),
+            FieldDef(
+                "description",
+                "Наименование",
+                "text",
+                ("товар", "наименование", "позиция", "описание"),
+                primary_text=True,
+            ),
             FieldDef("sku", "Артикул", "text", ("артикул", "код")),
             FieldDef("quantity", "Кол-во", "number", ("количество", "кол-во")),
             FieldDef("unit", "Ед.", "text", ("единица", "ед", "ед.изм")),
             FieldDef("unit_price", "Цена", "number", ("цена", "цена за единицу")),
             FieldDef("amount", "Сумма", "number", ("сумма", "стоимость", "итого")),
-            FieldDef("pre_discount_amount", "Сумма без скидки", "number",
-                     ("сумма без скидки", "до скидки", "скидка")),
+            FieldDef(
+                "pre_discount_amount",
+                "Сумма без скидки",
+                "number",
+                ("сумма без скидки", "до скидки", "скидка"),
+            ),
             FieldDef("tax_rate", "Ставка НДС", "number", ("ставка ндс", "ставка")),
             FieldDef("tax_amount", "НДС", "number", ("ндс", "налог")),
             FieldDef("invoice_number", "Номер счета", "text", ("номер счета", "счет")),
             FieldDef("invoice_date", "Дата счета", "date", ("дата", "дата счета")),
             FieldDef("supplier_name", "Поставщик", "text", ("поставщик", "контрагент")),
         ),
-        default_columns=("description", "quantity", "unit", "unit_price", "amount",
-                         "supplier_name", "invoice_number"),
+        default_columns=(
+            "description",
+            "quantity",
+            "unit",
+            "unit_price",
+            "amount",
+            "supplier_name",
+            "invoice_number",
+        ),
     ),
     "suppliers": SourceDef(
         key="suppliers",
         title="Поставщики",
         synonyms=("поставщик", "поставщики", "контрагент", "контрагенты"),
         fields=_fields(
-            FieldDef("name", "Название", "text",
-                     ("название", "имя", "поставщик"), primary_text=True),
+            FieldDef(
+                "name", "Название", "text", ("название", "имя", "поставщик"), primary_text=True
+            ),
             FieldDef("inn", "ИНН", "text", ("инн",)),
             FieldDef("kpp", "КПП", "text", ("кпп",)),
             FieldDef("address", "Адрес", "text", ("адрес",)),
@@ -241,63 +288,117 @@ SOURCES: dict[str, SourceDef] = {
         title="Остатки склада",
         synonyms=("склад", "остатки", "остаток", "запасы", "в наличии", "тмц"),
         fields=_fields(
-            FieldDef("name", "Наименование", "text",
-                     ("наименование", "товар", "позиция", "материал"), primary_text=True),
+            FieldDef(
+                "name",
+                "Наименование",
+                "text",
+                ("наименование", "товар", "позиция", "материал"),
+                primary_text=True,
+            ),
             FieldDef("sku", "Артикул", "text", ("артикул", "код")),
-            FieldDef("current_qty", "Остаток", "number",
-                     ("остаток", "количество", "кол-во", "в наличии", "запас")),
+            FieldDef(
+                "current_qty",
+                "Остаток",
+                "number",
+                ("остаток", "количество", "кол-во", "в наличии", "запас"),
+            ),
             FieldDef("unit", "Ед.", "text", ("единица", "ед", "ед.изм")),
-            FieldDef("min_qty", "Мин. остаток", "number",
-                     ("минимальный остаток", "минимум", "неснижаемый запас")),
-            FieldDef("location", "Место хранения", "text",
-                     ("место", "место хранения", "расположение", "ячейка", "локация")),
-            FieldDef("below_min", "Ниже минимума", "text",
-                     ("ниже минимума", "дефицит", "нехватка", "требует заказа")),
+            FieldDef(
+                "min_qty",
+                "Мин. остаток",
+                "number",
+                ("минимальный остаток", "минимум", "неснижаемый запас"),
+            ),
+            FieldDef(
+                "location",
+                "Место хранения",
+                "text",
+                ("место", "место хранения", "расположение", "ячейка", "локация"),
+            ),
+            FieldDef(
+                "below_min",
+                "Ниже минимума",
+                "text",
+                ("ниже минимума", "дефицит", "нехватка", "требует заказа"),
+            ),
         ),
         default_columns=("name", "sku", "current_qty", "unit", "location"),
     ),
     "documents": SourceDef(
         key="documents",
         title="Документы",
-        synonyms=("документ", "документы", "файл", "файлы", "акт", "акты",
-                  "накладн", "договор", "договоры", "кп", "коммерческое предложение"),
+        synonyms=(
+            "документ",
+            "документы",
+            "файл",
+            "файлы",
+            "акт",
+            "акты",
+            "накладн",
+            "договор",
+            "договоры",
+            "кп",
+            "коммерческое предложение",
+        ),
         fields=_fields(
-            FieldDef("file_name", "Файл", "text",
-                     ("файл", "имя файла", "название"), primary_text=True),
-            FieldDef("doc_type", "Тип", "text",
-                     ("тип", "тип документа", "вид")),
+            FieldDef(
+                "file_name", "Файл", "text", ("файл", "имя файла", "название"), primary_text=True
+            ),
+            FieldDef("doc_type", "Тип", "text", ("тип", "тип документа", "вид")),
             FieldDef("status", "Статус", "text", ("статус", "состояние")),
-            FieldDef("created_at", "Загружен", "date",
-                     ("дата", "дата загрузки", "загружен", "получен")),
-            FieldDef("source_channel", "Источник", "text",
-                     ("источник", "канал", "откуда")),
-            FieldDef("page_count", "Страниц", "number",
-                     ("страниц", "страницы", "кол-во страниц")),
-            FieldDef("doc_type_confidence", "Уверенность", "number",
-                     ("уверенность", "достоверность", "confidence")),
-            FieldDef("project", "Проект", "text",
-                     ("проект", "проекту", "проекта", "стройка", "объект строительства")),
-            FieldDef("object", "Объект", "text",
-                     ("объект", "объекту", "объекта", "площадка", "узел")),
+            FieldDef(
+                "created_at", "Загружен", "date", ("дата", "дата загрузки", "загружен", "получен")
+            ),
+            FieldDef("source_channel", "Источник", "text", ("источник", "канал", "откуда")),
+            FieldDef("page_count", "Страниц", "number", ("страниц", "страницы", "кол-во страниц")),
+            FieldDef(
+                "doc_type_confidence",
+                "Уверенность",
+                "number",
+                ("уверенность", "достоверность", "confidence"),
+            ),
+            FieldDef(
+                "project",
+                "Проект",
+                "text",
+                ("проект", "проекту", "проекта", "стройка", "объект строительства"),
+            ),
+            FieldDef(
+                "object", "Объект", "text", ("объект", "объекту", "объекта", "площадка", "узел")
+            ),
         ),
         default_columns=("file_name", "doc_type", "status", "created_at"),
     ),
     "payments": SourceDef(
         key="payments",
         title="Платежи",
-        synonyms=("платеж", "платежи", "оплата", "оплаты", "график платежей",
-                  "просрочка", "просрочки", "к оплате"),
+        synonyms=(
+            "платеж",
+            "платежи",
+            "оплата",
+            "оплаты",
+            "график платежей",
+            "просрочка",
+            "просрочки",
+            "к оплате",
+        ),
         fields=_fields(
-            FieldDef("due_date", "Срок оплаты", "date",
-                     ("срок", "срок оплаты", "дата оплаты", "оплатить до")),
+            FieldDef(
+                "due_date",
+                "Срок оплаты",
+                "date",
+                ("срок", "срок оплаты", "дата оплаты", "оплатить до"),
+            ),
             FieldDef("amount", "Сумма", "number", ("сумма", "сумма платежа")),
             FieldDef("currency", "Валюта", "text", ("валюта",)),
-            FieldDef("status", "Статус", "text",
-                     ("статус", "состояние")),  # scheduled|paid|overdue|partial|cancelled
+            FieldDef(
+                "status", "Статус", "text", ("статус", "состояние")
+            ),  # scheduled|paid|overdue|partial|cancelled
             FieldDef("paid_at", "Оплачен", "date", ("оплачен", "дата платежа")),
             FieldDef("paid_amount", "Оплачено", "number", ("оплачено",)),
-            FieldDef("invoice_number", "Номер счета", "text",
-                     ("номер счета", "счет"), primary_text=True),
+            FieldDef(
+                "invoice_number", "Номер счета", "text", ("номер счета", "счет"), primary_text=True
+            ),
             FieldDef("supplier_name", "Поставщик", "text", ("поставщик", "контрагент")),
             FieldDef("reference", "Назначение", "text", ("назначение", "референс")),
         ),
@@ -308,14 +409,17 @@ SOURCES: dict[str, SourceDef] = {
         title="Аномалии",
         synonyms=("аномалия", "аномалии", "расхождение", "расхождения", "проблемы"),
         fields=_fields(
-            FieldDef("title", "Аномалия", "text",
-                     ("название", "заголовок", "аномалия"), primary_text=True),
+            FieldDef(
+                "title",
+                "Аномалия",
+                "text",
+                ("название", "заголовок", "аномалия"),
+                primary_text=True,
+            ),
             FieldDef("anomaly_type", "Тип", "text", ("тип", "вид")),
-            FieldDef("severity", "Критичность", "text",
-                     ("критичность", "серьезность", "важность")),
+            FieldDef("severity", "Критичность", "text", ("критичность", "серьезность", "важность")),
             FieldDef("status", "Статус", "text", ("статус", "состояние")),
-            FieldDef("created_at", "Обнаружена", "date",
-                     ("дата", "обнаружена", "создана")),
+            FieldDef("created_at", "Обнаружена", "date", ("дата", "обнаружена", "создана")),
             FieldDef("resolved_by", "Решил", "text", ("решил", "кто решил")),
             FieldDef("resolved_at", "Решена", "date", ("решена", "дата решения")),
             FieldDef("description", "Описание", "text", ("описание", "детали")),
@@ -327,19 +431,13 @@ SOURCES: dict[str, SourceDef] = {
         title="Письма",
         synonyms=("письмо", "письма", "почта", "email", "входящие", "корреспонденция"),
         fields=_fields(
-            FieldDef("subject", "Тема", "text",
-                     ("тема", "заголовок"), primary_text=True),
-            FieldDef("from_address", "От кого", "text",
-                     ("от кого", "отправитель", "адрес")),
+            FieldDef("subject", "Тема", "text", ("тема", "заголовок"), primary_text=True),
+            FieldDef("from_address", "От кого", "text", ("от кого", "отправитель", "адрес")),
             FieldDef("mailbox", "Ящик", "text", ("ящик", "почтовый ящик")),
-            FieldDef("received_at", "Получено", "date",
-                     ("получено", "дата", "дата получения")),
-            FieldDef("attachment_count", "Вложений", "number",
-                     ("вложений", "кол-во вложений")),
-            FieldDef("has_attachments", "Вложения", "text",
-                     ("вложения", "с вложениями")),
-            FieldDef("direction", "Направление", "text",
-                     ("направление", "входящее", "исходящее")),
+            FieldDef("received_at", "Получено", "date", ("получено", "дата", "дата получения")),
+            FieldDef("attachment_count", "Вложений", "number", ("вложений", "кол-во вложений")),
+            FieldDef("has_attachments", "Вложения", "text", ("вложения", "с вложениями")),
+            FieldDef("direction", "Направление", "text", ("направление", "входящее", "исходящее")),
         ),
         default_columns=("subject", "from_address", "received_at", "attachment_count"),
     ),
@@ -348,19 +446,19 @@ SOURCES: dict[str, SourceDef] = {
         title="Чертежи",
         synonyms=("чертеж", "чертежи", "кд", "конструкторская документация"),
         fields=_fields(
-            FieldDef("drawing_number", "Обозначение", "text",
-                     ("обозначение", "номер чертежа", "децимальный номер")),
-            FieldDef("filename", "Файл", "text",
-                     ("файл", "имя файла"), primary_text=True),
-            FieldDef("title", "Наименование", "text",
-                     ("наименование", "название", "деталь")),
+            FieldDef(
+                "drawing_number",
+                "Обозначение",
+                "text",
+                ("обозначение", "номер чертежа", "децимальный номер"),
+            ),
+            FieldDef("filename", "Файл", "text", ("файл", "имя файла"), primary_text=True),
+            FieldDef("title", "Наименование", "text", ("наименование", "название", "деталь")),
             FieldDef("material", "Материал", "text", ("материал",)),
             FieldDef("revision", "Ревизия", "text", ("ревизия", "изменение")),
             FieldDef("format", "Формат", "text", ("формат",)),
-            FieldDef("drawing_type", "Тип", "text",
-                     ("тип", "вид")),  # detail|assembly|section|weld
-            FieldDef("part_class", "Класс детали", "text",
-                     ("класс", "класс детали")),
+            FieldDef("drawing_type", "Тип", "text", ("тип", "вид")),  # detail|assembly|section|weld
+            FieldDef("part_class", "Класс детали", "text", ("класс", "класс детали")),
             FieldDef("status", "Статус", "text", ("статус", "состояние")),
             FieldDef("created_at", "Загружен", "date", ("дата", "загружен")),
         ),
@@ -369,11 +467,22 @@ SOURCES: dict[str, SourceDef] = {
     "tool_catalog": SourceDef(
         key="tool_catalog",
         title="Каталог инструмента поставщиков",
-        synonyms=("каталог", "каталоги", "номенклатура поставщика", "прайс",
-                  "прайс-лист", "инструмент поставщика"),
+        synonyms=(
+            "каталог",
+            "каталоги",
+            "номенклатура поставщика",
+            "прайс",
+            "прайс-лист",
+            "инструмент поставщика",
+        ),
         fields=_fields(
-            FieldDef("name", "Наименование", "text",
-                     ("наименование", "название", "инструмент"), primary_text=True),
+            FieldDef(
+                "name",
+                "Наименование",
+                "text",
+                ("наименование", "название", "инструмент"),
+                primary_text=True,
+            ),
             FieldDef("part_number", "Артикул", "text", ("артикул", "код", "обозначение")),
             FieldDef("tool_type", "Тип", "text", ("тип", "вид инструмента")),
             FieldDef("diameter_mm", "Ø, мм", "number", ("диаметр", "ø")),
@@ -385,8 +494,14 @@ SOURCES: dict[str, SourceDef] = {
             FieldDef("supplier_name", "Поставщик", "text", ("поставщик", "контрагент")),
             FieldDef("created_at", "Добавлено", "date", ("дата", "добавлено")),
         ),
-        default_columns=("part_number", "name", "tool_type", "diameter_mm",
-                         "price_value", "supplier_name"),
+        default_columns=(
+            "part_number",
+            "name",
+            "tool_type",
+            "diameter_mm",
+            "price_value",
+            "supplier_name",
+        ),
     ),
     # ── Virtual sources (not SQL tables) ────────────────────────────────────
     # Resolved by provider functions, not the SQL engine, but exposed in the
@@ -394,11 +509,16 @@ SOURCES: dict[str, SourceDef] = {
     "vector_search": SourceDef(
         key="vector_search",
         title="Семантический поиск",
-        synonyms=("похож", "похожие", "семантический", "по смыслу", "найти похожие",
-                  "релевантные документы"),
+        synonyms=(
+            "похож",
+            "похожие",
+            "семантический",
+            "по смыслу",
+            "найти похожие",
+            "релевантные документы",
+        ),
         fields=_fields(
-            FieldDef("query", "Запрос", "text",
-                     ("запрос", "текст", "поиск"), primary_text=True),
+            FieldDef("query", "Запрос", "text", ("запрос", "текст", "поиск"), primary_text=True),
             FieldDef("score", "Релевантность", "number", ("релевантность", "score")),
             FieldDef("file_name", "Документ", "text", ("документ", "файл", "имя")),
             FieldDef("doc_type", "Тип", "text", ("тип", "вид")),
@@ -411,11 +531,23 @@ SOURCES: dict[str, SourceDef] = {
     "graph_query": SourceDef(
         key="graph_query",
         title="Связи (граф памяти)",
-        synonyms=("связи", "граф", "связан", "отношения", "окружение",
-                  "с кем связан", "что связано"),
+        synonyms=(
+            "связи",
+            "граф",
+            "связан",
+            "отношения",
+            "окружение",
+            "с кем связан",
+            "что связано",
+        ),
         fields=_fields(
-            FieldDef("start_node", "Сущность", "text",
-                     ("сущность", "узел", "от", "вокруг"), primary_text=True),
+            FieldDef(
+                "start_node",
+                "Сущность",
+                "text",
+                ("сущность", "узел", "от", "вокруг"),
+                primary_text=True,
+            ),
             FieldDef("mode", "Режим", "text", ("режим",)),  # neighborhood|path
             FieldDef("target", "Цель", "text", ("цель", "до")),
             FieldDef("source_title", "От", "text", ("от", "источник")),
@@ -439,10 +571,44 @@ def _norm(text: str) -> str:
 
 # Russian case/number endings, longest first; stripped once per word.
 _RU_ENDINGS = (
-    "иями", "ями", "ами", "ыми", "ими", "ого", "его", "ому", "ему",
-    "ой", "ей", "ом", "ем", "ам", "ям", "ах", "ях", "ую", "юю",
-    "ая", "яя", "ое", "ее", "ие", "ые", "ия", "ии", "ию",
-    "а", "я", "о", "е", "и", "ы", "у", "ю", "ь", "й",
+    "иями",
+    "ями",
+    "ами",
+    "ыми",
+    "ими",
+    "ого",
+    "его",
+    "ому",
+    "ему",
+    "ой",
+    "ей",
+    "ом",
+    "ем",
+    "ам",
+    "ям",
+    "ах",
+    "ях",
+    "ую",
+    "юю",
+    "ая",
+    "яя",
+    "ое",
+    "ее",
+    "ие",
+    "ые",
+    "ия",
+    "ии",
+    "ию",
+    "а",
+    "я",
+    "о",
+    "е",
+    "и",
+    "ы",
+    "у",
+    "ю",
+    "ь",
+    "й",
 )
 
 
@@ -524,8 +690,10 @@ def invoice_items_list_subquery():
     API (``/api/tables/query``) so the column matches agent spec-tables.
     """
     line_text = func.coalesce(InvoiceLine.description, "—") + func.coalesce(
-        " — " + func.trim(func.to_char(InvoiceLine.quantity, "FM999999990.###"))
-        + " " + func.coalesce(InvoiceLine.unit, "шт"),
+        " — "
+        + func.trim(func.to_char(InvoiceLine.quantity, "FM999999990.###"))
+        + " "
+        + func.coalesce(InvoiceLine.unit, "шт"),
         "",
     )
     return (
@@ -668,12 +836,8 @@ def _emails_exprs() -> dict[str, Any]:
         "mailbox": EmailMessage.mailbox,
         "received_at": EmailMessage.received_at,
         "attachment_count": EmailMessage.attachment_count,
-        "has_attachments": case(
-            (EmailMessage.has_attachments.is_(True), "Да"), else_="Нет"
-        ),
-        "direction": case(
-            (EmailMessage.is_inbound.is_(True), "Входящее"), else_="Исходящее"
-        ),
+        "has_attachments": case((EmailMessage.has_attachments.is_(True), "Да"), else_="Нет"),
+        "direction": case((EmailMessage.is_inbound.is_(True), "Входящее"), else_="Исходящее"),
     }
 
 
@@ -721,9 +885,7 @@ def _base_stmt(
     # group_by to select group keys + aggregate expressions over the same joins).
     cols = select_cols if select_cols is not None else [exprs[k].label(k) for k in keys]
     if source_key == "invoices":
-        return select(*cols).select_from(Invoice).outerjoin(
-            Party, Invoice.supplier_id == Party.id
-        )
+        return select(*cols).select_from(Invoice).outerjoin(Party, Invoice.supplier_id == Party.id)
     if source_key == "invoice_items":
         return (
             select(*cols)
@@ -803,10 +965,17 @@ WRITEBACK: dict[str, WritebackSpec] = {
     "invoices": WritebackSpec(
         entity_type="invoice",
         model=Invoice,
-        editable=frozenset({
-            "invoice_number", "invoice_date", "due_date",
-            "subtotal", "tax_amount", "total_amount", "currency",
-        }),
+        editable=frozenset(
+            {
+                "invoice_number",
+                "invoice_date",
+                "due_date",
+                "subtotal",
+                "tax_amount",
+                "total_amount",
+                "currency",
+            }
+        ),
         numeric_fields=frozenset({"subtotal", "tax_amount", "total_amount"}),
         date_fields=frozenset({"invoice_date", "due_date"}),
     ),
@@ -862,9 +1031,7 @@ async def apply_cell_writeback(
     wb = WRITEBACK.get(source_key)
     if wb is None or field not in wb.editable:
         return False, f"Поле «{field}» нередактируемо для источника «{source_key}»"
-    obj = (
-        await db.execute(select(wb.model).where(wb.model.id == pk))
-    ).scalar_one_or_none()
+    obj = (await db.execute(select(wb.model).where(wb.model.id == pk))).scalar_one_or_none()
     if obj is None:
         return False, "Строка не найдена"
     try:
@@ -872,6 +1039,7 @@ async def apply_cell_writeback(
     except ValueError as exc:
         return False, str(exc)
     return True, "ok"
+
 
 # Fields whose filters must use the aggregate-free line text (smart search over
 # invoice contents): filtering invoices by «items_list» means EXISTS over lines.
@@ -881,10 +1049,24 @@ _INVOICE_ITEMS_TEXT_FIELD = "items_list"
 # ── Smart filter ───────────────────────────────────────────────────────────────
 
 _NUM_RE = re.compile(r"^\d+(?:[.,]\d+)?$")
-_STOP_TOKENS = frozenset({
-    "для", "под", "из", "на", "по", "с", "и", "или", "все", "всех", "только",
-    "диаметр", "диаметра", "диаметром",  # qualifier words; the number itself matters
-})
+_STOP_TOKENS = frozenset(
+    {
+        "для",
+        "под",
+        "из",
+        "на",
+        "по",
+        "с",
+        "и",
+        "или",
+        "все",
+        "всех",
+        "только",
+        "диаметр",
+        "диаметра",
+        "диаметром",  # qualifier words; the number itself matters
+    }
+)
 
 
 def _smart_tokens(query: str) -> list[str]:
@@ -951,9 +1133,7 @@ def _smart_targets(source_key: str) -> tuple[Any, Any | None] | None:
     }.get(source_key)
 
 
-async def _smart_text_condition(
-    db: AsyncSession, source_key: str, query: str
-) -> Any | None:
+async def _smart_text_condition(db: AsyncSession, source_key: str, query: str) -> Any | None:
     """AND-of-tokens condition over the source's item text, with canonical expansion."""
     tokens = _smart_tokens(query)
     if not tokens:
@@ -1038,13 +1218,38 @@ def validate_spec(spec: TableSpec) -> list[str]:
 
 
 _TABLE_VERBS = (
-    "покажи", "показать", "выведи", "вывести", "выбери", "отбери", "сравни",
-    "сравнить", "сгруппир", "объедини", "посчитай", "сосчитай", "таблиц",
-    "сколько", "средн", "в разрезе", "по каждому", "построй", "список",
+    "покажи",
+    "показать",
+    "выведи",
+    "вывести",
+    "выбери",
+    "отбери",
+    "сравни",
+    "сравнить",
+    "сгруппир",
+    "объедини",
+    "посчитай",
+    "сосчитай",
+    "таблиц",
+    "сколько",
+    "средн",
+    "в разрезе",
+    "по каждому",
+    "построй",
+    "список",
 )
 _DOC_CONTENT_MARKERS = (
-    "о чём", "о чем", "напомни", "найди похож", "перескажи", "краткое содержан",
-    "текст письма", "что написано", "суть документа", "расскажи про", "对",
+    "о чём",
+    "о чем",
+    "напомни",
+    "найди похож",
+    "перескажи",
+    "краткое содержан",
+    "текст письма",
+    "что написано",
+    "суть документа",
+    "расскажи про",
+    "对",
 )
 
 
@@ -1059,28 +1264,34 @@ async def correct_category_error(
     if spec.source != "suppliers":
         return None
     vals = [
-        str(f.value) for f in spec.filters
+        str(f.value)
+        for f in spec.filters
         if f.field == "name" and f.op in ("smart", "contains") and f.value
     ]
     for v in vals:
         term = v.strip().strip("%").strip()
         if len(term) < 3:
             continue
-        sup_n = (await db.execute(
-            select(func.count(Party.id)).where(Party.name.ilike(f"%{term}%"))
-        )).scalar() or 0
+        sup_n = (
+            await db.execute(select(func.count(Party.id)).where(Party.name.ilike(f"%{term}%")))
+        ).scalar() or 0
         if sup_n:
             continue  # a legitimate supplier-name filter — leave it
-        item_n = (await db.execute(
-            select(func.count(InvoiceLine.id)).where(InvoiceLine.description.ilike(f"%{term}%"))
-        )).scalar() or 0
+        item_n = (
+            await db.execute(
+                select(func.count(InvoiceLine.id)).where(InvoiceLine.description.ilike(f"%{term}%"))
+            )
+        ).scalar() or 0
         if not item_n:
             continue  # not an item term either — don't touch
         group_by = ["supplier_name"] if re.search(r"поставщик", (user_text or "").lower()) else []
-        cols = [ColumnSpec(field=f) for f in
-                ("supplier_name", "description", "quantity", "unit_price", "amount")]
+        cols = [
+            ColumnSpec(field=f)
+            for f in ("supplier_name", "description", "quantity", "unit_price", "amount")
+        ]
         return TableSpec(
-            source="invoice_items", title=spec.title or "Позиции счетов",
+            source="invoice_items",
+            title=spec.title or "Позиции счетов",
             columns=cols,
             filters=[FilterSpec(field="description", op="smart", value=term)],
             group_by=group_by,
@@ -1124,7 +1335,7 @@ def _resolve_source(name: str) -> str | None:
     return None
 
 
-def _heal_filter(source: SourceDef, flt: "FilterSpec") -> "FilterSpec | None":
+def _heal_filter(source: SourceDef, flt: FilterSpec) -> FilterSpec | None:
     """Heal an off-catalog non-smart filter. Crucially, a numeric pseudo-field
     («amount_min», «сумма_от», «min_total») maps to the primary numeric field
     with gte/lte, and a search pseudo-field («search_text», «query») becomes a
@@ -1134,8 +1345,9 @@ def _heal_filter(source: SourceDef, flt: "FilterSpec") -> "FilterSpec | None":
         return flt.model_copy(update={"field": fd.key})
     raw = (flt.field or "").lower()
     if any(k in raw for k in ("search", "query", "keyword", "текст", "поиск")):
-        return flt.model_copy(update={
-            "field": source.primary_text_field or "description", "op": "smart"})
+        return flt.model_copy(
+            update={"field": source.primary_text_field or "description", "op": "smart"}
+        )
     op = flt.op
     if re.search(r"(_min\b|_от\b|_from\b|^min[_ ]|^от[_ ])", raw):
         op = "gte"
@@ -1144,8 +1356,22 @@ def _heal_filter(source: SourceDef, flt: "FilterSpec") -> "FilterSpec | None":
     base = re.sub(r"(_min|_max|_от|_до|_from|_to|^min_|^max_|^от_|^до_)", "", raw).strip()
     healed = resolve_field(source, base)
     if healed is None and any(
-        w in raw for w in ("amount", "sum", "сумм", "total", "итог", "price",
-                           "цен", "qty", "кол", "quant", "stoim", "стоим")):
+        w in raw
+        for w in (
+            "amount",
+            "sum",
+            "сумм",
+            "total",
+            "итог",
+            "price",
+            "цен",
+            "qty",
+            "кол",
+            "quant",
+            "stoim",
+            "стоим",
+        )
+    ):
         healed = _primary_number_field(source, base)
     if healed is not None:
         return flt.model_copy(update={"field": healed.key, "op": op})
@@ -1171,8 +1397,7 @@ def repair_spec_to_catalog(spec: TableSpec) -> tuple[TableSpec, list[str]]:
     def _heal(field: str, header: str | None = None) -> str | None:
         if field in source.fields:
             return field
-        fd = resolve_field(source, field) or (
-            resolve_field(source, header) if header else None)
+        fd = resolve_field(source, field) or (resolve_field(source, header) if header else None)
         return fd.key if fd else None
 
     new_cols: list[ColumnSpec] = []
@@ -1199,7 +1424,8 @@ def repair_spec_to_catalog(spec: TableSpec) -> tuple[TableSpec, list[str]]:
             if (healed_flt.field, healed_flt.op) != (flt.field, flt.op):
                 tail = f" ({healed_flt.op})" if healed_flt.op != flt.op else ""
                 notes.append(
-                    f"фильтр «{flt.field}» → «{source.fields[healed_flt.field].header}»{tail}")
+                    f"фильтр «{flt.field}» → «{source.fields[healed_flt.field].header}»{tail}"
+                )
             new_filters.append(healed_flt)
     spec.filters = new_filters
 
@@ -1250,17 +1476,15 @@ def _finalize_virtual(spec: TableSpec, all_rows: list[dict]) -> TableResult:
     cap = min(spec.limit or MAX_ROWS, MAX_ROWS)
     rows = rows[:cap]
 
-    out_rows = [
-        {fd.key: _format_value(r.get(fd.key), fd.type) for fd in field_defs}
-        for r in rows
-    ]
+    out_rows = [{fd.key: _format_value(r.get(fd.key), fd.type) for fd in field_defs} for r in rows]
     out_columns = [
-        {"key": fd.key, "header": col.header or fd.header, "type": fd.type,
-         "editable": False}
+        {"key": fd.key, "header": col.header or fd.header, "type": fd.type, "editable": False}
         for col, fd in zip(columns, field_defs, strict=True)
     ]
     return TableResult(
-        columns=out_columns, rows=out_rows, total=total,
+        columns=out_columns,
+        rows=out_rows,
+        total=total,
         truncated=total > len(out_rows),
     )
 
@@ -1289,8 +1513,9 @@ async def _execute_vector_search(db: AsyncSession, spec: TableSpec) -> TableResu
             "file_name": h.get("file_name") or h.get("payload", {}).get("file_name") or "",
             "doc_type": h.get("doc_type") or "",
             "status": h.get("status") or "",
-            "snippet": (h.get("payload", {}).get("text")
-                        or h.get("payload", {}).get("snippet") or "")[:300],
+            "snippet": (
+                h.get("payload", {}).get("text") or h.get("payload", {}).get("snippet") or ""
+            )[:300],
             "doc_id": str(h.get("doc_id") or ""),
             "query": query,
         }
@@ -1325,37 +1550,45 @@ async def _execute_graph_query(db: AsyncSession, spec: TableSpec) -> TableResult
         return _finalize_virtual(spec, [])
 
     edges = (
-        await db.execute(
-            select(KnowledgeEdge).where(
-                or_(
-                    KnowledgeEdge.source_node_id == center.id,
-                    KnowledgeEdge.target_node_id == center.id,
+        (
+            await db.execute(
+                select(KnowledgeEdge).where(
+                    or_(
+                        KnowledgeEdge.source_node_id == center.id,
+                        KnowledgeEdge.target_node_id == center.id,
+                    )
                 )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     node_ids = {center.id}
     for e in edges:
         node_ids.add(e.source_node_id)
         node_ids.add(e.target_node_id)
     nodes = (
-        await db.execute(select(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids)))
-    ).scalars().all()
+        (await db.execute(select(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids))))
+        .scalars()
+        .all()
+    )
     by_id = {n.id: n for n in nodes}
 
     rows = []
     for e in edges:
         src = by_id.get(e.source_node_id)
         tgt = by_id.get(e.target_node_id)
-        rows.append({
-            "start_node": center.title,
-            "source_title": src.title if src else "",
-            "edge_type": e.edge_type,
-            "target_title": tgt.title if tgt else "",
-            "target_type": tgt.node_type if tgt else "",
-            "confidence": round(float(e.confidence or 0.0), 3),
-            "reason": e.reason or "",
-        })
+        rows.append(
+            {
+                "start_node": center.title,
+                "source_title": src.title if src else "",
+                "edge_type": e.edge_type,
+                "target_title": tgt.title if tgt else "",
+                "target_type": tgt.node_type if tgt else "",
+                "confidence": round(float(e.confidence or 0.0), 3),
+                "reason": e.reason or "",
+            }
+        )
     return _finalize_virtual(spec, rows)
 
 
@@ -1414,9 +1647,7 @@ async def _execute_grouped(
     group_exprs = [exprs[g] for g in group_keys]
     stmt = stmt.group_by(*group_exprs)
 
-    total = (
-        await db.execute(select(func.count()).select_from(stmt.subquery()))
-    ).scalar() or 0
+    total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
 
     for g in group_exprs:
         stmt = stmt.order_by(g.asc())
@@ -1437,13 +1668,15 @@ async def _execute_grouped(
         for col, fd in zip(columns, field_defs, strict=True)
     ]
     return TableResult(
-        columns=out_columns, rows=rows, total=int(total),
+        columns=out_columns,
+        rows=rows,
+        total=int(total),
         truncated=int(total) > len(rows),
     )
 
 
 async def execute_spec(
-    db: AsyncSession, spec: TableSpec, *, viewer: "UserInfo | None" = None
+    db: AsyncSession, spec: TableSpec, *, viewer: UserInfo | None = None
 ) -> TableResult:
     """Compile the spec to one SQL query and return the FULL dataset.
 
@@ -1465,9 +1698,7 @@ async def execute_spec(
     if spec.source in VIRTUAL_SOURCES:
         return await _VIRTUAL_PROVIDERS[spec.source](db, spec)
 
-    columns = list(spec.columns) or [
-        ColumnSpec(field=f) for f in source.default_columns
-    ]
+    columns = list(spec.columns) or [ColumnSpec(field=f) for f in source.default_columns]
     # Ensure group_by fields are visible columns (so the grouping is legible),
     # placed first. Skip unknown fields — validate_spec already vetted them.
     existing = {c.field for c in columns}
@@ -1538,9 +1769,7 @@ async def execute_spec(
         stmt = stmt.where(cond)
 
     # True total BEFORE any limit — the full-data guarantee.
-    total = (
-        await db.execute(select(func.count()).select_from(stmt.subquery()))
-    ).scalar() or 0
+    total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
 
     # Sort — group_by fields cluster first (primary keys), then explicit sort
     # applies within each group. "объедини по поставщикам, сортируй по дате" →
@@ -1600,9 +1829,9 @@ async def execute_spec(
         if supplier_filter_value:
             supplier_exists = (
                 await db.execute(
-                    select(func.count()).select_from(Party).where(
-                        Party.name.ilike(f"%{supplier_filter_value}%")
-                    )
+                    select(func.count())
+                    .select_from(Party)
+                    .where(Party.name.ilike(f"%{supplier_filter_value}%"))
                 )
             ).scalar_one() > 0
             if not supplier_exists:
@@ -1622,9 +1851,15 @@ async def execute_spec(
 
 class PatchOp(BaseModel):
     op: Literal[
-        "add_column", "remove_column", "move_column",
-        "set_sort", "add_filter", "clear_filters", "set_limit",
-        "set_group_by", "set_agg",
+        "add_column",
+        "remove_column",
+        "move_column",
+        "set_sort",
+        "add_filter",
+        "clear_filters",
+        "set_limit",
+        "set_group_by",
+        "set_agg",
     ]
     field: str | None = None
     header: str | None = None
@@ -1721,9 +1956,7 @@ _SORT_RE = re.compile(
     r"(?:отсортируй|сортируй|сортировка|упорядочь?и?)\s+(?:по\s+)?(?P<what>[\w\s]+?)"
     r"(?:\s+(?P<dir>по\s+убыван\w*|по\s+возрастан\w*|убыв\w*|возраст\w*))?\s*$"
 )
-_ONLY_RE = re.compile(
-    r"(?:покажи|выведи|оставь)\s+только\s+(?P<what>.+?)\s*$"
-)
+_ONLY_RE = re.compile(r"(?:покажи|выведи|оставь)\s+только\s+(?P<what>.+?)\s*$")
 # Grouping directive anywhere in the request: «объедини по поставщикам»,
 # «сгруппируй по поставщику», «группировка по дате».
 _GROUP_RE = re.compile(
@@ -1743,11 +1976,33 @@ _AND_FILTER_RE = re.compile(
     re.IGNORECASE,
 )
 # Words that mean the user is asking a question/making a statement, not adding an item.
-_NON_ITEM_WORDS = frozenset({
-    "почему", "зачем", "когда", "куда", "откуда", "где", "как", "так",
-    "правда", "хорошо", "плохо", "верно", "неверно", "ясно", "конечно",
-    "они", "вы", "ты", "он", "она", "мы", "нас", "вас",
-})
+_NON_ITEM_WORDS = frozenset(
+    {
+        "почему",
+        "зачем",
+        "когда",
+        "куда",
+        "откуда",
+        "где",
+        "как",
+        "так",
+        "правда",
+        "хорошо",
+        "плохо",
+        "верно",
+        "неверно",
+        "ясно",
+        "конечно",
+        "они",
+        "вы",
+        "ты",
+        "он",
+        "она",
+        "мы",
+        "нас",
+        "вас",
+    }
+)
 
 
 def _contains_stem(word: str) -> str:
@@ -1761,7 +2016,7 @@ def _contains_stem(word: str) -> str:
         return word
     for ending in ("ями", "ами", "ях", "ах", "ов", "ей", "ам", "ям"):
         if word.endswith(ending) and len(word) - len(ending) >= 4:
-            return word[:-len(ending)]
+            return word[: -len(ending)]
     for ending in ("ые", "ий", "ие", "ых", "их"):
         if word.endswith(ending) and len(word) - 2 >= 4:
             return word[:-2]
@@ -1858,17 +2113,29 @@ def parse_patch_command(text: str, spec: TableSpec) -> ParsedCommand | None:
             # multiple contains on the same field produces OR, not AND.
             ops_list: list[PatchOp] = [PatchOp(op="clear_filters")]
             for stem in items:
-                ops_list.append(PatchOp(op="add_filter", filter=FilterSpec(
-                    field=target_field, op="contains", value=stem,
-                )))
+                ops_list.append(
+                    PatchOp(
+                        op="add_filter",
+                        filter=FilterSpec(
+                            field=target_field,
+                            op="contains",
+                            value=stem,
+                        ),
+                    )
+                )
             return ParsedCommand(ops_list, f"оставил только «{query}»")
         # Single item → keep smart filter (FTS + stemming).
         return ParsedCommand(
             [
                 PatchOp(op="clear_filters"),
-                PatchOp(op="add_filter", filter=FilterSpec(
-                    field=target_field, op="smart", value=query,
-                )),
+                PatchOp(
+                    op="add_filter",
+                    filter=FilterSpec(
+                        field=target_field,
+                        op="smart",
+                        value=query,
+                    ),
+                ),
             ],
             f"оставил только «{query}»",
         )
@@ -1883,9 +2150,14 @@ def parse_patch_command(text: str, spec: TableSpec) -> ParsedCommand | None:
         if not items:
             return None
         ops_list = [
-            PatchOp(op="add_filter", filter=FilterSpec(
-                field=target_field, op="contains", value=stem,
-            ))
+            PatchOp(
+                op="add_filter",
+                filter=FilterSpec(
+                    field=target_field,
+                    op="contains",
+                    value=stem,
+                ),
+            )
             for stem in items
         ]
         label = " и ".join(f"«{s}»" for s in items)
@@ -1927,9 +2199,15 @@ def _resolve_noun(source: SourceDef, raw: str) -> FieldDef | None:
                 return fd
     return None
 
+
 # Aggregate-function intent → applied to a numeric column under grouping.
-_AGG_LABEL = {"avg": "среднее", "min": "минимум", "max": "максимум",
-              "sum": "сумма", "count": "количество"}
+_AGG_LABEL = {
+    "avg": "среднее",
+    "min": "минимум",
+    "max": "максимум",
+    "sum": "сумма",
+    "count": "количество",
+}
 _AGG_RES: list[tuple[str, re.Pattern]] = [
     ("avg", re.compile(r"средн|в\s+среднем|сравн\w*\s+цен")),
     ("min", re.compile(r"минимальн|наименьш|дешевл|дешёв|деше\w*\s+всег")),
@@ -1937,8 +2215,10 @@ _AGG_RES: list[tuple[str, re.Pattern]] = [
     ("count", re.compile(r"скольк\w+|количеств\w+|число\s+поз")),
 ]
 _PRIMARY_NUMBER_FIELD = {
-    "invoice_items": "unit_price", "invoices": "total_amount",
-    "payments": "amount", "warehouse": "current_qty",
+    "invoice_items": "unit_price",
+    "invoices": "total_amount",
+    "payments": "amount",
+    "warehouse": "current_qty",
 }
 
 
@@ -1973,8 +2253,9 @@ def _recover_item_filter(source: SourceDef, text: str, spec: TableSpec) -> str |
     low = obj.lower()
     # Never filter by a source-type word («счета», «документы», «позиции»…) —
     # that's the dataset, not an item within it.
-    source_words = {w.lower() for src in SOURCES.values()
-                    for w in (src.key, src.title, *src.synonyms)}
+    source_words = {
+        w.lower() for src in SOURCES.values() for w in (src.key, src.title, *src.synonyms)
+    }
     if any(low == w or w in low for w in source_words):
         return None
     return obj
@@ -1990,8 +2271,7 @@ def _detect_agg_intent(text: str) -> str | None:
 def _primary_number_field(source: SourceDef, text: str) -> FieldDef | None:
     """Numeric field the aggregate targets — explicit noun first, else per-source
     default (цена/сумма), else the first numeric field."""
-    for noun in ("цена", "цены", "цену", "сумма", "суммы", "стоимость",
-                 "количество", "кол-во"):
+    for noun in ("цена", "цены", "цену", "сумма", "суммы", "стоимость", "количество", "кол-во"):
         if noun in text:
             fd = resolve_field(source, noun)
             if fd and fd.type == "number":
@@ -2053,9 +2333,7 @@ def reconcile_ops(spec: TableSpec, user_text: str) -> tuple[list[PatchOp], list[
     grouped = bool(spec.group_by) or any(o.op == "set_group_by" for o in ops)
     if agg and grouped:
         num_fd = _primary_number_field(source, text)
-        if num_fd and not any(
-            c.field == num_fd.key and c.agg == agg for c in spec.columns
-        ):
+        if num_fd and not any(c.field == num_fd.key and c.agg == agg for c in spec.columns):
             ops.append(PatchOp(op="set_agg", field=num_fd.key, agg=agg))
             notes.append(f"«{num_fd.header}» — {_AGG_LABEL[agg]}")
 
@@ -2064,8 +2342,14 @@ def reconcile_ops(spec: TableSpec, user_text: str) -> tuple[list[PatchOp], list[
     if grouped:
         item = _recover_item_filter(source, text, spec)
         if item:
-            ops.append(PatchOp(op="add_filter", filter=FilterSpec(
-                field=source.primary_text_field or "description", op="smart", value=item)))
+            ops.append(
+                PatchOp(
+                    op="add_filter",
+                    filter=FilterSpec(
+                        field=source.primary_text_field or "description", op="smart", value=item
+                    ),
+                )
+            )
             notes.append(f"фильтр по «{item}»")
 
     return ops, notes

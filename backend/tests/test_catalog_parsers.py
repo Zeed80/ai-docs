@@ -80,10 +80,14 @@ async def test_rows_without_tool_type_column_are_kept(db_session):
     assert result["skipped_by_reason"] == {"no_name": 1}
 
     entries = (
-        await db_session.execute(
-            select(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id == supplier.id)
+        (
+            await db_session.execute(
+                select(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id == supplier.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     by_part = {e.part_number: e for e in entries}
     assert by_part["MT-12"].tool_type.value == "endmill"
     assert by_part["DR-5"].tool_type.value == "drill"
@@ -115,16 +119,18 @@ def test_excel_header_is_found_below_a_banner():
     """Real price lists open with a company banner and a date, not a header."""
     from app.tasks.drawing_analysis import _parse_excel_catalog
 
-    data = _xlsx_bytes({
-        "Прайс": [
-            ["ООО «Ромашка» — прайс-лист"],
-            ["от 01.08.2026, цены без НДС"],
-            [],
-            ["Наименование", "Артикул", "Цена"],
-            ["Фреза концевая D12", "MT-12", 1500],
-            ["Сверло D5", "DR-5", 300],
-        ]
-    })
+    data = _xlsx_bytes(
+        {
+            "Прайс": [
+                ["ООО «Ромашка» — прайс-лист"],
+                ["от 01.08.2026, цены без НДС"],
+                [],
+                ["Наименование", "Артикул", "Цена"],
+                ["Фреза концевая D12", "MT-12", 1500],
+                ["Сверло D5", "DR-5", 300],
+            ]
+        }
+    )
     rows = _parse_excel_catalog(data)
     assert len(rows) == 2, rows
     assert rows[0]["name"] == "Фреза концевая D12"
@@ -134,10 +140,12 @@ def test_excel_header_is_found_below_a_banner():
 def test_excel_reads_every_sheet():
     from app.tasks.drawing_analysis import _parse_excel_catalog
 
-    data = _xlsx_bytes({
-        "Фрезы": [["Наименование", "Артикул", "Цена"], ["Фреза D10", "F-10", 900]],
-        "Свёрла": [["Наименование", "Артикул", "Цена"], ["Сверло D8", "S-8", 400]],
-    })
+    data = _xlsx_bytes(
+        {
+            "Фрезы": [["Наименование", "Артикул", "Цена"], ["Фреза D10", "F-10", 900]],
+            "Свёрла": [["Наименование", "Артикул", "Цена"], ["Сверло D8", "S-8", 400]],
+        }
+    )
     rows = _parse_excel_catalog(data)
     assert {r["part_number"] for r in rows} == {"F-10", "S-8"}
     assert {r["_sheet"] for r in rows} == {"Фрезы", "Свёрла"}
@@ -147,13 +155,15 @@ def test_excel_category_separator_is_attached_to_following_rows():
     """A lone cell is a category header — often the only type hint in the file."""
     from app.tasks.drawing_analysis import _parse_excel_catalog
 
-    data = _xlsx_bytes({
-        "Прайс": [
-            ["Наименование", "Артикул", "Цена"],
-            ["Фрезы концевые"],
-            ["D12 четырёхзубая", "MT-12", 1500],
-        ]
-    })
+    data = _xlsx_bytes(
+        {
+            "Прайс": [
+                ["Наименование", "Артикул", "Цена"],
+                ["Фрезы концевые"],
+                ["D12 четырёхзубая", "MT-12", 1500],
+            ]
+        }
+    )
     rows = _parse_excel_catalog(data)
     assert len(rows) == 1
     assert rows[0]["_category"] == "Фрезы концевые"
@@ -211,7 +221,11 @@ async def test_pdf_without_tables_falls_back_to_text_extraction(monkeypatch):
             return False
 
     monkeypatch.setattr(da, "_parse_catalog_text_via_llm", fake_llm)
-    monkeypatch.setitem(__import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda *_a, **_k: _Pdf())}))
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "pdfplumber",
+        type("M", (), {"open": staticmethod(lambda *_a, **_k: _Pdf())}),
+    )
 
     rows = await da._parse_pdf_catalog(b"%PDF-1.4 fake")
     assert rows and rows[0]["part_number"] == "CN-1"
@@ -235,7 +249,7 @@ def test_semicolon_csv_keeps_every_row():
         "MT-9-12;Фреза концевая Ø12 твердосплавная;3450,50\n"
         "DR-6-5;Сверло спиральное Ø6.5 HSS;480,00\n"
         "BOX-1;Ящик для инструмента;1 200,00\n"
-    ).encode("utf-8")
+    ).encode()
 
     rows = _parse_csv_catalog(data)
     assert len(rows) == 3
@@ -246,7 +260,7 @@ def test_semicolon_csv_keeps_every_row():
 def test_tab_separated_catalog_is_parsed():
     from app.tasks.drawing_analysis import _parse_csv_catalog
 
-    data = "Артикул\tНаименование\tЦена\nX-1\tСверло\t100\n".encode("utf-8")
+    data = "Артикул\tНаименование\tЦена\nX-1\tСверло\t100\n".encode()
     rows = _parse_csv_catalog(data)
     assert rows == [{"part_number": "X-1", "name": "Сверло", "price": "100"}]
 

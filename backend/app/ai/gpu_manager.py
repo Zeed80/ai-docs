@@ -22,7 +22,7 @@ from app.config import settings
 logger = structlog.get_logger()
 
 TOTAL_VRAM_GB: float = float(os.environ.get("GPU_TOTAL_VRAM_GB", "24.0"))
-SAFETY_MARGIN_GB: float = 1.0   # reserve 1 GB for OS / driver overhead
+SAFETY_MARGIN_GB: float = 1.0  # reserve 1 GB for OS / driver overhead
 
 
 @dataclass
@@ -38,7 +38,7 @@ class ProviderAllocation:
     running: bool = False
     models: list[LoadedModel] = field(default_factory=list)
     vram_used_gb: float = 0.0
-    vram_limit_gb: float | None = None   # soft limit set by user; None = unlimited
+    vram_limit_gb: float | None = None  # soft limit set by user; None = unlimited
     url: str = ""
 
 
@@ -58,11 +58,11 @@ class GPUTelemetry:
     driver_version: str | None = None
     utilization_pct: float | None = None
     temp_gpu_c: float | None = None
-    temp_mem_c: float | None = None            # nvidia-smi temperature.memory (N/A on GeForce)
-    temp_mem_junction_c: float | None = None   # gpu-temp-helper sidecar (gddr6 BAR read)
+    temp_mem_c: float | None = None  # nvidia-smi temperature.memory (N/A on GeForce)
+    temp_mem_junction_c: float | None = None  # gpu-temp-helper sidecar (gddr6 BAR read)
     power_draw_w: float | None = None
     power_limit_w: float | None = None
-    power_limit_min_w: float | None = None     # NVML constraints (sidecar only)
+    power_limit_min_w: float | None = None  # NVML constraints (sidecar only)
     power_limit_max_w: float | None = None
     power_limit_default_w: float | None = None
     fan_pct: float | None = None
@@ -72,7 +72,7 @@ class GPUTelemetry:
     clock_sm_mhz: float | None = None
     clock_mem_mhz: float | None = None
     ts: float = 0.0
-    source: str = "none"                       # sidecar | docker-exec | local
+    source: str = "none"  # sidecar | docker-exec | local
 
 
 @dataclass
@@ -83,9 +83,9 @@ class CPUTelemetry:
     threads: int | None = None
     utilization_pct: float | None = None
     temp_c: float | None = None
-    power_draw_w: float | None = None          # RAPL package energy delta
-    freq_mhz: float | None = None              # average current frequency
-    freq_limit_mhz: float | None = None        # scaling_max_freq cap
+    power_draw_w: float | None = None  # RAPL package energy delta
+    freq_mhz: float | None = None  # average current frequency
+    freq_limit_mhz: float | None = None  # scaling_max_freq cap
     freq_hw_min_mhz: float | None = None
     freq_hw_max_mhz: float | None = None
     boost: bool | None = None
@@ -194,8 +194,8 @@ async def _docker_exec_in_gpu_container(cmd: list[str]) -> str | None:
             i = 0
             while i + 8 <= len(raw):
                 _stream_type = raw[i]  # 1=stdout, 2=stderr
-                size = int.from_bytes(raw[i + 4:i + 8], "big")
-                chunk = raw[i + 8:i + 8 + size].decode("utf-8", errors="replace")
+                size = int.from_bytes(raw[i + 4 : i + 8], "big")
+                chunk = raw[i + 8 : i + 8 + size].decode("utf-8", errors="replace")
                 if _stream_type == 1:
                     output += chunk
                 i += 8 + size
@@ -458,11 +458,7 @@ def _run_nvidia_smi_local_raw(cmd: list[str]) -> str | None:
 def _helper_headers() -> dict[str, str]:
     from app.config import settings
 
-    return (
-        {"X-Power-Limit-Token": settings.agent_service_key}
-        if settings.agent_service_key
-        else {}
-    )
+    return {"X-Power-Limit-Token": settings.agent_service_key} if settings.agent_service_key else {}
 
 
 async def _helper_request(method: str, path: str, payload: dict | None = None) -> dict:
@@ -554,9 +550,7 @@ async def set_fan_auto(scope: str = "all") -> dict:
 async def set_fan_manual(channel_id: str, pct: float) -> dict:
     """Pin one channel to a fixed speed. The sidecar clamps to the safe range."""
     global _telemetry_cache
-    data = await _helper_request(
-        "POST", "/fans/manual", {"channel_id": channel_id, "pct": pct}
-    )
+    data = await _helper_request("POST", "/fans/manual", {"channel_id": channel_id, "pct": pct})
     logger.info(
         "fan_manual_set",
         channel=channel_id,
@@ -586,9 +580,7 @@ async def apply_fan_config(payload: dict) -> dict:
     return data
 
 
-async def set_fan_control(
-    enabled: bool | None = None, allow_hwmon: bool | None = None
-) -> dict:
+async def set_fan_control(enabled: bool | None = None, allow_hwmon: bool | None = None) -> dict:
     """Switch fan control on or off at runtime (GUI setting, not an env var)."""
     global _telemetry_cache
     payload: dict = {}
@@ -616,6 +608,7 @@ async def preview_fan_config(payload: dict) -> dict:
 # Per-provider status queries
 # ---------------------------------------------------------------------------
 
+
 async def _query_ollama(base_url: str, timeout: float = 5.0) -> ProviderAllocation:
     alloc = ProviderAllocation(provider="ollama", url=base_url)
     try:
@@ -628,7 +621,7 @@ async def _query_ollama(base_url: str, timeout: float = 5.0) -> ProviderAllocati
             name = m.get("name", "unknown")
             # Ollama returns size_vram in bytes
             vram_bytes = m.get("size_vram", 0)
-            vram_gb = round(vram_bytes / (1024 ** 3), 2)
+            vram_gb = round(vram_bytes / (1024**3), 2)
             alloc.models.append(LoadedModel(name=name, vram_gb=vram_gb, provider="ollama"))
             alloc.vram_used_gb += vram_gb
     except Exception as exc:
@@ -658,7 +651,7 @@ async def _query_llamacpp(base_url: str, timeout: float = 5.0) -> ProviderAlloca
             host_path = active_path.replace("/models/", f"{models_dir}/", 1)
             if os.path.exists(host_path):
                 size_bytes = os.path.getsize(host_path)
-                vram_gb = round(size_bytes / (1024 ** 3) * 0.95, 2)  # 95% of file goes to GPU
+                vram_gb = round(size_bytes / (1024**3) * 0.95, 2)  # 95% of file goes to GPU
 
         alloc.models = [LoadedModel(name=model_name, vram_gb=vram_gb, provider="llamacpp")]
         alloc.vram_used_gb = vram_gb
@@ -679,11 +672,13 @@ async def _query_vllm(base_url: str, timeout: float = 5.0) -> ProviderAllocation
         gpu_util = float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.85"))
         vram_estimate = round(TOTAL_VRAM_GB * gpu_util, 2)
         for m in data.get("data", []):
-            alloc.models.append(LoadedModel(
-                name=m.get("id", "unknown"),
-                vram_gb=vram_estimate,
-                provider="vllm",
-            ))
+            alloc.models.append(
+                LoadedModel(
+                    name=m.get("id", "unknown"),
+                    vram_gb=vram_estimate,
+                    provider="vllm",
+                )
+            )
             alloc.vram_used_gb += vram_estimate
     except Exception as exc:
         logger.debug("vllm_models_failed", error=str(exc))
@@ -694,10 +689,13 @@ async def _query_vllm(base_url: str, timeout: float = 5.0) -> ProviderAllocation
 # Redis soft-limit storage
 # ---------------------------------------------------------------------------
 
+
 def _load_vram_limits() -> dict[str, float]:
     try:
         import json
+
         from app.utils.redis_client import get_sync_redis
+
         raw = get_sync_redis().get("gpu_vram_limits")
         return json.loads(raw) if raw else {}
     except Exception:
@@ -707,7 +705,9 @@ def _load_vram_limits() -> dict[str, float]:
 def save_vram_limits(limits: dict[str, float]) -> None:
     try:
         import json
+
         from app.utils.redis_client import get_sync_redis
+
         get_sync_redis().set("gpu_vram_limits", json.dumps(limits))
     except Exception as exc:
         logger.warning("gpu_vram_limits_save_failed", error=str(exc))
@@ -716,6 +716,7 @@ def save_vram_limits(limits: dict[str, float]) -> None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 async def get_allocations() -> dict[str, ProviderAllocation]:
     """Query all providers concurrently and return VRAM allocations."""
@@ -778,7 +779,11 @@ async def check_can_load(provider: str, model_vram_gb: float) -> tuple[bool, str
         # Build advice
         largest_provider = max(allocs.values(), key=lambda a: a.vram_used_gb, default=None)
         advice = ""
-        if largest_provider and largest_provider.provider != provider and largest_provider.vram_used_gb > 0:
+        if (
+            largest_provider
+            and largest_provider.provider != provider
+            and largest_provider.vram_used_gb > 0
+        ):
             advice = (
                 f" Выгрузите модель из {largest_provider.provider} "
                 f"(~{largest_provider.vram_used_gb:.1f} GB) чтобы освободить место."
@@ -807,16 +812,20 @@ async def check_can_load(provider: str, model_vram_gb: float) -> tuple[bool, str
 # Ollama auto-management
 # ---------------------------------------------------------------------------
 
+
 async def unload_ollama_model(model_name: str, ollama_url: str | None = None) -> bool:
     """Unload a specific model from Ollama VRAM via keep_alive=0 API call."""
-    url = (ollama_url or str(settings.ollama_url).rstrip("/"))
+    url = ollama_url or str(settings.ollama_url).rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.post(f"{url}/api/generate", json={
-                "model": model_name,
-                "keep_alive": 0,
-                "prompt": "",
-            })
+            r = await client.post(
+                f"{url}/api/generate",
+                json={
+                    "model": model_name,
+                    "keep_alive": 0,
+                    "prompt": "",
+                },
+            )
             return r.status_code in (200, 204)
     except Exception as exc:
         logger.debug("ollama_unload_failed", model=model_name, error=str(exc))
@@ -831,11 +840,12 @@ async def unload_all_ollama_models(
     By default the pinned orchestrator model is preserved so the agent keeps an
     instant response. Pass exclude_pinned=False to force-unload everything.
     """
-    url = (ollama_url or str(settings.ollama_url).rstrip("/"))
+    url = ollama_url or str(settings.ollama_url).rstrip("/")
     pinned: set[str] = set()
     if exclude_pinned:
         try:
             from app.ai.model_lifecycle import pinned_ollama_models
+
             pinned = pinned_ollama_models()
         except Exception:
             pinned = set()
@@ -867,7 +877,9 @@ async def unload_all_ollama_models(
     return unloaded
 
 
-async def ensure_vram_for(provider: str, model_vram_gb: float, auto_free: bool = True) -> tuple[bool, str]:
+async def ensure_vram_for(
+    provider: str, model_vram_gb: float, auto_free: bool = True
+) -> tuple[bool, str]:
     """Check VRAM; if auto_free=True, auto-unload Ollama models to make room.
 
     Returns (ok, message). When auto_free triggers unloading, waits for GPU

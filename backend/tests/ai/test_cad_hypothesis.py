@@ -8,7 +8,9 @@ from app.ai.cad_ir.schema import Circle, DimensionEntity, Point, TextEntity
 
 
 def _ir(entities, scale=0.5) -> CadIR:
-    return CadIR(source=SourceInfo(image_width=400, image_height=300), scale=scale, entities=entities)
+    return CadIR(
+        source=SourceInfo(image_width=400, image_height=300), scale=scale, entities=entities
+    )
 
 
 # ── apply_vlm_readings ────────────────────────────────────────────────────────
@@ -40,13 +42,21 @@ def test_apply_vlm_readings_noop_on_empty():
 
 
 def test_thread_reading_promoted_over_lookalike_diameter():
-    """"M18" is a valid metric thread designation, "Ø18" would need geometry
+    """ "M18" is a valid metric thread designation, "Ø18" would need geometry
     to confirm — with no matching circle nearby, thread validity alone should
     decisively win here."""
     dim = DimensionEntity(
-        p1=Point(x=100, y=100), p2=Point(x=140, y=100), kind="linear",
-        text="M18", value_mm=None, confidence=0.5,
-        alternatives=[__import__("app.ai.cad_ir.schema", fromlist=["Alternative"]).Alternative(value="M180", p=0.1)],
+        p1=Point(x=100, y=100),
+        p2=Point(x=140, y=100),
+        kind="linear",
+        text="M18",
+        value_mm=None,
+        confidence=0.5,
+        alternatives=[
+            __import__("app.ai.cad_ir.schema", fromlist=["Alternative"]).Alternative(
+                value="M180", p=0.1
+            )
+        ],
     )
     ir = _ir([dim])
     resolve_hypotheses(ir)
@@ -55,9 +65,13 @@ def test_thread_reading_promoted_over_lookalike_diameter():
 
 
 def test_geometry_confirms_diameter_reading_over_alternative():
-    circle = Circle(center=Point(x=200, y=150), radius=36)  # 36px * scale=0.5 = 18mm diameter*... wait radius*2*scale
+    circle = Circle(
+        center=Point(x=200, y=150), radius=36
+    )  # 36px * scale=0.5 = 18mm diameter*... wait radius*2*scale
     text = TextEntity(
-        position=Point(x=205, y=150), text="Ø18", confidence=0.55,
+        position=Point(x=205, y=150),
+        text="Ø18",
+        confidence=0.55,
     )
     from app.ai.cad_ir.schema import Alternative
 
@@ -71,8 +85,13 @@ def test_geometry_confirms_diameter_reading_over_alternative():
 
 def test_ambiguous_reading_stays_inferred_and_queued_for_review():
     dim = DimensionEntity(
-        p1=Point(x=10, y=10), p2=Point(x=50, y=10), kind="linear",
-        text="13", value_mm=13.0, confidence=0.51, tolerance=None,
+        p1=Point(x=10, y=10),
+        p2=Point(x=50, y=10),
+        kind="linear",
+        text="13",
+        value_mm=13.0,
+        confidence=0.51,
+        tolerance=None,
     )
     from app.ai.cad_ir.schema import Alternative
 
@@ -88,8 +107,13 @@ def test_invalid_tolerance_symbol_penalized_in_favor_of_alternative():
     from app.ai.cad_ir.schema import Alternative
 
     dim = DimensionEntity(
-        p1=Point(x=10, y=10), p2=Point(x=50, y=10), kind="linear",
-        text="20Zz9", value_mm=20.0, confidence=0.55, tolerance="Zz9",  # bogus tolerance letters
+        p1=Point(x=10, y=10),
+        p2=Point(x=50, y=10),
+        kind="linear",
+        text="20Zz9",
+        value_mm=20.0,
+        confidence=0.55,
+        tolerance="Zz9",  # bogus tolerance letters
         alternatives=[Alternative(value="20H7", p=0.45)],
     )
     ir = _ir([dim])
@@ -105,8 +129,13 @@ def test_human_approved_entity_is_never_touched():
     from app.ai.cad_ir.schema import Alternative
 
     dim = DimensionEntity(
-        p1=Point(x=10, y=10), p2=Point(x=50, y=10), kind="linear",
-        text="M18", value_mm=None, confidence=0.9, assurance="human_approved",
+        p1=Point(x=10, y=10),
+        p2=Point(x=50, y=10),
+        kind="linear",
+        text="M18",
+        value_mm=None,
+        confidence=0.9,
+        assurance="human_approved",
         alternatives=[Alternative(value="M180", p=0.1)],
     )
     ir = _ir([dim])

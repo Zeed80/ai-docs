@@ -3,16 +3,17 @@
 Revision ID: 20260828_0013
 Revises: 20260828_0012
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 revision: str = "20260828_0013"
-down_revision: Union[str, None] = "20260828_0012"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260828_0012"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -23,8 +24,9 @@ def upgrade() -> None:
     if "agent_triage_mode" not in cols:
         op.add_column(
             "mailbox_configs",
-            sa.Column("agent_triage_mode", sa.String(20), nullable=False,
-                      server_default="classify"),
+            sa.Column(
+                "agent_triage_mode", sa.String(20), nullable=False, server_default="classify"
+            ),
         )
 
     if not insp.has_table("email_triage_results"):
@@ -45,8 +47,18 @@ def upgrade() -> None:
             sa.Column("error", sa.Text(), nullable=True),
             sa.Column("corrected_category", sa.String(40), nullable=True),
             sa.Column("corrected_by", sa.String(255), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.ForeignKeyConstraint(["message_id"], ["email_messages.id"], ondelete="CASCADE"),
             sa.ForeignKeyConstraint(["work_order_id"], ["work_orders.id"], ondelete="SET NULL"),
             sa.PrimaryKeyConstraint("id"),

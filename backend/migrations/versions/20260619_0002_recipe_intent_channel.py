@@ -5,8 +5,8 @@ Revises: 20260619_0001
 Create Date: 2026-06-19
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "20260619_0002"
 down_revision = "20260619_0001"
@@ -20,9 +20,7 @@ def upgrade() -> None:
     insp = sa.inspect(op.get_bind())
     existing = {c["name"] for c in insp.get_columns("recipe_skills")}
     if "intent" not in existing:
-        op.add_column(
-            "recipe_skills", sa.Column("intent", sa.String(length=40), nullable=True)
-        )
+        op.add_column("recipe_skills", sa.Column("intent", sa.String(length=40), nullable=True))
     if "output_channel" not in existing:
         op.add_column(
             "recipe_skills",

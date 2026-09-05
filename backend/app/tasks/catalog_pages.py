@@ -20,7 +20,9 @@ import uuid
 from typing import Any
 
 import structlog
-from sqlalchemy import func, select, text as sa_text, update as sa_update
+from sqlalchemy import func, select
+from sqlalchemy import text as sa_text
+from sqlalchemy import update as sa_update
 
 from app.domain import processing_jobs as pj
 from app.domain.catalog_images import (
@@ -60,26 +62,30 @@ def _run_async(coro):
     return run_async(coro)
 
 
-@celery_app.task(bind=True, name="catalog.prepare_pages", max_retries=1,
-                 soft_time_limit=1800, time_limit=1860)
+@celery_app.task(
+    bind=True, name="catalog.prepare_pages", max_retries=1, soft_time_limit=1800, time_limit=1860
+)
 def prepare_catalog_pages(self, document_id: str) -> dict:
     return _run_async(_prepare_pages_async(document_id))
 
 
-@celery_app.task(bind=True, name="catalog.render_page_batch", max_retries=1,
-                 soft_time_limit=900, time_limit=960)
+@celery_app.task(
+    bind=True, name="catalog.render_page_batch", max_retries=1, soft_time_limit=900, time_limit=960
+)
 def render_catalog_page_batch(self, document_id: str, run_id: str | None = None) -> dict:
     return _run_async(_render_batch_async(document_id, run_id))
 
 
-@celery_app.task(bind=True, name="catalog.parse_page_batch", max_retries=1,
-                 soft_time_limit=1800, time_limit=1860)
+@celery_app.task(
+    bind=True, name="catalog.parse_page_batch", max_retries=1, soft_time_limit=1800, time_limit=1860
+)
 def parse_catalog_page_batch(self, document_id: str, run_id: str | None = None) -> dict:
     return _run_async(_parse_batch_async(document_id, run_id))
 
 
-@celery_app.task(bind=True, name="catalog.finalize_catalog", max_retries=1,
-                 soft_time_limit=1800, time_limit=1860)
+@celery_app.task(
+    bind=True, name="catalog.finalize_catalog", max_retries=1, soft_time_limit=1800, time_limit=1860
+)
 def finalize_catalog(self, document_id: str, run_id: str | None = None) -> dict:
     return _run_async(_finalize_async(document_id, run_id))
 
@@ -273,14 +279,18 @@ async def _claim_pages(db, doc_uuid: uuid.UUID, status: str, next_status: str, l
     from app.db.models import CatalogPage
 
     rows = (
-        await db.execute(
-            select(CatalogPage)
-            .where(CatalogPage.document_id == doc_uuid, CatalogPage.status == status)
-            .order_by(CatalogPage.page_number)
-            .limit(limit)
-            .with_for_update(skip_locked=True)
+        (
+            await db.execute(
+                select(CatalogPage)
+                .where(CatalogPage.document_id == doc_uuid, CatalogPage.status == status)
+                .order_by(CatalogPage.page_number)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for row in rows:
         row.status = next_status
     await db.commit()
@@ -321,9 +331,13 @@ async def _render_batch_async(document_id: str, run_id: str | None) -> dict:
         # Nothing left to render → move on to parsing.
         async with factory() as db:
             total = await _count_pages(
-                db, doc_uuid, ("pending", "rendering", "rendered", "parsing", "parsed", "skipped", "failed")
+                db,
+                doc_uuid,
+                ("pending", "rendering", "rendered", "parsing", "parsed", "skipped", "failed"),
             )
-            done = await _count_pages(db, doc_uuid, ("rendered", "parsing", "parsed", "skipped", "failed"))
+            done = await _count_pages(
+                db, doc_uuid, ("rendered", "parsing", "parsed", "skipped", "failed")
+            )
         await _set_progress(factory, doc_uuid, "pages", done, total)
         await _mark_step(factory, doc_uuid, "pages", "done", rendered=done, total=total)
         parse_catalog_page_batch.delay(document_id, run_id)
@@ -369,7 +383,9 @@ async def _render_batch_async(document_id: str, run_id: str | None) -> dict:
                         page=page_number,
                         error=str(exc)[:200],
                     )
-                    rendered.append({"id": page_id, "page_number": page_number, "error": str(exc)[:400]})
+                    rendered.append(
+                        {"id": page_id, "page_number": page_number, "error": str(exc)[:400]}
+                    )
     finally:
         os.unlink(local_path)
 
@@ -393,9 +409,13 @@ async def _render_batch_async(document_id: str, run_id: str | None) -> dict:
             row.run_id = run_id
         await db.commit()
         total = await _count_pages(
-            db, doc_uuid, ("pending", "rendering", "rendered", "parsing", "parsed", "skipped", "failed")
+            db,
+            doc_uuid,
+            ("pending", "rendering", "rendered", "parsing", "parsed", "skipped", "failed"),
         )
-        done = await _count_pages(db, doc_uuid, ("rendered", "parsing", "parsed", "skipped", "failed"))
+        done = await _count_pages(
+            db, doc_uuid, ("rendered", "parsing", "parsed", "skipped", "failed")
+        )
 
     await _set_progress(factory, doc_uuid, "pages", done, total)
     render_catalog_page_batch.delay(document_id, run_id)
@@ -427,9 +447,7 @@ def _ocr_page(pdf, page_number: int, render_dpi: int) -> tuple[str, list[WordBox
     page = pdf.load_page(page_number - 1)
     pixmap = page.get_pixmap(dpi=OCR_DPI)
     image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-    data = pytesseract.image_to_data(
-        image, lang="rus+eng", output_type=pytesseract.Output.DICT
-    )
+    data = pytesseract.image_to_data(image, lang="rus+eng", output_type=pytesseract.Output.DICT)
 
     scale = render_dpi / OCR_DPI  # OCR renders larger; bring boxes to page raster
     words: list[WordBox] = []
@@ -459,8 +477,8 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
     from app.storage import upload_file
     from app.tasks.drawing_analysis import (
         _create_catalog_entries_from_rows,
-        _pdf_text_is_unreadable,
         _parse_catalog_text_via_llm,
+        _pdf_text_is_unreadable,
     )
 
     doc_uuid = uuid.UUID(document_id)
@@ -488,9 +506,7 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
         reason = await gpu_yield_reason(get_verify_model().model)
         if reason and yields_exhausted(document_id):
             # Ждали полчаса — дальше уступать значит не сделать работу вовсе.
-            logger.info(
-                "catalog_parse_proceeds_after_waiting", document=document_id, reason=reason
-            )
+            logger.info("catalog_parse_proceeds_after_waiting", document=document_id, reason=reason)
             reason = None
         if reason:
             mark_yielded(document_id)
@@ -528,12 +544,16 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
         # Furniture filter needs the whole document's candidates, which exist
         # only after rendering finished — that is why it runs here, not there.
         all_images = (
-            await db.execute(
-                select(CatalogPage.images).where(
-                    CatalogPage.document_id == doc_uuid, CatalogPage.images.isnot(None)
+            (
+                await db.execute(
+                    select(CatalogPage.images).where(
+                        CatalogPage.document_id == doc_uuid, CatalogPage.images.isnot(None)
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     if not batch:
         finalize_catalog.delay(document_id, run_id)
@@ -704,7 +724,9 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
                             ToolCatalogEntry.content_hash.in_(hashes),
                         )
                     )
-                ).scalars().all()
+                )
+                .scalars()
+                .all()
             )
             kept_rows: list[dict[str, Any]] = []
             kept_crops: list[dict[str, Any]] = []
@@ -732,7 +754,9 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
                             ToolCatalogEntry.source_document_id == doc_uuid
                         )
                     )
-                ).scalars().all()
+                )
+                .scalars()
+                .all()
             )
 
             outcome = await _create_catalog_entries_from_rows(
@@ -761,7 +785,9 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
                         )
                         .order_by(ToolCatalogEntry.created_at)
                     )
-                ).scalars().all()
+                )
+                .scalars()
+                .all()
                 if entry.id not in before_ids
             ]
             by_hash = {digest: index for index, digest in enumerate(kept_hashes)}
@@ -794,7 +820,9 @@ async def _parse_batch_async(document_id: str, run_id: str | None) -> dict:
         await db.commit()
 
         total = await _count_pages(
-            db, doc_uuid, ("pending", "rendering", "rendered", "parsing", "parsed", "skipped", "failed")
+            db,
+            doc_uuid,
+            ("pending", "rendering", "rendered", "parsing", "parsed", "skipped", "failed"),
         )
         done = await _count_pages(db, doc_uuid, ("parsed", "skipped", "failed"))
 
@@ -821,12 +849,16 @@ async def _finalize_async(document_id: str, run_id: str | None) -> dict:
         # Anything this run did not confirm is retired — a position that
         # disappeared from a re-parsed page must not linger as if it were real.
         page_ids = (
-            await db.execute(
-                select(CatalogPage.id).where(
-                    CatalogPage.document_id == doc_uuid, CatalogPage.run_id == run_id
+            (
+                await db.execute(
+                    select(CatalogPage.id).where(
+                        CatalogPage.document_id == doc_uuid, CatalogPage.run_id == run_id
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if page_ids:
             await db.execute(
                 sa_update(ToolCatalogEntry)
@@ -873,9 +905,7 @@ async def _finalize_async(document_id: str, run_id: str | None) -> dict:
 
     by_status = {status: count for status, count in stats}
     await _mark_step(factory, doc_uuid, "parse", "done", **by_status)
-    await _mark_step(
-        factory, doc_uuid, "images", "done", with_crop=with_image, entries=entries
-    )
+    await _mark_step(factory, doc_uuid, "images", "done", with_crop=with_image, entries=entries)
 
     from app.tasks.catalog_ingest import _map_canonical_items
 
@@ -1028,13 +1058,13 @@ async def _reindex_payload_async(document_id: str | None) -> dict:
             "price_value": entry.price_value,
         }
         try:
-            await __import__("asyncio").to_thread(
-                set_tool_catalog_payload, str(entry.id), payload
-            )
+            await __import__("asyncio").to_thread(set_tool_catalog_payload, str(entry.id), payload)
             updated += 1
         except Exception as exc:  # noqa: BLE001 — one missing point is not fatal
             failed += 1
-            logger.debug("catalog_payload_backfill_failed", entry=str(entry.id), error=str(exc)[:120])
+            logger.debug(
+                "catalog_payload_backfill_failed", entry=str(entry.id), error=str(exc)[:120]
+            )
 
     logger.info("catalog_payload_reindexed", updated=updated, failed=failed)
     return {"updated": updated, "failed": failed}
@@ -1087,13 +1117,17 @@ async def _backfill_page_text_async(document_id: str | None, batch: int) -> dict
             if doc is None or not doc.storage_path:
                 continue
             rows = (
-                await db.execute(
-                    select(CatalogPage)
-                    .where(CatalogPage.document_id == doc_id, CatalogPage.text.is_(None))
-                    .order_by(CatalogPage.page_number)
-                    .limit(batch)
+                (
+                    await db.execute(
+                        select(CatalogPage)
+                        .where(CatalogPage.document_id == doc_id, CatalogPage.text.is_(None))
+                        .order_by(CatalogPage.page_number)
+                        .limit(batch)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if not rows:
                 continue
             try:
@@ -1128,7 +1162,9 @@ async def _backfill_page_text_async(document_id: str | None, batch: int) -> dict
             await db.commit()
 
     logger.info(
-        "catalog_page_text_backfilled", filled=filled, without_readable_text=empty,
+        "catalog_page_text_backfilled",
+        filled=filled,
+        without_readable_text=empty,
         documents=documents,
     )
     if filled or empty:
@@ -1164,13 +1200,17 @@ async def _purge_inactive_async(older_than_days: int, dry_run: bool) -> dict:
 
     async with factory() as db:
         rows = (
-            await db.execute(
-                select(ToolCatalogEntry).where(
-                    ToolCatalogEntry.is_active.is_(False),
-                    ToolCatalogEntry.updated_at < cutoff,
+            (
+                await db.execute(
+                    select(ToolCatalogEntry).where(
+                        ToolCatalogEntry.is_active.is_(False),
+                        ToolCatalogEntry.updated_at < cutoff,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         candidates = [(entry.id, entry.embedding_id) for entry in rows]
 
         if dry_run:
@@ -1195,9 +1235,7 @@ async def _purge_inactive_async(older_than_days: int, dry_run: bool) -> dict:
             # catalog — 267 vectors of positions that no longer existed, still
             # answerable by search.
             try:
-                await __import__("asyncio").to_thread(
-                    delete_tool_catalog_entry, str(entry_id)
-                )
+                await __import__("asyncio").to_thread(delete_tool_catalog_entry, str(entry_id))
             except Exception as exc:  # noqa: BLE001 — DB row still goes
                 logger.debug("catalog_purge_vector_failed", error=str(exc)[:120])
             entry = await db.get(ToolCatalogEntry, entry_id)
@@ -1241,18 +1279,30 @@ async def _cleanup_anomalies_async(dry_run: bool) -> dict:
 
     async with factory() as db:
         cards = (
-            await db.execute(
-                select(AnomalyCard).where(
-                    AnomalyCard.entity_type == "tool_catalog_entry",
-                    AnomalyCard.status == AnomalyStatus.open,
+            (
+                await db.execute(
+                    select(AnomalyCard).where(
+                        AnomalyCard.entity_type == "tool_catalog_entry",
+                        AnomalyCard.status == AnomalyStatus.open,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         for card in cards:
             details = card.details or {}
-            new_entry = await db.get(ToolCatalogEntry, uuid.UUID(details["new_entry_id"])) if details.get("new_entry_id") else None
-            old_entry = await db.get(ToolCatalogEntry, uuid.UUID(details["existing_entry_id"])) if details.get("existing_entry_id") else None
+            new_entry = (
+                await db.get(ToolCatalogEntry, uuid.UUID(details["new_entry_id"]))
+                if details.get("new_entry_id")
+                else None
+            )
+            old_entry = (
+                await db.get(ToolCatalogEntry, uuid.UUID(details["existing_entry_id"]))
+                if details.get("existing_entry_id")
+                else None
+            )
 
             still_valid = False
             if new_entry is not None and old_entry is not None:

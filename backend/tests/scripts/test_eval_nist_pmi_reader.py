@@ -17,17 +17,13 @@ def _truth():
     return {
         "semantic_id": "nist:ftc:06:atc:52",
         "evidence": {
-            "drawing_page_candidates": [
-                {"asset": "suite/nist_ftc_06_asme1_rd.pdf", "page": 1}
-            ]
+            "drawing_page_candidates": [{"asset": "suite/nist_ftc_06_asme1_rd.pdf", "page": 1}]
         },
     }
 
 
 def test_page_truth_index_uses_official_page_membership():
-    assert page_truth_index([_truth()]) == {
-        "nist_ftc_06_asme1_rd_p01.png": [_truth()]
-    }
+    assert page_truth_index([_truth()]) == {"nist_ftc_06_asme1_rd_p01.png": [_truth()]}
 
 
 def test_select_pages_never_substitutes_missing_images(tmp_path):

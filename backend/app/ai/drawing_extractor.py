@@ -12,9 +12,10 @@ from __future__ import annotations
 import base64
 import json
 import re
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
 import structlog
-from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
 
 from app.config import settings
 
@@ -223,8 +224,8 @@ _PROMPT_MAP: dict[str, str] = {
 async def extract_features_from_image(
     image_bytes: bytes | list[bytes],
     *,
-    router: "AIRouter | None" = None,
-    drawing: "Drawing | None" = None,
+    router: AIRouter | None = None,
+    drawing: Drawing | None = None,
     model: str | None = None,
     hint_text: str | None = None,
     drawing_type: str = "detail",
@@ -251,7 +252,7 @@ async def extract_features_from_image(
         classification: Optional Stage-1 classification result to enrich the prompt
     """
     images = [image_bytes] if isinstance(image_bytes, bytes) else image_bytes
-    labels = view_labels or [f"view_{i+1}" for i in range(len(images))]
+    labels = view_labels or [f"view_{i + 1}" for i in range(len(images))]
 
     specialized_prompt = _PROMPT_MAP.get(drawing_type, DETAIL_DRAWING_PROMPT)
     context_part = ""
@@ -261,8 +262,7 @@ async def extract_features_from_image(
     few_shot_part = ""
     if few_shot_examples:
         lines = "\n".join(
-            f"- {ex['description']} → \"{ex['correct_type']}\""
-            for ex in few_shot_examples[:10]
+            f'- {ex["description"]} → "{ex["correct_type"]}"' for ex in few_shot_examples[:10]
         )
         few_shot_part = f"\n\n## Уточнения пользователей (приоритетные):\n{lines}"
 
@@ -276,7 +276,7 @@ async def extract_features_from_image(
         )
 
     if len(images) > 1:
-        view_list = "\n".join(f"- Изображение {i+1}: {labels[i]}" for i in range(len(images)))
+        view_list = "\n".join(f"- Изображение {i + 1}: {labels[i]}" for i in range(len(images)))
         user_message = f"""Ты анализируешь многовидовой технический чертёж. Тебе предоставлены {len(images)} изображений:
 {view_list}
 
@@ -295,6 +295,7 @@ async def extract_features_from_image(
 
     if router is None:
         from app.ai.router import ai_router
+
         router = ai_router
 
     return await _extract_via_router(
@@ -308,8 +309,8 @@ async def extract_features_from_image(
 
 async def _extract_via_router(
     images: list[bytes],
-    router: "AIRouter",
-    drawing: "Drawing | None",
+    router: AIRouter,
+    drawing: Drawing | None,
     user_message: str,
     allow_cloud: bool,
 ) -> dict[str, Any]:
@@ -325,6 +326,7 @@ async def _extract_via_router(
     # Check if resolved model supports multi-image; if not, process sequentially.
     # Candidate models come from task_routing (the single source of truth).
     from app.ai.task_routing import get_routing_for
+
     routed_models = get_routing_for(AITask.DRAWING_ANALYSIS_VLM).models
     resolved_model_name = _resolve_available_model(router, routed_models)
     supports_multi = False
@@ -372,8 +374,8 @@ async def _extract_via_router(
 
 async def _extract_sequential_and_merge(
     images: list[bytes],
-    router: "AIRouter",
-    drawing: "Drawing | None",
+    router: AIRouter,
+    drawing: Drawing | None,
     user_message: str,
     allow_cloud: bool,
 ) -> dict[str, Any]:
@@ -395,7 +397,7 @@ async def _extract_sequential_and_merge(
     return _merge_multiview_results(results)
 
 
-def _resolve_available_model(router: "AIRouter", fallback_chain: list[str]) -> str | None:
+def _resolve_available_model(router: AIRouter, fallback_chain: list[str]) -> str | None:
     """Return first model name in chain that exists in the registry."""
     for name in fallback_chain:
         try:
@@ -482,11 +484,11 @@ def _primary_nominal(feature: dict) -> float | None:
 
 @dataclass
 class DrawingClassification:
-    drawing_type: str          # "detail" | "assembly" | "section" | "weld"
-    part_class: str            # "shaft" | "plate" | "bracket" | "housing" | "flange" | "gear" | "spring" | "pipe" | "frame" | "cover" | "bushing" | "coupling" | "lever" | "gearbox" | "pump" | "valve" | "bearing_unit" | "hydraulic_cylinder" | "other"
-    part_name: str             # name from title block or inferred
-    views_present: list[str]   # ["front", "side", "top", "section_A-A", ...]
-    confidence: float          # 0.0-1.0
+    drawing_type: str  # "detail" | "assembly" | "section" | "weld"
+    part_class: str  # "shaft" | "plate" | "bracket" | "housing" | "flange" | "gear" | "spring" | "pipe" | "frame" | "cover" | "bushing" | "coupling" | "lever" | "gearbox" | "pump" | "valve" | "bearing_unit" | "hydraulic_cylinder" | "other"
+    part_name: str  # name from title block or inferred
+    views_present: list[str]  # ["front", "side", "top", "section_A-A", ...]
+    confidence: float  # 0.0-1.0
     notes: str = ""
 
 
@@ -522,8 +524,8 @@ views_present: list of views visible in the image:
 async def classify_drawing_image(
     image_bytes: bytes,
     *,
-    router: "AIRouter | None" = None,
-    drawing: "Drawing | None" = None,
+    router: AIRouter | None = None,
+    drawing: Drawing | None = None,
     allow_cloud: bool = False,
 ) -> DrawingClassification | None:
     """Stage-1 VLM call: classify what kind of drawing/part this is.
@@ -541,13 +543,17 @@ async def classify_drawing_image(
 
     if router is None:
         from app.ai.router import ai_router
+
         router = ai_router
 
     try:
         request = AIRequest(
             task=AITask.DRAWING_ANALYSIS_VLM,
             messages=[
-                ChatMessage(role="system", content="You are an expert engineering drawing classifier. Return only valid JSON."),
+                ChatMessage(
+                    role="system",
+                    content="You are an expert engineering drawing classifier. Return only valid JSON.",
+                ),
                 ChatMessage(role="user", content=DRAWING_CLASSIFICATION_PROMPT),
             ],
             images=images_b64,
@@ -577,7 +583,7 @@ async def classify_drawing_image(
 
 async def _classify_drawing_type(
     title_block_text: str | None,
-    router: "AIRouter | None" = None,
+    router: AIRouter | None = None,
 ) -> str:
     """Classify drawing type from title block text.
 
@@ -600,6 +606,7 @@ async def _classify_drawing_type(
     if router is not None:
         try:
             from app.ai.schemas import AIRequest, AITask, ChatMessage
+
             classify_prompt = (
                 "Определи тип технического чертежа по тексту штампа. "
                 "Отвечай ТОЛЬКО одним словом: detail (чертёж детали), assembly (сборочный чертёж), "
@@ -676,17 +683,29 @@ def extract_features_from_dxf_entities(
         cx = round(float(circle.get("center_x", 0)), 2)
         cy = round(float(circle.get("center_y", 0)), 2)
         name = f"Ø{diam}"
-        _add({
-            "feature_type": "hole",
-            "name": name,
-            "description": f"Отверстие Ø{diam} мм",
-            "confidence": 0.6,
-            "source_view": "front",
-            "contours": [{"primitive_type": "circle", "params": {"cx": cx, "cy": cy, "r": r}}],
-            "dimensions": [{"dim_type": "diameter", "nominal": diam, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": None, "label": name}],
-            "surfaces": [],
-            "gdt": [],
-        })
+        _add(
+            {
+                "feature_type": "hole",
+                "name": name,
+                "description": f"Отверстие Ø{diam} мм",
+                "confidence": 0.6,
+                "source_view": "front",
+                "contours": [{"primitive_type": "circle", "params": {"cx": cx, "cy": cy, "r": r}}],
+                "dimensions": [
+                    {
+                        "dim_type": "diameter",
+                        "nominal": diam,
+                        "upper_tol": None,
+                        "lower_tol": None,
+                        "unit": "mm",
+                        "fit_system": None,
+                        "label": name,
+                    }
+                ],
+                "surfaces": [],
+                "gdt": [],
+            }
+        )
 
     # ── Text entities → engineering features ──────────────────────────────
     for raw_text in texts:
@@ -701,61 +720,100 @@ def extract_features_from_dxf_entities(
             width = float(key_m.group(1))
             fit = key_m.group(2).upper()
             name = f"Паз {width}{fit}"
-            _add({
-                "feature_type": "key_slot",
-                "name": name,
-                "description": f"Шпоночный паз {width} мм, посадка {fit}",
-                "confidence": 0.88,
-                "source_view": "front",
-                "contours": [],
-                "dimensions": [{"dim_type": "linear", "nominal": width, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": fit, "label": name}],
-                "surfaces": [],
-                "gdt": [],
-            })
+            _add(
+                {
+                    "feature_type": "key_slot",
+                    "name": name,
+                    "description": f"Шпоночный паз {width} мм, посадка {fit}",
+                    "confidence": 0.88,
+                    "source_view": "front",
+                    "contours": [],
+                    "dimensions": [
+                        {
+                            "dim_type": "linear",
+                            "nominal": width,
+                            "upper_tol": None,
+                            "lower_tol": None,
+                            "unit": "mm",
+                            "fit_system": fit,
+                            "label": name,
+                        }
+                    ],
+                    "surfaces": [],
+                    "gdt": [],
+                }
+            )
             continue
 
         # Thread BEFORE diameter+fit (M12×1.5-6H starts with M, not Ø)
-        thread_m = re.match(r"(M\d+(?:[.,×x]\d+(?:[.,]\d+)?)?)\s*[-–]?\s*(\d+[Hgh])", t, re.IGNORECASE)
+        thread_m = re.match(
+            r"(M\d+(?:[.,×x]\d+(?:[.,]\d+)?)?)\s*[-–]?\s*(\d+[Hgh])", t, re.IGNORECASE
+        )
         if thread_m:
             size = thread_m.group(1)
             cls = thread_m.group(2)
             name = f"{size}-{cls}"
             nom_m = re.match(r"M(\d+)", size, re.IGNORECASE)
             nominal = float(nom_m.group(1)) if nom_m else 0.0
-            _add({
-                "feature_type": "thread",
-                "name": name,
-                "description": f"Резьба {name}",
-                "confidence": 0.92,
-                "source_view": "front",
-                "contours": [],
-                "dimensions": [{"dim_type": "diameter", "nominal": nominal, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": cls, "label": name}],
-                "surfaces": [],
-                "gdt": [],
-            })
+            _add(
+                {
+                    "feature_type": "thread",
+                    "name": name,
+                    "description": f"Резьба {name}",
+                    "confidence": 0.92,
+                    "source_view": "front",
+                    "contours": [],
+                    "dimensions": [
+                        {
+                            "dim_type": "diameter",
+                            "nominal": nominal,
+                            "upper_tol": None,
+                            "lower_tol": None,
+                            "unit": "mm",
+                            "fit_system": cls,
+                            "label": name,
+                        }
+                    ],
+                    "surfaces": [],
+                    "gdt": [],
+                }
+            )
             continue
 
         # Diameter with fit system: Ø50h6, Ø12H7, ⌀25k6
         diam_match = re.match(
             r"[ØÆø∅⌀]?\s*(\d+(?:[.,]\d+)?)\s*(H\d+|h\d+|JS\d+|js\d+|K\d+|k\d+|M\d+|m\d+|N\d+|n\d+|P\d+|p\d+|R\d+|r\d+|S\d+|s\d+|F\d+|f\d+|G\d+|g\d+|E\d+|e\d+|D\d+|d\d+)\b",
-            t, re.IGNORECASE,
+            t,
+            re.IGNORECASE,
         )
         if diam_match:
             nominal = float(diam_match.group(1).replace(",", "."))
             fit = diam_match.group(2)
             ftype = "hole" if fit[0].upper() in "HJSDEFG" else "surface"
             name = f"Ø{nominal}{fit}"
-            _add({
-                "feature_type": ftype,
-                "name": name,
-                "description": f"{'Отверстие' if ftype == 'hole' else 'Вал/поверхность'} Ø{nominal} {fit}",
-                "confidence": 0.90,
-                "source_view": "front",
-                "contours": [],
-                "dimensions": [{"dim_type": "diameter", "nominal": nominal, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": fit, "label": name}],
-                "surfaces": [],
-                "gdt": [],
-            })
+            _add(
+                {
+                    "feature_type": ftype,
+                    "name": name,
+                    "description": f"{'Отверстие' if ftype == 'hole' else 'Вал/поверхность'} Ø{nominal} {fit}",
+                    "confidence": 0.90,
+                    "source_view": "front",
+                    "contours": [],
+                    "dimensions": [
+                        {
+                            "dim_type": "diameter",
+                            "nominal": nominal,
+                            "upper_tol": None,
+                            "lower_tol": None,
+                            "unit": "mm",
+                            "fit_system": fit,
+                            "label": name,
+                        }
+                    ],
+                    "surfaces": [],
+                    "gdt": [],
+                }
+            )
             continue
 
         # Surface roughness: Ra1.6, Ra 3.2, Rz20
@@ -763,34 +821,42 @@ def extract_features_from_dxf_entities(
         if ra_m and "Ra" in t:
             val = float(ra_m.group(1).replace(",", "."))
             name = f"Ra{val}"
-            _add({
-                "feature_type": "surface",
-                "name": name,
-                "description": f"Шероховатость Ra {val} мкм",
-                "confidence": 0.95,
-                "source_view": "front",
-                "contours": [],
-                "dimensions": [],
-                "surfaces": [{"roughness_type": "Ra", "value": val, "machining_required": val <= 3.2}],
-                "gdt": [],
-            })
+            _add(
+                {
+                    "feature_type": "surface",
+                    "name": name,
+                    "description": f"Шероховатость Ra {val} мкм",
+                    "confidence": 0.95,
+                    "source_view": "front",
+                    "contours": [],
+                    "dimensions": [],
+                    "surfaces": [
+                        {"roughness_type": "Ra", "value": val, "machining_required": val <= 3.2}
+                    ],
+                    "gdt": [],
+                }
+            )
             continue
 
         rz_m = _RE_RZ.fullmatch(t) or (_RE_RZ.search(t) if "Rz" in t else None)
         if rz_m and "Rz" in t:
             val = float(rz_m.group(1).replace(",", "."))
             name = f"Rz{val}"
-            _add({
-                "feature_type": "surface",
-                "name": name,
-                "description": f"Шероховатость Rz {val} мкм",
-                "confidence": 0.95,
-                "source_view": "front",
-                "contours": [],
-                "dimensions": [],
-                "surfaces": [{"roughness_type": "Rz", "value": val, "machining_required": True}],
-                "gdt": [],
-            })
+            _add(
+                {
+                    "feature_type": "surface",
+                    "name": name,
+                    "description": f"Шероховатость Rz {val} мкм",
+                    "confidence": 0.95,
+                    "source_view": "front",
+                    "contours": [],
+                    "dimensions": [],
+                    "surfaces": [
+                        {"roughness_type": "Rz", "value": val, "machining_required": True}
+                    ],
+                    "gdt": [],
+                }
+            )
             continue
 
         # Chamfer: 2×45°, 1.5×45
@@ -798,17 +864,29 @@ def extract_features_from_dxf_entities(
         if chamfer_m:
             size = float(chamfer_m.group(1).replace(",", "."))
             name = f"{size}×45°"
-            _add({
-                "feature_type": "chamfer",
-                "name": name,
-                "description": f"Фаска {name}",
-                "confidence": 0.90,
-                "source_view": "front",
-                "contours": [],
-                "dimensions": [{"dim_type": "linear", "nominal": size, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": None, "label": name}],
-                "surfaces": [],
-                "gdt": [],
-            })
+            _add(
+                {
+                    "feature_type": "chamfer",
+                    "name": name,
+                    "description": f"Фаска {name}",
+                    "confidence": 0.90,
+                    "source_view": "front",
+                    "contours": [],
+                    "dimensions": [
+                        {
+                            "dim_type": "linear",
+                            "nominal": size,
+                            "upper_tol": None,
+                            "lower_tol": None,
+                            "unit": "mm",
+                            "fit_system": None,
+                            "label": name,
+                        }
+                    ],
+                    "surfaces": [],
+                    "gdt": [],
+                }
+            )
             continue
 
         # Radius: R2, r5
@@ -816,17 +894,29 @@ def extract_features_from_dxf_entities(
         if radius_m:
             val = float(radius_m.group(1).replace(",", "."))
             name = f"R{val}"
-            _add({
-                "feature_type": "radius",
-                "name": name,
-                "description": f"Радиус скругления R{val} мм",
-                "confidence": 0.85,
-                "source_view": "front",
-                "contours": [],
-                "dimensions": [{"dim_type": "radius", "nominal": val, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": None, "label": name}],
-                "surfaces": [],
-                "gdt": [],
-            })
+            _add(
+                {
+                    "feature_type": "radius",
+                    "name": name,
+                    "description": f"Радиус скругления R{val} мм",
+                    "confidence": 0.85,
+                    "source_view": "front",
+                    "contours": [],
+                    "dimensions": [
+                        {
+                            "dim_type": "radius",
+                            "nominal": val,
+                            "upper_tol": None,
+                            "lower_tol": None,
+                            "unit": "mm",
+                            "fit_system": None,
+                            "label": name,
+                        }
+                    ],
+                    "surfaces": [],
+                    "gdt": [],
+                }
+            )
             continue
 
         # Simple diameter without fit: Ø50, ⌀30
@@ -834,19 +924,36 @@ def extract_features_from_dxf_entities(
         if plain_diam_m and (t.startswith(("Ø", "⌀", "ø", "∅")) or "мм" in t.lower()):
             nominal = float(plain_diam_m.group(1).replace(",", "."))
             name = f"Ø{nominal}"
-            _add({
-                "feature_type": "hole",
-                "name": name,
-                "description": f"Диаметр Ø{nominal} мм",
-                "confidence": 0.65,
-                "source_view": "front",
-                "contours": [],
-                "dimensions": [{"dim_type": "diameter", "nominal": nominal, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": None, "label": name}],
-                "surfaces": [],
-                "gdt": [],
-            })
+            _add(
+                {
+                    "feature_type": "hole",
+                    "name": name,
+                    "description": f"Диаметр Ø{nominal} мм",
+                    "confidence": 0.65,
+                    "source_view": "front",
+                    "contours": [],
+                    "dimensions": [
+                        {
+                            "dim_type": "diameter",
+                            "nominal": nominal,
+                            "upper_tol": None,
+                            "lower_tol": None,
+                            "unit": "mm",
+                            "fit_system": None,
+                            "label": name,
+                        }
+                    ],
+                    "surfaces": [],
+                    "gdt": [],
+                }
+            )
 
-    logger.info("dxf_rule_extraction_done", feature_count=len(features), text_count=len(texts), circle_count=len(circles))
+    logger.info(
+        "dxf_rule_extraction_done",
+        feature_count=len(features),
+        text_count=len(texts),
+        circle_count=len(circles),
+    )
     return features
 
 
@@ -965,7 +1072,11 @@ async def suggest_tools_for_feature(
             temperature=0.1,
         )
 
-        raw_text = response.get("message", {}).get("content", "") if isinstance(response, dict) else str(response)
+        raw_text = (
+            response.get("message", {}).get("content", "")
+            if isinstance(response, dict)
+            else str(response)
+        )
         result = _parse_json_response(raw_text)
 
         if isinstance(result, list):
@@ -1011,10 +1122,7 @@ def _summarize_dxf_entities(entities: list[dict]) -> str:
         summary_parts.append("Тексты:\n" + "\n".join(f"  {t}" for t in text_values))
 
     if dims:
-        dim_descs = [
-            f"  {e.get('measurement', 0):.3f} {e.get('dim_type', '')}"
-            for e in dims[:20]
-        ]
+        dim_descs = [f"  {e.get('measurement', 0):.3f} {e.get('dim_type', '')}" for e in dims[:20]]
         summary_parts.append(f"Размеры ({len(dims)}):\n" + "\n".join(dim_descs))
 
     return "\n\n".join(summary_parts) or "Нет данных"

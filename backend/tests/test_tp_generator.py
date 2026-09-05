@@ -2,7 +2,6 @@
 
 import uuid
 
-import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -20,8 +19,8 @@ from app.ai.tp_generator import (
 from app.db.base import Base
 from app.db.models import NormControlCheck
 
-
 # ── _material_group ────────────────────────────────────────────────────────────
+
 
 def test_material_group_steel_carbon():
     assert _material_group("Ст.45") == "steel_carbon"
@@ -67,7 +66,7 @@ def test_confidence_honestly_flags_unrecognized_material():
     function must say so, not silently pretend it's carbon steel."""
     group, recognized = material_group_with_confidence("Титан ВТ6")
     assert group == "steel_carbon"  # still a fallback estimate...
-    assert recognized is False       # ...but honestly flagged as unconfirmed
+    assert recognized is False  # ...but honestly flagged as unconfirmed
 
 
 def test_confidence_flags_empty_or_nonsense_material():
@@ -127,7 +126,9 @@ def test_cutting_parameters_logs_typed_warning_for_unrecognized_material(monkeyp
     from app.ai import tp_generator
 
     calls = []
-    monkeypatch.setattr(tp_generator.logger, "warning", lambda event, **kw: calls.append((event, kw)))
+    monkeypatch.setattr(
+        tp_generator.logger, "warning", lambda event, **kw: calls.append((event, kw))
+    )
     calculate_cutting_parameters("turning", "Титан ВТ6", 30.0, 3.2)
     assert calls
     event, kw = calls[0]
@@ -136,6 +137,7 @@ def test_cutting_parameters_logs_typed_warning_for_unrecognized_material(monkeyp
 
 
 # ── _surface_to_method ─────────────────────────────────────────────────────────
+
 
 def test_surface_to_method_hole_rough():
     assert _surface_to_method("hole", 20.0, 6.3) == "drilling"
@@ -164,6 +166,7 @@ def test_surface_to_method_grinding():
 
 
 # ── calculate_cutting_parameters ──────────────────────────────────────────────
+
 
 def test_cutting_params_turning_steel45():
     params = calculate_cutting_parameters(
@@ -214,6 +217,7 @@ def test_cutting_params_unknown_operation():
 
 # ── calculate_time_norms ──────────────────────────────────────────────────────
 
+
 def test_time_norms_tsht_calculation():
     norms = calculate_time_norms(
         operation_type="turning",
@@ -247,6 +251,7 @@ def test_time_norms_fractions():
 
 
 # ── recommend_blank ────────────────────────────────────────────────────────────
+
 
 def test_blank_selection_high_kim_gives_rolled():
     # d=30, l=50: mass_blank ≈ 7.85e-6 * π * 15² * 50 ≈ 0.277 kg; mass_part=0.25 → KIM≈0.90
@@ -295,7 +300,9 @@ def test_blank_selection_has_required_keys():
 
 def _make_engine():
     engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
     return engine
@@ -319,13 +326,23 @@ def test_unrecognized_material_creates_a_normcontrol_check():
     plan_id = uuid.uuid4()
     with Session(engine) as db:
         draft_operations_from_surfaces(
-            [_surface_spec()], "Титан ВТ20", batch_size=10, plan_id=plan_id, db=db,
+            [_surface_spec()],
+            "Титан ВТ20",
+            batch_size=10,
+            plan_id=plan_id,
+            db=db,
         )
         db.commit()
 
-        checks = db.execute(
-            select(NormControlCheck).where(NormControlCheck.check_code == CompetenceCode.MATERIAL_UNRECOGNIZED)
-        ).scalars().all()
+        checks = (
+            db.execute(
+                select(NormControlCheck).where(
+                    NormControlCheck.check_code == CompetenceCode.MATERIAL_UNRECOGNIZED
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert len(checks) == 1
         check = checks[0]
         assert check.process_plan_id == plan_id
@@ -341,13 +358,23 @@ def test_recognized_material_creates_no_normcontrol_check():
     plan_id = uuid.uuid4()
     with Session(engine) as db:
         draft_operations_from_surfaces(
-            [_surface_spec()], "Сталь 45", batch_size=10, plan_id=plan_id, db=db,
+            [_surface_spec()],
+            "Сталь 45",
+            batch_size=10,
+            plan_id=plan_id,
+            db=db,
         )
         db.commit()
 
-        checks = db.execute(
-            select(NormControlCheck).where(NormControlCheck.check_code == CompetenceCode.MATERIAL_UNRECOGNIZED)
-        ).scalars().all()
+        checks = (
+            db.execute(
+                select(NormControlCheck).where(
+                    NormControlCheck.check_code == CompetenceCode.MATERIAL_UNRECOGNIZED
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert checks == []
 
 
@@ -356,12 +383,18 @@ def test_normcontrol_check_operation_id_points_at_the_actual_operation():
     plan_id = uuid.uuid4()
     with Session(engine) as db:
         ops = draft_operations_from_surfaces(
-            [_surface_spec()], "Титан ВТ6", batch_size=10, plan_id=plan_id, db=db,
+            [_surface_spec()],
+            "Титан ВТ6",
+            batch_size=10,
+            plan_id=plan_id,
+            db=db,
         )
         db.commit()
 
         turning_op = next(o for o in ops if o.operation_type == "turning")
         check = db.execute(
-            select(NormControlCheck).where(NormControlCheck.check_code == CompetenceCode.MATERIAL_UNRECOGNIZED)
+            select(NormControlCheck).where(
+                NormControlCheck.check_code == CompetenceCode.MATERIAL_UNRECOGNIZED
+            )
         ).scalar_one()
         assert check.operation_id == turning_op.id

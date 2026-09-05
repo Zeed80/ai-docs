@@ -122,9 +122,7 @@ async def test_article_code_is_found_although_a_dictionary_would_split_it(
 ):
     """Артикул для словаря полнотекстового поиска — не слово: «FR-16» он режет
     на части и целиком никогда не находит. Ветка ILIKE закрывает именно это."""
-    result = await search_catalog_pages(
-        catalog_with_pages.id, q="FR-16", limit=10, db=db_session
-    )
+    result = await search_catalog_pages(catalog_with_pages.id, q="FR-16", limit=10, db=db_session)
     assert [hit.page_number for hit in result.items] == [13]
 
 
@@ -134,9 +132,7 @@ async def test_page_without_readable_text_shows_its_positions_instead(
 ):
     """У страницы 13 текста нет (PDF без шрифтовых карт). Пустая строка вместо
     подсказки — это «нашлось, но непонятно что»; показываем позиции."""
-    result = await search_catalog_pages(
-        catalog_with_pages.id, q="FR-16", limit=10, db=db_session
-    )
+    result = await search_catalog_pages(catalog_with_pages.id, q="FR-16", limit=10, db=db_session)
     assert "FR-16" in result.items[0].snippet
 
 
@@ -146,9 +142,7 @@ async def test_catalog_without_any_readable_text_says_so(db_session, catalog_wit
     from sqlalchemy import update
 
     await db_session.execute(
-        update(CatalogPage)
-        .where(CatalogPage.document_id == catalog_with_pages.id)
-        .values(text="")
+        update(CatalogPage).where(CatalogPage.document_id == catalog_with_pages.id).values(text="")
     )
     await db_session.commit()
 

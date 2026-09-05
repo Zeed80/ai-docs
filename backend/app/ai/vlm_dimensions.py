@@ -72,7 +72,7 @@ def _parse_json_array(raw: str) -> list:
 async def read_sheet_text_entities(
     image_bytes: bytes,
     *,
-    router: "AIRouter | None" = None,
+    router: AIRouter | None = None,
     confidential: bool = True,
     tile_size: int = 1024,
     overlap: int = 160,
@@ -196,7 +196,7 @@ def _normalize_text_sizes(entities: list) -> None:
     source_region — so text renders at a sane, readable size and the glyph
     filter downstream sees a plausible box.
     """
-    from app.ai.cad_ir.schema import Point, SourceRegion
+    from app.ai.cad_ir.schema import SourceRegion
 
     heights = sorted(e.height for e in entities if e.height > 0)
     if len(heights) < 3:
@@ -283,9 +283,7 @@ def _snap_text_to_ink(entities: list, gray) -> None:
         if (max(xs) - min(xs)) > plausible_w or (max(ys) - min(ys)) > 2.2 * text_h:
             continue
         entity.position = Point(x=min(xs), y=max(ys))  # baseline-left of the ink
-        entity.source_region = SourceRegion(
-            x0=min(xs), y0=min(ys), x1=max(xs), y1=max(ys)
-        )
+        entity.source_region = SourceRegion(x0=min(xs), y0=min(ys), x1=max(xs), y1=max(ys))
 
 
 def _dedup_sheet_text(entities: list) -> list:
@@ -310,6 +308,7 @@ def _dedup_sheet_text(entities: list) -> list:
         if not duplicate:
             kept.append(entity)
     return kept
+
 
 _SYSTEM_PROMPT = """Ты читаешь МАЛЕНЬКИЙ вырезанный фрагмент технического чертежа —
 одну размерную надпись, допуск, обозначение резьбы или шероховатости.
@@ -353,13 +352,15 @@ def _parse_response(raw_text: str) -> list[dict]:
             conf = float(r.get("confidence", 0.0))
         except (TypeError, ValueError):
             conf = 0.0
-        out.append({
-            "text": str(r["text"]).strip(),
-            "value_mm": _safe_float(r.get("value_mm")),
-            "kind": r.get("kind") or "unclear",
-            "tolerance": r.get("tolerance") or None,
-            "confidence": max(0.0, min(1.0, conf)),
-        })
+        out.append(
+            {
+                "text": str(r["text"]).strip(),
+                "value_mm": _safe_float(r.get("value_mm")),
+                "kind": r.get("kind") or "unclear",
+                "tolerance": r.get("tolerance") or None,
+                "confidence": max(0.0, min(1.0, conf)),
+            }
+        )
     out.sort(key=lambda r: r["confidence"], reverse=True)
     return out
 
@@ -374,7 +375,7 @@ def _safe_float(v) -> float | None:
 async def read_crop_hypotheses(
     crop_png_bytes: bytes,
     *,
-    router: "AIRouter | None" = None,
+    router: AIRouter | None = None,
     confidential: bool = True,
 ) -> list[dict]:
     """One VLM call over one small crop -> ranked reading hypotheses.
@@ -472,7 +473,7 @@ def _parse_line_response(raw_text: str) -> dict:
 async def classify_line_hypotheses(
     crop_png_bytes: bytes,
     *,
-    router: "AIRouter | None" = None,
+    router: AIRouter | None = None,
     confidential: bool = True,
 ) -> dict:
     """One VLM call over a crop centered on an ambiguous line -> ranked
@@ -502,7 +503,8 @@ async def classify_line_hypotheses(
         response = await router.run(request)
         result = _parse_line_response(response.text or "")
         logger.info(
-            "vlm_line_classify", readings=len(result["line_readings"]),
+            "vlm_line_classify",
+            readings=len(result["line_readings"]),
             symbol=result["symbol"]["kind"] if result["symbol"] else None,
         )
         return result
@@ -511,8 +513,15 @@ async def classify_line_hypotheses(
         return {"line_readings": [], "symbol": None}
 
 
-def crop_bytes_for_bbox(image_bytes: bytes, x0: float, y0: float, x1: float, y1: float,
-                         padding_px: int = 20, highlight: bool = True) -> bytes | None:
+def crop_bytes_for_bbox(
+    image_bytes: bytes,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    padding_px: int = 20,
+    highlight: bool = True,
+) -> bytes | None:
     """Like ``crop_bytes_for_region`` but takes raw coordinates (entities
     don't carry a SourceRegion) and optionally draws a marker box around the
     highlighted area so the VLM knows which of possibly several lines in the
@@ -535,7 +544,8 @@ def crop_bytes_for_bbox(image_bytes: bytes, x0: float, y0: float, x1: float, y1:
             draw = ImageDraw.Draw(crop)
             draw.rectangle(
                 [int(x0) - cx0, int(y0) - cy0, int(x1) - cx0, int(y1) - cy0],
-                outline=(255, 0, 0), width=2,
+                outline=(255, 0, 0),
+                width=2,
             )
         scale = max(1, 220 // max(crop.width, crop.height, 1))
         if scale > 1:

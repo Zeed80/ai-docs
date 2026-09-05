@@ -16,11 +16,12 @@ Workspace queries don't need the vault at all: workspace.* endpoints fetch
 data directly from Postgres and publish to canvas — the history only needs
 the compact envelope.
 """
+
 from __future__ import annotations
 
 import json
-import uuid
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ def should_vault(content_json: str) -> bool:
 async def vault_store(session_id: str, result: dict) -> str:
     """Persist *result* in Redis and return the opaque vault_ref key."""
     from app.utils.redis_client import get_async_redis
+
     ref = f"vault:{session_id}:{uuid.uuid4().hex[:12]}"
     r = get_async_redis()
     await r.set(ref, json.dumps(result, ensure_ascii=False), ex=VAULT_TTL)
@@ -59,6 +61,7 @@ async def vault_store(session_id: str, result: dict) -> str:
 async def vault_get(ref: str, offset: int = 0, limit: int = 20) -> dict | None:
     """Retrieve a paginated slice of the vaulted result. Returns None if expired."""
     from app.utils.redis_client import get_async_redis
+
     r = get_async_redis()
     raw = await r.get(ref)
     if not raw:
@@ -67,7 +70,7 @@ async def vault_get(ref: str, offset: int = 0, limit: int = 20) -> dict | None:
     lk = _list_key(data)
     if lk:
         items: list = data[lk]
-        page = items[offset:offset + limit]
+        page = items[offset : offset + limit]
         meta = {k: v for k, v in data.items() if k != lk}
         return {
             **meta,
@@ -89,10 +92,7 @@ def make_vault_envelope(result: dict, vault_ref: str) -> dict:
     lk = _list_key(result)
     total: int = result.get("total") or (len(result[lk]) if lk else 0)
     # Copy all scalar/meta fields, drop the list payload
-    envelope: dict = {
-        k: v for k, v in result.items()
-        if k not in _LIST_KEYS
-    }
+    envelope: dict = {k: v for k, v in result.items() if k not in _LIST_KEYS}
     envelope["vault_ref"] = vault_ref
     envelope["total"] = total
     if lk and result.get(lk):

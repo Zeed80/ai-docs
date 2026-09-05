@@ -4,8 +4,9 @@ When the orchestrator routes a turn to the workspace, a structural result is
 auto-published to the desktop even if the user's phrasing has no trigger word.
 """
 
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from app.ai.agent_loop import AgentSession
 

@@ -3,7 +3,6 @@
 import pytest
 from httpx import AsyncClient
 
-
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 
@@ -28,9 +27,12 @@ async def test_get_config_status(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_config(client: AsyncClient):
-    resp = await client.patch("/api/ai/config", json={
-        "model_agent": "qwen3.5:9b",
-    })
+    resp = await client.patch(
+        "/api/ai/config",
+        json={
+            "model_agent": "qwen3.5:9b",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, dict)
@@ -50,9 +52,12 @@ async def test_get_agent_config(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_patch_agent_config(client: AsyncClient):
-    resp = await client.patch("/api/ai/agent-config", json={
-        "max_iterations": 15,
-    })
+    resp = await client.patch(
+        "/api/ai/agent-config",
+        json={
+            "max_iterations": 15,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, dict)

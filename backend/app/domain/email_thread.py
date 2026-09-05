@@ -11,7 +11,7 @@ send path (tasks/email_sender.py) so a sent reply:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import select
@@ -57,7 +57,7 @@ async def record_outbound_message(
     its Sent folder (Ф2.4). Without it our own outbound mail would be the one
     thing in the mailbox we could never tell the server anything about.
     """
-    sent_at = sent_at or datetime.now(timezone.utc)
+    sent_at = sent_at or datetime.now(UTC)
     to_addresses = draft_data.get("to_addresses") or []
     subject = draft_data.get("subject") or "(без темы)"
 
@@ -129,8 +129,10 @@ async def record_outbound_message(
     att_ids = [uuid.UUID(str(a)) for a in draft_data.get("attachment_ids", [])]
     if att_ids:
         staged = (
-            await db.execute(select(EmailAttachment).where(EmailAttachment.id.in_(att_ids)))
-        ).scalars().all()
+            (await db.execute(select(EmailAttachment).where(EmailAttachment.id.in_(att_ids))))
+            .scalars()
+            .all()
+        )
         for a in staged:
             db.add(
                 EmailAttachment(

@@ -69,8 +69,7 @@ def looks_like_clean_drawing(img) -> bool:
     return white >= 0.5 and background >= 180
 
 
-def render_target(path: pathlib.Path, out_png: pathlib.Path,
-                  long_side: int = 2048) -> str | None:
+def render_target(path: pathlib.Path, out_png: pathlib.Path, long_side: int = 2048) -> str | None:
     """One source file → one clean PNG target. PNG/JPG pass through
     (rescaled, cleanliness-gated); DXF renders via ezdxf; DWG needs the
     dwg2dxf binary (LibreDWG). Returns a rejection reason, or None on
@@ -82,8 +81,10 @@ def render_target(path: pathlib.Path, out_png: pathlib.Path,
 
             img = Image.open(path).convert("RGB")
             if not looks_like_clean_drawing(img):
-                return ("источник похож на фото, а не на чистый чертёж — "
-                        "таргетом должен быть чистый рендер/скан")
+                return (
+                    "источник похож на фото, а не на чистый чертёж — "
+                    "таргетом должен быть чистый рендер/скан"
+                )
             img.thumbnail((long_side, long_side))
             img.save(out_png)
             return None
@@ -95,7 +96,8 @@ def render_target(path: pathlib.Path, out_png: pathlib.Path,
                 dxf = pathlib.Path(tmp) / (path.stem + ".dxf")
                 subprocess.run(
                     ["dwg2dxf", "-y", "-o", str(dxf), str(path)],
-                    capture_output=True, timeout=300,
+                    capture_output=True,
+                    timeout=300,
                 )
                 if not dxf.exists():
                     return "dwg2dxf не смог сконвертировать файл"
@@ -181,8 +183,9 @@ def _is_drawing_page(gray) -> bool:
     return not (stripe_rate > 0.08 and frac < 0.12)
 
 
-def render_pdf_targets(path: pathlib.Path, out_dir: pathlib.Path,
-                       long_side: int = 1024, max_pages: int = 400) -> tuple[int, int]:
+def render_pdf_targets(
+    path: pathlib.Path, out_dir: pathlib.Path, long_side: int = 1024, max_pages: int = 400
+) -> tuple[int, int]:
     """A multi-page PDF album → one target per page; returns (rendered,
     skipped_non_drawing). Built for scanned drawing albums (e.g. the
     182-page ТЭМ2 locomotive album): pages are raster scans, so each render
@@ -220,10 +223,14 @@ def render_pdf_targets(path: pathlib.Path, out_dir: pathlib.Path,
             # straight to white.
             h, w = gray.shape
             bh, bw = max(1, h // 10), max(1, w // 10)
-            border = np.concatenate([
-                gray[:bh].ravel(), gray[-bh:].ravel(),
-                gray[:, :bw].ravel(), gray[:, -bw:].ravel(),
-            ])
+            border = np.concatenate(
+                [
+                    gray[:bh].ravel(),
+                    gray[-bh:].ravel(),
+                    gray[:, :bw].ravel(),
+                    gray[:, -bw:].ravel(),
+                ]
+            )
             paper = float(np.percentile(border, 85))
             if paper < 250:
                 gain = min(255.0 / max(paper, 1.0), 1.3)
@@ -236,8 +243,9 @@ def render_pdf_targets(path: pathlib.Path, out_dir: pathlib.Path,
     return ok, skipped
 
 
-def generate_synthetic_targets(out_dir: pathlib.Path, count: int, seed: int = 42,
-                               long_side: int = 1024) -> int:
+def generate_synthetic_targets(
+    out_dir: pathlib.Path, count: int, seed: int = 42, long_side: int = 1024
+) -> int:
     """Random ЕСКД sheets (shafts/plates/assemblies) via the project's own
     deterministic renderer — unlimited non-confidential targets.
 
@@ -249,9 +257,8 @@ def generate_synthetic_targets(out_dir: pathlib.Path, count: int, seed: int = 42
     import cairosvg
     from PIL import Image
 
-    from app.ai.techdraw import render_spec_to_svg
-
     from app.ai import lora_synth_specs as specs
+    from app.ai.techdraw import render_spec_to_svg
 
     rng = random.Random(seed)
     ok = 0
@@ -269,18 +276,21 @@ def generate_synthetic_targets(out_dir: pathlib.Path, count: int, seed: int = 42
             continue
         try:
             svg = render_spec_to_svg(spec)
-            png = cairosvg.svg2png(bytestring=svg.encode(), output_width=render_side,
-                                   background_color="white")
+            png = cairosvg.svg2png(
+                bytestring=svg.encode(), output_width=render_side, background_color="white"
+            )
             img = Image.open(io.BytesIO(png)).convert("RGB")
             if max(img.size) != long_side:
                 scale = long_side / max(img.size)
-                img = img.resize((round(img.width * scale), round(img.height * scale)),
-                                 Image.LANCZOS)
+                img = img.resize(
+                    (round(img.width * scale), round(img.height * scale)), Image.LANCZOS
+                )
             img.save(out_png)
             # The spec is the ground truth — captions for synthetics are
             # built from it deterministically (no VLM hours, no VLM errors).
             out_png.with_suffix(".spec.json").write_text(
-                json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+                json.dumps(spec, ensure_ascii=False), encoding="utf-8"
+            )
             ok += 1
         except Exception as exc:  # noqa: BLE001
             logger.warning("lora_dataset_synth_failed", kind=kind, i=i, error=str(exc)[:120])
@@ -320,8 +330,7 @@ def wrap_in_eskd_sheet(png_path: pathlib.Path, title: dict | None = None) -> Non
     left, other = round(20 * mm), round(5 * mm)
     frame_w = max(2, round(0.7 * mm))
 
-    sheet = Image.new("RGB", (w + left + other + 2 * frame_w, h + 2 * other + 2 * frame_w),
-                      "white")
+    sheet = Image.new("RGB", (w + left + other + 2 * frame_w, h + 2 * other + 2 * frame_w), "white")
     sheet.paste(img, (left + frame_w, other + frame_w))
     d = ImageDraw.Draw(sheet)
     sw, sh = sheet.size
@@ -335,8 +344,9 @@ def wrap_in_eskd_sheet(png_path: pathlib.Path, title: dict | None = None) -> Non
     col = x0 + round(tb_w * 0.35)
     d.line([col, y0, col, y1], fill="black", width=max(1, frame_w // 2))
     for frac in (0.33, 0.66):
-        d.line([x0, y0 + tb_h * frac, x1, y0 + tb_h * frac], fill="black",
-               width=max(1, frame_w // 2))
+        d.line(
+            [x0, y0 + tb_h * frac, x1, y0 + tb_h * frac], fill="black", width=max(1, frame_w // 2)
+        )
 
     t = dict(title or {})
     name = str(t.get("name") or "Чертёж")[:40]
@@ -354,9 +364,14 @@ def wrap_in_eskd_sheet(png_path: pathlib.Path, title: dict | None = None) -> Non
     sheet.save(png_path)
 
 
-def generate_edit_pairs(targets_dir: pathlib.Path, controls_dir: pathlib.Path,
-                        count: int, seed: int = 42, long_side: int = 1536) -> int:
-    """"drawing_edit" preset: pairs (render(A) → render(A')) with the exact
+def generate_edit_pairs(
+    targets_dir: pathlib.Path,
+    controls_dir: pathlib.Path,
+    count: int,
+    seed: int = 42,
+    long_side: int = 1536,
+) -> int:
+    """ "drawing_edit" preset: pairs (render(A) → render(A')) with the exact
     RU edit instruction as the training prompt. No photo degradation and no
     VLM captions — the instruction IS the label, and both renders share the
     layout by construction."""
@@ -385,9 +400,12 @@ def generate_edit_pairs(targets_dir: pathlib.Path, controls_dir: pathlib.Path,
                 ok += 1  # resumed: pair already rendered and validated
                 continue
 
-            def _render(s: dict) -> "Image.Image":
-                png = cairosvg.svg2png(bytestring=render_spec_to_svg(s).encode(),
-                                       output_width=long_side, background_color="white")
+            def _render(s: dict) -> Image.Image:
+                png = cairosvg.svg2png(
+                    bytestring=render_spec_to_svg(s).encode(),
+                    output_width=long_side,
+                    background_color="white",
+                )
                 return Image.open(io.BytesIO(png)).convert("RGB")
 
             img_a, img_b = _render(spec), _render(spec2)
@@ -395,10 +413,15 @@ def generate_edit_pairs(targets_dir: pathlib.Path, controls_dir: pathlib.Path,
                 continue  # mutation changed extents/layout → not a valid pair
             import numpy as np
 
-            diff_px = int((np.abs(
-                np.asarray(img_a.convert("L"), dtype=np.int16)
-                - np.asarray(img_b.convert("L"), dtype=np.int16)
-            ) > 50).sum())
+            diff_px = int(
+                (
+                    np.abs(
+                        np.asarray(img_a.convert("L"), dtype=np.int16)
+                        - np.asarray(img_b.convert("L"), dtype=np.int16)
+                    )
+                    > 50
+                ).sum()
+            )
             if diff_px < max(60, 0.08 * max(img_a.size)):
                 # Drop invisible edits (a chamfer removal on a tiny segment
                 # changes ~0 px — measured min was 0). The threshold scales
@@ -406,7 +429,7 @@ def generate_edit_pairs(targets_dir: pathlib.Path, controls_dir: pathlib.Path,
                 # thin outline whose pixel count grows ~linearly with
                 # resolution, so an area fraction over-rejects at high res.
                 continue
-            img_b.save(targets_dir / f"{name}.png")   # target = AFTER the edit
+            img_b.save(targets_dir / f"{name}.png")  # target = AFTER the edit
             img_a.save(controls_dir / f"{name}.png")  # control = BEFORE
             (targets_dir / f"{name}.txt").write_text(instruction, encoding="utf-8")
             ok += 1
@@ -419,7 +442,6 @@ def generate_edit_pairs(targets_dir: pathlib.Path, controls_dir: pathlib.Path,
 
 
 def degrade_target(clean_png: pathlib.Path, out_png: pathlib.Path, seed: int) -> bool:
-    import cv2
     import numpy as np
     from PIL import Image
 
@@ -443,14 +465,19 @@ def degrade_target(clean_png: pathlib.Path, out_png: pathlib.Path, seed: int) ->
 # ── Captioning ───────────────────────────────────────────────────────────────
 
 
-def caption_image(image_path: pathlib.Path, model: str, ollama_url: str,
-                  fallback_model: str | None = None) -> str | None:
+def caption_image(
+    image_path: pathlib.Path, model: str, ollama_url: str, fallback_model: str | None = None
+) -> str | None:
     """Short RU content caption via a local vision model. Downscale ladder
     (800→640) works around the vision-encoder OOM on 24GB — for the fallback
     model too (it can OOM at 800px just like the primary); refusals and
     trivial answers are rejected (QA)."""
-    for candidate, max_px in ((model, _CAPTION_MAX_PX), (model, 640),
-                              (fallback_model, _CAPTION_MAX_PX), (fallback_model, 640)):
+    for candidate, max_px in (
+        (model, _CAPTION_MAX_PX),
+        (model, 640),
+        (fallback_model, _CAPTION_MAX_PX),
+        (fallback_model, 640),
+    ):
         if not candidate:
             continue
         try:
@@ -491,9 +518,15 @@ def _ollama_caption(ollama_url: str, model: str, image_path: pathlib.Path, max_p
 # ── Assembly + QA ────────────────────────────────────────────────────────────
 
 
-def build_pair(target_png: pathlib.Path, control_png: pathlib.Path, caption: str,
-               images_dir: pathlib.Path, control_dir: pathlib.Path, name: str,
-               instruction: str = DEFAULT_INSTRUCTION) -> str | None:
+def build_pair(
+    target_png: pathlib.Path,
+    control_png: pathlib.Path,
+    caption: str,
+    images_dir: pathlib.Path,
+    control_dir: pathlib.Path,
+    name: str,
+    instruction: str = DEFAULT_INSTRUCTION,
+) -> str | None:
     """QA one (target, control, caption) triple and place it into the
     ai-toolkit layout. Returns a rejection reason, or None when accepted."""
     ink = _ink_fraction(target_png)
@@ -511,9 +544,7 @@ def build_pair(target_png: pathlib.Path, control_png: pathlib.Path, caption: str
     control_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(target_png, images_dir / f"{name}.png")
     shutil.copyfile(control_png, control_dir / f"{name}.png")
-    (images_dir / f"{name}.txt").write_text(
-        instruction.format(caption=caption), encoding="utf-8"
-    )
+    (images_dir / f"{name}.txt").write_text(instruction.format(caption=caption), encoding="utf-8")
     return None
 
 

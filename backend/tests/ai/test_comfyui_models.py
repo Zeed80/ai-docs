@@ -30,7 +30,10 @@ def test_available_models_groups_by_category():
 def test_keeps_exact_installed_model():
     info = _object_info(["qwen_image_edit_2511_fp8mixed.safetensors"], ["x"], ["y"])
     graph = {
-        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_edit_2511_fp8mixed.safetensors"}},
+        "1": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "qwen_image_edit_2511_fp8mixed.safetensors"},
+        },
     }
     out, missing = auto_resolve_models(graph, info)
     assert not missing
@@ -41,7 +44,10 @@ def test_substitutes_best_token_match():
     # Requested file absent; an equivalent Qwen edit unet is installed.
     info = _object_info(["qwen_image_edit_2511_bf16.safetensors"], ["x"], ["y"])
     graph = {
-        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_edit_fp8_e4m3fn.safetensors"}},
+        "1": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "qwen_image_edit_fp8_e4m3fn.safetensors"},
+        },
     }
     out, missing = auto_resolve_models(graph, info)
     assert not missing
@@ -63,7 +69,10 @@ def test_ignores_wired_inputs():
     # A model input wired from another node (list ref) must be left alone.
     info = _object_info(["a.safetensors"], ["x"], ["y"])
     graph = {
-        "2": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["1", 0], "lora_name": "z.safetensors", "strength_model": 1.0}},
+        "2": {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {"model": ["1", 0], "lora_name": "z.safetensors", "strength_model": 1.0},
+        },
     }
     out, missing = auto_resolve_models(graph, info)
     # lora 'z' not installed and no loras advertised → reported missing,
@@ -77,7 +86,10 @@ def test_controlnet_category_exact_match():
         "input": {"required": {"control_net_name": [["qwen-image/instantx/union.safetensors"]]}}
     }
     graph = {
-        "9": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "qwen-image/instantx/union.safetensors"}},
+        "9": {
+            "class_type": "ControlNetLoader",
+            "inputs": {"control_net_name": "qwen-image/instantx/union.safetensors"},
+        },
     }
     out, missing = auto_resolve_models(graph, info)
     assert not missing
@@ -88,10 +100,19 @@ def test_controlnet_category_substitutes_by_basename_tokens():
     # Installed file lives in a subfolder the requested literal doesn't know about.
     info = _object_info(["a.safetensors"], ["x"], ["y"])
     info["ControlNetLoader"] = {
-        "input": {"required": {"control_net_name": [["qwen-image/instantx/Qwen-Image-InstantX-ControlNet-Union.safetensors"]]}}
+        "input": {
+            "required": {
+                "control_net_name": [
+                    ["qwen-image/instantx/Qwen-Image-InstantX-ControlNet-Union.safetensors"]
+                ]
+            }
+        }
     }
     graph = {
-        "9": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "Qwen-Image-InstantX-ControlNet-Union.safetensors"}},
+        "9": {
+            "class_type": "ControlNetLoader",
+            "inputs": {"control_net_name": "Qwen-Image-InstantX-ControlNet-Union.safetensors"},
+        },
     }
     out, missing = auto_resolve_models(graph, info)
     assert not missing
@@ -104,7 +125,10 @@ def test_controlnet_category_reports_missing():
     info = _object_info(["a.safetensors"], ["x"], ["y"])
     info["ControlNetLoader"] = {"input": {"required": {"control_net_name": [[]]}}}
     graph = {
-        "9": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "some_other_controlnet.safetensors"}},
+        "9": {
+            "class_type": "ControlNetLoader",
+            "inputs": {"control_net_name": "some_other_controlnet.safetensors"},
+        },
     }
     out, missing = auto_resolve_models(graph, info)
     assert len(missing) == 1

@@ -35,7 +35,9 @@ def test_pivot_columns_are_selectable_and_named():
     # No spec → sensible default set.
     default = _resolve_pivot_columns(None, "Месяц")
     assert default[0][0] == "Месяц" and [c[3] for c in default][1:] == [
-        "invoice_count", "items", "total_amount"
+        "invoice_count",
+        "items",
+        "total_amount",
     ]
 
     # Unknown expr is dropped, not crashed.
@@ -56,10 +58,12 @@ def test_pivot_tolerates_messy_model_keys():
 
     # Imperfect spec still yields a usable, dimension-led table.
     cols = _resolve_pivot_columns(
-        [{"header": "ИНН", "expr": "supplier_inn"},
-         {"header": "Товар", "expr": "item_name"},
-         {"header": "Кол-во", "expr": "quantity"},
-         {"header": "Цена", "expr": "price"}],
+        [
+            {"header": "ИНН", "expr": "supplier_inn"},
+            {"header": "Товар", "expr": "item_name"},
+            {"header": "Кол-во", "expr": "quantity"},
+            {"header": "Цена", "expr": "price"},
+        ],
         "Поставщик",
     )
     assert [c[0] for c in cols] == ["Поставщик", "ИНН", "Товар", "Кол-во", "Цена"]

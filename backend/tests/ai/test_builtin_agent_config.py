@@ -143,7 +143,9 @@ tools:
     monkeypatch.setattr(
         agent_loop,
         "gateway_config",
-        SimpleNamespace(registry_path=registry_path, base_prompt_path=tmp_path / "base.md", skills_mode="skills"),
+        SimpleNamespace(
+            registry_path=registry_path, base_prompt_path=tmp_path / "base.md", skills_mode="skills"
+        ),
     )
     monkeypatch.setattr(agent_loop.AgentSession, "_log_action", _noop_log_action)
 
@@ -233,7 +235,9 @@ tools:
     monkeypatch.setattr(
         agent_loop,
         "gateway_config",
-        SimpleNamespace(registry_path=registry_path, base_prompt_path=tmp_path / "base.md", skills_mode="skills"),
+        SimpleNamespace(
+            registry_path=registry_path, base_prompt_path=tmp_path / "base.md", skills_mode="skills"
+        ),
     )
     monkeypatch.setattr(agent_loop.AgentSession, "_log_action", _noop_log_action)
 
@@ -285,7 +289,8 @@ def test_saved_model_wins_over_env_reasoning_model(monkeypatch):
     """A model chosen in settings (Redis) must not be overridden by the env default."""
     monkeypatch.setenv("OLLAMA_MODEL_REASONING", "gemma4:31b")
     monkeypatch.setattr(
-        agent_config_module, "_redis_get_agent_config",
+        agent_config_module,
+        "_redis_get_agent_config",
         lambda: {"provider": "ollama", "model": "qwen3.6:35b"},
     )
     cfg = get_builtin_agent_config()
@@ -296,7 +301,10 @@ def test_env_model_used_when_nothing_saved(monkeypatch):
     """With no saved model, the env reasoning model seeds the default."""
     monkeypatch.setenv("OLLAMA_MODEL_REASONING", "qwen3.5:9b")
     monkeypatch.setattr(agent_config_module, "_redis_get_agent_config", lambda: None)
-    monkeypatch.setattr(agent_config_module, "_CONFIG_FILE",
-                        agent_config_module.Path("/nonexistent/agent_config.json"))
+    monkeypatch.setattr(
+        agent_config_module,
+        "_CONFIG_FILE",
+        agent_config_module.Path("/nonexistent/agent_config.json"),
+    )
     cfg = get_builtin_agent_config()
     assert cfg.model == "qwen3.5:9b"

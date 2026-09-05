@@ -23,7 +23,6 @@ async def test_chat_session_crud_soft_delete(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_ws_chat_persists_messages(client: AsyncClient):
-    ws_url = "ws://test/ws/chat"
     # httpx AsyncClient does not support websocket test directly;
     # this integration path is covered by TestClient websocket tests.
     # Keep API-level check that history endpoint is available.

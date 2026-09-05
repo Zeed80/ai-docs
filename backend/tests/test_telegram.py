@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import AsyncClient
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -108,9 +107,15 @@ async def test_telegram_status_has_required_fields(client: AsyncClient):
         assert resp.status_code == 200
         data = resp.json()
         required = {
-            "configured", "bot_running", "notifications_enabled",
-            "has_default_chat", "allowed_users_count", "token_masked",
-            "chat_id_masked", "allowed_users_masked", "last_error",
+            "configured",
+            "bot_running",
+            "notifications_enabled",
+            "has_default_chat",
+            "allowed_users_count",
+            "token_masked",
+            "chat_id_masked",
+            "allowed_users_masked",
+            "last_error",
         }
         assert required.issubset(data.keys()), f"Missing fields: {required - data.keys()}"
     finally:

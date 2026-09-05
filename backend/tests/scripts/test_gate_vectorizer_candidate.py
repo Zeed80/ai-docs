@@ -42,11 +42,15 @@ def test_false_exact_is_always_blocking() -> None:
 
 
 def test_legacy_pixel_score_cannot_substitute_for_entity_metrics() -> None:
-    candidate = {"summary": {"dwg": {
-        "mean_recall": 0.999,
-        "mean_precision": 0.999,
-        "coverage_ok_rate": 1.0,
-    }}}
+    candidate = {
+        "summary": {
+            "dwg": {
+                "mean_recall": 0.999,
+                "mean_precision": 0.999,
+                "coverage_ok_rate": 1.0,
+            }
+        }
+    }
     failures = _evaluate(_report(), candidate)
     assert failures == [
         "candidate is missing held-out metrics: entity_precision, entity_recall, "

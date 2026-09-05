@@ -16,7 +16,11 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.graph_analytics import GraphAnalyticsSettings, get_graph_analytics_settings, save_graph_analytics_settings
+from app.ai.graph_analytics import (
+    GraphAnalyticsSettings,
+    get_graph_analytics_settings,
+    save_graph_analytics_settings,
+)
 from app.auth.jwt import require_role
 from app.auth.models import UserInfo, UserRole
 from app.db.models import KnowledgeEdge, KnowledgeNode, MemoryFact
@@ -93,7 +97,9 @@ async def graph_stats(
         )
     ).scalar_one_or_none()
     last_run_at = (state.metadata_ or {}).get("last_run_at") if state else None
-    return GraphStatsOut(nodes=nodes, edges=edges, last_run_at=last_run_at, insight_count=insight_count)
+    return GraphStatsOut(
+        nodes=nodes, edges=edges, last_run_at=last_run_at, insight_count=insight_count
+    )
 
 
 @router.get("/settings", response_model=GraphAnalyticsSettings)

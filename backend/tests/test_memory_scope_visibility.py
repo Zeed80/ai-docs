@@ -52,26 +52,20 @@ def test_no_scope_no_department_matches_baseline():
 
 
 def test_session_scope_with_department_adds_department_branch():
-    sql = _compiled(
-        _resolve_visible_scopes(_payload("session"), department_id="dept-1")
-    )
+    sql = _compiled(_resolve_visible_scopes(_payload("session"), department_id="dept-1"))
     assert "department:dept-1" in sql
     # baseline branches still present
     assert "project" in sql and "global" in sql
 
 
 def test_owner_scope_with_department_adds_department_branch():
-    sql = _compiled(
-        _resolve_visible_scopes(_payload("owner:alice"), department_id="dept-1")
-    )
+    sql = _compiled(_resolve_visible_scopes(_payload("owner:alice"), department_id="dept-1"))
     assert "owner:alice" in sql
     assert "department:dept-1" in sql
 
 
 def test_explicit_scope_with_department_adds_department_branch():
-    sql = _compiled(
-        _resolve_visible_scopes(_payload("custom"), department_id="dept-1")
-    )
+    sql = _compiled(_resolve_visible_scopes(_payload("custom"), department_id="dept-1"))
     assert "custom" in sql
     assert "department:dept-1" in sql
 

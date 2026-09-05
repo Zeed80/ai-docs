@@ -31,8 +31,18 @@ def upgrade() -> None:
         op.create_table(
             "cad_ir_revisions",
             sa.Column("id", GUID(), primary_key=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.Column("generation_id", GUID(), nullable=False),
             sa.Column("revision", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("ir_path", sa.String(1000), nullable=False),

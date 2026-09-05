@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 _MECHANICAL_3D_CHECKS = {
     "brep_valid",
     "manifold",
@@ -20,9 +19,7 @@ _MECHANICAL_2D_CHECKS = _MECHANICAL_3D_CHECKS | {
 }
 
 
-def mechanical_live_stage_report(
-    case_id: str, runtime_result: dict[str, Any]
-) -> dict[str, Any]:
+def mechanical_live_stage_report(case_id: str, runtime_result: dict[str, Any]) -> dict[str, Any]:
     checks = runtime_result.get("checks") or {}
 
     def evidence(stage: str, required: set[str]) -> dict[str, Any]:
@@ -35,9 +32,7 @@ def mechanical_live_stage_report(
             "required_checks": sorted(required),
             "failed_checks": missing,
             "artifact_sha256": runtime_result.get("artifact_sha256"),
-            "projection_primitive_count": runtime_result.get(
-                "projection_primitive_count"
-            ),
+            "projection_primitive_count": runtime_result.get("projection_primitive_count"),
         }
 
     entries = [

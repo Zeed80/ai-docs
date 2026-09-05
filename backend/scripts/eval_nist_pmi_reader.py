@@ -22,7 +22,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from eval_pmi_manifest import evaluate
 
-
 PAGE_NAME = re.compile(r"nist_(ctc|ftc)_(\d{2})_asme1_[a-z]+_p(\d{2})\.png$")
 SEMANTIC_ADAPTER = "nist-pmi-semantic-adapter-v2"
 
@@ -83,13 +82,16 @@ def _category_for_dimension(value: str) -> str | None:
 
     if _REFERENCE_DIMENSION.search(value) or _BASIC_DIMENSION.search(value):
         return "Basic and Reference Dimensions:"
-    if any(pattern.search(value) for pattern in (
-        _PLUS_MINUS_TOLERANCE,
-        _LIMIT_DIMENSION,
-        _UNILATERAL_TOLERANCE,
-        _FIT_CLASS,
-        _THREAD_TOLERANCE,
-    )):
+    if any(
+        pattern.search(value)
+        for pattern in (
+            _PLUS_MINUS_TOLERANCE,
+            _LIMIT_DIMENSION,
+            _UNILATERAL_TOLERANCE,
+            _FIT_CLASS,
+            _THREAD_TOLERANCE,
+        )
+    ):
         return "Directly Toleranced Dimensions & Dimension Symbols"
     return None
 
@@ -161,9 +163,7 @@ def restore_candidate_sources(page_result: dict[str, Any]) -> None:
             continue
         record["reader_source"] = "annotation"
         annotation_index = index - dimension_count
-        if annotation_index < len(annotations) and isinstance(
-            annotations[annotation_index], dict
-        ):
+        if annotation_index < len(annotations) and isinstance(annotations[annotation_index], dict):
             record["reader_annotation_kind"] = str(
                 annotations[annotation_index].get("kind") or "other"
             )
@@ -237,10 +237,7 @@ async def run(args: argparse.Namespace) -> int:
         metrics_by_source = {
             source: evaluate(
                 list(reference_by_id.values()),
-                [
-                    record for record in candidate_records
-                    if record.get("reader_source") == source
-                ],
+                [record for record in candidate_records if record.get("reader_source") == source],
             )
             for source in ("dimension", "annotation")
         }
@@ -281,7 +278,13 @@ async def run(args: argparse.Namespace) -> int:
         write_checkpoint()
 
     report = write_checkpoint()
-    print(json.dumps({key: report[key] for key in ("pages", "reader_errors", "metrics")}, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {key: report[key] for key in ("pages", "reader_errors", "metrics")},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 

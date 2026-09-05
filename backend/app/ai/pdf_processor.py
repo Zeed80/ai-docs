@@ -1,6 +1,5 @@
 """PDF processing with PyMuPDF — text extraction, bbox mapping, page rendering."""
 
-import io
 from dataclasses import dataclass, field
 
 import structlog
@@ -102,14 +101,16 @@ def extract_pdf(content: bytes, *, render_pages: bool = True, dpi: int = 150) ->
                     line_text += span.get("text", "")
 
                 if line_text.strip():
-                    blocks.append(TextBlock(
-                        text=line_text.strip(),
-                        page=page_idx,
-                        x0=line_bbox[0],
-                        y0=line_bbox[1],
-                        x1=line_bbox[2],
-                        y1=line_bbox[3],
-                    ))
+                    blocks.append(
+                        TextBlock(
+                            text=line_text.strip(),
+                            page=page_idx,
+                            x0=line_bbox[0],
+                            y0=line_bbox[1],
+                            x1=line_bbox[2],
+                            y1=line_bbox[3],
+                        )
+                    )
                     page_text_parts.append(line_text.strip())
 
         page_text = "\n".join(page_text_parts)
@@ -123,14 +124,16 @@ def extract_pdf(content: bytes, *, render_pages: bool = True, dpi: int = 150) ->
             pix = page.get_pixmap(matrix=mat)
             png_bytes = pix.tobytes("png")
 
-        pdf_data.pages.append(PageData(
-            page_number=page_idx,
-            width=rect.width,
-            height=rect.height,
-            text=page_text,
-            blocks=blocks,
-            png_bytes=png_bytes,
-        ))
+        pdf_data.pages.append(
+            PageData(
+                page_number=page_idx,
+                width=rect.width,
+                height=rect.height,
+                text=page_text,
+                blocks=blocks,
+                png_bytes=png_bytes,
+            )
+        )
 
     pdf_data.full_text = "\n\n".join(all_text_parts)
     doc.close()

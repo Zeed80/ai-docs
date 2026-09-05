@@ -54,18 +54,20 @@ def build_release_manifest(
     """Assemble (and self-verify) the release manifest for one accepted CAD IR
     revision. Raises ``ReleaseBlocked`` when the drawing is not releasable."""
     blocking = [
-        {"code": i.code, "rule_id": i.rule_id, "message_ru": i.message_ru,
-         "norm_ref": i.norm_ref, "entity_ids": i.entity_ids}
+        {
+            "code": i.code,
+            "rule_id": i.rule_id,
+            "message_ru": i.message_ru,
+            "norm_ref": i.norm_ref,
+            "entity_ids": i.entity_ids,
+        }
         for i in ir.validation.blocking
     ]
     if not accepted or accepted_revision != revision:
-        raise ReleaseBlocked(
-            "Чертёж не принят на текущей ревизии — примите его перед выпуском."
-        )
+        raise ReleaseBlocked("Чертёж не принят на текущей ревизии — примите его перед выпуском.")
     if blocking:
         raise ReleaseBlocked(
-            f"В отчёте валидации {len(blocking)} блокирующих нарушений — "
-            "выпуск невозможен."
+            f"В отчёте валидации {len(blocking)} блокирующих нарушений — выпуск невозможен."
         )
 
     # Re-render deterministically and prove reproducibility against what was
@@ -77,10 +79,7 @@ def build_release_manifest(
         "svg": _sha(render_ir_to_svg(ir)),
         "png": _sha(render_ir_to_png(ir)),
     }
-    reproducible = {
-        kind: (stored_artifact_hashes.get(kind) == rerender[kind])
-        for kind in rerender
-    }
+    reproducible = {kind: (stored_artifact_hashes.get(kind) == rerender[kind]) for kind in rerender}
     ir_reproducible = stored_ir_sha256 == _sha(ir_bytes)
 
     counts: dict[str, int] = {}

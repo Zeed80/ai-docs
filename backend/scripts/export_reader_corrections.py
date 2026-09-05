@@ -35,10 +35,14 @@ async def _run(out_dir: pathlib.Path) -> int:
     records: list[dict] = []
     async with factory() as db:
         rows = (
-            await db.execute(
-                select(ImageGeneration).where(ImageGeneration.operation == "vectorize")
+            (
+                await db.execute(
+                    select(ImageGeneration).where(ImageGeneration.operation == "vectorize")
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for row in rows:
             record = (row.params or {}).get("spec_correction_record")
             if record:

@@ -33,9 +33,7 @@ def upgrade() -> None:
     if bind.dialect.name != "postgresql":
         return
     for action_name in _APPROVAL_ACTION_NAMES:
-        op.execute(
-            f"ALTER TYPE approvalactiontype ADD VALUE IF NOT EXISTS '{action_name}'"
-        )
+        op.execute(f"ALTER TYPE approvalactiontype ADD VALUE IF NOT EXISTS '{action_name}'")
 
 
 def downgrade() -> None:

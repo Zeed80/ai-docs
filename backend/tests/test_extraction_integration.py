@@ -5,12 +5,11 @@ Run with: python3 -m pytest tests/test_extraction_integration.py -v -s --timeout
 Skip if Ollama unavailable: @pytest.mark.skipif
 """
 
-import asyncio
-import os
 from pathlib import Path
 
 import httpx
 import pytest
+
 
 # Check Ollama availability
 def _ollama_available() -> bool:
@@ -19,6 +18,7 @@ def _ollama_available() -> bool:
         return r.status_code == 200
     except Exception:
         return False
+
 
 OLLAMA_AVAILABLE = _ollama_available()
 EXAMPLE_DIR = Path(__file__).parent.parent.parent / "example-invoices"
@@ -49,7 +49,7 @@ class TestExtractionIntegration:
     @pytest.mark.asyncio
     async def test_classify_real_invoice(self):
         """Classify a real invoice PDF using gemma4:e4b."""
-        from app.ai.extraction_prompts import CLASSIFY_SYSTEM, CLASSIFY_PROMPT
+        from app.ai.extraction_prompts import CLASSIFY_PROMPT, CLASSIFY_SYSTEM
         from app.ai.ollama_client import generate_json
         from app.ai.pdf_processor import extract_pdf
 
@@ -71,7 +71,7 @@ class TestExtractionIntegration:
             timeout_seconds=60.0,
         )
 
-        print(f"\n--- Classification result ---")
+        print("\n--- Classification result ---")
         print(result)
 
         assert "type" in result
@@ -82,10 +82,14 @@ class TestExtractionIntegration:
     @pytest.mark.asyncio
     async def test_extract_real_invoice(self):
         """Full extraction of a real invoice with field validation."""
-        from app.ai.extraction_prompts import EXTRACT_INVOICE_SYSTEM, EXTRACT_INVOICE_PROMPT
+        from app.ai.confidence import (
+            compute_field_confidences,
+            compute_overall_confidence,
+            validate_arithmetic,
+        )
+        from app.ai.extraction_prompts import EXTRACT_INVOICE_PROMPT, EXTRACT_INVOICE_SYSTEM
         from app.ai.ollama_client import generate_json
         from app.ai.pdf_processor import extract_pdf
-        from app.ai.confidence import validate_arithmetic, compute_field_confidences, compute_overall_confidence
 
         pdf_path = self._get_sample_path(SAMPLE_INVOICES[0])
         content = pdf_path.read_bytes()
@@ -114,7 +118,9 @@ class TestExtractionIntegration:
         print(f"  supplier: {extracted.get('supplier', {}).get('name')}")
 
         # At least one key field or line items must be present
-        has_key_field = any(extracted.get(k) for k in ["invoice_number", "invoice_date", "total_amount"])
+        has_key_field = any(
+            extracted.get(k) for k in ["invoice_number", "invoice_date", "total_amount"]
+        )
         has_lines = bool(extracted.get("lines"))
         assert has_key_field or has_lines, f"Extraction returned no useful fields: {extracted}"
         assert has_lines, "No line items extracted"
@@ -139,9 +145,9 @@ class TestExtractionIntegration:
     @pytest.mark.asyncio
     async def test_bbox_binding(self):
         """Test bbox binding on a real invoice."""
-        from app.ai.extraction_prompts import EXTRACT_INVOICE_SYSTEM, EXTRACT_INVOICE_PROMPT
+        from app.ai.extraction_prompts import EXTRACT_INVOICE_PROMPT, EXTRACT_INVOICE_SYSTEM
         from app.ai.ollama_client import generate_json
-        from app.ai.pdf_processor import extract_pdf, bind_bboxes
+        from app.ai.pdf_processor import bind_bboxes, extract_pdf
 
         pdf_path = self._get_sample_path(SAMPLE_INVOICES[0])
         content = pdf_path.read_bytes()
@@ -179,7 +185,7 @@ class TestExtractionIntegration:
     @pytest.mark.asyncio
     async def test_multiple_invoices(self):
         """Test extraction across multiple suppliers."""
-        from app.ai.extraction_prompts import CLASSIFY_SYSTEM, CLASSIFY_PROMPT
+        from app.ai.extraction_prompts import CLASSIFY_PROMPT, CLASSIFY_SYSTEM
         from app.ai.ollama_client import generate_json
         from app.ai.pdf_processor import extract_pdf
 
@@ -203,18 +209,22 @@ class TestExtractionIntegration:
                     system=CLASSIFY_SYSTEM,
                     timeout_seconds=60.0,
                 )
-                results.append({
-                    "file": filename,
-                    "type": result.get("type"),
-                    "confidence": result.get("confidence"),
-                    "status": "ok",
-                })
+                results.append(
+                    {
+                        "file": filename,
+                        "type": result.get("type"),
+                        "confidence": result.get("confidence"),
+                        "status": "ok",
+                    }
+                )
             except Exception as e:
                 results.append({"file": filename, "status": "error", "error": str(e)})
 
         print(f"\n--- Multi-invoice classification ({len(results)} files) ---")
         for r in results:
-            print(f"  {r['file']}: {r.get('type', '?')} ({r.get('confidence', '?')}) [{r['status']}]")
+            print(
+                f"  {r['file']}: {r.get('type', '?')} ({r.get('confidence', '?')}) [{r['status']}]"
+            )
 
         ok_count = sum(1 for r in results if r["status"] == "ok")
         assert ok_count >= 1, "No invoices successfully classified"

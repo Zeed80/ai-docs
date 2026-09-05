@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 import textwrap
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -137,7 +137,7 @@ async def build_capability(
 
     ai_router = AIRouter()
     skill_name = skill_name or _derive_skill_name(gap_description)
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
 
     context = _build_context(gap_description, skill_name, context_skills or [], ts)
 
@@ -169,8 +169,8 @@ async def build_capability(
                     messages=[
                         *(
                             [ChatMessage(role="system", content=system)]
-                            if system else
-                            [ChatMessage(role="system", content=_SYSTEM_PROMPT)]
+                            if system
+                            else [ChatMessage(role="system", content=_SYSTEM_PROMPT)]
                         ),
                         ChatMessage(role="user", content=prompt),
                     ],
@@ -261,7 +261,7 @@ def _load_existing_examples(skill_names: list[str]) -> str:
     text = example_path.read_text(encoding="utf-8")
     # Return first 80 lines as pattern reference
     lines = text.splitlines()[:80]
-    return f"```python\n# Pattern from workspace.py\n" + "\n".join(lines) + "\n```"
+    return "```python\n# Pattern from workspace.py\n" + "\n".join(lines) + "\n```"
 
 
 def _extract_code(raw: str) -> str:

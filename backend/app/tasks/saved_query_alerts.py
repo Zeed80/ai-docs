@@ -35,17 +35,19 @@ async def _check_alerts() -> dict:
             try:
                 new_count = await _run_query_count(db, sq.nl_text)
                 if sq.result_count is not None and new_count != sq.result_count:
-                    await chat_bus.publish({
-                        "type": "notification",
-                        "level": "info",
-                        "title": "Алерт поиска",
-                        "message": (
-                            f"Запрос «{sq.nl_text[:60]}» — "
-                            f"результатов: {sq.result_count} → {new_count}"
-                        ),
-                        "entity_type": "saved_query",
-                        "entity_id": str(sq.id),
-                    })
+                    await chat_bus.publish(
+                        {
+                            "type": "notification",
+                            "level": "info",
+                            "title": "Алерт поиска",
+                            "message": (
+                                f"Запрос «{sq.nl_text[:60]}» — "
+                                f"результатов: {sq.result_count} → {new_count}"
+                            ),
+                            "entity_type": "saved_query",
+                            "entity_id": str(sq.id),
+                        }
+                    )
                     fired += 1
 
                 sq.result_count = new_count
@@ -71,13 +73,9 @@ async def _run_query_count(db, nl_text: str) -> int:
     q = nl_text.lower()
 
     inv_result = await db.execute(
-        select(func.count()).select_from(Invoice).where(
-            Invoice.invoice_number.ilike(f"%{q}%")
-        )
+        select(func.count()).select_from(Invoice).where(Invoice.invoice_number.ilike(f"%{q}%"))
     )
     doc_result = await db.execute(
-        select(func.count()).select_from(Document).where(
-            Document.file_name.ilike(f"%{q}%")
-        )
+        select(func.count()).select_from(Document).where(Document.file_name.ilike(f"%{q}%"))
     )
     return (inv_result.scalar() or 0) + (doc_result.scalar() or 0)

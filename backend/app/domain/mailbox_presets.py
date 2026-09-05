@@ -7,6 +7,7 @@ which auth methods this provider actually accepts today — plain passwords
 have quietly stopped working for Gmail and (for most tenants) Microsoft 365,
 so offering that option there just reproduces the same failed login.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

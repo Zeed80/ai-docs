@@ -4,23 +4,23 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import log_action
-from fastapi.responses import StreamingResponse
 
 try:
+    from app.ai.normcontrol_agent import run_normcontrol as _run_normcontrol_check
     from app.ai.tp_generator import (
-        extract_tp_features_from_drawing,
-        save_surface_specs,
-        recommend_blank,
-        select_equipment,
         calculate_cutting_parameters,
         calculate_time_norms,
+        extract_tp_features_from_drawing,
+        recommend_blank,
+        save_surface_specs,
+        select_equipment,
     )
-    from app.ai.normcontrol_agent import run_normcontrol as _run_normcontrol_check
     from app.tasks.tp_generation import generate_tp_from_drawing as celery_tp_task
 except ImportError:
     extract_tp_features_from_drawing = None  # type: ignore[assignment]
@@ -38,7 +38,6 @@ from app.db.models import (
     Document,
     Drawing,
     EntityMention,
-    GostFormData,
     KnowledgeEdge,
     KnowledgeNode,
     ManufacturingCheckResult,
@@ -54,16 +53,16 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.domain.technology import (
-    ManufacturingResourceCreate,
-    ManufacturingResourceOut,
-    LearningSuggestionOut,
-    LearningSuggestionResponse,
     LearningRuleActivateRequest,
     LearningRuleCreate,
     LearningRuleListResponse,
     LearningRuleOut,
     LearningRuleReflectRequest,
     LearningRuleRejectRequest,
+    LearningSuggestionOut,
+    LearningSuggestionResponse,
+    ManufacturingResourceCreate,
+    ManufacturingResourceOut,
     NormEstimateApproveRequest,
     NormEstimateCreate,
     NormEstimateOut,
@@ -75,10 +74,10 @@ from app.domain.technology import (
     ProcessPlanApproveRequest,
     ProcessPlanCreate,
     ProcessPlanDetail,
-    ProcessPlanEstimateNormsRequest,
-    ProcessPlanEstimateNormsResponse,
     ProcessPlanDraftFromDocumentRequest,
     ProcessPlanDraftFromDocumentResponse,
+    ProcessPlanEstimateNormsRequest,
+    ProcessPlanEstimateNormsResponse,
     ProcessPlanListResponse,
     ProcessPlanOut,
     ResourceListResponse,
@@ -153,7 +152,9 @@ async def list_operation_templates(
         count_query = count_query.where(ManufacturingOperationTemplate.is_active.is_(True))
     total = (await db.execute(count_query)).scalar() or 0
     result = await db.execute(
-        query.order_by(ManufacturingOperationTemplate.operation_type, ManufacturingOperationTemplate.name)
+        query.order_by(
+            ManufacturingOperationTemplate.operation_type, ManufacturingOperationTemplate.name
+        )
         .offset(offset)
         .limit(limit)
     )
@@ -384,8 +385,9 @@ async def export_process_plan(
     db: AsyncSession = Depends(get_db),
 ):
     """Export a ProcessPlan as an Excel workbook (TechCard) or printable HTML (RouteCard)."""
-    from fastapi.responses import StreamingResponse
     import io
+
+    from fastapi.responses import StreamingResponse
 
     plan = await _load_process_plan_detail(db, plan_id)
     if not plan:
@@ -412,6 +414,7 @@ async def export_process_plan(
 def _build_techcard_excel(plan: ProcessPlanDetail) -> bytes:
     """Generate a ГОСТ-style TechCard Excel workbook."""
     import io
+
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
@@ -430,9 +433,7 @@ def _build_techcard_excel(plan: ProcessPlanDetail) -> bytes:
         c = ws.cell(row=row, column=col, value=value)
         c.border = border
         c.font = font or normal
-        c.alignment = Alignment(
-            horizontal=align, vertical="center", wrap_text=wrap
-        )
+        c.alignment = Alignment(horizontal=align, vertical="center", wrap_text=wrap)
         if fill:
             c.fill = fill
         return c
@@ -468,12 +469,22 @@ def _build_techcard_excel(plan: ProcessPlanDetail) -> bytes:
 
     # Operations header
     op_start = len(meta) + 4
-    headers = ["№", "Код", "Наименование операции", "Тип", "t пз (мин)", "t оп (мин)", "t труд (мин)", "Требования"]
+    headers = [
+        "№",
+        "Код",
+        "Наименование операции",
+        "Тип",
+        "t пз (мин)",
+        "t оп (мин)",
+        "t труд (мин)",
+        "Требования",
+    ]
     ws.row_dimensions[op_start].height = 18
     for col, h in enumerate(headers, 1):
         _cell(op_start, col, h, font=header_font, fill=header_fill, align="center")
 
     from openpyxl.utils import get_column_letter
+
     col_widths = [5, 8, 40, 15, 10, 10, 12, 40]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -586,7 +597,9 @@ async def approve_process_plan(
     if plan.status == "approved":
         return plan
     if getattr(plan, "normcontrol_status", None) == "failed":
-        raise HTTPException(422, detail="Normcontrol has open errors — resolve them before approving")
+        raise HTTPException(
+            422, detail="Normcontrol has open errors — resolve them before approving"
+        )
 
     plan.status = "approved"
     plan.approved_by = payload.approved_by
@@ -658,7 +671,9 @@ async def validate_process_plan(
     return _technology_check_response(plan_id, saved_checks)
 
 
-@router.post("/process-plans/{plan_id}/estimate-norms", response_model=ProcessPlanEstimateNormsResponse)
+@router.post(
+    "/process-plans/{plan_id}/estimate-norms", response_model=ProcessPlanEstimateNormsResponse
+)
 async def estimate_process_plan_norms(
     plan_id: uuid.UUID,
     payload: ProcessPlanEstimateNormsRequest,
@@ -749,7 +764,9 @@ async def add_operation(
     return operation
 
 
-@router.post("/process-plans/{plan_id}/norm-estimates", response_model=NormEstimateOut, status_code=201)
+@router.post(
+    "/process-plans/{plan_id}/norm-estimates", response_model=NormEstimateOut, status_code=201
+)
 async def create_norm_estimate(
     plan_id: uuid.UUID,
     payload: NormEstimateCreate,
@@ -1035,10 +1052,12 @@ async def reject_learning_rule(
         raise HTTPException(400, "Active learning rule cannot be rejected")
     rule.status = "rejected"
     metadata = dict(rule.metadata_ or {})
-    metadata.update({
-        "rejected_by": payload.rejected_by,
-        "rejected_at": datetime.now(UTC).isoformat(),
-    })
+    metadata.update(
+        {
+            "rejected_by": payload.rejected_by,
+            "rejected_at": datetime.now(UTC).isoformat(),
+        }
+    )
     if payload.comment:
         metadata["rejection_comment"] = payload.comment
     rule.metadata_ = metadata
@@ -1527,8 +1546,14 @@ async def generate_tp_from_drawing(
     )
 
     await db.commit()
-    await log_action(db, action="tech.generate_tp_from_drawing", entity_type="process_plan",
-                     entity_id=plan_id, user_id=created_by, details={"drawing_id": str(drawing_id)})
+    await log_action(
+        db,
+        action="tech.generate_tp_from_drawing",
+        entity_type="process_plan",
+        entity_id=plan_id,
+        user_id=created_by,
+        details={"drawing_id": str(drawing_id)},
+    )
 
     return {"plan_id": str(plan_id), "task_id": task.id, "status": "queued"}
 
@@ -1712,19 +1737,25 @@ async def get_normcontrol_result(
         raise HTTPException(404, detail="ProcessPlan not found")
 
     rows = (
-        await db.execute(
-            select(NormControlCheck)
-            .where(NormControlCheck.process_plan_id == plan_id)
-            .order_by(NormControlCheck.created_at)
+        (
+            await db.execute(
+                select(NormControlCheck)
+                .where(NormControlCheck.process_plan_id == plan_id)
+                .order_by(NormControlCheck.created_at)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     errors = [c for c in rows if c.severity == "error" and c.status == "open"]
     warnings = [c for c in rows if c.severity == "warning" and c.status == "open"]
 
     return {
         "status": getattr(plan, "normcontrol_status", None) or "not_checked",
-        "checked_at": plan.normcontrol_checked_at.isoformat() if plan.normcontrol_checked_at else None,
+        "checked_at": plan.normcontrol_checked_at.isoformat()
+        if plan.normcontrol_checked_at
+        else None,
         "checks": [_normcontrol_check_out(c) for c in rows],
         "errors_count": len(errors),
         "warnings_count": len(warnings),
@@ -1743,16 +1774,16 @@ async def set_blank_spec(
     if not plan:
         raise HTTPException(404, detail="ProcessPlan not found")
 
-    result = await db.execute(
-        select(BlankSpec).where(BlankSpec.process_plan_id == plan_id)
-    )
+    result = await db.execute(select(BlankSpec).where(BlankSpec.process_plan_id == plan_id))
     spec = result.scalar_one_or_none()
     if spec:
         for k, v in payload.items():
             if hasattr(spec, k):
                 setattr(spec, k, v)
     else:
-        spec = BlankSpec(process_plan_id=plan_id, **{k: v for k, v in payload.items() if k != "process_plan_id"})
+        spec = BlankSpec(
+            process_plan_id=plan_id, **{k: v for k, v in payload.items() if k != "process_plan_id"}
+        )
         db.add(spec)
 
     plan.blank_type = spec.blank_type
@@ -1812,12 +1843,26 @@ async def get_blank_spec(
 # Правка операции из карточки ревизии. Белый список: всё остальное (id,
 # process_plan_id, служебные метки) через этот путь не меняется.
 _OPERATION_PATCHABLE = {
-    "operation_code", "name", "operation_type", "sequence_no",
-    "setup_description", "transition_text", "control_requirements",
-    "safety_requirements", "setup_minutes", "machine_minutes", "labor_minutes",
-    "gost_operation_code", "department_code", "workplace_code",
-    "to_minutes", "tv_minutes", "tob_minutes",
-    "cutting_parameters", "tooling_list", "measuring_tools",
+    "operation_code",
+    "name",
+    "operation_type",
+    "sequence_no",
+    "setup_description",
+    "transition_text",
+    "control_requirements",
+    "safety_requirements",
+    "setup_minutes",
+    "machine_minutes",
+    "labor_minutes",
+    "gost_operation_code",
+    "department_code",
+    "workplace_code",
+    "to_minutes",
+    "tv_minutes",
+    "tob_minutes",
+    "cutting_parameters",
+    "tooling_list",
+    "measuring_tools",
 }
 
 
@@ -1882,7 +1927,9 @@ async def list_surface_specs(
                 "fit_system": s.fit_system,
                 "operation_id": str(s.operation_id) if s.operation_id else None,
                 "drawing_feature_id": str(s.drawing_feature_id) if s.drawing_feature_id else None,
-                "assigned_machine_id": str(s.assigned_machine_id) if s.assigned_machine_id else None,
+                "assigned_machine_id": str(s.assigned_machine_id)
+                if s.assigned_machine_id
+                else None,
                 "confidence": s.confidence,
             }
             for s in specs
@@ -1930,7 +1977,9 @@ async def _get_or_create_process_plan_node(
     plan: ManufacturingProcessPlan,
 ) -> KnowledgeNode:
     canonical_key = f"process_plan:{plan.id}"
-    result = await db.execute(select(KnowledgeNode).where(KnowledgeNode.canonical_key == canonical_key))
+    result = await db.execute(
+        select(KnowledgeNode).where(KnowledgeNode.canonical_key == canonical_key)
+    )
     node = result.scalar_one_or_none()
     if node:
         return node
@@ -1955,7 +2004,9 @@ async def _get_or_create_operation_node(
     operation: ManufacturingOperation,
 ) -> KnowledgeNode:
     canonical_key = f"operation:{operation.id}"
-    result = await db.execute(select(KnowledgeNode).where(KnowledgeNode.canonical_key == canonical_key))
+    result = await db.execute(
+        select(KnowledgeNode).where(KnowledgeNode.canonical_key == canonical_key)
+    )
     node = result.scalar_one_or_none()
     if node:
         return node
@@ -1980,7 +2031,9 @@ async def _get_or_create_resource_node(
     resource: ManufacturingResource,
 ) -> KnowledgeNode:
     canonical_key = f"{resource.resource_type}:{resource.id}"
-    result = await db.execute(select(KnowledgeNode).where(KnowledgeNode.canonical_key == canonical_key))
+    result = await db.execute(
+        select(KnowledgeNode).where(KnowledgeNode.canonical_key == canonical_key)
+    )
     node = result.scalar_one_or_none()
     if node:
         return node

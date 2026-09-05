@@ -14,7 +14,6 @@ The test suite is skipped gracefully when example-invoices/ is absent
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -58,11 +57,13 @@ def _mime(path: Path) -> str:
 # Fixtures: add all invoice extensions to the allowlist
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 async def _allow_all_invoice_extensions(db_session):
     """Insert allowlist entries for every extension found in example-invoices/."""
-    from app.db.models import FileExtensionAllowlist
     from sqlalchemy import select
+
+    from app.db.models import FileExtensionAllowlist
 
     extensions = {p.suffix.lower() for p in _ALL_INVOICES if p.suffix}
     for ext in extensions:
@@ -79,6 +80,7 @@ async def _allow_all_invoice_extensions(db_session):
 # ---------------------------------------------------------------------------
 # Parametrized: one test per invoice file
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _ALL_INVOICES, reason="example-invoices/ directory not found")
 @pytest.mark.parametrize(
@@ -122,6 +124,7 @@ async def test_ingest_real_invoice(invoice_path: Path, client: AsyncClient):
 # Bulk: all invoices in one sequential run — assert 0 server errors
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not _ALL_INVOICES, reason="example-invoices/ directory not found")
 @pytest.mark.asyncio
 @pytest.mark.timeout(3600)
@@ -147,7 +150,9 @@ async def test_bulk_ingest_all_invoices_no_server_errors(client: AsyncClient):
         elif resp.status_code == 202:
             results["quarantined"].append(invoice_path.name)
         elif resp.status_code >= 400:
-            results["client_error"].append(f"{invoice_path.name} → {resp.status_code}: {resp.text[:100]}")
+            results["client_error"].append(
+                f"{invoice_path.name} → {resp.status_code}: {resp.text[:100]}"
+            )
         elif resp.json().get("is_duplicate"):
             results["duplicate"].append(invoice_path.name)
         else:
@@ -175,6 +180,7 @@ async def test_bulk_ingest_all_invoices_no_server_errors(client: AsyncClient):
 # ---------------------------------------------------------------------------
 # Deduplication consistency
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _ALL_INVOICES, reason="example-invoices/ directory not found")
 @pytest.mark.asyncio
@@ -230,6 +236,7 @@ async def test_dedup_different_name_same_content(client: AsyncClient):
 # File type detection on real invoices
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not _ALL_INVOICES, reason="example-invoices/ directory not found")
 @pytest.mark.asyncio
 @pytest.mark.timeout(300)
@@ -246,9 +253,7 @@ async def test_pdf_invoices_not_classified_as_drawing(client: AsyncClient):
             continue
         data = resp.json()
         detected = data.get("detected_type")
-        assert detected != "drawing", (
-            f"{invoice_path.name} wrongly classified as drawing"
-        )
+        assert detected != "drawing", f"{invoice_path.name} wrongly classified as drawing"
 
 
 @pytest.mark.skipif(

@@ -20,13 +20,13 @@ from PIL import Image
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+from eval_nist_pmi_reader import load_jsonl, select_pages  # noqa: E402
+
 from app.ai.cad_recognize.spec_fragments import (  # noqa: E402
     _detect_pmi_frame_regions,
     _main_view_crop_box,
     _overview,
 )
-from eval_nist_pmi_reader import load_jsonl, select_pages  # noqa: E402
-
 
 GEOMETRIC_TOLERANCE_CATEGORY = "Geometric Tolerances"
 
@@ -36,12 +36,9 @@ def summarize(page_results: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "contract": "nist-pmi-frame-locator-diagnostic-v1",
         "pages": len(page_results),
-        "reference_records": sum(
-            int(page["reference_record_count"]) for page in page_results
-        ),
+        "reference_records": sum(int(page["reference_record_count"]) for page in page_results),
         "geometric_tolerance_reference_records": sum(
-            int(page["geometric_tolerance_reference_record_count"])
-            for page in page_results
+            int(page["geometric_tolerance_reference_record_count"]) for page in page_results
         ),
         "detected_regions": sum(counts),
         "pages_with_zero_regions": sum(count == 0 for count in counts),
@@ -105,7 +102,13 @@ def main() -> int:
         json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    print(json.dumps({key: value for key, value in report.items() if key != "page_results"}, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {key: value for key, value in report.items() if key != "page_results"},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 

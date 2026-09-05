@@ -57,15 +57,17 @@ def test_coerce_channel_leaves_chat_for_smalltalk():
 def test_validator_rescues_imperfect_model_output():
     # Mirrors real local-model output that used to fail validation outright:
     # role=null, role="email" (a capability), bare-string recommended, numeric entity.
-    d = TurnDecision.model_validate({
-        "intent": "answer_self",
-        "role": None,                       # → data_analyst
-        "output_channel": "desktop",        # invalid → chat
-        "grounding": "vector",              # invalid → none
-        "recommended": ["invoices", {"capability": "email", "action": "send"}],
-        "entities": {"number_1": 12345},    # numeric → str
-        "confidence": 0.9,
-    })
+    d = TurnDecision.model_validate(
+        {
+            "intent": "answer_self",
+            "role": None,  # → data_analyst
+            "output_channel": "desktop",  # invalid → chat
+            "grounding": "vector",  # invalid → none
+            "recommended": ["invoices", {"capability": "email", "action": "send"}],
+            "entities": {"number_1": 12345},  # numeric → str
+            "confidence": 0.9,
+        }
+    )
     assert d.role == "data_analyst"
     assert d.output_channel == "chat"
     assert d.grounding == "none"
@@ -98,7 +100,9 @@ def test_lenient_parse_fenced_json_and_plain():
     from app.ai.turn_router import lenient_parse_decision
 
     assert lenient_parse_decision('```json\n{"intent":"count"}\n```')["intent"] == "count"
-    assert lenient_parse_decision('{"intent":"smalltalk","confidence":1.0}')["intent"] == "smalltalk"
+    assert (
+        lenient_parse_decision('{"intent":"smalltalk","confidence":1.0}')["intent"] == "smalltalk"
+    )
     # Must NOT be fooled by an empty {} embedded in prose.
     assert lenient_parse_decision("entities: {}\nno decision here") is None
 

@@ -21,9 +21,15 @@ SHAFT = {
 }
 
 PLATE = {
-    "type": "plate", "shape": "circle", "diameter": 120, "thickness": 14,
+    "type": "plate",
+    "shape": "circle",
+    "diameter": 120,
+    "thickness": 14,
     "holes": [{"x": 0, "y": 0, "diameter": 40, "tolerance": "H7"}],
-    "bolt_circle_d": 90, "bolt_circle_n": 6, "bolt_hole_d": 11, "bolt_hole_tol": "H12",
+    "bolt_circle_d": 90,
+    "bolt_circle_n": 6,
+    "bolt_hole_d": 11,
+    "bolt_hole_tol": "H12",
     "title": {"name": "Фланец", "material": "Сталь 20 ГОСТ 1050-2013"},
 }
 
@@ -78,6 +84,7 @@ def test_png_and_dxf_export():
 
 def test_dxf_uses_millimeters_and_real_dimensions():
     import io
+
     import ezdxf
 
     spec = {
@@ -101,6 +108,7 @@ def test_dxf_uses_millimeters_and_real_dimensions():
 
 def test_dxf_dimensions_use_closed_arrowheads_not_ticks():
     import io
+
     import ezdxf
 
     spec = {
@@ -124,17 +132,20 @@ def test_dxf_dimensions_use_closed_arrowheads_not_ticks():
 
 
 def test_svg_dimension_arrows_are_closed_polygons():
-    svg = techdraw.render_spec_to_svg({
-        "type": "shaft",
-        "segments": [{"diameter": 50, "length": 50, "roughness": 1.6}],
-        "title": {},
-    })
+    svg = techdraw.render_spec_to_svg(
+        {
+            "type": "shaft",
+            "segments": [{"diameter": 50, "length": 50, "roughness": 1.6}],
+            "title": {},
+        }
+    )
     assert "<polygon" in svg
     assert "Ra 1.6" in svg
 
 
 def test_plate_dxf_has_hole_and_bolt_circle_dimensions():
     import io
+
     import ezdxf
 
     doc = ezdxf.read(io.StringIO(techdraw.render_spec_to_dxf(PLATE).decode("utf-8")))
@@ -151,8 +162,14 @@ def test_unknown_type_raises():
 SHAFT_WITH_BORE = {
     "type": "shaft",
     "segments": [
-        {"diameter": 45, "length": 60, "tolerance": "h6", "roughness": 0.8,
-         "bore_diameter": 20, "section_hatch": True},
+        {
+            "diameter": 45,
+            "length": 60,
+            "tolerance": "h6",
+            "roughness": 0.8,
+            "bore_diameter": 20,
+            "section_hatch": True,
+        },
         {"diameter": 24, "length": 25, "thread": "M24x2", "thread_end_view": True},
     ],
     "title": {"name": "Вал", "material": "Сталь 45 ГОСТ 1050-2013"},
@@ -233,16 +250,26 @@ def test_explicit_sheet_format_honored():
 
 
 def test_title_block_new_gost_2104_fields():
-    spec = {**SHAFT, "title": {**SHAFT["title"], "show_frame": True, "mass_kg": 1.2,
-                                "litera": "У", "checked_by": "Иванов", "sheet_no": 1,
-                                "sheet_count": 1}}
+    spec = {
+        **SHAFT,
+        "title": {
+            **SHAFT["title"],
+            "show_frame": True,
+            "mass_kg": 1.2,
+            "litera": "У",
+            "checked_by": "Иванов",
+            "sheet_no": 1,
+            "sheet_count": 1,
+        },
+    }
     svg = techdraw.render_spec_to_svg(spec)
     assert "1.2" in svg and "У" in svg and "Иванов" in svg
 
 
 def test_png_autocrops_when_frame_is_off():
-    from PIL import Image
     import io as _io
+
+    from PIL import Image
 
     png_no_frame = techdraw.render_spec_to_png(SHAFT)
     spec_framed = {**SHAFT, "title": {**SHAFT["title"], "show_frame": True}}

@@ -23,14 +23,14 @@ class ProviderKind(str, Enum):
     OPENAI = "openai"
     # Cloud — OpenAI-compatible gateways
     OLLAMA_CLOUD = "ollama_cloud"
-    MOONSHOT = "moonshot"      # Kimi
+    MOONSHOT = "moonshot"  # Kimi
     MINIMAX = "minimax"
-    DASHSCOPE = "dashscope"    # Qwen (Alibaba)
+    DASHSCOPE = "dashscope"  # Qwen (Alibaba)
     MISTRAL = "mistral"
     GROQ = "groq"
     TOGETHER = "together"
     FIREWORKS = "fireworks"
-    XAI = "xai"               # Grok
+    XAI = "xai"  # Grok
     COHERE = "cohere"
     PERPLEXITY = "perplexity"
     DEEPINFRA = "deepinfra"
@@ -215,7 +215,7 @@ class ModelCapability(BaseModel):
     cost_per_1k_output: float | None = None
     quality_score: float = 0.0
     speed_score: float = 0.0
-    vram_gb_estimate: float | None = None   # expected VRAM usage in GB
+    vram_gb_estimate: float | None = None  # expected VRAM usage in GB
     # Thinking / chain-of-thought (CoT) control.
     #   thinking_supported — the model can reason step-by-step (Qwen3, DeepSeek-R1…)
     #   thinking_enabled    — default state of the per-model toggle. For extraction

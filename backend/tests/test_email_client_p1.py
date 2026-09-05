@@ -1,14 +1,11 @@
 """P1: the mail view becomes a real client — threading, folders, labels, search."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-import pytest
 from httpx import AsyncClient
 
 from app.db.models import (
-    DraftAction,
-    EmailLabel,
     EmailMessage,
     EmailThread,
     MailboxConfig,
@@ -17,22 +14,34 @@ from app.db.models import (
 
 def _shared_mailbox(name: str = "procurement") -> MailboxConfig:
     return MailboxConfig(
-        name=name, display_name=name, imap_host="h", imap_port=993, imap_user=name,
-        imap_password_encrypted="x", imap_ssl=True, is_active=True, mailbox_type="shared",
+        name=name,
+        display_name=name,
+        imap_host="h",
+        imap_port=993,
+        imap_user=name,
+        imap_password_encrypted="x",
+        imap_ssl=True,
+        is_active=True,
+        mailbox_type="shared",
     )
 
 
 def _thread(mailbox: str, subject: str, **kw) -> EmailThread:
-    return EmailThread(subject=subject, mailbox=mailbox, message_count=1,
-                       last_message_at=datetime.now(timezone.utc), **kw)
+    return EmailThread(
+        subject=subject, mailbox=mailbox, message_count=1, last_message_at=datetime.now(UTC), **kw
+    )
 
 
 def _msg(thread: EmailThread, mailbox: str, subject: str, body: str, **kw) -> EmailMessage:
     return EmailMessage(
-        thread=thread, mailbox=mailbox, subject=subject, body_text=body,
+        thread=thread,
+        mailbox=mailbox,
+        subject=subject,
+        body_text=body,
         from_address=kw.pop("from_address", "supplier@partner.ru"),
         to_addresses=kw.pop("to_addresses", ["procurement@company.ru"]),
-        received_at=datetime.now(timezone.utc), is_inbound=kw.pop("is_inbound", True),
+        received_at=datetime.now(UTC),
+        is_inbound=kw.pop("is_inbound", True),
         message_id_header=kw.pop("message_id_header", f"<{uuid.uuid4()}@partner.ru>"),
         **kw,
     )
@@ -45,8 +54,11 @@ def test_resolve_threading_headers_builds_references_chain():
     from app.domain.email_thread import resolve_threading_headers
 
     parent = EmailMessage(
-        mailbox="procurement", from_address="x@y.ru", subject="s",
-        message_id_header="<a@y.ru>", references="<root@y.ru>",
+        mailbox="procurement",
+        from_address="x@y.ru",
+        subject="s",
+        message_id_header="<a@y.ru>",
+        references="<root@y.ru>",
     )
     in_reply_to, references = resolve_threading_headers(parent)
     assert in_reply_to == "<a@y.ru>"
@@ -95,14 +107,16 @@ async def test_bulk_thread_actions(client: AsyncClient, db_session):
     db_session.add_all([th, _msg(th, "procurement", "Счёт на оплату", "текст")])
     await db_session.commit()
 
-    r = await client.post("/api/email/threads/actions",
-                          json={"thread_ids": [str(th.id)], "action": "read"})
+    r = await client.post(
+        "/api/email/threads/actions", json={"thread_ids": [str(th.id)], "action": "read"}
+    )
     assert r.status_code == 200 and r.json()["updated"] == 1
     await db_session.refresh(th)
     assert th.is_read is True
 
-    r = await client.post("/api/email/threads/actions",
-                          json={"thread_ids": [str(th.id)], "action": "archive"})
+    r = await client.post(
+        "/api/email/threads/actions", json={"thread_ids": [str(th.id)], "action": "archive"}
+    )
     assert r.status_code == 200
     await db_session.refresh(th)
     assert th.folder == "archive"
@@ -127,18 +141,20 @@ async def test_label_crud_and_apply(client: AsyncClient, db_session):
     assert r.status_code == 201, r.text
     label_id = r.json()["id"]
 
-    r = await client.post("/api/email/threads/actions", json={
-        "thread_ids": [str(th.id)], "action": "add_label", "label_id": label_id})
+    r = await client.post(
+        "/api/email/threads/actions",
+        json={"thread_ids": [str(th.id)], "action": "add_label", "label_id": label_id},
+    )
     assert r.status_code == 200 and r.json()["updated"] == 1
 
     r = await client.get("/api/email/labels")
-    assert next(l for l in r.json() if l["id"] == label_id)["thread_count"] == 1
+    assert next(lb for lb in r.json() if lb["id"] == label_id)["thread_count"] == 1
 
     r = await client.get(f"/api/email/threads?label_id={label_id}")
     assert any(t["id"] == str(th.id) for t in r.json()["items"])
 
     r = await client.get("/api/email/threads/" + str(th.id))
-    assert any(l["id"] == label_id for l in r.json()["labels"])
+    assert any(lb["id"] == label_id for lb in r.json()["labels"])
 
 
 # ── FTS search ────────────────────────────────────────────────────────────
@@ -147,11 +163,17 @@ async def test_label_crud_and_apply(client: AsyncClient, db_session):
 async def test_fulltext_search_cyrillic(client: AsyncClient, db_session):
     db_session.add(_shared_mailbox())
     th = _thread("procurement", "Поставка подшипников")
-    db_session.add_all([
-        th,
-        _msg(th, "procurement", "Поставка подшипников",
-             "Уважаемые коллеги, отгрузка запланирована на среду."),
-    ])
+    db_session.add_all(
+        [
+            th,
+            _msg(
+                th,
+                "procurement",
+                "Поставка подшипников",
+                "Уважаемые коллеги, отгрузка запланирована на среду.",
+            ),
+        ]
+    )
     other = _thread("procurement", "Отпуск сотрудника")
     db_session.add_all([other, _msg(other, "procurement", "Отпуск сотрудника", "заявление")])
     await db_session.commit()
@@ -167,17 +189,31 @@ async def test_fulltext_search_cyrillic(client: AsyncClient, db_session):
 
 
 async def test_send_from_foreign_personal_mailbox_is_forbidden(client: AsyncClient, db_session):
-    db_session.add(MailboxConfig(
-        name="boss@company.ru", display_name="boss", owner_sub="someone-else",
-        mailbox_type="personal", imap_host="h", imap_port=993, imap_user="boss",
-        imap_password_encrypted="x", imap_ssl=True, is_active=True,
-    ))
+    db_session.add(
+        MailboxConfig(
+            name="boss@company.ru",
+            display_name="boss",
+            owner_sub="someone-else",
+            mailbox_type="personal",
+            imap_host="h",
+            imap_port=993,
+            imap_user="boss",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            is_active=True,
+        )
+    )
     await db_session.commit()
 
-    r = await client.post("/api/email/send", json={
-        "mailbox": "boss@company.ru", "to_addresses": ["x@y.ru"],
-        "subject": "hi", "body_html": "<p>hi</p>",
-    })
+    r = await client.post(
+        "/api/email/send",
+        json={
+            "mailbox": "boss@company.ru",
+            "to_addresses": ["x@y.ru"],
+            "subject": "hi",
+            "body_html": "<p>hi</p>",
+        },
+    )
     assert r.status_code == 403
 
 
@@ -185,10 +221,16 @@ async def test_send_from_shared_mailbox_queues_draft(client: AsyncClient, db_ses
     db_session.add(_shared_mailbox())
     await db_session.commit()
 
-    r = await client.post("/api/email/send", json={
-        "mailbox": "procurement", "to_addresses": ["supplier@partner.ru"],
-        "subject": "Запрос КП", "body_html": "<p>Добрый день</p>", "body_text": "Добрый день",
-    })
+    r = await client.post(
+        "/api/email/send",
+        json={
+            "mailbox": "procurement",
+            "to_addresses": ["supplier@partner.ru"],
+            "subject": "Запрос КП",
+            "body_html": "<p>Добрый день</p>",
+            "body_text": "Добрый день",
+        },
+    )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "queued"
 
@@ -199,8 +241,9 @@ async def test_send_from_shared_mailbox_queues_draft(client: AsyncClient, db_ses
 async def test_contacts_autocomplete_from_history(client: AsyncClient, db_session):
     db_session.add(_shared_mailbox())
     th = _thread("procurement", "История")
-    db_session.add_all([th, _msg(th, "procurement", "История", "t",
-                                 from_address="ivan@supplier-abc.ru")])
+    db_session.add_all(
+        [th, _msg(th, "procurement", "История", "t", from_address="ivan@supplier-abc.ru")]
+    )
     await db_session.commit()
 
     r = await client.get("/api/email/contacts?q=supplier-abc")

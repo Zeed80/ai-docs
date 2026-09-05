@@ -40,7 +40,6 @@ from app.ai.schemas import (
     ProviderConfig,
     ProviderKind,
 )
-from app.config import settings
 
 logger = structlog.get_logger()
 
@@ -69,6 +68,7 @@ class AIGpuBusyError(RuntimeError):
 
 class AIStructuredOutputValidationError(RuntimeError):
     """Raised when a critical structured AI response does not validate."""
+
 
 _EMAIL_SYSTEM = """Ты — AI-сотрудник {agent_name}. Пишешь деловые письма на русском языке
 для промышленного предприятия. Отвечай строго в JSON."""
@@ -123,12 +123,14 @@ _CHAT_TITLE_PROMPT = """Сформулируй краткое название �
 def _runtime_ocr_model() -> str:
     """Resolve OCR/extraction model name from runtime AI config (legacy helper)."""
     from app.ai.model_resolver import get_ocr_model
+
     return get_ocr_model().model
 
 
 def _runtime_ocr_model_and_provider() -> tuple[str, str]:
     """Resolve OCR/extraction model + provider from runtime AI config."""
     from app.ai.model_resolver import get_ocr_model
+
     cfg = get_ocr_model()
     return cfg.model, cfg.provider
 
@@ -192,9 +194,7 @@ class AIRouter:
             self.providers = {}
             for kind in self.registry.providers:
                 try:
-                    self.providers[kind] = self._build_provider(
-                        kind, self._default_resolved(kind)
-                    )
+                    self.providers[kind] = self._build_provider(kind, self._default_resolved(kind))
                 except Exception:  # noqa: BLE001 — placeholder kinds may be unbuildable
                     pass
 
@@ -218,9 +218,7 @@ class AIRouter:
             if kind in self._injected_kinds or kind in self.providers:
                 continue
             try:
-                self.providers[kind] = self._build_provider(
-                    kind, self._default_resolved(kind)
-                )
+                self.providers[kind] = self._build_provider(kind, self._default_resolved(kind))
             except Exception:  # noqa: BLE001 — placeholder kinds may be unbuildable
                 pass
         logger.info("ai_router_registry_reloaded", models=len(fresh.models))
@@ -283,9 +281,7 @@ class AIRouter:
             # что реально установлено на живых узлах.
             return self.providers[model.provider], _default_instance(model.provider)
 
-        resolved = select_instance(
-            model.provider, model.provider_model, model.preferred_instance
-        )
+        resolved = select_instance(model.provider, model.provider_model, model.preferred_instance)
         cached = self.providers.get(model.provider)
         # Reuse the cached default-node provider (and any test-injected stub)
         # unless the call targets a specific named node — then build fresh so
@@ -314,9 +310,7 @@ class AIRouter:
         # that is down) hard-failed the whole turn instead of degrading to the
         # configured route. Dedup while preserving order.
         if request.preferred_model:
-            candidates = list(
-                dict.fromkeys([request.preferred_model, *routing.models])
-            )
+            candidates = list(dict.fromkeys([request.preferred_model, *routing.models]))
         else:
             candidates = list(routing.models)
 
@@ -362,11 +356,15 @@ class AIRouter:
             except (KeyError, ValueError) as exc:
                 last_error = exc
                 logger.warning(
-                    "ai_route_model_unresolved", task=request.task.value,
-                    model=model_name, error=str(exc),
+                    "ai_route_model_unresolved",
+                    task=request.task.value,
+                    model=model_name,
+                    error=str(exc),
                 )
                 continue
-            self._enforce_policy(request, model, resolved)  # policy errors are not per-model failures
+            self._enforce_policy(
+                request, model, resolved
+            )  # policy errors are not per-model failures
             # Resolve effective thinking: per-call override → per-assignment
             # (task_routing.thinking) → model catalog default. The per-task layer
             # lets the same model reason in one slot and not in another.
@@ -533,6 +531,7 @@ class AIRouter:
         if not request.metadata.get("inference_params"):
             try:
                 from app.ai.parameter_profiles import get_inference_params
+
                 params = get_inference_params(request.task)
                 request = request.model_copy(
                     update={"metadata": {**request.metadata, "inference_params": params}}
@@ -566,6 +565,7 @@ class AIRouter:
         if payload is None:
             # Fall back to structured_output extractor for weak model text responses
             from app.ai.structured_output import parse_json_output
+
             text = response.text or "{}"
             payload = parse_json_output(text)
             if payload is None:
@@ -608,6 +608,7 @@ class AIRouter:
         already reads task_routing, not ai_config — the docstring said
         "from ai_config" after the call beneath it had already migrated)."""
         from app.ai.model_resolver import get_ocr_model
+
         cfg = get_ocr_model()
         return cfg.model, cfg.provider
 
@@ -615,6 +616,7 @@ class AIRouter:
         """Return temperature for OCR/classification tasks from the active profile."""
         try:
             from app.ai.parameter_profiles import get_inference_params
+
             return float(get_inference_params(task).get("temperature", 0.0))
         except Exception:
             return 0.0
@@ -694,6 +696,7 @@ class AIRouter:
 
     async def generate_email(self, context: dict) -> dict:
         import json
+
         from app.ai.agent_config import get_builtin_agent_config
 
         prompt = _EMAIL_PROMPT.format(context_json=json.dumps(context, ensure_ascii=False))
@@ -704,6 +707,7 @@ class AIRouter:
             confidential=True,
         )
         import json as _json
+
         try:
             return _json.loads(raw) if isinstance(raw, str) else raw
         except Exception:
@@ -728,6 +732,7 @@ class AIRouter:
 
     async def analyze_email_style(self, emails_text: str, count: int) -> dict:
         from app.ai.model_resolver import get_ocr_model
+
         ocr_cfg = get_ocr_model()
         system = """You are a communication style analyzer for business emails.
 Analyze the writing style of emails and provide recommendations. Respond in JSON only."""
@@ -754,12 +759,14 @@ Respond with JSON:
 
     async def nl_to_query(self, nl: str, schema: dict | None = None) -> dict:
         import json
+
         prompt = _NL_QUERY_PROMPT.format(
             nl_text=nl,
             schema_json=json.dumps(schema or {}, ensure_ascii=False),
         )
         raw = await reasoning_generate(prompt, system=_NL_QUERY_SYSTEM, format_json=True)
         import json as _json
+
         try:
             return _json.loads(raw) if isinstance(raw, str) else raw
         except Exception:

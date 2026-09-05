@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import math
 import re
-import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,7 +76,9 @@ def _match_thread_texts_to_circles(ir: CadIR, circles: list[Circle]) -> dict[str
         if anchor is None:
             continue
         for circle in circles:
-            threshold = max(circle.radius * _THREAD_SEARCH_RADIUS_FACTOR, _THREAD_SEARCH_RADIUS_MIN_PX)
+            threshold = max(
+                circle.radius * _THREAD_SEARCH_RADIUS_FACTOR, _THREAD_SEARCH_RADIUS_MIN_PX
+            )
             d = math.hypot(anchor.x - circle.center.x, anchor.y - circle.center.y)
             if d <= threshold:
                 candidates.append((d, circle.id, e.id, text))
@@ -94,7 +95,7 @@ def _match_thread_texts_to_circles(ir: CadIR, circles: list[Circle]) -> dict[str
 
 
 async def promote_ir_to_drawing(
-    db: AsyncSession, gen: "ImageGeneration", ir: CadIR, revision: int
+    db: AsyncSession, gen: ImageGeneration, ir: CadIR, revision: int
 ) -> Drawing:
     """Create (and flush) a Drawing row plus one DrawingFeature per circle
     entity in the IR — holes by default, threads when a callout is found
@@ -110,8 +111,10 @@ async def promote_ir_to_drawing(
         thumbnail_path=gen.thumbnail_path,
         title_block=ir.sheet.title_block or None,
         bounding_box={
-            "x_min": 0.0, "y_min": 0.0,
-            "x_max": ir.source.image_width * scale, "y_max": ir.source.image_height * scale,
+            "x_min": 0.0,
+            "y_min": 0.0,
+            "x_max": ir.source.image_width * scale,
+            "y_max": ir.source.image_height * scale,
             "units": units,
         },
         is_confidential=True,
@@ -158,7 +161,8 @@ async def promote_ir_to_drawing(
                 feature_id=feature.id,
                 primitive_type=FeaturePrimitiveType.circle,
                 params={
-                    "cx": entity.center.x * scale, "cy": entity.center.y * scale,
+                    "cx": entity.center.x * scale,
+                    "cy": entity.center.y * scale,
                     "r": entity.radius * scale,
                 },
                 is_user_edited=entity.origin == "human",

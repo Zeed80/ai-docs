@@ -58,6 +58,7 @@ class ApprovalListResponse(BaseModel):
 
 # ── Chain schemas ─────────────────────────────────────────────────────────────
 
+
 class ChainStep(BaseModel):
     assigned_to: str
     comment: str | None = None

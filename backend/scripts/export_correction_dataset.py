@@ -17,9 +17,10 @@ from pathlib import Path
 async def _export(output_path: Path, mark_used: bool, min_records: int) -> int:
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
-    from app.db.session import _get_session_factory
-    from app.db.models import DrawingFeatureCorrection
     from sqlalchemy import select
+
+    from app.db.models import DrawingFeatureCorrection
+    from app.db.session import _get_session_factory
 
     async with _get_session_factory()() as db:
         result = await db.execute(
@@ -36,9 +37,7 @@ async def _export(output_path: Path, mark_used: bool, min_records: int) -> int:
     records = []
     for c in corrections:
         surrounding = (c.context_json or {}).get("surrounding_types", [])
-        context_str = (
-            f"Окружающие элементы: {', '.join(surrounding[:5])}" if surrounding else ""
-        )
+        context_str = f"Окружающие элементы: {', '.join(surrounding[:5])}" if surrounding else ""
 
         user_content = (
             f"Элемент чертежа: {c.original_name}\n"
@@ -93,6 +92,7 @@ async def _export(output_path: Path, mark_used: bool, min_records: int) -> int:
     if mark_used and corrections:
         async with _get_session_factory()() as db:
             from sqlalchemy import update
+
             ids = [c.id for c in corrections]
             await db.execute(
                 update(DrawingFeatureCorrection)

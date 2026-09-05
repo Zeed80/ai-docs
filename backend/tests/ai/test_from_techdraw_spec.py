@@ -105,14 +105,19 @@ def test_shaft_ir_carries_roughness_marks_legacy_dxf_also_draws() -> None:
 
     legacy_doc = ezdxf.read(io.StringIO(render_spec_to_dxf(spec.model_dump()).decode("utf-8")))
     legacy_roughness_text = [
-        e.dxf.text for e in legacy_doc.modelspace()
+        e.dxf.text
+        for e in legacy_doc.modelspace()
         if e.dxftype() == "TEXT" and e.dxf.layer == "ROUGHNESS"
     ]
     assert any("3.2" in t for t in legacy_roughness_text), "legacy path should draw the Ra callout"
 
     ir = shaft_spec_to_ir(spec)
-    ir_roughness_texts = [e.text for e in ir.entities if e.type == "text" and "Ra" in (e.text or "")]
-    assert any("3.2" in t for t in ir_roughness_texts), "adapter must not silently drop seg.roughness"
+    ir_roughness_texts = [
+        e.text for e in ir.entities if e.type == "text" and "Ra" in (e.text or "")
+    ]
+    assert any("3.2" in t for t in ir_roughness_texts), (
+        "adapter must not silently drop seg.roughness"
+    )
 
 
 def test_shaft_ir_no_roughness_marks_when_not_specified() -> None:

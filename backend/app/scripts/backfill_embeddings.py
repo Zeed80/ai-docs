@@ -12,9 +12,9 @@ async def main() -> None:
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
-    from app.db.session import _get_session_factory
-    from app.db.models import Document, DocumentExtraction
     from app.ai.embeddings import build_document_text, embed_text, get_active_embedding_profile
+    from app.db.models import Document, DocumentExtraction
+    from app.db.session import _get_session_factory
     from app.vector.qdrant_store import (
         collection_count_for,
         ensure_collection,
@@ -85,12 +85,15 @@ async def main() -> None:
             logger.error("backfill_doc_error", doc_id=str(doc.id), error=str(e))
 
     final_count = collection_count_for(profile.collection_name)
-    print(f"\nDone: {ok} embedded, {errors} errors. Qdrant {profile.collection_name} total: {final_count}")
+    print(
+        f"\nDone: {ok} embedded, {errors} errors. Qdrant {profile.collection_name} total: {final_count}"
+    )
 
 
 if __name__ == "__main__":
     # Set env vars if not set
     import dotenv
+
     try:
         dotenv.load_dotenv()
     except Exception:

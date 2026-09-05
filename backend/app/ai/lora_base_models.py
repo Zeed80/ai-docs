@@ -32,7 +32,7 @@ LORA_BASE_MODELS: dict[str, dict] = {
         "quantize": {
             "quantize": True,
             "qtype": "uint3|ostris/accuracy_recovery_adapters/"
-                     "qwen_image_edit_2511_torchao_uint3.safetensors",
+            "qwen_image_edit_2511_torchao_uint3.safetensors",
             "quantize_te": True,
             "qtype_te": "qfloat8",
         },
@@ -49,8 +49,12 @@ LORA_BASE_MODELS: dict[str, dict] = {
         # Gated on HF (confirmed live 2026-07-05: 401 GatedRepoError) — needs
         # an HF_TOKEN whose account accepted the license. klein-4B is open.
         "gated": True,
-        "quantize": {"quantize": True, "qtype": "qfloat8",
-                     "quantize_te": True, "qtype_te": "qfloat8"},
+        "quantize": {
+            "quantize": True,
+            "qtype": "qfloat8",
+            "quantize_te": True,
+            "qtype_te": "qfloat8",
+        },
     },
     "flux2_klein_4b": {
         "family": "flux2",
@@ -60,8 +64,12 @@ LORA_BASE_MODELS: dict[str, dict] = {
         "sec_per_step": None,
         "fits_24gb": True,
         "gated": False,
-        "quantize": {"quantize": True, "qtype": "qfloat8",
-                     "quantize_te": True, "qtype_te": "qfloat8"},
+        "quantize": {
+            "quantize": True,
+            "qtype": "qfloat8",
+            "quantize_te": True,
+            "qtype_te": "qfloat8",
+        },
     },
     "flux2_dev": {
         "family": "flux2",
@@ -72,8 +80,12 @@ LORA_BASE_MODELS: dict[str, dict] = {
         "fits_24gb": False,
         "gated": True,
         "vram_note": "требует ≥80GB GPU — на текущей карте (24GB) обучение упадёт",
-        "quantize": {"quantize": True, "qtype": "qfloat8",
-                     "quantize_te": True, "qtype_te": "qfloat8"},
+        "quantize": {
+            "quantize": True,
+            "qtype": "qfloat8",
+            "quantize_te": True,
+            "qtype_te": "qfloat8",
+        },
     },
 }
 
@@ -89,8 +101,7 @@ HF_GATED_HELP = (
 
 
 def base_model_info(key: str | None) -> dict:
-    return LORA_BASE_MODELS.get(key or DEFAULT_BASE_MODEL,
-                                LORA_BASE_MODELS[DEFAULT_BASE_MODEL])
+    return LORA_BASE_MODELS.get(key or DEFAULT_BASE_MODEL, LORA_BASE_MODELS[DEFAULT_BASE_MODEL])
 
 
 # ── HuggingFace token (gated FLUX.2 models) ──────────────────────────────────

@@ -70,17 +70,24 @@ def test_small_reading_noise_still_counts_as_agreement():
 
 
 def test_provenance_maps_tile_evidence_to_full_sheet_coordinates():
-    profile = [{
-        "diameter_mm": 30,
-        "length_mm": 40,
-        "evidence": [{"image_index": 1, "bbox": [10, 20, 110, 70], "raw_text": "Ø30"}],
-    }]
-    read = _read(profile, source_images=[{
-        "image_index": 1,
-        "image_width": 1400,
-        "image_height": 1400,
-        "source_bbox": [1200, 800, 2600, 2200],
-    }])
+    profile = [
+        {
+            "diameter_mm": 30,
+            "length_mm": 40,
+            "evidence": [{"image_index": 1, "bbox": [10, 20, 110, 70], "raw_text": "Ø30"}],
+        }
+    ]
+    read = _read(
+        profile,
+        source_images=[
+            {
+                "image_index": 1,
+                "image_width": 1400,
+                "image_height": 1400,
+                "source_bbox": [1200, 800, 2600, 2200],
+            }
+        ],
+    )
     spec = consensus_spec([read, read, read])
     evidence = spec["value_provenance"]["main_view/outer/0/diameter_mm"]["evidence"][0]
     assert evidence["source_bbox"] == [1210.0, 820.0, 1310.0, 870.0]
@@ -122,11 +129,13 @@ def test_multiple_labeled_sections_are_not_collapsed_by_consensus():
         {"kind": "section", "view_id": "a", "label": "А-А"},
         {"kind": "section", "view_id": "b", "label": "Б-Б"},
     ]
-    spec = consensus_spec([
-        _read(_PROFILE, views=views),
-        _read(_PROFILE, views=views),
-        _read(_PROFILE, views=views),
-    ])
+    spec = consensus_spec(
+        [
+            _read(_PROFILE, views=views),
+            _read(_PROFILE, views=views),
+            _read(_PROFILE, views=views),
+        ]
+    )
     assert [view["view_id"] for view in spec["views"]] == ["a", "b"]
 
 
@@ -190,10 +199,7 @@ def test_agreeing_cross_hole_boolean_survives_consensus():
         "through": True,
         "count": 1,
     }
-    reads = [
-        _read(_PROFILE, main_view={"cross_holes": [dict(hole)]})
-        for _ in range(3)
-    ]
+    reads = [_read(_PROFILE, main_view={"cross_holes": [dict(hole)]}) for _ in range(3)]
 
     spec = consensus_spec(reads)
 
@@ -226,9 +232,18 @@ def test_profile_thread_needs_majority_even_when_section_geometry_agrees():
 
 def test_disputed_cut_feature_is_not_silently_dropped():
     reads = [
-        _read(_PROFILE, main_view={"cross_holes": [{
-            "diameter_mm": 9, "axial_position_mm": 455, "count": 1,
-        }]}),
+        _read(
+            _PROFILE,
+            main_view={
+                "cross_holes": [
+                    {
+                        "diameter_mm": 9,
+                        "axial_position_mm": 455,
+                        "count": 1,
+                    }
+                ]
+            },
+        ),
         _read(_PROFILE),
         _read(_PROFILE),
     ]

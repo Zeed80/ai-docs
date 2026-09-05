@@ -9,20 +9,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
     BOM,
-    Approval,
     AnomalyCard,
+    Approval,
     AuditLog,
     AuditTimelineEvent,
     BOMLine,
     CollectionItem,
     Document,
-    DraftAction,
     DocumentArtifact,
     DocumentChunk,
     DocumentExtraction,
     DocumentLink,
     DocumentProcessingJob,
     DocumentVersion,
+    DraftAction,
     Drawing,
     DrawingAssemblyBOM,
     DrawingFeature,
@@ -82,10 +82,16 @@ async def hard_delete_document(
 
     storage_paths = [doc.storage_path]
     artifact_paths = (
-        await db.execute(
-            select(DocumentArtifact.storage_path).where(DocumentArtifact.document_id == document_id)
+        (
+            await db.execute(
+                select(DocumentArtifact.storage_path).where(
+                    DocumentArtifact.document_id == document_id
+                )
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     storage_paths.extend([path for path in artifact_paths if path])
 
     version_ids = set(
@@ -93,19 +99,23 @@ async def hard_delete_document(
             await db.execute(
                 select(DocumentVersion.id).where(DocumentVersion.document_id == document_id)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     extraction_ids = set(
         (
             await db.execute(
                 select(DocumentExtraction.id).where(DocumentExtraction.document_id == document_id)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     invoice_ids = set(
-        (
-            await db.execute(select(Invoice.id).where(Invoice.document_id == document_id))
-        ).scalars().all()
+        (await db.execute(select(Invoice.id).where(Invoice.document_id == document_id)))
+        .scalars()
+        .all()
     )
     invoice_line_ids = set()
     if invoice_ids:
@@ -114,14 +124,18 @@ async def hard_delete_document(
                 await db.execute(
                     select(InvoiceLine.id).where(InvoiceLine.invoice_id.in_(invoice_ids))
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
     receipt_ids = set(
         (
             await db.execute(
                 select(WarehouseReceipt.id).where(WarehouseReceipt.document_id == document_id)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     if invoice_ids:
         receipt_ids.update(
@@ -129,7 +143,9 @@ async def hard_delete_document(
                 await db.execute(
                     select(WarehouseReceipt.id).where(WarehouseReceipt.invoice_id.in_(invoice_ids))
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
 
     bom_ids = set(
@@ -142,7 +158,9 @@ async def hard_delete_document(
                     ManufacturingProcessPlan.document_id == document_id
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     operation_ids = set()
     if process_plan_ids:
@@ -153,7 +171,9 @@ async def hard_delete_document(
                         ManufacturingOperation.process_plan_id.in_(process_plan_ids)
                     )
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
 
     normative_doc_ids = set(
@@ -163,7 +183,9 @@ async def hard_delete_document(
                     NormativeDocument.source_document_id == document_id
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     normative_version_ids = set(
         (
@@ -172,7 +194,9 @@ async def hard_delete_document(
                     NormativeDocumentVersion.source_document_id == document_id
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     if normative_doc_ids:
         normative_version_ids.update(
@@ -182,25 +206,25 @@ async def hard_delete_document(
                         NormativeDocumentVersion.normative_document_id.in_(normative_doc_ids)
                     )
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
     ntd_check_ids = set(
-        (
-            await db.execute(select(NTDCheckRun.id).where(NTDCheckRun.document_id == document_id))
-        ).scalars().all()
+        (await db.execute(select(NTDCheckRun.id).where(NTDCheckRun.document_id == document_id)))
+        .scalars()
+        .all()
     )
 
     chunk_ids = set(
-        (
-            await db.execute(
-                select(DocumentChunk.id).where(DocumentChunk.document_id == document_id)
-            )
-        ).scalars().all()
+        (await db.execute(select(DocumentChunk.id).where(DocumentChunk.document_id == document_id)))
+        .scalars()
+        .all()
     )
     evidence_ids = set(
-        (
-            await db.execute(select(EvidenceSpan.id).where(EvidenceSpan.document_id == document_id))
-        ).scalars().all()
+        (await db.execute(select(EvidenceSpan.id).where(EvidenceSpan.document_id == document_id)))
+        .scalars()
+        .all()
     )
     node_ids = set(
         (
@@ -213,14 +237,14 @@ async def hard_delete_document(
                     )
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     mention_ids = set(
-        (
-            await db.execute(
-                select(EntityMention.id).where(EntityMention.document_id == document_id)
-            )
-        ).scalars().all()
+        (await db.execute(select(EntityMention.id).where(EntityMention.document_id == document_id)))
+        .scalars()
+        .all()
     )
     embedding_points = (
         await db.execute(
@@ -236,7 +260,9 @@ async def hard_delete_document(
             await db.execute(
                 select(KnowledgeEdge.id).where(KnowledgeEdge.source_document_id == document_id)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     if node_ids:
         edge_ids.update(
@@ -247,7 +273,9 @@ async def hard_delete_document(
                         | (KnowledgeEdge.target_node_id.in_(node_ids))
                     )
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
     if evidence_ids:
         edge_ids.update(
@@ -255,7 +283,9 @@ async def hard_delete_document(
                 await db.execute(
                     select(KnowledgeEdge.id).where(KnowledgeEdge.evidence_span_id.in_(evidence_ids))
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
 
     # Canonical graph nodes (supplier, invoice, tool, standard…) deliberately
@@ -283,7 +313,9 @@ async def hard_delete_document(
                 await db.execute(
                     select(EntityMention.node_id).where(EntityMention.id.in_(mention_ids))
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
             if node_id
         )
 
@@ -418,11 +450,9 @@ async def hard_delete_document(
     # ── Drawing cascade ──────────────────────────────────────────────────────
     # Must happen before deleting Document (drawings.document_id → documents.id)
     drawing_ids = set(
-        (
-            await db.execute(
-                select(Drawing.id).where(Drawing.document_id == document_id)
-            )
-        ).scalars().all()
+        (await db.execute(select(Drawing.id).where(Drawing.document_id == document_id)))
+        .scalars()
+        .all()
     )
     if drawing_ids:
         # Nullify nullable drawing_id FK in process plans from *other* documents
@@ -564,7 +594,9 @@ async def _delete_orphan_nodes(
                     KnowledgeEdge.source_node_id.in_(candidate_ids)
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     referenced.update(
         (
@@ -573,23 +605,27 @@ async def _delete_orphan_nodes(
                     KnowledgeEdge.target_node_id.in_(candidate_ids)
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     referenced.update(
         (
             await db.execute(
                 select(EntityMention.node_id).where(EntityMention.node_id.in_(candidate_ids))
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     orphan_ids = {node_id for node_id in candidate_ids if node_id not in referenced}
     if not orphan_ids:
         return
     await db.execute(delete(GraphReviewItem).where(GraphReviewItem.node_id.in_(orphan_ids)))
     result = await db.execute(delete(KnowledgeNode).where(KnowledgeNode.id.in_(orphan_ids)))
-    counts["knowledge_nodes_orphaned"] = int(
-        counts.get("knowledge_nodes_orphaned", 0) or 0
-    ) + int(result.rowcount or 0)
+    counts["knowledge_nodes_orphaned"] = int(counts.get("knowledge_nodes_orphaned", 0) or 0) + int(
+        result.rowcount or 0
+    )
 
 
 async def _delete_cross_entity_records(
@@ -607,22 +643,34 @@ async def _delete_cross_entity_records(
     # then expand with their chain children (self-referencing chain_root_id FK).
     root_approval_ids: set[uuid.UUID] = set()
     for entity_type, entity_id in entity_pairs:
-        rows = (await db.execute(
-            select(Approval.id).where(
-                Approval.entity_type == entity_type,
-                Approval.entity_id == entity_id,
+        rows = (
+            (
+                await db.execute(
+                    select(Approval.id).where(
+                        Approval.entity_type == entity_type,
+                        Approval.entity_id == entity_id,
+                    )
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
         root_approval_ids.update(rows)
 
     child_approval_ids: set[uuid.UUID] = set()
     if root_approval_ids:
-        child_rows = (await db.execute(
-            select(Approval.id).where(
-                Approval.chain_root_id.in_(root_approval_ids),
-                Approval.id.notin_(root_approval_ids),
+        child_rows = (
+            (
+                await db.execute(
+                    select(Approval.id).where(
+                        Approval.chain_root_id.in_(root_approval_ids),
+                        Approval.id.notin_(root_approval_ids),
+                    )
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
         child_approval_ids.update(child_rows)
 
     all_approval_ids = root_approval_ids | child_approval_ids
@@ -639,12 +687,10 @@ async def _delete_cross_entity_records(
             )
         # Delete chain children first; chain roots are removed by the loop below.
         if child_approval_ids:
-            result = await db.execute(
-                delete(Approval).where(Approval.id.in_(child_approval_ids))
+            result = await db.execute(delete(Approval).where(Approval.id.in_(child_approval_ids)))
+            counts[Approval.__tablename__] = int(counts.get(Approval.__tablename__, 0) or 0) + int(
+                result.rowcount or 0
             )
-            counts[Approval.__tablename__] = int(
-                counts.get(Approval.__tablename__, 0) or 0
-            ) + int(result.rowcount or 0)
 
     # Remove export jobs / draft emails tied to the deleted entities so no rows
     # are left pointing at non-existent invoices/documents (orphan cleanup).
@@ -655,12 +701,19 @@ async def _delete_cross_entity_records(
                 ExportJob.entity_id == entity_id,
             )
         )
-        counts[ExportJob.__tablename__] = int(
-            counts.get(ExportJob.__tablename__, 0) or 0
-        ) + int(export_result.rowcount or 0)
+        counts[ExportJob.__tablename__] = int(counts.get(ExportJob.__tablename__, 0) or 0) + int(
+            export_result.rowcount or 0
+        )
 
     for entity_type, entity_id in entity_pairs:
-        for model in (CollectionItem, AnomalyCard, Approval, DraftAction, AuditLog, AuditTimelineEvent):
+        for model in (
+            CollectionItem,
+            AnomalyCard,
+            Approval,
+            DraftAction,
+            AuditLog,
+            AuditTimelineEvent,
+        ):
             column_type = getattr(model, "entity_type", None)
             column_id = getattr(model, "entity_id", None)
             if column_type is None or column_id is None:

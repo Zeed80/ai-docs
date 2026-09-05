@@ -10,7 +10,6 @@ TOOL_CALLING}, supports_tool_calling=True, supports_structured_output=True —
 from app.ai.provider_catalog_probes import capability_from_listing
 from app.ai.schemas import ProviderKind
 
-
 # Ответ OpenRouter в том виде, в каком он приходит из /v1/models.
 OPENROUTER_ITEM = {
     "id": "anthropic/claude-sonnet-4",
@@ -62,9 +61,7 @@ def test_missing_price_stays_missing_rather_than_zero():
 
 
 def test_a_provider_without_metadata_is_marked_unknown_not_capable():
-    cap = capability_from_listing(
-        "k", ProviderKind.DEEPSEEK, {"id": "deepseek-chat"}
-    )
+    cap = capability_from_listing("k", ProviderKind.DEEPSEEK, {"id": "deepseek-chat"})
 
     assert cap.capabilities_unknown is True
     assert cap.modalities == set()

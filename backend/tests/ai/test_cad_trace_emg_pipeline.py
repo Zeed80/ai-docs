@@ -23,16 +23,18 @@ async def test_emg_pipeline_compiles_kernel_candidate_back_from_sealed_graph(mon
     ``feature_tree_from_spec``. This is the production default (see
     ``infra/.env``: ``EMG_PIPELINE_ENABLED=true``), not an opt-in canary."""
     candidate = FeatureTreeCandidate(
-        features=[Feature3D(
-            kind="extrude",
-            params={"depth_mm": 12.0, "width_mm": 40.0, "height_mm": 20.0},
-            param_provenance={
-                "depth_mm": ParamProvenance(origin="stated", detail="dimension"),
-                "width_mm": ParamProvenance(origin="measured", detail="profile"),
-                "height_mm": ParamProvenance(origin="measured", detail="profile"),
-            },
-            confidence=0.9,
-        )],
+        features=[
+            Feature3D(
+                kind="extrude",
+                params={"depth_mm": 12.0, "width_mm": 40.0, "height_mm": 20.0},
+                param_provenance={
+                    "depth_mm": ParamProvenance(origin="stated", detail="dimension"),
+                    "width_mm": ParamProvenance(origin="measured", detail="profile"),
+                    "height_mm": ParamProvenance(origin="measured", detail="profile"),
+                },
+                confidence=0.9,
+            )
+        ],
         score=0.9,
         label="legacy candidate",
     )
@@ -77,9 +79,7 @@ async def test_emg_pipeline_compiles_kernel_candidate_back_from_sealed_graph(mon
     assert result["graph_admission"]["advisory_verification_issue_codes"] == [
         "domain_mandatory_assertion_missing"
     ]
-    assert "drawing_scale_not_available" in result["graph_admission"][
-        "verification_issue_codes"
-    ]
+    assert "drawing_scale_not_available" in result["graph_admission"]["verification_issue_codes"]
 
 
 @pytest.mark.asyncio
@@ -87,16 +87,18 @@ async def test_mechanical_kernel_is_not_called_when_graph_hash_is_invalid(monkey
     from app.ai.cad_emg_compat import spec_feature_tree_as_graph
 
     candidate = FeatureTreeCandidate(
-        features=[Feature3D(
-            kind="extrude",
-            params={"depth_mm": 12.0, "width_mm": 40.0, "height_mm": 20.0},
-            param_provenance={
-                "depth_mm": ParamProvenance(origin="stated", detail="dimension"),
-                "width_mm": ParamProvenance(origin="measured", detail="profile"),
-                "height_mm": ParamProvenance(origin="measured", detail="profile"),
-            },
-            confidence=0.9,
-        )],
+        features=[
+            Feature3D(
+                kind="extrude",
+                params={"depth_mm": 12.0, "width_mm": 40.0, "height_mm": 20.0},
+                param_provenance={
+                    "depth_mm": ParamProvenance(origin="stated", detail="dimension"),
+                    "width_mm": ParamProvenance(origin="measured", detail="profile"),
+                    "height_mm": ParamProvenance(origin="measured", detail="profile"),
+                },
+                confidence=0.9,
+            )
+        ],
         score=0.9,
         label="tampered graph candidate",
     )
@@ -161,9 +163,7 @@ async def test_spec_rebuild_uses_available_session_factory(monkeypatch):
         lambda: lambda: MissingGenerationSession(),
     )
 
-    result = await cad_trace._rebuild_from_spec(
-        "00000000-0000-0000-0000-000000000001"
-    )
+    result = await cad_trace._rebuild_from_spec("00000000-0000-0000-0000-000000000001")
 
     assert result == {"error": "not found"}
 

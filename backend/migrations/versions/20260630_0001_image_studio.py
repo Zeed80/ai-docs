@@ -45,12 +45,16 @@ def upgrade() -> None:
             sa.Column("is_builtin", sa.Boolean(), nullable=False, server_default=sa.false()),
             sa.Column("owner_sub", sa.String(length=255), nullable=True),
             sa.Column(
-                "created_at", sa.DateTime(timezone=True),
-                server_default=sa.text("now()"), nullable=False,
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
             ),
             sa.Column(
-                "updated_at", sa.DateTime(timezone=True),
-                server_default=sa.text("now()"), nullable=False,
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
             ),
         )
         op.create_index("ix_comfyui_workflows_key", "comfyui_workflows", ["key"])
@@ -64,8 +68,12 @@ def upgrade() -> None:
         # CREATE TYPE (which fails with DuplicateObject). postgresql.ENUM honours
         # create_type=False reliably.
         status_enum = postgresql.ENUM(
-            "queued", "running", "done", "failed",
-            name="imagegenstatus", create_type=False,
+            "queued",
+            "running",
+            "done",
+            "failed",
+            name="imagegenstatus",
+            create_type=False,
         )
         status_enum.create(bind, checkfirst=True)
         op.create_table(
@@ -74,9 +82,7 @@ def upgrade() -> None:
             sa.Column("owner_sub", sa.String(length=255), nullable=True),
             sa.Column("operation", sa.String(length=60), nullable=False, server_default="edit"),
             sa.Column("workflow_id", GUID(), nullable=True),
-            sa.Column(
-                "status", status_enum, nullable=False, server_default="queued"
-            ),
+            sa.Column("status", status_enum, nullable=False, server_default="queued"),
             sa.Column("prompt", sa.Text(), nullable=True),
             sa.Column("negative_prompt", sa.Text(), nullable=True),
             sa.Column("params", sa.JSON(), nullable=False),
@@ -90,12 +96,16 @@ def upgrade() -> None:
             sa.Column("parent_id", GUID(), nullable=True),
             sa.Column("accepted", sa.Boolean(), nullable=False, server_default=sa.false()),
             sa.Column(
-                "created_at", sa.DateTime(timezone=True),
-                server_default=sa.text("now()"), nullable=False,
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
             ),
             sa.Column(
-                "updated_at", sa.DateTime(timezone=True),
-                server_default=sa.text("now()"), nullable=False,
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
             ),
             sa.ForeignKeyConstraint(["workflow_id"], ["comfyui_workflows.id"]),
             sa.ForeignKeyConstraint(["parent_id"], ["image_generations.id"]),

@@ -78,7 +78,8 @@ def parse_dimension(text: str) -> dict[str, Any] | None:
         "deviation": deviation.group(0) if deviation else None,
         "thread": (
             f"M{thread.group(1).replace(',', '.')}x{thread.group(2).replace(',', '.')}"
-            if thread else None
+            if thread
+            else None
         ),
     }
 
@@ -91,28 +92,31 @@ def _edge_measures(report: dict) -> list[dict[str, Any]]:
         if length <= 0:
             continue
         if edge.get("curve") == "Circle":
-            measures.append({
-                "key": edge.get("key"),
-                "index": edge.get("index"),
-                "kind": "diameter",
-                "value_mm": length / math.pi,
-            })
+            measures.append(
+                {
+                    "key": edge.get("key"),
+                    "index": edge.get("index"),
+                    "kind": "diameter",
+                    "value_mm": length / math.pi,
+                }
+            )
         elif edge.get("curve") == "Line":
-            measures.append({
-                "key": edge.get("key"),
-                "index": edge.get("index"),
-                "kind": "length",
-                "value_mm": length,
-            })
+            measures.append(
+                {
+                    "key": edge.get("key"),
+                    "index": edge.get("index"),
+                    "kind": "length",
+                    "value_mm": length,
+                }
+            )
     return measures
 
 
-def _match_edges(
-    measures: list[dict[str, Any]], nominal: float, kind: str
-) -> list[dict[str, Any]]:
+def _match_edges(measures: list[dict[str, Any]], nominal: float, kind: str) -> list[dict[str, Any]]:
     window = max(_TOLERANCE_FLOOR, nominal * _TOLERANCE_RATIO)
     return [
-        measure for measure in measures
+        measure
+        for measure in measures
         if measure["kind"] == kind and abs(measure["value_mm"] - nominal) <= window
     ]
 
@@ -217,7 +221,6 @@ def collect_part_properties(spec: dict, report: dict) -> dict[str, Any]:
         "notes": notes,
         # Bar stock for a lathe part: the smallest round bar the part fits in.
         "round_stock_diameter_mm": (
-            round(max(float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0)), 3)
-            or None
+            round(max(float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0)), 3) or None
         ),
     }

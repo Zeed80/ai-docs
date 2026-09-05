@@ -35,12 +35,34 @@ def _index_exists(index: str, table: str) -> bool:
 def upgrade() -> None:
     # ── Extend ManufacturingProcessPlan ───────────────────────────────────────
     for col in [
-        ("tp_type", sa.Column("tp_type", sa.String(50), nullable=False, server_default="единичный")),
-        ("drawing_id", sa.Column("drawing_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("drawings.id"), nullable=True)),
+        (
+            "tp_type",
+            sa.Column("tp_type", sa.String(50), nullable=False, server_default="единичный"),
+        ),
+        (
+            "drawing_id",
+            sa.Column(
+                "drawing_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("drawings.id"),
+                nullable=True,
+            ),
+        ),
         ("blank_spec_id", sa.Column("blank_spec_id", postgresql.UUID(as_uuid=True), nullable=True)),
-        ("normcontrol_status", sa.Column("normcontrol_status", sa.String(30), nullable=False, server_default="not_checked")),
-        ("normcontrol_checked_at", sa.Column("normcontrol_checked_at", sa.DateTime(timezone=True), nullable=True)),
-        ("normcontrol_checked_by", sa.Column("normcontrol_checked_by", sa.String(100), nullable=True)),
+        (
+            "normcontrol_status",
+            sa.Column(
+                "normcontrol_status", sa.String(30), nullable=False, server_default="not_checked"
+            ),
+        ),
+        (
+            "normcontrol_checked_at",
+            sa.Column("normcontrol_checked_at", sa.DateTime(timezone=True), nullable=True),
+        ),
+        (
+            "normcontrol_checked_by",
+            sa.Column("normcontrol_checked_by", sa.String(100), nullable=True),
+        ),
         ("total_norm_minutes", sa.Column("total_norm_minutes", sa.Float(), nullable=True)),
     ]:
         if not _col_exists("manufacturing_process_plans", col[0]):
@@ -59,8 +81,14 @@ def upgrade() -> None:
         ("gost_operation_code", sa.Column("gost_operation_code", sa.String(10), nullable=True)),
         ("department_code", sa.Column("department_code", sa.String(20), nullable=True)),
         ("workplace_code", sa.Column("workplace_code", sa.String(20), nullable=True)),
-        ("tooling_list", sa.Column("tooling_list", postgresql.JSON(astext_type=sa.Text()), nullable=True)),
-        ("measuring_tools", sa.Column("measuring_tools", postgresql.JSON(astext_type=sa.Text()), nullable=True)),
+        (
+            "tooling_list",
+            sa.Column("tooling_list", postgresql.JSON(astext_type=sa.Text()), nullable=True),
+        ),
+        (
+            "measuring_tools",
+            sa.Column("measuring_tools", postgresql.JSON(astext_type=sa.Text()), nullable=True),
+        ),
         ("to_minutes", sa.Column("to_minutes", sa.Float(), nullable=True)),
         ("tv_minutes", sa.Column("tv_minutes", sa.Float(), nullable=True)),
         ("tob_minutes", sa.Column("tob_minutes", sa.Float(), nullable=True)),
@@ -78,27 +106,76 @@ def upgrade() -> None:
         op.create_table(
             "drawing_tp_links",
             sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, primary_key=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False),
-            sa.Column("drawing_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("drawings.id"), nullable=False),
-            sa.Column("process_plan_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("manufacturing_process_plans.id"), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                onupdate=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "drawing_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("drawings.id"),
+                nullable=False,
+            ),
+            sa.Column(
+                "process_plan_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("manufacturing_process_plans.id"),
+                nullable=False,
+            ),
             sa.Column("link_type", sa.String(50), nullable=False, server_default="derived_from"),
             sa.Column("surface_mapping", postgresql.JSON(astext_type=sa.Text()), nullable=True),
             sa.Column("created_by", sa.String(100), nullable=False, server_default="sveta"),
         )
         op.create_index("ix_drawing_tp_links_drawing_id", "drawing_tp_links", ["drawing_id"])
-        op.create_index("ix_drawing_tp_links_process_plan_id", "drawing_tp_links", ["process_plan_id"])
+        op.create_index(
+            "ix_drawing_tp_links_process_plan_id", "drawing_tp_links", ["process_plan_id"]
+        )
 
     # ── SurfaceMachiningSpec ──────────────────────────────────────────────────
     if not _table_exists("surface_machining_specs"):
         op.create_table(
             "surface_machining_specs",
             sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, primary_key=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False),
-            sa.Column("process_plan_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("manufacturing_process_plans.id"), nullable=False),
-            sa.Column("operation_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("manufacturing_operations.id"), nullable=True),
-            sa.Column("drawing_feature_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("drawing_features.id"), nullable=True),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                onupdate=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "process_plan_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("manufacturing_process_plans.id"),
+                nullable=False,
+            ),
+            sa.Column(
+                "operation_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("manufacturing_operations.id"),
+                nullable=True,
+            ),
+            sa.Column(
+                "drawing_feature_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("drawing_features.id"),
+                nullable=True,
+            ),
             sa.Column("surface_type", sa.String(60), nullable=False),
             sa.Column("nominal_mm", sa.Float(), nullable=True),
             sa.Column("upper_tol", sa.Float(), nullable=True),
@@ -107,24 +184,59 @@ def upgrade() -> None:
             sa.Column("fit_system", sa.String(20), nullable=True),
             sa.Column("machining_method", sa.String(60), nullable=False),
             sa.Column("machining_stage", sa.String(30), nullable=False, server_default="finish"),
-            sa.Column("assigned_machine_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("manufacturing_resources.id"), nullable=True),
-            sa.Column("assigned_tool_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("manufacturing_resources.id"), nullable=True),
+            sa.Column(
+                "assigned_machine_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("manufacturing_resources.id"),
+                nullable=True,
+            ),
+            sa.Column(
+                "assigned_tool_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("manufacturing_resources.id"),
+                nullable=True,
+            ),
             sa.Column("allowance_mm", sa.Float(), nullable=True),
             sa.Column("confidence", sa.Float(), nullable=False, server_default="0"),
-            sa.Column("metadata_", postgresql.JSON(astext_type=sa.Text()), nullable=True, key="metadata"),
+            sa.Column(
+                "metadata_", postgresql.JSON(astext_type=sa.Text()), nullable=True, key="metadata"
+            ),
         )
-        op.create_index("ix_surface_machining_specs_plan_id", "surface_machining_specs", ["process_plan_id"])
-        op.create_index("ix_surface_machining_specs_method", "surface_machining_specs", ["machining_method"])
-        op.create_index("ix_surface_machining_specs_type", "surface_machining_specs", ["surface_type"])
+        op.create_index(
+            "ix_surface_machining_specs_plan_id", "surface_machining_specs", ["process_plan_id"]
+        )
+        op.create_index(
+            "ix_surface_machining_specs_method", "surface_machining_specs", ["machining_method"]
+        )
+        op.create_index(
+            "ix_surface_machining_specs_type", "surface_machining_specs", ["surface_type"]
+        )
 
     # ── BlankSpec ─────────────────────────────────────────────────────────────
     if not _table_exists("blank_specs"):
         op.create_table(
             "blank_specs",
             sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, primary_key=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False),
-            sa.Column("process_plan_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("manufacturing_process_plans.id"), nullable=False, unique=True),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                onupdate=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "process_plan_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("manufacturing_process_plans.id"),
+                nullable=False,
+                unique=True,
+            ),
             sa.Column("blank_type", sa.String(80), nullable=False),
             sa.Column("material_grade", sa.String(200), nullable=False),
             sa.Column("standard_gost", sa.String(100), nullable=True),
@@ -143,10 +255,31 @@ def upgrade() -> None:
         op.create_table(
             "gost_form_data",
             sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, primary_key=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False),
-            sa.Column("process_plan_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("manufacturing_process_plans.id"), nullable=False),
-            sa.Column("operation_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("manufacturing_operations.id"), nullable=True),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                onupdate=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "process_plan_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("manufacturing_process_plans.id"),
+                nullable=False,
+            ),
+            sa.Column(
+                "operation_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("manufacturing_operations.id"),
+                nullable=True,
+            ),
             sa.Column("form_type", sa.String(10), nullable=False),
             sa.Column("gost_code", sa.String(50), nullable=False),
             sa.Column("form_variant", sa.String(20), nullable=False, server_default="form1"),
@@ -165,10 +298,31 @@ def upgrade() -> None:
         op.create_table(
             "normcontrol_checks",
             sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, primary_key=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False),
-            sa.Column("process_plan_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("manufacturing_process_plans.id"), nullable=False),
-            sa.Column("operation_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("manufacturing_operations.id"), nullable=True),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                onupdate=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "process_plan_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("manufacturing_process_plans.id"),
+                nullable=False,
+            ),
+            sa.Column(
+                "operation_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("manufacturing_operations.id"),
+                nullable=True,
+            ),
             sa.Column("form_type", sa.String(10), nullable=True),
             sa.Column("gost_code", sa.String(50), nullable=False),
             sa.Column("clause", sa.String(50), nullable=True),
@@ -179,7 +333,9 @@ def upgrade() -> None:
             sa.Column("recommendation", sa.Text(), nullable=True),
             sa.Column("auto_fixable", sa.Boolean(), nullable=False, server_default="false"),
             sa.Column("evidence", postgresql.JSON(astext_type=sa.Text()), nullable=True),
-            sa.Column("created_by", sa.String(100), nullable=False, server_default="normcontrol_agent"),
+            sa.Column(
+                "created_by", sa.String(100), nullable=False, server_default="normcontrol_agent"
+            ),
             sa.Column("resolved_by", sa.String(100), nullable=True),
             sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
         )
@@ -198,9 +354,18 @@ def downgrade() -> None:
     op.drop_table("drawing_tp_links")
 
     for col in [
-        "tpz_minutes", "tsht_k_minutes", "tsht_minutes", "totd_minutes",
-        "tob_minutes", "tv_minutes", "to_minutes", "measuring_tools",
-        "tooling_list", "workplace_code", "department_code", "gost_operation_code",
+        "tpz_minutes",
+        "tsht_k_minutes",
+        "tsht_minutes",
+        "totd_minutes",
+        "tob_minutes",
+        "tv_minutes",
+        "to_minutes",
+        "measuring_tools",
+        "tooling_list",
+        "workplace_code",
+        "department_code",
+        "gost_operation_code",
     ]:
         op.drop_column("manufacturing_operations", col)
 
@@ -208,7 +373,12 @@ def downgrade() -> None:
     op.drop_index("ix_mfg_process_plans_drawing_id", "manufacturing_process_plans")
     op.drop_index("ix_mfg_process_plans_tp_type", "manufacturing_process_plans")
     for col in [
-        "total_norm_minutes", "normcontrol_checked_by", "normcontrol_checked_at",
-        "normcontrol_status", "blank_spec_id", "drawing_id", "tp_type",
+        "total_norm_minutes",
+        "normcontrol_checked_by",
+        "normcontrol_checked_at",
+        "normcontrol_status",
+        "blank_spec_id",
+        "drawing_id",
+        "tp_type",
     ]:
         op.drop_column("manufacturing_process_plans", col)

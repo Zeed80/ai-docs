@@ -17,8 +17,18 @@ depends_on = None
 
 def _timestamps() -> list[sa.Column]:
     return [
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
     ]
 
 
@@ -32,7 +42,9 @@ def upgrade() -> None:
         sa.Column("actions", sa.JSON(), server_default=sa.text("'[]'::json"), nullable=False),
         sa.Column("allowed_roots", sa.JSON(), server_default=sa.text("'[]'::json"), nullable=False),
         sa.Column("allowed_hosts", sa.JSON(), server_default=sa.text("'[]'::json"), nullable=False),
-        sa.Column("allowed_commands", sa.JSON(), server_default=sa.text("'[]'::json"), nullable=False),
+        sa.Column(
+            "allowed_commands", sa.JSON(), server_default=sa.text("'[]'::json"), nullable=False
+        ),
         sa.Column("max_actions", sa.Integer(), server_default="20", nullable=False),
         sa.Column("used_actions", sa.Integer(), server_default="0", nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
@@ -44,7 +56,11 @@ def upgrade() -> None:
     )
     for column in ("work_order_id", "granted_to", "expires_at", "revoked_at"):
         op.create_index(f"ix_computer_use_grants_{column}", "computer_use_grants", [column])
-    op.create_index("ix_computer_use_grants_active", "computer_use_grants", ["work_order_id", "revoked_at", "expires_at"])
+    op.create_index(
+        "ix_computer_use_grants_active",
+        "computer_use_grants",
+        ["work_order_id", "revoked_at", "expires_at"],
+    )
 
     op.create_table(
         "computer_use_actions",
@@ -70,7 +86,11 @@ def upgrade() -> None:
     )
     for column in ("work_order_id", "grant_id", "step_id", "action", "action_digest", "status"):
         op.create_index(f"ix_computer_use_actions_{column}", "computer_use_actions", [column])
-    op.create_index("ix_computer_use_actions_order_created", "computer_use_actions", ["work_order_id", "created_at"])
+    op.create_index(
+        "ix_computer_use_actions_order_created",
+        "computer_use_actions",
+        ["work_order_id", "created_at"],
+    )
 
 
 def downgrade() -> None:

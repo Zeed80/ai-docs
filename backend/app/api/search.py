@@ -91,11 +91,7 @@ async def search_documents(
 ):
     """Skill: doc.search — Hybrid search: Postgres FTS + ILIKE fallback."""
     q = (
-        q
-        or query_text
-        or (body.q if body else None)
-        or (body.query if body else None)
-        or ""
+        q or query_text or (body.q if body else None) or (body.query if body else None) or ""
     ).strip()
     if body and body.limit:
         limit = min(int(body.limit), 100)
@@ -181,7 +177,9 @@ async def nl_to_query(
     try:
         from app.ai.router import ai_router
 
-        result = await ai_router.nl_to_query(payload.query, schema={"prompt": NL_TO_STRUCTURED_PROMPT})
+        result = await ai_router.nl_to_query(
+            payload.query, schema={"prompt": NL_TO_STRUCTURED_PROMPT}
+        )
 
         values = result.get("filters", result)
         structured = StructuredFilter(
@@ -271,8 +269,9 @@ async def hybrid_search(
             )
             if hits:
                 doc_ids = [h["doc_id"] for h in hits]
-                from sqlalchemy import case
                 from uuid import UUID
+
+                from sqlalchemy import case
 
                 uuid_ids = [UUID(did) for did in doc_ids]
                 ordering = case(
@@ -280,9 +279,7 @@ async def hybrid_search(
                     value=Document.id,
                 )
                 result = await db.execute(
-                    select(Document)
-                    .where(Document.id.in_(uuid_ids))
-                    .order_by(ordering)
+                    select(Document).where(Document.id.in_(uuid_ids)).order_by(ordering)
                 )
                 items = result.scalars().all()
                 total = len(items)
@@ -337,6 +334,7 @@ async def hybrid_search(
 
 
 # ── SavedQuery CRUD ────────────────────────────────────────────────────────────
+
 
 class SavedQueryCreate(BaseModel):
     nl_text: str
@@ -432,7 +430,7 @@ async def find_similar(
     results: list[SimilarResult] = []
 
     try:
-        from app.vector.qdrant_store import search_similar, collection_count_for
+        from app.vector.qdrant_store import collection_count_for, search_similar
 
         collection_name = f"{entity_type}s"
         if collection_count_for(collection_name) == 0:
@@ -449,17 +447,20 @@ async def find_similar(
             if hit_id == str(entity_id):
                 continue
             title = hit.payload.get("title") or hit.payload.get("file_name") or hit_id[:8]
-            results.append(SimilarResult(
-                id=hit_id,
-                entity_type=entity_type,
-                title=title,
-                score=round(hit.score, 3),
-            ))
+            results.append(
+                SimilarResult(
+                    id=hit_id,
+                    entity_type=entity_type,
+                    title=title,
+                    score=round(hit.score, 3),
+                )
+            )
 
     except Exception:
         # Fallback: return recently created entities of the same type
         if entity_type == "invoice":
             from app.db.models import Invoice
+
             rows = await db.execute(
                 select(Invoice)
                 .where(Invoice.id != entity_id)
@@ -467,14 +468,17 @@ async def find_similar(
                 .limit(limit)
             )
             for inv in rows.scalars().all():
-                results.append(SimilarResult(
-                    id=str(inv.id),
-                    entity_type="invoice",
-                    title=inv.invoice_number or str(inv.id)[:8],
-                    score=0.5,
-                ))
+                results.append(
+                    SimilarResult(
+                        id=str(inv.id),
+                        entity_type="invoice",
+                        title=inv.invoice_number or str(inv.id)[:8],
+                        score=0.5,
+                    )
+                )
         elif entity_type == "document":
             from app.db.models import Document
+
             rows = await db.execute(
                 select(Document)
                 .where(Document.id != entity_id)
@@ -482,12 +486,14 @@ async def find_similar(
                 .limit(limit)
             )
             for doc in rows.scalars().all():
-                results.append(SimilarResult(
-                    id=str(doc.id),
-                    entity_type="document",
-                    title=doc.file_name,
-                    score=0.5,
-                ))
+                results.append(
+                    SimilarResult(
+                        id=str(doc.id),
+                        entity_type="document",
+                        title=doc.file_name,
+                        score=0.5,
+                    )
+                )
 
     return SimilarResponse(
         results=results[:limit],

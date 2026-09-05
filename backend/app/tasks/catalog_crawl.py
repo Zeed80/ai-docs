@@ -26,16 +26,45 @@ from app.tasks.celery_app import celery_app
 logger = structlog.get_logger()
 
 PRIORITY_MARKERS = (
-    "/catalog", "/katalog", "/product", "/tovar", "/price", "/prays",
-    "/instrument", "/shop", "/goods",
+    "/catalog",
+    "/katalog",
+    "/product",
+    "/tovar",
+    "/price",
+    "/prays",
+    "/instrument",
+    "/shop",
+    "/goods",
 )
 PENALTY_MARKERS = (
-    "/news", "/novosti", "/about", "/o-kompanii", "/contact", "/kontakt",
-    "/blog", "/vacanc", "/delivery", "/dostavka", "/payment", "/login",
+    "/news",
+    "/novosti",
+    "/about",
+    "/o-kompanii",
+    "/contact",
+    "/kontakt",
+    "/blog",
+    "/vacanc",
+    "/delivery",
+    "/dostavka",
+    "/payment",
+    "/login",
 )
 SKIP_SUFFIXES = (
-    ".jpg", ".jpeg", ".png", ".gif", ".svg", ".css", ".js", ".ico", ".mp4",
-    ".zip", ".rar", ".7z", ".doc", ".exe",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".svg",
+    ".css",
+    ".js",
+    ".ico",
+    ".mp4",
+    ".zip",
+    ".rar",
+    ".7z",
+    ".doc",
+    ".exe",
 )
 DEFAULT_MAX_PAGES = 100
 DEFAULT_MAX_DEPTH = 3
@@ -114,9 +143,7 @@ def crawl_supplier_site(
     return run_async(_crawl_async(supplier_id, start_url, max_pages, max_depth))
 
 
-async def _crawl_async(
-    supplier_id: str, start_url: str, max_pages: int, max_depth: int
-) -> dict:
+async def _crawl_async(supplier_id: str, start_url: str, max_pages: int, max_depth: int) -> dict:
     from app.api.tool_catalog import _same_site
     from app.api.web_search import WebFetchRequest, fetch_page
     from app.db.models import ToolSupplier

@@ -24,12 +24,16 @@ def _codes(findings) -> set[str]:
 
 def test_a_step_longer_than_all_the_others_is_flagged():
     """Live: 150+78+240+470 read off a spindle whose overall is 470."""
-    spec = {"main_view": {"outer": [
-        {"diameter_mm": 102.6, "length_mm": 150},
-        {"diameter_mm": 56.55, "length_mm": 78},
-        {"diameter_mm": 51, "length_mm": 240},
-        {"diameter_mm": 80, "length_mm": 470},
-    ]}}
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 102.6, "length_mm": 150},
+                {"diameter_mm": 56.55, "length_mm": 78},
+                {"diameter_mm": 51, "length_mm": 240},
+                {"diameter_mm": 80, "length_mm": 470},
+            ]
+        }
+    }
     findings = check_spec_arithmetic(spec)
     assert "section_longer_than_all_others" in _codes(findings)
     # Suspicion, not proof: a long plain shaft is legal.
@@ -37,20 +41,26 @@ def test_a_step_longer_than_all_the_others_is_flagged():
 
 
 def test_an_ordinary_stepped_shaft_raises_nothing():
-    spec = {"main_view": {"outer": [
-        {"diameter_mm": 30, "length_mm": 40},
-        {"diameter_mm": 50, "length_mm": 60},
-        {"diameter_mm": 36, "length_mm": 25},
-    ]}}
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {"diameter_mm": 50, "length_mm": 60},
+                {"diameter_mm": 36, "length_mm": 25},
+            ]
+        }
+    }
     assert check_spec_arithmetic(spec) == []
 
 
 def test_sections_may_not_exceed_a_stated_overall():
     spec = {
-        "main_view": {"outer": [
-            {"diameter_mm": 30, "length_mm": 300},
-            {"diameter_mm": 50, "length_mm": 300},
-        ]},
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 300},
+                {"diameter_mm": 50, "length_mm": 300},
+            ]
+        },
         "dimensions": [{"value": "470"}, {"value": "Ø80js6"}],
     }
     findings = check_spec_arithmetic(spec)
@@ -59,49 +69,79 @@ def test_sections_may_not_exceed_a_stated_overall():
 
 
 def test_a_bore_wider_than_its_body_is_an_error():
-    spec = {"main_view": {
-        "outer": [{"diameter_mm": 30, "length_mm": 40}, {"diameter_mm": 50, "length_mm": 60}],
-        "bore": [{"diameter_mm": 60, "length_mm": 50}],
-    }}
+    spec = {
+        "main_view": {
+            "outer": [{"diameter_mm": 30, "length_mm": 40}, {"diameter_mm": 50, "length_mm": 60}],
+            "bore": [{"diameter_mm": 60, "length_mm": 50}],
+        }
+    }
     assert "bore_not_inside_body" in _codes(check_spec_arithmetic(spec))
 
 
 def test_a_bore_longer_than_its_body_is_an_error():
-    spec = {"main_view": {
-        "outer": [{"diameter_mm": 30, "length_mm": 40}, {"diameter_mm": 50, "length_mm": 60}],
-        "bore": [{"diameter_mm": 16, "length_mm": 200}],
-    }}
+    spec = {
+        "main_view": {
+            "outer": [{"diameter_mm": 30, "length_mm": 40}, {"diameter_mm": 50, "length_mm": 60}],
+            "bore": [{"diameter_mm": 16, "length_mm": 200}],
+        }
+    }
     assert "bore_longer_than_body" in _codes(check_spec_arithmetic(spec))
 
 
 def test_a_hole_outside_the_outline_is_an_error():
-    spec = {"main_view": {"profile": {
-        "shape": "circle", "diameter_mm": 140, "thickness_mm": 20,
-        "holes": [{"center_x_mm": 90, "center_y_mm": 0, "diameter_mm": 14}],
-    }}}
+    spec = {
+        "main_view": {
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 140,
+                "thickness_mm": 20,
+                "holes": [{"center_x_mm": 90, "center_y_mm": 0, "diameter_mm": 14}],
+            }
+        }
+    }
     assert "hole_outside_profile" in _codes(check_spec_arithmetic(spec))
 
 
 def test_a_bolt_circle_that_does_not_fit_is_an_error():
-    spec = {"main_view": {"profile": {
-        "shape": "circle", "diameter_mm": 140, "thickness_mm": 20,
-        "hole_patterns": [{
-            "kind": "bolt_circle", "count": 6,
-            "bolt_circle_diameter_mm": 200, "hole_diameter_mm": 14,
-        }],
-    }}}
+    spec = {
+        "main_view": {
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 140,
+                "thickness_mm": 20,
+                "hole_patterns": [
+                    {
+                        "kind": "bolt_circle",
+                        "count": 6,
+                        "bolt_circle_diameter_mm": 200,
+                        "hole_diameter_mm": 14,
+                    }
+                ],
+            }
+        }
+    }
     assert "bolt_circle_outside_profile" in _codes(check_spec_arithmetic(spec))
 
 
 def test_a_flange_that_fits_raises_nothing():
-    spec = {"main_view": {"profile": {
-        "shape": "circle", "diameter_mm": 560, "thickness_mm": 20,
-        "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 80}],
-        "hole_patterns": [{
-            "kind": "bolt_circle", "count": 4,
-            "bolt_circle_diameter_mm": 200, "hole_diameter_mm": 18,
-        }],
-    }}}
+    spec = {
+        "main_view": {
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 560,
+                "thickness_mm": 20,
+                "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 80}],
+                "hole_patterns": [
+                    {
+                        "kind": "bolt_circle",
+                        "count": 4,
+                        "bolt_circle_diameter_mm": 200,
+                        "hole_diameter_mm": 18,
+                    }
+                ],
+            }
+        }
+    }
     assert check_spec_arithmetic(spec) == []
 
 
@@ -109,10 +149,16 @@ def test_a_flange_that_fits_raises_nothing():
 
 
 def _flange(bore_mm: float) -> dict:
-    return {"main_view": {"profile": {
-        "shape": "circle", "diameter_mm": 560, "thickness_mm": 20,
-        "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": bore_mm}],
-    }}}
+    return {
+        "main_view": {
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 560,
+                "thickness_mm": 20,
+                "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": bore_mm}],
+            }
+        }
+    }
 
 
 def test_a_misread_bore_contradicts_the_measured_proportions():
@@ -136,11 +182,15 @@ def test_too_few_circles_to_compare_yields_no_verdict():
 
 
 def test_the_report_counts_errors_separately_from_warnings():
-    spec = {"main_view": {"outer": [
-        {"diameter_mm": 30, "length_mm": 40},
-        {"diameter_mm": 50, "length_mm": 60},
-        {"diameter_mm": 36, "length_mm": 500},
-    ]}}
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {"diameter_mm": 50, "length_mm": 60},
+                {"diameter_mm": 36, "length_mm": 500},
+            ]
+        }
+    }
     report = cross_check_spec(spec)
     assert report["errors"] == 0
     assert len(report["findings"]) == 1
@@ -149,10 +199,16 @@ def test_the_report_counts_errors_separately_from_warnings():
 
 def test_silence_from_the_raster_check_is_not_reported_as_agreement():
     """A flange once passed while the check had measured one 4 px hole."""
-    spec = {"main_view": {"profile": {
-        "shape": "circle", "diameter_mm": 560, "thickness_mm": 20,
-        "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 80}],
-    }}}
+    spec = {
+        "main_view": {
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 560,
+                "thickness_mm": 20,
+                "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 80}],
+            }
+        }
+    }
 
     class _Ink:
         pass
@@ -180,10 +236,13 @@ def test_a_building_plan_read_as_a_shaft_is_refused():
     """Live: a floor plan produced a 3-metre shaft with zero unresolved."""
     plan = {
         "part": "наименование",
-        "main_view": {"type": "тело вращения (вал)", "outer": [
-            {"diameter_mm": 3000, "length_mm": 4500},
-            {"diameter_mm": 2000, "length_mm": 7500},
-        ]},
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"diameter_mm": 3000, "length_mm": 4500},
+                {"diameter_mm": 2000, "length_mm": 7500},
+            ],
+        },
         "title_block": {"material": "материал", "scale": "масштаб"},
     }
     codes = _codes(check_spec_arithmetic(plan))
@@ -194,10 +253,12 @@ def test_a_building_plan_read_as_a_shaft_is_refused():
 
 def test_a_stamp_echoing_its_own_captions_is_an_error_on_its_own():
     spec = {
-        "main_view": {"outer": [
-            {"diameter_mm": 30, "length_mm": 40},
-            {"diameter_mm": 50, "length_mm": 60},
-        ]},
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {"diameter_mm": 50, "length_mm": 60},
+            ]
+        },
         "title_block": {"material": "материал"},
     }
     assert "stamp_placeholders_read_as_values" in _codes(check_spec_arithmetic(spec))
@@ -205,10 +266,12 @@ def test_a_stamp_echoing_its_own_captions_is_an_error_on_its_own():
 
 def test_a_real_part_passes_the_plausibility_gates():
     spec = {
-        "main_view": {"outer": [
-            {"diameter_mm": 102, "length_mm": 150},
-            {"diameter_mm": 80, "length_mm": 240},
-        ]},
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 102, "length_mm": 150},
+                {"diameter_mm": 80, "length_mm": 240},
+            ]
+        },
         "title_block": {"material": "Сталь 45 ГОСТ 1050-2013", "scale": "1:2"},
     }
     assert check_spec_arithmetic(spec) == []
@@ -219,10 +282,17 @@ def test_the_measured_outline_rejects_an_impossible_hole():
     from app.ai.cad_recognize.spec_crosscheck import check_outline_against_image
 
     def flange(bore: float) -> dict:
-        return {"main_view": {"type": "фланец", "profile": {
-            "shape": "circle", "diameter_mm": 560, "thickness_mm": 20,
-            "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": bore}],
-        }}}
+        return {
+            "main_view": {
+                "type": "фланец",
+                "profile": {
+                    "shape": "circle",
+                    "diameter_mm": 560,
+                    "thickness_mm": 20,
+                    "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": bore}],
+                },
+            }
+        }
 
     measured_px = 277.4  # the flange outline as the detector measures it
     assert check_outline_against_image(flange(80), measured_px) == []
@@ -250,9 +320,7 @@ def test_a_bounded_45_degree_band_is_detected_as_hatching():
     ink = np.zeros((200, 200), dtype="uint8")
     # 15 short 45°-ish parallel strokes inside a bounded band — enough to
     # clear the "real fill, not a stray diagonal line" threshold (12).
-    segments = tuple(
-        (40 + i * 4, 60, 40 + i * 4 + 20, 80) for i in range(15)
-    )
+    segments = tuple((40 + i * 4, 60, 40 + i * 4 + 20, 80) for i in range(15))
     with patch("cv2.HoughLinesP", return_value=_lines(*segments)):
         result = detect_axial_hatching(ink)
     assert result is not None
@@ -295,11 +363,15 @@ def test_hatching_with_no_stated_bore_is_the_exact_live_bug():
     section view clearly shows one — cad_solid.py built it solid with no
     hard blocker because the reader never flagged a section view either.
     This is the independent, image-grounded signal that catches it."""
-    spec = {"main_view": {
-        "outer": [{"diameter_mm": 40, "length_mm": 100}], "bore": [],
-    }}
+    spec = {
+        "main_view": {
+            "outer": [{"diameter_mm": 40, "length_mm": 100}],
+            "bore": [],
+        }
+    }
     findings = check_axial_hatching_against_bore(
-        spec, {"segment_count": 43, "bbox_px": [1, 1, 2, 2]},
+        spec,
+        {"segment_count": 43, "bbox_px": [1, 1, 2, 2]},
     )
     codes = {f.code for f in findings}
     assert "axial_hatching_bore_mismatch" in codes
@@ -307,12 +379,15 @@ def test_hatching_with_no_stated_bore_is_the_exact_live_bug():
 
 
 def test_a_correctly_stated_bore_with_hatching_raises_nothing():
-    spec = {"main_view": {
-        "outer": [{"diameter_mm": 40, "length_mm": 100}],
-        "bore": [{"diameter_mm": 20, "length_mm": 100}],
-    }}
+    spec = {
+        "main_view": {
+            "outer": [{"diameter_mm": 40, "length_mm": 100}],
+            "bore": [{"diameter_mm": 20, "length_mm": 100}],
+        }
+    }
     findings = check_axial_hatching_against_bore(
-        spec, {"segment_count": 43, "bbox_px": [1, 1, 2, 2]},
+        spec,
+        {"segment_count": 43, "bbox_px": [1, 1, 2, 2]},
     )
     assert findings == []
 
@@ -320,10 +395,12 @@ def test_a_correctly_stated_bore_with_hatching_raises_nothing():
 def test_a_stated_bore_with_no_detected_hatching_is_only_a_warning():
     """The detector's own false-negative rate is unmeasured — this must not
     read as proof the bore is wrong, only a softer prompt to double-check."""
-    spec = {"main_view": {
-        "outer": [{"diameter_mm": 40, "length_mm": 100}],
-        "bore": [{"diameter_mm": 20, "length_mm": 100}],
-    }}
+    spec = {
+        "main_view": {
+            "outer": [{"diameter_mm": 40, "length_mm": 100}],
+            "bore": [{"diameter_mm": 20, "length_mm": 100}],
+        }
+    }
     findings = check_axial_hatching_against_bore(spec, None)
     assert [f.code for f in findings] == ["no_axial_hatching_for_stated_bore"]
     assert findings[0].severity == "warn"
@@ -333,7 +410,8 @@ def test_hatching_without_any_outer_profile_is_not_evaluated():
     """A prismatic/unclassified part has nothing for this check to mean
     anything about — the check is scoped to bodies of revolution."""
     findings = check_axial_hatching_against_bore(
-        {"main_view": {}}, {"segment_count": 43, "bbox_px": [1, 1, 2, 2]},
+        {"main_view": {}},
+        {"segment_count": 43, "bbox_px": [1, 1, 2, 2]},
     )
     assert findings == []
 
@@ -353,9 +431,7 @@ def test_detect_axial_hatching_is_silent_on_a_solid_shaft():
     with no section view and no bore — the true negative."""
     from app.tasks.cad_trace import _binarize
 
-    ink, _w, _h = _binarize(
-        (ROOT / "example-drawings" / "shaft_detail.png").read_bytes()
-    )
+    ink, _w, _h = _binarize((ROOT / "example-drawings" / "shaft_detail.png").read_bytes())
     assert detect_axial_hatching(ink) is None
 
 
@@ -371,10 +447,18 @@ def _spec_with_named_cross_hole() -> dict:
             ],
         },
         "views": [
-            {"kind": "front", "view_id": "front", "body_index": 0,
-             "features_shown": ["0:cross_holes:0"]},
-            {"kind": "side", "view_id": "side", "body_index": 0,
-             "features_shown": ["0:cross_holes:0"]},
+            {
+                "kind": "front",
+                "view_id": "front",
+                "body_index": 0,
+                "features_shown": ["0:cross_holes:0"],
+            },
+            {
+                "kind": "side",
+                "view_id": "side",
+                "body_index": 0,
+                "features_shown": ["0:cross_holes:0"],
+            },
         ],
     }
 

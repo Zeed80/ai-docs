@@ -39,9 +39,7 @@ PAPER_PX_PER_MM = 4.0
 _FORMAT_LADDER = ("A4", "A3", "A2", "A1", "A0")
 # Below this the drawing is too small to read even if it technically fits.
 _MIN_USEFUL_RATIO = 1 / 5
-_SEMANTIC_ANNOTATION_KINDS = frozenset(
-    {"roughness", "tolerance", "datum", "thread", "weld"}
-)
+_SEMANTIC_ANNOTATION_KINDS = frozenset({"roughness", "tolerance", "datum", "thread", "weld"})
 _ANNOTATION_ROW_MM = 6.0
 
 
@@ -124,9 +122,7 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
     extra. ``/drawing`` needs a base view before a section, so a front view is
     always requested first even when the sheet will not carry it.
     """
-    source_views = [
-        view for view in (spec.get("views") or []) if isinstance(view, dict)
-    ]
+    source_views = [view for view in (spec.get("views") or []) if isinstance(view, dict)]
     source_sections = [view for view in source_views if view.get("kind") == "section"]
     views: list[dict[str, Any]] = [{"kind": "front"}]
     if part_class == "hollow_rotation":
@@ -144,10 +140,7 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
     elif part_class in ("flange", "plate"):
         views.append({"kind": "section", "label": "А-А", "section_symbol": "А"})
 
-    requested = {
-        str(view.get("kind"))
-        for view in source_views
-    }
+    requested = {str(view.get("kind")) for view in source_views}
     # A view the reader saw on the source sheet is reproduced. "top" used to be
     # read, validated and then silently never drawn.
     for kind in ("side", "top", "section"):
@@ -181,18 +174,20 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
         # arbitrary part of the projection.
         if not centre or not radius:
             continue
-        views.append({
-            "kind": "detail",
-            "label": source.get("label"),
-            "detail_center_mm": centre,
-            "detail_radius_mm": radius,
-            "detail_scale_factor": source.get("detail_scale_factor") or 2.0,
-        })
+        views.append(
+            {
+                "kind": "detail",
+                "label": source.get("label"),
+                "detail_center_mm": centre,
+                "detail_radius_mm": radius,
+                "detail_scale_factor": source.get("detail_scale_factor") or 2.0,
+            }
+        )
     if part_class in ("solid_rotation", "hollow_rotation") and not any(
         v["kind"] == "side" for v in views
     ):
         # A turned part with cross features needs the end view to show them.
-        body = (spec.get("main_view") or {})
+        body = spec.get("main_view") or {}
         if body.get("keyways") or body.get("cross_holes") or body.get("axial_holes"):
             views.append({"kind": "side"})
     return views
@@ -201,15 +196,18 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
 def _view_reasons(views: list[dict[str, Any]], part_class: str, spec: dict) -> list[dict[str, Any]]:
     body = spec.get("main_view") or {}
     source_kinds = {
-        str(view.get("kind")) for view in (spec.get("views") or [])
-        if isinstance(view, dict)
+        str(view.get("kind")) for view in (spec.get("views") or []) if isinstance(view, dict)
     }
     reasons: list[dict[str, Any]] = []
     for index, view in enumerate(views):
         kind = view.get("presentation_kind") or view["kind"]
         reason = "основная проекция детали"
         if kind == "section":
-            reason = "показ внутреннего профиля" if body.get("bore") else "разрез прочитан на исходном листе"
+            reason = (
+                "показ внутреннего профиля"
+                if body.get("bore")
+                else "разрез прочитан на исходном листе"
+            )
         elif kind == "side" and (
             body.get("keyways") or body.get("cross_holes") or body.get("axial_holes")
         ):
@@ -218,12 +216,14 @@ def _view_reasons(views: list[dict[str, Any]], part_class: str, spec: dict) -> l
             reason = "увеличенный местный вид, прочитанный на исходном листе"
         elif kind in source_kinds:
             reason = "проекция присутствует на исходном листе"
-        reasons.append({
-            "view_index": index,
-            "kind": kind,
-            "visible": True,
-            "reason": reason,
-        })
+        reasons.append(
+            {
+                "view_index": index,
+                "kind": kind,
+                "visible": True,
+                "reason": reason,
+            }
+        )
     if part_class == "hollow_rotation":
         for item in reasons:
             if item["kind"] == "front":
@@ -327,7 +327,9 @@ def plan_sheet(
     chosen_format, ratio, label = formats[-1], 1.0, "1:1"
     for candidate in formats:
         ratio, label = choose_standard_scale(
-            layout_w, layout_h, candidate,
+            layout_w,
+            layout_h,
+            candidate,
             landscape=landscape,
             reserve_title_block=not geometry_only,
             reserve_notes_mm=notes_mm,
@@ -348,9 +350,7 @@ def plan_sheet(
     # 2.305): showing the plain outline beside it draws the same body twice.
     scaffold: set[int] = set()
     if part_class == "hollow_rotation" and any(v["kind"] == "section" for v in views):
-        scaffold = {
-            index for index, view in enumerate(views) if view["kind"] == "front"
-        }
+        scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
     return SheetPlan(
         part_class=part_class,
         views=views,
@@ -366,9 +366,7 @@ def plan_sheet(
     )
 
 
-def _dimension_requests(
-    drawing: dict, spec: dict, plan: SheetPlan
-) -> list[dict[str, Any]]:
+def _dimension_requests(drawing: dict, spec: dict, plan: SheetPlan) -> list[dict[str, Any]]:
     """Which edges to dimension, chosen by matching the reading to the views.
 
     A dimension is placed only where a READ value lines up with an edge the
@@ -401,14 +399,12 @@ def _dimension_requests(
     # made the section a picture of a cavity with no size.
     bore = parts[0].get("bore") or []
     wanted_diameters = sorted(
-        {float(s["d"]) for s in outer if s.get("d")}
-        | {float(s["d"]) for s in bore if s.get("d")}
+        {float(s["d"]) for s in outer if s.get("d")} | {float(s["d"]) for s in bore if s.get("d")}
     )
     longest = max((float(s.get("l") or 0.0) for s in outer), default=0.0)
-    wanted_lengths = sorted({
-        float(s["l"]) for s in outer
-        if s.get("l") and abs(float(s["l"]) - longest) > 1e-6
-    })
+    wanted_lengths = sorted(
+        {float(s["l"]) for s in outer if s.get("l") and abs(float(s["l"]) - longest) > 1e-6}
+    )
     total_length = sum(float(s.get("l") or 0.0) for s in outer)
 
     for view_index, view in enumerate(views):
@@ -426,14 +422,16 @@ def _dimension_requests(
                 match = _closest(measured, wanted_diameters)
                 if match is not None:
                     wanted_diameters.remove(match)
-                    requests.append({
-                        "view_index": view_index,
-                        "edge_index": int(index),
-                        "kind": "Diameter",
-                        "label": "",
-                        "_nominal_mm": match,
-                        "_is_diameter": True,
-                    })
+                    requests.append(
+                        {
+                            "view_index": view_index,
+                            "edge_index": int(index),
+                            "kind": "Diameter",
+                            "label": "",
+                            "_nominal_mm": match,
+                            "_is_diameter": True,
+                        }
+                    )
             elif item.get("type") == "line" and len(item.get("points") or []) == 2:
                 (u1, v1), (u2, v2) = item["points"]
                 length_mm = math.hypot(u2 - u1, v2 - v1) / ratio
@@ -444,20 +442,18 @@ def _dimension_requests(
                 if match is None:
                     continue
                 wanted_lengths.remove(match)
-                requests.append({
-                    "view_index": view_index,
-                    "edge_index": int(index),
-                    "kind": "DistanceX",
-                    "label": "",
-                    "_nominal_mm": match,
-                    "_is_diameter": False,
-                })
-        requests.extend(
-            _diameter_requests(view, view_index, wanted_diameters, ratio)
-        )
-        if total_length > 0 and not any(
-            request.get("_is_overall") for request in requests
-        ):
+                requests.append(
+                    {
+                        "view_index": view_index,
+                        "edge_index": int(index),
+                        "kind": "DistanceX",
+                        "label": "",
+                        "_nominal_mm": match,
+                        "_is_diameter": False,
+                    }
+                )
+        requests.extend(_diameter_requests(view, view_index, wanted_diameters, ratio))
+        if total_length > 0 and not any(request.get("_is_overall") for request in requests):
             overall = _overall_length_request(view, view_index, total_length, ratio)
             if overall is not None:
                 requests.append(overall)
@@ -554,15 +550,17 @@ def _diameter_requests(
                 continue
             wanted.remove(match)
             used.update({edge_a, edge_b})
-            requests.append({
-                "view_index": view_index,
-                "edge_index": edge_a,
-                "second_edge_index": edge_b,
-                "kind": "DistanceY",
-                "label": "",
-                "_nominal_mm": match,
-                "_is_diameter": True,
-            })
+            requests.append(
+                {
+                    "view_index": view_index,
+                    "edge_index": edge_a,
+                    "second_edge_index": edge_b,
+                    "kind": "DistanceY",
+                    "label": "",
+                    "_nominal_mm": match,
+                    "_is_diameter": True,
+                }
+            )
             break
     return requests
 
@@ -640,8 +638,6 @@ async def build_sheet_from_solid(
     a drawing of something else.
     """
     from app.ai.cad_projection import (
-        dimensions_from_kernel,
-        place_sheet_views,
         verify_views_against_solid,
     )
     from app.services.cad_kernel import draw_candidate_sheet
@@ -669,8 +665,7 @@ async def build_sheet_from_solid(
             scale=plan.ratio,
             hidden_lines=True,
             dimensions=[
-                {k: v for k, v in request.items() if not k.startswith("_")}
-                for request in requests
+                {k: v for k, v in request.items() if not k.startswith("_")} for request in requests
             ],
         )
         if dimensioned and dimensioned.get("views"):
@@ -680,7 +675,8 @@ async def build_sheet_from_solid(
     # is a stray witness line with "0" on it — worse than the dimension being
     # absent, because a reader has to work out that it means nothing.
     measured = [
-        item for item in (drawing.get("dimensions") or [])
+        item
+        for item in (drawing.get("dimensions") or [])
         if isinstance(item.get("value_mm"), (int, float)) and item["value_mm"] > 0
     ]
     if len(measured) != len(drawing.get("dimensions") or []):
@@ -747,8 +743,10 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         else technical_requirements_height_mm(spec)
     )
     paper_w, paper_h, area_x0, area_y0, area_w, area_h = _drawing_area_mm(
-        plan.sheet_format, plan.landscape,
-        reserve_title_block=not plan.geometry_only, reserve_notes_mm=notes_mm,
+        plan.sheet_format,
+        plan.landscape,
+        reserve_title_block=not plan.geometry_only,
+        reserve_notes_mm=notes_mm,
     )
 
     # Lay the views out at the origin first, measure them, then centre.
@@ -759,8 +757,10 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
     offset_u = area_x0 + max((area_w - extent_w) / 2.0, 0.0)
     offset_v = area_y0 + max((area_h - extent_h) / 2.0, 0.0)
     entities, placements = place_sheet_views(
-        views, px_per_mm=PAPER_PX_PER_MM,
-        origin_u_mm=offset_u, origin_v_mm=offset_v,
+        views,
+        px_per_mm=PAPER_PX_PER_MM,
+        origin_u_mm=offset_u,
+        origin_v_mm=offset_v,
         skip=plan.scaffold_views,
     )
     entities += dimensions_from_kernel(
@@ -776,9 +776,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
             y_mm=area_y0 + area_h + 5.0,
         )
     if not plan.geometry_only:
-        entities += _sheet_frame_entities(
-            paper_w, paper_h, PAPER_PX_PER_MM, spec, plan.scale_label
-        )
+        entities += _sheet_frame_entities(paper_w, paper_h, PAPER_PX_PER_MM, spec, plan.scale_label)
 
     ir = CadIR(
         source=SourceInfo(
@@ -801,9 +799,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
     return ir, (extent_w, extent_h)
 
 
-def _annotation_entities(
-    spec: dict, *, x_mm: float, y_mm: float
-) -> list[Any]:
+def _annotation_entities(spec: dict, *, x_mm: float, y_mm: float) -> list[Any]:
     """Place exact structured manufacturing symbols in their reserved band."""
     from app.ai.cad_ir.schema import AnnotationEntity, Point
 

@@ -25,9 +25,23 @@ logger = structlog.get_logger()
 
 # ── Roughness (ГОСТ 2789-73 standard Ra series, µm) ────────────────────────────
 
-STANDARD_RA_SERIES: frozenset[float] = frozenset({
-    0.025, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.3, 12.5, 25.0, 50.0, 100.0,
-})
+STANDARD_RA_SERIES: frozenset[float] = frozenset(
+    {
+        0.025,
+        0.05,
+        0.1,
+        0.2,
+        0.4,
+        0.8,
+        1.6,
+        3.2,
+        6.3,
+        12.5,
+        25.0,
+        50.0,
+        100.0,
+    }
+)
 
 
 def nearest_ra(value: float) -> float:
@@ -38,19 +52,29 @@ def nearest_ra(value: float) -> float:
 # ── ISO 286 / ЕСДП: tolerances and fits ────────────────────────────────────────
 
 ISO_SIZE_RANGES: tuple[tuple[float, float], ...] = (
-    (1, 3), (3, 6), (6, 10), (10, 18), (18, 30), (30, 50),
-    (50, 80), (80, 120), (120, 180), (180, 250), (250, 315), (315, 400),
+    (1, 3),
+    (3, 6),
+    (6, 10),
+    (10, 18),
+    (18, 30),
+    (30, 50),
+    (50, 80),
+    (80, 120),
+    (120, 180),
+    (180, 250),
+    (250, 315),
+    (315, 400),
 )
 
 # IT-grade tolerance width (µm) per size range, for the grades this module
 # supports. Source: ISO 286-1 / ГОСТ 25346-89 standard tolerance grade table.
 _IT_GRADE_UM: dict[int, tuple[int, ...]] = {
     # range index aligns with ISO_SIZE_RANGES
-    5:  (4, 5, 6, 8, 9, 11, 13, 15, 18, 20, 23, 25),
-    6:  (6, 8, 9, 11, 13, 16, 19, 22, 25, 29, 32, 36),
-    7:  (10, 12, 15, 18, 21, 25, 30, 35, 40, 46, 52, 57),
-    8:  (14, 18, 22, 27, 33, 39, 46, 54, 63, 72, 81, 89),
-    9:  (25, 30, 36, 43, 52, 62, 74, 87, 100, 115, 130, 140),
+    5: (4, 5, 6, 8, 9, 11, 13, 15, 18, 20, 23, 25),
+    6: (6, 8, 9, 11, 13, 16, 19, 22, 25, 29, 32, 36),
+    7: (10, 12, 15, 18, 21, 25, 30, 35, 40, 46, 52, 57),
+    8: (14, 18, 22, 27, 33, 39, 46, 54, 63, 72, 81, 89),
+    9: (25, 30, 36, 43, 52, 62, 74, 87, 100, 115, 130, 140),
     10: (40, 48, 58, 70, 84, 100, 120, 140, 160, 185, 210, 230),
     11: (60, 75, 90, 110, 130, 160, 190, 220, 250, 290, 320, 360),
     12: (100, 120, 150, 180, 210, 250, 300, 350, 400, 460, 520, 570),
@@ -178,7 +202,9 @@ def fit_clearance_kind(hole_symbol: str, shaft_symbol: str) -> str:
     versa at the same nominal size band is the caller's job (pass matching
     diameters' bands in); here we classify from already-resolved deviations.
     """
-    hole = tolerance_band(hole_symbol, 20.0)  # any nominal in a shared range; letter shape is what matters
+    hole = tolerance_band(
+        hole_symbol, 20.0
+    )  # any nominal in a shared range; letter shape is what matters
     shaft = tolerance_band(shaft_symbol, 20.0)
     if not hole or not shaft:
         return "unknown"
@@ -190,6 +216,7 @@ def fit_clearance_kind(hole_symbol: str, shaft_symbol: str) -> str:
 
 
 # ── Materials ───────────────────────────────────────────────────────────────
+
 
 @dataclass(frozen=True)
 class MaterialSpec:
@@ -203,8 +230,12 @@ MATERIAL_CATALOG: dict[str, MaterialSpec] = {
     "сталь 45 гост 1050-2013": MaterialSpec("Сталь 45 ГОСТ 1050-2013", "steel_carbon", 7850.0, 2.5),
     "сталь 20 гост 1050-2013": MaterialSpec("Сталь 20 ГОСТ 1050-2013", "steel_carbon", 7850.0, 2.5),
     "сталь 40х гост 4543-71": MaterialSpec("Сталь 40Х ГОСТ 4543-71", "steel_alloy", 7850.0, 2.5),
-    "сталь 30хгса гост 4543-71": MaterialSpec("Сталь 30ХГСА ГОСТ 4543-71", "steel_alloy", 7850.0, 2.5),
-    "сталь 12х18н10т гост 5632-2014": MaterialSpec("Сталь 12Х18Н10Т ГОСТ 5632-2014", "stainless", 7900.0, 3.0),
+    "сталь 30хгса гост 4543-71": MaterialSpec(
+        "Сталь 30ХГСА ГОСТ 4543-71", "steel_alloy", 7850.0, 2.5
+    ),
+    "сталь 12х18н10т гост 5632-2014": MaterialSpec(
+        "Сталь 12Х18Н10Т ГОСТ 5632-2014", "stainless", 7900.0, 3.0
+    ),
     "сч20 гост 1412-85": MaterialSpec("СЧ20 ГОСТ 1412-85", "cast_iron", 7200.0, 3.0),
     "сч30 гост 1412-85": MaterialSpec("СЧ30 ГОСТ 1412-85", "cast_iron", 7300.0, 3.0),
     "д16т гост 4784-97": MaterialSpec("Д16Т ГОСТ 4784-97", "aluminum", 2780.0, 2.0),
@@ -248,6 +279,7 @@ def canonical_material_designation(text: str) -> str:
 
 # ── Metric threads (ГОСТ 8724-2002 coarse + common fine pitches) ─────────────
 
+
 @dataclass(frozen=True)
 class ThreadSpec:
     designation: str
@@ -286,9 +318,7 @@ METRIC_THREAD_TABLE: dict[float, ThreadSpec] = {
     )
 }
 
-_THREAD_DESIGNATION_RE = re.compile(
-    r"^M\s*(\d+(?:[.,]\d+)?)(?:\s*[×xXхХ]\s*(\d+(?:[.,]\d+)?))?$"
-)
+_THREAD_DESIGNATION_RE = re.compile(r"^M\s*(\d+(?:[.,]\d+)?)(?:\s*[×xXхХ]\s*(\d+(?:[.,]\d+)?))?$")
 
 
 def parse_thread(designation: str) -> ThreadSpec | None:
@@ -320,6 +350,7 @@ def minor_diameter_mm(thread: ThreadSpec, pitch_mm: float | None = None) -> floa
 
 
 # ── Sheet formats (ГОСТ 2.301) ────────────────────────────────────────────────
+
 
 @dataclass(frozen=True)
 class SheetFormat:

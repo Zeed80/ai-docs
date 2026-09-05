@@ -18,8 +18,8 @@ import re
 import shutil
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -84,9 +84,10 @@ def _sees_all(user: UserInfo) -> bool:
 
 
 def _can_train_lora(user: UserInfo) -> bool:
-    return _is_agent_service(user) or _is_admin(user) or any(
-        role in (user.roles or [])
-        for role in (UserRole.engineer, UserRole.technologist)
+    return (
+        _is_agent_service(user)
+        or _is_admin(user)
+        or any(role in (user.roles or []) for role in (UserRole.engineer, UserRole.technologist))
     )
 
 
@@ -94,16 +95,16 @@ def _can_access(obj: LoraDataset | LoraTrainingRun | None, user: UserInfo) -> bo
     return obj is not None and (obj.owner_sub == user.sub or _sees_all(user))
 
 
-async def _get_dataset_checked(db: AsyncSession, dataset_id: uuid.UUID,
-                               user: UserInfo) -> LoraDataset:
+async def _get_dataset_checked(
+    db: AsyncSession, dataset_id: uuid.UUID, user: UserInfo
+) -> LoraDataset:
     ds = await db.get(LoraDataset, dataset_id)
     if not _can_access(ds, user):
         raise HTTPException(404, "Датасет не найден")
     return ds
 
 
-async def _get_run_checked(db: AsyncSession, run_id: uuid.UUID,
-                           user: UserInfo) -> LoraTrainingRun:
+async def _get_run_checked(db: AsyncSession, run_id: uuid.UUID, user: UserInfo) -> LoraTrainingRun:
     run = await db.get(LoraTrainingRun, run_id)
     if not _can_access(run, user):
         raise HTTPException(404, "Запуск не найден")
@@ -153,8 +154,7 @@ class RunConfig(BaseModel):
     def _known_base_model(cls, v: str) -> str:
         if v not in LORA_BASE_MODELS:
             raise ValueError(
-                f"Неизвестная базовая модель «{v}». "
-                f"Доступны: {', '.join(sorted(LORA_BASE_MODELS))}"
+                f"Неизвестная базовая модель «{v}». Доступны: {', '.join(sorted(LORA_BASE_MODELS))}"
             )
         return v
 
@@ -218,14 +218,14 @@ def _run_out(run: LoraTrainingRun) -> dict:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _age(ts: datetime | None) -> timedelta:
     if ts is None:
         return timedelta(0)
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
+        ts = ts.replace(tzinfo=UTC)
     return _utcnow() - ts
 
 
@@ -247,8 +247,10 @@ async def _watchdog_datasets(db: AsyncSession, datasets: list[LoraDataset]) -> N
             continue
         if not alive:
             ds.status = LoraDatasetStatus.failed
-            ds.error = ("Подготовка прервана (воркер перезапущен?). "
-                        "Создайте датасет заново — готовые артефакты переиспользуются.")
+            ds.error = (
+                "Подготовка прервана (воркер перезапущен?). "
+                "Создайте датасет заново — готовые артефакты переиспользуются."
+            )
             dirty = True
     if dirty:
         await db.commit()
@@ -274,8 +276,9 @@ async def _watchdog_runs(db: AsyncSession, runs: list[LoraTrainingRun]) -> None:
             continue
         if not alive:
             run.status = LoraRunStatus.failed
-            run.error = ("Задача обучения потеряна (воркер перезапущен до старта?). "
-                         "Создайте запуск заново.")
+            run.error = (
+                "Задача обучения потеряна (воркер перезапущен до старта?). Создайте запуск заново."
+            )
             dirty = True
     if dirty:
         await db.commit()
@@ -293,10 +296,14 @@ async def upload_source(
         raise HTTPException(403, "Недостаточно прав для подготовки LoRA")
     suffix = pathlib.Path(file.filename or "src").suffix.lower()
     if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
-        raise HTTPException(400, f"Неподдерживаемый формат: {suffix}. "
-                                 f"Допустимо: {', '.join(sorted(_ALLOWED_UPLOAD_SUFFIXES))}")
-    safe_name = re.sub(r"[^\w.\-]", "_", pathlib.Path(file.filename or "src").name,
-                       flags=re.UNICODE)
+        raise HTTPException(
+            400,
+            f"Неподдерживаемый формат: {suffix}. "
+            f"Допустимо: {', '.join(sorted(_ALLOWED_UPLOAD_SUFFIXES))}",
+        )
+    safe_name = re.sub(
+        r"[^\w.\-]", "_", pathlib.Path(file.filename or "src").name, flags=re.UNICODE
+    )
     rel = pathlib.Path("uploads") / user.sub / f"{uuid.uuid4().hex[:8]}_{safe_name}"
     dest = _data_dir() / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -306,8 +313,7 @@ async def upload_source(
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
                 if size > _MAX_UPLOAD_BYTES:
-                    raise HTTPException(
-                        413, f"Файл больше {_MAX_UPLOAD_BYTES // (1024 * 1024)} МБ")
+                    raise HTTPException(413, f"Файл больше {_MAX_UPLOAD_BYTES // (1024 * 1024)} МБ")
                 fh.write(chunk)
     except HTTPException:
         dest.unlink(missing_ok=True)
@@ -354,8 +360,11 @@ async def create_dataset(
     if not _can_train_lora(user):
         raise HTTPException(403, "Недостаточно прав для подготовки LoRA")
     if body.preset == "drawing_edit" and body.source_paths:
-        raise HTTPException(400, "Пресет «Правки чертежей» обучается только на "
-                                 "синтетических парах — загруженные файлы не используются.")
+        raise HTTPException(
+            400,
+            "Пресет «Правки чертежей» обучается только на "
+            "синтетических парах — загруженные файлы не используются.",
+        )
     if body.preset == "drawing_cleanup" and not body.source_paths and body.params.synth_count <= 0:
         raise HTTPException(400, "Нужны исходники и/или synth_count > 0.")
     _validate_source_paths(body.source_paths, user)
@@ -449,8 +458,7 @@ def _loras_dir(user: UserInfo) -> pathlib.Path:
     return _data_dir() / "loras" / user.sub
 
 
-async def _resolve_lora_source(ref: str, db: AsyncSession,
-                               user: UserInfo) -> pathlib.Path:
+async def _resolve_lora_source(ref: str, db: AsyncSession, user: UserInfo) -> pathlib.Path:
     """Ref → absolute source path to INSPECT (no copy). Owner-scoped."""
     kind, _, rest = ref.partition(":")
     if kind == "upload":
@@ -545,32 +553,40 @@ async def list_loras(
     up = _loras_dir(user)
     if up.exists():
         for f in sorted(up.glob("*.safetensors")):
-            items.append({"ref": f"upload:{f.name}", "label": f.name,
-                          "source": "upload", **inspect_lora(f)})
+            items.append(
+                {"ref": f"upload:{f.name}", "label": f.name, "source": "upload", **inspect_lora(f)}
+            )
 
     # 2. Own finished-run checkpoints.
-    q = select(LoraTrainingRun).where(
-        LoraTrainingRun.status == LoraRunStatus.done
-    ).order_by(LoraTrainingRun.created_at.desc()).limit(50)
+    q = (
+        select(LoraTrainingRun)
+        .where(LoraTrainingRun.status == LoraRunStatus.done)
+        .order_by(LoraTrainingRun.created_at.desc())
+        .limit(50)
+    )
     if not _sees_all(user):
         q = q.where(LoraTrainingRun.owner_sub == user.sub)
     for run in (await db.execute(q)).scalars().all():
-        for ckpt in (run.checkpoints or []):
+        for ckpt in run.checkpoints or []:
             src = pathlib.Path(run.output_dir or "") / f"run_{run.id}" / ckpt
             if not src.exists():
                 continue
             info = inspect_lora(src)
-            items.append({
-                "ref": f"run:{run.id}:{ckpt}",
-                "label": f"{run.name} · {ckpt.split('_')[-1].replace('.safetensors', '')}",
-                "source": "run", **info,
-            })
+            items.append(
+                {
+                    "ref": f"run:{run.id}:{ckpt}",
+                    "label": f"{run.name} · {ckpt.split('_')[-1].replace('.safetensors', '')}",
+                    "source": "run",
+                    **info,
+                }
+            )
 
     # 3. Deployed on the ComfyUI node (shared, admin/engineer curated).
     if _COMFYUI_LORAS_DIR.exists():
         for f in sorted(_COMFYUI_LORAS_DIR.glob("*.safetensors")):
-            items.append({"ref": f"node:{f.name}", "label": f.name,
-                          "source": "node", **inspect_lora(f)})
+            items.append(
+                {"ref": f"node:{f.name}", "label": f.name, "source": "node", **inspect_lora(f)}
+            )
 
     return {"loras": items}
 
@@ -638,8 +654,10 @@ async def create_run(
         lora_info = inspect_lora(src)
         check = check_compatibility(lora_info, info["family"], int(config.get("rank", 32)))
         if not check["compatible"]:
-            raise HTTPException(400, "LoRA несовместима с выбранной базовой "
-                                     "моделью:\n" + "\n".join(check["reasons"]))
+            raise HTTPException(
+                400,
+                "LoRA несовместима с выбранной базовой моделью:\n" + "\n".join(check["reasons"]),
+            )
         config["resume_from"] = await _prepare_resume_path(body.resume_lora, db, user)
         if check.get("suggested_rank"):
             config["rank"] = int(check["suggested_rank"])
@@ -671,8 +689,9 @@ async def create_run(
     await db.commit()
     await db.refresh(run)
     await db.refresh(job)
-    logger.info("lora_training_queued", run_id=str(run.id), user=user.sub,
-                base_model=body.config.base_model)
+    logger.info(
+        "lora_training_queued", run_id=str(run.id), user=user.sub, base_model=body.config.base_model
+    )
     out = _run_out(run)
     out["job_id"] = str(job.id)
     return out
@@ -720,8 +739,7 @@ async def stop_run(
             try:
                 celery_app.control.revoke(run.celery_task_id)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("lora_revoke_failed", run_id=str(run_id),
-                               error=str(exc)[:120])
+                logger.warning("lora_revoke_failed", run_id=str(run_id), error=str(exc)[:120])
         run.status = LoraRunStatus.cancelled
         await studio_queue.mark_job_cancelled(db, job, error="Задача отменена пользователем.")
         await db.commit()
@@ -780,8 +798,7 @@ async def deploy_checkpoint(
         raise HTTPException(403, "Недостаточно прав для публикации LoRA")
     run = await _get_run_checked(db, run_id, user)
     lora_name = await _deploy(run, checkpoint)
-    return {"ok": True, "lora_name": lora_name,
-            "base_family": run.base_family or "qwen"}
+    return {"ok": True, "lora_name": lora_name, "base_family": run.base_family or "qwen"}
 
 
 class MakeWorkflowBody(BaseModel):
@@ -820,12 +837,14 @@ async def make_workflow(
 
     base = (
         await db.execute(
-            select(ComfyWorkflow).where(
+            select(ComfyWorkflow)
+            .where(
                 ComfyWorkflow.operation == operation,
                 ComfyWorkflow.base_family == family,
                 ComfyWorkflow.is_builtin.is_(True),
                 ComfyWorkflow.enabled.is_(True),
-            ).limit(1)
+            )
+            .limit(1)
         )
     ).scalar_one_or_none()
     if not base:
@@ -846,8 +865,7 @@ async def make_workflow(
     new_id = str(max(int(n) for n in graph if n.isdigit()) + 1)
     graph[new_id] = {
         "class_type": "LoraLoaderModelOnly",
-        "inputs": {"model": prev_model, "lora_name": lora_name,
-                   "strength_model": body.strength},
+        "inputs": {"model": prev_model, "lora_name": lora_name, "strength_model": body.strength},
     }
     graph[sampler_id] = dict(graph[sampler_id])
     graph[sampler_id]["inputs"] = dict(graph[sampler_id]["inputs"])
@@ -857,8 +875,9 @@ async def make_workflow(
         graph[sampler_id]["inputs"]["steps"] = 25
         graph[sampler_id]["inputs"]["cfg"] = 1.0
         for node in graph.values():
-            if (node.get("class_type") == "LoraLoaderModelOnly"
-                    and "Lightning" in str(node["inputs"].get("lora_name", ""))):
+            if node.get("class_type") == "LoraLoaderModelOnly" and "Lightning" in str(
+                node["inputs"].get("lora_name", "")
+            ):
                 node["inputs"] = dict(node["inputs"])
                 node["inputs"]["strength_model"] = 0.0
 
@@ -866,7 +885,10 @@ async def make_workflow(
     inject_map["custom_lora_strength"] = {"node": new_id, "input": "strength_model"}
     params_schema = dict(base.params_schema or {})
     params_schema["custom_lora_strength"] = {
-        "type": "float", "default": body.strength, "min": 0.0, "max": 2.0,
+        "type": "float",
+        "default": body.strength,
+        "min": 0.0,
+        "max": 2.0,
         "label": f"Сила LoRA «{run.name}»",
     }
     if operation == "cleanup":
@@ -875,7 +897,8 @@ async def make_workflow(
         # confirmed against raw ComfyUI). Schema defaults flow into task
         # params automatically.
         params_schema["postprocess"] = {
-            "type": "str", "default": "text_only",
+            "type": "str",
+            "default": "text_only",
             "label": "Постобработка (full / text_only / none)",
         }
 
@@ -886,7 +909,7 @@ async def make_workflow(
         owner_sub=user.sub,
         title=body.title or f"{base.title} + LoRA «{run.name}»",
         description=f"Клон «{base.title}» с обученной LoRA {lora_name} "
-                    f"(чекпойнт {body.checkpoint}).",
+        f"(чекпойнт {body.checkpoint}).",
         category=base.category,
         operation=operation,
         base_family=family,
@@ -911,16 +934,24 @@ async def delete_dataset(
     training run still references it."""
     ds = await _get_dataset_checked(db, dataset_id, user)
     runs = (
-        await db.execute(
-            select(LoraTrainingRun).where(
-                LoraTrainingRun.dataset_id == dataset_id,
-                LoraTrainingRun.status.in_(
-                    [LoraRunStatus.pending_approval, LoraRunStatus.queued,
-                     LoraRunStatus.running, LoraRunStatus.stopping]
-                ),
+        (
+            await db.execute(
+                select(LoraTrainingRun).where(
+                    LoraTrainingRun.dataset_id == dataset_id,
+                    LoraTrainingRun.status.in_(
+                        [
+                            LoraRunStatus.pending_approval,
+                            LoraRunStatus.queued,
+                            LoraRunStatus.running,
+                            LoraRunStatus.stopping,
+                        ]
+                    ),
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if runs:
         raise HTTPException(409, "Датасет используется активным обучением")
     if ds.dataset_dir:
@@ -929,9 +960,10 @@ async def delete_dataset(
     own_sources = {s for s in (ds.source_paths or []) if s.startswith("uploads/")}
     if own_sources:
         others = (
-            await db.execute(select(LoraDataset.source_paths)
-                             .where(LoraDataset.id != dataset_id))
-        ).scalars().all()
+            (await db.execute(select(LoraDataset.source_paths).where(LoraDataset.id != dataset_id)))
+            .scalars()
+            .all()
+        )
         still_used = {s for paths in others for s in (paths or [])}
         for src in own_sources - still_used:
             (_data_dir() / src).unlink(missing_ok=True)
@@ -980,8 +1012,9 @@ async def caption_models(user: UserInfo = Depends(get_current_user)):
         try:
             mods = {m.value for m in cap.modalities}
             if "vision" in mods and cap.local_only and cap.status.value != "disabled":
-                out.append({"key": key, "model": cap.provider_model,
-                            "provider": cap.provider.value})
+                out.append(
+                    {"key": key, "model": cap.provider_model, "provider": cap.provider.value}
+                )
         except Exception:  # noqa: BLE001
             continue
     return {"models": out}

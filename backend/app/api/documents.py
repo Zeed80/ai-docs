@@ -17,7 +17,7 @@ from app.audit.service import add_timeline_event, log_action
 from app.auth.jwt import get_current_user, require_role
 from app.auth.models import UserInfo, UserRole
 from app.chat.store import append_chat_attachment
-from app.domain.access import apply_visibility
+from app.config import settings
 from app.db.models import (
     Document,
     DocumentArtifact,
@@ -38,8 +38,8 @@ from app.db.models import (
     NTDCheckRun,
     QuarantineEntry,
 )
-from app.config import settings
 from app.db.session import get_db
+from app.domain.access import apply_visibility
 from app.domain.document_deletion import (
     hard_delete_document,
     hard_delete_documents,
@@ -120,9 +120,7 @@ _MIME_TO_DOC_TYPE: dict[str, str] = {
 }
 
 
-def _quick_detect_doc_type(
-    filename: str, mime_type: str
-) -> tuple[str | None, str | None]:
+def _quick_detect_doc_type(filename: str, mime_type: str) -> tuple[str | None, str | None]:
     """
     Return (doc_type, source) based on file extension and MIME type alone.
     No AI call — instantaneous.
@@ -137,10 +135,9 @@ def _quick_detect_doc_type(
     return None, None
 
 
-from app.domain.pipeline import PIPELINE_STEP_DEFINITIONS  # noqa: E402
-
 # Moved to app.domain.file_types so the e-mail ingest path shares it.
 from app.domain.file_types import DEFAULT_ALLOWED_EXTENSIONS  # noqa: E402
+from app.domain.pipeline import PIPELINE_STEP_DEFINITIONS  # noqa: E402
 
 
 def _delete_result_payload(result: dict) -> DocumentDeleteResult:
@@ -162,13 +159,17 @@ async def _count_for(db: AsyncSession, entity, *conditions) -> int:
 
 async def _document_text_for_memory(db: AsyncSession, doc: Document) -> str:
     chunks = (
-        await db.execute(
-            select(DocumentChunk.text)
-            .where(DocumentChunk.document_id == doc.id)
-            .order_by(DocumentChunk.chunk_index.asc())
-            .limit(200)
+        (
+            await db.execute(
+                select(DocumentChunk.text)
+                .where(DocumentChunk.document_id == doc.id)
+                .order_by(DocumentChunk.chunk_index.asc())
+                .limit(200)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if chunks:
         return "\n\n".join(chunks)
 
@@ -281,16 +282,20 @@ async def _batch_pipeline_status(
         .subquery()
     )
     jobs_rows = (
-        await db.execute(
-            select(DocumentProcessingJob).join(
-                latest_job_subq,
-                and_(
-                    DocumentProcessingJob.document_id == latest_job_subq.c.document_id,
-                    DocumentProcessingJob.created_at == latest_job_subq.c.max_created,
-                ),
+        (
+            await db.execute(
+                select(DocumentProcessingJob).join(
+                    latest_job_subq,
+                    and_(
+                        DocumentProcessingJob.document_id == latest_job_subq.c.document_id,
+                        DocumentProcessingJob.created_at == latest_job_subq.c.max_created,
+                    ),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     jobs_by_doc = {j.document_id: j for j in jobs_rows}
 
     # 2. Latest graph build status per document
@@ -304,78 +309,122 @@ async def _batch_pipeline_status(
         .subquery()
     )
     graphs_rows = (
-        await db.execute(
-            select(GraphBuildStatus).join(
-                latest_graph_subq,
-                and_(
-                    GraphBuildStatus.document_id == latest_graph_subq.c.document_id,
-                    GraphBuildStatus.created_at == latest_graph_subq.c.max_created,
-                ),
+        (
+            await db.execute(
+                select(GraphBuildStatus).join(
+                    latest_graph_subq,
+                    and_(
+                        GraphBuildStatus.document_id == latest_graph_subq.c.document_id,
+                        GraphBuildStatus.created_at == latest_graph_subq.c.max_created,
+                    ),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     graphs_by_doc = {g.document_id: g for g in graphs_rows}
 
     def _counts(rows) -> dict[uuid.UUID, int]:
         return {row[0]: int(row[1]) for row in rows}
 
     # 3–12. Grouped COUNT queries (one roundtrip each)
-    extraction_counts = _counts((await db.execute(
-        select(DocumentExtraction.document_id, func.count())
-        .where(DocumentExtraction.document_id.in_(doc_ids))
-        .group_by(DocumentExtraction.document_id)
-    )).all())
-    artifact_counts = _counts((await db.execute(
-        select(DocumentArtifact.document_id, func.count())
-        .where(DocumentArtifact.document_id.in_(doc_ids))
-        .group_by(DocumentArtifact.document_id)
-    )).all())
-    chunk_counts = _counts((await db.execute(
-        select(DocumentChunk.document_id, func.count())
-        .where(DocumentChunk.document_id.in_(doc_ids))
-        .group_by(DocumentChunk.document_id)
-    )).all())
-    evidence_counts = _counts((await db.execute(
-        select(EvidenceSpan.document_id, func.count())
-        .where(EvidenceSpan.document_id.in_(doc_ids))
-        .group_by(EvidenceSpan.document_id)
-    )).all())
-    node_counts = _counts((await db.execute(
-        select(KnowledgeNode.source_document_id, func.count())
-        .where(KnowledgeNode.source_document_id.in_(doc_ids))
-        .group_by(KnowledgeNode.source_document_id)
-    )).all())
-    edge_counts = _counts((await db.execute(
-        select(KnowledgeEdge.source_document_id, func.count())
-        .where(KnowledgeEdge.source_document_id.in_(doc_ids))
-        .group_by(KnowledgeEdge.source_document_id)
-    )).all())
-    graph_review_counts = _counts((await db.execute(
-        select(GraphReviewItem.document_id, func.count())
-        .where(
-            GraphReviewItem.document_id.in_(doc_ids),
-            GraphReviewItem.status == "pending",
-        )
-        .group_by(GraphReviewItem.document_id)
-    )).all())
-    embedding_counts = _counts((await db.execute(
-        select(MemoryEmbeddingRecord.document_id, func.count())
-        .where(MemoryEmbeddingRecord.document_id.in_(doc_ids))
-        .group_by(MemoryEmbeddingRecord.document_id)
-    )).all())
-    ntd_check_counts = _counts((await db.execute(
-        select(NTDCheckRun.document_id, func.count())
-        .where(NTDCheckRun.document_id.in_(doc_ids))
-        .group_by(NTDCheckRun.document_id)
-    )).all())
-    ntd_finding_counts = _counts((await db.execute(
-        select(NTDCheckFinding.document_id, func.count())
-        .where(
-            NTDCheckFinding.document_id.in_(doc_ids),
-            NTDCheckFinding.status == "open",
-        )
-        .group_by(NTDCheckFinding.document_id)
-    )).all())
+    extraction_counts = _counts(
+        (
+            await db.execute(
+                select(DocumentExtraction.document_id, func.count())
+                .where(DocumentExtraction.document_id.in_(doc_ids))
+                .group_by(DocumentExtraction.document_id)
+            )
+        ).all()
+    )
+    artifact_counts = _counts(
+        (
+            await db.execute(
+                select(DocumentArtifact.document_id, func.count())
+                .where(DocumentArtifact.document_id.in_(doc_ids))
+                .group_by(DocumentArtifact.document_id)
+            )
+        ).all()
+    )
+    chunk_counts = _counts(
+        (
+            await db.execute(
+                select(DocumentChunk.document_id, func.count())
+                .where(DocumentChunk.document_id.in_(doc_ids))
+                .group_by(DocumentChunk.document_id)
+            )
+        ).all()
+    )
+    evidence_counts = _counts(
+        (
+            await db.execute(
+                select(EvidenceSpan.document_id, func.count())
+                .where(EvidenceSpan.document_id.in_(doc_ids))
+                .group_by(EvidenceSpan.document_id)
+            )
+        ).all()
+    )
+    node_counts = _counts(
+        (
+            await db.execute(
+                select(KnowledgeNode.source_document_id, func.count())
+                .where(KnowledgeNode.source_document_id.in_(doc_ids))
+                .group_by(KnowledgeNode.source_document_id)
+            )
+        ).all()
+    )
+    edge_counts = _counts(
+        (
+            await db.execute(
+                select(KnowledgeEdge.source_document_id, func.count())
+                .where(KnowledgeEdge.source_document_id.in_(doc_ids))
+                .group_by(KnowledgeEdge.source_document_id)
+            )
+        ).all()
+    )
+    graph_review_counts = _counts(
+        (
+            await db.execute(
+                select(GraphReviewItem.document_id, func.count())
+                .where(
+                    GraphReviewItem.document_id.in_(doc_ids),
+                    GraphReviewItem.status == "pending",
+                )
+                .group_by(GraphReviewItem.document_id)
+            )
+        ).all()
+    )
+    embedding_counts = _counts(
+        (
+            await db.execute(
+                select(MemoryEmbeddingRecord.document_id, func.count())
+                .where(MemoryEmbeddingRecord.document_id.in_(doc_ids))
+                .group_by(MemoryEmbeddingRecord.document_id)
+            )
+        ).all()
+    )
+    ntd_check_counts = _counts(
+        (
+            await db.execute(
+                select(NTDCheckRun.document_id, func.count())
+                .where(NTDCheckRun.document_id.in_(doc_ids))
+                .group_by(NTDCheckRun.document_id)
+            )
+        ).all()
+    )
+    ntd_finding_counts = _counts(
+        (
+            await db.execute(
+                select(NTDCheckFinding.document_id, func.count())
+                .where(
+                    NTDCheckFinding.document_id.in_(doc_ids),
+                    NTDCheckFinding.status == "open",
+                )
+                .group_by(NTDCheckFinding.document_id)
+            )
+        ).all()
+    )
 
     result: dict[uuid.UUID, DocumentPipelineStatus] = {}
     for doc_id in doc_ids:
@@ -416,10 +465,7 @@ def _initial_pipeline_steps(*, memory_seed_done: bool = False) -> list[dict]:
 
 
 def _mark_pipeline_step(steps: list[dict], key: str, status: str) -> list[dict]:
-    return [
-        {**step, "status": status} if step.get("key") == key else step
-        for step in steps
-    ]
+    return [{**step, "status": status} if step.get("key") == key else step for step in steps]
 
 
 async def _create_processing_job(
@@ -481,9 +527,7 @@ async def _ingest_eml_attachments(
                 logger.info("eml_attachment_skipped_ext", filename=att_name, ext=ext)
                 continue
             att_hash = att.get("sha256") or hashlib.sha256(att_bytes).hexdigest()
-            existing = await db.execute(
-                select(Document).where(Document.file_hash == att_hash)
-            )
+            existing = await db.execute(select(Document).where(Document.file_hash == att_hash))
             if existing.scalar_one_or_none() is not None:
                 continue  # already ingested elsewhere; skip duplicate
 
@@ -510,9 +554,7 @@ async def _ingest_eml_attachments(
             )
             db.add(child)
             await db.flush()
-            await _create_processing_job(
-                db, child, status="queued", current_step="classification"
-            )
+            await _create_processing_job(db, child, status="queued", current_step="classification")
             db.add(
                 DocumentLink(
                     document_id=child.id,
@@ -546,6 +588,7 @@ async def download_document(
 
     try:
         from app.storage import download_file
+
         content = download_file(doc.storage_path)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Storage unavailable: {e}")
@@ -572,6 +615,7 @@ async def get_document_presigned_url(
 
     try:
         from app.storage import get_presigned_url
+
         url = get_presigned_url(doc.storage_path)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Storage unavailable: {e}")
@@ -608,7 +652,7 @@ async def ingest_document(
             detail={
                 "stage": "validation",
                 "file_name": file.filename or "unknown",
-                "error": f"File too large: {file_size // (1024*1024)} MB exceeds limit of {settings.max_upload_size_mb} MB",
+                "error": f"File too large: {file_size // (1024 * 1024)} MB exceeds limit of {settings.max_upload_size_mb} MB",
             },
         )
 
@@ -626,6 +670,7 @@ async def ingest_document(
 
     # ClamAV antivirus scan (skipped gracefully if clamd not available)
     from app.security.clamav import scan_bytes
+
     scan = scan_bytes(content)
     if not scan.is_clean:
         raise HTTPException(
@@ -662,17 +707,20 @@ async def ingest_document(
         )
     )
     is_allowed = (
-        allowed_result.scalar_one_or_none() is not None
-        or ext in DEFAULT_ALLOWED_EXTENSIONS
+        allowed_result.scalar_one_or_none() is not None or ext in DEFAULT_ALLOWED_EXTENSIONS
     )
 
     # Store to MinIO (even suspicious files — reviewer may release them)
     import asyncio
+
     storage_path = f"documents/{file_hash[:2]}/{file_hash[2:4]}/{file_hash}"
     try:
         from app.storage import upload_file
+
         await asyncio.to_thread(
-            upload_file, content, storage_path,
+            upload_file,
+            content,
+            storage_path,
             file.content_type or "application/octet-stream",
         )
     except Exception as e:
@@ -709,6 +757,7 @@ async def ingest_document(
     object_id = None
     if project or site_object:
         from app.domain.projects import get_or_create_object, get_or_create_project
+
         project_id = await get_or_create_project(db, project)
         object_id = await get_or_create_object(db, site_object, project_id=project_id)
 
@@ -763,7 +812,9 @@ async def ingest_document(
             },
         )
         await add_timeline_event(
-            db, entity_type="document", entity_id=doc.id,
+            db,
+            entity_type="document",
+            entity_id=doc.id,
             event_type="quarantined",
             summary=f"Файл помещён в карантин: {doc.file_name} (расширение {ext} не разрешено)",
             actor="system",
@@ -771,6 +822,7 @@ async def ingest_document(
         await db.commit()
         logger.info("document_quarantined", doc_id=str(doc.id), ext=ext)
         from fastapi.responses import JSONResponse
+
         return JSONResponse(
             status_code=202,
             content={
@@ -843,9 +895,7 @@ async def ingest_document(
         if not memory_seed_done:
             skip_keys.add("memory_seed")
         processing_job.pipeline_steps = [
-            {**step, "status": "skipped"}
-            if step.get("key") in skip_keys
-            else step
+            {**step, "status": "skipped"} if step.get("key") in skip_keys else step
             for step in (processing_job.pipeline_steps or [])
         ]
 
@@ -894,6 +944,7 @@ async def ingest_document(
         try:
             from app.services.drawing_service import create_and_analyze_drawing
             from app.storage import download_file
+
             file_bytes = download_file(doc.storage_path) if doc.storage_path else b""
             drawing, drawing_task_id = await create_and_analyze_drawing(
                 file_bytes=file_bytes,
@@ -919,6 +970,7 @@ async def ingest_document(
         # Auto-trigger extraction pipeline
         try:
             from app.tasks.extraction import process_document
+
             task = process_document.delay(str(doc.id))
             if processing_job:
                 processing_job.celery_task_id = str(task.id) if task else None
@@ -945,6 +997,7 @@ async def ingest_document(
     if not auto_process:
         try:
             from app.tasks.embedding import embed_document
+
             embed_document.delay(str(doc.id))
         except Exception as e:
             logger.warning("embed_queue_failed", doc_id=str(doc.id), error=str(e))
@@ -991,8 +1044,11 @@ async def list_documents(
 
     # Row-level visibility: hide other departments' owned documents from non-managers.
     query = await apply_visibility(
-        db, current_user, query,
-        owner_col=Document.owner_sub, department_col=Document.department_id,
+        db,
+        current_user,
+        query,
+        owner_col=Document.owner_sub,
+        department_col=Document.department_id,
     )
 
     # Count
@@ -1043,31 +1099,27 @@ async def list_document_workspace(
         )
 
     query = await apply_visibility(
-        db, current_user, query,
+        db,
+        current_user,
+        query,
         owner_col=Document.owner_sub,
         department_col=Document.department_id,
     )
 
-    total = (
-        await db.execute(select(func.count()).select_from(query.subquery()))
-    ).scalar() or 0
+    total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
 
     order_col = {
         "created_asc": Document.created_at.asc(),
         "updated_desc": Document.updated_at.desc(),
     }.get(sort_by, Document.created_at.desc())
 
-    result = await db.execute(
-        query.order_by(order_col).offset(offset).limit(limit)
-    )
+    result = await db.execute(query.order_by(order_col).offset(offset).limit(limit))
     docs = result.scalars().all()
 
     # status_counts и type_counts скоупированы под те же фильтры + visibility
     base_subq = query.subquery()
     status_counts_result = await db.execute(
-        select(base_subq.c.status, func.count())
-        .select_from(base_subq)
-        .group_by(base_subq.c.status)
+        select(base_subq.c.status, func.count()).select_from(base_subq).group_by(base_subq.c.status)
     )
     status_counts = {
         s.value if hasattr(s, "value") else str(s): int(count)
@@ -1086,10 +1138,7 @@ async def list_document_workspace(
 
     doc_ids = [doc.id for doc in docs]
     pipeline_by_id = await _batch_pipeline_status(db, doc_ids)
-    items = [
-        DocumentWorkspaceItem(document=doc, pipeline=pipeline_by_id[doc.id])
-        for doc in docs
-    ]
+    items = [DocumentWorkspaceItem(document=doc, pipeline=pipeline_by_id[doc.id]) for doc in docs]
     return DocumentWorkspaceResponse(
         items=items,
         total=total,
@@ -1134,7 +1183,9 @@ async def get_pipeline_current(
             "id": str(doc.id),
             "file_name": doc.file_name,
             "status": doc.status.value if hasattr(doc.status, "value") else doc.status,
-            "doc_type": doc.doc_type.value if doc.doc_type and hasattr(doc.doc_type, "value") else doc.doc_type,
+            "doc_type": doc.doc_type.value
+            if doc.doc_type and hasattr(doc.doc_type, "value")
+            else doc.doc_type,
         },
         "pipeline": pipeline,
     }
@@ -1171,9 +1222,7 @@ async def list_all_document_ids(
                 Document.file_hash.ilike(f"%{search}%"),
             )
         )
-    result = await db.execute(
-        query.order_by(Document.created_at.desc()).limit(5000)
-    )
+    result = await db.execute(query.order_by(Document.created_at.desc()).limit(5000))
     ids = [str(row) for row in result.scalars().all()]
     return {"ids": ids, "total": len(ids)}
 
@@ -1187,14 +1236,13 @@ async def get_document_invoice(
     db: AsyncSession = Depends(get_db),
 ):
     """Return invoice with line items for a document."""
-    from app.db.models import Invoice, InvoiceLine  # noqa: F401
     from sqlalchemy.orm import selectinload as _sil
+
+    from app.db.models import Invoice, InvoiceLine  # noqa: F401
 
     # Try direct FK first (invoice.document_id), then via DocumentLink
     inv_result = await db.execute(
-        select(Invoice)
-        .where(Invoice.document_id == document_id)
-        .options(_sil(Invoice.lines))
+        select(Invoice).where(Invoice.document_id == document_id).options(_sil(Invoice.lines))
     )
     invoice = inv_result.scalar_one_or_none()
 
@@ -1219,28 +1267,32 @@ async def get_document_invoice(
             "id": str(invoice.id),
             "preview": False,
             "invoice_number": invoice.invoice_number,
-            "invoice_date": invoice.invoice_date.date().isoformat() if invoice.invoice_date else None,
+            "invoice_date": invoice.invoice_date.date().isoformat()
+            if invoice.invoice_date
+            else None,
             "due_date": invoice.due_date.date().isoformat() if invoice.due_date else None,
             "currency": invoice.currency,
             "subtotal": float(invoice.subtotal) if invoice.subtotal is not None else None,
             "tax_amount": float(invoice.tax_amount) if invoice.tax_amount is not None else None,
-            "total_amount": float(invoice.total_amount) if invoice.total_amount is not None else None,
+            "total_amount": float(invoice.total_amount)
+            if invoice.total_amount is not None
+            else None,
             "status": invoice.status.value if invoice.status else None,
             "lines": [
                 {
-                    "id": str(l.id),
-                    "line_number": l.line_number,
-                    "sku": l.sku,
-                    "description": l.description,
-                    "quantity": float(l.quantity) if l.quantity is not None else None,
-                    "unit": l.unit,
-                    "unit_price": float(l.unit_price) if l.unit_price is not None else None,
-                    "amount": float(l.amount) if l.amount is not None else None,
-                    "tax_rate": float(l.tax_rate) if l.tax_rate is not None else None,
-                    "tax_amount": float(l.tax_amount) if l.tax_amount is not None else None,
-                    "confidence": float(l.confidence) if l.confidence is not None else None,
+                    "id": str(ln.id),
+                    "line_number": ln.line_number,
+                    "sku": ln.sku,
+                    "description": ln.description,
+                    "quantity": float(ln.quantity) if ln.quantity is not None else None,
+                    "unit": ln.unit,
+                    "unit_price": float(ln.unit_price) if ln.unit_price is not None else None,
+                    "amount": float(ln.amount) if ln.amount is not None else None,
+                    "tax_rate": float(ln.tax_rate) if ln.tax_rate is not None else None,
+                    "tax_amount": float(ln.tax_amount) if ln.tax_amount is not None else None,
+                    "confidence": float(ln.confidence) if ln.confidence is not None else None,
                 }
-                for l in sorted(invoice.lines, key=lambda x: x.line_number)
+                for ln in sorted(invoice.lines, key=lambda x: x.line_number)
             ],
         }
 
@@ -1271,18 +1323,18 @@ async def get_document_invoice(
         "lines": [
             {
                 "id": None,
-                "line_number": l.get("line_number", i + 1),
-                "sku": l.get("sku"),
-                "description": l.get("description"),
-                "quantity": l.get("quantity"),
-                "unit": l.get("unit"),
-                "unit_price": l.get("unit_price"),
-                "amount": l.get("amount"),
-                "tax_rate": l.get("tax_rate"),
-                "tax_amount": l.get("tax_amount"),
+                "line_number": ln.get("line_number", i + 1),
+                "sku": ln.get("sku"),
+                "description": ln.get("description"),
+                "quantity": ln.get("quantity"),
+                "unit": ln.get("unit"),
+                "unit_price": ln.get("unit_price"),
+                "amount": ln.get("amount"),
+                "tax_rate": ln.get("tax_rate"),
+                "tax_amount": ln.get("tax_amount"),
                 "confidence": None,
             }
-            for i, l in enumerate(lines_raw)
+            for i, ln in enumerate(lines_raw)
         ],
     }
 
@@ -1572,9 +1624,7 @@ async def get_document_management_summary(
 ):
     """Skill: doc.management — Read document pipeline, memory, graph and NTD status."""
     result = await db.execute(
-        select(Document)
-        .where(Document.id == document_id)
-        .options(selectinload(Document.links))
+        select(Document).where(Document.id == document_id).options(selectinload(Document.links))
     )
     doc = result.scalar_one_or_none()
     if not doc:
@@ -1632,6 +1682,7 @@ async def update_document(
         try:
             from app.db.models import DocumentExtraction
             from app.tasks.extraction import extract_invoice, process_approved_document
+
             extraction_row = (
                 await db.execute(
                     select(DocumentExtraction)
@@ -1639,7 +1690,11 @@ async def update_document(
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            doc_type_val = doc.doc_type.value if doc.doc_type and hasattr(doc.doc_type, "value") else (doc.doc_type or "")
+            doc_type_val = (
+                doc.doc_type.value
+                if doc.doc_type and hasattr(doc.doc_type, "value")
+                else (doc.doc_type or "")
+            )
             if not extraction_row and doc_type_val == "invoice":
                 # Extraction was interrupted (e.g. worker restart) — re-trigger it.
                 # auto_verify will call process_approved_document after it succeeds.
@@ -1765,9 +1820,7 @@ async def get_document_dependencies(
 ):
     """Skill: doc.dependencies — Search explicit links and graph dependencies for a document."""
     result = await db.execute(
-        select(Document)
-        .where(Document.id == document_id)
-        .options(selectinload(Document.links))
+        select(Document).where(Document.id == document_id).options(selectinload(Document.links))
     )
     doc = result.scalar_one_or_none()
     if not doc:
@@ -1940,9 +1993,12 @@ async def extract_document(
     # Commit BEFORE dispatching to broker so celery always finds the queued job
     await db.commit()
 
-    task = process_document.delay(str(document_id), force, True)  # priority=True → gpu_priority queue
+    task = process_document.delay(
+        str(document_id), force, True
+    )  # priority=True → gpu_priority queue
     if task and task.id:
         from sqlalchemy import update as _sa_upd
+
         await db.execute(
             _sa_upd(DocumentProcessingJob)
             .where(DocumentProcessingJob.id == job.id)
@@ -1950,7 +2006,9 @@ async def extract_document(
         )
         await db.commit()
 
-    logger.info("extract_triggered", document_id=str(document_id), task_id=getattr(task, "id", None))
+    logger.info(
+        "extract_triggered", document_id=str(document_id), task_id=getattr(task, "id", None)
+    )
     return TaskResponse(
         task_id=task.id,
         document_id=document_id,

@@ -5,11 +5,11 @@ The action enum the model sees is injected from _DISPATCH, so a mismatch would
 mean the model is offered actions that cannot be routed (or vice versa).
 """
 
+from app.ai.agent_loop import _load_capabilities
 from app.api.capability_router import (
     capability_action_map,
     validate_capability_catalog,
 )
-from app.ai.agent_loop import _load_capabilities
 
 
 def test_catalog_is_consistent_with_dispatch():
@@ -83,9 +83,15 @@ def test_the_technologist_role_can_actually_reach_its_own_work():
 
     tech = set(capability_action_map()["tech"])
     assert {
-        "generate_tp_from_drawing", "analyze_surfaces", "select_equipment_for_op",
-        "calculate_cutting_params", "normcontrol_check", "normcontrol_resolve",
-        "blank_spec_set", "surface_specs_list", "export_gost_forms",
+        "generate_tp_from_drawing",
+        "analyze_surfaces",
+        "select_equipment_for_op",
+        "calculate_cutting_params",
+        "normcontrol_check",
+        "normcontrol_resolve",
+        "blank_spec_set",
+        "surface_specs_list",
+        "export_gost_forms",
         "operation_template_create",
     } <= tech
 

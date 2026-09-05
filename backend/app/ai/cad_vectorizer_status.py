@@ -10,9 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
-
 CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
-        "pipeline_revision": "drawing-graph-staged-reader-v3",
+    "pipeline_revision": "drawing-graph-staged-reader-v3",
     "evaluated_at": "2026-07-21",
     "accuracy_contract": {
         "mode": "fail_closed_two_person_certification",
@@ -32,11 +31,20 @@ CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
             "constraint_solver",
         ],
         "heads": [
-            "line", "endpoint", "junction", "circle", "arc",
-            "text", "dimension", "annotation", "hatch",
+            "line",
+            "endpoint",
+            "junction",
+            "circle",
+            "arc",
+            "text",
+            "dimension",
+            "annotation",
+            "hatch",
         ],
         "rejected_as_authoritative": [
-            "qwen3_vl", "zero_to_cad_qwen3_vl", "line_only_vectorizer",
+            "qwen3_vl",
+            "zero_to_cad_qwen3_vl",
+            "line_only_vectorizer",
         ],
         "promotion_requires_profile_gate": True,
     },
@@ -323,18 +331,22 @@ def get_cad_vectorizer_development_status() -> dict[str, Any]:
     description = CAD_VECTORIZER_DEVELOPMENT_STATUS["description_drafting"]
     return {
         **CAD_VECTORIZER_DEVELOPMENT_STATUS,
-        "runtime_pipeline": build_cad_pipeline_manifest(
-            profile="auto", method="trace"
-        ),
+        "runtime_pipeline": build_cad_pipeline_manifest(profile="auto", method="trace"),
         "accuracy_contract": {
             **CAD_VECTORIZER_DEVELOPMENT_STATUS["accuracy_contract"],
-            "required_signatures": list(CAD_VECTORIZER_DEVELOPMENT_STATUS["accuracy_contract"]["required_signatures"]),
+            "required_signatures": list(
+                CAD_VECTORIZER_DEVELOPMENT_STATUS["accuracy_contract"]["required_signatures"]
+            ),
         },
         "selected_model_direction": {
             **CAD_VECTORIZER_DEVELOPMENT_STATUS["selected_model_direction"],
             "stages": list(CAD_VECTORIZER_DEVELOPMENT_STATUS["selected_model_direction"]["stages"]),
             "heads": list(CAD_VECTORIZER_DEVELOPMENT_STATUS["selected_model_direction"]["heads"]),
-            "rejected_as_authoritative": list(CAD_VECTORIZER_DEVELOPMENT_STATUS["selected_model_direction"]["rejected_as_authoritative"]),
+            "rejected_as_authoritative": list(
+                CAD_VECTORIZER_DEVELOPMENT_STATUS["selected_model_direction"][
+                    "rejected_as_authoritative"
+                ]
+            ),
         },
         "corpus": corpus,
         "latest_real_stack_regression": {

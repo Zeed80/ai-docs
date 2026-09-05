@@ -151,11 +151,7 @@ def check_tool_execution(
     """Return a policy decision before a skill/tool is executed."""
     risk = classify_skill_risk(skill_name)
     action = args.get("action")
-    action_risk = (
-        classify_capability_action_risk(str(action))
-        if "." not in skill_name
-        else "low"
-    )
+    action_risk = classify_capability_action_risk(str(action)) if "." not in skill_name else "low"
     if action_risk == "high":
         risk = "high"
     mode = (config.permission_mode or "workspace_write").lower()

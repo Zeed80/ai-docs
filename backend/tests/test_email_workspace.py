@@ -1,12 +1,9 @@
 """Tests for Email Workspace API — drafts, risk-check, templates."""
 
-import uuid
-
 import pytest
 from httpx import AsyncClient
 
 from app.db.models import (
-    DraftAction,
     EmailMessage,
     EmailThread,
     Party,
@@ -62,9 +59,12 @@ async def email_thread(db_session):
 
 @pytest.mark.asyncio
 async def test_email_search(client: AsyncClient, email_thread):
-    resp = await client.post("/api/email/search", json={
-        "query": "Счёт",
-    })
+    resp = await client.post(
+        "/api/email/search",
+        json={
+            "query": "Счёт",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] >= 1
@@ -96,22 +96,33 @@ async def test_draft_lifecycle(client: AsyncClient, db_session):
     # подтверждения человека — и мог оказаться личным ящиком сотрудника).
     from app.db.models import MailboxConfig
 
-    db_session.add(MailboxConfig(
-        name="lifecycle-box", imap_host="imap.example.com", imap_port=993,
-        imap_user="lifecycle", imap_password_encrypted="x", imap_ssl=True,
-        smtp_host="smtp.example.com", smtp_port=587,
-        smtp_user="lifecycle@example.com", smtp_password_encrypted="y",
-        is_active=True,
-    ))
+    db_session.add(
+        MailboxConfig(
+            name="lifecycle-box",
+            imap_host="imap.example.com",
+            imap_port=993,
+            imap_user="lifecycle",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            smtp_user="lifecycle@example.com",
+            smtp_password_encrypted="y",
+            is_active=True,
+        )
+    )
     await db_session.commit()
 
     # Create draft
-    resp = await client.post("/api/email/drafts", json={
-        "to_addresses": ["supplier@example.com"],
-        "subject": "Тестовое письмо",
-        "body_html": "<p>Добрый день!</p>",
-        "mailbox": "lifecycle-box",
-    })
+    resp = await client.post(
+        "/api/email/drafts",
+        json={
+            "to_addresses": ["supplier@example.com"],
+            "subject": "Тестовое письмо",
+            "body_html": "<p>Добрый день!</p>",
+            "mailbox": "lifecycle-box",
+        },
+    )
     assert resp.status_code == 200
     draft = resp.json()
     draft_id = draft["id"]
@@ -133,30 +144,31 @@ async def test_draft_lifecycle(client: AsyncClient, db_session):
 
     # Send — queues a Celery task (no worker in tests), status becomes "queued".
     # expected_digest обязателен: подтверждают текст письма, а не его id.
-    digest = risk["content_digest"] if "content_digest" in risk else (
-        (await client.get(f"/api/email/drafts/{draft_id}")).json()["content_digest"]
+    digest = (
+        risk["content_digest"]
+        if "content_digest" in risk
+        else ((await client.get(f"/api/email/drafts/{draft_id}")).json()["content_digest"])
     )
-    resp = await client.post(
-        f"/api/email/drafts/{draft_id}/send", json={"expected_digest": digest}
-    )
+    resp = await client.post(f"/api/email/drafts/{draft_id}/send", json={"expected_digest": digest})
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] in ("sent", "queued")
 
     # Cannot send again
-    resp = await client.post(
-        f"/api/email/drafts/{draft_id}/send", json={"expected_digest": digest}
-    )
+    resp = await client.post(f"/api/email/drafts/{draft_id}/send", json={"expected_digest": digest})
     assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_risk_check_sensitive_content(client: AsyncClient):
-    resp = await client.post("/api/email/drafts", json={
-        "to_addresses": ["supplier@example.com"],
-        "subject": "Конфиденциально",
-        "body_html": "<p>Это конфиденциальная информация</p>",
-        "body_text": "Это конфиденциальная информация",
-    })
+    resp = await client.post(
+        "/api/email/drafts",
+        json={
+            "to_addresses": ["supplier@example.com"],
+            "subject": "Конфиденциально",
+            "body_html": "<p>Это конфиденциальная информация</p>",
+            "body_text": "Это конфиденциальная информация",
+        },
+    )
     draft_id = resp.json()["id"]
 
     resp = await client.post(f"/api/email/drafts/{draft_id}/risk-check")
@@ -168,9 +180,12 @@ async def test_risk_check_sensitive_content(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_suggest_template(client: AsyncClient):
-    resp = await client.post("/api/email/suggest-template", json={
-        "context_type": "payment_reminder",
-    })
+    resp = await client.post(
+        "/api/email/suggest-template",
+        json={
+            "context_type": "payment_reminder",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["templates"]) >= 1
@@ -181,9 +196,12 @@ async def test_suggest_template(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_style_analyze_no_matching_emails(client: AsyncClient, supplier_with_email):
     # supplier_with_email has contact_email=sales@acme.com, but no emails in DB from that address
-    resp = await client.post("/api/email/style-analyze", json={
-        "email_address": "nobody-has-this@nowhere.test",
-    })
+    resp = await client.post(
+        "/api/email/style-analyze",
+        json={
+            "email_address": "nobody-has-this@nowhere.test",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["tone"] in ("neutral", "formal", "friendly")  # AI may still try to analyze

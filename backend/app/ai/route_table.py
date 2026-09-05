@@ -27,10 +27,13 @@ from app.ai.degradation import log_degraded
 
 logger = structlog.get_logger()
 
+
 def _routes_path() -> Path:
     # Same root resolution as gateway_config (AIAGENT_ROOT env override in Docker).
     from app.ai.gateway_config import _AIAGENT_ROOT
+
     return _AIAGENT_ROOT / "config" / "routes.yml"
+
 
 _cache: dict[str, Any] | None = None
 _cache_mtime: float = 0.0
@@ -166,9 +169,7 @@ def fallback_canvas(text: str) -> str | None:
             continue
         if rule.get("require_table_edit") and not is_table_edit_request(text):
             continue
-        if rule.get("require_extra_any") and not any(
-            kw in t for kw in rule["require_extra_any"]
-        ):
+        if rule.get("require_extra_any") and not any(kw in t for kw in rule["require_extra_any"]):
             continue
         for sub in rule.get("sub_rules") or []:
             if any(kw in t for kw in sub.get("require_any") or []):
@@ -179,18 +180,67 @@ def fallback_canvas(text: str) -> str | None:
 
 # ── Supplier helpers ───────────────────────────────────────────────────────────
 
-_SUPPLIER_NAME_STOPWORDS = frozenset({
-    # Russian stopwords
-    "всех", "всем", "всеми", "всё", "все", "другим", "другие", "другого",
-    "любой", "каждый", "каждого", "одного", "один", "без", "только",
-    "кроме", "нескольких", "нескольким", "поставщикам", "поставщиках",
-    "лучший", "лучшего", "лучшем", "худший", "первый", "последний",
-    # Short prepositions / function words (frequently mismatched)
-    "по", "из", "от", "до", "за", "на", "об", "во", "ко", "со", "для",
-    "при", "над", "под", "про", "как", "что", "или", "это", "тот", "тем",
-    # English words that may appear after "поставщик"
-    "trust", "score", "rating", "list", "profile", "top", "best",
-})
+_SUPPLIER_NAME_STOPWORDS = frozenset(
+    {
+        # Russian stopwords
+        "всех",
+        "всем",
+        "всеми",
+        "всё",
+        "все",
+        "другим",
+        "другие",
+        "другого",
+        "любой",
+        "каждый",
+        "каждого",
+        "одного",
+        "один",
+        "без",
+        "только",
+        "кроме",
+        "нескольких",
+        "нескольким",
+        "поставщикам",
+        "поставщиках",
+        "лучший",
+        "лучшего",
+        "лучшем",
+        "худший",
+        "первый",
+        "последний",
+        # Short prepositions / function words (frequently mismatched)
+        "по",
+        "из",
+        "от",
+        "до",
+        "за",
+        "на",
+        "об",
+        "во",
+        "ко",
+        "со",
+        "для",
+        "при",
+        "над",
+        "под",
+        "про",
+        "как",
+        "что",
+        "или",
+        "это",
+        "тот",
+        "тем",
+        # English words that may appear after "поставщик"
+        "trust",
+        "score",
+        "rating",
+        "list",
+        "profile",
+        "top",
+        "best",
+    }
+)
 
 _SUPPLIER_NAME_RE = re.compile(
     r"поставщик[аиу]?\s+([«»\"']?[а-яёa-zА-ЯЁA-Z][а-яёa-z0-9А-ЯЁA-Z«»\"'\-\.]{2,}"
@@ -347,10 +397,10 @@ def aux_quality_budgets() -> dict[str, Any]:
 class FastIntent:
     """A resolved deterministic intent the executor can run without the LLM."""
 
-    capability: str               # capability/skill map key, e.g. "invoices"
-    action: str                   # capability action, e.g. "list"
+    capability: str  # capability/skill map key, e.g. "invoices"
+    action: str  # capability action, e.g. "list"
     args: dict = field(default_factory=dict)
-    entity_label: str = ""        # human-readable label for the answer
+    entity_label: str = ""  # human-readable label for the answer
     search_term: str | None = None
 
 
@@ -360,9 +410,7 @@ _INVENTORY_TERM_RE = re.compile(
 _INVENTORY_TERM_FALLBACK_RE = re.compile(
     r"(?:остатк\w*|запас\w*)\s+(.+?)(?:\s+на\s+складе|\s*[.!?]|$)"
 )
-_INVENTORY_FILLER_RE = re.compile(
-    r"\b(позиц\w*|товар\w*|материал\w*|тмц|номенклатур\w*|штук|шт)\b"
-)
+_INVENTORY_FILLER_RE = re.compile(r"\b(позиц\w*|товар\w*|материал\w*|тмц|номенклатур\w*|штук|шт)\b")
 
 
 def _extract_inventory_term(text: str) -> str | None:

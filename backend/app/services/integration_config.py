@@ -4,6 +4,7 @@ Lets an admin set the Authentik API token / external URL from the project admin 
 without editing infra/.env. Falls back to the env-provided settings when unset.
 The token is never returned to clients — only a "set" flag and a masked hint.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -83,23 +84,32 @@ class MailServerConfig:
 
 async def get_mail_server_config() -> MailServerConfig:
     """Load the Mailcow connection config, decrypting the API key."""
+    from sqlalchemy import select
+
     from app.ai.secret_box import decrypt
     from app.db.models import MailServerConfig as MailServerConfigRow
     from app.db.session import _get_session_factory
-    from sqlalchemy import select
 
     factory = _get_session_factory()
     async with factory() as db:
         row = (
             await db.execute(
-                select(MailServerConfigRow).where(MailServerConfigRow.singleton_key == _MAIL_SERVER_SINGLETON)
+                select(MailServerConfigRow).where(
+                    MailServerConfigRow.singleton_key == _MAIL_SERVER_SINGLETON
+                )
             )
         ).scalar_one_or_none()
 
     if row is None:
         return MailServerConfig(
-            api_url=None, api_key="", mail_domain=None, webmail_url=None,
-            imap_host=None, imap_port=993, smtp_host=None, smtp_port=465,
+            api_url=None,
+            api_key="",
+            mail_domain=None,
+            webmail_url=None,
+            imap_host=None,
+            imap_port=993,
+            smtp_host=None,
+            smtp_port=465,
             default_quota_mb=1024,
         )
     return MailServerConfig(

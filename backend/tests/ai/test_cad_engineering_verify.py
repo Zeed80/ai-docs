@@ -42,9 +42,7 @@ def test_invalid_graph_reference_fails_closed():
 
 
 def test_missing_dxf_reopen_proof_fails_closed():
-    result = verify_engineering_ir(
-        _ir(assurance="human_approved", dxf_reopens=None)
-    )
+    result = verify_engineering_ir(_ir(assurance="human_approved", dxf_reopens=None))
 
     assert result.exact_ready is False
     assert result.checks["dxf_reopens"] is False

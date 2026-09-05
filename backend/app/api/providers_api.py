@@ -17,8 +17,7 @@ Endpoints (prefix /api/providers):
 from __future__ import annotations
 
 import asyncio
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import httpx
@@ -28,8 +27,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai import provider_registry
-from app.ai import model_runtime_store
+from app.ai import model_runtime_store, provider_registry
 from app.ai.model_registry import ModelRegistry
 from app.ai.schemas import AITask, ModelCapability, ModelStatus, ProviderKind
 from app.ai.secret_box import decrypt, encrypt, key_state, mask
@@ -61,8 +59,8 @@ class ProviderInstanceOut(BaseModel):
     id: str
     kind: str
     name: str
-    base_url: str | None       # effective URL (stored override or default)
-    default_base_url: str       # the kind's default from the registry
+    base_url: str | None  # effective URL (stored override or default)
+    default_base_url: str  # the kind's default from the registry
     enabled: bool
     is_local: bool
     api_key_set: bool
@@ -71,7 +69,7 @@ class ProviderInstanceOut(BaseModel):
     # app_secret_key) раньше был неотличим от отсутствующего: api_key_set
     # приходил False, и человек вводил ключ заново с тем же результатом.
     api_key_state: str
-    extra: dict                 # {headers: {...}, body: {...}} — provider-specific params
+    extra: dict  # {headers: {...}, body: {...}} — provider-specific params
     last_check_at: datetime | None
     last_check_ok: bool | None
     last_error: str | None
@@ -103,7 +101,7 @@ class ProviderInstanceUpdate(BaseModel):
     base_url: str | None = None
     enabled: bool | None = None
     api_key: str | None = None  # "" clears the key; None leaves it unchanged
-    extra: dict | None = None   # {headers: {...}, body: {...}}; replaces if provided
+    extra: dict | None = None  # {headers: {...}, body: {...}}; replaces if provided
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -152,7 +150,9 @@ async def _sync_cache(db: AsyncSession) -> None:
 @router.get("", response_model=ProvidersListOut, dependencies=_admin)
 @router.get("/", response_model=ProvidersListOut, dependencies=_admin)
 async def list_providers(db: AsyncSession = Depends(get_db)) -> ProvidersListOut:
-    result = await db.execute(select(ProviderInstance).order_by(ProviderInstance.kind, ProviderInstance.name))
+    result = await db.execute(
+        select(ProviderInstance).order_by(ProviderInstance.kind, ProviderInstance.name)
+    )
     instances = [_to_out(i) for i in result.scalars().all()]
 
     registry = _registry()
@@ -228,7 +228,9 @@ async def update_provider(
         new_url = payload.base_url.strip()
         # Storing the default URL → keep it as inherited (None) so future default
         # changes propagate and the row stays clean.
-        inst.base_url = None if (not new_url or new_url == _default_base_url(inst.kind)) else new_url
+        inst.base_url = (
+            None if (not new_url or new_url == _default_base_url(inst.kind)) else new_url
+        )
     if payload.enabled is not None:
         inst.enabled = payload.enabled
     if payload.api_key is not None:
@@ -261,7 +263,9 @@ def _repin_models_after_rename(old_name: str, new_name: str) -> None:
         if moved:
             logger.info(
                 "model_pins_followed_node_rename",
-                old_name=old_name, new_name=new_name, models=moved,
+                old_name=old_name,
+                new_name=new_name,
+                models=moved,
             )
     except Exception as exc:  # noqa: BLE001 — переименование уже сохранено
         logger.warning("model_pin_repin_failed", error=str(exc))
@@ -314,7 +318,7 @@ async def test_provider(instance_id: str, db: AsyncSession = Depends(get_db)) ->
     except Exception as exc:  # noqa: BLE001
         error = str(exc)
 
-    inst.last_check_at = datetime.now(timezone.utc)
+    inst.last_check_at = datetime.now(UTC)
     inst.last_check_ok = ok
     inst.last_error = error
     await db.commit()
@@ -342,9 +346,7 @@ async def refresh_models(instance_id: str, db: AsyncSession = Depends(get_db)) -
     url = base if base.endswith("/v1") else f"{base}/v1"
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                f"{url}/models", headers={"Authorization": f"Bearer {api_key}"}
-            )
+            resp = await client.get(f"{url}/models", headers={"Authorization": f"Bearer {api_key}"})
             resp.raise_for_status()
             data = resp.json().get("data", [])
     except Exception as exc:  # noqa: BLE001
@@ -435,9 +437,7 @@ async def list_models(
         try:
             avail = {
                 k: v.value
-                for k, v in (
-                    await asyncio.to_thread(catalog_availability, registry.models)
-                ).items()
+                for k, v in (await asyncio.to_thread(catalog_availability, registry.models)).items()
             }
         except Exception as exc:  # noqa: BLE001
             logger.warning("catalog_availability_failed", error=str(exc))
@@ -506,32 +506,30 @@ async def routing_health() -> list[RoutingChainOut]:
     def _entry(key: str, primary: bool) -> RoutingChainEntry:
         cap = registry.models.get(key)
         if cap is None:
-            return RoutingChainEntry(
-                key=key, availability="not_in_catalog", is_primary=primary
-            )
+            return RoutingChainEntry(key=key, availability="not_in_catalog", is_primary=primary)
         try:
             state = model_availability(cap.provider, cap.provider_model).value
         except Exception:  # noqa: BLE001
             state = Availability.UNKNOWN.value
         return RoutingChainEntry(
-            key=key, provider_model=cap.provider_model,
-            provider=cap.provider.value, availability=state, is_primary=primary,
+            key=key,
+            provider_model=cap.provider_model,
+            provider=cap.provider.value,
+            availability=state,
+            is_primary=primary,
         )
 
     def _build() -> list[RoutingChainOut]:
         out: list[RoutingChainOut] = []
         for task, cfg in get_task_routing().items():
-            entries = [
-                _entry(k, i == 0) for i, k in enumerate(cfg.models or [])
-            ]
-            out.append(RoutingChainOut(
-                task=str(task).split(".")[-1].lower(),
-                models=entries,
-                dead=sum(
-                    1 for e in entries
-                    if e.availability in ("missing", "not_in_catalog")
-                ),
-            ))
+            entries = [_entry(k, i == 0) for i, k in enumerate(cfg.models or [])]
+            out.append(
+                RoutingChainOut(
+                    task=str(task).split(".")[-1].lower(),
+                    models=entries,
+                    dead=sum(1 for e in entries if e.availability in ("missing", "not_in_catalog")),
+                )
+            )
         return sorted(out, key=lambda r: r.task)
 
     return await asyncio.to_thread(_build)
@@ -573,9 +571,7 @@ async def prune_routing(db: AsyncSession = Depends(get_db)) -> RoutingPruneOut:
             if not dropped:
                 continue
             try:
-                save_task_routing(
-                    task, cfg.model_copy(update={"models": [head, *kept]})
-                )
+                save_task_routing(task, cfg.model_copy(update={"models": [head, *kept]}))
             except Exception as exc:  # noqa: BLE001
                 # Одна невалидная цепочка не должна отменять чистку остальных.
                 result.failed[name] = str(exc)
@@ -600,7 +596,8 @@ async def prune_routing(db: AsyncSession = Depends(get_db)) -> RoutingPruneOut:
             except ValueError:
                 continue
             await model_runtime_store.persist_task_routing(
-                db, task=task.value,
+                db,
+                task=task.value,
                 routing=get_routing_for(task).model_dump(mode="json"),
             )
         await db.commit()
@@ -614,14 +611,14 @@ class LiveModelOut(BaseModel):
     key: str
     provider: str
     provider_model: str
-    status: str               # production/candidate/loaded/…
+    status: str  # production/candidate/loaded/…
     modalities: list[str]
     local_only: bool
     thinking_supported: bool
     thinking_enabled: bool
     thinking_levels: list[str] = []
-    loaded: bool              # actually present on a node right now
-    node: str | None          # which node hosts it (local multi-node)
+    loaded: bool  # actually present on a node right now
+    node: str | None  # which node hosts it (local multi-node)
     # Node this model is pinned to, if any (None = the router picks). Lets the
     # UI offer "run this model on the GPU node / on the CPU node".
     preferred_instance: str | None = None
@@ -671,13 +668,35 @@ def _capability_facts(cap) -> dict:
 
 
 _VISION_HINTS = (
-    "vl", "vision", "llava", "gemma3", "gemma4", "minicpm-v", "moondream",
-    "internvl", "glm-4v", "glm4v", "pixtral", "llama3.2-vision", "qwen2.5vl",
-    "qwen3-vl", "qwen3.5", "qwen3.6",
+    "vl",
+    "vision",
+    "llava",
+    "gemma3",
+    "gemma4",
+    "minicpm-v",
+    "moondream",
+    "internvl",
+    "glm-4v",
+    "glm4v",
+    "pixtral",
+    "llama3.2-vision",
+    "qwen2.5vl",
+    "qwen3-vl",
+    "qwen3.5",
+    "qwen3.6",
 )
 _THINK_HINTS = (
-    "qwen3", "deepseek-r1", "deepseek_r1", "qwq", "reasoner", "thinking",
-    "gpt-oss", "magistral", "r1", "marco-o1", "skywork-o1",
+    "qwen3",
+    "deepseek-r1",
+    "deepseek_r1",
+    "qwq",
+    "reasoner",
+    "thinking",
+    "gpt-oss",
+    "magistral",
+    "r1",
+    "marco-o1",
+    "skywork-o1",
 )
 
 
@@ -845,7 +864,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
     """All selectable models: every model actually loaded on every configured
     provider node, merged with catalog metadata. Discovered models are registered
     into the catalog overlay so they get a stable key (assignable + thinking)."""
-    from app.ai.schemas import ModelCapability, Modality, ModelStatus
+    from app.ai.schemas import Modality, ModelCapability, ModelStatus
 
     registry = _registry()
     # catalog: provider_model (per provider) → (key, cap)
@@ -878,8 +897,12 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
     level_overrides_to_persist: list[dict] = []
 
     # 1) Live local nodes.
-    local_kinds = [ProviderKind.OLLAMA, ProviderKind.VLLM, ProviderKind.LLAMACPP,
-                   ProviderKind.OPENAI_COMPATIBLE]
+    local_kinds = [
+        ProviderKind.OLLAMA,
+        ProviderKind.VLLM,
+        ProviderKind.LLAMACPP,
+        ProviderKind.OPENAI_COMPATIBLE,
+    ]
     for kind in local_kinds:
         for inst in provider_registry.list_instances(kind):
             loaded = await _node_loaded_models(inst)
@@ -932,12 +955,16 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                             levels = _infer_thinking_levels(pm, kind.value)
                             levels_probed = bool(levels)
                         cap = ModelCapability(
-                            name=key, provider=kind, provider_model=pm,
+                            name=key,
+                            provider=kind,
+                            provider_model=pm,
                             status=existing.status if existing else ModelStatus.CANDIDATE,
                             modalities={Modality(m) for m in mods},
                             supports_tool_calling="tool_calling" in mods,
-                            supports_structured_output=True, local_only=True,
-                            thinking_supported=thinking, capability_source="discovered",
+                            supports_structured_output=True,
+                            local_only=True,
+                            thinking_supported=thinking,
+                            capability_source="discovered",
                             thinking_levels=levels,
                             thinking_levels_probed=levels_probed,
                             vram_gb_estimate=vram,
@@ -948,19 +975,23 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                             # but the persisted overlay row should stay consistent
                             # with it rather than silently reverting in between.
                             thinking_enabled=existing.thinking_enabled if existing else False,
-                            thinking_level_default=existing.thinking_level_default if existing else None,
+                            thinking_level_default=existing.thinking_level_default
+                            if existing
+                            else None,
                             preferred_instance=existing.preferred_instance if existing else None,
                         )
                         registry.add_model(key, cap, persist=True)
                         by_pm[(kind.value, pm)] = (key, cap)
-                        discovered_to_persist.append({
-                            "model_key": key,
-                            "provider": kind.value,
-                            "provider_model": pm,
-                            "capability": cap.model_dump(mode="json", exclude={"name"}),
-                            "source": "local_live_discovery",
-                            "verification_status": "discovered",
-                        })
+                        discovered_to_persist.append(
+                            {
+                                "model_key": key,
+                                "provider": kind.value,
+                                "provider_model": pm,
+                                "capability": cap.model_dump(mode="json", exclude={"name"}),
+                                "source": "local_live_discovery",
+                                "verification_status": "discovered",
+                            }
+                        )
                         hit = (key, cap)
                 if hit:
                     key, cap = hit
@@ -997,14 +1028,19 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                             by_pm[(kind.value, pm)] = (key, cap)
                         # else: infra hiccup — leave unprobed, retry next poll.
                     out[key] = LiveModelOut(
-                        key=key, provider=kind.value, provider_model=cap.provider_model,
-                        status=cap.status.value, modalities=sorted(m.value for m in cap.modalities),
-                        local_only=cap.local_only, thinking_supported=cap.thinking_supported,
+                        key=key,
+                        provider=kind.value,
+                        provider_model=cap.provider_model,
+                        status=cap.status.value,
+                        modalities=sorted(m.value for m in cap.modalities),
+                        local_only=cap.local_only,
+                        thinking_supported=cap.thinking_supported,
                         thinking_enabled=cap.thinking_enabled,
                         thinking_levels=effective_thinking_levels(
                             cap.thinking_supported, kind.value, cap.thinking_levels
                         ),
-                        loaded=True, node=inst.name,
+                        loaded=True,
+                        node=inst.name,
                         preferred_instance=_pin_display_name(cap.preferred_instance),
                         vram_gb_estimate=cap.vram_gb_estimate or vram,
                         **_capability_facts(cap),
@@ -1018,35 +1054,46 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                     thinking = _infer_thinking(pm)
                     if key not in registry.models:
                         cap = ModelCapability(
-                            name=key, provider=kind, provider_model=pm,
+                            name=key,
+                            provider=kind,
+                            provider_model=pm,
                             status=ModelStatus.CANDIDATE,
                             modalities={Modality(m) for m in mods},
                             supports_tool_calling="tool_calling" in mods,
-                            supports_structured_output=True, local_only=True,
-                            thinking_supported=thinking, capability_source="discovered",
+                            supports_structured_output=True,
+                            local_only=True,
+                            thinking_supported=thinking,
+                            capability_source="discovered",
                             vram_gb_estimate=vram,
                             thinking_levels=_infer_thinking_levels(pm, kind.value),
                         )
                         registry.add_model(key, cap, persist=True)
-                        discovered_to_persist.append({
-                            "model_key": key,
-                            "provider": kind.value,
-                            "provider_model": pm,
-                            "capability": cap.model_dump(mode="json", exclude={"name"}),
-                            "source": "local_live_discovery",
-                            "verification_status": "discovered",
-                        })
+                        discovered_to_persist.append(
+                            {
+                                "model_key": key,
+                                "provider": kind.value,
+                                "provider_model": pm,
+                                "capability": cap.model_dump(mode="json", exclude={"name"}),
+                                "source": "local_live_discovery",
+                                "verification_status": "discovered",
+                            }
+                        )
                     seen_keys.add(key)
                     th = registry.models[key]
                     out[key] = LiveModelOut(
-                        key=key, provider=kind.value, provider_model=pm,
-                        status="loaded", modalities=sorted(mods), local_only=True,
+                        key=key,
+                        provider=kind.value,
+                        provider_model=pm,
+                        status="loaded",
+                        modalities=sorted(mods),
+                        local_only=True,
                         thinking_supported=th.thinking_supported,
                         thinking_enabled=th.thinking_enabled,
                         thinking_levels=effective_thinking_levels(
                             th.thinking_supported, kind.value, th.thinking_levels
                         ),
-                        loaded=True, node=inst.name,
+                        loaded=True,
+                        node=inst.name,
                         preferred_instance=_pin_display_name(th.preferred_instance),
                         vram_gb_estimate=vram,
                         **_capability_facts(th),
@@ -1066,14 +1113,19 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
         if cap.local_only and cap.provider == ProviderKind.OLLAMA:
             continue
         out[key] = LiveModelOut(
-            key=key, provider=cap.provider.value, provider_model=cap.provider_model,
-            status=cap.status.value, modalities=sorted(m.value for m in cap.modalities),
-            local_only=cap.local_only, thinking_supported=cap.thinking_supported,
+            key=key,
+            provider=cap.provider.value,
+            provider_model=cap.provider_model,
+            status=cap.status.value,
+            modalities=sorted(m.value for m in cap.modalities),
+            local_only=cap.local_only,
+            thinking_supported=cap.thinking_supported,
             thinking_enabled=cap.thinking_enabled,
             thinking_levels=effective_thinking_levels(
                 cap.thinking_supported, cap.provider.value, cap.thinking_levels
             ),
-            loaded=False, node=None,
+            loaded=False,
+            node=None,
             preferred_instance=_pin_display_name(cap.preferred_instance),
             vram_gb_estimate=cap.vram_gb_estimate,
             **_capability_facts(cap),
@@ -1209,13 +1261,13 @@ class SlotOut(BaseModel):
     group: str
     label: str
     hint: str
-    model: str | None              # catalog key currently shown by this response (current or draft)
+    model: str | None  # catalog key currently shown by this response (current or draft)
     current_model: str | None = None  # catalog key actually applied right now
-    local_only: bool               # EFFECTIVE: cloud forbidden for this slot right now
+    local_only: bool  # EFFECTIVE: cloud forbidden for this slot right now
     cloud_optionable: bool = False  # a confidential slot that CAN be opened to cloud
-    cloud_allowed: bool = False     # admin opted this slot into cloud models
+    cloud_allowed: bool = False  # admin opted this slot into cloud models
     required_modality: str | None = None  # capability the slot needs (UI ⚠ source)
-    thinking_capable: bool = False        # compatibility alias: slot + selected model support reasoning
+    thinking_capable: bool = False  # compatibility alias: slot + selected model support reasoning
     thinking_enabled: bool | None = None  # compatibility alias: per-assignment override
     thinking_supported_by_slot: bool = False
     thinking_supported_by_model: bool = False
@@ -1229,7 +1281,7 @@ class SlotOut(BaseModel):
     thinking_mixed: bool = False
     thinking_warning: str | None = None
     # Reasoning-effort level for the selected model, if it declares any.
-    thinking_levels: list[str] = []          # levels the SELECTED model supports (empty = none)
+    thinking_levels: list[str] = []  # levels the SELECTED model supports (empty = none)
     thinking_level_override: str | None = None  # this slot's explicit level override
     thinking_level_effective: str | None = None  # resolved level actually in effect
 
@@ -1239,55 +1291,107 @@ class SlotOut(BaseModel):
 # (PATCH /slots/{slot}/allow-cloud), после чего _slot_effective_local_only
 # перестаёт держать слот локальным.
 _SLOTS = [
-    ("ocr_fast", "Документы", "Быстрая (OCR/VLM)",
-     "OCR счётов, классификация и первичный VLM-анализ", True),
-    ("structured_extraction", "Документы", "Извлечение полей",
-     "Структурированное извлечение и текстовая проверка документов", True),
-    ("ocr_large", "Документы", "Крупная (сложные случаи)",
-     "Повторное извлечение при низкой уверенности/ошибках", True),
+    (
+        "ocr_fast",
+        "Документы",
+        "Быстрая (OCR/VLM)",
+        "OCR счётов, классификация и первичный VLM-анализ",
+        True,
+    ),
+    (
+        "structured_extraction",
+        "Документы",
+        "Извлечение полей",
+        "Структурированное извлечение и текстовая проверка документов",
+        True,
+    ),
+    (
+        "ocr_large",
+        "Документы",
+        "Крупная (сложные случаи)",
+        "Повторное извлечение при низкой уверенности/ошибках",
+        True,
+    ),
     # Агентские слоты помечены local-only не потому, что облако для них
     # запрещено — CLAUDE.md прямо разрешает cloud-модели для planner/auditor и
     # генерации писем, — а потому, что через них проходит содержимое писем,
     # счетов и чертежей. Флаг делает их cloud-opt-in: облако остаётся
     # доступным, но включается осознанно (PATCH /slots/{slot}/allow-cloud с
     # подтверждением), а не побочным эффектом выбора модели из списка.
-    ("agent_orchestrator", "Агент", "Оркестратор",
-     "Планирование, вызов инструментов, диалог", True),
-    ("agent_fast", "Агент", "Быстрая (роутер/простые ходы)",
-     "Классификация хода и быстрые ответы — лёгкая модель, structured output", True),
-    ("agent_email", "Агент", "Письма",
-     "Генерация деловых писем и черновиков", True),
-    ("agent_large", "Агент", "Большая (скиллы/скрипты/ТП)",
-     "Генерация кода, навыков, техпроцессов", True),
+    (
+        "agent_orchestrator",
+        "Агент",
+        "Оркестратор",
+        "Планирование, вызов инструментов, диалог",
+        True,
+    ),
+    (
+        "agent_fast",
+        "Агент",
+        "Быстрая (роутер/простые ходы)",
+        "Классификация хода и быстрые ответы — лёгкая модель, structured output",
+        True,
+    ),
+    ("agent_email", "Агент", "Письма", "Генерация деловых писем и черновиков", True),
+    (
+        "agent_large",
+        "Агент",
+        "Большая (скиллы/скрипты/ТП)",
+        "Генерация кода, навыков, техпроцессов",
+        True,
+    ),
     # Обе настройки существовали и раньше, но задавались мимо каталога:
     # «модель для сжатия» — свободным текстом в настройках агента (опечатка
     # или имя несуществующей модели молча ломали сжатие), аудитор — вовсе не
     # был представлен и просто копировал модель агента.
-    ("agent_compression", "Агент", "Сжатие контекста",
-     "Сжимает длинный диалог в конспект, когда контекст подходит к пределу. "
-     "Не задано → та же модель, что у оркестратора", True),
-    ("agent_auditor", "Агент", "Аудитор ответов",
-     "Проверяет ответ агента на соответствие вопросу перед выдачей. "
-     "Не задано → та же модель, что у оркестратора", True),
-    ("embedding", "Поиск", "Векторизация (embedding)",
-     "Семантический поиск по документам", True),
-    ("rerank", "Поиск", "Реранкинг",
-     "Переранжирование результатов поиска", True),
-    ("cad_spec_read", "Оцифровка", "Чтение чертежа (VLM)",
-     "Метод «по описанию»: модель читает исходное изображение в структурный спек", True),
+    (
+        "agent_compression",
+        "Агент",
+        "Сжатие контекста",
+        "Сжимает длинный диалог в конспект, когда контекст подходит к пределу. "
+        "Не задано → та же модель, что у оркестратора",
+        True,
+    ),
+    (
+        "agent_auditor",
+        "Агент",
+        "Аудитор ответов",
+        "Проверяет ответ агента на соответствие вопросу перед выдачей. "
+        "Не задано → та же модель, что у оркестратора",
+        True,
+    ),
+    ("embedding", "Поиск", "Векторизация (embedding)", "Семантический поиск по документам", True),
+    ("rerank", "Поиск", "Реранкинг", "Переранжирование результатов поиска", True),
+    (
+        "cad_spec_read",
+        "Оцифровка",
+        "Чтение чертежа (VLM)",
+        "Метод «по описанию»: модель читает исходное изображение в структурный спек",
+        True,
+    ),
     # The text layer is its own slot because it is its own job: transcribing
     # what is WRITTEN on the sheet, where a small document specialist beats the
     # large general reader (fit recall 0.800 -> 1.000). It used to be a
     # hardcoded model name, so nothing else could be tried against it.
-    ("cad_text_ocr", "Оцифровка", "Текстовый слой чертежа (OCR)",
-     "Транскрипция надписей и размеров с листа. Специализированная документная "
-     "модель читает точнее общего VLM; геометрию не определяет", True),
+    (
+        "cad_text_ocr",
+        "Оцифровка",
+        "Текстовый слой чертежа (OCR)",
+        "Транскрипция надписей и размеров с листа. Специализированная документная "
+        "модель читает точнее общего VLM; геометрию не определяет",
+        True,
+    ),
     # NB: the experimental whole-sheet graph pipeline (layout / fragment /
     # evidence-verify / legacy read) is intentionally NOT surfaced as user
     # slots — it runs opt-in on its model_registry.yaml fallback defaults.
-    ("cad_spec_draft", "Оцифровка", "Чертёжник (по описанию)",
-     "Генеративная модель строит геометрию из описания (можно LoRA). "
-     "Не задано → детерминированный чертёжник тел вращения", True),
+    (
+        "cad_spec_draft",
+        "Оцифровка",
+        "Чертёжник (по описанию)",
+        "Генеративная модель строит геометрию из описания (можно LoRA). "
+        "Не задано → детерминированный чертёжник тел вращения",
+        True,
+    ),
 ]
 
 _SLOT_MODALITY = {
@@ -1448,7 +1552,7 @@ class AssignmentDraftIn(BaseModel):
         return {k: _as_slot_draft(v) for k, v in self.slots.items()}
 
 
-def _cloud_overrides(payload: "AssignmentDraftIn") -> dict[str, bool]:
+def _cloud_overrides(payload: AssignmentDraftIn) -> dict[str, bool]:
     """Слоты, которым черновик открывает или закрывает облако."""
     return {
         slot: draft.allow_cloud
@@ -1524,9 +1628,7 @@ def _set_slot_cloud_allowed(slot: str, allowed: bool) -> None:
             update_builtin_agent_config,
         )
 
-        update_builtin_agent_config(
-            BuiltinAgentConfigUpdate(auditor_allow_cloud=allowed)
-        )
+        update_builtin_agent_config(BuiltinAgentConfigUpdate(auditor_allow_cloud=allowed))
 
 
 def _slot_base_local_only(slot: str) -> bool:
@@ -1596,6 +1698,7 @@ def _slot_thinking_override(slot: str) -> bool | None:
     if slot in _SLOT_THINKING_TASKS:
         from app.ai.schemas import AITask
         from app.ai.task_routing import get_routing_for
+
         try:
             return get_routing_for(AITask(_SLOT_THINKING_TASKS[slot][0])).thinking
         except (ValueError, KeyError):
@@ -1609,12 +1712,14 @@ def _slot_thinking_level_override(slot: str) -> str | None:
         return None
     if slot in _SLOT_THINKING_LEVEL_AGENT_FIELDS:
         from app.ai.agent_config import get_builtin_agent_config
+
         cfg = get_builtin_agent_config()
         field = _SLOT_THINKING_LEVEL_AGENT_FIELDS[slot][0]
         return getattr(cfg, field, None)
     if slot in _SLOT_THINKING_TASKS:
         from app.ai.schemas import AITask
         from app.ai.task_routing import get_routing_for
+
         try:
             return get_routing_for(AITask(_SLOT_THINKING_TASKS[slot][0])).thinking_level
         except (ValueError, KeyError):
@@ -1639,11 +1744,7 @@ def _slot_thinking_state(slot: str, registry, model_key: str | None) -> dict[str
         effective = bool(model_default)
         source = "model"
     provider = cap.provider.value if cap else None
-    disable_supported = (
-        provider in _THINKING_DISABLE_SUPPORTED_PROVIDERS
-        if provider
-        else True
-    )
+    disable_supported = provider in _THINKING_DISABLE_SUPPORTED_PROVIDERS if provider else True
     warning = None
     if slot_supported and model_supported and effective is False and not disable_supported:
         warning = (
@@ -1712,7 +1813,10 @@ def _build_slot_out(
     )
     effective_local_only = bool(local_only) and not cloud_allowed
     return SlotOut(
-        slot=slot, group=group, label=label, hint=hint,
+        slot=slot,
+        group=group,
+        label=label,
+        hint=hint,
         model=model,
         current_model=applied,
         local_only=effective_local_only,
@@ -1842,10 +1946,7 @@ def _loaded_node_for(cap: ModelCapability, index: dict[tuple[str, str], str]) ->
     if cap.provider not in _LOCAL_KINDS:
         return None
     pv = cap.provider.value
-    return (
-        index.get((pv, cap.provider_model))
-        or index.get((pv, cap.provider_model.split(":")[0]))
-    )
+    return index.get((pv, cap.provider_model)) or index.get((pv, cap.provider_model.split(":")[0]))
 
 
 def _verification_warning(
@@ -1905,53 +2006,83 @@ async def _validate_assignment_draft(
     for slot, model_key in draft.items():
         meta = _slot_meta(slot)
         if meta is None:
-            errors.append(AssignmentIssue(slot=slot, model=model_key, code="unknown_slot", message="Неизвестный слот", severity="error"))
+            errors.append(
+                AssignmentIssue(
+                    slot=slot,
+                    model=model_key,
+                    code="unknown_slot",
+                    message="Неизвестный слот",
+                    severity="error",
+                )
+            )
             continue
         if not model_key:
             # Explicit unset (e.g. rollback to an empty old_model) — emit a diff
             # so it is actually applied; no model = no capability checks.
             old = current.get(slot)
             if old is not None:
-                diff.append(AssignmentDiffItem(slot=slot, old_model=old, new_model=None, affected=_slot_affected(slot)))
+                diff.append(
+                    AssignmentDiffItem(
+                        slot=slot, old_model=old, new_model=None, affected=_slot_affected(slot)
+                    )
+                )
             continue
         cap = registry.models.get(model_key)
         if cap is None:
-            errors.append(AssignmentIssue(slot=slot, model=model_key, code="unknown_model", message="Модель не найдена в каталоге", severity="error"))
+            errors.append(
+                AssignmentIssue(
+                    slot=slot,
+                    model=model_key,
+                    code="unknown_model",
+                    message="Модель не найдена в каталоге",
+                    severity="error",
+                )
+            )
             continue
         # Проверка шла по БАЗОВОМУ local_only, то есть игнорировала выданное
         # разрешение на облако: применение (_apply_slot_assignment) его
         # учитывает, а валидация — нет, и она оказывалась строже. Слот, где
         # облако разрешено осознанно, всё равно отвергался.
         cloud_ok = (cloud_overrides or {}).get(slot)
-        slot_local_only = (
-            not cloud_ok if cloud_ok is not None else _slot_effective_local_only(slot)
-        )
+        slot_local_only = not cloud_ok if cloud_ok is not None else _slot_effective_local_only(slot)
         if slot_local_only and not cap.local_only:
-            errors.append(AssignmentIssue(
-                slot=slot, model=model_key, code="cloud_for_confidential",
-                message=(
-                    "Слот работает с содержимым документов — облачную модель "
-                    "нужно разрешить для него отдельно"
-                ),
-                severity="error",
-            ))
+            errors.append(
+                AssignmentIssue(
+                    slot=slot,
+                    model=model_key,
+                    code="cloud_for_confidential",
+                    message=(
+                        "Слот работает с содержимым документов — облачную модель "
+                        "нужно разрешить для него отдельно"
+                    ),
+                    severity="error",
+                )
+            )
         required = _SLOT_MODALITY.get(slot)
         if required and required not in {m.value for m in cap.modalities}:
             # «Не умеет» и «мы не проверяли» — разные вещи для того, кто
             # выбирает модель. Второе чинится пробным запросом, первое нет.
             if getattr(cap, "capabilities_unknown", False):
-                warnings.append(AssignmentIssue(
-                    slot=slot, model=model_key, code="capabilities_unknown",
-                    message=(
-                        "Провайдер не сообщает возможности этой модели — "
-                        "проверьте пробным запросом"
-                    ),
-                ))
+                warnings.append(
+                    AssignmentIssue(
+                        slot=slot,
+                        model=model_key,
+                        code="capabilities_unknown",
+                        message=(
+                            "Провайдер не сообщает возможности этой модели — "
+                            "проверьте пробным запросом"
+                        ),
+                    )
+                )
             else:
-                warnings.append(AssignmentIssue(
-                    slot=slot, model=model_key, code="modality_mismatch",
-                    message=f"Модель не заявляет capability '{required}'",
-                ))
+                warnings.append(
+                    AssignmentIssue(
+                        slot=slot,
+                        model=model_key,
+                        code="modality_mismatch",
+                        message=f"Модель не заявляет capability '{required}'",
+                    )
+                )
         # A loaded local model has proven it runs → suppress catalog-status and
         # not-loaded caveats; only real constraints (modality/confidential) stand.
         is_loaded = cap.provider in _LOCAL_KINDS and _loaded_node_for(cap, loaded) is not None
@@ -1959,10 +2090,21 @@ async def _validate_assignment_draft(
         if verification_warning is not None:
             warnings.append(verification_warning)
         if cap.provider in _LOCAL_KINDS and not is_loaded:
-            warnings.append(AssignmentIssue(slot=slot, model=model_key, code="not_loaded", message="Модель не найдена ни на одном локальном узле сейчас"))
+            warnings.append(
+                AssignmentIssue(
+                    slot=slot,
+                    model=model_key,
+                    code="not_loaded",
+                    message="Модель не найдена ни на одном локальном узле сейчас",
+                )
+            )
         old = current.get(slot)
         if old != model_key:
-            diff.append(AssignmentDiffItem(slot=slot, old_model=old, new_model=model_key, affected=_slot_affected(slot)))
+            diff.append(
+                AssignmentDiffItem(
+                    slot=slot, old_model=old, new_model=model_key, affected=_slot_affected(slot)
+                )
+            )
     return diff, warnings, errors
 
 
@@ -2007,19 +2149,23 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
             )
         source_tail = current.models if fallback_keys is None else fallback_keys
         tail = [m for m in source_tail if m != model_key and m in valid_keys]
-        routing = current.model_copy(update={
-            "models": [model_key, *tail],
-            "local_only": cap.local_only,
-            "allow_cloud": not cap.local_only,
-        })
+        routing = current.model_copy(
+            update={
+                "models": [model_key, *tail],
+                "local_only": cap.local_only,
+                "allow_cloud": not cap.local_only,
+            }
+        )
         save_task_routing(task, routing)
 
     key = model_key
     try:
         if slot == "ocr_fast":
             for t in (
-                AITask.INVOICE_OCR, AITask.CLASSIFICATION,
-                AITask.DRAWING_ANALYSIS, AITask.DRAWING_ANALYSIS_VLM,
+                AITask.INVOICE_OCR,
+                AITask.CLASSIFICATION,
+                AITask.DRAWING_ANALYSIS,
+                AITask.DRAWING_ANALYSIS_VLM,
             ):
                 _set_primary(t, key)
             _mirror_ai_config(DocumentGroup(vision_model=key))
@@ -2057,34 +2203,50 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
         elif slot == "agent_orchestrator":
             # Orchestrator + worker + base model. fast_model is a SEPARATE slot
             # (agent_fast) so a heavy orchestrator no longer forces a heavy router.
-            update_builtin_agent_config(BuiltinAgentConfigUpdate(
-                provider=cap.provider.value, model=cap.provider_model,
-                orchestrator_provider=cap.provider.value, orchestrator_model=cap.provider_model,
-                worker_provider=cap.provider.value, worker_model=cap.provider_model,
-            ))
+            update_builtin_agent_config(
+                BuiltinAgentConfigUpdate(
+                    provider=cap.provider.value,
+                    model=cap.provider_model,
+                    orchestrator_provider=cap.provider.value,
+                    orchestrator_model=cap.provider_model,
+                    worker_provider=cap.provider.value,
+                    worker_model=cap.provider_model,
+                )
+            )
             for t in (AITask.ORCHESTRATOR_PLANNING, AITask.TOOL_CALLING):
                 _assign_task(t, key)
         elif slot == "agent_fast":
-            update_builtin_agent_config(BuiltinAgentConfigUpdate(
-                fast_provider=cap.provider.value, fast_model=cap.provider_model,
-            ))
+            update_builtin_agent_config(
+                BuiltinAgentConfigUpdate(
+                    fast_provider=cap.provider.value,
+                    fast_model=cap.provider_model,
+                )
+            )
         elif slot == "agent_large":
-            update_builtin_agent_config(BuiltinAgentConfigUpdate(
-                builder_provider=cap.provider.value, builder_model=cap.provider_model,
-            ))
+            update_builtin_agent_config(
+                BuiltinAgentConfigUpdate(
+                    builder_provider=cap.provider.value,
+                    builder_model=cap.provider_model,
+                )
+            )
             _assign_task(AITask.CODE_GENERATION, key)
         elif slot == "agent_compression":
             # Провайдер обязателен: раньше сжатие всегда уходило провайдеру
             # worker'а, каким бы ни было имя модели — назвать облачную модель
             # значило отправить её запрос в локальную Ollama.
-            update_builtin_agent_config(BuiltinAgentConfigUpdate(
-                compression_provider=cap.provider.value,
-                compression_model=cap.provider_model,
-            ))
+            update_builtin_agent_config(
+                BuiltinAgentConfigUpdate(
+                    compression_provider=cap.provider.value,
+                    compression_model=cap.provider_model,
+                )
+            )
         elif slot == "agent_auditor":
-            update_builtin_agent_config(BuiltinAgentConfigUpdate(
-                auditor_provider=cap.provider.value, auditor_model=cap.provider_model,
-            ))
+            update_builtin_agent_config(
+                BuiltinAgentConfigUpdate(
+                    auditor_provider=cap.provider.value,
+                    auditor_model=cap.provider_model,
+                )
+            )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -2101,10 +2263,13 @@ def _unset_slot(slot: str, registry) -> None:
 
     defaults = _default_config()
     if slot == "agent_orchestrator":
-        update_builtin_agent_config(BuiltinAgentConfigUpdate(
-            model=defaults.model, orchestrator_model=defaults.orchestrator_model,
-            worker_model=defaults.worker_model,
-        ))
+        update_builtin_agent_config(
+            BuiltinAgentConfigUpdate(
+                model=defaults.model,
+                orchestrator_model=defaults.orchestrator_model,
+                worker_model=defaults.worker_model,
+            )
+        )
         for t in (AITask.ORCHESTRATOR_PLANNING, AITask.TOOL_CALLING):
             reset_task_routing(t)
     elif slot == "agent_fast":
@@ -2113,15 +2278,19 @@ def _unset_slot(slot: str, registry) -> None:
         update_builtin_agent_config(BuiltinAgentConfigUpdate(builder_model=defaults.builder_model))
         reset_task_routing(AITask.CODE_GENERATION)
     elif slot == "agent_compression":
-        update_builtin_agent_config(BuiltinAgentConfigUpdate(
-            compression_provider=defaults.compression_provider,
-            compression_model=defaults.compression_model,
-        ))
+        update_builtin_agent_config(
+            BuiltinAgentConfigUpdate(
+                compression_provider=defaults.compression_provider,
+                compression_model=defaults.compression_model,
+            )
+        )
     elif slot == "agent_auditor":
-        update_builtin_agent_config(BuiltinAgentConfigUpdate(
-            auditor_provider=defaults.auditor_provider,
-            auditor_model=defaults.auditor_model,
-        ))
+        update_builtin_agent_config(
+            BuiltinAgentConfigUpdate(
+                auditor_provider=defaults.auditor_provider,
+                auditor_model=defaults.auditor_model,
+            )
+        )
     else:
         for item in _slot_affected(slot):
             if "." not in item:
@@ -2146,7 +2315,8 @@ async def _persist_slot_durable(db: AsyncSession, slot: str) -> None:
         if item.startswith("agent_config."):
             if not agent_done:
                 await model_runtime_store.persist_agent_config(
-                    db, config=get_builtin_agent_config().model_dump(mode="json"))
+                    db, config=get_builtin_agent_config().model_dump(mode="json")
+                )
                 agent_done = True
         elif "." not in item:  # an AITask value
             try:
@@ -2154,11 +2324,15 @@ async def _persist_slot_durable(db: AsyncSession, slot: str) -> None:
             except ValueError:
                 continue
             await model_runtime_store.persist_task_routing(
-                db, task=task.value, routing=get_routing_for(task).model_dump(mode="json"))
+                db, task=task.value, routing=get_routing_for(task).model_dump(mode="json")
+            )
 
 
 async def _apply_draft_atomic(
-    db: AsyncSession, diff: list[AssignmentDiffItem], before: dict, registry,
+    db: AsyncSession,
+    diff: list[AssignmentDiffItem],
+    before: dict,
+    registry,
 ) -> None:
     """Apply all slots; on any failure restore already-applied slots to `before`.
 
@@ -2219,9 +2393,7 @@ async def _autostart_assigned_provider(model_key: str, registry) -> None:
             try:
                 from app.ai import gpu_manager
 
-                await gpu_manager.ensure_vram_for(
-                    cap.provider.value, vram, auto_free=True
-                )
+                await gpu_manager.ensure_vram_for(cap.provider.value, vram, auto_free=True)
             except Exception as exc:  # noqa: BLE001 — pre-check is advisory
                 logger.warning("assignment_autostart_vram_failed", error=str(exc)[:160])
 
@@ -2237,8 +2409,10 @@ async def _autostart_assigned_provider(model_key: str, registry) -> None:
             else:
                 res = await vllm_manager.ensure_server_running()
             logger.info(
-                "assignment_autostart", provider="vllm",
-                model=pm, status=res.get("status"),
+                "assignment_autostart",
+                provider="vllm",
+                model=pm,
+                status=res.get("status"),
             )
         elif cap.provider == ProviderKind.LLAMACPP:
             from app.ai.providers import llamacpp_manager
@@ -2443,40 +2617,48 @@ def _model_eligibility(
     verdict = "ok"
 
     if slot_local_only and not cap.local_only:
-        reasons.append(ModelCandidateReason(
-            code="cloud_for_confidential",
-            message="Слот работает с содержимым документов — выберите облако осознанно",
-            fix_action="open_cloud_provider",
-            fix_target=cap.provider.value,
-        ))
+        reasons.append(
+            ModelCandidateReason(
+                code="cloud_for_confidential",
+                message="Слот работает с содержимым документов — выберите облако осознанно",
+                fix_action="open_cloud_provider",
+                fix_target=cap.provider.value,
+            )
+        )
         verdict = "forbidden"
 
     if cap.provider in _LOCAL_KINDS and not is_loaded:
-        reasons.append(ModelCandidateReason(
-            code="not_loaded",
-            message="Модели нет ни на одном включённом узле",
-            fix_action="pull_model",
-            fix_target=cap.provider_model,
-        ))
+        reasons.append(
+            ModelCandidateReason(
+                code="not_loaded",
+                message="Модели нет ни на одном включённом узле",
+                fix_action="pull_model",
+                fix_target=cap.provider_model,
+            )
+        )
         if verdict == "ok":
             verdict = "needs_action"
 
     required = _SLOT_MODALITY.get(slot)
     if required and required not in {m.value for m in cap.modalities}:
         if getattr(cap, "capabilities_unknown", False):
-            reasons.append(ModelCandidateReason(
-                code="capabilities_unknown",
-                message="Провайдер не сообщает возможности модели — проверьте пробным запросом",
-                fix_action="verify_model",
-                fix_target=cap.name,
-            ))
+            reasons.append(
+                ModelCandidateReason(
+                    code="capabilities_unknown",
+                    message="Провайдер не сообщает возможности модели — проверьте пробным запросом",
+                    fix_action="verify_model",
+                    fix_target=cap.name,
+                )
+            )
             if verdict == "ok":
                 verdict = "needs_action"
         else:
-            reasons.append(ModelCandidateReason(
-                code="modality_mismatch",
-                message=f"Модель не заявляет «{required}»",
-            ))
+            reasons.append(
+                ModelCandidateReason(
+                    code="modality_mismatch",
+                    message=f"Модель не заявляет «{required}»",
+                )
+            )
             if verdict == "ok":
                 verdict = "unsuitable"
 
@@ -2507,9 +2689,7 @@ async def slot_candidates(slot: str) -> list[ModelCandidateOut]:
 
         avail = {
             k: v.value
-            for k, v in (
-                await asyncio.to_thread(catalog_availability, registry.models)
-            ).items()
+            for k, v in (await asyncio.to_thread(catalog_availability, registry.models)).items()
         }
     except Exception as exc:  # noqa: BLE001
         logger.warning("slot_candidates_availability_failed", error=str(exc))
@@ -2523,24 +2703,26 @@ async def slot_candidates(slot: str) -> list[ModelCandidateOut]:
         verdict, reasons = _model_eligibility(
             slot, cap, is_loaded=node is not None, slot_local_only=slot_local_only
         )
-        out.append(ModelCandidateOut(
-            key=key,
-            provider=cap.provider.value,
-            provider_model=cap.provider_model,
-            node=node,
-            availability=avail.get(key, "unknown"),
-            modalities=sorted(m.value for m in cap.modalities),
-            thinking_supported=cap.thinking_supported,
-            thinking_levels=effective_thinking_levels(
-                cap.thinking_supported, cap.provider.value, cap.thinking_levels
-            ),
-            local_only=cap.local_only,
-            capabilities_unknown=getattr(cap, "capabilities_unknown", False),
-            vram_gb_estimate=cap.vram_gb_estimate,
-            eligibility=verdict,
-            reasons=reasons,
-            **_capability_facts(cap),
-        ))
+        out.append(
+            ModelCandidateOut(
+                key=key,
+                provider=cap.provider.value,
+                provider_model=cap.provider_model,
+                node=node,
+                availability=avail.get(key, "unknown"),
+                modalities=sorted(m.value for m in cap.modalities),
+                thinking_supported=cap.thinking_supported,
+                thinking_levels=effective_thinking_levels(
+                    cap.thinking_supported, cap.provider.value, cap.thinking_levels
+                ),
+                local_only=cap.local_only,
+                capabilities_unknown=getattr(cap, "capabilities_unknown", False),
+                vram_gb_estimate=cap.vram_gb_estimate,
+                eligibility=verdict,
+                reasons=reasons,
+                **_capability_facts(cap),
+            )
+        )
     return out
 
 
@@ -2582,9 +2764,7 @@ async def slots_health() -> list[SlotHealthOut]:
     try:
         avail = {
             k: v.value
-            for k, v in (
-                await asyncio.to_thread(catalog_availability, registry.models)
-            ).items()
+            for k, v in (await asyncio.to_thread(catalog_availability, registry.models)).items()
         }
     except Exception as exc:  # noqa: BLE001
         logger.warning("slot_health_availability_failed", error=str(exc))
@@ -2597,7 +2777,7 @@ async def slots_health() -> list[SlotHealthOut]:
     # которой в каталоге уже нет, вместо 0.7% у назначенной сейчас.
     by_task_model: dict[tuple[str, str], dict] = {}
     try:
-        for row in (telemetry.get_summary().get("by_model") or []):
+        for row in telemetry.get_summary().get("by_model") or []:
             by_task_model[(str(row.get("task")), str(row.get("model")))] = row
     except Exception as exc:  # noqa: BLE001 — телеметрия не критична
         logger.warning("slot_health_telemetry_failed", error=str(exc))
@@ -2622,27 +2802,28 @@ async def slots_health() -> list[SlotHealthOut]:
         priced = bool(cap and (cap.cost_per_1k_input or cap.cost_per_1k_output))
         cost = None
         if priced and cap:
-            cost = (
-                tokens_in / 1000 * (cap.cost_per_1k_input or 0)
-                + tokens_out / 1000 * (cap.cost_per_1k_output or 0)
+            cost = tokens_in / 1000 * (cap.cost_per_1k_input or 0) + tokens_out / 1000 * (
+                cap.cost_per_1k_output or 0
             )
 
-        out.append(SlotHealthOut(
-            slot=slot,
-            label=label,
-            model=model_key,
-            provider=cap.provider.value if cap else None,
-            availability=avail.get(model_key or "", "unknown"),
-            node=_pin_display_name(cap.preferred_instance) if cap else None,
-            calls=calls,
-            errors=errors,
-            error_rate=(errors / calls) if calls else 0.0,
-            avg_latency_ms=round(latency_sum / calls) if calls else 0,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            cost_usd=round(cost, 4) if cost is not None else None,
-            priced=priced,
-        ))
+        out.append(
+            SlotHealthOut(
+                slot=slot,
+                label=label,
+                model=model_key,
+                provider=cap.provider.value if cap else None,
+                availability=avail.get(model_key or "", "unknown"),
+                node=_pin_display_name(cap.preferred_instance) if cap else None,
+                calls=calls,
+                errors=errors,
+                error_rate=(errors / calls) if calls else 0.0,
+                avg_latency_ms=round(latency_sum / calls) if calls else 0,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cost_usd=round(cost, 4) if cost is not None else None,
+                priced=priced,
+            )
+        )
     return out
 
 
@@ -2710,22 +2891,23 @@ async def cost_report() -> CostReportOut:
         priced = bool(cap and (cap.cost_per_1k_input or cap.cost_per_1k_output))
         cost = None
         if priced and cap:
-            cost = (
-                acc["tokens_in"] / 1000 * (cap.cost_per_1k_input or 0)
-                + acc["tokens_out"] / 1000 * (cap.cost_per_1k_output or 0)
-            )
+            cost = acc["tokens_in"] / 1000 * (cap.cost_per_1k_input or 0) + acc[
+                "tokens_out"
+            ] / 1000 * (cap.cost_per_1k_output or 0)
             total += cost
         elif acc["calls"]:
             unpriced.append(key)
-        out.append(CostRow(
-            model=key,
-            provider=cap.provider.value if cap else None,
-            calls=acc["calls"],
-            tokens_in=acc["tokens_in"],
-            tokens_out=acc["tokens_out"],
-            cost_usd=round(cost, 4) if cost is not None else None,
-            priced=priced,
-        ))
+        out.append(
+            CostRow(
+                model=key,
+                provider=cap.provider.value if cap else None,
+                calls=acc["calls"],
+                tokens_in=acc["tokens_in"],
+                tokens_out=acc["tokens_out"],
+                cost_usd=round(cost, 4) if cost is not None else None,
+                priced=priced,
+            )
+        )
 
     out.sort(key=lambda r: (r.cost_usd or 0, r.calls), reverse=True)
     return CostReportOut(
@@ -2763,12 +2945,16 @@ async def list_assignment_revisions(
     from app.db.models import ModelAssignmentRevision
 
     rows = (
-        await db.execute(
-            select(ModelAssignmentRevision)
-            .order_by(ModelAssignmentRevision.created_at.desc())
-            .limit(max(1, min(limit, 100)))
+        (
+            await db.execute(
+                select(ModelAssignmentRevision)
+                .order_by(ModelAssignmentRevision.created_at.desc())
+                .limit(max(1, min(limit, 100)))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     return [
         AssignmentRevisionOut(
@@ -2789,7 +2975,9 @@ async def list_assignment_revisions(
     ]
 
 
-@router.post("/assignments/{revision_id}/rollback", response_model=AssignmentDraftOut, dependencies=_admin)
+@router.post(
+    "/assignments/{revision_id}/rollback", response_model=AssignmentDraftOut, dependencies=_admin
+)
 async def rollback_assignment_revision(
     revision_id: str,
     confirm_warnings: bool = False,
@@ -2871,14 +3059,21 @@ async def set_slot_allow_cloud(slot: str, payload: SlotCloudWrite) -> dict:
     if meta is None:
         raise HTTPException(404, f"Unknown slot: {slot}")
     if not _slot_base_local_only(slot):
-        return {"ok": True, "slot": slot, "cloud_allowed": True, "note": "slot already allows cloud"}
+        return {
+            "ok": True,
+            "slot": slot,
+            "cloud_allowed": True,
+            "note": "slot already allows cloud",
+        }
     _set_slot_cloud_allowed(slot, payload.allowed)
     return {"ok": True, "slot": slot, "cloud_allowed": payload.allowed}
 
 
 class SlotThinkingWrite(BaseModel):
     enabled: bool | None  # None → model default; True/False → force on/off for this slot
-    level: str | None = None  # reasoning-effort level; only valid for the selected model's thinking_levels
+    level: str | None = (
+        None  # reasoning-effort level; only valid for the selected model's thinking_levels
+    )
 
 
 class SlotSmokeIn(BaseModel):
@@ -2911,6 +3106,7 @@ def _apply_slot_thinking(slot: str, enabled: bool | None, level: str | None = No
     if slot in _SLOT_THINKING_TASKS:
         from app.ai.schemas import AITask
         from app.ai.task_routing import get_routing_for, save_task_routing
+
         for tval in _SLOT_THINKING_TASKS[slot]:
             try:
                 task = AITask(tval)
@@ -2923,6 +3119,7 @@ def _apply_slot_thinking(slot: str, enabled: bool | None, level: str | None = No
     # Agent-config slots: write the tri-state *_disable_thinking field(s).
     if slot in _SLOT_THINKING_AGENT_FIELDS:
         from app.ai.agent_config import BuiltinAgentConfigUpdate, update_builtin_agent_config
+
         disable = None if enabled is None else (not enabled)
         patch = {field: disable for field in _SLOT_THINKING_AGENT_FIELDS[slot]}
         if slot in _SLOT_THINKING_LEVEL_AGENT_FIELDS:
@@ -2943,7 +3140,12 @@ async def set_slot_thinking(
     await _persist_slot_durable(db, slot)
     await db.commit()
     await model_runtime_store.hydrate_runtime_cache(db)
-    return {"ok": True, "slot": slot, "thinking_enabled": payload.enabled, "thinking_level": payload.level}
+    return {
+        "ok": True,
+        "slot": slot,
+        "thinking_enabled": payload.enabled,
+        "thinking_level": payload.level,
+    }
 
 
 def _slot_smoke_task(slot: str) -> AITask:
@@ -3016,9 +3218,7 @@ async def smoke_slot_assignment(
         )
     thinking_state = _slot_thinking_state(slot, registry, model_key)
     thinking_requested = (
-        payload.thinking
-        if payload.thinking is not None
-        else thinking_state["thinking_effective"]
+        payload.thinking if payload.thinking is not None else thinking_state["thinking_effective"]
     )
     thinking_level_requested = (
         payload.thinking_level

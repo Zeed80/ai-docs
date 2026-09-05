@@ -13,7 +13,7 @@ second time; two implementations of the same expression drift.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 
@@ -32,7 +32,7 @@ def scenario_cron_dispatch(self) -> dict:
     from app.ai.gateway_config import gateway_config
     from app.tasks.agent_cron import cron_matches
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     due: list[str] = []
     for sdef in gateway_config.scenario_definitions:
         trigger = sdef.get("trigger") or {}
@@ -61,8 +61,7 @@ def scenario_cron_dispatch(self) -> dict:
             key = f"scenario:cron:{name}:{now.strftime('%Y%m%d%H%M')}"
             if not redis.set(key, "1", nx=True, ex=_LOCK_TTL_SECONDS):
                 continue
-        run_scenario.apply_async(args=[name], kwargs={"triggered_by": "cron"},
-                                 queue="scheduler")
+        run_scenario.apply_async(args=[name], kwargs={"triggered_by": "cron"}, queue="scheduler")
         dispatched.append(name)
 
     logger.info("scenario_cron_dispatch", dispatched=dispatched)
@@ -70,8 +69,9 @@ def scenario_cron_dispatch(self) -> dict:
 
 
 @celery_app.task(name="scenario.run", bind=True, max_retries=1, queue="scheduler")
-def run_scenario(self, name: str, triggered_by: str = "system",
-                 trigger: dict | None = None) -> dict:
+def run_scenario(
+    self, name: str, triggered_by: str = "system", trigger: dict | None = None
+) -> dict:
     """Execute one scenario through the existing runner."""
     from app.ai.scenario_runner import scenario_runner
     from app.tasks.async_runner import run_async

@@ -8,17 +8,17 @@ Revision ID: 20260822_0001
 Revises: 20260821_0002
 Create Date: 2026-08-22
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 revision: str = "20260822_0001"
-down_revision: Union[str, None] = "20260821_0002"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260821_0002"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -42,8 +42,18 @@ def upgrade() -> None:
         sa.Column("run_id", sa.String(36), nullable=True),
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("document_id", "page_number", name="uq_catalog_pages_document_page"),

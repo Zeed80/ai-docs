@@ -86,7 +86,9 @@ def test_nobody_but_human_touches_approved() -> None:
 
 
 def test_sanitize_strips_unearned_assurance() -> None:
-    fixed = sanitize_incoming({"type": "segment", "assurance": "human_approved"}, actor="recognizer")
+    fixed = sanitize_incoming(
+        {"type": "segment", "assurance": "human_approved"}, actor="recognizer"
+    )
     assert fixed["assurance"] == "inferred"
     human = sanitize_incoming({"type": "segment", "assurance": "inferred"}, actor="human")
     assert human["assurance"] == "human_approved"
@@ -121,9 +123,11 @@ def test_sticky_diffusion_issue_survives_revalidation() -> None:
 
     seg = _seg()
     ir = CadIR(source=SourceInfo(image_width=100, image_height=100), entities=[seg])
-    ir.validation.issues.append(ValidationIssueIR(
-        code="DIFFUSION_ADDED_INK", severity="warn", entity_ids=[seg.id], message_ru="x"
-    ))
+    ir.validation.issues.append(
+        ValidationIssueIR(
+            code="DIFFUSION_ADDED_INK", severity="warn", entity_ids=[seg.id], message_ru="x"
+        )
+    )
     validate_ir(ir)
     assert any(i.code == "DIFFUSION_ADDED_INK" for i in ir.validation.issues)
     # once the flagged entity is gone, the sticky issue is dropped

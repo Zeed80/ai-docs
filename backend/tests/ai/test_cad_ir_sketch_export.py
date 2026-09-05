@@ -193,9 +193,11 @@ def test_disjoint_extra_entity_is_rejected():
 
 
 def test_standalone_circle_exports_as_two_exact_semicircular_arcs():
-    profile = cad_ir_profile_to_sketch_segments([
-        Circle(center=Point(x=25, y=-10), radius=5),
-    ])
+    profile = cad_ir_profile_to_sketch_segments(
+        [
+            Circle(center=Point(x=25, y=-10), radius=5),
+        ]
+    )
     assert profile == [
         {
             "kind": "arc",

@@ -8,11 +8,13 @@ Pipeline for any model output:
 
 Weak local models often wrap JSON in prose or markdown — this module handles all that.
 """
+
 from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable, Coroutine, Type, TypeVar
+from collections.abc import Callable, Coroutine
+from typing import Any, TypeVar
 
 import structlog
 from pydantic import BaseModel
@@ -162,9 +164,7 @@ async def enforce_structured_output(
             error=last_error,
         )
         # Correction prompt for next attempt
-        active_prompt = _CORRECTION_TEMPLATE.format(
-            error=last_error, schema=schema_str
-        )
+        active_prompt = _CORRECTION_TEMPLATE.format(error=last_error, schema=schema_str)
 
     logger.error("structured_output_failed_all_retries", error=last_error)
     return _defaults(schema)

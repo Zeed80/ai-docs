@@ -50,17 +50,19 @@ def _view_geometries(views: list[DrawingViewSection]):
     for view in views:
         meta = getattr(view, "geometry", None)
         meta = meta if isinstance(meta, dict) else {}
-        out.append(ViewGeometry(
-            label=view.section_label or view.section_type,
-            projection=(meta.get("projection") or view.section_type or "").lower(),
-            scale=meta.get("scale_mm_per_px"),
-            circles=[ViewCircle(**c) for c in meta.get("circles", []) if isinstance(c, dict)],
-            diameters_mm=list(meta.get("diameters_mm", [])),
-            axes_x=list(meta.get("axes_x", [])),
-            axes_y=list(meta.get("axes_y", [])),
-            bbox=_bbox_tuple(view.bbox_on_sheet),
-            has_hidden=bool(meta.get("has_hidden")),
-        ))
+        out.append(
+            ViewGeometry(
+                label=view.section_label or view.section_type,
+                projection=(meta.get("projection") or view.section_type or "").lower(),
+                scale=meta.get("scale_mm_per_px"),
+                circles=[ViewCircle(**c) for c in meta.get("circles", []) if isinstance(c, dict)],
+                diameters_mm=list(meta.get("diameters_mm", [])),
+                axes_x=list(meta.get("axes_x", [])),
+                axes_y=list(meta.get("axes_y", [])),
+                bbox=_bbox_tuple(view.bbox_on_sheet),
+                has_hidden=bool(meta.get("has_hidden")),
+            )
+        )
     return out
 
 
@@ -78,16 +80,42 @@ def reconstruct_from_views(
     unresolved: list[str] = []
     scores: list[float] = []
     for feature in features:
-        supporting = sorted({item for item in (feature.confirmed_by_views or []) if item} | ({feature.source_view} if feature.source_view else set()))
-        depth = next((dimension.nominal for dimension in feature.dimensions if dimension.dim_type == FeatureDimType.depth), None)
-        confirmed = len(supporting) >= 2 or any("section" in item.lower() or "-" in item for item in supporting)
-        confidence = min(1.0, feature.confidence + (0.15 if confirmed else 0.0) + (0.1 if depth is not None else 0.0))
-        reconstructed.append(MultiViewFeature(
-            feature_id=str(feature.id), kind=feature.feature_type.value,
-            supporting_views=supporting, depth_mm=depth, confidence=round(confidence, 3),
-        ))
+        supporting = sorted(
+            {item for item in (feature.confirmed_by_views or []) if item}
+            | ({feature.source_view} if feature.source_view else set())
+        )
+        depth = next(
+            (
+                dimension.nominal
+                for dimension in feature.dimensions
+                if dimension.dim_type == FeatureDimType.depth
+            ),
+            None,
+        )
+        confirmed = len(supporting) >= 2 or any(
+            "section" in item.lower() or "-" in item for item in supporting
+        )
+        confidence = min(
+            1.0,
+            feature.confidence + (0.15 if confirmed else 0.0) + (0.1 if depth is not None else 0.0),
+        )
+        reconstructed.append(
+            MultiViewFeature(
+                feature_id=str(feature.id),
+                kind=feature.feature_type.value,
+                supporting_views=supporting,
+                depth_mm=depth,
+                confidence=round(confidence, 3),
+            )
+        )
         scores.append(confidence)
-        if depth is None and feature.feature_type.value in {"hole", "pocket", "boss", "groove", "slot"}:
+        if depth is None and feature.feature_type.value in {
+            "hole",
+            "pocket",
+            "boss",
+            "groove",
+            "slot",
+        }:
             unresolved.append(f"глубина элемента «{feature.name}» не задана")
         if not confirmed and len(available_views) < 2:
             unresolved.append(f"для «{feature.name}» нужен второй вид или разрез")
@@ -102,7 +130,8 @@ def reconstruct_from_views(
     # missing_data — never silently trusted.
     correspondence_notes: list[str] = []
     try:
-        from app.ai.cad_ir.correspondence import build_correspondence_graph, correspondence_notes as _notes
+        from app.ai.cad_ir.correspondence import build_correspondence_graph
+        from app.ai.cad_ir.correspondence import correspondence_notes as _notes
 
         graph = build_correspondence_graph(_view_geometries(views))
         correspondence_notes = _notes(graph)
@@ -114,8 +143,13 @@ def reconstruct_from_views(
         correspondence_notes = []
 
     label = "многовидовая реконструкция" if len(available_views) >= 2 else "одновидовая гипотеза"
-    return [MultiViewCandidate(
-        label=label, score=round(score, 3), supporting_views=sorted(available_views),
-        features=reconstructed, missing_data=sorted(set(unresolved)),
-        correspondences=correspondence_notes,
-    )]
+    return [
+        MultiViewCandidate(
+            label=label,
+            score=round(score, 3),
+            supporting_views=sorted(available_views),
+            features=reconstructed,
+            missing_data=sorted(set(unresolved)),
+            correspondences=correspondence_notes,
+        )
+    ]

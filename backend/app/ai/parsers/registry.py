@@ -161,9 +161,7 @@ def _parse_pdf(content: bytes) -> ParsedDocument:
                 text=text, parser_name="pdf_text_layer", page_count=data.page_count
             )
         # Text layer empty → scanned PDF → OCR fallback.
-        return ParsedDocument(
-            parser_name="pdf_scanned", needs_ocr=True, page_count=data.page_count
-        )
+        return ParsedDocument(parser_name="pdf_scanned", needs_ocr=True, page_count=data.page_count)
     except Exception as exc:
         logger.warning("pdf_parse_failed", error=str(exc))
         # Cannot read text layer — still let the caller try OCR.
@@ -199,9 +197,7 @@ def _parse_xlsx(content: bytes) -> ParsedDocument:
         logger.warning("xlsx_parser_unavailable")
         return ParsedDocument(parser_name="xlsx_unavailable")
     try:
-        workbook = openpyxl.load_workbook(
-            io.BytesIO(content), read_only=True, data_only=True
-        )
+        workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
         lines: list[str] = []
         for sheet in workbook.worksheets:
             lines.append(f"[Sheet: {sheet.title}]")
@@ -421,9 +417,7 @@ def _step_header(content: str) -> str:
     header_end = data_start if data_start != -1 else min(len(content), header_start + 4000)
     lines = [line.strip() for line in content[header_start:header_end].splitlines()]
     interesting = [
-        line
-        for line in lines
-        if line.startswith(("FILE_DESCRIPTION", "FILE_NAME", "FILE_SCHEMA"))
+        line for line in lines if line.startswith(("FILE_DESCRIPTION", "FILE_NAME", "FILE_SCHEMA"))
     ]
     return "\n".join(interesting)
 

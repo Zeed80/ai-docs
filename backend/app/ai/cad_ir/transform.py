@@ -95,12 +95,12 @@ def _unit(dx: float, dy: float) -> tuple[float, float]:
     return dx / n, dy / n
 
 
-_CORNER_GAP_TOLERANCE_RATIO = 0.15  # corner endpoints may be up to 15% of the shorter segment's length apart
+_CORNER_GAP_TOLERANCE_RATIO = (
+    0.15  # corner endpoints may be up to 15% of the shorter segment's length apart
+)
 
 
-def _shared_and_far_endpoints(
-    seg1: Segment, seg2: Segment
-) -> tuple[Point, Point, Point]:
+def _shared_and_far_endpoints(seg1: Segment, seg2: Segment) -> tuple[Point, Point, Point]:
     """Which endpoint pair is the shared corner (closest pair), and the two
     "far" endpoints defining each segment's outward direction from it."""
     candidates = [
@@ -143,8 +143,12 @@ def chamfer(seg1: Segment, seg2: Segment, distance: float) -> tuple[Segment, Seg
     new_seg1 = _replace_endpoint(seg1, corner, a)
     new_seg2 = _replace_endpoint(seg2, corner, b)
     bevel = Segment(
-        p1=a, p2=b, line_class=seg1.line_class, width_class=seg1.width_class,
-        origin="human", assurance="human_approved",
+        p1=a,
+        p2=b,
+        line_class=seg1.line_class,
+        width_class=seg1.width_class,
+        origin="human",
+        assurance="human_approved",
     )
     return new_seg1, new_seg2, bevel
 
@@ -178,9 +182,14 @@ def fillet(seg1: Segment, seg2: Segment, radius: float) -> tuple[Segment, Segmen
     new_seg1 = _replace_endpoint(seg1, corner, t1)
     new_seg2 = _replace_endpoint(seg2, corner, t2)
     arc = Arc(
-        center=center, radius=radius, start_angle=start_angle, end_angle=end_angle,
-        line_class=seg1.line_class, width_class=seg1.width_class,
-        origin="human", assurance="human_approved",
+        center=center,
+        radius=radius,
+        start_angle=start_angle,
+        end_angle=end_angle,
+        line_class=seg1.line_class,
+        width_class=seg1.width_class,
+        origin="human",
+        assurance="human_approved",
     )
     return new_seg1, new_seg2, arc
 
@@ -284,9 +293,7 @@ def offset_entity(entity: Entity, distance: float, side_point: Point) -> Entity:
         new_r = entity.radius + sign * distance
         if new_r <= 1e-6:
             raise SketchOpError("смещение внутрь больше радиуса")
-        return entity.model_copy(
-            update={"id": new_entity_id(), "radius": new_r, "origin": "human"}
-        )
+        return entity.model_copy(update={"id": new_entity_id(), "radius": new_r, "origin": "human"})
     raise SketchOpError("смещение поддерживается для отрезка, окружности и дуги")
 
 
@@ -381,6 +388,4 @@ def join_segments(a: Segment, b: Segment) -> Entity:
         # collinear → one straight segment spanning both
         return Segment(p1=far_a.model_copy(), p2=far_b.model_copy(), **common)
     corner = Point(x=(shared_a.x + shared_b.x) / 2, y=(shared_a.y + shared_b.y) / 2)
-    return Polyline(
-        points=[far_a.model_copy(), corner, far_b.model_copy()], closed=False, **common
-    )
+    return Polyline(points=[far_a.model_copy(), corner, far_b.model_copy()], closed=False, **common)

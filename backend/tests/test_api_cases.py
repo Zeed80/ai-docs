@@ -64,7 +64,9 @@ async def test_update_case(client: AsyncClient):
     created = (await client.post("/api/cases", json={"title": "До обновления"})).json()
     case_id = created["id"]
 
-    resp = await client.patch(f"/api/cases/{case_id}", json={"status": "closed", "title": "После обновления"})
+    resp = await client.patch(
+        f"/api/cases/{case_id}", json={"status": "closed", "title": "После обновления"}
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "closed"
@@ -91,6 +93,7 @@ async def test_add_document_to_case(client: AsyncClient):
 
     # Ingest a document first
     import io
+
     doc_resp = await client.post(
         "/api/documents/ingest",
         files={"file": ("test.txt", io.BytesIO(b"invoice content"), "text/plain")},
@@ -115,6 +118,7 @@ async def test_add_duplicate_document_to_case(client: AsyncClient):
     case_id = created["id"]
 
     import io
+
     doc_resp = await client.post(
         "/api/documents/ingest",
         files={"file": ("dup.txt", io.BytesIO(b"dup"), "text/plain")},
@@ -133,6 +137,7 @@ async def test_list_case_documents(client: AsyncClient):
     case_id = created["id"]
 
     import io
+
     doc_resp = await client.post(
         "/api/documents/ingest",
         files={"file": ("listed.txt", io.BytesIO(b"content"), "text/plain")},
@@ -149,9 +154,6 @@ async def test_list_case_documents(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_approval_decide_approve(client: AsyncClient):
-    from app.db.models import Approval, ApprovalActionType, ApprovalStatus
-    from sqlalchemy.ext.asyncio import AsyncSession
-
     created = (await client.post("/api/cases", json={"title": "Кейс с апрувом"})).json()
     case_id = created["id"]
 

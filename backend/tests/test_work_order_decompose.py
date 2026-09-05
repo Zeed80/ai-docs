@@ -48,19 +48,24 @@ def test_blocker_reason_digs_into_step_failed_wrapper():
 
 def test_blocker_reason_falls_back_to_error_message_without_a_code():
     assert (
-        _blocker_reason({"code": "step_failed", "error": {"message": "timed out"}})
-        == "timed out"
+        _blocker_reason({"code": "step_failed", "error": {"message": "timed out"}}) == "timed out"
     )
 
 
 def test_blocker_reason_uses_top_level_code_for_non_step_failed_blockers():
-    assert _blocker_reason({"code": "token_budget_exceeded", "tokens_spent": 500}) == "token_budget_exceeded"
+    assert (
+        _blocker_reason({"code": "token_budget_exceeded", "tokens_spent": 500})
+        == "token_budget_exceeded"
+    )
 
 
 def test_planned_step_decompose_requires_nonempty_children():
     with pytest.raises(ValidationError, match="children"):
         PlannedStep(
-            step_key="fanout", title="Fan out", kind="decompose", input={},
+            step_key="fanout",
+            title="Fan out",
+            kind="decompose",
+            input={},
         )
 
 
@@ -83,9 +88,9 @@ def test_split_child_budgets_rounds_down_but_never_to_zero():
 
 
 def test_split_child_budgets_explicit_override_wins():
-    assert _split_child_budgets(
-        {"token_budget": 900}, 3, {"token_budget": 50}
-    ) == {"token_budget": 50}
+    assert _split_child_budgets({"token_budget": 900}, 3, {"token_budget": 50}) == {
+        "token_budget": 50
+    }
 
 
 def test_split_child_budgets_no_parent_budget_means_no_child_budget():
@@ -93,13 +98,16 @@ def test_split_child_budgets_no_parent_budget_means_no_child_budget():
 
 
 @pytest.mark.asyncio
-async def test_decompose_creates_children_with_split_budget_and_parent_waits(test_engine, monkeypatch):
+async def test_decompose_creates_children_with_split_budget_and_parent_waits(
+    test_engine, monkeypatch
+):
     factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     # _execute_decompose opens its own session via app.db.session._get_session_factory
     # (production code, cached engine pointed at settings.database_url) — force it onto
     # this test's NullPool test_engine instead, or it can hand out a connection from a
     # different, possibly-dirty pooled engine ("another operation is in progress").
     import app.db.session as _db_session_module
+
     monkeypatch.setattr(_db_session_module, "_get_session_factory", lambda: factory)
     children_input = {
         "children": [
@@ -109,11 +117,19 @@ async def test_decompose_creates_children_with_split_budget_and_parent_waits(tes
     }
     async with factory() as db:
         order = await create_work_order(
-            db, owner_key="tester", objective="Собрать отчёт по двум поставщикам",
-            priority=80, risk_level="medium", budgets={"token_budget": 1000},
+            db,
+            owner_key="tester",
+            objective="Собрать отчёт по двум поставщикам",
+            priority=80,
+            risk_level="medium",
+            budgets={"token_budget": 1000},
         )
         await create_single_step_plan(
-            db, order, kind="decompose", title="Fan out", input_data=children_input,
+            db,
+            order,
+            kind="decompose",
+            title="Fan out",
+            input_data=children_input,
         )
         order_id = order.id
         await db.commit()
@@ -123,13 +139,12 @@ async def test_decompose_creates_children_with_split_budget_and_parent_waits(tes
 
     async with factory() as db:
         children = list(
-            (
-                await db.execute(select(WorkOrder).where(WorkOrder.parent_id == order_id))
-            ).scalars()
+            (await db.execute(select(WorkOrder).where(WorkOrder.parent_id == order_id))).scalars()
         )
         assert len(children) == 2
         assert {c.objective for c in children} == {
-            "Поставщик А: собрать счета", "Поставщик Б: собрать счета",
+            "Поставщик А: собрать счета",
+            "Поставщик Б: собрать счета",
         }
         for child in children:
             # A child never outranks the parent that spawned it.
@@ -146,15 +161,22 @@ async def test_decompose_children_inherit_exploratory_constraints(test_engine, m
     agent_turn step later fails and gets replanned."""
     factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     import app.db.session as _db_session_module
+
     monkeypatch.setattr(_db_session_module, "_get_session_factory", lambda: factory)
     children_input = {"children": [{"objective": "Поставщик А: найди каталог"}]}
     async with factory() as db:
         order = await create_work_order(
-            db, owner_key="tester", objective="Найди каталоги поставщиков",
+            db,
+            owner_key="tester",
+            objective="Найди каталоги поставщиков",
             constraints={"mode": "exploratory"},
         )
         await create_single_step_plan(
-            db, order, kind="decompose", title="Fan out", input_data=children_input,
+            db,
+            order,
+            kind="decompose",
+            title="Fan out",
+            input_data=children_input,
         )
         order_id = order.id
         await db.commit()
@@ -169,19 +191,26 @@ async def test_decompose_children_inherit_exploratory_constraints(test_engine, m
 
 
 @pytest.mark.asyncio
-async def test_promote_waiting_parents_completes_once_all_children_succeed(test_engine, monkeypatch):
+async def test_promote_waiting_parents_completes_once_all_children_succeed(
+    test_engine, monkeypatch
+):
     factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     # _execute_decompose opens its own session via app.db.session._get_session_factory
     # (production code, cached engine pointed at settings.database_url) — force it onto
     # this test's NullPool test_engine instead, or it can hand out a connection from a
     # different, possibly-dirty pooled engine ("another operation is in progress").
     import app.db.session as _db_session_module
+
     monkeypatch.setattr(_db_session_module, "_get_session_factory", lambda: factory)
     children_input = {"children": [{"objective": "Child one"}, {"objective": "Child two"}]}
     async with factory() as db:
         parent = await create_work_order(db, owner_key="tester", objective="Parent")
         await create_single_step_plan(
-            db, parent, kind="decompose", title="Fan out", input_data=children_input,
+            db,
+            parent,
+            kind="decompose",
+            title="Fan out",
+            input_data=children_input,
         )
         parent_id = parent.id
         await db.commit()
@@ -215,8 +244,12 @@ async def test_promote_waiting_parents_completes_once_all_children_succeed(test_
             assert claimed is not None
             c_order, c_step, c_attempt = claimed
             await complete_attempt(
-                db, order=c_order, step=c_step, attempt=c_attempt,
-                output={"text": "готово"}, actor="w",
+                db,
+                order=c_order,
+                step=c_step,
+                attempt=c_attempt,
+                output={"text": "готово"},
+                actor="w",
             )
             await verify_nonempty_result(db, order=c_order, step=c_step)
         await db.commit()
@@ -246,6 +279,7 @@ async def test_promote_waiting_parents_builds_structured_coverage_for_explorator
     real reason; both must show up in the right coverage bucket."""
     factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     import app.db.session as _db_session_module
+
     monkeypatch.setattr(_db_session_module, "_get_session_factory", lambda: factory)
     children_input = {
         "children": [
@@ -262,7 +296,11 @@ async def test_promote_waiting_parents_builds_structured_coverage_for_explorator
             acceptance_criteria=exploratory_acceptance_criteria(),
         )
         await create_single_step_plan(
-            db, parent, kind="decompose", title="Fan out", input_data=children_input,
+            db,
+            parent,
+            kind="decompose",
+            title="Fan out",
+            input_data=children_input,
         )
         parent_id = parent.id
         await db.commit()
@@ -290,7 +328,12 @@ async def test_promote_waiting_parents_builds_structured_coverage_for_explorator
         assert claimed is not None
         c_order, c_step, c_attempt = claimed
         await complete_attempt(
-            db, order=c_order, step=c_step, attempt=c_attempt, output={"text": "готово"}, actor="w",
+            db,
+            order=c_order,
+            step=c_step,
+            attempt=c_attempt,
+            output={"text": "готово"},
+            actor="w",
         )
         await verify_nonempty_result(db, order=c_order, step=c_step)
 
@@ -298,8 +341,13 @@ async def test_promote_waiting_parents_builds_structured_coverage_for_explorator
         assert claimed2 is not None
         b_order, b_step, b_attempt = claimed2
         await fail_attempt(
-            db, order=b_order, step=b_step, attempt=b_attempt,
-            error={"code": "no_grant"}, retryable=False, actor="w",
+            db,
+            order=b_order,
+            step=b_step,
+            attempt=b_attempt,
+            error={"code": "no_grant"},
+            retryable=False,
+            actor="w",
         )
         await db.commit()
 
@@ -312,7 +360,9 @@ async def test_promote_waiting_parents_builds_structured_coverage_for_explorator
 
         decompose_step = (
             await db.execute(
-                select(WorkStep).where(WorkStep.work_order_id == parent_id, WorkStep.kind == "decompose")
+                select(WorkStep).where(
+                    WorkStep.work_order_id == parent_id, WorkStep.kind == "decompose"
+                )
             )
         ).scalar_one()
         coverage = decompose_step.output["coverage"]
@@ -343,14 +393,13 @@ async def test_promote_waiting_parents_fails_when_every_child_fails(test_engine,
     # this test's NullPool test_engine instead, or it can hand out a connection from a
     # different, possibly-dirty pooled engine ("another operation is in progress").
     import app.db.session as _db_session_module
+
     monkeypatch.setattr(_db_session_module, "_get_session_factory", lambda: factory)
     # max_replans: 0 so the single failure goes straight to "blocked" (a
     # terminal status) instead of "replanning" (active — promote_waiting_
     # parents would correctly keep waiting through a replan, which is a
     # different scenario from "every child is genuinely done, all failed").
-    children_input = {
-        "children": [{"objective": "Doomed child", "budgets": {"max_replans": 0}}]
-    }
+    children_input = {"children": [{"objective": "Doomed child", "budgets": {"max_replans": 0}}]}
     async with factory() as db:
         # Ф4-re (AGENT_AUTONOMY_ROADMAP.md): the parent's own max_replans
         # also needs to be 0 now — a failed required criterion (zero
@@ -362,7 +411,11 @@ async def test_promote_waiting_parents_fails_when_every_child_fails(test_engine,
             db, owner_key="tester", objective="Parent", budgets={"max_replans": 0}
         )
         await create_single_step_plan(
-            db, parent, kind="decompose", title="Fan out", input_data=children_input,
+            db,
+            parent,
+            kind="decompose",
+            title="Fan out",
+            input_data=children_input,
         )
         parent_id = parent.id
         await db.commit()
@@ -374,16 +427,19 @@ async def test_promote_waiting_parents_fails_when_every_child_fails(test_engine,
         await transition_work_order(db, parent, "running", actor="test")
         await enter_waiting_for_children(db, order=parent, actor="test")
         child = (
-            await db.execute(
-                select(WorkOrder).where(WorkOrder.id == output["child_order_ids"][0])
-            )
+            await db.execute(select(WorkOrder).where(WorkOrder.id == output["child_order_ids"][0]))
         ).scalar_one()
         claimed = await claim_ready_step(db, worker_id="w", work_order_id=child.id)
         assert claimed is not None
         c_order, c_step, c_attempt = claimed
         await fail_attempt(
-            db, order=c_order, step=c_step, attempt=c_attempt,
-            error={"code": "boom"}, retryable=False, actor="w",
+            db,
+            order=c_order,
+            step=c_step,
+            attempt=c_attempt,
+            error={"code": "boom"},
+            retryable=False,
+            actor="w",
         )
         await db.commit()
         assert child.status == "blocked"  # terminal, no replans configured
@@ -406,7 +462,8 @@ async def test_promote_waiting_parents_fails_when_every_child_fails(test_engine,
 
 @pytest.mark.asyncio
 async def test_promote_waiting_parents_replans_when_every_child_fails_but_budget_remains(
-    test_engine, monkeypatch,
+    test_engine,
+    monkeypatch,
 ):
     """Ф4-re (AGENT_AUTONOMY_ROADMAP.md): the counterpart to the test above —
     same all-children-failed scenario, but this time the PARENT has an
@@ -415,17 +472,20 @@ async def test_promote_waiting_parents_replans_when_every_child_fails_but_budget
     failed required criterion since that fix."""
     factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     import app.db.session as _db_session_module
+
     monkeypatch.setattr(_db_session_module, "_get_session_factory", lambda: factory)
 
-    children_input = {
-        "children": [{"objective": "Doomed child", "budgets": {"max_replans": 0}}]
-    }
+    children_input = {"children": [{"objective": "Doomed child", "budgets": {"max_replans": 0}}]}
     async with factory() as db:
         parent = await create_work_order(
             db, owner_key="tester", objective="Parent", budgets={"max_replans": 2}
         )
         await create_single_step_plan(
-            db, parent, kind="decompose", title="Fan out", input_data=children_input,
+            db,
+            parent,
+            kind="decompose",
+            title="Fan out",
+            input_data=children_input,
         )
         parent_id = parent.id
         await db.commit()
@@ -437,16 +497,19 @@ async def test_promote_waiting_parents_replans_when_every_child_fails_but_budget
         await transition_work_order(db, parent, "running", actor="test")
         await enter_waiting_for_children(db, order=parent, actor="test")
         child = (
-            await db.execute(
-                select(WorkOrder).where(WorkOrder.id == output["child_order_ids"][0])
-            )
+            await db.execute(select(WorkOrder).where(WorkOrder.id == output["child_order_ids"][0]))
         ).scalar_one()
         claimed = await claim_ready_step(db, worker_id="w", work_order_id=child.id)
         assert claimed is not None
         c_order, c_step, c_attempt = claimed
         await fail_attempt(
-            db, order=c_order, step=c_step, attempt=c_attempt,
-            error={"code": "boom"}, retryable=False, actor="w",
+            db,
+            order=c_order,
+            step=c_step,
+            attempt=c_attempt,
+            error={"code": "boom"},
+            retryable=False,
+            actor="w",
         )
         await db.commit()
 

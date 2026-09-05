@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import secrets
 import hashlib
+import secrets
+from datetime import UTC
 from typing import Any
 
 import structlog
@@ -27,12 +28,14 @@ logger = structlog.get_logger()
 
 async def _store_state(state: str, redirect_uri: str) -> None:
     from app.utils.redis_client import get_async_redis
+
     r = get_async_redis()
     await r.setex(f"oauth_state:{state}", 600, redirect_uri)
 
 
 async def _pop_state(state: str) -> str | None:
     from app.utils.redis_client import get_async_redis
+
     r = get_async_redis()
     key = f"oauth_state:{state}"
     pipe = r.pipeline()
@@ -92,9 +95,7 @@ async def update_me(
     from app.auth.jwt import invalidate_active_cache
     from app.db.models import User
 
-    row = (
-        await db.execute(select(User).where(User.sub == user.sub))
-    ).scalar_one_or_none()
+    row = (await db.execute(select(User).where(User.sub == user.sub))).scalar_one_or_none()
     if row is None:
         # Аутентифицированный человек без строки в users — обычное дело до
         # первого upsert'а на логине. Отказ здесь означал бы «настройте
@@ -118,6 +119,7 @@ async def update_me(
 def _frontend_base_from_uri(redirect_uri: str) -> str:
     """Extract frontend origin from redirect_uri (e.g. http://192.168.1.246:3000)."""
     from urllib.parse import urlparse
+
     parsed = urlparse(redirect_uri)
     if parsed.scheme and parsed.netloc:
         return f"{parsed.scheme}://{parsed.netloc}"
@@ -134,6 +136,7 @@ async def login(
     # token theft (especially in dev mode where a dev-token cookie is issued directly).
     if settings.auth_enabled:
         from urllib.parse import urlparse as _up
+
         _req_netloc = _up(redirect_uri).netloc
         _allowed = {_up(settings.frontend_url).netloc}
         if _req_netloc and _req_netloc not in _allowed:
@@ -165,6 +168,7 @@ async def login(
     # Also store next under a derived key
     try:
         from app.utils.redis_client import get_async_redis
+
         await get_async_redis().setex(
             f"oauth_next:{state}", 600, next if next.startswith("/") else "/inbox"
         )
@@ -236,9 +240,7 @@ async def callback(
         logger.warning("oidc_callback_rejected", status=exc.status_code, detail=exc.detail)
         frontend_base = _frontend_base_from_uri(redirect_uri)
         reason = "deactivated" if exc.status_code == 403 else "verification_failed"
-        return RedirectResponse(
-            url=f"{frontend_base}/auth/login?error={reason}", status_code=302
-        )
+        return RedirectResponse(url=f"{frontend_base}/auth/login?error={reason}", status_code=302)
 
     try:
         await upsert_user(db, user_info)
@@ -252,12 +254,13 @@ async def callback(
     # Retrieve next-path stored during login (default to /inbox)
     try:
         from app.utils.redis_client import get_async_redis
+
         _r = get_async_redis()
         _nkey = f"oauth_next:{state}"
         _pipe = _r.pipeline()
         _pipe.get(_nkey)
         _pipe.delete(_nkey)
-        _next_path = ((await _pipe.execute())[0] or "/inbox")
+        _next_path = (await _pipe.execute())[0] or "/inbox"
     except Exception:
         _next_path = "/inbox"
     if not _next_path.startswith("/"):
@@ -273,10 +276,12 @@ async def callback(
         try:
             import base64 as _b64
             import json as _json
+
             _payload_b64 = access_token.split(".")[1]
             _payload_b64 += "=" * (-len(_payload_b64) % 4)
             _claims = _json.loads(_b64.urlsafe_b64decode(_payload_b64))
             import time as _time
+
             _token_ttl = max(0, int(_claims.get("exp", 0)) - int(_time.time()))
         except Exception:
             pass
@@ -325,6 +330,7 @@ def _token_max_age(access_token: str) -> int:
         import base64 as _b64
         import json as _json
         import time as _time
+
         p = access_token.split(".")[1]
         p += "=" * (-len(p) % 4)
         claims = _json.loads(_b64.urlsafe_b64decode(p))
@@ -379,6 +385,7 @@ async def qr_login_create(
 async def qr_login_redeem(payload: QrRedeemRequest, request: Request) -> Response:
     """Redeem a QR-login token: set the mobile device's session cookie. Public."""
     from app.utils.redis_client import get_async_redis
+
     r = get_async_redis()
     key = f"qrlogin:{payload.token}"
     pipe = r.pipeline()
@@ -396,6 +403,7 @@ async def qr_login_redeem(payload: QrRedeemRequest, request: Request) -> Respons
 
     # Make sure the relayed session is still valid (not expired/revoked).
     from app.auth.jwt import _verify_token
+
     try:
         redeemed_user = await _verify_token(session_jwt)
     except Exception:
@@ -498,17 +506,13 @@ async def device_unlock_redeem(
     from app.db.models import DeviceUnlockCredential, User
 
     res = await db.execute(
-        select(DeviceUnlockCredential).where(
-            DeviceUnlockCredential.handle == payload.handle
-        )
+        select(DeviceUnlockCredential).where(DeviceUnlockCredential.handle == payload.handle)
     )
     cred = res.scalar_one_or_none()
     ok = (
         cred is not None
         and not cred.revoked
-        and secrets.compare_digest(
-            cred.secret_hash, _hash_unlock_secret(payload.secret)
-        )
+        and secrets.compare_digest(cred.secret_hash, _hash_unlock_secret(payload.secret))
     )
     if not ok:
         logger.warning(
@@ -537,9 +541,9 @@ async def device_unlock_redeem(
         session_epoch=epoch,
     )
 
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    cred.last_used_at = datetime.now(timezone.utc)
+    cred.last_used_at = datetime.now(UTC)
     await db.commit()
 
     is_production = settings.app_env == "production"

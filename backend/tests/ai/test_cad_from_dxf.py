@@ -61,11 +61,13 @@ def _source_ir() -> CadIR:
                     Point(x=650, y=500),
                     Point(x=500, y=500),
                 ],
-                holes=[[
-                    Point(x=540, y=390),
-                    Point(x=580, y=390),
-                    Point(x=580, y=430),
-                ]],
+                holes=[
+                    [
+                        Point(x=540, y=390),
+                        Point(x=580, y=390),
+                        Point(x=580, y=430),
+                    ]
+                ],
             ),
             AnnotationEntity(
                 position=Point(x=250, y=500),

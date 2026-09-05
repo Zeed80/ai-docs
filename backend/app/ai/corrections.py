@@ -40,16 +40,36 @@ _VECTOR_SCOPE = "correction_triggers"
 CORRECTION_REPLAY_SCORE = 0.80
 
 _CORRECTION_MARKERS = (
-    "не так", "не то", "не это", "неверно", "неправильно", "не правильно",
-    "я просил", "я же просил", "просил же", "надо было", "должно быть",
-    "нет, ", "нет надо", "нет, надо", "не надо", "а не ", "вместо",
-    "поправь", "исправь", "ошиб", "имел в виду", "имелось в виду", "не верно",
+    "не так",
+    "не то",
+    "не это",
+    "неверно",
+    "неправильно",
+    "не правильно",
+    "я просил",
+    "я же просил",
+    "просил же",
+    "надо было",
+    "должно быть",
+    "нет, ",
+    "нет надо",
+    "нет, надо",
+    "не надо",
+    "а не ",
+    "вместо",
+    "поправь",
+    "исправь",
+    "ошиб",
+    "имел в виду",
+    "имелось в виду",
+    "не верно",
 )
 
 
 def _redis():
     try:
         from app.utils.redis_client import get_sync_redis
+
         return get_sync_redis()
     except Exception:
         return None
@@ -96,8 +116,9 @@ def correction_to_ops(source: str, correction_text: str) -> list[PatchOp]:
 
 
 def _ops_to_json(ops: list[PatchOp]) -> str:
-    return json.dumps([o.model_dump(mode="json", exclude_none=True) for o in ops],
-                      ensure_ascii=False)
+    return json.dumps(
+        [o.model_dump(mode="json", exclude_none=True) for o in ops], ensure_ascii=False
+    )
 
 
 def _ops_from_json(raw: str) -> list[PatchOp]:
@@ -106,9 +127,14 @@ def _ops_from_json(raw: str) -> list[PatchOp]:
 
 def _collection_name() -> str:
     from app.ai.embeddings import embedding_collection_name, get_active_embedding_profile
+
     p = get_active_embedding_profile()
-    return embedding_collection_name(scope=_VECTOR_SCOPE, model_key=p.model_key,
-                                     dimension=p.dimension, distance_metric=p.distance_metric)
+    return embedding_collection_name(
+        scope=_VECTOR_SCOPE,
+        model_key=p.model_key,
+        dimension=p.dimension,
+        distance_metric=p.distance_metric,
+    )
 
 
 async def _vector_upsert(point_id: str, source: str, ops_json: str, text: str) -> None:
@@ -121,9 +147,15 @@ async def _vector_upsert(point_id: str, source: str, ops_json: str, text: str) -
     collection = _collection_name()
     ensure_collection(collection, vector_size=p.dimension, distance_metric=p.distance_metric)
     upsert_memory_embedding(
-        point_id=point_id, vector=vector, collection_name=collection,
-        payload={"content_type": "correction_trigger", "source": source,
-                 "ops": ops_json, "text": text[:500]},
+        point_id=point_id,
+        vector=vector,
+        collection_name=collection,
+        payload={
+            "content_type": "correction_trigger",
+            "source": source,
+            "ops": ops_json,
+            "text": text[:500],
+        },
     )
 
 
@@ -133,8 +165,9 @@ async def _vector_search(request: str, source: str) -> list[PatchOp]:
     from app.vector.qdrant_store import search_similar
 
     vector = await embed_text(request, task_type="query")
-    hits = search_similar(vector, limit=5, collection_name=_collection_name(),
-                          score_threshold=CORRECTION_REPLAY_SCORE)
+    hits = search_similar(
+        vector, limit=5, collection_name=_collection_name(), score_threshold=CORRECTION_REPLAY_SCORE
+    )
     for hit in hits:
         payload = hit.get("payload") or {}
         if payload.get("source") == source and payload.get("ops"):
@@ -162,8 +195,9 @@ async def record_correction(prev_request: str, source: str, correction_text: str
         await _vector_upsert(f"correction:{intent_hash}", source, ops_json, prev_request)
     except Exception as exc:
         logger.warning("correction_vector_write_failed", error=str(exc))
-    logger.info("correction_learned", source=source, ops=[o.op for o in ops],
-                prev=prev_request[:80])
+    logger.info(
+        "correction_learned", source=source, ops=[o.op for o in ops], prev=prev_request[:80]
+    )
     return ops
 
 

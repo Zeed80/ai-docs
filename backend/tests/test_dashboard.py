@@ -1,14 +1,17 @@
 """Tests for Dashboard API — unified feed and today's summary."""
 
-from datetime import datetime, timezone
-
 import pytest
 from httpx import AsyncClient
 
 from app.db.models import (
-    Approval, ApprovalActionType, ApprovalStatus,
-    AnomalyCard, AnomalyStatus, AnomalyType,
-    Document, DocumentStatus,
+    AnomalyCard,
+    AnomalyStatus,
+    AnomalyType,
+    Approval,
+    ApprovalActionType,
+    ApprovalStatus,
+    Document,
+    DocumentStatus,
 )
 
 
@@ -52,6 +55,7 @@ async def open_anomaly(db_session):
     await db_session.flush()
 
     from app.db.models import AnomalySeverity
+
     anomaly = AnomalyCard(
         entity_type="document",
         entity_id=doc.id,

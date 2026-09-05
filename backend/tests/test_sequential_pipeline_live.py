@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import base64
 import os
-import time
 import uuid
 from pathlib import Path
 
@@ -38,8 +37,7 @@ def _text_layer_pdfs(n: int) -> list[Path]:
     if not _INVOICES.is_dir():
         return []
     return sorted(
-        p for p in _INVOICES.iterdir()
-        if p.suffix.lower() == ".pdf" and not p.name.startswith(".")
+        p for p in _INVOICES.iterdir() if p.suffix.lower() == ".pdf" and not p.name.startswith(".")
     )[:n]
 
 
@@ -49,11 +47,12 @@ def test_sequential_pipeline_no_overlap():
 
     from app.db.models import Document, DocumentProcessingJob  # noqa: F401
     from app.db.session import _get_engine, _get_session_factory
-    from app.tasks.extraction import classify_document
-    from app.tasks.ingest import store_document
 
     # IMPORTANT: this test requires real workers, not eager mode.
     from app.tasks.celery_app import celery_app
+    from app.tasks.extraction import classify_document
+    from app.tasks.ingest import store_document
+
     assert not celery_app.conf.task_always_eager, "set CELERY_TASK_ALWAYS_EAGER=false for live run"
 
     pdfs = _text_layer_pdfs(4)

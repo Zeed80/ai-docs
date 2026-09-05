@@ -26,6 +26,7 @@ _CACHE_TTL = 20  # seconds — snapshot freshness vs. DB load
 def _redis():
     try:
         from app.utils.redis_client import get_sync_redis
+
         return get_sync_redis()
     except Exception:
         return None
@@ -117,6 +118,7 @@ async def get_flow_snapshot(config, *, use_cache: bool = True) -> dict | None:
     base = config.backend_url.rstrip("/")
     try:
         from app.ai.agent_loop import internal_headers
+
         headers = internal_headers()
     except Exception:
         headers = {}

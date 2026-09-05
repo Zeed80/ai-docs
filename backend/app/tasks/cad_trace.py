@@ -121,13 +121,15 @@ async def _append_cad_process_event(
             if isinstance(model_output, dict):
                 output_id = f"model-output-{sequence}"
                 outputs = list(params.get("cad_model_outputs") or [])
-                outputs.append({
-                    "id": output_id,
-                    "sequence": sequence,
-                    "at": now,
-                    "stage": stage,
-                    **model_output,
-                })
+                outputs.append(
+                    {
+                        "id": output_id,
+                        "sequence": sequence,
+                        "at": now,
+                        "stage": stage,
+                        **model_output,
+                    }
+                )
                 params["cad_model_outputs"] = outputs[-_CAD_MODEL_OUTPUT_MAX_ITEMS:]
                 event_details["model_output_id"] = output_id
             if isinstance(partial_spec, dict) and partial_spec:
@@ -148,20 +150,24 @@ async def _append_cad_process_event(
                 event_details,
                 int(process.get("progress_pct") or 0),
             )
-            process.update({
-                "version": _CAD_PROCESS_LOG_VERSION,
-                "status": (
-                    "failed" if stage == "pipeline" and status == "failed"
-                    else "done" if stage == "pipeline" and status == "completed"
-                    else process.get("status", "running")
-                ),
-                "current_stage": stage,
-                "current_status": status,
-                "updated_at": now,
-                "progress_pct": progress_pct,
-                "current_message": message,
-                "events": events[-_CAD_PROCESS_LOG_MAX_EVENTS:],
-            })
+            process.update(
+                {
+                    "version": _CAD_PROCESS_LOG_VERSION,
+                    "status": (
+                        "failed"
+                        if stage == "pipeline" and status == "failed"
+                        else "done"
+                        if stage == "pipeline" and status == "completed"
+                        else process.get("status", "running")
+                    ),
+                    "current_stage": stage,
+                    "current_status": status,
+                    "updated_at": now,
+                    "progress_pct": progress_pct,
+                    "current_message": message,
+                    "events": events[-_CAD_PROCESS_LOG_MAX_EVENTS:],
+                }
+            )
             process.setdefault("started_at", now)
             params["cad_process"] = process
             gen.params = params
@@ -214,6 +220,7 @@ async def _finalize_cad_task_failure(generation_id: str, message: str) -> None:
         {"terminal": True},
     )
     await _mark_failed(gen_uuid, message)
+
 
 # ГОСТ 2.301 sheet sizes (portrait, mm) — landscape is matched by swapping.
 _GOST_SHEETS = {
@@ -356,21 +363,23 @@ async def _store_editor_build(
             path = paths.get(kind)
             if path:
                 params[f"{kind}_path"] = path
-        params.update({
-            "cad_artifact_revision": cad_revision.revision,
-            "cad_edit_context": {
-                "mode": "design",
-                "source_graph_id": f"image-generation:{gen_uuid}",
-                "design_graph_id": graph_row.graph_id,
-            },
-            "solid_3d": solid_result,
-            "engineering_model_graph": {
-                "revision_id": str(graph_row.id),
-                "graph_id": graph_row.graph_id,
-                "revision": graph_row.revision,
-                "canonical_sha256": graph_row.canonical_sha256,
-            },
-        })
+        params.update(
+            {
+                "cad_artifact_revision": cad_revision.revision,
+                "cad_edit_context": {
+                    "mode": "design",
+                    "source_graph_id": f"image-generation:{gen_uuid}",
+                    "design_graph_id": graph_row.graph_id,
+                },
+                "solid_3d": solid_result,
+                "engineering_model_graph": {
+                    "revision_id": str(graph_row.id),
+                    "graph_id": graph_row.graph_id,
+                    "revision": graph_row.revision,
+                    "canonical_sha256": graph_row.canonical_sha256,
+                },
+            }
+        )
         gen.params = params
         gen.status = ImageGenStatus.done
         await db.commit()
@@ -420,10 +429,7 @@ async def _rebuild_from_spec(
         params = dict(gen.params or {})
         owner_sub = gen.owner_sub
     current_correction_event_id = params.get("spec_correction_event_id")
-    if (
-        correction_event_id is not None
-        and current_correction_event_id != correction_event_id
-    ):
+    if correction_event_id is not None and current_correction_event_id != correction_event_id:
         return {
             "ok": True,
             "superseded": True,
@@ -443,10 +449,14 @@ async def _rebuild_from_spec(
     if dimension_graph["errors"]:
         spec = {
             **spec,
-            "unresolved": list(dict.fromkeys([
-                *(spec.get("unresolved") or []),
-                *dimension_graph["errors"],
-            ])),
+            "unresolved": list(
+                dict.fromkeys(
+                    [
+                        *(spec.get("unresolved") or []),
+                        *dimension_graph["errors"],
+                    ]
+                )
+            ),
         }
     sheet_format = str(params.get("sheet_format") or "").upper() or None
     landscape = str(params.get("sheet_orientation") or "landscape").lower() != "portrait"
@@ -467,17 +477,19 @@ async def _rebuild_from_spec(
 
         rebuild_candidate = feature_tree_from_spec(spec)
         if rebuild_candidate is not None:
-            patch_digest = hashlib.sha256(json.dumps(
-                {
-                    "spec": spec,
-                    "candidate": rebuild_candidate.model_dump(mode="json"),
-                    "human": bool(params.get("spec_corrected")),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                default=str,
-                separators=(",", ":"),
-            ).encode()).hexdigest()
+            patch_digest = hashlib.sha256(
+                json.dumps(
+                    {
+                        "spec": spec,
+                        "candidate": rebuild_candidate.model_dump(mode="json"),
+                        "human": bool(params.get("spec_corrected")),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
             patch_key = (
                 f"spec-correction:{generation_id}:{correction_event_id}"
                 if correction_event_id is not None
@@ -508,7 +520,9 @@ async def _rebuild_from_spec(
                 }
                 await db.commit()
     solid_result = await _build_spec_solid(
-        spec, generation_id, owner_sub,
+        spec,
+        generation_id,
+        owner_sub,
         sheet_format=sheet_format,
         landscape=landscape,
         # A plain retry must not bypass the raster evidence gate.  A stored
@@ -531,8 +545,7 @@ async def _rebuild_from_spec(
     )
     result_graph = solid_result.pop("_engineering_model_graph", None)
     if engineering_graph is not None and (
-        result_graph is None
-        or result_graph.canonical_sha256 != engineering_graph.canonical_sha256
+        result_graph is None or result_graph.canonical_sha256 != engineering_graph.canonical_sha256
     ):
         return {"error": "CAD build returned a different EMG revision", "built": False}
     spec_ir = solid_result.pop("_sheet_ir", None)
@@ -560,9 +573,7 @@ async def _rebuild_from_spec(
         spec_ir.validation.issues.append(
             ValidationIssueIR(
                 code=(
-                    "SPEC_VALUE_DERIVED"
-                    if assumption.origin == "derived"
-                    else "SPEC_VALUE_ASSUMED"
+                    "SPEC_VALUE_DERIVED" if assumption.origin == "derived" else "SPEC_VALUE_ASSUMED"
                 ),
                 severity="warn",
                 level=3,
@@ -581,8 +592,7 @@ async def _rebuild_from_spec(
             return {"error": "not found"}
         if (
             correction_event_id is not None
-            and (gen.params or {}).get("spec_correction_event_id")
-            != correction_event_id
+            and (gen.params or {}).get("spec_correction_event_id") != correction_event_id
         ):
             return {
                 "ok": True,
@@ -608,14 +618,21 @@ async def _rebuild_from_spec(
             "rebuilt_from_spec": True,
             **(
                 {"engineering_model_graph": engineering_graph_ref}
-                if engineering_graph_ref is not None else {}
+                if engineering_graph_ref is not None
+                else {}
             ),
         }
         # A rebuild is a new REVISION, never an overwrite: the reader's own
         # attempt and the corrected one are both part of the record.
         cad_revision = await cad_ir_store.save_revision(
-            db, gen, spec_ir, origin="human", created_by=owner_sub,
-            keep_raster=None, thin_px=2, thick_px=4,
+            db,
+            gen,
+            spec_ir,
+            origin="human",
+            created_by=owner_sub,
+            keep_raster=None,
+            thin_px=2,
+            thick_px=4,
         )
         if engineering_graph_row is not None:
             cad_revision.engineering_graph_revision_id = engineering_graph_row.id
@@ -666,8 +683,14 @@ def add_feature_to_graph(
     """
     return run_async(
         _add_feature_to_graph(
-            generation_id, feature_kind, feature_params, note, idempotency_key,
-            actor_sub, expected_base_revision, expected_base_sha256,
+            generation_id,
+            feature_kind,
+            feature_params,
+            note,
+            idempotency_key,
+            actor_sub,
+            expected_base_revision,
+            expected_base_sha256,
         )
     )
 
@@ -686,7 +709,7 @@ async def _add_feature_to_graph(
 
     from app.ai.cad_emg_compat import feature_tree_from_graph
     from app.ai.cad_ir.feature_tree import Feature3D, ParamProvenance
-    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.db.models import ImageGeneration
     from app.db.session import _get_session_factory
     from app.services.engineering_model_graph import load_graph, persist_feature_tree_revision
 
@@ -703,12 +726,8 @@ async def _add_feature_to_graph(
         )
     if latest_row is None:
         return {"error": "EngineeringModelGraph ещё не создан для этой генерации"}
-    if (
-        (expected_base_revision is not None and latest_row.revision != expected_base_revision)
-        or (
-            expected_base_sha256 is not None
-            and latest_row.canonical_sha256 != expected_base_sha256
-        )
+    if (expected_base_revision is not None and latest_row.revision != expected_base_revision) or (
+        expected_base_sha256 is not None and latest_row.canonical_sha256 != expected_base_sha256
     ):
         return {"error": "stale_graph_revision"}
     graph = load_graph(latest_row)
@@ -727,9 +746,7 @@ async def _add_feature_to_graph(
         # Ф3.3's own rule (_append_human_features): every param a human adds
         # is explicitly "human" provenance — never left unset.
         param_provenance={
-            key: ParamProvenance(
-                origin="human", detail="добавлено человеком в CAD-редакторе"
-            )
+            key: ParamProvenance(origin="human", detail="добавлено человеком в CAD-редакторе")
             for key in feature_params
         },
         confidence=1.0,
@@ -773,8 +790,7 @@ async def _add_feature_to_graph(
         generation_id,
         owner_sub,
         sheet_format=str(params.get("sheet_format") or "").upper() or None,
-        landscape=str(params.get("sheet_orientation") or "landscape").lower()
-        != "portrait",
+        landscape=str(params.get("sheet_orientation") or "landscape").lower() != "portrait",
         require_source_evidence=not bool(params.get("spec_corrected")),
         source_sha256=params.get("normalized_source_sha256"),
         source_uri=params.get("normalized_source_path"),
@@ -823,8 +839,7 @@ async def _add_feature_to_graph(
                 gen_for_rollback = await db.get(ImageGeneration, gen_uuid)
                 if gen_for_rollback is not None:
                     current_emg = dict(
-                        (gen_for_rollback.params or {}).get("engineering_model_graph")
-                        or {}
+                        (gen_for_rollback.params or {}).get("engineering_model_graph") or {}
                     )
                     if current_emg:
                         gen_for_rollback.params = {
@@ -907,8 +922,13 @@ def remove_feature_from_graph(
     """
     return run_async(
         _remove_feature_from_graph(
-            generation_id, operation_id, note, idempotency_key,
-            actor_sub, expected_base_revision, expected_base_sha256,
+            generation_id,
+            operation_id,
+            note,
+            idempotency_key,
+            actor_sub,
+            expected_base_revision,
+            expected_base_sha256,
         )
     )
 
@@ -925,7 +945,7 @@ async def _remove_feature_from_graph(
     import uuid as _uuid
 
     from app.ai.cad_emg_compat import feature_tree_from_graph
-    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.db.models import ImageGeneration
     from app.db.session import _get_session_factory
     from app.services.engineering_model_graph import load_graph, persist_feature_tree_revision
 
@@ -947,12 +967,8 @@ async def _remove_feature_from_graph(
         )
     if latest_row is None:
         return {"error": "EngineeringModelGraph ещё не создан для этой генерации"}
-    if (
-        (expected_base_revision is not None and latest_row.revision != expected_base_revision)
-        or (
-            expected_base_sha256 is not None
-            and latest_row.canonical_sha256 != expected_base_sha256
-        )
+    if (expected_base_revision is not None and latest_row.revision != expected_base_revision) or (
+        expected_base_sha256 is not None and latest_row.canonical_sha256 != expected_base_sha256
     ):
         return {"error": "stale_graph_revision"}
     graph = load_graph(latest_row)
@@ -1010,8 +1026,7 @@ async def _remove_feature_from_graph(
         generation_id,
         owner_sub,
         sheet_format=str(params.get("sheet_format") or "").upper() or None,
-        landscape=str(params.get("sheet_orientation") or "landscape").lower()
-        != "portrait",
+        landscape=str(params.get("sheet_orientation") or "landscape").lower() != "portrait",
         require_source_evidence=not bool(params.get("spec_corrected")),
         source_sha256=params.get("normalized_source_sha256"),
         source_uri=params.get("normalized_source_path"),
@@ -1022,10 +1037,9 @@ async def _remove_feature_from_graph(
         require_envelope_match=False,
     )
     if not solid_result or not solid_result.get("built"):
-        error_message = (
-            (solid_result or {}).get("error")
-            or "деталь не собралась после удаления операции"
-        )
+        error_message = (solid_result or {}).get(
+            "error"
+        ) or "деталь не собралась после удаления операции"
         # Same auto-rollback principle as add_feature_to_graph's own failure
         # branch: a delete that leaves the model unbuildable (e.g. removing
         # geometry a later fillet's edge_key depended on) must not become
@@ -1050,8 +1064,7 @@ async def _remove_feature_from_graph(
                 gen_for_rollback = await db.get(ImageGeneration, gen_uuid)
                 if gen_for_rollback is not None:
                     current_emg = dict(
-                        (gen_for_rollback.params or {}).get("engineering_model_graph")
-                        or {}
+                        (gen_for_rollback.params or {}).get("engineering_model_graph") or {}
                     )
                     if current_emg:
                         gen_for_rollback.params = {
@@ -1108,10 +1121,12 @@ def _pattern_offsets(pattern: dict, base_x: float, base_y: float) -> list[tuple[
         for i in range(count):
             angle = i * step
             cos_a, sin_a = math.cos(angle), math.sin(angle)
-            offsets.append((
-                cx + rel_x * cos_a - rel_y * sin_a,
-                cy + rel_x * sin_a + rel_y * cos_a,
-            ))
+            offsets.append(
+                (
+                    cx + rel_x * cos_a - rel_y * sin_a,
+                    cy + rel_x * sin_a + rel_y * cos_a,
+                )
+            )
         return offsets
     raise ValueError(f"неизвестный вид массива: {kind!r}")
 
@@ -1143,8 +1158,14 @@ def pattern_feature_in_graph(
     pattern from Ф6/Ф2, reused unchanged."""
     return run_async(
         _pattern_feature_in_graph(
-            generation_id, operation_id, pattern, note, idempotency_key,
-            actor_sub, expected_base_revision, expected_base_sha256,
+            generation_id,
+            operation_id,
+            pattern,
+            note,
+            idempotency_key,
+            actor_sub,
+            expected_base_revision,
+            expected_base_sha256,
         )
     )
 
@@ -1163,7 +1184,7 @@ async def _pattern_feature_in_graph(
 
     from app.ai.cad_emg_compat import feature_tree_from_graph
     from app.ai.cad_ir.feature_tree import Feature3D, ParamProvenance
-    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.db.models import ImageGeneration
     from app.db.session import _get_session_factory
     from app.services.engineering_model_graph import load_graph, persist_feature_tree_revision
 
@@ -1185,12 +1206,8 @@ async def _pattern_feature_in_graph(
         )
     if latest_row is None:
         return {"error": "EngineeringModelGraph ещё не создан для этой генерации"}
-    if (
-        (expected_base_revision is not None and latest_row.revision != expected_base_revision)
-        or (
-            expected_base_sha256 is not None
-            and latest_row.canonical_sha256 != expected_base_sha256
-        )
+    if (expected_base_revision is not None and latest_row.revision != expected_base_revision) or (
+        expected_base_sha256 is not None and latest_row.canonical_sha256 != expected_base_sha256
     ):
         return {"error": "stale_graph_revision"}
     graph = load_graph(latest_row)
@@ -1238,10 +1255,7 @@ async def _pattern_feature_in_graph(
                 key: (
                     ParamProvenance(
                         origin="human",
-                        detail=(
-                            f"массив CAD-редактора, экземпляр "
-                            f"{i + 1}/{len(offsets)}"
-                        ),
+                        detail=(f"массив CAD-редактора, экземпляр {i + 1}/{len(offsets)}"),
                     )
                     if key in {"center_x_mm", "center_y_mm"}
                     else target.param_provenance.get(
@@ -1259,10 +1273,8 @@ async def _pattern_feature_in_graph(
         for i, (x, y) in enumerate(offsets)
     ]
     updated_candidate = base_candidate.model_copy(deep=True)
-    updated_candidate.features[index:index + 1] = patterned
-    updated_candidate.label = (
-        f"{updated_candidate.label}; массив: {target.kind} × {len(patterned)}"
-    )
+    updated_candidate.features[index : index + 1] = patterned
+    updated_candidate.label = f"{updated_candidate.label}; массив: {target.kind} × {len(patterned)}"
 
     async with factory() as db:
         engineering_graph_row = await _persist_editor_candidate(
@@ -1288,8 +1300,7 @@ async def _pattern_feature_in_graph(
         generation_id,
         owner_sub,
         sheet_format=str(params.get("sheet_format") or "").upper() or None,
-        landscape=str(params.get("sheet_orientation") or "landscape").lower()
-        != "portrait",
+        landscape=str(params.get("sheet_orientation") or "landscape").lower() != "portrait",
         require_source_evidence=not bool(params.get("spec_corrected")),
         source_sha256=params.get("normalized_source_sha256"),
         source_uri=params.get("normalized_source_path"),
@@ -1299,9 +1310,9 @@ async def _pattern_feature_in_graph(
         require_envelope_match=False,
     )
     if not solid_result or not solid_result.get("built"):
-        error_message = (
-            (solid_result or {}).get("error") or "деталь не собралась после создания массива"
-        )
+        error_message = (solid_result or {}).get(
+            "error"
+        ) or "деталь не собралась после создания массива"
         async with factory() as db:
             try:
                 rollback_row = await persist_feature_tree_revision(
@@ -1318,8 +1329,7 @@ async def _pattern_feature_in_graph(
                 gen_for_rollback = await db.get(ImageGeneration, gen_uuid)
                 if gen_for_rollback is not None:
                     current_emg = dict(
-                        (gen_for_rollback.params or {}).get("engineering_model_graph")
-                        or {}
+                        (gen_for_rollback.params or {}).get("engineering_model_graph") or {}
                     )
                     if current_emg:
                         gen_for_rollback.params = {
@@ -1373,10 +1383,17 @@ def restore_design_revision(
     expected_base_sha256: str | None = None,
 ) -> dict:
     """Restore old design content as a new immutable graph/CadIR revision."""
-    return run_async(_restore_design_revision(
-        generation_id, target_revision, note, idempotency_key, actor_sub,
-        expected_base_revision, expected_base_sha256,
-    ))
+    return run_async(
+        _restore_design_revision(
+            generation_id,
+            target_revision,
+            note,
+            idempotency_key,
+            actor_sub,
+            expected_base_revision,
+            expected_base_sha256,
+        )
+    )
 
 
 async def _restore_design_revision(
@@ -1412,11 +1429,9 @@ async def _restore_design_revision(
         if latest_row is None or needs_fork:
             return {"error": "Ветка конструкции ещё не создана"}
         if (
-            (expected_base_revision is not None and latest_row.revision != expected_base_revision)
-            or (
-                expected_base_sha256 is not None
-                and latest_row.canonical_sha256 != expected_base_sha256
-            )
+            expected_base_revision is not None and latest_row.revision != expected_base_revision
+        ) or (
+            expected_base_sha256 is not None and latest_row.canonical_sha256 != expected_base_sha256
         ):
             return {"error": "stale_graph_revision"}
         target_row = (
@@ -1431,12 +1446,8 @@ async def _restore_design_revision(
             return {"error": f"Ревизия конструкции r{target_revision} не найдена"}
         if target_row.id == latest_row.id:
             return {"error": "Выбранная ревизия уже является текущей"}
-        current_candidate = feature_tree_from_graph(
-            load_graph(latest_row), target_id="preview"
-        )
-        target_candidate = feature_tree_from_graph(
-            load_graph(target_row), target_id="preview"
-        )
+        current_candidate = feature_tree_from_graph(load_graph(latest_row), target_id="preview")
+        target_candidate = feature_tree_from_graph(load_graph(target_row), target_id="preview")
     if current_candidate is None or target_candidate is None:
         return {"error": "Не удалось восстановить дерево построения из ревизии"}
     spec = params.get("spec_corrected") or params.get("spec")
@@ -1467,8 +1478,7 @@ async def _restore_design_revision(
         generation_id,
         owner_sub,
         sheet_format=str(params.get("sheet_format") or "").upper() or None,
-        landscape=str(params.get("sheet_orientation") or "landscape").lower()
-        != "portrait",
+        landscape=str(params.get("sheet_orientation") or "landscape").lower() != "portrait",
         require_source_evidence=not bool(params.get("spec_corrected")),
         source_sha256=params.get("normalized_source_sha256"),
         source_uri=params.get("normalized_source_path"),
@@ -1476,10 +1486,9 @@ async def _restore_design_revision(
         require_envelope_match=False,
     )
     if not solid_result or not solid_result.get("built"):
-        error_message = (
-            (solid_result or {}).get("error")
-            or "Не удалось пересобрать выбранную ревизию конструкции"
-        )
+        error_message = (solid_result or {}).get(
+            "error"
+        ) or "Не удалось пересобрать выбранную ревизию конструкции"
         async with factory() as db:
             try:
                 rollback_row = await _persist_editor_candidate(
@@ -1512,10 +1521,7 @@ async def _restore_design_revision(
                 pass
         return {"error": error_message, "built": False}
     result_graph = solid_result.pop("_engineering_model_graph", None)
-    if (
-        result_graph is None
-        or result_graph.canonical_sha256 != restored_graph.canonical_sha256
-    ):
+    if result_graph is None or result_graph.canonical_sha256 != restored_graph.canonical_sha256:
         return {"error": "CAD build returned a different EMG revision", "built": False}
     await _store_editor_build(
         factory=factory,
@@ -1650,7 +1656,11 @@ def _binarize(image_bytes: bytes):
         try:
             block = (max(15, min(h, w) // 25)) | 1
             sauvola = cv2.ximgproc.niBlackThreshold(
-                gray, 255, cv2.THRESH_BINARY, block, 0.2,
+                gray,
+                255,
+                cv2.THRESH_BINARY,
+                block,
+                0.2,
                 binarizationMethod=cv2.ximgproc.BINARIZATION_SAUVOLA,
             )
             sauvola_ink = cv2.bitwise_not(sauvola)
@@ -1711,9 +1721,7 @@ def _scale_from_quad(
     if confirmed_format not in _GOST_SHEETS:
         return None, None
     _x, _y, fw, fh = cv2.boundingRect(quad)
-    expected_w, expected_h = _frame_dimensions_mm(
-        confirmed_format, landscape=fw >= fh
-    )
+    expected_w, expected_h = _frame_dimensions_mm(confirmed_format, landscape=fw >= fh)
     frame_aspect = fw / max(fh, 1.0)
     expected_aspect = expected_w / expected_h
     if abs(frame_aspect - expected_aspect) / expected_aspect > _FRAME_ASPECT_TOL:
@@ -1815,7 +1823,9 @@ def _detect_title_block(ink, w: int, h: int) -> dict | None:
 # look like a bare "N:M" ratio; a wrongly-inferred scale would produce a
 # false ESKD_SCALE_NONSTANDARD warning, exactly the noise this is meant to
 # avoid, not add.
-_STAMP_SCALE_PATTERN = re.compile(r"[MМ]\s*(\d+(?:[.,]\d+)?)\s*:\s*(\d+(?:[.,]\d+)?)", re.IGNORECASE)
+_STAMP_SCALE_PATTERN = re.compile(
+    r"[MМ]\s*(\d+(?:[.,]\d+)?)\s*:\s*(\d+(?:[.,]\d+)?)", re.IGNORECASE
+)
 
 
 def _extract_stamp_scale(text_entities: list, region: dict) -> str | None:
@@ -1851,14 +1861,14 @@ def _extract_stamp_scale(text_entities: list, region: dict) -> str | None:
 # Without this split a clean sheet came back with 220+ single-char "в"/"8"/
 # "|" noise entities and holes punched in real geometry (B2 review, 2026-07-13).
 _TEXT_MIN_CONF_SINGLE = 70.0
-_TEXT_MIN_CONF_SHORT = 60.0   # 2 chars
-_TEXT_MIN_CONF_LONG = 58.0    # 3+ chars
-_TEXT_MAX_ASPECT = 8.0        # thinner than this = a line, not text
-_TEXT_MIN_ALNUM_RATIO = 0.6   # mostly letters/digits, not stray punctuation
+_TEXT_MIN_CONF_SHORT = 60.0  # 2 chars
+_TEXT_MIN_CONF_LONG = 58.0  # 3+ chars
+_TEXT_MAX_ASPECT = 8.0  # thinner than this = a line, not text
+_TEXT_MIN_ALNUM_RATIO = 0.6  # mostly letters/digits, not stray punctuation
 
 
 def _classify_ocr_region(region, lenient: bool = False) -> str:
-    """"text" (real label), "smudge" (exclude only) or "geometry" (ignore).
+    """ "text" (real label), "smudge" (exclude only) or "geometry" (ignore).
 
     ``lenient`` keeps low-confidence but plausibly text-shaped reads as text
     (for a downstream VLM re-read) instead of demoting them to smudge."""
@@ -1881,9 +1891,7 @@ def _classify_ocr_region(region, lenient: bool = False) -> str:
         return "text"  # let the VLM stage judge the reading
     n = len(compact)
     threshold = (
-        _TEXT_MIN_CONF_SINGLE if n == 1
-        else _TEXT_MIN_CONF_SHORT if n == 2
-        else _TEXT_MIN_CONF_LONG
+        _TEXT_MIN_CONF_SINGLE if n == 1 else _TEXT_MIN_CONF_SHORT if n == 2 else _TEXT_MIN_CONF_LONG
     )
     return "text" if region.conf >= threshold else "smudge"
 
@@ -1965,8 +1973,11 @@ def _overlay_spec_annotations(ir, spec: dict) -> None:
         ir.entities.append(
             TextEntity(
                 position=Point(x=left, y=y),
-                text=text, height=height,
-                line_class="dim", width_class="thin", origin="spec",
+                text=text,
+                height=height,
+                line_class="dim",
+                width_class="thin",
+                origin="spec",
                 assurance="inferred",
             )
         )
@@ -2020,6 +2031,7 @@ async def _build_spec_solid(
     Still never raises. A kernel that is down, or a part it cannot build, is
     reported as such — with what was read kept — rather than crashing the task.
     """
+    from app.ai.cad_process_log import record_cad_process_event
     from app.ai.cad_solid import (
         estimate_mass_kg,
         feature_tree_from_spec,
@@ -2027,7 +2039,6 @@ async def _build_spec_solid(
         solid_preview_gate,
         verify_solid_against_spec,
     )
-    from app.ai.cad_process_log import record_cad_process_event
     from app.services.cad_kernel import (
         CadKernelError,
         candidate_compile_payload,
@@ -2101,12 +2112,11 @@ async def _build_spec_solid(
             "label": str(spec.get("part") or ""),
             **(
                 {"_engineering_model_graph": engineering_graph}
-                if engineering_graph is not None else {}
+                if engineering_graph is not None
+                else {}
             ),
         }
-    build_gate = solid_build_gate(
-        spec, candidate, require_source_evidence=require_source_evidence
-    )
+    build_gate = solid_build_gate(spec, candidate, require_source_evidence=require_source_evidence)
     graph_admission = None
     if engineering_graph is not None:
         from app.services.engineering_model_graph import evaluate_build_admission
@@ -2118,16 +2128,19 @@ async def _build_spec_solid(
         )
         if not graph_admission.allowed:
             admission_blockers = [
-                f"EMG {item.code}: {item.message}"
-                for item in graph_admission.blockers
+                f"EMG {item.code}: {item.message}" for item in graph_admission.blockers
             ]
             build_gate = {
                 **build_gate,
                 "allowed": False,
-                "blockers": list(dict.fromkeys([
-                    *(str(item) for item in build_gate["blockers"]),
-                    *admission_blockers,
-                ])),
+                "blockers": list(
+                    dict.fromkeys(
+                        [
+                            *(str(item) for item in build_gate["blockers"]),
+                            *admission_blockers,
+                        ]
+                    )
+                ),
             }
     preview_gate = solid_preview_gate(build_gate)
     # A2: a step whose length could not be read compiles anyway, with a
@@ -2144,9 +2157,8 @@ async def _build_spec_solid(
         for provenance in feature.param_provenance.values()
     )
     preview_mode = (
-        (not bool(build_gate["allowed"]) and bool(preview_gate["allowed"]))
-        or has_unconfirmed_guess
-    )
+        not bool(build_gate["allowed"]) and bool(preview_gate["allowed"])
+    ) or has_unconfirmed_guess
     confirm_assumptions = bool(build_gate["warnings"]) or preview_mode
     kernel_input = candidate_compile_payload(
         candidate,
@@ -2155,9 +2167,7 @@ async def _build_spec_solid(
             "generation_id": generation_id,
             "source": "spec_reader",
             "preview_review_required": preview_mode,
-            "excluded_geometry": (
-                " | ".join(preview_gate["excluded"]) if preview_mode else ""
-            ),
+            "excluded_geometry": (" | ".join(preview_gate["excluded"]) if preview_mode else ""),
         },
     )
     await record_cad_process_event(
@@ -2176,8 +2186,7 @@ async def _build_spec_solid(
             "kernel_payload_sha256": kernel_input.get("sha256"),
             "confirm_assumptions": confirm_assumptions,
             "graph_admission": (
-                graph_admission.model_dump(mode="json")
-                if graph_admission is not None else None
+                graph_admission.model_dump(mode="json") if graph_admission is not None else None
             ),
         },
     )
@@ -2196,15 +2205,15 @@ async def _build_spec_solid(
             "warnings": build_gate["warnings"],
             "preview_gate": preview_gate,
             "graph_admission": (
-                graph_admission.model_dump(mode="json")
-                if graph_admission is not None else None
+                graph_admission.model_dump(mode="json") if graph_admission is not None else None
             ),
             "label": candidate.label,
             "feature_tree": candidate.model_dump(mode="json"),
             "kernel_input": kernel_input,
             **(
                 {"_engineering_model_graph": engineering_graph}
-                if engineering_graph is not None else {}
+                if engineering_graph is not None
+                else {}
             ),
         }
     await record_cad_process_event(
@@ -2231,15 +2240,15 @@ async def _build_spec_solid(
                 "generation_id": generation_id,
                 "source": "spec_reader",
                 "preview_review_required": preview_mode,
-                "excluded_geometry": (
-                    " | ".join(preview_gate["excluded"]) if preview_mode else ""
-                ),
+                "excluded_geometry": (" | ".join(preview_gate["excluded"]) if preview_mode else ""),
             },
         )
     except CadKernelError as exc:
         logger.warning("cad_solid_failed", generation_id=generation_id, error=str(exc))
         await record_cad_process_event(
-            "kernel.compile", "failed", "CAD-ядро отклонило feature tree",
+            "kernel.compile",
+            "failed",
+            "CAD-ядро отклонило feature tree",
             {"error": str(exc)[:400]},
         )
         return {
@@ -2249,13 +2258,16 @@ async def _build_spec_solid(
             "label": candidate.label,
             **(
                 {"_engineering_model_graph": engineering_graph}
-                if engineering_graph is not None else {}
+                if engineering_graph is not None
+                else {}
             ),
         }
     except Exception as exc:  # noqa: BLE001
         logger.warning("cad_solid_error", generation_id=generation_id, error=str(exc))
         await record_cad_process_event(
-            "kernel.compile", "failed", "Ошибка вызова CAD-ядра",
+            "kernel.compile",
+            "failed",
+            "Ошибка вызова CAD-ядра",
             {"error": f"{type(exc).__name__}: {exc}"[:400]},
         )
         return {
@@ -2265,7 +2277,8 @@ async def _build_spec_solid(
             "label": candidate.label,
             **(
                 {"_engineering_model_graph": engineering_graph}
-                if engineering_graph is not None else {}
+                if engineering_graph is not None
+                else {}
             ),
         }
 
@@ -2326,7 +2339,8 @@ async def _build_spec_solid(
             },
             **(
                 {"_engineering_model_graph": engineering_graph}
-                if engineering_graph is not None else {}
+                if engineering_graph is not None
+                else {}
             ),
         }
     # The sheet itself: views, sections and dimensions all measured off this
@@ -2343,15 +2357,19 @@ async def _build_spec_solid(
     )
     try:
         sheet = await build_sheet_from_solid(
-            candidate, spec, report,
-            sheet_format=sheet_format, landscape=landscape, geometry_only=True,
+            candidate,
+            spec,
+            report,
+            sheet_format=sheet_format,
+            landscape=landscape,
+            geometry_only=True,
         )
     except Exception as exc:  # noqa: BLE001 — a drawing failure is reportable, not fatal
-        logger.warning(
-            "cad_sheet_from_solid_failed", generation_id=generation_id, error=str(exc)
-        )
+        logger.warning("cad_sheet_from_solid_failed", generation_id=generation_id, error=str(exc))
         await record_cad_process_event(
-            "sheet.build", "failed", "Не удалось построить лист из B-Rep",
+            "sheet.build",
+            "failed",
+            "Не удалось построить лист из B-Rep",
             {"error": f"{type(exc).__name__}: {exc}"[:400]},
         )
     # Stage 3: what the sheet said is bound to the edges the kernel built,
@@ -2374,9 +2392,7 @@ async def _build_spec_solid(
         if engineering_graph is not None
         else "unsealed"
     )
-    prefix = (
-        f"image-gen/{owner_sub or 'shared'}/{generation_id}_solid_{graph_token}"
-    )
+    prefix = f"image-gen/{owner_sub or 'shared'}/{generation_id}_solid_{graph_token}"
     paths: dict[str, str] = {}
     topology_bytes = None
     if artifacts.topology:
@@ -2403,9 +2419,7 @@ async def _build_spec_solid(
         # Geometry-vs-spec is necessary but not sufficient: the spec itself was
         # read by a model.  Until an independent source-projection comparison
         # passes, a compiled body is explicitly unverified.
-        "build_status": (
-            "preview_review_required" if preview_mode else "built_unverified"
-        ),
+        "build_status": ("preview_review_required" if preview_mode else "built_unverified"),
         "complete": not preview_mode,
         "preview": preview_mode,
         "blockers": build_gate["blockers"],
@@ -2416,8 +2430,7 @@ async def _build_spec_solid(
         "build_gate": build_gate,
         "preview_gate": preview_gate,
         "graph_admission": (
-            graph_admission.model_dump(mode="json")
-            if graph_admission is not None else None
+            graph_admission.model_dump(mode="json") if graph_admission is not None else None
         ),
         "verification": {
             **verification.as_dict(),
@@ -2450,7 +2463,8 @@ async def _build_spec_solid(
             # Exact kernel truth: complete independent bodies and validated
             # operation-prefix checkpoints may be reused. The report retains
             # the exact rebuilt/reused indices and checkpoint topology proof.
-            "incremental_build": report.get("incremental_build") or {
+            "incremental_build": report.get("incremental_build")
+            or {
                 "schema": "cad-kernel-incremental/1.1",
                 "strategy": "unavailable_full_rebuild",
                 "cache_enabled": False,
@@ -2470,8 +2484,7 @@ async def _build_spec_solid(
         "feature_tree": candidate.model_dump(mode="json"),
         "kernel_input": kernel_input,
         **(
-            {"_engineering_model_graph": engineering_graph}
-            if engineering_graph is not None else {}
+            {"_engineering_model_graph": engineering_graph} if engineering_graph is not None else {}
         ),
     }
     if sheet is not None:
@@ -2519,13 +2532,12 @@ def _revalidated_spec(spec: dict) -> dict:
 
     candidate = dict(spec)
     candidate["unresolved"] = [
-        item for item in (spec.get("unresolved") or [])
+        item
+        for item in (spec.get("unresolved") or [])
         if not str(item).startswith("body:") and not str(item).startswith("view:")
     ]
     try:
-        revalidated = EngineeringDrawingSpec.model_validate(candidate).model_dump(
-            mode="json"
-        )
+        revalidated = EngineeringDrawingSpec.model_validate(candidate).model_dump(mode="json")
     except Exception:  # noqa: BLE001 — keep the read rather than lose it to a re-check
         return spec
     # Fields the contract does not know about (provenance, consensus telemetry,
@@ -2627,10 +2639,7 @@ async def _store_failed_reading(
                 },
                 "solid_input": (solid_result or {}).get("kernel_input"),
                 "cad_pipeline_manifest": pipeline_manifest,
-                **(
-                    {"engineering_model_graph": graph_ref}
-                    if graph_ref is not None else {}
-                ),
+                **({"engineering_model_graph": graph_ref} if graph_ref is not None else {}),
             }
             if fallback_ir is not None:
                 from app.ai.cad_ir.schema import ValidationIssueIR
@@ -2651,8 +2660,14 @@ async def _store_failed_reading(
                         )
                     )
                 await cad_ir_store.save_revision(
-                    db, gen, fallback_ir, origin="auto", created_by=owner_sub,
-                    keep_raster=None, thin_px=2, thick_px=4,
+                    db,
+                    gen,
+                    fallback_ir,
+                    origin="auto",
+                    created_by=owner_sub,
+                    keep_raster=None,
+                    thin_px=2,
+                    thick_px=4,
                 )
                 revision_created = True
             gen.status = ImageGenStatus.done
@@ -2796,16 +2811,12 @@ def _drop_in_glyph_segments(entities: list, text_entities: list) -> list:
     """
     import math
 
-    boxes = [
-        t.source_region for t in text_entities if getattr(t, "source_region", None)
-    ]
+    boxes = [t.source_region for t in text_entities if getattr(t, "source_region", None)]
     if not boxes:
         return list(entities)
     heights = sorted(box.y1 - box.y0 for box in boxes)
     median_h = heights[len(heights) // 2] if heights else 0.0
-    usable = [
-        box for box in boxes if median_h <= 0 or (box.y1 - box.y0) <= 3.0 * median_h
-    ]
+    usable = [box for box in boxes if median_h <= 0 or (box.y1 - box.y0) <= 3.0 * median_h]
 
     def _is_glyph_stroke(seg) -> bool:
         length = math.hypot(seg.p2.x - seg.p1.x, seg.p2.y - seg.p1.y)
@@ -2820,9 +2831,7 @@ def _drop_in_glyph_segments(entities: list, text_entities: list) -> list:
                 return True
         return False
 
-    return [
-        e for e in entities if not (e.type == "segment" and _is_glyph_stroke(e))
-    ]
+    return [e for e in entities if not (e.type == "segment" and _is_glyph_stroke(e))]
 
 
 def _ocr_text_entities(image_bytes: bytes, lenient: bool = False):
@@ -2892,10 +2901,15 @@ async def _enrich_text_with_vlm(text_entities: list, source_bytes: bytes) -> Non
     failure on one crop never aborts the batch (read_crop_hypotheses already
     degrades to []) or the pipeline."""
     from app.ai.cad_hypothesis import apply_vlm_readings
-    from app.ai.vlm_dimensions import MAX_CROP_READS_PER_RUN, crop_bytes_for_region, read_crop_hypotheses
+    from app.ai.vlm_dimensions import (
+        MAX_CROP_READS_PER_RUN,
+        crop_bytes_for_region,
+        read_crop_hypotheses,
+    )
 
     candidates = [
-        e for e in text_entities
+        e
+        for e in text_entities
         if e.confidence < _VLM_ENRICH_CONFIDENCE_THRESHOLD and e.source_region is not None
     ][:MAX_CROP_READS_PER_RUN]
     for entity in candidates:
@@ -2919,7 +2933,8 @@ async def _enrich_lines_with_vlm(ir, source_bytes: bytes) -> None:
     from app.ai.vlm_dimensions import classify_line_hypotheses, crop_bytes_for_bbox
 
     candidates = [
-        e for e in ir.entities
+        e
+        for e in ir.entities
         if isinstance(e, Segment) and e.width_class == "thin" and e.assurance != "human_approved"
     ][:_VLM_LINE_BUDGET]
     for entity in candidates:
@@ -2990,9 +3005,7 @@ def _assess_export_fidelity(ir, ink, keep_raster, thin_px: int, thick_px: int) -
 
     drawn = rasterize_entities(vector_entities, w, h, thin_px, thick_px) < 128
     radius = _coverage_dilate_px(h, w)
-    kernel = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
-    )
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
     drawn_grown = cv2.dilate(drawn.astype(np.uint8), kernel) > 0
     missed = (geometry_ink & ~drawn_grown).astype(np.uint8)
     count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(missed, connectivity=8)
@@ -3079,9 +3092,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         message: str,
         details: dict[str, Any] | None = None,
     ) -> None:
-        await _append_cad_process_event(
-            gen_uuid, stage, status, message, details
-        )
+        await _append_cad_process_event(gen_uuid, stage, status, message, details)
 
     recorder_token = install_cad_process_recorder(_record)
 
@@ -3197,9 +3208,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             "Снимок маршрута и версий компонентов сохранён",
             {
                 "config_sha256": pipeline_manifest.get("config_sha256"),
-                "spec_reader": (
-                    pipeline_manifest.get("components", {}).get("spec_reader", {})
-                ),
+                "spec_reader": (pipeline_manifest.get("components", {}).get("spec_reader", {})),
             },
         )
 
@@ -3260,9 +3269,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 try:
                     graph_ir = draft_drawing_graph(graph)
                 except DrawingGraphDraftError as exc:
-                    return await _fail(
-                        "Метод «по описанию»: graph drafter остановлен: " + str(exc)
-                    )
+                    return await _fail("Метод «по описанию»: graph drafter остановлен: " + str(exc))
                 graph_ir.source.generation_id = generation_id
                 graph_ink, graph_width, graph_height = _binarize(content)
                 if (
@@ -3293,9 +3300,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                                     mode="json", exclude={"graph"}
                                 ),
                                 "drawing_graph_sha256": graph.content_sha256(),
-                                "drawing_graph_vlm_evidence": vlm_evidence.model_dump(
-                                    mode="json"
-                                ),
+                                "drawing_graph_vlm_evidence": vlm_evidence.model_dump(mode="json"),
                                 "drawing_graph_verification": (
                                     graph_verification.model_dump(mode="json")
                                 ),
@@ -3303,19 +3308,14 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             await db.commit()
                     return await _fail(
                         "Метод «по описанию»: graph не прошёл независимую проверку: "
-                        + "; ".join(
-                            issue.message for issue in graph_verification.blocking[:5]
-                        )
+                        + "; ".join(issue.message for issue in graph_verification.blocking[:5])
                     )
                 validate_ir(graph_ir)
                 if graph_ir.validation.blocking:
                     return await _fail(
                         "Метод «по описанию»: CadIR validation заблокировала "
                         "построение: "
-                        + "; ".join(
-                            issue.message_ru
-                            for issue in graph_ir.validation.blocking[:5]
-                        )
+                        + "; ".join(issue.message_ru for issue in graph_ir.validation.blocking[:5])
                     )
                 async with factory() as db:
                     gen = await db.get(ImageGeneration, gen_uuid)
@@ -3363,18 +3363,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             mode="json", exclude={"graph", "parsed_payload"}
                         ),
                         "drawing_graph_sha256": graph.content_sha256(),
-                        "drawing_graph_vlm_evidence": vlm_evidence.model_dump(
-                            mode="json"
-                        ),
-                        "drawing_graph_verification": graph_verification.model_dump(
-                            mode="json"
-                        ),
+                        "drawing_graph_vlm_evidence": vlm_evidence.model_dump(mode="json"),
+                        "drawing_graph_verification": graph_verification.model_dump(mode="json"),
                         "cad_pipeline_manifest": pipeline_manifest,
                         "normalized_source_path": normalized_path,
-                        **(
-                            {"engineering_model_graph": emg_ref}
-                            if emg_ref is not None else {}
-                        ),
+                        **({"engineering_model_graph": emg_ref} if emg_ref is not None else {}),
                     }
                     cad_revision = await cad_ir_store.save_revision(
                         db,
@@ -3409,13 +3402,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             if vectorize_method == "spec":
                 if not content:
                     return await _fail("Метод «по описанию»: нужен исходный скан/фото.")
+                from app.ai.cad_recognize.spec_fragments import (
+                    read_spec_best_effort,
+                )
                 from app.ai.cad_recognize.spec_vectorize import (
                     SpecReaderNotVisionError,
                     SpecReadMalformedError,
                     SpecReadTruncatedError,
-                )
-                from app.ai.cad_recognize.spec_fragments import (
-                    read_spec_best_effort,
                 )
 
                 try:
@@ -3451,8 +3444,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             else "Чтение завершено без валидной спецификации"
                         ),
                         {
-                            "attempts": len(spec.get("reader_attempts") or [])
-                            if spec else 0,
+                            "attempts": len(spec.get("reader_attempts") or []) if spec else 0,
                             "has_geometry": bool(
                                 spec and (spec.get("main_view") or {}).get("outer")
                             ),
@@ -3466,8 +3458,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             "ни один проход не успел сформировать валидную геометрию."
                         )
                     spec.setdefault("optional_unresolved", []).append(
-                        "чтение достигло лимита 480 с.; использован последний "
-                        "сохранённый consensus"
+                        "чтение достигло лимита 480 с.; использован последний сохранённый consensus"
                     )
                     await _record(
                         "reader.timeout_recovery",
@@ -3528,12 +3519,12 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
                 try:
                     await _record(
-                        "reader.followup", "started",
-                        "Начато уточнение недостающих размеров", None,
+                        "reader.followup",
+                        "started",
+                        "Начато уточнение недостающих размеров",
+                        None,
                     )
-                    spec, followup_log = await resolve_missing_dimensions(
-                        content, spec
-                    )
+                    spec, followup_log = await resolve_missing_dimensions(content, spec)
                 except Exception as exc:  # noqa: BLE001 — a follow-up must never cost the read
                     logger.warning(
                         "cad_spec_followup_failed",
@@ -3574,7 +3565,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     check_ink = None
                 crosscheck = cross_check_spec(spec, check_ink)
                 blocking_checks = [
-                    finding["message"] for finding in crosscheck["findings"]
+                    finding["message"]
+                    for finding in crosscheck["findings"]
                     if finding["severity"] == "error"
                 ]
                 from app.ai.cad_dimension_graph import build_dimension_graph
@@ -3600,17 +3592,21 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "unresolved": list(dict.fromkeys(unresolved)),
                     }
                 spec_sheet = str(params.get("sheet_format") or "").upper() or None
-                spec_landscape = str(
-                    params.get("sheet_orientation") or "landscape"
-                ).lower() != "portrait"
+                spec_landscape = (
+                    str(params.get("sheet_orientation") or "landscape").lower() != "portrait"
+                )
 
                 # 3D-first: the part is built, and the sheet is what that part
                 # looks like. Not a drawing that happens to have a model beside
                 # it — the model IS the drawing's source, so two views cannot
                 # disagree and a dimension cannot contradict what it labels.
                 solid_result = await _build_spec_solid(
-                    spec, generation_id, owner_sub, sheet_format=spec_sheet,
-                    landscape=spec_landscape, require_source_evidence=True,
+                    spec,
+                    generation_id,
+                    owner_sub,
+                    sheet_format=spec_sheet,
+                    landscape=spec_landscape,
+                    require_source_evidence=True,
                     source_sha256=normalized_source_sha256,
                     source_uri=normalized_source_path,
                 )
@@ -3625,7 +3621,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "по прочитанному не удалось собрать деталь"
                     )
                     blockers = [
-                        str(item) for item in (solid_result or {}).get("blockers") or []
+                        str(item)
+                        for item in (solid_result or {}).get("blockers") or []
                         if str(item)
                     ]
                     if blockers:
@@ -3649,25 +3646,33 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         fallback_ir = await draft_from_spec_async(
                             spec,
                             draft_model=_get_routing_for(_AITask.CAD_SPEC_DRAFT).primary,
-                            sheet_format=spec_sheet, landscape=spec_landscape,
+                            sheet_format=spec_sheet,
+                            landscape=spec_landscape,
                         )
                     except Exception:  # noqa: BLE001 — best-effort fallback only
                         fallback_ir = None
                     revision_created = await _store_failed_reading(
-                        factory, gen_uuid, spec, crosscheck, followup_log,
-                        unresolved, solid_result, pipeline_manifest,
-                        build_note=build_note, fallback_ir=fallback_ir,
+                        factory,
+                        gen_uuid,
+                        spec,
+                        crosscheck,
+                        followup_log,
+                        unresolved,
+                        solid_result,
+                        pipeline_manifest,
+                        build_note=build_note,
+                        fallback_ir=fallback_ir,
                         owner_sub=owner_sub,
                     )
                     await _record(
                         "pipeline",
                         "completed",
                         (
-                            "Оцифровка завершена без 3D-тела; сохранён 2D-черновик "
-                            "для правки — "
-                            if revision_created else
-                            "Оцифровка завершена без геометрии; чтение сохранено — "
-                        ) + "откройте спецификацию, уточните недостающие размеры "
+                            "Оцифровка завершена без 3D-тела; сохранён 2D-черновик для правки — "
+                            if revision_created
+                            else "Оцифровка завершена без геометрии; чтение сохранено — "
+                        )
+                        + "откройте спецификацию, уточните недостающие размеры "
                         "и пересоберите.",
                         {
                             "solid_built": False,
@@ -3687,12 +3692,10 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     }
                 from app.ai.cad_source_projection import evaluate_source_projection
 
-                solid_result["source_projection_verification"] = (
-                    evaluate_source_projection(spec, crosscheck, solid_result)
+                solid_result["source_projection_verification"] = evaluate_source_projection(
+                    spec, crosscheck, solid_result
                 )
-                engineering_graph = solid_result.pop(
-                    "_engineering_model_graph", None
-                )
+                engineering_graph = solid_result.pop("_engineering_model_graph", None)
                 spec_ir = solid_result.pop("_sheet_ir", None)
                 if spec_ir is None:
                     return await _fail(
@@ -3710,8 +3713,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 spec_dim_check = _unplaced_callouts(solid_result, spec)
                 solid_result.pop("_dimensions", None)
                 validate_ir(spec_ir)
-                from app.ai.cad_ir.schema import ValidationIssueIR
                 from app.ai.cad_ir.dxf_render import verify_dxf_roundtrip
+                from app.ai.cad_ir.schema import ValidationIssueIR
 
                 dxf_roundtrip = verify_dxf_roundtrip(spec_ir)
                 spec_ir.validation.dxf_reopens = bool(dxf_roundtrip.get("ok"))
@@ -3834,14 +3837,17 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "normalized_source_path": normalized_path,
                         "solid_input": (solid_result or {}).get("kernel_input"),
                         **({"solid_3d": solid_result} if solid_result else {}),
-                        **(
-                            {"engineering_model_graph": graph_ref}
-                            if graph_ref is not None else {}
-                        ),
+                        **({"engineering_model_graph": graph_ref} if graph_ref is not None else {}),
                     }
                     cad_revision = await cad_ir_store.save_revision(
-                        db, gen, spec_ir, origin="auto", created_by=owner_sub,
-                        keep_raster=None, thin_px=2, thick_px=4,
+                        db,
+                        gen,
+                        spec_ir,
+                        origin="auto",
+                        created_by=owner_sub,
+                        keep_raster=None,
+                        thin_px=2,
+                        thick_px=4,
                     )
                     if graph_row is not None:
                         cad_revision.engineering_graph_revision_id = graph_row.id
@@ -3860,8 +3866,10 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     },
                 )
                 return {
-                    "ok": True, "generation_id": generation_id,
-                    "entities": len(spec_ir.entities), "method": "spec",
+                    "ok": True,
+                    "generation_id": generation_id,
+                    "entities": len(spec_ir.entities),
+                    "method": "spec",
                     "review_required": True,
                     "warnings": len(unresolved),
                     "solid_3d": bool(solid_result and solid_result.get("built")),
@@ -3891,9 +3899,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             draft_model = get_routing_for(AITask.CAD_SPEC_DRAFT).primary
             # Sheet + orientation → auto scale (ГОСТ 2.302). No sheet → free-fit.
             spec_sheet = str(params.get("sheet_format") or "").upper() or None
-            spec_landscape = str(
-                params.get("sheet_orientation") or "landscape"
-            ).lower() != "portrait"
+            spec_landscape = (
+                str(params.get("sheet_orientation") or "landscape").lower() != "portrait"
+            )
             spec_ir = await draft_from_spec_async(
                 spec,
                 draft_model=draft_model,
@@ -3916,7 +3924,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     return {"cancelled": True}
                 normalized_path = None
                 if content:
-                    normalized_path = f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_normalized.png"
+                    normalized_path = (
+                        f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_normalized.png"
+                    )
                     upload_file(content, normalized_path, "image/png")
                 gen.params = {
                     **(gen.params or {}),
@@ -3928,16 +3938,24 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 if normalized_path:
                     gen.params["normalized_source_path"] = normalized_path
                 await cad_ir_store.save_revision(
-                    db, gen, spec_ir, origin="auto", created_by=owner_sub,
-                    keep_raster=None, thin_px=2, thick_px=4,
+                    db,
+                    gen,
+                    spec_ir,
+                    origin="auto",
+                    created_by=owner_sub,
+                    keep_raster=None,
+                    thin_px=2,
+                    thick_px=4,
                 )
                 gen.status = ImageGenStatus.done
                 job = await studio_queue.job_for_generation(db, gen_uuid)
                 await studio_queue.mark_job_done(db, job)
                 await db.commit()
             return {
-                "ok": True, "generation_id": generation_id,
-                "entities": len(spec_ir.entities), "method": "spec",
+                "ok": True,
+                "generation_id": generation_id,
+                "entities": len(spec_ir.entities),
+                "method": "spec",
             }
 
         # Stage 1: classical preprocess — same module the cleanup path trusts.
@@ -3995,17 +4013,22 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 logger.warning("cad_trace_vlm_enrich_failed", error=str(exc))
             before = len(text_entities)
             text_entities = [
-                e for e in text_entities
-                if e.confidence * 100 >= (
-                    _TEXT_MIN_CONF_SINGLE if len((e.text or "").strip()) <= 1
-                    else _TEXT_MIN_CONF_SHORT if len((e.text or "").strip()) == 2
+                e
+                for e in text_entities
+                if e.confidence * 100
+                >= (
+                    _TEXT_MIN_CONF_SINGLE
+                    if len((e.text or "").strip()) <= 1
+                    else _TEXT_MIN_CONF_SHORT
+                    if len((e.text or "").strip()) == 2
                     else _TEXT_MIN_CONF_LONG
                 )
             ]
             if before != len(text_entities):
                 logger.info(
                     "cad_trace_post_vlm_text_filter",
-                    kept=len(text_entities), dropped=before - len(text_entities),
+                    kept=len(text_entities),
+                    dropped=before - len(text_entities),
                 )
 
         from app.ai.cad_profile import choose_profile
@@ -4056,7 +4079,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # detal_126 it dropped the main shaft body, ~78% of segments (2619 ->
         # 584). Instead trace everything and remove only segments that lie
         # ENTIRELY inside a text glyph's tight box afterwards.
-        arbitration = arbitrate_recognition(ink, None, TechnicalVectorizerRecognizer(), CvRecognizer())
+        arbitration = arbitrate_recognition(
+            ink, None, TechnicalVectorizerRecognizer(), CvRecognizer()
+        )
         # B1: an empty recognition is a hard failure only when the sheet
         # itself is pathological (no ink at all / near-solid black). Anything
         # in between degrades to a reviewable draft: the ink ships as raster
@@ -4068,7 +4093,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if degraded_recognition and not 0.0 < ink_fraction <= _DEGRADED_MAX_INK_FRACTION:
             return await _fail(
                 "Не удалось распознать линейную графику: лист "
-                + ("пустой. " if ink_fraction <= 0.0 else "почти полностью залит — не похож на линейный чертёж. ")
+                + (
+                    "пустой. "
+                    if ink_fraction <= 0.0
+                    else "почти полностью залит — не похож на линейный чертёж. "
+                )
                 + "Попробуйте сначала пропустить фото через режим «Очистка»."
             )
         keep_raster = arbitration.keep_raster
@@ -4089,7 +4118,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # not thin, so they can never be consumed here.
         recognized = _drop_in_glyph_segments(arbitration.entities, text_entities)
         geometry, text_entities, dim_count = reconstruct_dimensions(
-            recognized, text_entities, scale, w, h,
+            recognized,
+            text_entities,
+            scale,
+            w,
+            h,
         )
 
         frame_px = None
@@ -4129,8 +4162,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # Dimension leader lines still rasterize, so coverage is preserved.
         score = (
             score_coverage(
-                [*geometry, *frame_segments], ink,
-                keep_raster, thin_px, thick_px,
+                [*geometry, *frame_segments],
+                ink,
+                keep_raster,
+                thin_px,
+                thick_px,
             )
             if (frame_segments or dim_count)
             else arbitration.score
@@ -4159,29 +4195,38 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         from app.ai.cad_ir.schema import ValidationIssueIR
 
         if degraded_recognition:
-            ir.validation.issues.append(ValidationIssueIR(
-                code="RECOGNITION_EMPTY", severity="error",
-                message_ru=(
-                    "Векторная геометрия не распознана — лист сохранён растровой подложкой "
-                    "с рамкой и текстом. Проверьте исходник, попробуйте режим «Очистка» "
-                    "или обведите геометрию вручную в редакторе."
-                ),
-            ))
+            ir.validation.issues.append(
+                ValidationIssueIR(
+                    code="RECOGNITION_EMPTY",
+                    severity="error",
+                    message_ru=(
+                        "Векторная геометрия не распознана — лист сохранён растровой подложкой "
+                        "с рамкой и текстом. Проверьте исходник, попробуйте режим «Очистка» "
+                        "или обведите геометрию вручную в редакторе."
+                    ),
+                )
+            )
         if not arbitration.neural_available:
-            ir.validation.issues.append(ValidationIssueIR(
-                code="NEURAL_UNAVAILABLE", severity="info",
-                message_ru="Нейросетевой распознаватель недоступен — использован классический CV-путь.",
-            ))
+            ir.validation.issues.append(
+                ValidationIssueIR(
+                    code="NEURAL_UNAVAILABLE",
+                    severity="info",
+                    message_ru="Нейросетевой распознаватель недоступен — использован классический CV-путь.",
+                )
+            )
         if arbitration.discrepancy:
             n = arbitration.notes
-            ir.validation.issues.append(ValidationIssueIR(
-                code="RECOGNIZER_DISCREPANCY", severity="warn",
-                message_ru=(
-                    f"Нейросеть и классический CV дали расходящиеся результаты "
-                    f"({n.get('neural_entities')} vs {n.get('cv_entities')} элементов) "
-                    f"— использован результат {arbitration.recognizer_used}, сверьте с оригиналом."
-                ),
-            ))
+            ir.validation.issues.append(
+                ValidationIssueIR(
+                    code="RECOGNIZER_DISCREPANCY",
+                    severity="warn",
+                    message_ru=(
+                        f"Нейросеть и классический CV дали расходящиеся результаты "
+                        f"({n.get('neural_entities')} vs {n.get('cv_entities')} элементов) "
+                        f"— использован результат {arbitration.recognizer_used}, сверьте с оригиналом."
+                    ),
+                )
+            )
 
         if degraded_recognition or not arbitration.neural_available or arbitration.discrepancy:
             ir.digitization_status = "review_required"
@@ -4209,17 +4254,21 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 flagged = entities_in_mask(
                     ir.entities, added, arbitration.thin_px, arbitration.thick_px
                 )
-                logger.info("diffusion_provenance", flagged=len(flagged), removed_px=int(removed.sum()))
+                logger.info(
+                    "diffusion_provenance", flagged=len(flagged), removed_px=int(removed.sum())
+                )
                 if flagged:
-                    ir.validation.issues.append(ValidationIssueIR(
-                        code="DIFFUSION_ADDED_INK",
-                        severity="warn",
-                        entity_ids=flagged,
-                        message_ru=(
-                            f"{len(flagged)} элемент(ов) распознаны из областей, ДОРИСОВАННЫХ "
-                            "диффузионной очисткой, — их не было на исходном фото. Подтвердите или удалите."
-                        ),
-                    ))
+                    ir.validation.issues.append(
+                        ValidationIssueIR(
+                            code="DIFFUSION_ADDED_INK",
+                            severity="warn",
+                            entity_ids=flagged,
+                            message_ru=(
+                                f"{len(flagged)} элемент(ов) распознаны из областей, ДОРИСОВАННЫХ "
+                                "диффузионной очисткой, — их не было на исходном фото. Подтвердите или удалите."
+                            ),
+                        )
+                    )
                     queued = {r.entity_id for r in ir.review}
                     for eid in flagged:
                         if eid not in queued:
@@ -4231,34 +4280,40 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     added, flagged_entities, arbitration.thin_px, arbitration.thick_px
                 )
                 if orphan_boxes:
-                    ir.validation.issues.append(ValidationIssueIR(
-                        code="DIFFUSION_ADDED_INK",
-                        severity="warn",
-                        message_ru=(
-                            f"Диффузионная очистка ДОРИСОВАЛА графику в {len(orphan_boxes)} "
-                            f"растровых зон(ах), не ставших элементами (крупнейшая: {orphan_boxes[0]}). "
-                            "Сверьте эти области с оригиналом."
-                        ),
-                    ))
+                    ir.validation.issues.append(
+                        ValidationIssueIR(
+                            code="DIFFUSION_ADDED_INK",
+                            severity="warn",
+                            message_ru=(
+                                f"Диффузионная очистка ДОРИСОВАЛА графику в {len(orphan_boxes)} "
+                                f"растровых зон(ах), не ставших элементами (крупнейшая: {orphan_boxes[0]}). "
+                                "Сверьте эти области с оригиналом."
+                            ),
+                        )
+                    )
                 boxes = mask_regions(removed)
                 if boxes:
-                    ir.validation.issues.append(ValidationIssueIR(
-                        code="DIFFUSION_REMOVED_INK",
+                    ir.validation.issues.append(
+                        ValidationIssueIR(
+                            code="DIFFUSION_REMOVED_INK",
+                            severity="warn",
+                            message_ru=(
+                                f"Диффузионная очистка СТЁРЛА {len(boxes)} участок(ов) исходной графики "
+                                f"(крупнейший: {boxes[0]}). Сверьте с оригиналом."
+                            ),
+                        )
+                    )
+            else:
+                ir.validation.issues.append(
+                    ValidationIssueIR(
+                        code="DIFFUSION_SOURCE_UNVERIFIED",
                         severity="warn",
                         message_ru=(
-                            f"Диффузионная очистка СТЁРЛА {len(boxes)} участок(ов) исходной графики "
-                            f"(крупнейший: {boxes[0]}). Сверьте с оригиналом."
+                            "Источник — результат генеративной модели, и сверка с оригиналом недоступна: "
+                            "происхождение графики не подтверждено. Проверяйте размеры по бумажному оригиналу."
                         ),
-                    ))
-            else:
-                ir.validation.issues.append(ValidationIssueIR(
-                    code="DIFFUSION_SOURCE_UNVERIFIED",
-                    severity="warn",
-                    message_ru=(
-                        "Источник — результат генеративной модели, и сверка с оригиналом недоступна: "
-                        "происхождение графики не подтверждено. Проверяйте размеры по бумажному оригиналу."
-                    ),
-                ))
+                    )
+                )
 
         # Stage 7: persist revision 0 + renders.
         async with factory() as db:
@@ -4282,7 +4337,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 ),
             }
             await cad_ir_store.save_revision(
-                db, gen, ir,
+                db,
+                gen,
+                ir,
                 origin="auto",
                 created_by=owner_sub,
                 keep_raster=keep_raster,

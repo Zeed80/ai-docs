@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 
 
@@ -82,8 +80,13 @@ async def test_run_creation_queues_immediately(client, db_session, monkeypatch):
     monkeypatch.setattr(celery_app, "send_task", fake_send)
 
     ds = LoraDataset(
-        name="готовый", status=LoraDatasetStatus.ready, preset="drawing_cleanup",
-        params={}, source_paths=[], stats={"pairs": 42}, preview_paths=[],
+        name="готовый",
+        status=LoraDatasetStatus.ready,
+        preset="drawing_cleanup",
+        params={},
+        source_paths=[],
+        stats={"pairs": 42},
+        preview_paths=[],
         dataset_dir="/lora-data/datasets/test",
     )
     db_session.add(ds)
@@ -92,8 +95,11 @@ async def test_run_creation_queues_immediately(client, db_session, monkeypatch):
 
     resp = await client.post(
         "/api/lora/runs",
-        json={"dataset_id": str(ds.id), "name": "проба",
-              "config": {"steps": 1000, "base_model": "qwen_image_edit_2511"}},
+        json={
+            "dataset_id": str(ds.id),
+            "name": "проба",
+            "config": {"steps": 1000, "base_model": "qwen_image_edit_2511"},
+        },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -108,28 +114,45 @@ async def test_run_config_validation(client, db_session, monkeypatch):
     from app.db.models import LoraDataset, LoraDatasetStatus
     from app.tasks.celery_app import celery_app
 
-    monkeypatch.setattr(celery_app, "send_task",
-                        lambda *a, **k: type("T", (), {"id": "x"})())
-    ds = LoraDataset(name="ds", status=LoraDatasetStatus.ready, preset="drawing_cleanup",
-                     params={}, source_paths=[], stats={}, preview_paths=[],
-                     dataset_dir="/lora-data/datasets/t")
+    monkeypatch.setattr(celery_app, "send_task", lambda *a, **k: type("T", (), {"id": "x"})())
+    ds = LoraDataset(
+        name="ds",
+        status=LoraDatasetStatus.ready,
+        preset="drawing_cleanup",
+        params={},
+        source_paths=[],
+        stats={},
+        preview_paths=[],
+        dataset_dir="/lora-data/datasets/t",
+    )
     db_session.add(ds)
     await db_session.commit()
     await db_session.refresh(ds)
 
     # steps beyond the cap → 422
-    resp = await client.post("/api/lora/runs", json={
-        "dataset_id": str(ds.id), "name": "x", "config": {"steps": 10**7}})
+    resp = await client.post(
+        "/api/lora/runs", json={"dataset_id": str(ds.id), "name": "x", "config": {"steps": 10**7}}
+    )
     assert resp.status_code == 422
     # unknown base model → 422 (whitelist)
-    resp = await client.post("/api/lora/runs", json={
-        "dataset_id": str(ds.id), "name": "x",
-        "config": {"steps": 500, "base_model": "stable-diffusion-1.5"}})
+    resp = await client.post(
+        "/api/lora/runs",
+        json={
+            "dataset_id": str(ds.id),
+            "name": "x",
+            "config": {"steps": 500, "base_model": "stable-diffusion-1.5"},
+        },
+    )
     assert resp.status_code == 422
     # a flux2 model is accepted and its family recorded
-    resp = await client.post("/api/lora/runs", json={
-        "dataset_id": str(ds.id), "name": "x",
-        "config": {"steps": 500, "base_model": "flux2_klein_4b"}})
+    resp = await client.post(
+        "/api/lora/runs",
+        json={
+            "dataset_id": str(ds.id),
+            "name": "x",
+            "config": {"steps": 500, "base_model": "flux2_klein_4b"},
+        },
+    )
     assert resp.status_code == 200, resp.text
     assert resp.json()["base_family"] == "flux2"
 
@@ -142,28 +165,44 @@ async def test_gated_model_without_token_is_refused_early(client, db_session, mo
     from app.db.models import LoraDataset, LoraDatasetStatus
     from app.tasks.celery_app import celery_app
 
-    monkeypatch.setattr(celery_app, "send_task",
-                        lambda *a, **k: type("T", (), {"id": "x"})())
+    monkeypatch.setattr(celery_app, "send_task", lambda *a, **k: type("T", (), {"id": "x"})())
     monkeypatch.setattr(settings, "hf_token", None, raising=False)
 
-    ds = LoraDataset(name="ds", status=LoraDatasetStatus.ready, preset="drawing_cleanup",
-                     params={}, source_paths=[], stats={}, preview_paths=[],
-                     dataset_dir="/lora-data/datasets/t")
+    ds = LoraDataset(
+        name="ds",
+        status=LoraDatasetStatus.ready,
+        preset="drawing_cleanup",
+        params={},
+        source_paths=[],
+        stats={},
+        preview_paths=[],
+        dataset_dir="/lora-data/datasets/t",
+    )
     db_session.add(ds)
     await db_session.commit()
     await db_session.refresh(ds)
 
-    resp = await client.post("/api/lora/runs", json={
-        "dataset_id": str(ds.id), "name": "x",
-        "config": {"steps": 500, "base_model": "flux2_klein_9b"}})
+    resp = await client.post(
+        "/api/lora/runs",
+        json={
+            "dataset_id": str(ds.id),
+            "name": "x",
+            "config": {"steps": 500, "base_model": "flux2_klein_9b"},
+        },
+    )
     assert resp.status_code == 400
     detail = resp.json()["detail"]
     assert "gated" in detail and "HuggingFace" in detail  # actionable, GUI-oriented
 
     # klein-4B is open — no token required, run queues fine.
-    resp = await client.post("/api/lora/runs", json={
-        "dataset_id": str(ds.id), "name": "x",
-        "config": {"steps": 500, "base_model": "flux2_klein_4b"}})
+    resp = await client.post(
+        "/api/lora/runs",
+        json={
+            "dataset_id": str(ds.id),
+            "name": "x",
+            "config": {"steps": 500, "base_model": "flux2_klein_4b"},
+        },
+    )
     assert resp.status_code == 200
 
 
@@ -174,15 +213,23 @@ def _write_lora(path, rank=32, base_version="qwen_image", step=1500):
     import struct
 
     tensors = {
-        "diffusion_model.blocks.0.attn.lora_A.weight":
-            {"dtype": "F16", "shape": [rank, 3072], "data_offsets": [0, 2]},
-        "diffusion_model.blocks.0.attn.lora_B.weight":
-            {"dtype": "F16", "shape": [3072, rank], "data_offsets": [2, 4]},
+        "diffusion_model.blocks.0.attn.lora_A.weight": {
+            "dtype": "F16",
+            "shape": [rank, 3072],
+            "data_offsets": [0, 2],
+        },
+        "diffusion_model.blocks.0.attn.lora_B.weight": {
+            "dtype": "F16",
+            "shape": [3072, rank],
+            "data_offsets": [2, 4],
+        },
     }
-    meta = {"ss_base_model_version": base_version,
-            "training_info": json.dumps({"step": step, "epoch": 0}),
-            "software": json.dumps({"name": "ai-toolkit"}),
-            "ss_output_name": "my_lora"}
+    meta = {
+        "ss_base_model_version": base_version,
+        "training_info": json.dumps({"step": step, "epoch": 0}),
+        "software": json.dumps({"name": "ai-toolkit"}),
+        "ss_output_name": "my_lora",
+    }
     header = {**tensors, "__metadata__": meta}
     raw = json.dumps(header).encode()
     with open(path, "wb") as fh:
@@ -227,8 +274,7 @@ async def test_resume_lora_incompatible_is_refused(client, db_session, monkeypat
     from app.db.models import LoraDataset, LoraDatasetStatus
     from app.tasks.celery_app import celery_app
 
-    monkeypatch.setattr(celery_app, "send_task",
-                        lambda *a, **k: type("T", (), {"id": "x"})())
+    monkeypatch.setattr(celery_app, "send_task", lambda *a, **k: type("T", (), {"id": "x"})())
     lora = tmp_path / "flux.safetensors"
     _write_lora(lora, rank=32, base_version="flux2_klein")
 
@@ -237,18 +283,30 @@ async def test_resume_lora_incompatible_is_refused(client, db_session, monkeypat
 
     monkeypatch.setattr(api, "_resolve_lora_source", fake_resolve)
 
-    ds = LoraDataset(name="ds", status=LoraDatasetStatus.ready, preset="drawing_cleanup",
-                     params={}, source_paths=[], stats={}, preview_paths=[],
-                     dataset_dir="/lora-data/datasets/t")
+    ds = LoraDataset(
+        name="ds",
+        status=LoraDatasetStatus.ready,
+        preset="drawing_cleanup",
+        params={},
+        source_paths=[],
+        stats={},
+        preview_paths=[],
+        dataset_dir="/lora-data/datasets/t",
+    )
     db_session.add(ds)
     await db_session.commit()
     await db_session.refresh(ds)
 
     # Continuing a flux2 LoRA on a qwen base → 400.
-    resp = await client.post("/api/lora/runs", json={
-        "dataset_id": str(ds.id), "name": "ft",
-        "config": {"steps": 500, "base_model": "qwen_image_edit_2511"},
-        "resume_lora": "upload:flux.safetensors"})
+    resp = await client.post(
+        "/api/lora/runs",
+        json={
+            "dataset_id": str(ds.id),
+            "name": "ft",
+            "config": {"steps": 500, "base_model": "qwen_image_edit_2511"},
+            "resume_lora": "upload:flux.safetensors",
+        },
+    )
     assert resp.status_code == 400
     assert "несовместима" in resp.json()["detail"].lower()
 
@@ -265,8 +323,9 @@ def test_hf_token_resolver_uses_shared_settings_token(monkeypatch):
     assert m.get_hf_token() == "env-token"
     assert m.hf_token_status()["source"] == "env"
     # Shared token from settings wins.
-    monkeypatch.setattr("app.ai.providers.llamacpp_manager._load_tokens",
-                        lambda: {"huggingface": "shared-token"})
+    monkeypatch.setattr(
+        "app.ai.providers.llamacpp_manager._load_tokens", lambda: {"huggingface": "shared-token"}
+    )
     assert m.get_hf_token() == "shared-token"
     st = m.hf_token_status()
     assert st["configured"] and st["source"] == "settings"
@@ -276,16 +335,24 @@ def test_hf_token_resolver_uses_shared_settings_token(monkeypatch):
 async def test_source_paths_must_be_uploads(client):
     """Arbitrary-file-read guard: sources outside uploads/<sub>/ are refused."""
     for bad in ["/etc/passwd", "../../secrets/key.png", "datasets/x/target.png"]:
-        resp = await client.post("/api/lora/datasets", json={
-            "name": "x", "source_paths": [bad], "params": {"synth_count": 0}})
+        resp = await client.post(
+            "/api/lora/datasets",
+            json={"name": "x", "source_paths": [bad], "params": {"synth_count": 0}},
+        )
         assert resp.status_code == 400, f"{bad} should be rejected"
 
 
 @pytest.mark.asyncio
 async def test_edit_preset_rejects_sources(client):
-    resp = await client.post("/api/lora/datasets", json={
-        "name": "edit", "preset": "drawing_edit",
-        "source_paths": ["uploads/dev-user/a.png"], "params": {"synth_count": 50}})
+    resp = await client.post(
+        "/api/lora/datasets",
+        json={
+            "name": "edit",
+            "preset": "drawing_edit",
+            "source_paths": ["uploads/dev-user/a.png"],
+            "params": {"synth_count": 50},
+        },
+    )
     assert resp.status_code == 400
 
 
@@ -302,21 +369,35 @@ async def test_owner_scoping_hides_foreign_runs(client, db_session, monkeypatch)
     )
     from app.main import app
 
-    ds = LoraDataset(owner_sub="alice", name="ds", status=LoraDatasetStatus.ready,
-                     preset="drawing_cleanup", params={}, source_paths=[], stats={},
-                     preview_paths=[])
+    ds = LoraDataset(
+        owner_sub="alice",
+        name="ds",
+        status=LoraDatasetStatus.ready,
+        preset="drawing_cleanup",
+        params={},
+        source_paths=[],
+        stats={},
+        preview_paths=[],
+    )
     db_session.add(ds)
     await db_session.flush()
-    run = LoraTrainingRun(owner_sub="alice", dataset_id=ds.id, name="alice-run",
-                          status=LoraRunStatus.running, config={}, progress={},
-                          checkpoints=[], sample_paths=[])
+    run = LoraTrainingRun(
+        owner_sub="alice",
+        dataset_id=ds.id,
+        name="alice-run",
+        status=LoraRunStatus.running,
+        config={},
+        progress={},
+        checkpoints=[],
+        sample_paths=[],
+    )
     db_session.add(run)
     await db_session.commit()
     await db_session.refresh(run)
 
     app.dependency_overrides[get_current_user] = lambda: UserInfo(
-        sub="bob", email="bob@x", name="Bob", preferred_username="bob",
-        roles=[UserRole.viewer])
+        sub="bob", email="bob@x", name="Bob", preferred_username="bob", roles=[UserRole.viewer]
+    )
     try:
         assert (await client.get(f"/api/lora/runs/{run.id}")).status_code == 404
         assert (await client.post(f"/api/lora/runs/{run.id}/stop")).status_code == 404
@@ -337,16 +418,29 @@ async def test_stop_queued_run_cancels_and_revokes(client, db_session, monkeypat
     from app.tasks.celery_app import celery_app
 
     revoked: list = []
-    monkeypatch.setattr(celery_app.control, "revoke",
-                        lambda tid, **kw: revoked.append(tid))
+    monkeypatch.setattr(celery_app.control, "revoke", lambda tid, **kw: revoked.append(tid))
 
-    ds = LoraDataset(name="ds", status=LoraDatasetStatus.ready, preset="drawing_cleanup",
-                     params={}, source_paths=[], stats={}, preview_paths=[])
+    ds = LoraDataset(
+        name="ds",
+        status=LoraDatasetStatus.ready,
+        preset="drawing_cleanup",
+        params={},
+        source_paths=[],
+        stats={},
+        preview_paths=[],
+    )
     db_session.add(ds)
     await db_session.flush()
-    run = LoraTrainingRun(dataset_id=ds.id, name="q", status=LoraRunStatus.queued,
-                          config={}, progress={}, checkpoints=[], sample_paths=[],
-                          celery_task_id="celery-abc")
+    run = LoraTrainingRun(
+        dataset_id=ds.id,
+        name="q",
+        status=LoraRunStatus.queued,
+        config={},
+        progress={},
+        checkpoints=[],
+        sample_paths=[],
+        celery_task_id="celery-abc",
+    )
     db_session.add(run)
     await db_session.commit()
     await db_session.refresh(run)
@@ -362,14 +456,24 @@ async def test_stop_requires_active_run(client, db_session):
     from app.db.models import LoraDataset, LoraDatasetStatus, LoraRunStatus, LoraTrainingRun
 
     ds = LoraDataset(
-        name="ds", status=LoraDatasetStatus.ready, preset="drawing_cleanup",
-        params={}, source_paths=[], stats={}, preview_paths=[],
+        name="ds",
+        status=LoraDatasetStatus.ready,
+        preset="drawing_cleanup",
+        params={},
+        source_paths=[],
+        stats={},
+        preview_paths=[],
     )
     db_session.add(ds)
     await db_session.flush()
     run = LoraTrainingRun(
-        dataset_id=ds.id, name="done-run", status=LoraRunStatus.done,
-        config={}, progress={}, checkpoints=[], sample_paths=[],
+        dataset_id=ds.id,
+        name="done-run",
+        status=LoraRunStatus.done,
+        config={},
+        progress={},
+        checkpoints=[],
+        sample_paths=[],
     )
     db_session.add(run)
     await db_session.commit()
@@ -430,13 +534,26 @@ async def test_make_workflow_clones_builtin_with_lora(client, db_session, monkey
 
     monkeypatch.setattr(api, "_deploy", fake_deploy)
 
-    ds = LoraDataset(name="ds", status=LoraDatasetStatus.ready, preset="drawing_cleanup",
-                     params={}, source_paths=[], stats={}, preview_paths=[])
+    ds = LoraDataset(
+        name="ds",
+        status=LoraDatasetStatus.ready,
+        preset="drawing_cleanup",
+        params={},
+        source_paths=[],
+        stats={},
+        preview_paths=[],
+    )
     db_session.add(ds)
     await db_session.flush()
-    run = LoraTrainingRun(dataset_id=ds.id, name="Моя LoRA", status=LoraRunStatus.done,
-                          config={}, progress={}, checkpoints=["ckpt.safetensors"],
-                          sample_paths=[])
+    run = LoraTrainingRun(
+        dataset_id=ds.id,
+        name="Моя LoRA",
+        status=LoraRunStatus.done,
+        config={},
+        progress={},
+        checkpoints=["ckpt.safetensors"],
+        sample_paths=[],
+    )
     db_session.add(run)
     await db_session.commit()
     await db_session.refresh(run)
@@ -451,17 +568,23 @@ async def test_make_workflow_clones_builtin_with_lora(client, db_session, monkey
     wf = await db_session.get(ComfyWorkflow, __import__("uuid").UUID(body["workflow_id"]))
     assert wf.operation == "cleanup" and wf.enabled and not wf.is_builtin
     # Наша LoRA-нода в графе, KSampler переключён на неё, рабочая точка cfg=1/25 шагов.
-    lora_nodes = [n for n in wf.graph.values()
-                  if n.get("class_type") == "LoraLoaderModelOnly"
-                  and n["inputs"].get("lora_name") == "my_lora.safetensors"]
+    lora_nodes = [
+        n
+        for n in wf.graph.values()
+        if n.get("class_type") == "LoraLoaderModelOnly"
+        and n["inputs"].get("lora_name") == "my_lora.safetensors"
+    ]
     assert len(lora_nodes) == 1
     assert lora_nodes[0]["inputs"]["strength_model"] == 0.9
     sampler = next(n for n in wf.graph.values() if n.get("class_type") == "KSampler")
     assert sampler["inputs"]["steps"] == 25 and sampler["inputs"]["cfg"] == 1.0
     # Lightning выключена в клоне.
-    lightning = next(n for n in wf.graph.values()
-                     if n.get("class_type") == "LoraLoaderModelOnly"
-                     and "Lightning" in str(n["inputs"].get("lora_name", "")))
+    lightning = next(
+        n
+        for n in wf.graph.values()
+        if n.get("class_type") == "LoraLoaderModelOnly"
+        and "Lightning" in str(n["inputs"].get("lora_name", ""))
+    )
     assert lightning["inputs"]["strength_model"] == 0.0
     assert "custom_lora_strength" in wf.params_schema
 
@@ -471,15 +594,22 @@ def test_build_train_config_branches_by_family():
     path and control-image sample coming from the catalog."""
     from app.tasks.lora_training import _build_train_config
 
-    qwen = _build_train_config("r1", "/lora-data/datasets/x",
-                               {"steps": 500, "base_model": "qwen_image_edit_2511"})
+    qwen = _build_train_config(
+        "r1", "/lora-data/datasets/x", {"steps": 500, "base_model": "qwen_image_edit_2511"}
+    )
     qmodel = qwen["config"]["process"][0]["model"]
     assert qmodel["arch"] == "qwen_image_edit_plus"
     assert "uint3" in qmodel["qtype"]
 
-    flux = _build_train_config("r2", "/lora-data/datasets/x",
-                               {"steps": 500, "base_model": "flux2_klein_9b",
-                                "samples": [{"prompt": "p", "ctrl_img_1": "/x.png"}]})
+    flux = _build_train_config(
+        "r2",
+        "/lora-data/datasets/x",
+        {
+            "steps": 500,
+            "base_model": "flux2_klein_9b",
+            "samples": [{"prompt": "p", "ctrl_img_1": "/x.png"}],
+        },
+    )
     fmodel = flux["config"]["process"][0]["model"]
     assert fmodel["arch"] == "flux2_klein_9b"  # klein has a size-specific arch
     assert fmodel["name_or_path"] == "black-forest-labs/FLUX.2-klein-base-9B"

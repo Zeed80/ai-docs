@@ -1,14 +1,19 @@
 """Tests for Canonical Items API — normalization reference dictionary."""
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
 
 from app.db.models import (
-    Document, DocumentStatus, Invoice, InvoiceStatus, InvoiceLine, CanonicalItem,
+    CanonicalItem,
+    Document,
+    DocumentStatus,
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
 )
-from datetime import datetime, timezone
 
 
 @pytest.fixture
@@ -46,7 +51,7 @@ async def invoice_with_line(db_session, canonical_bolt):
         currency="RUB",
         total_amount=5500.0,
         status=InvoiceStatus.needs_review,
-        invoice_date=datetime.now(timezone.utc),
+        invoice_date=datetime.now(UTC),
     )
     db_session.add(inv)
     await db_session.flush()
@@ -70,14 +75,17 @@ async def invoice_with_line(db_session, canonical_bolt):
 
 @pytest.mark.asyncio
 async def test_create_canonical_item(client: AsyncClient):
-    resp = await client.post("/api/canonical", json={
-        "name": "Гайка М8 ГОСТ 5915-70",
-        "category": "Крепёж",
-        "unit": "шт",
-        "aliases": ["Гайка М8", "nut M8"],
-        "okpd2_code": "25.94.12",
-        "gost": "ГОСТ 5915-70",
-    })
+    resp = await client.post(
+        "/api/canonical",
+        json={
+            "name": "Гайка М8 ГОСТ 5915-70",
+            "category": "Крепёж",
+            "unit": "шт",
+            "aliases": ["Гайка М8", "nut M8"],
+            "okpd2_code": "25.94.12",
+            "gost": "ГОСТ 5915-70",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Гайка М8 ГОСТ 5915-70"
@@ -126,10 +134,13 @@ async def test_get_canonical_item_not_found(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_canonical_item(client: AsyncClient, canonical_bolt):
-    resp = await client.patch(f"/api/canonical/{canonical_bolt.id}", json={
-        "description": "Шестигранный болт для металлоконструкций",
-        "is_confirmed": True,
-    })
+    resp = await client.patch(
+        f"/api/canonical/{canonical_bolt.id}",
+        json={
+            "description": "Шестигранный болт для металлоконструкций",
+            "is_confirmed": True,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["description"] == "Шестигранный болт для металлоконструкций"
@@ -138,9 +149,12 @@ async def test_update_canonical_item(client: AsyncClient, canonical_bolt):
 
 @pytest.mark.asyncio
 async def test_delete_canonical_item(client: AsyncClient):
-    create_resp = await client.post("/api/canonical", json={
-        "name": "Временная позиция для удаления",
-    })
+    create_resp = await client.post(
+        "/api/canonical",
+        json={
+            "name": "Временная позиция для удаления",
+        },
+    )
     item_id = create_resp.json()["id"]
 
     resp = await client.delete(f"/api/canonical/{item_id}")
@@ -155,10 +169,13 @@ async def test_delete_canonical_item(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_suggest_mapping_by_description(client: AsyncClient, canonical_bolt):
-    resp = await client.post("/api/canonical/suggest", json={
-        "description": "Болт М8х30 для крепления",
-        "limit": 5,
-    })
+    resp = await client.post(
+        "/api/canonical/suggest",
+        json={
+            "description": "Болт М8х30 для крепления",
+            "limit": 5,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "matches" in data
@@ -171,10 +188,13 @@ async def test_suggest_mapping_by_description(client: AsyncClient, canonical_bol
 
 @pytest.mark.asyncio
 async def test_suggest_mapping_by_line_id(client: AsyncClient, invoice_with_line, canonical_bolt):
-    resp = await client.post("/api/canonical/suggest", json={
-        "invoice_line_id": str(invoice_with_line.id),
-        "limit": 3,
-    })
+    resp = await client.post(
+        "/api/canonical/suggest",
+        json={
+            "invoice_line_id": str(invoice_with_line.id),
+            "limit": 3,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "query" in data
@@ -186,10 +206,13 @@ async def test_suggest_mapping_by_line_id(client: AsyncClient, invoice_with_line
 
 @pytest.mark.asyncio
 async def test_confirm_mapping(client: AsyncClient, invoice_with_line, canonical_bolt):
-    resp = await client.post("/api/canonical/confirm", json={
-        "invoice_line_id": str(invoice_with_line.id),
-        "canonical_item_id": str(canonical_bolt.id),
-    })
+    resp = await client.post(
+        "/api/canonical/confirm",
+        json={
+            "invoice_line_id": str(invoice_with_line.id),
+            "canonical_item_id": str(canonical_bolt.id),
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "invoice_line_id" in data or "status" in data or "canonical_item_id" in data
@@ -197,8 +220,11 @@ async def test_confirm_mapping(client: AsyncClient, invoice_with_line, canonical
 
 @pytest.mark.asyncio
 async def test_confirm_mapping_invalid_line(client: AsyncClient, canonical_bolt):
-    resp = await client.post("/api/canonical/confirm", json={
-        "invoice_line_id": str(uuid.uuid4()),
-        "canonical_item_id": str(canonical_bolt.id),
-    })
+    resp = await client.post(
+        "/api/canonical/confirm",
+        json={
+            "invoice_line_id": str(uuid.uuid4()),
+            "canonical_item_id": str(canonical_bolt.id),
+        },
+    )
     assert resp.status_code == 404

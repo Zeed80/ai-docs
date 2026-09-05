@@ -40,9 +40,7 @@ def _literal_kinds(path: Path, class_name: str) -> list[str]:
                 # Literal[...] — with or without a default value after it.
                 if isinstance(annotation, ast.Subscript):
                     elements = annotation.slice
-                    values = (
-                        elements.elts if isinstance(elements, ast.Tuple) else [elements]
-                    )
+                    values = elements.elts if isinstance(elements, ast.Tuple) else [elements]
                     return [
                         value.value
                         for value in values
@@ -65,6 +63,6 @@ def test_feature_kinds_match_across_the_kernel_boundary():
         "Feature3D.kind and the kernel's Feature.kind have drifted apart — "
         f"backend only: {sorted(set(backend) - set(kernel))}, "
         f"kernel only: {sorted(set(kernel) - set(backend))}. "
-        "The kernel rejects unknown kinds outright (extra=\"forbid\"), so this "
+        'The kernel rejects unknown kinds outright (extra="forbid"), so this '
         "breaks every 3D build."
     )

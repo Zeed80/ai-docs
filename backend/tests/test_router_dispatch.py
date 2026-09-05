@@ -6,11 +6,12 @@ The executors themselves are mocked; the live routing quality is covered by the
 raw-model trap test.
 """
 
-import pytest
 from unittest.mock import AsyncMock
 
+import pytest
+
 from app.ai.orchestrator import AgentOrchestrator, _decision_to_plan
-from app.ai.turn_router import TurnDecision, RecommendedTool
+from app.ai.turn_router import RecommendedTool, TurnDecision
 
 
 def _orc() -> AgentOrchestrator:
@@ -39,7 +40,9 @@ def test_decision_to_plan_unmatched_workspace_falls_back_to_spec_table():
     """A workspace turn with no specialised route still gets the universal
     SQL-backed spec-table surface (never an empty canvas)."""
     d = TurnDecision(
-        intent="analytical_table", role="data_analyst", output_channel="workspace",
+        intent="analytical_table",
+        role="data_analyst",
+        output_channel="workspace",
         goal="сводка по непонятной сущности кверти",
     )
     plan = _decision_to_plan(d, "сводка по непонятной сущности кверти")
@@ -122,6 +125,7 @@ async def test_dispatch_table_edit_falls_through_when_not_a_patch(monkeypatch):
 
 def _cfg():
     from app.ai.agent_config import get_builtin_agent_config
+
     return get_builtin_agent_config()
 
 

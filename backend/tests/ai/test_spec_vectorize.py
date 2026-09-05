@@ -113,7 +113,10 @@ def test_draft_rotation_body_builds_clean_stepped_profile():
 
 
 def test_draft_rotation_body_declines_when_no_sections():
-    assert draft_rotation_body({"main_view": {"features": [{"kind": "hole", "diameter_mm": 10}]}}) is None
+    assert (
+        draft_rotation_body({"main_view": {"features": [{"kind": "hole", "diameter_mm": 10}]}})
+        is None
+    )
 
 
 def test_draft_rotation_body_never_invents_missing_lengths():
@@ -130,35 +133,41 @@ def test_draft_rotation_body_never_invents_missing_lengths():
 
 
 def test_engineering_spec_marks_incomplete_rotation_profile_unresolved():
-    spec = EngineeringDrawingSpec.model_validate({
-        "schema_version": 1,
-        "part": "Вал",
-        "main_view": {
-            "type": "тело вращения (вал)",
-            "outer": [
-                {"diameter_mm": 30, "length_mm": 40},
-                {"diameter_mm": 50, "length_mm": None},
-            ],
-        },
-    })
+    spec = EngineeringDrawingSpec.model_validate(
+        {
+            "schema_version": 1,
+            "part": "Вал",
+            "main_view": {
+                "type": "тело вращения (вал)",
+                "outer": [
+                    {"diameter_mm": 30, "length_mm": 40},
+                    {"diameter_mm": 50, "length_mm": None},
+                ],
+            },
+        }
+    )
     assert "body:0:outer:1:length-missing" in spec.unresolved
 
 
 def test_engineering_spec_marks_prismatic_body_without_profile_unresolved():
-    spec = EngineeringDrawingSpec.model_validate({
-        "main_view": {"type": "призматическая пластина"},
-    })
+    spec = EngineeringDrawingSpec.model_validate(
+        {
+            "main_view": {"type": "призматическая пластина"},
+        }
+    )
     assert "body:0:profile-missing" in spec.unresolved
 
 
 def test_optional_metadata_does_not_block_complete_geometry():
-    spec = EngineeringDrawingSpec.model_validate({
-        "main_view": {
-            "type": "призматическая пластина",
-            "profile": {"shape": "rectangle", "width_mm": 120, "height_mm": 80},
-        },
-        "unresolved": ["материал детали не указан", "масштаб чертежа не указан"],
-    })
+    spec = EngineeringDrawingSpec.model_validate(
+        {
+            "main_view": {
+                "type": "призматическая пластина",
+                "profile": {"shape": "rectangle", "width_mm": 120, "height_mm": 80},
+            },
+            "unresolved": ["материал детали не указан", "масштаб чертежа не указан"],
+        }
+    )
     assert spec.unresolved == []
     assert len(spec.optional_unresolved) == 2
 
@@ -211,14 +220,22 @@ def test_a_sheet_over_the_tile_budget_says_so():
 def test_draft_multiple_rotation_bodies_each_with_own_axis():
     spec = {
         "parts": [
-            {"name": "Вал 1", "type": "тело вращения", "features": [
-                {"kind": "cylinder", "diameter_mm": 30, "length_mm": 40},
-                {"kind": "cylinder", "diameter_mm": 50, "length_mm": 120},
-            ]},
-            {"name": "Вал 2", "type": "тело вращения", "features": [
-                {"kind": "cylinder", "diameter_mm": 20, "length_mm": 60},
-                {"kind": "cylinder", "diameter_mm": 40, "length_mm": 80},
-            ]},
+            {
+                "name": "Вал 1",
+                "type": "тело вращения",
+                "features": [
+                    {"kind": "cylinder", "diameter_mm": 30, "length_mm": 40},
+                    {"kind": "cylinder", "diameter_mm": 50, "length_mm": 120},
+                ],
+            },
+            {
+                "name": "Вал 2",
+                "type": "тело вращения",
+                "features": [
+                    {"kind": "cylinder", "diameter_mm": 20, "length_mm": 60},
+                    {"kind": "cylinder", "diameter_mm": 40, "length_mm": 80},
+                ],
+            },
         ]
     }
     ir = draft_rotation_body(spec, sheet_format="A3", landscape=True)
@@ -283,37 +300,31 @@ def test_prismatic_plate_drafter_emits_exact_geometry_dimensions_and_holes():
     assert ir.recognizer_used == "spec-drafter-prismatic"
     assert ir.sheet.format == "A3"
     assert len([entity for entity in ir.entities if entity.type == "circle"]) == 2
-    values = [
-        entity.value_mm for entity in ir.entities if entity.type == "dimension"
-    ]
+    values = [entity.value_mm for entity in ir.entities if entity.type == "dimension"]
     assert sorted(values) == [10, 10, 80, 120]
     assert all(entity.origin == "spec" for entity in ir.entities)
     # Part geometry is constraint-validated; the ГОСТ frame/stamp around it is
     # sheet furniture and is tagged as such, not claimed as validated geometry.
-    part = [
-        entity for entity in ir.entities
-        if SHEET_FRAME_EVIDENCE not in entity.evidence
-    ]
+    part = [entity for entity in ir.entities if SHEET_FRAME_EVIDENCE not in entity.evidence]
     assert all(entity.assurance == "constraint_validated" for entity in part)
-    frame = [
-        entity for entity in ir.entities
-        if SHEET_FRAME_EVIDENCE in entity.evidence
-    ]
+    frame = [entity for entity in ir.entities if SHEET_FRAME_EVIDENCE in entity.evidence]
     assert frame and all(entity.assurance == "inferred" for entity in frame)
 
 
 def test_prismatic_drafter_emits_four_true_corner_arcs_for_a_rounded_plate():
-    spec = EngineeringDrawingSpec.model_validate({
-        "main_view": {
-            "type": "призматическая пластина",
-            "profile": {
-                "shape": "rectangle",
-                "width_mm": 120,
-                "height_mm": 80,
-                "corner_radius_mm": 10,
+    spec = EngineeringDrawingSpec.model_validate(
+        {
+            "main_view": {
+                "type": "призматическая пластина",
+                "profile": {
+                    "shape": "rectangle",
+                    "width_mm": 120,
+                    "height_mm": 80,
+                    "corner_radius_mm": 10,
+                },
             },
-        },
-    }).model_dump(mode="json")
+        }
+    ).model_dump(mode="json")
 
     ir = draft_prismatic_body(spec, px_per_mm=2)
 
@@ -325,53 +336,62 @@ def test_prismatic_drafter_emits_four_true_corner_arcs_for_a_rounded_plate():
 
 def test_prismatic_profile_rejects_a_corner_radius_larger_than_half_side():
     with pytest.raises(ValueError, match="corner_radius_mm"):
-        EngineeringDrawingSpec.model_validate({
-            "main_view": {
-                "type": "призматическая пластина",
-                "profile": {
-                    "shape": "rectangle",
-                    "width_mm": 100,
-                    "height_mm": 40,
-                    "corner_radius_mm": 21,
+        EngineeringDrawingSpec.model_validate(
+            {
+                "main_view": {
+                    "type": "призматическая пластина",
+                    "profile": {
+                        "shape": "rectangle",
+                        "width_mm": 100,
+                        "height_mm": 40,
+                        "corner_radius_mm": 21,
+                    },
                 },
-            },
-        })
+            }
+        )
 
 
 def test_prismatic_drafter_declines_incomplete_profile():
-    assert draft_prismatic_body({
-        "main_view": {
-            "type": "призматическая",
-            "profile": {"shape": "rectangle", "width_mm": 120},
-        },
-    }) is None
+    assert (
+        draft_prismatic_body(
+            {
+                "main_view": {
+                    "type": "призматическая",
+                    "profile": {"shape": "rectangle", "width_mm": 120},
+                },
+            }
+        )
+        is None
+    )
 
 
 def test_bolt_circle_expands_to_exact_holes_and_pitch_dimension():
-    spec = EngineeringDrawingSpec.model_validate({
-        "main_view": {
-            "type": "круглый фланец",
-            "profile": {
-                "shape": "circle",
-                "diameter_mm": 180,
-                "hole_patterns": [{
-                    "kind": "bolt_circle",
-                    "count": 6,
-                    "bolt_circle_diameter_mm": 140,
-                    "hole_diameter_mm": 14,
-                    "start_angle_deg": 0,
-                    "tolerance": "H7",
-                }],
+    spec = EngineeringDrawingSpec.model_validate(
+        {
+            "main_view": {
+                "type": "круглый фланец",
+                "profile": {
+                    "shape": "circle",
+                    "diameter_mm": 180,
+                    "hole_patterns": [
+                        {
+                            "kind": "bolt_circle",
+                            "count": 6,
+                            "bolt_circle_diameter_mm": 140,
+                            "hole_diameter_mm": 14,
+                            "start_angle_deg": 0,
+                            "tolerance": "H7",
+                        }
+                    ],
+                },
             },
-        },
-    }).model_dump(mode="json")
+        }
+    ).model_dump(mode="json")
     ir = draft_prismatic_body(spec, px_per_mm=2)
     assert ir is not None
     circles = [entity for entity in ir.entities if entity.type == "circle"]
     assert len(circles) == 7
-    values = sorted(
-        entity.value_mm for entity in ir.entities if entity.type == "dimension"
-    )
+    values = sorted(entity.value_mm for entity in ir.entities if entity.type == "dimension")
     assert values == [14, 14, 14, 14, 14, 14, 140, 180]
     flange_center = circles[0].center
     first_hole = circles[1].center
@@ -380,30 +400,32 @@ def test_bolt_circle_expands_to_exact_holes_and_pitch_dimension():
 
 
 def test_capsule_slot_emits_two_exact_lines_two_arcs_and_dimensions():
-    spec = EngineeringDrawingSpec.model_validate({
-        "main_view": {
-            "type": "призматическая пластина",
-            "profile": {
-                "shape": "rectangle",
-                "width_mm": 100,
-                "height_mm": 60,
-                "slots": [{
-                    "center_x_mm": 0,
-                    "center_y_mm": 0,
-                    "length_mm": 40,
-                    "width_mm": 12,
-                    "rotation_deg": 30,
-                }],
+    spec = EngineeringDrawingSpec.model_validate(
+        {
+            "main_view": {
+                "type": "призматическая пластина",
+                "profile": {
+                    "shape": "rectangle",
+                    "width_mm": 100,
+                    "height_mm": 60,
+                    "slots": [
+                        {
+                            "center_x_mm": 0,
+                            "center_y_mm": 0,
+                            "length_mm": 40,
+                            "width_mm": 12,
+                            "rotation_deg": 30,
+                        }
+                    ],
+                },
             },
-        },
-    }).model_dump(mode="json")
+        }
+    ).model_dump(mode="json")
     ir = draft_prismatic_body(spec, px_per_mm=4)
     assert ir is not None
     assert len([entity for entity in ir.entities if entity.type == "arc"]) == 2
     assert len([entity for entity in ir.entities if entity.type == "segment"]) == 8
-    values = sorted(
-        entity.value_mm for entity in ir.entities if entity.type == "dimension"
-    )
+    values = sorted(entity.value_mm for entity in ir.entities if entity.type == "dimension")
     assert values == [12, 40, 60, 100]
 
 
@@ -415,11 +437,13 @@ def test_prismatic_drafter_fails_closed_for_feature_outside_profile():
                 "shape": "rectangle",
                 "width_mm": 100,
                 "height_mm": 60,
-                "holes": [{
-                    "center_x_mm": 49,
-                    "center_y_mm": 0,
-                    "diameter_mm": 10,
-                }],
+                "holes": [
+                    {
+                        "center_x_mm": 49,
+                        "center_y_mm": 0,
+                        "diameter_mm": 10,
+                    }
+                ],
             },
         },
     }
@@ -428,31 +452,37 @@ def test_prismatic_drafter_fails_closed_for_feature_outside_profile():
 
 def test_spec_rejects_slot_with_length_below_width():
     with pytest.raises(ValueError):
-        EngineeringDrawingSpec.model_validate({
-            "main_view": {
-                "type": "призматическая пластина",
-                "profile": {
-                    "shape": "rectangle",
-                    "width_mm": 100,
-                    "height_mm": 60,
-                    "slots": [{
-                        "center_x_mm": 0,
-                        "center_y_mm": 0,
-                        "length_mm": 10,
-                        "width_mm": 12,
-                    }],
+        EngineeringDrawingSpec.model_validate(
+            {
+                "main_view": {
+                    "type": "призматическая пластина",
+                    "profile": {
+                        "shape": "rectangle",
+                        "width_mm": 100,
+                        "height_mm": 60,
+                        "slots": [
+                            {
+                                "center_x_mm": 0,
+                                "center_y_mm": 0,
+                                "length_mm": 10,
+                                "width_mm": 12,
+                            }
+                        ],
+                    },
                 },
-            },
-        })
+            }
+        )
 
 
 def test_dsl_to_ir_decodes_all_primitive_kinds():
-    ir = _dsl_to_ir({
-        "lines": [[0, 0, 100, 0], [100, 0, 100, 50]],
-        "circles": [[50, 25, 10]],
-        "arcs": [[50, 25, 20, 0, 90]],
-        "polylines": [{"pts": [[0, 0], [10, 10], [20, 0]], "closed": 1}],
-    })
+    ir = _dsl_to_ir(
+        {
+            "lines": [[0, 0, 100, 0], [100, 0, 100, 50]],
+            "circles": [[50, 25, 10]],
+            "arcs": [[50, 25, 20, 0, 90]],
+            "polylines": [{"pts": [[0, 0], [10, 10], [20, 0]], "closed": 1}],
+        }
+    )
     assert ir is not None
     kinds = sorted(e.type for e in ir.entities)
     assert kinds == ["arc", "circle", "polyline", "segment", "segment"]
@@ -559,7 +589,9 @@ async def test_rotation_body_uses_constructed_axis_not_generative():
 @pytest.mark.asyncio
 async def test_prismatic_part_uses_generative_model():
     # A non-rotation part: the parametric drafter declines → generative model.
-    router = _FakeRouter('{"lines":[[0,0,120,0],[120,0,120,60],[120,60,0,60],[0,60,0,0]],"circles":[[60,30,8]],"arcs":[],"polylines":[]}')
+    router = _FakeRouter(
+        '{"lines":[[0,0,120,0],[120,0,120,60],[120,60,0,60],[0,60,0,0]],"circles":[[60,30,8]],"arcs":[],"polylines":[]}'
+    )
     spec = {"main_view": {"type": "призматическая", "features": [{"kind": "plate"}]}}
     ir = await draft_from_spec_async(spec, draft_model="apex", router=router)
     assert ir is not None
@@ -585,8 +617,15 @@ async def test_no_model_assigned_uses_deterministic():
 
 def test_layout_on_sheet_scales_generative_geometry():
     from app.ai.cad_recognize.spec_vectorize import _dsl_to_ir, _layout_on_sheet
-    ir = _dsl_to_ir({"lines": [[0, 0, 100, 0], [100, 0, 100, 50], [0, 50, 100, 50]],
-                     "circles": [], "arcs": [], "polylines": []})
+
+    ir = _dsl_to_ir(
+        {
+            "lines": [[0, 0, 100, 0], [100, 0, 100, 50], [0, 50, 100, 50]],
+            "circles": [],
+            "arcs": [],
+            "polylines": [],
+        }
+    )
     spec = {"dimensions": [{"value": "300"}, {"value": "150"}]}
     _layout_on_sheet(ir, spec, "A3", True)
     assert ir.sheet.format == "A3"
@@ -633,9 +672,9 @@ def test_side_view_shares_the_front_view_axis_exactly():
     assert ir is not None
     circles = [e for e in ir.entities if isinstance(e, Circle)]
     axes = [
-        e for e in ir.entities
-        if isinstance(e, Segment) and e.line_class == "axis"
-        and abs(e.p1.y - e.p2.y) < 1e-9
+        e
+        for e in ir.entities
+        if isinstance(e, Segment) and e.line_class == "axis" and abs(e.p1.y - e.p2.y) < 1e-9
     ]
     assert axes, "front view must carry a centreline"
     front_axis_y = axes[0].p1.y
@@ -683,13 +722,18 @@ def test_side_view_enters_the_sheet_scale_decision():
 
 
 def test_view_naming_a_missing_body_blocks_the_spec():
-    spec = EngineeringDrawingSpec.model_validate({
-        "main_view": {"type": "тело вращения (вал)", "outer": [
-            {"diameter_mm": 30, "length_mm": 40},
-            {"diameter_mm": 50, "length_mm": 60},
-        ]},
-        "views": [{"kind": "side", "body_index": 7}],
-    })
+    spec = EngineeringDrawingSpec.model_validate(
+        {
+            "main_view": {
+                "type": "тело вращения (вал)",
+                "outer": [
+                    {"diameter_mm": 30, "length_mm": 40},
+                    {"diameter_mm": 50, "length_mm": 60},
+                ],
+            },
+            "views": [{"kind": "side", "body_index": 7}],
+        }
+    )
     assert "view:0:body-index-out-of-range" in spec.unresolved
 
 
@@ -702,14 +746,10 @@ def test_unsectioned_bore_is_dashed_in_both_views():
     ir = draft_rotation_body(spec, px_per_mm=4.0)
     assert ir is not None
     hidden_segments = [
-        e for e in ir.entities
-        if isinstance(e, Segment) and e.line_class == "hidden"
+        e for e in ir.entities if isinstance(e, Segment) and e.line_class == "hidden"
     ]
     assert hidden_segments, "front view must draw the bore as hidden lines"
-    bore_circles = [
-        e for e in ir.entities
-        if isinstance(e, Circle) and e.line_class == "hidden"
-    ]
+    bore_circles = [e for e in ir.entities if isinstance(e, Circle) and e.line_class == "hidden"]
     assert len(bore_circles) == 1
     assert bore_circles[0].radius == pytest.approx(16 * 4.0 / 2)
 
@@ -735,28 +775,21 @@ def _hollow_spec(views: list[dict]) -> dict:
 def test_section_hatches_the_wall_and_makes_bore_edges_solid():
     from app.ai.cad_ir.schema import HatchRegion, Segment
 
-    ir = draft_rotation_body(
-        _hollow_spec([{"kind": "section", "body_index": 0}]), px_per_mm=4.0
-    )
+    ir = draft_rotation_body(_hollow_spec([{"kind": "section", "body_index": 0}]), px_per_mm=4.0)
     assert ir is not None
     hatches = [e for e in ir.entities if isinstance(e, HatchRegion)]
     # One wall band each side of the axis.
     assert len(hatches) == 2
     assert all(len(h.boundary) >= 4 for h in hatches)
     # A cut edge is a contour, never a hidden line.
-    assert not [
-        e for e in ir.entities
-        if isinstance(e, Segment) and e.line_class == "hidden"
-    ]
+    assert not [e for e in ir.entities if isinstance(e, Segment) and e.line_class == "hidden"]
 
 
 def test_section_boundary_is_a_simple_loop_not_a_bowtie():
     """The return path must run right-to-left, or the fill self-intersects."""
     from app.ai.cad_ir.schema import HatchRegion
 
-    ir = draft_rotation_body(
-        _hollow_spec([{"kind": "section", "body_index": 0}]), px_per_mm=4.0
-    )
+    ir = draft_rotation_body(_hollow_spec([{"kind": "section", "body_index": 0}]), px_per_mm=4.0)
     assert ir is not None
     loop = [e for e in ir.entities if isinstance(e, HatchRegion)][0].boundary
     xs = [p.x for p in loop]
@@ -786,9 +819,7 @@ def test_sheet_gets_a_gost_frame_and_a_filled_stamp():
     # ГОСТ 2.302 prefers 1:1 — the drafter must not enlarge just because the
     # sheet has spare room.
     assert ir.sheet.title_block["scale"] == "1:1"
-    frame = [
-        e for e in ir.entities if SHEET_FRAME_EVIDENCE in e.evidence
-    ]
+    frame = [e for e in ir.entities if SHEET_FRAME_EVIDENCE in e.evidence]
     assert frame, "the frame must exist as real entities, not just a flag"
 
 
@@ -800,8 +831,7 @@ def test_drawing_never_overlaps_the_title_block_band():
     sheet_h = ir.source.image_height
     stamp_top = sheet_h - 55.0 * 4.0
     part = [
-        e for e in ir.entities
-        if SHEET_FRAME_EVIDENCE not in e.evidence and e.type == "segment"
+        e for e in ir.entities if SHEET_FRAME_EVIDENCE not in e.evidence and e.type == "segment"
     ]
     assert part
     assert all(max(e.p1.y, e.p2.y) < stamp_top for e in part)
@@ -826,7 +856,8 @@ def test_diameter_tolerance_never_leaks_onto_a_length():
     ir = draft_rotation_body(spec, px_per_mm=4.0)
     assert ir is not None
     lengths = [
-        e.text for e in ir.entities
+        e.text
+        for e in ir.entities
         if e.type == "dimension" and e.kind == "linear" and e.value_mm == 40
     ]
     assert lengths == ["40"]
@@ -921,12 +952,14 @@ def test_reader_format_repair_keeps_invalid_section_path_fail_closed():
                 {"diameter_mm": 50, "length_mm": 60},
             ],
         },
-        "views": [{
-            "kind": "section",
-            "view_id": "А-А",
-            "section_path_mm": [150, 270],
-            "detail_scale_factor": None,
-        }],
+        "views": [
+            {
+                "kind": "section",
+                "view_id": "А-А",
+                "section_path_mm": [150, 270],
+                "detail_scale_factor": None,
+            }
+        ],
     }
 
     repaired = _coerce_spec_containers(parsed)
@@ -982,7 +1015,8 @@ def test_malformed_evidence_never_discards_the_dimension_it_annotates():
             "outer": [
                 {"diameter_mm": 30, "length_mm": 40, "evidence": "Ø30 слева"},
                 {
-                    "diameter_mm": 50, "length_mm": 60,
+                    "diameter_mm": 50,
+                    "length_mm": 60,
                     "evidence": [{"image_index": "1", "bbox": [1, 2], "raw_text": "Ø50"}],
                 },
             ],
@@ -1039,28 +1073,34 @@ def test_repair_never_invents_a_missing_tail():
 
 def test_a_complete_flange_profile_is_not_blocked_by_a_wrong_type_label():
     """Live: a correctly read flange was rejected for being labelled a shaft."""
-    spec = EngineeringDrawingSpec.model_validate({
-        "part": "Фланец",
-        "main_view": {
-            # The reader's own (wrong) classification.
-            "type": "тело вращения (вал)",
-            "outer": [{"diameter_mm": 560, "length_mm": 20}],
-            "profile": {
-                "shape": "circle", "diameter_mm": 560, "thickness_mm": 20,
-                "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 80}],
+    spec = EngineeringDrawingSpec.model_validate(
+        {
+            "part": "Фланец",
+            "main_view": {
+                # The reader's own (wrong) classification.
+                "type": "тело вращения (вал)",
+                "outer": [{"diameter_mm": 560, "length_mm": 20}],
+                "profile": {
+                    "shape": "circle",
+                    "diameter_mm": 560,
+                    "thickness_mm": 20,
+                    "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 80}],
+                },
             },
-        },
-    })
+        }
+    )
     assert spec.unresolved == []
 
 
 def test_a_shaft_with_one_section_and_no_profile_still_blocks():
-    spec = EngineeringDrawingSpec.model_validate({
-        "main_view": {
-            "type": "тело вращения (вал)",
-            "outer": [{"diameter_mm": 50, "length_mm": 60}],
-        },
-    })
+    spec = EngineeringDrawingSpec.model_validate(
+        {
+            "main_view": {
+                "type": "тело вращения (вал)",
+                "outer": [{"diameter_mm": 50, "length_mm": 60}],
+            },
+        }
+    )
     assert any("outer-profile-incomplete" in item for item in spec.unresolved)
 
 
@@ -1093,15 +1133,21 @@ def test_an_unusable_hole_pattern_is_dropped_not_the_whole_sheet():
         "main_view": {
             "type": "фланец",
             "profile": {
-                "shape": "circle", "diameter_mm": 140, "thickness_mm": 20,
+                "shape": "circle",
+                "diameter_mm": 140,
+                "thickness_mm": 20,
                 "holes": [
                     {"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 40},
                     {"center_x_mm": 10, "center_y_mm": 0, "diameter_mm": None},
                 ],
-                "hole_patterns": [{
-                    "kind": "bolt_circle", "count": 6,
-                    "bolt_circle_diameter_mm": 110, "hole_diameter_mm": None,
-                }],
+                "hole_patterns": [
+                    {
+                        "kind": "bolt_circle",
+                        "count": 6,
+                        "bolt_circle_diameter_mm": 110,
+                        "hole_diameter_mm": None,
+                    }
+                ],
             },
         },
     }
@@ -1128,13 +1174,11 @@ def test_drafter_reproduces_a_hand_written_spec_exactly():
     import asyncio
     import json
     import pathlib
-    from collections import defaultdict
 
     from app.ai.cad_recognize.spec_vectorize import draft_from_spec_async
 
     spec_path = (
-        pathlib.Path(__file__).resolve().parents[1]
-        / "fixtures" / "detal_126_reference_spec.json"
+        pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "detal_126_reference_spec.json"
     )
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
     spec.pop("_comment", None)
@@ -1163,9 +1207,9 @@ def test_drafter_reproduces_a_hand_written_spec_exactly():
         for s in spec["main_view"]["outer"] + spec["main_view"]["bore"]
     ]
     for diameter, length in expected:
-        assert any(
-            abs(d - diameter) <= 0.02 and abs(l - length) <= 0.02 for d, l in drawn
-        ), f"Ø{diameter} L{length} is not on the drawing"
+        assert any(abs(d - diameter) <= 0.02 and abs(ln - length) <= 0.02 for d, ln in drawn), (
+            f"Ø{diameter} L{length} is not on the drawing"
+        )
 
 
 def test_refusal_sheet_carries_the_reading_and_no_part_geometry():
@@ -1217,12 +1261,14 @@ def test_coerce_marks_incomplete_profile_and_pattern_unresolved():
                 "shape": "rectangle",
                 "width_mm": None,
                 "height_mm": 80,
-                "hole_patterns": [{
-                    "kind": "bolt_circle",
-                    "count": 6,
-                    "bolt_circle_diameter_mm": 0,
-                    "hole_diameter_mm": 8,
-                }],
+                "hole_patterns": [
+                    {
+                        "kind": "bolt_circle",
+                        "count": 6,
+                        "bolt_circle_diameter_mm": 0,
+                        "hole_diameter_mm": 8,
+                    }
+                ],
             },
         },
         "unresolved": [],
@@ -1249,12 +1295,14 @@ def test_coerce_keeps_complete_profile_and_pattern():
             "profile": {
                 "shape": "circle",
                 "diameter_mm": 100,
-                "hole_patterns": [{
-                    "kind": "bolt_circle",
-                    "count": 6,
-                    "bolt_circle_diameter_mm": 70,
-                    "hole_diameter_mm": 8,
-                }],
+                "hole_patterns": [
+                    {
+                        "kind": "bolt_circle",
+                        "count": 6,
+                        "bolt_circle_diameter_mm": 70,
+                        "hole_diameter_mm": 8,
+                    }
+                ],
             },
         },
     }
@@ -1279,23 +1327,37 @@ def _spec_with_two_bodies() -> dict:
                 {"size_mm": 1, "angle_deg": 45, "location": "left_end"},
                 {"size_mm": 2, "angle_deg": 45, "location": "right_end"},
             ],
-            "keyways": [{
-                "axial_start_mm": 10, "length_mm": 30, "width_mm": 8, "depth_mm": 4,
-            }],
+            "keyways": [
+                {
+                    "axial_start_mm": 10,
+                    "length_mm": 30,
+                    "width_mm": 8,
+                    "depth_mm": 4,
+                }
+            ],
         },
-        "parts": [{
-            "type": "призматическая",
-            "outer": [],
-            "profile": {
-                "shape": "rectangle", "width_mm": 50, "height_mm": 30,
-                "thickness_mm": 10,
-                "holes": [{"center_x_mm": 5, "center_y_mm": 5, "diameter_mm": 6}],
-                "slots": [{
-                    "center_x_mm": 0, "center_y_mm": 0,
-                    "length_mm": 20, "width_mm": 6, "rotation_deg": 30,
-                }],
-            },
-        }],
+        "parts": [
+            {
+                "type": "призматическая",
+                "outer": [],
+                "profile": {
+                    "shape": "rectangle",
+                    "width_mm": 50,
+                    "height_mm": 30,
+                    "thickness_mm": 10,
+                    "holes": [{"center_x_mm": 5, "center_y_mm": 5, "diameter_mm": 6}],
+                    "slots": [
+                        {
+                            "center_x_mm": 0,
+                            "center_y_mm": 0,
+                            "length_mm": 20,
+                            "width_mm": 6,
+                            "rotation_deg": 30,
+                        }
+                    ],
+                },
+            }
+        ],
         "views": [],
         "dimensions": [],
         "annotations": [],
@@ -1388,14 +1450,18 @@ def test_sketch_shape_requires_at_least_one_segment():
 def test_sketch_field_is_rejected_on_rectangle_and_circle():
     with pytest.raises(ValidationError, match="sketch is valid only for shape='sketch'"):
         SpecPrismaticProfile(
-            shape="rectangle", width_mm=10, height_mm=10, thickness_mm=5,
+            shape="rectangle",
+            width_mm=10,
+            height_mm=10,
+            thickness_mm=5,
             sketch=[SpecSketchSegment(kind="line", to=(1.0, 1.0))],
         )
 
 
 def test_valid_sketch_profile_round_trips():
     profile = SpecPrismaticProfile(
-        shape="sketch", thickness_mm=8,
+        shape="sketch",
+        thickness_mm=8,
         sketch=[
             SpecSketchSegment(kind="line", to=(40.0, 0.0)),
             SpecSketchSegment(kind="arc", to=(40.0, 40.0), center=(40.0, 20.0), clockwise=False),
@@ -1421,8 +1487,13 @@ def test_linear_pattern_requires_its_own_fields():
     with pytest.raises(ValidationError, match="linear pattern requires"):
         SpecHolePattern(kind="linear", hole_diameter_mm=6, count=4)
     SpecHolePattern(
-        kind="linear", hole_diameter_mm=6, count=4,
-        spacing_mm=20, direction_deg=0, start_x_mm=-30, start_y_mm=0,
+        kind="linear",
+        hole_diameter_mm=6,
+        count=4,
+        spacing_mm=20,
+        direction_deg=0,
+        start_x_mm=-30,
+        start_y_mm=0,
     )
 
 
@@ -1430,22 +1501,51 @@ def test_rectangular_pattern_requires_its_own_fields():
     with pytest.raises(ValidationError, match="rectangular pattern requires"):
         SpecHolePattern(kind="rectangular", hole_diameter_mm=6, rows=2, columns=3)
     SpecHolePattern(
-        kind="rectangular", hole_diameter_mm=6, rows=2, columns=3,
-        spacing_x_mm=20, spacing_y_mm=15, start_x_mm=-20, start_y_mm=-7.5,
+        kind="rectangular",
+        hole_diameter_mm=6,
+        rows=2,
+        columns=3,
+        spacing_x_mm=20,
+        spacing_y_mm=15,
+        start_x_mm=-20,
+        start_y_mm=-7.5,
     )
 
 
 def test_expanded_profile_holes_covers_all_three_pattern_kinds():
     profile = {
-        "shape": "rectangle", "width_mm": 200, "height_mm": 200, "thickness_mm": 10,
+        "shape": "rectangle",
+        "width_mm": 200,
+        "height_mm": 200,
+        "thickness_mm": 10,
         "holes": [],
         "hole_patterns": [
-            {"kind": "bolt_circle", "count": 4, "bolt_circle_diameter_mm": 40,
-             "hole_diameter_mm": 5, "start_angle_deg": 0},
-            {"kind": "linear", "count": 3, "hole_diameter_mm": 4,
-             "spacing_mm": 10, "direction_deg": 90, "start_x_mm": 0, "start_y_mm": 0},
-            {"kind": "rectangular", "rows": 2, "columns": 2, "hole_diameter_mm": 3,
-             "spacing_x_mm": 5, "spacing_y_mm": 5, "start_x_mm": -50, "start_y_mm": -50},
+            {
+                "kind": "bolt_circle",
+                "count": 4,
+                "bolt_circle_diameter_mm": 40,
+                "hole_diameter_mm": 5,
+                "start_angle_deg": 0,
+            },
+            {
+                "kind": "linear",
+                "count": 3,
+                "hole_diameter_mm": 4,
+                "spacing_mm": 10,
+                "direction_deg": 90,
+                "start_x_mm": 0,
+                "start_y_mm": 0,
+            },
+            {
+                "kind": "rectangular",
+                "rows": 2,
+                "columns": 2,
+                "hole_diameter_mm": 3,
+                "spacing_x_mm": 5,
+                "spacing_y_mm": 5,
+                "start_x_mm": -50,
+                "start_y_mm": -50,
+            },
         ],
     }
     holes = _expanded_profile_holes(profile)
@@ -1455,23 +1555,39 @@ def test_expanded_profile_holes_covers_all_three_pattern_kinds():
 
 def test_expanded_profile_holes_refuses_unknown_pattern_kind():
     profile = {
-        "shape": "rectangle", "width_mm": 100, "height_mm": 100, "thickness_mm": 10,
-        "holes": [], "hole_patterns": [{"kind": "spiral", "hole_diameter_mm": 5}],
+        "shape": "rectangle",
+        "width_mm": 100,
+        "height_mm": 100,
+        "thickness_mm": 10,
+        "holes": [],
+        "hole_patterns": [{"kind": "spiral", "hole_diameter_mm": 5}],
     }
     assert _expanded_profile_holes(profile) is None
 
 
 def test_coerce_spec_containers_prunes_incomplete_linear_pattern_but_keeps_valid_one():
     raw = {
-        "main_view": {"profile": {
-            "shape": "rectangle", "width_mm": 100, "height_mm": 100, "thickness_mm": 10,
-            "hole_patterns": [
-                {"kind": "linear", "hole_diameter_mm": 5, "count": 3, "spacing_mm": 10,
-                 "direction_deg": 0, "start_x_mm": 0, "start_y_mm": 0},
-                # missing spacing/direction/start:
-                {"kind": "linear", "hole_diameter_mm": 5, "count": 3},
-            ],
-        }},
+        "main_view": {
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 100,
+                "height_mm": 100,
+                "thickness_mm": 10,
+                "hole_patterns": [
+                    {
+                        "kind": "linear",
+                        "hole_diameter_mm": 5,
+                        "count": 3,
+                        "spacing_mm": 10,
+                        "direction_deg": 0,
+                        "start_x_mm": 0,
+                        "start_y_mm": 0,
+                    },
+                    # missing spacing/direction/start:
+                    {"kind": "linear", "hole_diameter_mm": 5, "count": 3},
+                ],
+            }
+        },
     }
     repaired = _coerce_spec_containers(raw)
     kept = repaired["main_view"]["profile"]["hole_patterns"]

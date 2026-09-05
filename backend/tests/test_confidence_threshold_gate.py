@@ -33,15 +33,20 @@ def _clean_invoice() -> dict:
         "total_amount": 1200.0,
         "supplier": {
             "name": "ООО Поставщик",
-            "inn": "7707083893",          # valid 10-digit control digit
+            "inn": "7707083893",  # valid 10-digit control digit
             "kpp": "770701001",
-            "address": "г. Москва",        # insignificant
-            "phone": "+7 495 000-00-00",   # insignificant
+            "address": "г. Москва",  # insignificant
+            "phone": "+7 495 000-00-00",  # insignificant
         },
         "buyer": {"name": "ООО Покупатель", "inn": "7707083893"},
         "lines": [
-            {"line_number": 1, "name": "Болт М6", "quantity": 10,
-             "unit_price": 100.0, "amount": 1000.0},
+            {
+                "line_number": 1,
+                "name": "Болт М6",
+                "quantity": 10,
+                "unit_price": 100.0,
+                "amount": 1000.0,
+            },
         ],
     }
 
@@ -80,7 +85,9 @@ def test_broken_line_item_is_flagged():
     data["lines"][0]["amount"] = 5.0  # qty*price=1000 != 5  → line amount fails
     sig = significant_fields_confidence(_confs(data), threshold=0.95)
     flagged = {f["field"] for f in sig.low_fields}
-    assert any(f.startswith("line_1.") for f in flagged), f"expected a line field flagged: {flagged}"
+    assert any(f.startswith("line_1.") for f in flagged), (
+        f"expected a line field flagged: {flagged}"
+    )
 
 
 def test_invalid_inn_lowers_confidence():

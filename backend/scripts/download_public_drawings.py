@@ -20,12 +20,10 @@ from __future__ import annotations
 import argparse
 import io
 import json
-import os
 import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -36,8 +34,19 @@ REAL_DRAWINGS: list[dict] = [
         "drawing_type": "assembly",
         "description": "Raspberry Pi 4 PCB assembly drawing with dimensions (mm)",
         "features": [
-            {"feature_type": "surface", "name": "PCB Board 85×56mm", "dimensions": [{"dim_type": "linear", "nominal": 85.0}, {"dim_type": "linear", "nominal": 56.0}]},
-            {"feature_type": "hole", "name": "Mounting holes Ø2.7mm", "dimensions": [{"dim_type": "diameter", "nominal": 2.7}]},
+            {
+                "feature_type": "surface",
+                "name": "PCB Board 85×56mm",
+                "dimensions": [
+                    {"dim_type": "linear", "nominal": 85.0},
+                    {"dim_type": "linear", "nominal": 56.0},
+                ],
+            },
+            {
+                "feature_type": "hole",
+                "name": "Mounting holes Ø2.7mm",
+                "dimensions": [{"dim_type": "diameter", "nominal": 2.7}],
+            },
             {"feature_type": "boss", "name": "USB-A connector", "dimensions": []},
         ],
     },
@@ -47,7 +56,11 @@ REAL_DRAWINGS: list[dict] = [
         "drawing_type": "detail",
         "description": "ISO/UTS thread profile with dimension annotations",
         "features": [
-            {"feature_type": "thread", "name": "ISO thread profile H", "dimensions": [{"dim_type": "linear", "nominal": 0.0}]},
+            {
+                "feature_type": "thread",
+                "name": "ISO thread profile H",
+                "dimensions": [{"dim_type": "linear", "nominal": 0.0}],
+            },
             {"feature_type": "chamfer", "name": "Thread root radius", "dimensions": []},
         ],
     },
@@ -59,6 +72,7 @@ REAL_DRAWINGS: list[dict] = [
 def _font():
     """Return a PIL ImageFont — default bitmap if truetype unavailable."""
     from PIL import ImageFont
+
     try:
         return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
     except Exception:
@@ -67,6 +81,7 @@ def _font():
 
 def _font_sm():
     from PIL import ImageFont
+
     try:
         return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
     except Exception:
@@ -75,6 +90,7 @@ def _font_sm():
 
 def _font_bold():
     from PIL import ImageFont
+
     try:
         return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
     except Exception:
@@ -84,6 +100,7 @@ def _font_bold():
 def make_shaft_detail_png() -> bytes:
     """Деталь: ступенчатый вал с Ø50h6, Ø30k6, отверстием Ø10H7, шпоночным пазом, Ra, GD&T."""
     from PIL import Image, ImageDraw
+
     W, H = 1200, 800
     img = Image.new("RGB", (W, H), (248, 248, 248))
     d = ImageDraw.Draw(img)
@@ -172,6 +189,7 @@ def make_shaft_detail_png() -> bytes:
 def make_flange_detail_png() -> bytes:
     """Деталь: фланец с отверстиями под болты, Ra, посадки."""
     from PIL import Image, ImageDraw
+
     W, H = 1000, 900
     img = Image.new("RGB", (W, H), (248, 248, 248))
     d = ImageDraw.Draw(img)
@@ -198,6 +216,7 @@ def make_flange_detail_png() -> bytes:
 
     # 4× bolt holes Ø18 at PCD=200
     import math
+
     for angle in [0, 90, 180, 270]:
         rad = math.radians(angle)
         hx = cx + int(100 * math.cos(rad))
@@ -239,6 +258,7 @@ def make_flange_detail_png() -> bytes:
 def make_assembly_drawing_png() -> bytes:
     """Сборка: редуктор с BOM/спецификацией и позиционными номерами."""
     from PIL import Image, ImageDraw
+
     W, H = 1400, 900
     img = Image.new("RGB", (W, H), (248, 248, 248))
     d = ImageDraw.Draw(img)
@@ -294,17 +314,19 @@ def make_assembly_drawing_png() -> bytes:
 
     # Balloon callouts
     balloon_data = [
-        (120, 290, "1"),   # Корпус
-        (400, 185, "2"),   # Крышка
-        (80, 350, "3"),    # Вал ведущий
-        (720, 360, "4"),   # Вал ведомый
-        (222, 340, "5"),   # Шестерня
-        (465, 395, "6"),   # Колесо
-        (155, 320, "7"),   # Подшипник
-        (60, 440, "8"),    # Болт
+        (120, 290, "1"),  # Корпус
+        (400, 185, "2"),  # Крышка
+        (80, 350, "3"),  # Вал ведущий
+        (720, 360, "4"),  # Вал ведомый
+        (222, 340, "5"),  # Шестерня
+        (465, 395, "6"),  # Колесо
+        (155, 320, "7"),  # Подшипник
+        (60, 440, "8"),  # Болт
     ]
-    for (bx, by, num) in balloon_data:
-        d.ellipse([bx - 14, by - 14, bx + 14, by + 14], outline=(0, 0, 0), width=2, fill=(255, 255, 200))
+    for bx, by, num in balloon_data:
+        d.ellipse(
+            [bx - 14, by - 14, bx + 14, by + 14], outline=(0, 0, 0), width=2, fill=(255, 255, 200)
+        )
         d.text((bx - 5 if len(num) == 1 else bx - 8, by - 8), num, font=fb, fill=(0, 0, 0))
 
     # Key dimensions
@@ -319,6 +341,7 @@ def make_assembly_drawing_png() -> bytes:
 def make_section_view_png() -> bytes:
     """Разрез: корпус подшипника с внутренними полостями, Ra, посадки."""
     from PIL import Image, ImageDraw
+
     W, H = 1100, 850
     img = Image.new("RGB", (W, H), (248, 248, 248))
     d = ImageDraw.Draw(img)
@@ -389,6 +412,7 @@ def make_section_view_png() -> bytes:
 def make_weld_drawing_png() -> bytes:
     """Сварная конструкция: кронштейн с обозначениями швов по ГОСТ 2.312."""
     from PIL import Image, ImageDraw
+
     W, H = 1100, 800
     img = Image.new("RGB", (W, H), (248, 248, 248))
     d = ImageDraw.Draw(img)
@@ -447,7 +471,12 @@ def make_weld_drawing_png() -> bytes:
     d.text((725, 360), "380", font=f, fill=(0, 0, 0))
 
     # Technical requirements
-    d.text((100, 640), "ТТ: 1. Сварка МИГ. Электрод ER70S-6. 2. Зачистить брызги. 3. Грунтовать ГФ-021.", font=fsm, fill=(0, 0, 0))
+    d.text(
+        (100, 640),
+        "ТТ: 1. Сварка МИГ. Электрод ER70S-6. 2. Зачистить брызги. 3. Грунтовать ГФ-021.",
+        font=fsm,
+        fill=(0, 0, 0),
+    )
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", dpi=(200, 200))
@@ -457,8 +486,10 @@ def make_weld_drawing_png() -> bytes:
 def make_gear_detail_dxf() -> bytes:
     """Деталь: шестерня — DXF с размерами и посадками."""
     try:
+        import os
+        import tempfile
+
         import ezdxf
-        import tempfile, os
     except ImportError:
         return b""
 
@@ -488,18 +519,30 @@ def make_gear_detail_dxf() -> bytes:
 def make_threaded_shaft_dxf() -> bytes:
     """Деталь с резьбой: болт М20×1.5-6g — DXF."""
     try:
+        import os
+        import tempfile
+
         import ezdxf
-        import tempfile, os
     except ImportError:
         return b""
 
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
 
-    msp.add_lwpolyline([
-        (0, -10), (80, -10), (80, -8), (100, -8),
-        (100, 8), (80, 8), (80, 10), (0, 10), (0, -10),
-    ], close=True)
+    msp.add_lwpolyline(
+        [
+            (0, -10),
+            (80, -10),
+            (80, -8),
+            (100, -8),
+            (100, 8),
+            (80, 8),
+            (80, 10),
+            (0, 10),
+            (0, -10),
+        ],
+        close=True,
+    )
     msp.add_line((80, -8), (100, -8))
     msp.add_line((80, 8), (100, 8))
     msp.add_line((-10, 0), (120, 0))
@@ -526,23 +569,45 @@ SYNTHETIC_DRAWINGS: list[dict] = [
         "generator": make_shaft_detail_png,
         "description": "Ступенчатый вал Ø50/Ø30, шпоночный паз, отверстие Ø10H7, Ra, GD&T",
         "features": [
-            {"feature_type": "surface", "name": "Шейка Ø50h6",
-             "dimensions": [{"dim_type": "diameter", "nominal": 50.0, "fit_system": "h6"}],
-             "surfaces": [{"roughness_type": "Ra", "value": 0.8}]},
-            {"feature_type": "surface", "name": "Шейка Ø30h6",
-             "dimensions": [{"dim_type": "diameter", "nominal": 30.0, "fit_system": "h6"}],
-             "surfaces": [{"roughness_type": "Ra", "value": 3.2}]},
-            {"feature_type": "surface", "name": "Шейка Ø30k6",
-             "dimensions": [{"dim_type": "diameter", "nominal": 30.0, "fit_system": "k6"}],
-             "surfaces": [{"roughness_type": "Ra", "value": 3.2}]},
-            {"feature_type": "hole", "name": "Отверстие Ø10H7",
-             "dimensions": [{"dim_type": "diameter", "nominal": 10.0, "fit_system": "H7"}],
-             "surfaces": [{"roughness_type": "Ra", "value": 1.6}]},
-            {"feature_type": "key_slot", "name": "Шпоночный паз 12×6",
-             "dimensions": [{"dim_type": "linear", "nominal": 12.0}, {"dim_type": "depth", "nominal": 6.0}],
-             "surfaces": [{"roughness_type": "Ra", "value": 1.6}]},
-            {"feature_type": "surface", "name": "Длина вала L=840",
-             "dimensions": [{"dim_type": "linear", "nominal": 840.0}], "surfaces": []},
+            {
+                "feature_type": "surface",
+                "name": "Шейка Ø50h6",
+                "dimensions": [{"dim_type": "diameter", "nominal": 50.0, "fit_system": "h6"}],
+                "surfaces": [{"roughness_type": "Ra", "value": 0.8}],
+            },
+            {
+                "feature_type": "surface",
+                "name": "Шейка Ø30h6",
+                "dimensions": [{"dim_type": "diameter", "nominal": 30.0, "fit_system": "h6"}],
+                "surfaces": [{"roughness_type": "Ra", "value": 3.2}],
+            },
+            {
+                "feature_type": "surface",
+                "name": "Шейка Ø30k6",
+                "dimensions": [{"dim_type": "diameter", "nominal": 30.0, "fit_system": "k6"}],
+                "surfaces": [{"roughness_type": "Ra", "value": 3.2}],
+            },
+            {
+                "feature_type": "hole",
+                "name": "Отверстие Ø10H7",
+                "dimensions": [{"dim_type": "diameter", "nominal": 10.0, "fit_system": "H7"}],
+                "surfaces": [{"roughness_type": "Ra", "value": 1.6}],
+            },
+            {
+                "feature_type": "key_slot",
+                "name": "Шпоночный паз 12×6",
+                "dimensions": [
+                    {"dim_type": "linear", "nominal": 12.0},
+                    {"dim_type": "depth", "nominal": 6.0},
+                ],
+                "surfaces": [{"roughness_type": "Ra", "value": 1.6}],
+            },
+            {
+                "feature_type": "surface",
+                "name": "Длина вала L=840",
+                "dimensions": [{"dim_type": "linear", "nominal": 840.0}],
+                "surfaces": [],
+            },
         ],
         "gdt": [
             {"symbol": "cylindricity", "tolerance_value": 0.02, "datum_reference": "A"},
@@ -555,17 +620,32 @@ SYNTHETIC_DRAWINGS: list[dict] = [
         "generator": make_flange_detail_png,
         "description": "Фланец Ø560 с 4×Ø18 отверстиями под болты, центральное отверстие Ø80H7",
         "features": [
-            {"feature_type": "surface", "name": "Наружный диаметр Ø560",
-             "dimensions": [{"dim_type": "diameter", "nominal": 560.0}],
-             "surfaces": [{"roughness_type": "Ra", "value": 3.2}]},
-            {"feature_type": "hole", "name": "Центральное отверстие Ø80H7",
-             "dimensions": [{"dim_type": "diameter", "nominal": 80.0, "fit_system": "H7"}],
-             "surfaces": [{"roughness_type": "Ra", "value": 1.6}]},
-            {"feature_type": "hole", "name": "Болтовые отверстия 4×Ø18",
-             "dimensions": [{"dim_type": "diameter", "nominal": 18.0}], "surfaces": []},
-            {"feature_type": "surface", "name": "Торцевая поверхность t=20±0.1",
-             "dimensions": [{"dim_type": "linear", "nominal": 20.0, "upper_tol": 0.1, "lower_tol": -0.1}],
-             "surfaces": [{"roughness_type": "Ra", "value": 3.2}]},
+            {
+                "feature_type": "surface",
+                "name": "Наружный диаметр Ø560",
+                "dimensions": [{"dim_type": "diameter", "nominal": 560.0}],
+                "surfaces": [{"roughness_type": "Ra", "value": 3.2}],
+            },
+            {
+                "feature_type": "hole",
+                "name": "Центральное отверстие Ø80H7",
+                "dimensions": [{"dim_type": "diameter", "nominal": 80.0, "fit_system": "H7"}],
+                "surfaces": [{"roughness_type": "Ra", "value": 1.6}],
+            },
+            {
+                "feature_type": "hole",
+                "name": "Болтовые отверстия 4×Ø18",
+                "dimensions": [{"dim_type": "diameter", "nominal": 18.0}],
+                "surfaces": [],
+            },
+            {
+                "feature_type": "surface",
+                "name": "Торцевая поверхность t=20±0.1",
+                "dimensions": [
+                    {"dim_type": "linear", "nominal": 20.0, "upper_tol": 0.1, "lower_tol": -0.1}
+                ],
+                "surfaces": [{"roughness_type": "Ra", "value": 3.2}],
+            },
         ],
         "gdt": [],
     },
@@ -592,21 +672,41 @@ SYNTHETIC_DRAWINGS: list[dict] = [
         "generator": make_section_view_png,
         "description": "Разрез А-А корпуса подшипника: расточка Ø120H7, карман, канавки уплотнения",
         "features": [
-            {"feature_type": "hole", "name": "Расточка Ø120H7",
-             "dimensions": [{"dim_type": "diameter", "nominal": 120.0, "fit_system": "H7"}],
-             "surfaces": [{"roughness_type": "Ra", "value": 1.6}]},
-            {"feature_type": "surface", "name": "Наружный диаметр Ø200",
-             "dimensions": [{"dim_type": "diameter", "nominal": 200.0}],
-             "surfaces": [{"roughness_type": "Ra", "value": 6.3}]},
-            {"feature_type": "pocket", "name": "Карман 50×40×20",
-             "dimensions": [{"dim_type": "linear", "nominal": 50.0}],
-             "surfaces": [{"roughness_type": "Ra", "value": 3.2}]},
-            {"feature_type": "groove", "name": "Канавка уплотнения 6×4",
-             "dimensions": [{"dim_type": "linear", "nominal": 6.0}, {"dim_type": "depth", "nominal": 4.0}],
-             "surfaces": []},
-            {"feature_type": "surface", "name": "Высота корпуса L=500±0.2",
-             "dimensions": [{"dim_type": "linear", "nominal": 500.0, "upper_tol": 0.2, "lower_tol": -0.2}],
-             "surfaces": []},
+            {
+                "feature_type": "hole",
+                "name": "Расточка Ø120H7",
+                "dimensions": [{"dim_type": "diameter", "nominal": 120.0, "fit_system": "H7"}],
+                "surfaces": [{"roughness_type": "Ra", "value": 1.6}],
+            },
+            {
+                "feature_type": "surface",
+                "name": "Наружный диаметр Ø200",
+                "dimensions": [{"dim_type": "diameter", "nominal": 200.0}],
+                "surfaces": [{"roughness_type": "Ra", "value": 6.3}],
+            },
+            {
+                "feature_type": "pocket",
+                "name": "Карман 50×40×20",
+                "dimensions": [{"dim_type": "linear", "nominal": 50.0}],
+                "surfaces": [{"roughness_type": "Ra", "value": 3.2}],
+            },
+            {
+                "feature_type": "groove",
+                "name": "Канавка уплотнения 6×4",
+                "dimensions": [
+                    {"dim_type": "linear", "nominal": 6.0},
+                    {"dim_type": "depth", "nominal": 4.0},
+                ],
+                "surfaces": [],
+            },
+            {
+                "feature_type": "surface",
+                "name": "Высота корпуса L=500±0.2",
+                "dimensions": [
+                    {"dim_type": "linear", "nominal": 500.0, "upper_tol": 0.2, "lower_tol": -0.2}
+                ],
+                "surfaces": [],
+            },
         ],
         "gdt": [],
     },
@@ -616,16 +716,36 @@ SYNTHETIC_DRAWINGS: list[dict] = [
         "generator": make_weld_drawing_png,
         "description": "Кронштейн сварной Ст3сп: основание, ребро, косынка, швы по ГОСТ 5264 и 14771",
         "features": [
-            {"feature_type": "surface", "name": "Основание L=600",
-             "dimensions": [{"dim_type": "linear", "nominal": 600.0}], "surfaces": []},
-            {"feature_type": "hole", "name": "Крепёжные отверстия 4×Ø18",
-             "dimensions": [{"dim_type": "diameter", "nominal": 18.0}], "surfaces": []},
-            {"feature_type": "weld", "name": "Шов Т1 катет 5мм ГОСТ 5264",
-             "dimensions": [{"dim_type": "linear", "nominal": 5.0}], "surfaces": []},
-            {"feature_type": "weld", "name": "Шов катет 6мм ГОСТ 14771",
-             "dimensions": [{"dim_type": "linear", "nominal": 6.0}], "surfaces": []},
-            {"feature_type": "weld", "name": "Шов косынки катет 5мм (4 шва)",
-             "dimensions": [{"dim_type": "linear", "nominal": 5.0}], "surfaces": []},
+            {
+                "feature_type": "surface",
+                "name": "Основание L=600",
+                "dimensions": [{"dim_type": "linear", "nominal": 600.0}],
+                "surfaces": [],
+            },
+            {
+                "feature_type": "hole",
+                "name": "Крепёжные отверстия 4×Ø18",
+                "dimensions": [{"dim_type": "diameter", "nominal": 18.0}],
+                "surfaces": [],
+            },
+            {
+                "feature_type": "weld",
+                "name": "Шов Т1 катет 5мм ГОСТ 5264",
+                "dimensions": [{"dim_type": "linear", "nominal": 5.0}],
+                "surfaces": [],
+            },
+            {
+                "feature_type": "weld",
+                "name": "Шов катет 6мм ГОСТ 14771",
+                "dimensions": [{"dim_type": "linear", "nominal": 6.0}],
+                "surfaces": [],
+            },
+            {
+                "feature_type": "weld",
+                "name": "Шов косынки катет 5мм (4 шва)",
+                "dimensions": [{"dim_type": "linear", "nominal": 5.0}],
+                "surfaces": [],
+            },
         ],
         "gdt": [],
     },
@@ -635,13 +755,24 @@ SYNTHETIC_DRAWINGS: list[dict] = [
         "generator": make_gear_detail_dxf,
         "description": "Шестерня Ø100 с отверстием Ø20H7 и шпоночным пазом — DXF",
         "features": [
-            {"feature_type": "surface", "name": "Наружный диаметр Ø100",
-             "dimensions": [{"dim_type": "diameter", "nominal": 100.0}], "surfaces": []},
-            {"feature_type": "hole", "name": "Отверстие Ø20H7",
-             "dimensions": [{"dim_type": "diameter", "nominal": 20.0, "fit_system": "H7"}],
-             "surfaces": []},
-            {"feature_type": "key_slot", "name": "Шпоночный паз",
-             "dimensions": [{"dim_type": "linear", "nominal": 8.0}], "surfaces": []},
+            {
+                "feature_type": "surface",
+                "name": "Наружный диаметр Ø100",
+                "dimensions": [{"dim_type": "diameter", "nominal": 100.0}],
+                "surfaces": [],
+            },
+            {
+                "feature_type": "hole",
+                "name": "Отверстие Ø20H7",
+                "dimensions": [{"dim_type": "diameter", "nominal": 20.0, "fit_system": "H7"}],
+                "surfaces": [],
+            },
+            {
+                "feature_type": "key_slot",
+                "name": "Шпоночный паз",
+                "dimensions": [{"dim_type": "linear", "nominal": 8.0}],
+                "surfaces": [],
+            },
         ],
         "gdt": [],
     },
@@ -651,11 +782,18 @@ SYNTHETIC_DRAWINGS: list[dict] = [
         "generator": make_threaded_shaft_dxf,
         "description": "Болт с резьбой М20×1.5-6g — DXF",
         "features": [
-            {"feature_type": "thread", "name": "Резьба М20×1.5-6g",
-             "dimensions": [{"dim_type": "diameter", "nominal": 20.0, "fit_system": "6g"}],
-             "surfaces": []},
-            {"feature_type": "surface", "name": "Длина резьбы 20мм",
-             "dimensions": [{"dim_type": "linear", "nominal": 20.0}], "surfaces": []},
+            {
+                "feature_type": "thread",
+                "name": "Резьба М20×1.5-6g",
+                "dimensions": [{"dim_type": "diameter", "nominal": 20.0, "fit_system": "6g"}],
+                "surfaces": [],
+            },
+            {
+                "feature_type": "surface",
+                "name": "Длина резьбы 20мм",
+                "dimensions": [{"dim_type": "linear", "nominal": 20.0}],
+                "surfaces": [],
+            },
         ],
         "gdt": [],
     },
@@ -715,7 +853,7 @@ def main(output_dir: Path, skip_download: bool = False) -> None:
                     dest.write_bytes(data)
                     print(f"    OK  ({dest.stat().st_size // 1024} KB)")
                 else:
-                    print(f"    SKIP (генератор вернул пустые данные — нет зависимости?)")
+                    print("    SKIP (генератор вернул пустые данные — нет зависимости?)")
                     continue
             except Exception as exc:
                 print(f"    ERROR: {exc}", file=sys.stderr)
@@ -745,12 +883,22 @@ def main(output_dir: Path, skip_download: bool = False) -> None:
             continue
         kb = f.stat().st_size // 1024
         print(f"  {f.name:<40} {kb:>5} KB")
-    print(f"\nИтого: {len(list(output_dir.glob('*')))-1} файлов + ground_truth.json")
+    print(f"\nИтого: {len(list(output_dir.glob('*'))) - 1} файлов + ground_truth.json")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Download and generate engineering drawing test dataset")
-    parser.add_argument("--output-dir", default="example-drawings", help="Output directory (default: example-drawings)")
-    parser.add_argument("--skip-download", action="store_true", help="Skip real drawing downloads, only generate synthetic")
+    parser = argparse.ArgumentParser(
+        description="Download and generate engineering drawing test dataset"
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="example-drawings",
+        help="Output directory (default: example-drawings)",
+    )
+    parser.add_argument(
+        "--skip-download",
+        action="store_true",
+        help="Skip real drawing downloads, only generate synthetic",
+    )
     args = parser.parse_args()
     main(Path(args.output_dir), skip_download=args.skip_download)

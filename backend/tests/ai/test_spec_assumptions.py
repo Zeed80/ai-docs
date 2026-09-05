@@ -38,11 +38,13 @@ def test_one_missing_length_is_arithmetic_not_a_guess():
 
 def test_two_missing_lengths_remain_unresolved():
     spec = {
-        "main_view": {"outer": [
-            {"diameter_mm": 80.0, "length_mm": 150.0},
-            {"diameter_mm": 102.0, "length_mm": None},
-            {"diameter_mm": 60.0, "length_mm": None},
-        ]},
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 80.0, "length_mm": 150.0},
+                {"diameter_mm": 102.0, "length_mm": None},
+                {"diameter_mm": 60.0, "length_mm": None},
+            ]
+        },
         "dimensions": [{"value": "450"}],
     }
     completed, assumptions = apply_assumptions(spec)
@@ -54,10 +56,12 @@ def test_two_missing_lengths_remain_unresolved():
 
 def test_without_an_overall_missing_length_remains_unresolved():
     spec = {
-        "main_view": {"outer": [
-            {"diameter_mm": 80.0, "length_mm": 100.0},
-            {"diameter_mm": 60.0, "length_mm": None},
-        ]},
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 80.0, "length_mm": 100.0},
+                {"diameter_mm": 60.0, "length_mm": None},
+            ]
+        },
         "dimensions": [{"value": "Ø80"}],
     }
     completed, assumptions = apply_assumptions(spec)
@@ -97,10 +101,15 @@ def test_a_keyway_gets_its_width_and_depth_from_the_shaft_diameter():
 
 def test_a_thread_gets_its_coarse_pitch_but_only_from_the_series():
     spec = {
-        "main_view": {"outer": [
-            {"diameter_mm": 24.0, "length_mm": 60.0,
-             "thread": {"designation": "M24", "nominal_diameter_mm": 24.0}},
-        ]},
+        "main_view": {
+            "outer": [
+                {
+                    "diameter_mm": 24.0,
+                    "length_mm": 60.0,
+                    "thread": {"designation": "M24", "nominal_diameter_mm": 24.0},
+                },
+            ]
+        },
     }
     completed, assumptions = apply_assumptions(spec)
     assert completed["main_view"]["outer"][0]["thread"]["pitch_mm"] == 3.0
@@ -109,10 +118,15 @@ def test_a_thread_gets_its_coarse_pitch_but_only_from_the_series():
     # A nominal outside the standard series gets nothing: a wrong pitch is a
     # scrapped part, and there is no principle to pick one from.
     odd = {
-        "main_view": {"outer": [
-            {"diameter_mm": 23.0, "length_mm": 60.0,
-             "thread": {"designation": "M23", "nominal_diameter_mm": 23.0}},
-        ]},
+        "main_view": {
+            "outer": [
+                {
+                    "diameter_mm": 23.0,
+                    "length_mm": 60.0,
+                    "thread": {"designation": "M23", "nominal_diameter_mm": 23.0},
+                },
+            ]
+        },
     }
     completed, assumptions = apply_assumptions(odd)
     assert completed["main_view"]["outer"][0]["thread"].get("pitch_mm") is None
@@ -124,8 +138,9 @@ def test_a_stated_value_is_never_overwritten():
         "main_view": {
             "outer": [{"diameter_mm": 60.0, "length_mm": 100.0}],
             "chamfers": [{"location": "left_end", "size_mm": 0.5, "angle_deg": 30.0}],
-            "keyways": [{"axial_start_mm": 10.0, "length_mm": 50.0,
-                         "width_mm": 10.0, "depth_mm": 4.0}],
+            "keyways": [
+                {"axial_start_mm": 10.0, "length_mm": 50.0, "width_mm": 10.0, "depth_mm": 4.0}
+            ],
         },
     }
     completed, assumptions = apply_assumptions(spec)
@@ -144,10 +159,12 @@ def test_every_assumption_is_recorded_where_the_value_lives():
 
 def test_a_complete_reading_is_left_exactly_as_it_is():
     spec = {
-        "main_view": {"outer": [
-            {"diameter_mm": 80.0, "length_mm": 150.0},
-            {"diameter_mm": 60.0, "length_mm": 120.0},
-        ]},
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 80.0, "length_mm": 150.0},
+                {"diameter_mm": 60.0, "length_mm": 120.0},
+            ]
+        },
     }
     completed, assumptions = apply_assumptions(spec)
     assert assumptions == []

@@ -79,9 +79,7 @@ def test_consolidate_polylines_remerges_collinear_fragments():
 
     segments = [e for e in out if e.type == "segment"]
     assert len(segments) == 1
-    span = max(segments[0].p1.x, segments[0].p2.x) - min(
-        segments[0].p1.x, segments[0].p2.x
-    )
+    span = max(segments[0].p1.x, segments[0].p2.x) - min(segments[0].p1.x, segments[0].p2.x)
     assert span == pytest.approx(100.0, abs=1.0)
 
 

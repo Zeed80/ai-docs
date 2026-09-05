@@ -38,17 +38,19 @@ def upgrade() -> None:
         # server_default mirrors TimestampMixin so inserts that omit timestamps
         # (ORM relies on the DB default) don't violate the NOT NULL constraint.
         sa.Column(
-            "created_at", sa.DateTime(timezone=True),
-            server_default=sa.text("now()"), nullable=False,
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
         ),
         sa.Column(
-            "updated_at", sa.DateTime(timezone=True),
-            server_default=sa.text("now()"), nullable=False,
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
         ),
     )
-    op.create_index(
-        "ix_workspace_sheets_owner_sub", "workspace_sheets", ["owner_sub"]
-    )
+    op.create_index("ix_workspace_sheets_owner_sub", "workspace_sheets", ["owner_sub"])
 
 
 def downgrade() -> None:

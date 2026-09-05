@@ -4,6 +4,8 @@ Full chain: poll IMAP → ingest attachments → classify → extract → normal
 Runs on 'ingest' queue via Celery Beat or manual trigger.
 """
 
+from datetime import UTC
+
 import structlog
 
 from app.tasks.celery_app import celery_app
@@ -96,8 +98,8 @@ def run_triage(self, mailbox: str | None = None) -> dict:
     2. Store attachments as Documents
     3. Trigger extraction pipeline for each
     """
-    from app.tasks.ingest import poll_imap_mailbox
     from app.tasks.extraction import process_document
+    from app.tasks.ingest import poll_imap_mailbox
 
     if mailbox:
         mailboxes = [mailbox]
@@ -106,12 +108,22 @@ def run_triage(self, mailbox: str | None = None) -> dict:
             mailboxes = list_active_mailboxes(require_sweep=False)
         except MailboxLookupError as exc:
             logger.error("triage_aborted_no_mailbox_list", error=str(exc))
-            return {"status": "error", "error": f"mailbox list unavailable: {exc}",
-                    "mailboxes": [], "emails": 0, "documents": 0}
+            return {
+                "status": "error",
+                "error": f"mailbox list unavailable: {exc}",
+                "mailboxes": [],
+                "emails": 0,
+                "documents": 0,
+            }
         if not mailboxes:
             logger.info("triage_nothing_to_sweep")
-            return {"status": "ok", "mailboxes": [], "emails": 0, "documents": 0,
-                    "note": "нет активных почтовых ящиков"}
+            return {
+                "status": "ok",
+                "mailboxes": [],
+                "emails": 0,
+                "documents": 0,
+                "note": "нет активных почтовых ящиков",
+            }
 
     total_emails = 0
     total_docs = 0
@@ -137,20 +149,24 @@ def run_triage(self, mailbox: str | None = None) -> dict:
             for doc_id in doc_ids:
                 try:
                     extract_result = process_document(doc_id)
-                    results.append({
-                        "document_id": doc_id,
-                        "mailbox": mb,
-                        "status": "processed",
-                        "extraction": extract_result,
-                    })
+                    results.append(
+                        {
+                            "document_id": doc_id,
+                            "mailbox": mb,
+                            "status": "processed",
+                            "extraction": extract_result,
+                        }
+                    )
                 except Exception as e:
                     logger.error("triage_extract_failed", document_id=doc_id, error=str(e))
-                    results.append({
-                        "document_id": doc_id,
-                        "mailbox": mb,
-                        "status": "extract_failed",
-                        "error": str(e),
-                    })
+                    results.append(
+                        {
+                            "document_id": doc_id,
+                            "mailbox": mb,
+                            "status": "extract_failed",
+                            "error": str(e),
+                        }
+                    )
 
         except Exception as e:
             logger.error("triage_poll_failed", mailbox=mb, error=str(e))
@@ -200,13 +216,15 @@ def rule_create_work_order(self, email_message_id: str, prompt: str) -> dict:
             await create_work_plan(
                 db,
                 order,
-                steps=[{
-                    "step_key": "handle",
-                    "title": "Обработать письмо по правилу фильтра",
-                    "kind": "agent_turn",
-                    "input": {"prompt": prompt},
-                    "depends_on": [],
-                }],
+                steps=[
+                    {
+                        "step_key": "handle",
+                        "title": "Обработать письмо по правилу фильтра",
+                        "kind": "agent_turn",
+                        "input": {"prompt": prompt},
+                        "depends_on": [],
+                    }
+                ],
             )
             await db.commit()
             return {"status": "ok", "work_order_id": str(order.id)}
@@ -249,7 +267,7 @@ def prune_attachments(self) -> dict:
     (MailServerConfig.attachment_retention_days) that are NOT linked to a kept
     Document. The EmailAttachment row stays (filename/size for the thread view);
     only storage_path is cleared and the object removed."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from sqlalchemy import select
 
@@ -262,14 +280,20 @@ def prune_attachments(self) -> dict:
         days = (cfg.attachment_retention_days if cfg else 180) or 180
         if days <= 0:
             return {"status": "disabled"}
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        rows = db.execute(
-            select(EmailAttachment).where(
-                EmailAttachment.created_at < cutoff,
-                EmailAttachment.storage_path.isnot(None),
-                EmailAttachment.document_id.is_(None),
-            ).limit(2000)
-        ).scalars().all()
+        cutoff = datetime.now(UTC) - timedelta(days=days)
+        rows = (
+            db.execute(
+                select(EmailAttachment)
+                .where(
+                    EmailAttachment.created_at < cutoff,
+                    EmailAttachment.storage_path.isnot(None),
+                    EmailAttachment.document_id.is_(None),
+                )
+                .limit(2000)
+            )
+            .scalars()
+            .all()
+        )
         failed = 0
         for att in rows:
             try:
@@ -283,7 +307,9 @@ def prune_attachments(self) -> dict:
                 # let the next run try again.
                 logger.warning(
                     "email_attachment_delete_failed",
-                    attachment_id=str(att.id), path=att.storage_path, error=str(exc),
+                    attachment_id=str(att.id),
+                    path=att.storage_path,
+                    error=str(exc),
                 )
                 failed += 1
                 continue
@@ -291,14 +317,17 @@ def prune_attachments(self) -> dict:
             removed += 1
         db.commit()
     logger.info(
-        "email_attachments_pruned", removed=removed, failed=failed, retention_days=days,
+        "email_attachments_pruned",
+        removed=removed,
+        failed=failed,
+        retention_days=days,
     )
     return {"status": "ok", "removed": removed, "failed": failed}
 
 
 def prune_bodies_for(db) -> dict[str, int]:
     """The body-retention pass itself, so it is testable against a session."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from sqlalchemy import or_, select
 
@@ -311,24 +340,30 @@ def prune_bodies_for(db) -> dict[str, int]:
         )
     ).all()
     for mailbox, days in configs:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=int(days))
-        rows = db.execute(
-            select(EmailMessage).where(
-                EmailMessage.mailbox == mailbox,
-                EmailMessage.received_at < cutoff,
-                or_(
-                    EmailMessage.body_text.isnot(None),
-                    EmailMessage.body_html.isnot(None),
-                ),
-            ).limit(5000)
-        ).scalars().all()
+        cutoff = datetime.now(UTC) - timedelta(days=int(days))
+        rows = (
+            db.execute(
+                select(EmailMessage)
+                .where(
+                    EmailMessage.mailbox == mailbox,
+                    EmailMessage.received_at < cutoff,
+                    or_(
+                        EmailMessage.body_text.isnot(None),
+                        EmailMessage.body_html.isnot(None),
+                    ),
+                )
+                .limit(5000)
+            )
+            .scalars()
+            .all()
+        )
         for msg in rows:
             msg.body_text = None
             msg.body_html = None
             msg.body_html_sanitized = None
             # The snippet stays: a thread list of blank rows is unusable, and
             # 300 characters is not what a retention policy is about.
-            msg.body_pruned_at = datetime.now(timezone.utc)
+            msg.body_pruned_at = datetime.now(UTC)
         if rows:
             pruned_by_mailbox[mailbox] = len(rows)
     return pruned_by_mailbox
@@ -375,15 +410,19 @@ def backfill_body_text(self, limit: int = 2000) -> dict:
 
     updated = 0
     with sync_session() as db:
-        rows = db.execute(
-            select(EmailMessage)
-            .where(
-                or_(EmailMessage.body_text.is_(None), EmailMessage.body_text == ""),
-                EmailMessage.body_html.isnot(None),
-                EmailMessage.body_html != "",
+        rows = (
+            db.execute(
+                select(EmailMessage)
+                .where(
+                    or_(EmailMessage.body_text.is_(None), EmailMessage.body_text == ""),
+                    EmailMessage.body_html.isnot(None),
+                    EmailMessage.body_html != "",
+                )
+                .limit(limit)
             )
-            .limit(limit)
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for msg in rows:
             text = html_to_text(msg.body_html)
             if not text:
@@ -416,7 +455,10 @@ def triage_message(self, message_id: str) -> dict:
         from sqlalchemy import select
 
         from app.db.models import (
-            EmailAttachment, EmailMessage, EmailTriageResult, MailboxConfig,
+            EmailAttachment,
+            EmailMessage,
+            EmailTriageResult,
+            MailboxConfig,
         )
         from app.db.session import _get_session_factory
         from app.domain.email_triage import classify_letter, label_for, plan_actions
@@ -430,9 +472,7 @@ def triage_message(self, message_id: str) -> dict:
 
             mode = (
                 await db.execute(
-                    select(MailboxConfig.agent_triage_mode).where(
-                        MailboxConfig.name == msg.mailbox
-                    )
+                    select(MailboxConfig.agent_triage_mode).where(MailboxConfig.name == msg.mailbox)
                 )
             ).scalar_one_or_none() or "classify"
             if mode == "off":
@@ -440,22 +480,24 @@ def triage_message(self, message_id: str) -> dict:
 
             existing = (
                 await db.execute(
-                    select(EmailTriageResult).where(
-                        EmailTriageResult.message_id == msg.id
-                    )
+                    select(EmailTriageResult).where(EmailTriageResult.message_id == msg.id)
                 )
             ).scalar_one_or_none()
             if existing is not None:
                 return {"status": "skipped", "reason": "already_triaged"}
 
             attachments = (
-                await db.execute(
-                    select(EmailAttachment.filename).where(
-                        EmailAttachment.message_id == msg.id,
-                        EmailAttachment.is_inline == False,  # noqa: E712
+                (
+                    await db.execute(
+                        select(EmailAttachment.filename).where(
+                            EmailAttachment.message_id == msg.id,
+                            EmailAttachment.is_inline == False,  # noqa: E712
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
             try:
                 outcome = await classify_letter(
@@ -466,40 +508,53 @@ def triage_message(self, message_id: str) -> dict:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.error("email_triage_failed", message_id=message_id, error=str(exc))
-                db.add(EmailTriageResult(
-                    message_id=msg.id, mailbox=msg.mailbox, category="other",
-                    status="error", error=str(exc)[:500],
-                ))
+                db.add(
+                    EmailTriageResult(
+                        message_id=msg.id,
+                        mailbox=msg.mailbox,
+                        category="other",
+                        status="error",
+                        error=str(exc)[:500],
+                    )
+                )
                 await db.commit()
                 # Retry: a model hiccup should not permanently leave a letter
                 # unclassified, but the failure is recorded either way.
                 raise self.retry(exc=exc, countdown=120)
 
             perform, propose = plan_actions(
-                outcome, has_attachments=bool(attachments), mode=mode,
+                outcome,
+                has_attachments=bool(attachments),
+                mode=mode,
             )
             done = await _apply_triage_actions(db, msg, outcome, perform)
 
-            db.add(EmailTriageResult(
-                message_id=msg.id,
-                mailbox=msg.mailbox,
-                category=outcome.category,
-                confidence=outcome.confidence,
-                summary=outcome.summary,
-                entities=outcome.entities,
-                proposed=propose,
-                performed=done,
-                model_name=outcome.model_name,
-                status="done",
-            ))
+            db.add(
+                EmailTriageResult(
+                    message_id=msg.id,
+                    mailbox=msg.mailbox,
+                    category=outcome.category,
+                    confidence=outcome.confidence,
+                    summary=outcome.summary,
+                    entities=outcome.entities,
+                    proposed=propose,
+                    performed=done,
+                    model_name=outcome.model_name,
+                    status="done",
+                )
+            )
             await db.commit()
 
             from app.core.metrics import email_triage_total
 
             email_triage_total.labels(category=outcome.category).inc()
             logger.info(
-                "email_triaged", message_id=message_id, category=outcome.category,
-                confidence=outcome.confidence, performed=len(done), proposed=len(propose),
+                "email_triaged",
+                message_id=message_id,
+                category=outcome.category,
+                confidence=outcome.confidence,
+                performed=len(done),
+                proposed=len(propose),
             )
             return {
                 "status": "ok",
@@ -544,9 +599,13 @@ async def _apply_triage_actions(db, msg, outcome, perform: list[dict]) -> list[d
                 if msg.thread_id:
                     exists = await db.get(EmailThreadLabel, (msg.thread_id, label.id))
                     if exists is None:
-                        db.add(EmailThreadLabel(
-                            thread_id=msg.thread_id, label_id=label.id, added_by="sveta",
-                        ))
+                        db.add(
+                            EmailThreadLabel(
+                                thread_id=msg.thread_id,
+                                label_id=label.id,
+                                added_by="sveta",
+                            )
+                        )
                 done.append({**action, "label": name})
 
             elif kind == "notify_responsible":
@@ -581,9 +640,9 @@ async def _apply_triage_actions(db, msg, outcome, perform: list[dict]) -> list[d
 
                     party = (
                         await db.execute(
-                            select(Party).where(
-                                Party.name.ilike(f"%{outcome.entities['supplier_name']}%")
-                            ).limit(1)
+                            select(Party)
+                            .where(Party.name.ilike(f"%{outcome.entities['supplier_name']}%"))
+                            .limit(1)
                         )
                     ).scalar_one_or_none()
                     if party is not None:
@@ -606,8 +665,9 @@ async def _triage_recipients(db, msg) -> list[str]:
 
     row = (
         await db.execute(
-            select(MailboxConfig.assigned_role, MailboxConfig.mailbox_type,
-                   MailboxConfig.owner_sub).where(MailboxConfig.name == msg.mailbox)
+            select(
+                MailboxConfig.assigned_role, MailboxConfig.mailbox_type, MailboxConfig.owner_sub
+            ).where(MailboxConfig.name == msg.mailbox)
         )
     ).first()
     if row is None:
@@ -617,8 +677,12 @@ async def _triage_recipients(db, msg) -> list[str]:
         return [owner_sub] if owner_sub else []
     if role and role != "agent_ingress":
         return list(
-            (await db.execute(
-                select(User.sub).where(User.role == role, User.is_active == True)  # noqa: E712
-            )).scalars().all()
+            (
+                await db.execute(
+                    select(User.sub).where(User.role == role, User.is_active == True)  # noqa: E712
+                )
+            )
+            .scalars()
+            .all()
         )
     return []

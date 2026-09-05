@@ -79,9 +79,7 @@ def _msg_text(msg: dict) -> str:
 
 def _prune_old_tool_results(messages: list[dict], keep_last: int = 6) -> list[dict]:
     """Replace tool-result content in older messages with a one-line placeholder."""
-    tool_result_indices = [
-        i for i, m in enumerate(messages) if m.get("role") == "tool"
-    ]
+    tool_result_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
     to_prune = tool_result_indices[:-keep_last] if len(tool_result_indices) > keep_last else []
     pruned = []
     for i, m in enumerate(messages):
@@ -131,7 +129,10 @@ class ContextCompressor:
 
         logger.info(
             "ContextCompressor ready: model=%s ctx=%d threshold=%d (%.0f%%)",
-            model, ctx, self._threshold_tokens, threshold_percent * 100,
+            model,
+            ctx,
+            self._threshold_tokens,
+            threshold_percent * 100,
         )
 
     def update_model(self, model: str) -> None:
@@ -139,9 +140,7 @@ class ContextCompressor:
         self._model = model
         ctx = get_model_context_length(model)
         self._context_length = ctx
-        self._threshold_tokens = max(
-            int(ctx * self._threshold_percent), _MIN_CONTEXT_FLOOR
-        )
+        self._threshold_tokens = max(int(ctx * self._threshold_percent), _MIN_CONTEXT_FLOOR)
         self._max_summary_tokens = min(int(ctx * 0.05), 12_000)
 
     def should_compress(self, messages: list[dict]) -> bool:
@@ -170,8 +169,8 @@ class ContextCompressor:
 
         # Step 2 — split into head / middle / tail
         head = messages[: self._protect_first_n]
-        tail = messages[-self._protect_last_n:]
-        middle = messages[self._protect_first_n: len(messages) - self._protect_last_n]
+        tail = messages[-self._protect_last_n :]
+        middle = messages[self._protect_first_n : len(messages) - self._protect_last_n]
 
         if not middle:
             logger.info("ContextCompressor: nothing to compress (middle is empty)")
@@ -230,13 +229,15 @@ class ContextCompressor:
 
         after_tokens = estimate_tokens_rough(compacted)
         savings_pct = (
-            (before_tokens - after_tokens) / before_tokens * 100
-            if before_tokens > 0 else 0.0
+            (before_tokens - after_tokens) / before_tokens * 100 if before_tokens > 0 else 0.0
         )
 
         logger.info(
             "ContextCompressor: compressed %d→%d tokens (%.0f%% saved, run #%d)",
-            before_tokens, after_tokens, savings_pct, self._compression_count,
+            before_tokens,
+            after_tokens,
+            savings_pct,
+            self._compression_count,
         )
 
         # Anti-thrashing tracking
@@ -257,9 +258,7 @@ class ContextCompressor:
             text = _msg_text(m)
             tool_calls = m.get("tool_calls") or []
             if role == "assistant" and tool_calls:
-                calls = ", ".join(
-                    tc.get("function", {}).get("name", "?") for tc in tool_calls
-                )
+                calls = ", ".join(tc.get("function", {}).get("name", "?") for tc in tool_calls)
                 lines.append(f"[assistant → tools: {calls}]")
                 if text:
                     lines.append(f"[assistant]: {text}")

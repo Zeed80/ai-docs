@@ -10,12 +10,12 @@ Channel naming (prefix defaults to "sveta:bus"):
   {prefix}:user:{sub}     — push to a specific user
   {prefix}:room:{room_id} — push to room members
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
-import logging
-from collections.abc import Callable, Awaitable
+from collections.abc import Awaitable, Callable
 
 import structlog
 
@@ -80,11 +80,11 @@ class ChatBus:
         if channel == f"{_PREFIX}:global":
             targets = list(self._subs.values())
         elif channel.startswith(f"{_PREFIX}:user:"):
-            key = channel[len(f"{_PREFIX}:user:"):]
+            key = channel[len(f"{_PREFIX}:user:") :]
             sids = self._keyed_subs.get(key, set())
             targets = [self._subs[s] for s in sids if s in self._subs]
         elif channel.startswith(f"{_PREFIX}:room:"):
-            key = "room:" + channel[len(f"{_PREFIX}:room:"):]
+            key = "room:" + channel[len(f"{_PREFIX}:room:") :]
             sids = self._keyed_subs.get(key, set())
             targets = [self._subs[s] for s in sids if s in self._subs]
         else:
@@ -94,6 +94,7 @@ class ChatBus:
 
 
 # ── Redis helpers ─────────────────────────────────────────────────────────────
+
 
 def publish_sync(event: dict, *, user_sub: str | None = None) -> None:
     """Fire-and-forget publish from synchronous code (Celery tasks).
@@ -114,6 +115,7 @@ async def _redis_publish(channel: str, event: dict) -> None:
     """Publish event to Redis channel. Falls back to local dispatch on error."""
     try:
         from app.utils.redis_client import get_async_redis
+
         await get_async_redis().publish(channel, json.dumps(event, default=str))
     except Exception as exc:
         logger.warning("chat_bus_redis_publish_failed", channel=channel, error=str(exc))
@@ -130,6 +132,7 @@ async def _safe_call(callback: ChatCallback, event: dict) -> None:
 
 # ── Background subscriber task ────────────────────────────────────────────────
 
+
 async def start_redis_subscriber() -> asyncio.Task:
     """
     Launch a long-running task that subscribes to all sveta:bus:* channels
@@ -143,8 +146,9 @@ async def start_redis_subscriber() -> asyncio.Task:
 
 
 async def _subscriber_loop() -> None:
-    from app.config import settings
     import redis.asyncio as aioredis
+
+    from app.config import settings
 
     while True:
         try:
@@ -165,6 +169,7 @@ async def _subscriber_loop() -> None:
                 if channel == f"{_PREFIX}:skill_reload":
                     try:
                         from app.ai.orchestrator import invalidate_canvas_map_cache
+
                         invalidate_canvas_map_cache()
                     except Exception:
                         pass

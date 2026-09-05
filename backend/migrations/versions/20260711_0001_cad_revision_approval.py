@@ -24,7 +24,9 @@ def _columns(table: str) -> set[str]:
 def upgrade() -> None:
     image_columns = _columns("image_generations")
     if "accepted_revision" not in image_columns:
-        op.add_column("image_generations", sa.Column("accepted_revision", sa.Integer(), nullable=True))
+        op.add_column(
+            "image_generations", sa.Column("accepted_revision", sa.Integer(), nullable=True)
+        )
 
     revision_columns = _columns("cad_ir_revisions")
     if "ir_sha256" not in revision_columns:

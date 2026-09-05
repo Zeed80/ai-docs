@@ -59,14 +59,27 @@ _CONTEXT_LENGTHS: dict[str, int] = {
 }
 
 # models that support vision (image inputs)
-_VISION_MODELS: frozenset[str] = frozenset({
-    "gemma4:e4b", "gemma4:12b", "gemma4:26b", "gemma4:27b",
-    "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5",
-    "claude-opus-4", "claude-sonnet-4",
-    "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229",
-    "gpt-4o", "gpt-4o-mini",
-    "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash",
-})
+_VISION_MODELS: frozenset[str] = frozenset(
+    {
+        "gemma4:e4b",
+        "gemma4:12b",
+        "gemma4:26b",
+        "gemma4:27b",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+        "claude-opus-4",
+        "claude-sonnet-4",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+        "claude-3-opus-20240229",
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gemini-2.0-flash",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+    }
+)
 
 _DEFAULT_CONTEXT = 32_000
 

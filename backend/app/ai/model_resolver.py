@@ -13,8 +13,9 @@ are used only as a last-resort fallback when routing yields nothing.
 
 from __future__ import annotations
 
-import structlog
 from dataclasses import dataclass
+
+import structlog
 
 from app.ai.schemas import AITask
 from app.config import settings
@@ -49,6 +50,7 @@ def _resolve(task: AITask, fallback_model: str) -> tuple[str, str]:
     """Resolve a task's primary model via task_routing, with an env fallback."""
     try:
         from app.ai.task_routing import resolve_model
+
         model, provider = resolve_model(task)
     except Exception as exc:
         logger.warning("model_resolver_routing_unavailable", task=task.value, error=str(exc))
@@ -81,8 +83,11 @@ def get_ocr_model() -> ModelConfig:
     model, provider = _resolve(AITask.INVOICE_OCR, settings.ollama_model_ocr)
     if provider not in _LOCAL_PROVIDERS:
         return _force_local(
-            AITask.INVOICE_OCR, model, provider,
-            settings.ollama_model_ocr, "model_resolver_ocr_cloud_blocked",
+            AITask.INVOICE_OCR,
+            model,
+            provider,
+            settings.ollama_model_ocr,
+            "model_resolver_ocr_cloud_blocked",
         )
     return ModelConfig(model=model, provider=provider)
 
@@ -92,8 +97,11 @@ def get_vlm_model() -> ModelConfig:
     model, provider = _resolve(AITask.DRAWING_ANALYSIS_VLM, settings.ollama_model_vlm)
     if provider not in _LOCAL_PROVIDERS:
         return _force_local(
-            AITask.DRAWING_ANALYSIS_VLM, model, provider,
-            settings.ollama_model_vlm, "model_resolver_vlm_cloud_blocked",
+            AITask.DRAWING_ANALYSIS_VLM,
+            model,
+            provider,
+            settings.ollama_model_vlm,
+            "model_resolver_vlm_cloud_blocked",
         )
     return ModelConfig(model=model, provider=provider)
 
@@ -105,7 +113,8 @@ def get_reasoning_model(confidential: bool = False) -> ModelConfig:
     if confidential and provider not in _LOCAL_PROVIDERS:
         logger.warning(
             "model_resolver_reasoning_cloud_blocked_confidential",
-            provider=provider, model=model,
+            provider=provider,
+            model=model,
         )
         provider = "ollama"
         model = settings.ollama_model_reasoning
@@ -117,8 +126,11 @@ def get_verify_model() -> ModelConfig:
     model, provider = _resolve(AITask.STRUCTURED_EXTRACTION, settings.ollama_model_ocr)
     if provider not in _LOCAL_PROVIDERS:
         return _force_local(
-            AITask.STRUCTURED_EXTRACTION, model, provider,
-            settings.ollama_model_ocr, "model_resolver_verify_cloud_blocked",
+            AITask.STRUCTURED_EXTRACTION,
+            model,
+            provider,
+            settings.ollama_model_ocr,
+            "model_resolver_verify_cloud_blocked",
         )
     return ModelConfig(model=model, provider=provider)
 
@@ -164,9 +176,7 @@ def _resolved_node(provider: str):
         logger.error("model_resolver_unknown_provider", provider=provider)
         return None
     except Exception as exc:  # noqa: BLE001 — реестр недоступен целиком
-        logger.error(
-            "model_resolver_node_lookup_failed", provider=provider, error=str(exc)
-        )
+        logger.error("model_resolver_node_lookup_failed", provider=provider, error=str(exc))
         return None
 
 

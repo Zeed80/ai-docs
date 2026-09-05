@@ -12,11 +12,12 @@ Both steps can use the same or different models.
 
 Reference: "Self-Refine: Iterative Refinement with Self-Feedback" (Madaan et al. 2023)
 """
+
 from __future__ import annotations
 
-import re
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine
+from typing import Any
 
 import structlog
 
@@ -91,6 +92,7 @@ _CODE_CRITIQUE_PROMPT = """\
 
 # ── Data classes ───────────────────────────────────────────────────────────────
 
+
 @dataclass
 class CritiqueResult:
     score: float
@@ -119,6 +121,7 @@ class RefineResult:
 
 
 # ── Core refinement loop ──────────────────────────────────────────────────────
+
 
 async def refine(
     response: str,
@@ -163,9 +166,7 @@ async def refine(
 
         # Revise
         issues_text = "\n".join(f"- {issue}" for issue in critique.issues)
-        revise_prompt = _REVISE_PROMPT.format(
-            task=task, issues=issues_text
-        )
+        revise_prompt = _REVISE_PROMPT.format(task=task, issues=issues_text)
         current = await generate_fn(revise_prompt, None)
 
     final_score = history[-1].score if history else 0.0
@@ -187,7 +188,9 @@ async def refine_code(
 ) -> RefineResult:
     """Specialized refinement for Python skill code."""
     return await refine(
-        code, task, generate_fn,
+        code,
+        task,
+        generate_fn,
         max_rounds=max_rounds,
         target_score=target_score,
         mode="code",
@@ -214,6 +217,7 @@ async def revise_with_issues(
 
 # ── Critique helper ────────────────────────────────────────────────────────────
 
+
 async def _critique(
     response: str,
     task: str,
@@ -227,13 +231,12 @@ async def _critique(
         prompt = _CODE_CRITIQUE_PROMPT.format(task=task, code=response)
     else:
         system = _CRITIQUE_SYSTEM
-        prompt = _CRITIQUE_PROMPT.format(
-            task=task, response=response, threshold=int(target_score)
-        )
+        prompt = _CRITIQUE_PROMPT.format(task=task, response=response, threshold=int(target_score))
 
     raw_text = await generate_fn(prompt, system)
 
     from app.ai.structured_output import parse_json_output
+
     parsed = parse_json_output(raw_text, default={})
 
     return CritiqueResult(

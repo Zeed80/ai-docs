@@ -10,6 +10,7 @@ try:
     )
 except ImportError:
     import pytest
+
     pytest.skip("scripts.turboquant_benchmark not yet implemented", allow_module_level=True)
 
 

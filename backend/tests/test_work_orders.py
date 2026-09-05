@@ -17,10 +17,9 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 import pytest
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import MemoryFact, RecipeSkill, WorkLearning, WorkToolCall
 from app.domain.work_learning import process_work_learning
@@ -120,9 +119,7 @@ async def test_completed_work_order_materializes_provenance_memory_and_recipe(te
 
     async with factory() as db:
         learning = (
-            await db.execute(
-                select(WorkLearning).where(WorkLearning.work_order_id == order_id)
-            )
+            await db.execute(select(WorkLearning).where(WorkLearning.work_order_id == order_id))
         ).scalar_one()
         fact = await db.get(MemoryFact, learning.memory_fact_id)
         assert learning.status == "recorded"
@@ -209,9 +206,7 @@ async def test_dag_plan_releases_only_satisfied_dependents(db_session):
     await transition_step(db_session, first, "running", actor="worker")
     await transition_step(db_session, first, "succeeded", actor="worker")
 
-    unfinished = await promote_ready_dependents(
-        db_session, order=order, plan_id=plan.id
-    )
+    unfinished = await promote_ready_dependents(db_session, order=order, plan_id=plan.id)
 
     assert unfinished is True
     assert second.state == "ready"
@@ -225,7 +220,12 @@ async def test_dataflow_resolves_only_succeeded_step_outputs(db_session):
         db_session,
         order,
         steps=[
-            {"step_key": "lookup", "title": "Lookup", "kind": "agent_turn", "input": {"prompt": "x"}},
+            {
+                "step_key": "lookup",
+                "title": "Lookup",
+                "kind": "agent_turn",
+                "input": {"prompt": "x"},
+            },
             {
                 "step_key": "consume",
                 "title": "Consume",
@@ -260,7 +260,12 @@ async def test_dataflow_falls_back_to_result_wrapper_when_model_omits_it(db_sess
         db_session,
         order,
         steps=[
-            {"step_key": "create", "title": "Create", "kind": "agent_turn", "input": {"prompt": "x"}},
+            {
+                "step_key": "create",
+                "title": "Create",
+                "kind": "agent_turn",
+                "input": {"prompt": "x"},
+            },
             {
                 "step_key": "consume",
                 "title": "Consume",
@@ -274,7 +279,11 @@ async def test_dataflow_falls_back_to_result_wrapper_when_model_omits_it(db_sess
         ],
     )
     create, consume = steps
-    create.output = {"result": {"id": "sup-1", "supplier_id": "sup-1"}, "result_summary": "ok", "executor": "capability"}
+    create.output = {
+        "result": {"id": "sup-1", "supplier_id": "sup-1"},
+        "result_summary": "ok",
+        "executor": "capability",
+    }
     create.state = "succeeded"
 
     resolved, provenance = await resolve_step_input(db_session, consume)
@@ -288,12 +297,19 @@ async def test_dataflow_fallback_does_not_mask_a_genuinely_missing_field(db_sess
     """The fallback only kicks in when the field is missing at the top
     level AND present one level down in .result — a field missing from
     BOTH must still raise, not silently resolve to something wrong."""
-    order = await create_work_order(db_session, owner_key="tester", objective="Dataflow no fallback")
+    order = await create_work_order(
+        db_session, owner_key="tester", objective="Dataflow no fallback"
+    )
     _plan, steps = await create_work_plan(
         db_session,
         order,
         steps=[
-            {"step_key": "create", "title": "Create", "kind": "agent_turn", "input": {"prompt": "x"}},
+            {
+                "step_key": "create",
+                "title": "Create",
+                "kind": "agent_turn",
+                "input": {"prompt": "x"},
+            },
             {
                 "step_key": "consume",
                 "title": "Consume",
@@ -332,7 +348,12 @@ async def test_dataflow_resolves_bracket_array_indexing(db_session):
         db_session,
         order,
         steps=[
-            {"step_key": "discover", "title": "Discover", "kind": "agent_turn", "input": {"prompt": "x"}},
+            {
+                "step_key": "discover",
+                "title": "Discover",
+                "kind": "agent_turn",
+                "input": {"prompt": "x"},
+            },
             {
                 "step_key": "ingest",
                 "title": "Ingest",
@@ -402,14 +423,19 @@ def test_planned_step_coerces_a_bare_boolean_success_predicate_instead_of_reject
     evaluates success_predicate, so coercing it keeps the plan instead of
     discarding a whole multi-step DAG for the single-step fallback."""
     step = PlannedStep(
-        step_key="s1", title="x", kind="agent_turn", success_predicate=True,
+        step_key="s1",
+        title="x",
+        kind="agent_turn",
+        success_predicate=True,
     )
     assert step.success_predicate == {"type": "custom", "description": "True"}
 
 
 def test_planned_step_leaves_a_well_formed_success_predicate_untouched():
     step = PlannedStep(
-        step_key="s1", title="x", kind="agent_turn",
+        step_key="s1",
+        title="x",
+        kind="agent_turn",
         success_predicate={"type": "min_length", "value": 10},
     )
     assert step.success_predicate == {"type": "min_length", "value": 10}

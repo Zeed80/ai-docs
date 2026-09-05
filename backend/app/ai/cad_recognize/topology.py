@@ -122,11 +122,7 @@ def _drop_isolated_specks(segments: list[Segment]) -> tuple[list[Segment], int]:
 
     def _neighbours(p: Point) -> int:
         cx, cy = _key(p)
-        return sum(
-            counts.get((cx + dx, cy + dy), 0)
-            for dx in (-1, 0, 1)
-            for dy in (-1, 0, 1)
-        )
+        return sum(counts.get((cx + dx, cy + dy), 0) for dx in (-1, 0, 1) for dy in (-1, 0, 1))
 
     kept: list[Segment] = []
     dropped = 0
@@ -160,12 +156,16 @@ def _dedup_segments(segments: list[Segment]) -> tuple[list[Segment], int]:
 
     def _same(a: Segment, b: Segment) -> bool:
         fwd = (
-            abs(a.p1.x - b.p1.x) <= tol and abs(a.p1.y - b.p1.y) <= tol
-            and abs(a.p2.x - b.p2.x) <= tol and abs(a.p2.y - b.p2.y) <= tol
+            abs(a.p1.x - b.p1.x) <= tol
+            and abs(a.p1.y - b.p1.y) <= tol
+            and abs(a.p2.x - b.p2.x) <= tol
+            and abs(a.p2.y - b.p2.y) <= tol
         )
         rev = (
-            abs(a.p1.x - b.p2.x) <= tol and abs(a.p1.y - b.p2.y) <= tol
-            and abs(a.p2.x - b.p1.x) <= tol and abs(a.p2.y - b.p1.y) <= tol
+            abs(a.p1.x - b.p2.x) <= tol
+            and abs(a.p1.y - b.p2.y) <= tol
+            and abs(a.p2.x - b.p1.x) <= tol
+            and abs(a.p2.y - b.p1.y) <= tol
         )
         return fwd or rev
 
@@ -206,10 +206,14 @@ def _snap_canonical(segments: list[Segment]) -> list[Segment]:
         half = _seg_len(s) / 2.0
         rad = math.radians(target)
         ux, uy = math.cos(rad), math.sin(rad)
-        out.append(s.model_copy(update={
-            "p1": Point(x=cx - ux * half, y=cy - uy * half),
-            "p2": Point(x=cx + ux * half, y=cy + uy * half),
-        }))
+        out.append(
+            s.model_copy(
+                update={
+                    "p1": Point(x=cx - ux * half, y=cy - uy * half),
+                    "p2": Point(x=cx + ux * half, y=cy + uy * half),
+                }
+            )
+        )
     return out
 
 
@@ -289,9 +293,7 @@ def _merge_group(group: list[Segment], line_class: str | None = None) -> Segment
     )
 
 
-def _collinear_groups(
-    segments: list[Segment], gap_tol: float
-) -> list[list[Segment]]:
+def _collinear_groups(segments: list[Segment], gap_tol: float) -> list[list[Segment]]:
     """Union-find over locally close, collinear segments. Candidate pairs
     come from a coarse spatial hash of padded segment AABBs, so the pass
     stays near-linear on the thousands of fragments the neural backend
@@ -374,10 +376,7 @@ def _classify_dash_group(group: list[Segment]) -> str | None:
         for s in group
     )
     lens = [length for _span, length in spans]
-    gaps = [
-        max(0.0, spans[i + 1][0][0] - spans[i][0][1])
-        for i in range(len(spans) - 1)
-    ]
+    gaps = [max(0.0, spans[i + 1][0][0] - spans[i][0][1]) for i in range(len(spans) - 1)]
     if not gaps or max(lens) > _DASH_ELEMENT_MAX_PX:
         return None
     # Gaps must be regular — one huge gap means two unrelated strokes that
@@ -393,12 +392,7 @@ def _classify_dash_group(group: list[Segment]) -> str | None:
         # Axis (штрихпунктирная): long strokes alternating with short
         # dashes/dots — no two shorts in a row, at least two longs.
         kinds = ["s" if length <= long_thr else "l" for _span, length in spans]
-        if (
-            len(longs) >= 2
-            and "ss" not in "".join(kinds)
-            and kinds[0] == "l"
-            and kinds[-1] == "l"
-        ):
+        if len(longs) >= 2 and "ss" not in "".join(kinds) and kinds[0] == "l" and kinds[-1] == "l":
             return "axis"
         return None
     if len(group) >= _DASH_MIN_ELEMENTS:
@@ -535,9 +529,7 @@ def _fit_chain_ellipse(members: list[Segment], pts: list[Point]) -> Entity | Non
     for i in range(steps):
         t = 2.0 * math.pi * i / steps
         u, v = semi_a * math.cos(t), semi_b * math.sin(t)
-        points.append(
-            Point(x=cx + u * cos_t - v * sin_t, y=cy + u * sin_t + v * cos_t)
-        )
+        points.append(Point(x=cx + u * cos_t - v * sin_t, y=cy + u * sin_t + v * cos_t))
     anchor = max(members, key=_seg_len)
     return Polyline(
         points=points,
@@ -590,7 +582,9 @@ def _refit_chain(
         "origin": anchor.origin,
     }
     if prim.kind == "circle":
-        return Circle(center=Point(x=prim.center[0], y=prim.center[1]), radius=prim.radius, **common)
+        return Circle(
+            center=Point(x=prim.center[0], y=prim.center[1]), radius=prim.radius, **common
+        )
     return Arc(
         center=Point(x=prim.center[0], y=prim.center[1]),
         radius=prim.radius,
@@ -709,7 +703,9 @@ def _merge_cocircular_arcs(arcs: list[Arc]) -> tuple[list[Arc], list[Entity]]:
         for j in range(i + 1, len(arcs)):
             a, b = arcs[i], arcs[j]
             dc = math.hypot(a.center.x - b.center.x, a.center.y - b.center.y)
-            if dc <= _ARC_CENTER_TOL_PX and abs(a.radius - b.radius) <= _ARC_RADIUS_REL_TOL * max(a.radius, b.radius):
+            if dc <= _ARC_CENTER_TOL_PX and abs(a.radius - b.radius) <= _ARC_RADIUS_REL_TOL * max(
+                a.radius, b.radius
+            ):
                 uf.union(i, j)
     groups: dict[int, list[Arc]] = {}
     for i, a in enumerate(arcs):
@@ -752,10 +748,15 @@ def _merge_cocircular_arcs(arcs: list[Arc]) -> tuple[list[Arc], list[Entity]]:
             if end - start <= 0.5:
                 continue
             made_any = True
-            merged.append(Arc(
-                center=Point(x=cx, y=cy), radius=r,
-                start_angle=start, end_angle=end, **common,
-            ))
+            merged.append(
+                Arc(
+                    center=Point(x=cx, y=cy),
+                    radius=r,
+                    start_angle=start,
+                    end_angle=end,
+                    **common,
+                )
+            )
         if not made_any:
             kept.extend(group)
     return kept, merged

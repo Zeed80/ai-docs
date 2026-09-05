@@ -34,9 +34,16 @@ def _workflow_dir() -> Path:
             return cand
     return candidates[0]
 
+
 _FIELDS = (
-    "title", "description", "category", "operation",
-    "graph", "inject_map", "params_schema", "base_family",
+    "title",
+    "description",
+    "category",
+    "operation",
+    "graph",
+    "inject_map",
+    "params_schema",
+    "base_family",
 )
 
 
@@ -66,10 +73,10 @@ async def seed_builtin_workflows(db) -> None:
 
     # Prune builtin rows whose template was removed/renamed (keep user copies).
     stale = (
-        await db.execute(
-            select(ComfyWorkflow).where(ComfyWorkflow.is_builtin.is_(True))
-        )
-    ).scalars().all()
+        (await db.execute(select(ComfyWorkflow).where(ComfyWorkflow.is_builtin.is_(True))))
+        .scalars()
+        .all()
+    )
     changed = False
     for row in stale:
         if row.key not in shipped_keys:

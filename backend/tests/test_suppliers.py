@@ -1,13 +1,17 @@
 """Tests for Supplier API."""
 
-import uuid
-
 import pytest
 from httpx import AsyncClient
 
 from app.db.models import (
-    Document, DocumentStatus, Invoice, InvoiceLine, InvoiceStatus,
-    Party, PartyRole, SupplierProfile,
+    Document,
+    DocumentStatus,
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    Party,
+    PartyRole,
+    SupplierProfile,
 )
 
 
@@ -36,38 +40,69 @@ async def supplier(db_session):
 
     # Create 2 invoices with lines for price history
     doc1 = Document(
-        file_name="inv1.pdf", file_hash="h1", file_size=100,
-        mime_type="application/pdf", storage_path="t/1.pdf", status=DocumentStatus.approved,
+        file_name="inv1.pdf",
+        file_hash="h1",
+        file_size=100,
+        mime_type="application/pdf",
+        storage_path="t/1.pdf",
+        status=DocumentStatus.approved,
     )
     doc2 = Document(
-        file_name="inv2.pdf", file_hash="h2", file_size=200,
-        mime_type="application/pdf", storage_path="t/2.pdf", status=DocumentStatus.approved,
+        file_name="inv2.pdf",
+        file_hash="h2",
+        file_size=200,
+        mime_type="application/pdf",
+        storage_path="t/2.pdf",
+        status=DocumentStatus.approved,
     )
     db_session.add_all([doc1, doc2])
     await db_session.flush()
 
     inv1 = Invoice(
-        document_id=doc1.id, invoice_number="S-001", currency="RUB",
-        total_amount=10000.0, status=InvoiceStatus.approved, supplier_id=party.id,
+        document_id=doc1.id,
+        invoice_number="S-001",
+        currency="RUB",
+        total_amount=10000.0,
+        status=InvoiceStatus.approved,
+        supplier_id=party.id,
     )
     inv2 = Invoice(
-        document_id=doc2.id, invoice_number="S-002", currency="RUB",
-        total_amount=12000.0, status=InvoiceStatus.needs_review, supplier_id=party.id,
+        document_id=doc2.id,
+        invoice_number="S-002",
+        currency="RUB",
+        total_amount=12000.0,
+        status=InvoiceStatus.needs_review,
+        supplier_id=party.id,
     )
     db_session.add_all([inv1, inv2])
     await db_session.flush()
 
     line1 = InvoiceLine(
-        invoice_id=inv1.id, line_number=1, description="Болт М8",
-        quantity=100, unit="шт", unit_price=50.0, amount=5000.0,
+        invoice_id=inv1.id,
+        line_number=1,
+        description="Болт М8",
+        quantity=100,
+        unit="шт",
+        unit_price=50.0,
+        amount=5000.0,
     )
     line2 = InvoiceLine(
-        invoice_id=inv1.id, line_number=2, description="Гайка М8",
-        quantity=100, unit="шт", unit_price=30.0, amount=3000.0,
+        invoice_id=inv1.id,
+        line_number=2,
+        description="Гайка М8",
+        quantity=100,
+        unit="шт",
+        unit_price=30.0,
+        amount=3000.0,
     )
     line3 = InvoiceLine(
-        invoice_id=inv2.id, line_number=1, description="Болт М8",
-        quantity=100, unit="шт", unit_price=55.0, amount=5500.0,
+        invoice_id=inv2.id,
+        line_number=1,
+        description="Болт М8",
+        quantity=100,
+        unit="шт",
+        unit_price=55.0,
+        amount=5500.0,
     )
     db_session.add_all([line1, line2, line3])
     await db_session.commit()
@@ -151,9 +186,12 @@ async def test_alerts(client: AsyncClient, supplier):
 
 @pytest.mark.asyncio
 async def test_update_supplier(client: AsyncClient, supplier):
-    resp = await client.patch(f"/api/suppliers/{supplier.id}", json={
-        "contact_phone": "+7 999 123 4567",
-    })
+    resp = await client.patch(
+        f"/api/suppliers/{supplier.id}",
+        json={
+            "contact_phone": "+7 999 123 4567",
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["contact_phone"] == "+7 999 123 4567"
 

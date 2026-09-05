@@ -9,7 +9,7 @@ live stack per the roadmap's Ф0.C checklist.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -177,7 +177,7 @@ class TestRecordProactiveFeedback:
     @pytest.mark.asyncio
     async def test_snoozed_action_carries_snoozed_until(self):
         db = _mock_db()
-        until = datetime.now(timezone.utc) + timedelta(hours=1)
+        until = datetime.now(UTC) + timedelta(hours=1)
         row = await record_proactive_feedback(
             db,
             beat_task_name="proactive.check_due_dates",

@@ -11,7 +11,7 @@ and exports are in conditional units until the user supplies a scale.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -26,11 +26,11 @@ EntityOrigin = Literal["neural", "vlm", "cv", "human", "spec"]
 # *_validated; ONLY a human action reaches human_approved. Enforcement lives
 # in assurance.py — the schema just names the states.
 Assurance = Literal[
-    "observed",              # прочитано непосредственно из источника
-    "inferred",              # восстановлено моделью/эвристикой
+    "observed",  # прочитано непосредственно из источника
+    "inferred",  # восстановлено моделью/эвристикой
     "constraint_validated",  # согласуется с геометрией/ограничениями
-    "calculation_validated", # подтверждено расчётом
-    "human_approved",        # утверждено человеком
+    "calculation_validated",  # подтверждено расчётом
+    "human_approved",  # утверждено человеком
 ]
 
 # line_class → DXF/SVG layer name (single mapping used by every render)
@@ -213,7 +213,14 @@ class AnnotationEntity(_EntityBase):
 
 
 Entity = Annotated[
-    Union[Segment, Arc, Circle, Polyline, TextEntity, DimensionEntity, HatchRegion, AnnotationEntity],
+    Segment
+    | Arc
+    | Circle
+    | Polyline
+    | TextEntity
+    | DimensionEntity
+    | HatchRegion
+    | AnnotationEntity,
     Field(discriminator="type"),
 ]
 
@@ -328,8 +335,18 @@ class CadEntityRelation(BaseModel):
 
 
 ConstraintKind = Literal[
-    "coincident", "horizontal", "vertical", "parallel", "perpendicular",
-    "tangent", "concentric", "equal", "distance", "angle", "radius", "diameter",
+    "coincident",
+    "horizontal",
+    "vertical",
+    "parallel",
+    "perpendicular",
+    "tangent",
+    "concentric",
+    "equal",
+    "distance",
+    "angle",
+    "radius",
+    "diameter",
 ]
 
 
@@ -362,7 +379,7 @@ class GeometricConstraint(BaseModel):
     driven: bool = False
 
     @model_validator(mode="after")
-    def _has_targets(self) -> "GeometricConstraint":
+    def _has_targets(self) -> GeometricConstraint:
         if not self.refs and not self.entity_ids:
             raise ValueError("constraint requires refs or entity_ids")
         if self.parameter and self.value is not None:
@@ -394,7 +411,7 @@ class CadIR(BaseModel):
     schema_version: int = SCHEMA_VERSION
 
     @model_validator(mode="after")
-    def _migrate_v1(self) -> "CadIR":
+    def _migrate_v1(self) -> CadIR:
         """v1 → v2: derive the assurance rung from origin. Deterministic and
         idempotent — stored v1 revisions upgrade transparently on load."""
         if self.schema_version < 2:
@@ -407,7 +424,11 @@ class CadIR(BaseModel):
                 else:
                     entity.assurance = "inferred"
             self.schema_version = SCHEMA_VERSION
-        if self.scale is not None and self.scale_source is None and self.source.kind in ("blank", "spec"):
+        if (
+            self.scale is not None
+            and self.scale_source is None
+            and self.source.kind in ("blank", "spec")
+        ):
             self.scale_source = "sheet_format"
         if self.schema_version < 3:
             self.schema_version = SCHEMA_VERSION
@@ -418,6 +439,7 @@ class CadIR(BaseModel):
         if self.schema_version < 5:
             self.schema_version = SCHEMA_VERSION
         return self
+
     units: Literal["mm"] = "mm"
     # mm per source pixel; None until frame detection / manual input
     scale: float | None = Field(default=None, gt=0)
@@ -430,9 +452,9 @@ class CadIR(BaseModel):
     validation: ValidationReportIR = Field(default_factory=ValidationReportIR)
     review: list[ReviewItem] = Field(default_factory=list)
     unresolved_regions: list[UnresolvedRegion] = Field(default_factory=list)
-    digitization_status: Literal[
-        "exact_candidate", "review_required", "refused"
-    ] = "review_required"
+    digitization_status: Literal["exact_candidate", "review_required", "refused"] = (
+        "review_required"
+    )
     parameters: list[CadParameter] = Field(default_factory=list)
     constraints: list[GeometricConstraint] = Field(default_factory=list)
     configurations: list[SketchConfiguration] = Field(default_factory=list)
@@ -441,7 +463,7 @@ class CadIR(BaseModel):
     recognizer_used: str | None = None
 
     @model_validator(mode="after")
-    def _validate_relation_references(self) -> "CadIR":
+    def _validate_relation_references(self) -> CadIR:
         entity_ids = [entity.id for entity in self.entities]
         if len(entity_ids) != len(set(entity_ids)):
             raise ValueError("CadIR entity ids must be unique")
@@ -453,9 +475,7 @@ class CadIR(BaseModel):
             refs = [relation.source_entity_id, *relation.target_entity_ids]
             missing = sorted({ref for ref in refs if ref not in known})
             if missing:
-                raise ValueError(
-                    f"relation {relation.id} references missing entities: {missing}"
-                )
+                raise ValueError(f"relation {relation.id} references missing entities: {missing}")
         return self
 
     def entity_by_id(self, entity_id: str) -> Entity | None:

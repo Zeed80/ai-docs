@@ -28,7 +28,9 @@ def create_signed_file_token(
         "artifact_id": artifact_id,
         "exp": expires_at,
     }
-    payload_part = _b64(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    payload_part = _b64(
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    )
     signature = _sign(payload_part, secret)
     return f"{payload_part}.{signature}", expires_at
 

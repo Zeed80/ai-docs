@@ -100,15 +100,17 @@ def get_summary() -> dict[str, Any]:
         errors = m.get("errors", 0)
         total_calls += calls
         total_errors += errors
-        by_model.append({
-            "task": task,
-            "model": model,
-            "calls": calls,
-            "errors": errors,
-            "avg_latency_ms": round(m.get("lat_ms", 0) / calls) if calls else 0,
-            "tokens_in": m.get("tin", 0),
-            "tokens_out": m.get("tout", 0),
-        })
+        by_model.append(
+            {
+                "task": task,
+                "model": model,
+                "calls": calls,
+                "errors": errors,
+                "avg_latency_ms": round(m.get("lat_ms", 0) / calls) if calls else 0,
+                "tokens_in": m.get("tin", 0),
+                "tokens_out": m.get("tout", 0),
+            }
+        )
 
     recent = []
     for item in raw_recent:

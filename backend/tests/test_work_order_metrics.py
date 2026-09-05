@@ -18,14 +18,22 @@ from app.domain.work_orders import (
 async def test_metrics_counts_status_and_computes_duration_percentiles(client, db_session):
     order = await create_work_order(db_session, owner_key="tester", objective="Metrics me")
     await create_single_step_plan(
-        db_session, order, kind="agent_turn", title="Execute", input_data={"prompt": "x"},
+        db_session,
+        order,
+        kind="agent_turn",
+        title="Execute",
+        input_data={"prompt": "x"},
     )
     claimed = await claim_ready_step(db_session, worker_id="w", work_order_id=order.id)
     assert claimed is not None
     c_order, c_step, c_attempt = claimed
     await complete_attempt(
-        db_session, order=c_order, step=c_step, attempt=c_attempt,
-        output={"text": "готово"}, actor="w",
+        db_session,
+        order=c_order,
+        step=c_step,
+        attempt=c_attempt,
+        output={"text": "готово"},
+        actor="w",
     )
     await db_session.commit()
 

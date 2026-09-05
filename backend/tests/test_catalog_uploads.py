@@ -58,17 +58,21 @@ async def test_upload_creates_document_links_and_job(client: AsyncClient, db_ses
     assert doc is not None
     assert doc.doc_type == DocumentType.supplier_catalog
     links = (
-        await db_session.execute(
-            select(DocumentLink).where(DocumentLink.document_id == doc.id)
-        )
-    ).scalars().all()
-    assert {l.linked_entity_type for l in links} >= {"tool_supplier"}
+        (await db_session.execute(select(DocumentLink).where(DocumentLink.document_id == doc.id)))
+        .scalars()
+        .all()
+    )
+    assert {link.linked_entity_type for link in links} >= {"tool_supplier"}
 
     job = (
-        await db_session.execute(
-            select(DocumentProcessingJob).where(DocumentProcessingJob.document_id == doc.id)
+        (
+            await db_session.execute(
+                select(DocumentProcessingJob).where(DocumentProcessingJob.document_id == doc.id)
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     assert job is not None
     keys = [s["key"] for s in job.pipeline_steps]
     # "pages" and "images" joined the pipeline when parsing became page-wise.
@@ -81,7 +85,9 @@ async def test_same_file_twice_is_not_duplicated(client: AsyncClient, db_session
     ids = []
     for _ in range(2):
         with (
-            patch("app.tasks.catalog_ingest.ingest_catalog_document.delay", lambda *a, **k: _Task()),
+            patch(
+                "app.tasks.catalog_ingest.ingest_catalog_document.delay", lambda *a, **k: _Task()
+            ),
             patch("app.storage.upload_file", lambda *a, **k: "tool-catalogs/x"),
         ):
             resp = await client.post(
@@ -100,7 +106,9 @@ async def test_two_different_files_are_independent_uploads(
     docs = []
     for payload, name in ((b"a,b\n1,2\n", "one.csv"), (b"c,d\n3,4\n", "two.csv")):
         with (
-            patch("app.tasks.catalog_ingest.ingest_catalog_document.delay", lambda *a, **k: _Task()),
+            patch(
+                "app.tasks.catalog_ingest.ingest_catalog_document.delay", lambda *a, **k: _Task()
+            ),
             patch("app.storage.upload_file", lambda *a, **k: f"tool-catalogs/{name}"),
         ):
             resp = await client.post(
@@ -146,7 +154,9 @@ async def test_deleting_one_upload_keeps_other_catalog_entries(
     doc_ids = []
     for payload, name in ((b"a\n1\n", "one.csv"), (b"b\n2\n", "two.csv")):
         with (
-            patch("app.tasks.catalog_ingest.ingest_catalog_document.delay", lambda *a, **k: _Task()),
+            patch(
+                "app.tasks.catalog_ingest.ingest_catalog_document.delay", lambda *a, **k: _Task()
+            ),
             patch("app.storage.upload_file", lambda *a, **k: f"tool-catalogs/{name}"),
         ):
             resp = await client.post(
@@ -174,13 +184,17 @@ async def test_deleting_one_upload_keeps_other_catalog_entries(
     assert resp.json()["entries"] == 1
 
     remaining = (
-        await db_session.execute(
-            select(ToolCatalogEntry).where(
-                ToolCatalogEntry.supplier_id == supplier.id,
-                ToolCatalogEntry.is_active.is_(True),
+        (
+            await db_session.execute(
+                select(ToolCatalogEntry).where(
+                    ToolCatalogEntry.supplier_id == supplier.id,
+                    ToolCatalogEntry.is_active.is_(True),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert [e.part_number for e in remaining] == ["P-2"]
 
 

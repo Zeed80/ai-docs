@@ -48,7 +48,9 @@ def _fake_runner_smoke(code: str) -> dict:
         harness_path = hf.name
     proc = subprocess.run(
         [sys.executable, harness_path, code_path],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     lines = (proc.stdout or "").strip().splitlines()
     return json.loads(lines[-1]) if lines else {"ok": False, "errors": ["no smoke output"]}
@@ -66,6 +68,7 @@ def fake_runner(monkeypatch):
         return SimpleNamespace(status_code=200, content=b"x", json=lambda: payload)
 
     import httpx
+
     monkeypatch.setattr(httpx, "post", fake_post)
     yield calls
 
@@ -118,11 +121,7 @@ def test_missing_import_caught_by_smoke():
 
 def test_dangerous_import_blocked_before_smoke(fake_runner):
     # AST gate must reject this; smoke must NOT run on already-rejected code.
-    code = (
-        "import os\n"
-        "async def execute(args: dict) -> dict:\n"
-        "    return {'status': 'ok'}\n"
-    )
+    code = "import os\nasync def execute(args: dict) -> dict:\n    return {'status': 'ok'}\n"
     errors, _ = _validate_draft(_draft(code))
     assert any("Forbidden import" in e for e in errors), errors
     assert not fake_runner, "Smoke must be skipped when AST validation already failed"
@@ -136,8 +135,6 @@ def test_runner_unavailable_degrades_to_warning(monkeypatch):
         raise httpx.ConnectError("runner down")
 
     monkeypatch.setattr(httpx, "post", boom)
-    errors, warnings = capability_sandbox._smoke_test_code(
-        "async def execute(a): return {}"
-    )
+    errors, warnings = capability_sandbox._smoke_test_code("async def execute(a): return {}")
     assert not errors
     assert any("static validation only" in w for w in warnings)

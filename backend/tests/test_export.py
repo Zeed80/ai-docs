@@ -1,7 +1,7 @@
 """Tests for Export API — Excel and 1C export jobs."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
@@ -28,7 +28,7 @@ async def invoice(db_session):
         currency="RUB",
         total_amount=12000.0,
         status=InvoiceStatus.approved,
-        invoice_date=datetime.now(timezone.utc),
+        invoice_date=datetime.now(UTC),
     )
     db_session.add(inv)
     await db_session.commit()

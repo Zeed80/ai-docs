@@ -14,9 +14,9 @@ moments of inertia mm⁴, stresses MPa (N/mm²), temperatures °C.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
-
+from typing import Any
 
 # F2: bumped whenever any formula/threshold below changes — stored in every
 # run snapshot so an old result can be traced to the exact solver revision
@@ -153,7 +153,9 @@ def solve_buckling(inputs: dict, material) -> SolverOutcome:
     force = abs(_number(inputs, "force_n"))
     mu = float(inputs.get("end_factor_mu", 1.0))
     if not math.isfinite(mu) or mu <= 0:
-        raise AnalysisInputError("Коэффициент приведения длины end_factor_mu должен быть положительным")
+        raise AnalysisInputError(
+            "Коэффициент приведения длины end_factor_mu должен быть положительным"
+        )
     if "moment_inertia_mm4" in inputs:
         inertia = _positive(inputs, "moment_inertia_mm4")
     elif "diameter_mm" in inputs:
@@ -190,7 +192,9 @@ def solve_thermal_expansion(inputs: dict, material) -> SolverOutcome:
     if alpha is None:
         alpha = getattr(material, "thermal_expansion_1_k", None) if material else None
     if not alpha or not math.isfinite(float(alpha)) or float(alpha) <= 0:
-        raise AnalysisInputError("Нужен alpha_1_k или материал с коэффициентом теплового расширения")
+        raise AnalysisInputError(
+            "Нужен alpha_1_k или материал с коэффициентом теплового расширения"
+        )
     alpha = float(alpha)
     elongation = alpha * length * delta_t
     constrained = bool(inputs.get("constrained", False))
@@ -208,7 +212,9 @@ def solve_thermal_expansion(inputs: dict, material) -> SolverOutcome:
         stress = modulus * alpha * abs(delta_t)
         yield_mpa = getattr(material, "yield_strength_mpa", None) if material else None
         factor = _safety(yield_mpa, stress)
-        results.update({"thermal_stress_mpa": stress, "yield_strength_mpa": yield_mpa, "safety_factor": factor})
+        results.update(
+            {"thermal_stress_mpa": stress, "yield_strength_mpa": yield_mpa, "safety_factor": factor}
+        )
         assumptions.append("оба конца жёстко защемлены: σ = E·α·ΔT")
         passed = None if factor is None else factor >= 1
     return SolverOutcome(results=results, assumptions=assumptions, passed=passed)
@@ -227,17 +233,19 @@ def _beam_system(
 
     n_nodes = n_elements + 1
     le = length / n_elements
-    k_e = (ei / le**3) * np.array([
-        [12, 6 * le, -12, 6 * le],
-        [6 * le, 4 * le**2, -6 * le, 2 * le**2],
-        [-12, -6 * le, 12, -6 * le],
-        [6 * le, 2 * le**2, -6 * le, 4 * le**2],
-    ])
+    k_e = (ei / le**3) * np.array(
+        [
+            [12, 6 * le, -12, 6 * le],
+            [6 * le, 4 * le**2, -6 * le, 2 * le**2],
+            [-12, -6 * le, 12, -6 * le],
+            [6 * le, 2 * le**2, -6 * le, 4 * le**2],
+        ]
+    )
     ndof = 2 * n_nodes
     stiffness = np.zeros((ndof, ndof))
     for element in range(n_elements):
         i = 2 * element
-        stiffness[i:i + 4, i:i + 4] += k_e
+        stiffness[i : i + 4, i : i + 4] += k_e
 
     load_vector = np.zeros(ndof)
     for load in loads:
@@ -249,18 +257,20 @@ def _beam_system(
             element = min(int(position // le), n_elements - 1)
             xi = (position - element * le) / le
             # Hermite shape functions distribute the point load consistently
-            h = np.array([
-                1 - 3 * xi**2 + 2 * xi**3,
-                le * (xi - 2 * xi**2 + xi**3),
-                3 * xi**2 - 2 * xi**3,
-                le * (-(xi**2) + xi**3),
-            ])
-            load_vector[2 * element:2 * element + 4] += force * h
+            h = np.array(
+                [
+                    1 - 3 * xi**2 + 2 * xi**3,
+                    le * (xi - 2 * xi**2 + xi**3),
+                    3 * xi**2 - 2 * xi**3,
+                    le * (-(xi**2) + xi**3),
+                ]
+            )
+            load_vector[2 * element : 2 * element + 4] += force * h
         elif kind == "udl":
             q = float(load["force_n_per_mm"])
             fe = np.array([q * le / 2, q * le**2 / 12, q * le / 2, -q * le**2 / 12])
             for element in range(n_elements):
-                load_vector[2 * element:2 * element + 4] += fe
+                load_vector[2 * element : 2 * element + 4] += fe
         else:
             raise AnalysisInputError(f"Неизвестный тип нагрузки: {kind!r} (point | udl)")
 
@@ -276,7 +286,7 @@ def _beam_system(
     # element end moments from k_e @ u_e (θ-DOF rows) — bending moment at nodes
     moments = np.zeros(n_nodes)
     for element in range(n_elements):
-        forces = k_e @ solution[2 * element:2 * element + 4]
+        forces = k_e @ solution[2 * element : 2 * element + 4]
         moments[element] = max(abs(moments[element]), abs(forces[1]))
         moments[element + 1] = max(abs(moments[element + 1]), abs(forces[3]))
     return solution, moments
@@ -318,7 +328,8 @@ def solve_fea_beam(inputs: dict, material) -> SolverOutcome:
         solution, moments = _beam_system(n, length, ei, supports, loads)
         deflection = float(max(abs(solution[0::2])))
         if previous is not None and (
-            deflection == 0.0 or abs(deflection - previous) / max(abs(deflection), 1e-12) < tolerance
+            deflection == 0.0
+            or abs(deflection - previous) / max(abs(deflection), 1e-12) < tolerance
         ):
             converged = True
             break

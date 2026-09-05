@@ -29,11 +29,11 @@ from app.domain.graph import (
     EntityMentionOut,
     EvidenceSpanCreate,
     EvidenceSpanOut,
+    GraphNeighborhoodResponse,
+    GraphPathResponse,
     GraphReviewDecision,
     GraphReviewItemOut,
     GraphReviewListResponse,
-    GraphNeighborhoodResponse,
-    GraphPathResponse,
     KnowledgeEdgeCreate,
     KnowledgeEdgeOut,
     KnowledgeNodeCreate,
@@ -297,9 +297,7 @@ async def list_review_items(
     query = select(GraphReviewItem).where(GraphReviewItem.status == status)
     if document_id:
         query = query.where(GraphReviewItem.document_id == document_id)
-    result = await db.execute(
-        query.order_by(GraphReviewItem.created_at.desc()).limit(limit)
-    )
+    result = await db.execute(query.order_by(GraphReviewItem.created_at.desc()).limit(limit))
     items = list(result.scalars().all())
     return GraphReviewListResponse(items=items, total=len(items))
 

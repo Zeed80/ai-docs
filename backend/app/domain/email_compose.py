@@ -35,7 +35,9 @@ from app.db.models import EmailMessage, EmailThread, Invoice, Party
 
 logger = structlog.get_logger()
 
-_PROMPT_PATH = Path(__file__).resolve().parents[2].parent / "aiagent" / "prompts" / "email-drafting.md"
+_PROMPT_PATH = (
+    Path(__file__).resolve().parents[2].parent / "aiagent" / "prompts" / "email-drafting.md"
+)
 _FALLBACK_SYSTEM = (
     "Ты — Света, ассистент отдела снабжения. Пишешь деловые письма на русском языке. "
     "Тон деловой, структура: приветствие, суть в первом абзаце, конкретные ссылки "
@@ -116,9 +118,14 @@ def _strip_preamble(text: str) -> str:
     t = text.strip()
     first, _, rest = t.partition("\n")
     low = first.lower()
-    if len(first) < 120 and any(
-        k in low for k in ("письмо", "вариант", "черновик", "готово", "текст письма", "результат")
-    ) and first.rstrip().endswith((":", "—", "-")):
+    if (
+        len(first) < 120
+        and any(
+            k in low
+            for k in ("письмо", "вариант", "черновик", "готово", "текст письма", "результат")
+        )
+        and first.rstrip().endswith((":", "—", "-"))
+    ):
         return rest.strip() or t
     return t
 
@@ -144,8 +151,12 @@ def _extract_result(agent_text: str, *, fallback_subject: str) -> dict:
             notes = data.get("notes") or []
             body_html = (data.get("body_html") or "").strip()
             if body_html:
-                return {"subject": subject, "body_text": body_text,
-                        "body_html": body_html, "notes": notes}
+                return {
+                    "subject": subject,
+                    "body_text": body_text,
+                    "body_html": body_html,
+                    "notes": notes,
+                }
         except Exception:  # noqa: BLE001
             pass
         # strip the fence from the prose body
@@ -167,7 +178,9 @@ async def _gather_context(db: AsyncSession, ctx: ComposeContext) -> tuple[str, s
     prior_seen = False
 
     if ctx.supplier_id:
-        party = (await db.execute(select(Party).where(Party.id == ctx.supplier_id))).scalar_one_or_none()
+        party = (
+            await db.execute(select(Party).where(Party.id == ctx.supplier_id))
+        ).scalar_one_or_none()
         if party:
             lines.append(f"Контрагент: {party.name} (id {party.id})")
             if party.contact_email:
@@ -175,7 +188,9 @@ async def _gather_context(db: AsyncSession, ctx: ComposeContext) -> tuple[str, s
                 lines.append(f"Email контрагента: {party.contact_email}")
 
     if ctx.invoice_id:
-        inv = (await db.execute(select(Invoice).where(Invoice.id == ctx.invoice_id))).scalar_one_or_none()
+        inv = (
+            await db.execute(select(Invoice).where(Invoice.id == ctx.invoice_id))
+        ).scalar_one_or_none()
         if inv:
             lines.append(
                 f"Счёт №{inv.invoice_number or '—'} (id {inv.id}), сумма "
@@ -189,13 +204,17 @@ async def _gather_context(db: AsyncSession, ctx: ComposeContext) -> tuple[str, s
         ).scalar_one_or_none()
         if th:
             msgs = (
-                await db.execute(
-                    select(EmailMessage)
-                    .where(EmailMessage.thread_id == th.id)
-                    .order_by(EmailMessage.received_at.desc())
-                    .limit(5)
+                (
+                    await db.execute(
+                        select(EmailMessage)
+                        .where(EmailMessage.thread_id == th.id)
+                        .order_by(EmailMessage.received_at.desc())
+                        .limit(5)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if msgs:
                 from app.ai.input_sanitizer import UNTRUSTED_NOTE, wrap_untrusted
 
@@ -214,15 +233,21 @@ async def _gather_context(db: AsyncSession, ctx: ComposeContext) -> tuple[str, s
             from app.ai.router import ai_router
 
             hist = (
-                await db.execute(
-                    select(EmailMessage)
-                    .where(EmailMessage.from_address.ilike(f"%{counterparty_email}%"))
-                    .order_by(EmailMessage.received_at.desc())
-                    .limit(5)
+                (
+                    await db.execute(
+                        select(EmailMessage)
+                        .where(EmailMessage.from_address.ilike(f"%{counterparty_email}%"))
+                        .order_by(EmailMessage.received_at.desc())
+                        .limit(5)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if hist:
-                text = "\n---\n".join(f"{m.from_address}: {(m.body_text or '')[:400]}" for m in hist)
+                text = "\n---\n".join(
+                    f"{m.from_address}: {(m.body_text or '')[:400]}" for m in hist
+                )
                 style = await ai_router.analyze_email_style(text, len(hist))
                 tone = style.get("tone", "formal")
                 if style.get("greeting_style"):
@@ -247,11 +272,16 @@ def _email_model_override() -> str | None:
 
 
 _TOOL_LABELS = {
-    "invoices": "смотрю счета", "suppliers": "смотрю поставщиков",
-    "procurement": "смотрю закупки", "documents": "ищу документы",
-    "warehouse": "проверяю склад", "email": "смотрю переписку",
-    "analytics": "считаю данные", "tool_catalog": "ищу в каталоге",
-    "search": "ищу", "memory": "вспоминаю",
+    "invoices": "смотрю счета",
+    "suppliers": "смотрю поставщиков",
+    "procurement": "смотрю закупки",
+    "documents": "ищу документы",
+    "warehouse": "проверяю склад",
+    "email": "смотрю переписку",
+    "analytics": "считаю данные",
+    "tool_catalog": "ищу в каталоге",
+    "search": "ищу",
+    "memory": "вспоминаю",
 }
 
 
@@ -320,11 +350,11 @@ async def _single_shot(system: str, prompt: str) -> dict:
 
 
 _JSON_TAIL = (
-    'ФОРМАТ ОТВЕТА (строго):\n'
-    '1) Основная часть ответа — это ТОЛЬКО готовый текст письма, начиная с '
-    'приветствия («Добрый день!» / «Уважаемые коллеги!»). Без строк «Нашёл счёт…», '
-    '«Готовый текст письма:», «Тема:», без разделителей «---» перед текстом.\n'
-    '2) В самом конце — ОДИН блок:\n'
+    "ФОРМАТ ОТВЕТА (строго):\n"
+    "1) Основная часть ответа — это ТОЛЬКО готовый текст письма, начиная с "
+    "приветствия («Добрый день!» / «Уважаемые коллеги!»). Без строк «Нашёл счёт…», "
+    "«Готовый текст письма:», «Тема:», без разделителей «---» перед текстом.\n"
+    "2) В самом конце — ОДИН блок:\n"
     '```json\n{"subject": "<тема письма>", "notes": ["<что ты выяснил и учёл>"]}\n```'
 )
 
@@ -343,7 +373,7 @@ def _cut_to_letter(text: str) -> str:
     for m in _LETTER_MARKERS.finditer(t):
         pass
     if m:
-        t = t[m.end():].strip()
+        t = t[m.end() :].strip()
     # leading separator line
     t = re.sub(r"^\s*-{3,}\s*\n", "", t).strip()
     # leading "Тема: ..." line

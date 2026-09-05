@@ -23,8 +23,7 @@ _NUMBER_TOKEN = re.compile(r"[^0-9]*([0-9]+(?:[.,][0-9]+)?)[^0-9]*")
 
 def _matches(value: float, candidates: list[float], relative: float = 0.005) -> bool:
     return any(
-        abs(value - candidate) <= max(0.05, abs(candidate) * relative)
-        for candidate in candidates
+        abs(value - candidate) <= max(0.05, abs(candidate) * relative) for candidate in candidates
     )
 
 
@@ -75,12 +74,14 @@ def _ocr_numeric_tokens(image: Any) -> list[dict[str, Any]]:
         height = int(data["height"][index])
         if not (0 < value <= 100_000 and 0 < width <= 160 and 0 < height <= 90):
             continue
-        tokens.append({
-            "raw_text": text,
-            "ocr_value_mm": value,
-            "ocr_confidence": max(0.0, min(1.0, confidence / 100.0)),
-            "label_bbox": [x, y, x + width, y + height],
-        })
+        tokens.append(
+            {
+                "raw_text": text,
+                "ocr_value_mm": value,
+                "ocr_confidence": max(0.0, min(1.0, confidence / 100.0)),
+                "label_bbox": [x, y, x + width, y + height],
+            }
+        )
     return tokens
 
 
@@ -105,17 +106,21 @@ def _hough_lines(image: Any) -> tuple[list[list[float]], list[list[float]]]:
         return horizontal, vertical
     for x1, y1, x2, y2 in lines[:, 0]:
         if abs(int(y2) - int(y1)) <= 2 and abs(int(x2) - int(x1)) >= 35:
-            horizontal.append([
-                float(min(x1, x2)),
-                float(y1 + y2) / 2.0,
-                float(max(x1, x2)),
-            ])
+            horizontal.append(
+                [
+                    float(min(x1, x2)),
+                    float(y1 + y2) / 2.0,
+                    float(max(x1, x2)),
+                ]
+            )
         if abs(int(x2) - int(x1)) <= 2 and abs(int(y2) - int(y1)) >= 20:
-            vertical.append([
-                float(x1 + x2) / 2.0,
-                float(min(y1, y2)),
-                float(max(y1, y2)),
-            ])
+            vertical.append(
+                [
+                    float(x1 + x2) / 2.0,
+                    float(min(y1, y2)),
+                    float(max(y1, y2)),
+                ]
+            )
     return horizontal, vertical
 
 
@@ -129,9 +134,9 @@ def _pair_tokens_with_lines(
         x0, _y0, x1, y1 = token["label_bbox"]
         center_x = (x0 + x1) / 2.0
         candidates = [
-            line for line in horizontal
-            if y1 + 3 <= line[1] <= y1 + 35
-            and line[0] - 15 <= center_x <= line[2] + 15
+            line
+            for line in horizontal
+            if y1 + 3 <= line[1] <= y1 + 35 and line[0] - 15 <= center_x <= line[2] + 15
         ]
         if not candidates:
             continue
@@ -139,12 +144,14 @@ def _pair_tokens_with_lines(
         for line in sorted(candidates, key=lambda item: (item[1] - y1, -(item[2] - item[0]))):
             line_x0, line_y, line_x1 = line
             left_extensions = [
-                item for item in vertical
+                item
+                for item in vertical
                 if line_x0 - 60 <= item[0] <= line_x0 + 20
                 and item[1] - 15 <= line_y <= item[2] + 15
             ]
             right_extensions = [
-                item for item in vertical
+                item
+                for item in vertical
                 if line_x1 - 20 <= item[0] <= line_x1 + 60
                 and item[1] - 15 <= line_y <= item[2] + 15
             ]
@@ -158,11 +165,13 @@ def _pair_tokens_with_lines(
         right = min(right_extensions, key=lambda item: abs(item[0] - line_x1))
         if right[0] - left[0] < 35:
             continue
-        paired.append({
-            **token,
-            "line": [round(left[0], 1), round(line_y, 1), round(right[0], 1), round(line_y, 1)],
-            "span_px": round(right[0] - left[0], 1),
-        })
+        paired.append(
+            {
+                **token,
+                "line": [round(left[0], 1), round(line_y, 1), round(right[0], 1), round(line_y, 1)],
+                "span_px": round(right[0] - left[0], 1),
+            }
+        )
     return paired
 
 
@@ -200,18 +209,14 @@ def localize_axial_dimensions(
             "blockers": [f"локализатор размерных линий недоступен: {type(exc).__name__}"],
         }
     paired = _deduplicate(_pair_tokens_with_lines(tokens, horizontal, vertical))
-    overall_candidates = [
-        item for item in paired
-        if _matches(item["ocr_value_mm"], known)
-    ]
+    overall_candidates = [item for item in paired if _matches(item["ocr_value_mm"], known)]
     # The callout VLM may miss a number that Tesseract has already tied to a
     # real dimension line. In that case the widest paired line is the only
     # admissible overall candidate: it spans the two extreme datum extensions,
     # so using its own printed label is observation, not silhouette measuring.
     if not overall_candidates:
         overall_candidates = [
-            item for item in paired
-            if float(item.get("ocr_confidence") or 0.0) >= 0.45
+            item for item in paired if float(item.get("ocr_confidence") or 0.0) >= 0.45
         ]
     if not overall_candidates:
         return {
@@ -267,9 +272,7 @@ def localize_axial_dimensions(
             # but only when the printed token differs by that narrow OCR edit.
             geometric = float(round(measured))
             geometric_error = abs(measured - geometric) / max(geometric, 1e-6)
-            raw_digits = "".join(
-                character for character in item["raw_text"] if character.isdigit()
-            )
+            raw_digits = "".join(character for character in item["raw_text"] if character.isdigit())
             geometric_digits = f"{geometric:g}".replace(".", "")
             if (
                 geometric > 0
@@ -307,21 +310,23 @@ def localize_axial_dimensions(
             continue
         if confidence < 0.6:
             station = None
-        accepted.append({
-            "id": "",
-            "raw_text": item["raw_text"],
-            "value_mm": round(value, 3),
-            "ocr_value_mm": round(ocr_value, 3),
-            "ocr_corrected": corrected,
-            "value_source": value_source,
-            "relation": relation,
-            "station_from_left_mm": round(station, 3) if station is not None else None,
-            "label_bbox": item["label_bbox"],
-            "dimension_line": item["line"],
-            "span_px": item["span_px"],
-            "span_check_mm": round(measured, 2),
-            "confidence": round(confidence, 3),
-        })
+        accepted.append(
+            {
+                "id": "",
+                "raw_text": item["raw_text"],
+                "value_mm": round(value, 3),
+                "ocr_value_mm": round(ocr_value, 3),
+                "ocr_corrected": corrected,
+                "value_source": value_source,
+                "relation": relation,
+                "station_from_left_mm": round(station, 3) if station is not None else None,
+                "label_bbox": item["label_bbox"],
+                "dimension_line": item["line"],
+                "span_px": item["span_px"],
+                "span_check_mm": round(measured, 2),
+                "confidence": round(confidence, 3),
+            }
+        )
     accepted.sort(key=lambda item: (item["dimension_line"][1], item["dimension_line"][0]))
     for index, item in enumerate(accepted, start=1):
         item["id"] = f"axial-dim-{index}"

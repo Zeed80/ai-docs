@@ -45,10 +45,7 @@ def _source_feature_ids(*items: Any) -> list[str]:
     same fail-closed default as every other id-tagged reference in this
     codebase.
     """
-    return [
-        str(item["id"]) for item in items
-        if isinstance(item, dict) and item.get("id")
-    ]
+    return [str(item["id"]) for item in items if isinstance(item, dict) and item.get("id")]
 
 
 def _fill_provisional_step_lengths(
@@ -128,13 +125,18 @@ def solid_build_gate(
     """
     unresolved = [str(item) for item in spec.get("unresolved") or [] if str(item)]
     non_geometric = [
-        item for item in unresolved
+        item
+        for item in unresolved
         if (
             "подготовительного отверстия" in item.lower()
             and not any(
                 marker in item.lower()
                 for marker in (
-                    "торец", "сквозное", "глухое", "глубин", "резьба/шаг",
+                    "торец",
+                    "сквозное",
+                    "глухое",
+                    "глубин",
+                    "резьба/шаг",
                 )
             )
         )
@@ -148,9 +150,14 @@ def solid_build_gate(
         missing_evidence = [
             f"main_view.{group}.{index}"
             for group in (
-                "outer", "bore", "keyways", "cross_holes", "axial_holes",
+                "outer",
+                "bore",
+                "keyways",
+                "cross_holes",
+                "axial_holes",
                 "circular_hole_patterns",
-                "grooves", "chamfers",
+                "grooves",
+                "chamfers",
             )
             for index, item in enumerate(body.get(group) or [])
             if isinstance(item, dict) and not item.get("evidence")
@@ -173,12 +180,15 @@ def solid_build_gate(
     for item in candidate.missing_data:
         message = str(item)
         lowered = message.lower()
-        is_critical = any(marker in lowered for marker in (
-            "не построен",
-            "длиннее детали",
-            "построено только главное",
-            "прочитан не полностью",
-        ))
+        is_critical = any(
+            marker in lowered
+            for marker in (
+                "не построен",
+                "длиннее детали",
+                "построено только главное",
+                "прочитан не полностью",
+            )
+        )
         if "разрез не прочитан" in lowered:
             is_critical = has_section
         (blockers if is_critical else warnings).append(message)
@@ -273,7 +283,9 @@ def _profile_volume_from_points(points: list[dict]) -> float:
         start_diameter = float(start["r"]) * 2.0
         end_diameter = float(end["r"]) * 2.0
         volume += (
-            math.pi * length / 12.0
+            math.pi
+            * length
+            / 12.0
             * (start_diameter**2 + start_diameter * end_diameter + end_diameter**2)
         )
     return volume
@@ -289,7 +301,9 @@ def _profile_volume_mm3(sections: list[dict]) -> float:
         end_diameter = float(taper_end_diameter(section) or start_diameter)
         length = float(section["l"])
         volume += (
-            math.pi * length / 12.0
+            math.pi
+            * length
+            / 12.0
             * (start_diameter**2 + start_diameter * end_diameter + end_diameter**2)
         )
     return volume
@@ -336,7 +350,9 @@ def _sketch_closure_error(sketch: list[dict]) -> float | None:
 
 
 def _rotated_capsule_sketch(
-    straight: float, radius: float, rotation_deg: float,
+    straight: float,
+    radius: float,
+    rotation_deg: float,
 ) -> tuple[float, float, list[dict]]:
     """Ф2.3: a capsule (stadium) slot's line/arc chain, rotated about its
     own centre — the kernel's ``sketch``-profile boss/pocket tool
@@ -427,21 +443,28 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         }
         if corner_radius:
             base_params["corner_radius_mm"] = corner_radius
-        features.append(Feature3D(
-            kind="extrude",
-            params=base_params,
-            param_provenance={
-                **provenance,
-                "width_mm": ParamProvenance(origin="stated", detail="габарит по чертежу"),
-                "height_mm": ParamProvenance(origin="stated", detail="габарит по чертежу"),
-                **({
-                    "corner_radius_mm": ParamProvenance(
-                        origin="stated", detail="радиус углов прочитан с выноски R"
-                    )
-                } if corner_radius else {}),
-            },
-            confidence=0.9,
-        ))
+        features.append(
+            Feature3D(
+                kind="extrude",
+                params=base_params,
+                param_provenance={
+                    **provenance,
+                    "width_mm": ParamProvenance(origin="stated", detail="габарит по чертежу"),
+                    "height_mm": ParamProvenance(origin="stated", detail="габарит по чертежу"),
+                    **(
+                        {
+                            "corner_radius_mm": ParamProvenance(
+                                origin="stated", detail="радиус углов прочитан с выноски R"
+                            )
+                        }
+                        if corner_radius
+                        else {}
+                    ),
+                },
+                confidence=0.9,
+            )
+        )
+
         # The sheet gives hole centres from the middle of the plate; an extrude
         # box is anchored at its corner, so the frames must be reconciled here
         # rather than by whoever reads the feature tree later.
@@ -451,20 +474,25 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         diameter = _num(profile.get("diameter_mm"))
         if not diameter:
             return None
-        features.append(Feature3D(
-            kind="revolve",
-            params={"profile_points": [
-                {"r": diameter / 2.0, "z": 0.0},
-                {"r": diameter / 2.0, "z": thickness},
-            ]},
-            param_provenance={
-                **provenance,
-                "profile_points": ParamProvenance(
-                    origin="stated", detail="диаметр и толщина прочитаны с чертежа"
-                ),
-            },
-            confidence=0.9,
-        ))
+        features.append(
+            Feature3D(
+                kind="revolve",
+                params={
+                    "profile_points": [
+                        {"r": diameter / 2.0, "z": 0.0},
+                        {"r": diameter / 2.0, "z": thickness},
+                    ]
+                },
+                param_provenance={
+                    **provenance,
+                    "profile_points": ParamProvenance(
+                        origin="stated", detail="диаметр и толщина прочитаны с чертежа"
+                    ),
+                },
+                confidence=0.9,
+            )
+        )
+
         # A turned base is addressed from its axis, which is the same frame the
         # drawing uses for a flange — no conversion needed.
         def to_base(x: float, y: float) -> tuple[float, float]:
@@ -479,18 +507,21 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
             # rectangle read wrong — it is an open contour, and extruding an
             # open wire is not a real solid. Refused, never force-closed.
             return None
-        features.append(Feature3D(
-            kind="extrude",
-            params={"sketch_profile": sketch, "depth_mm": thickness},
-            param_provenance={
-                **provenance,
-                "sketch_profile": ParamProvenance(
-                    origin="stated",
-                    detail="контур прочитан как последовательность линий/дуг от центра профиля",
-                ),
-            },
-            confidence=0.85,
-        ))
+        features.append(
+            Feature3D(
+                kind="extrude",
+                params={"sketch_profile": sketch, "depth_mm": thickness},
+                param_provenance={
+                    **provenance,
+                    "sketch_profile": ParamProvenance(
+                        origin="stated",
+                        detail="контур прочитан как последовательность линий/дуг от центра профиля",
+                    ),
+                },
+                confidence=0.85,
+            )
+        )
+
         # Every hole/slot on this profile is already given relative to the
         # profile's own centre — the same origin the sketch's first implicit
         # vertex (0, 0) starts from. No corner to translate to.
@@ -505,24 +536,26 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         if not diameter or x is None or y is None:
             return None
         cx, cy = to_base(x, y)
-        features.append(Feature3D(
-            kind="hole",
-            source_feature_ids=_source_feature_ids(hole),
-            params={
-                "diameter_mm": diameter,
-                "center_x_mm": cx,
-                "center_y_mm": cy,
-                # A plate hole is through unless the sheet said otherwise; a
-                # blind hole needs a depth the reader did not provide.
-                "through": True,
-            },
-            param_provenance={
-                "diameter_mm": ParamProvenance(origin="stated", detail="Ø отверстия с чертежа"),
-                "center_x_mm": ParamProvenance(origin="stated", detail="координата от центра"),
-                "center_y_mm": ParamProvenance(origin="stated", detail="координата от центра"),
-            },
-            confidence=0.85,
-        ))
+        features.append(
+            Feature3D(
+                kind="hole",
+                source_feature_ids=_source_feature_ids(hole),
+                params={
+                    "diameter_mm": diameter,
+                    "center_x_mm": cx,
+                    "center_y_mm": cy,
+                    # A plate hole is through unless the sheet said otherwise; a
+                    # blind hole needs a depth the reader did not provide.
+                    "through": True,
+                },
+                param_provenance={
+                    "diameter_mm": ParamProvenance(origin="stated", detail="Ø отверстия с чертежа"),
+                    "center_x_mm": ParamProvenance(origin="stated", detail="координата от центра"),
+                    "center_y_mm": ParamProvenance(origin="stated", detail="координата от центра"),
+                },
+                confidence=0.85,
+            )
+        )
 
     for slot in profile.get("slots") or []:
         if not isinstance(slot, dict):
@@ -543,54 +576,69 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
             offset_x, offset_y, sketch = _rotated_capsule_sketch(
                 straight, width_mm / 2.0, rotation_deg
             )
-            features.append(Feature3D(
-                kind="pocket",
-                source_feature_ids=_source_feature_ids(slot),
-                params={
-                    "profile": "sketch", "sketch_profile": sketch,
-                    "depth_mm": thickness,
-                    "center_x_mm": cx + offset_x, "center_y_mm": cy + offset_y,
-                },
-                param_provenance={
-                    "sketch_profile": ParamProvenance(
-                        origin="stated",
-                        detail=(
-                            f"паз {length:g}×{width_mm:g} повёрнут на "
-                            f"{rotation_deg:g}° по прочитанному углу"
-                        ),
-                    )
-                },
-                confidence=0.8,
-            ))
+            features.append(
+                Feature3D(
+                    kind="pocket",
+                    source_feature_ids=_source_feature_ids(slot),
+                    params={
+                        "profile": "sketch",
+                        "sketch_profile": sketch,
+                        "depth_mm": thickness,
+                        "center_x_mm": cx + offset_x,
+                        "center_y_mm": cy + offset_y,
+                    },
+                    param_provenance={
+                        "sketch_profile": ParamProvenance(
+                            origin="stated",
+                            detail=(
+                                f"паз {length:g}×{width_mm:g} повёрнут на "
+                                f"{rotation_deg:g}° по прочитанному углу"
+                            ),
+                        )
+                    },
+                    confidence=0.8,
+                )
+            )
             continue
         if straight > 0:
-            features.append(Feature3D(
-                kind="pocket",
-                source_feature_ids=_source_feature_ids(slot),
-                params={
-                    "profile": "rectangle", "width_mm": straight, "height_mm": width_mm,
-                    "center_x_mm": cx, "center_y_mm": cy, "depth_mm": thickness,
-                },
-                confidence=0.8,
-            ))
+            features.append(
+                Feature3D(
+                    kind="pocket",
+                    source_feature_ids=_source_feature_ids(slot),
+                    params={
+                        "profile": "rectangle",
+                        "width_mm": straight,
+                        "height_mm": width_mm,
+                        "center_x_mm": cx,
+                        "center_y_mm": cy,
+                        "depth_mm": thickness,
+                    },
+                    confidence=0.8,
+                )
+            )
         # The capsule ends: a slot is a rectangle plus a round at each end.
         for offset in (-straight / 2.0, straight / 2.0):
-            features.append(Feature3D(
-                kind="hole",
-                source_feature_ids=_source_feature_ids(slot),
-                params={
-                    "diameter_mm": width_mm,
-                    "center_x_mm": cx + offset,
-                    "center_y_mm": cy,
-                    "through": True,
-                },
-                confidence=0.8,
-            ))
+            features.append(
+                Feature3D(
+                    kind="hole",
+                    source_feature_ids=_source_feature_ids(slot),
+                    params={
+                        "diameter_mm": width_mm,
+                        "center_x_mm": cx + offset,
+                        "center_y_mm": cy,
+                        "through": True,
+                    },
+                    confidence=0.8,
+                )
+            )
     if len(features) == 1:
         missing.append("на профиле не прочитано ни одного отверстия или паза")
     label = str(spec.get("part") or "Пластина") + " — по прочитанному контуру и толщине"
     return FeatureTreeCandidate(
-        features=features, score=0.85, label=label[:500], missing_data=missing,
+        features=features,
+        score=0.85,
+        label=label[:500],
+        missing_data=missing,
     )
 
 
@@ -637,7 +685,8 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
         "profile_points": ParamProvenance(
             origin="guessed" if outer_guess_notes else "stated",
             detail=(
-                "; ".join(outer_guess_notes) if outer_guess_notes
+                "; ".join(outer_guess_notes)
+                if outer_guess_notes
                 else "диаметры и длины ступеней прочитаны с чертежа (outer[])"
             ),
         )
@@ -656,7 +705,8 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
         provenance["bore_points"] = ParamProvenance(
             origin="guessed" if bore_guess_notes else "stated",
             detail=(
-                "; ".join(bore_guess_notes) if bore_guess_notes
+                "; ".join(bore_guess_notes)
+                if bore_guess_notes
                 else "внутренний контур прочитан с разреза (bore[])"
             ),
         )
@@ -672,13 +722,9 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
         for point in bore_points:
             point["z"] += bore_offset
         if bore_length > outer_length + 1e-6:
-            missing.append(
-                "расточка длиннее детали — проверьте прочитанные длины"
-            )
+            missing.append("расточка длиннее детали — проверьте прочитанные длины")
     elif not bore_unusable_note:
-        missing.append(
-            "разрез не прочитан: деталь построена сплошной, полость не учтена"
-        )
+        missing.append("разрез не прочитан: деталь построена сплошной, полость не учтена")
 
     features = [
         Feature3D(
@@ -691,20 +737,13 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
         )
     ]
 
-    def append_threads(
-        sections: list[dict], *, start_offset: float, internal: bool
-    ) -> None:
+    def append_threads(sections: list[dict], *, start_offset: float, internal: bool) -> None:
         axial_start = start_offset
         for section in sections:
             thread = section.get("thread") or {}
-            designation = str(
-                thread.get("designation") or thread.get("spec") or ""
-            ).strip()
+            designation = str(thread.get("designation") or thread.get("spec") or "").strip()
             if designation:
-                diameter = (
-                    _num(thread.get("nominal_diameter_mm"))
-                    or _num(section.get("d"))
-                )
+                diameter = _num(thread.get("nominal_diameter_mm")) or _num(section.get("d"))
                 if diameter:
                     thread_params: dict[str, Any] = {
                         "spec": designation,
@@ -716,22 +755,24 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
                     pitch = _num(thread.get("pitch_mm"))
                     if pitch:
                         thread_params["pitch_mm"] = pitch
-                    features.append(Feature3D(
-                        kind="thread",
-                        source_feature_ids=_source_feature_ids(section),
-                        params=thread_params,
-                        param_provenance={
-                            "spec": ParamProvenance(
-                                origin="stated",
-                                detail="обозначение резьбы прочитано с чертежа",
-                            ),
-                            "diameter_mm": ParamProvenance(
-                                origin="stated", detail="номинальный диаметр резьбы"
-                            ),
-                        },
-                        confidence=0.85,
-                        body_index=body_index,
-                    ))
+                    features.append(
+                        Feature3D(
+                            kind="thread",
+                            source_feature_ids=_source_feature_ids(section),
+                            params=thread_params,
+                            param_provenance={
+                                "spec": ParamProvenance(
+                                    origin="stated",
+                                    detail="обозначение резьбы прочитано с чертежа",
+                                ),
+                                "diameter_mm": ParamProvenance(
+                                    origin="stated", detail="номинальный диаметр резьбы"
+                                ),
+                            },
+                            confidence=0.85,
+                            body_index=body_index,
+                        )
+                    )
             axial_start += float(section.get("l") or 0.0)
 
     append_threads(outer, start_offset=0.0, internal=False)
@@ -792,11 +833,31 @@ def _section_starts(outer: list[dict]) -> list[float]:
 
 
 _METRIC_COARSE_PITCH_MM = {
-    1.0: 0.25, 1.2: 0.25, 1.4: 0.3, 1.6: 0.35, 1.8: 0.35,
-    2.0: 0.4, 2.5: 0.45, 3.0: 0.5, 3.5: 0.6, 4.0: 0.7,
-    5.0: 0.8, 6.0: 1.0, 8.0: 1.25, 10.0: 1.5, 12.0: 1.75,
-    14.0: 2.0, 16.0: 2.0, 18.0: 2.5, 20.0: 2.5, 22.0: 2.5,
-    24.0: 3.0, 27.0: 3.0, 30.0: 3.5, 33.0: 3.5, 36.0: 4.0,
+    1.0: 0.25,
+    1.2: 0.25,
+    1.4: 0.3,
+    1.6: 0.35,
+    1.8: 0.35,
+    2.0: 0.4,
+    2.5: 0.45,
+    3.0: 0.5,
+    3.5: 0.6,
+    4.0: 0.7,
+    5.0: 0.8,
+    6.0: 1.0,
+    8.0: 1.25,
+    10.0: 1.5,
+    12.0: 1.75,
+    14.0: 2.0,
+    16.0: 2.0,
+    18.0: 2.5,
+    20.0: 2.5,
+    22.0: 2.5,
+    24.0: 3.0,
+    27.0: 3.0,
+    30.0: 3.5,
+    33.0: 3.5,
+    36.0: 4.0,
 }
 
 
@@ -866,17 +927,19 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
         else:
             missing.append("канавка без глубины — не построена")
             continue
-        features.append(Feature3D(
-            kind="groove",
-            source_feature_ids=_source_feature_ids(groove),
-            params=params,
-            param_provenance={
-                "axial_position_mm": ParamProvenance(
-                    origin="stated", detail="положение канавки прочитано с чертежа"
-                ),
-            },
-            confidence=0.85,
-        ))
+        features.append(
+            Feature3D(
+                kind="groove",
+                source_feature_ids=_source_feature_ids(groove),
+                params=params,
+                param_provenance={
+                    "axial_position_mm": ParamProvenance(
+                        origin="stated", detail="положение канавки прочитано с чертежа"
+                    ),
+                },
+                confidence=0.85,
+            )
+        )
 
     for keyway in body.get("keyways") or []:
         start = _num(keyway.get("axial_start_mm"))
@@ -886,27 +949,27 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
         if start is None or not (length and width and depth):
             missing.append("шпоночный паз прочитан не полностью — не построен")
             continue
-        features.append(Feature3D(
-            kind="keyway",
-            source_feature_ids=_source_feature_ids(keyway),
-            params={
-                "axial_start_mm": start,
-                "length_mm": length,
-                "width_mm": width,
-                "depth_mm": depth,
-                "angle_deg": _num(keyway.get("angle_deg")) or 0.0,
-                "end_type": keyway.get("end_type") or "closed",
-            },
-            param_provenance={
-                "width_mm": ParamProvenance(
-                    origin="stated", detail="ширина паза с чертежа"
-                ),
-                "depth_mm": ParamProvenance(
-                    origin="stated", detail="глубина паза t1 с чертежа"
-                ),
-            },
-            confidence=0.85,
-        ))
+        features.append(
+            Feature3D(
+                kind="keyway",
+                source_feature_ids=_source_feature_ids(keyway),
+                params={
+                    "axial_start_mm": start,
+                    "length_mm": length,
+                    "width_mm": width,
+                    "depth_mm": depth,
+                    "angle_deg": _num(keyway.get("angle_deg")) or 0.0,
+                    "end_type": keyway.get("end_type") or "closed",
+                },
+                param_provenance={
+                    "width_mm": ParamProvenance(origin="stated", detail="ширина паза с чертежа"),
+                    "depth_mm": ParamProvenance(
+                        origin="stated", detail="глубина паза t1 с чертежа"
+                    ),
+                },
+                confidence=0.85,
+            )
+        )
 
     for hole in body.get("cross_holes") or []:
         diameter = _num(hole.get("diameter_mm"))
@@ -933,45 +996,49 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             depth = _num(hole.get("depth_mm"))
             if depth and through is False:
                 params["depth_mm"] = depth
-            features.append(Feature3D(
-                kind="hole",
-                source_feature_ids=_source_feature_ids(hole),
-                params=params,
-                param_provenance={
-                    "diameter_mm": ParamProvenance(
-                        origin="stated", detail="Ø поперечного отверстия с чертежа"
-                    ),
-                },
-                confidence=0.8,
-            ))
-            counterbore_diameter = _num(hole.get("counterbore_diameter_mm"))
-            counterbore_depth = _num(hole.get("counterbore_depth_mm"))
-            if counterbore_diameter and counterbore_depth:
-                features.append(Feature3D(
+            features.append(
+                Feature3D(
                     kind="hole",
                     source_feature_ids=_source_feature_ids(hole),
-                    params={
-                        "axis": "radial",
-                        "diameter_mm": counterbore_diameter,
-                        "axial_position_mm": position,
-                        "angle_deg": base_angle + index * step,
-                        "center_x_mm": 0.0,
-                        "center_y_mm": 0.0,
-                        "through": False,
-                        "depth_mm": counterbore_depth,
-                    },
+                    params=params,
                     param_provenance={
                         "diameter_mm": ParamProvenance(
-                            origin="stated",
-                            detail="Ø цековки поперечного отверстия с чертежа",
-                        ),
-                        "depth_mm": ParamProvenance(
-                            origin="stated",
-                            detail="глубина цековки с чертежа",
+                            origin="stated", detail="Ø поперечного отверстия с чертежа"
                         ),
                     },
                     confidence=0.8,
-                ))
+                )
+            )
+            counterbore_diameter = _num(hole.get("counterbore_diameter_mm"))
+            counterbore_depth = _num(hole.get("counterbore_depth_mm"))
+            if counterbore_diameter and counterbore_depth:
+                features.append(
+                    Feature3D(
+                        kind="hole",
+                        source_feature_ids=_source_feature_ids(hole),
+                        params={
+                            "axis": "radial",
+                            "diameter_mm": counterbore_diameter,
+                            "axial_position_mm": position,
+                            "angle_deg": base_angle + index * step,
+                            "center_x_mm": 0.0,
+                            "center_y_mm": 0.0,
+                            "through": False,
+                            "depth_mm": counterbore_depth,
+                        },
+                        param_provenance={
+                            "diameter_mm": ParamProvenance(
+                                origin="stated",
+                                detail="Ø цековки поперечного отверстия с чертежа",
+                            ),
+                            "depth_mm": ParamProvenance(
+                                origin="stated",
+                                detail="глубина цековки с чертежа",
+                            ),
+                        },
+                        confidence=0.8,
+                    )
+                )
 
     for pattern in body.get("axial_holes") or []:
         count = int(pattern.get("count") or 0)
@@ -1032,32 +1099,34 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             center_x = radius * math.cos(math.radians(angle))
             center_y = radius * math.sin(math.radians(angle))
             if entry_offset > 0 and entry_recess_diameter is not None:
-                features.append(Feature3D(
-                    kind="hole",
-                    source_feature_ids=_source_feature_ids(pattern),
-                    params={
-                        "axis": "z",
-                        "diameter_mm": entry_recess_diameter,
-                        "center_x_mm": round(center_x, 6),
-                        "center_y_mm": round(center_y, 6),
-                        "through": False,
-                        "from_face": from_face,
-                        "entry_offset_mm": 0.0,
-                        "depth_mm": entry_offset,
-                        "role": "entry_recess",
-                    },
-                    param_provenance={
-                        "diameter_mm": ParamProvenance(
-                            origin="stated",
-                            detail="Ø входной выборки перед осевым резьбовым отверстием",
-                        ),
-                        "depth_mm": ParamProvenance(
-                            origin="measured",
-                            detail="глубина выборки измерена по продольному векторному контуру",
-                        ),
-                    },
-                    confidence=0.78,
-                ))
+                features.append(
+                    Feature3D(
+                        kind="hole",
+                        source_feature_ids=_source_feature_ids(pattern),
+                        params={
+                            "axis": "z",
+                            "diameter_mm": entry_recess_diameter,
+                            "center_x_mm": round(center_x, 6),
+                            "center_y_mm": round(center_y, 6),
+                            "through": False,
+                            "from_face": from_face,
+                            "entry_offset_mm": 0.0,
+                            "depth_mm": entry_offset,
+                            "role": "entry_recess",
+                        },
+                        param_provenance={
+                            "diameter_mm": ParamProvenance(
+                                origin="stated",
+                                detail="Ø входной выборки перед осевым резьбовым отверстием",
+                            ),
+                            "depth_mm": ParamProvenance(
+                                origin="measured",
+                                detail="глубина выборки измерена по продольному векторному контуру",
+                            ),
+                        },
+                        confidence=0.78,
+                    )
+                )
             params: dict[str, Any] = {
                 "axis": "z",
                 "diameter_mm": cut_diameter,
@@ -1069,33 +1138,36 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             }
             if through is False:
                 params["depth_mm"] = drill_depth
-            features.append(Feature3D(
-                kind="hole",
-                source_feature_ids=_source_feature_ids(pattern),
-                params=params,
-                param_provenance={
-                    "diameter_mm": ParamProvenance(
-                        origin=diameter_origin,
-                        detail=diameter_detail,
-                    ),
-                    "center_x_mm": ParamProvenance(
-                        origin="propagated",
-                        detail="координата из прочитанной делительной окружности",
-                    ),
-                    "center_y_mm": ParamProvenance(
-                        origin="propagated",
-                        detail="координата из прочитанной делительной окружности",
-                    ),
-                    "entry_offset_mm": ParamProvenance(
-                        origin="measured" if entry_offset else "propagated",
-                        detail=(
-                            "смещённая входная плоскость измерена по векторному контуру продольного разреза"
-                            if entry_offset else "вход на крайнем торце"
+            features.append(
+                Feature3D(
+                    kind="hole",
+                    source_feature_ids=_source_feature_ids(pattern),
+                    params=params,
+                    param_provenance={
+                        "diameter_mm": ParamProvenance(
+                            origin=diameter_origin,
+                            detail=diameter_detail,
                         ),
-                    ),
-                },
-                confidence=0.82,
-            ))
+                        "center_x_mm": ParamProvenance(
+                            origin="propagated",
+                            detail="координата из прочитанной делительной окружности",
+                        ),
+                        "center_y_mm": ParamProvenance(
+                            origin="propagated",
+                            detail="координата из прочитанной делительной окружности",
+                        ),
+                        "entry_offset_mm": ParamProvenance(
+                            origin="measured" if entry_offset else "propagated",
+                            detail=(
+                                "смещённая входная плоскость измерена по векторному контуру продольного разреза"
+                                if entry_offset
+                                else "вход на крайнем торце"
+                            ),
+                        ),
+                    },
+                    confidence=0.82,
+                )
+            )
             thread_params: dict[str, Any] = {
                 "spec": designation,
                 "diameter_mm": nominal,
@@ -1109,35 +1181,37 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                 thread_params["pitch_mm"] = pitch
             if thread_depth is not None:
                 thread_params["length_mm"] = thread_depth
-            features.append(Feature3D(
-                kind="thread",
-                source_feature_ids=_source_feature_ids(pattern),
-                params=thread_params,
-                param_provenance={
-                    "spec": ParamProvenance(
-                        origin="stated", detail="обозначение резьбы с торцевого вида"
-                    ),
-                    "pitch_mm": ParamProvenance(
-                        origin=(
-                            "stated"
-                            if _num(thread.get("pitch_mm")) is not None
-                            else "standard"
+            features.append(
+                Feature3D(
+                    kind="thread",
+                    source_feature_ids=_source_feature_ids(pattern),
+                    params=thread_params,
+                    param_provenance={
+                        "spec": ParamProvenance(
+                            origin="stated", detail="обозначение резьбы с торцевого вида"
                         ),
-                        detail=(
-                            "шаг указан в обозначении"
-                            if _num(thread.get("pitch_mm")) is not None
-                            else "крупный шаг метрической резьбы по стандарту"
+                        "pitch_mm": ParamProvenance(
+                            origin=(
+                                "stated" if _num(thread.get("pitch_mm")) is not None else "standard"
+                            ),
+                            detail=(
+                                "шаг указан в обозначении"
+                                if _num(thread.get("pitch_mm")) is not None
+                                else "крупный шаг метрической резьбы по стандарту"
+                            ),
                         ),
-                    ),
-                    "center_x_mm": ParamProvenance(
-                        origin="propagated", detail="центр на прочитанной делительной окружности"
-                    ),
-                    "center_y_mm": ParamProvenance(
-                        origin="propagated", detail="центр на прочитанной делительной окружности"
-                    ),
-                },
-                confidence=0.82,
-            ))
+                        "center_x_mm": ParamProvenance(
+                            origin="propagated",
+                            detail="центр на прочитанной делительной окружности",
+                        ),
+                        "center_y_mm": ParamProvenance(
+                            origin="propagated",
+                            detail="центр на прочитанной делительной окружности",
+                        ),
+                    },
+                    confidence=0.82,
+                )
+            )
 
     for pattern in body.get("circular_hole_patterns") or []:
         count = int(pattern.get("count") or 0)
@@ -1197,27 +1271,31 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             if through is False:
                 params["depth_mm"] = depth
             if axis_mode == "inclined":
-                params.update({
-                    "inclination_deg": inclination,
-                    "radial_direction": radial_direction,
-                })
-            features.append(Feature3D(
-                kind="hole",
-                source_feature_ids=_source_feature_ids(pattern),
-                params=params,
-                param_provenance={
-                    "diameter_mm": ParamProvenance(
-                        origin="stated", detail="Ø группового отверстия с разреза"
-                    ),
-                    "center_x_mm": ParamProvenance(
-                        origin="propagated", detail="координата из PCD и угловой фазы"
-                    ),
-                    "center_y_mm": ParamProvenance(
-                        origin="propagated", detail="координата из PCD и угловой фазы"
-                    ),
-                },
-                confidence=0.78,
-            ))
+                params.update(
+                    {
+                        "inclination_deg": inclination,
+                        "radial_direction": radial_direction,
+                    }
+                )
+            features.append(
+                Feature3D(
+                    kind="hole",
+                    source_feature_ids=_source_feature_ids(pattern),
+                    params=params,
+                    param_provenance={
+                        "diameter_mm": ParamProvenance(
+                            origin="stated", detail="Ø группового отверстия с разреза"
+                        ),
+                        "center_x_mm": ParamProvenance(
+                            origin="propagated", detail="координата из PCD и угловой фазы"
+                        ),
+                        "center_y_mm": ParamProvenance(
+                            origin="propagated", detail="координата из PCD и угловой фазы"
+                        ),
+                    },
+                    confidence=0.78,
+                )
+            )
 
     features.extend(_edge_features(body, outer, starts, total_length, missing))
     return features
@@ -1255,17 +1333,19 @@ def _edge_features(
             params = {"size_mm": size, "edge_selector": selector}
             if kind == "chamfer" and _num(item.get("angle_deg")):
                 params["angle_deg"] = _num(item.get("angle_deg"))
-            features.append(Feature3D(
-                kind=kind,
-                source_feature_ids=_source_feature_ids(item),
-                params=params,
-                param_provenance={
-                    "size_mm": ParamProvenance(
-                        origin="stated", detail=f"размер {kind} с чертежа"
-                    ),
-                },
-                confidence=0.75,
-            ))
+            features.append(
+                Feature3D(
+                    kind=kind,
+                    source_feature_ids=_source_feature_ids(item),
+                    params=params,
+                    param_provenance={
+                        "size_mm": ParamProvenance(
+                            origin="stated", detail=f"размер {kind} с чертежа"
+                        ),
+                    },
+                    confidence=0.75,
+                )
+            )
     return features
 
 
@@ -1285,14 +1365,16 @@ def _edge_selector(
     if location == "left_end":
         first = outer[0] if outer else {}
         return {
-            "curve": "Circle", "at_z_mm": 0.0,
+            "curve": "Circle",
+            "at_z_mm": 0.0,
             "diameter_mm": at_diameter or _num(first.get("d")),
         }
     if location == "right_end":
         last = outer[-1] if outer else {}
         end_diameter = taper_end_diameter(last) if last else None
         return {
-            "curve": "Circle", "at_z_mm": total_length,
+            "curve": "Circle",
+            "at_z_mm": total_length,
             "diameter_mm": at_diameter or end_diameter or _num(last.get("d")),
         }
     # "bore_mouth" (chamfer) and "bore" (fillet — SpecFillet's own location
@@ -1301,7 +1383,8 @@ def _edge_selector(
     if location in ("shoulder", "bore_mouth", "bore"):
         if at_z is not None:
             return {
-                "curve": "Circle", "at_z_mm": at_z,
+                "curve": "Circle",
+                "at_z_mm": at_z,
                 **({"diameter_mm": at_diameter} if at_diameter else {}),
             }
         if at_diameter:
@@ -1356,12 +1439,17 @@ def verify_solid_against_spec(
     # reading the total from there is exact for a normal fully-stated build
     # too (same arithmetic), and correct for a guessed one.
     revolve = next(
-        (feature for feature in (candidate.features if candidate else []) if feature.kind == "revolve"),
+        (
+            feature
+            for feature in (candidate.features if candidate else [])
+            if feature.kind == "revolve"
+        ),
         None,
     )
     profile_points = (revolve.params.get("profile_points") if revolve else None) or []
     stated_length = (
-        float(profile_points[-1]["z"]) if profile_points
+        float(profile_points[-1]["z"])
+        if profile_points
         else sum(float(section["l"]) for section in outer if section.get("l"))
     )
     stated_diameter = max((float(section["d"]) for section in outer), default=0.0)
@@ -1414,7 +1502,8 @@ def verify_solid_against_spec(
     )
     # Same candidate-first, raw-spec-fallback rule as stated_length above.
     outer_volume = (
-        _profile_volume_from_points(profile_points) if profile_points
+        _profile_volume_from_points(profile_points)
+        if profile_points
         else _profile_volume_mm3(outer)
     )
     expected_base_volume = outer_volume - bore_volume

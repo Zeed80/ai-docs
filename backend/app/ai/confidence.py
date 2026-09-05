@@ -10,8 +10,8 @@ from app.ai import ru_validators as rv
 from app.db.models import ConfidenceReason
 
 # Confidence levels for objectively *verifiable* fields.
-_VERIFIED = 0.98   # checksum / arithmetic passed → near-certain
-_FAILED = 0.25     # checksum / arithmetic failed → almost certainly wrong
+_VERIFIED = 0.98  # checksum / arithmetic passed → near-certain
+_FAILED = 0.25  # checksum / arithmetic failed → almost certainly wrong
 # Default prior for present fields we cannot verify objectively (names, free text,
 # line descriptions). Matches the application default auto-approve threshold (0.95)
 # so unverifiable fields sit right at the gate: they auto-approve at default
@@ -50,21 +50,30 @@ def compute_field_confidences(
     warning_fields = {e["field"] for e in validation_errors if e.get("severity") == "warning"}
 
     top_fields = [
-        "invoice_number", "invoice_date", "due_date", "validity_date", "currency",
-        "payment_id", "special_marks",
-        "subtotal", "tax_amount", "total_amount",
+        "invoice_number",
+        "invoice_date",
+        "due_date",
+        "validity_date",
+        "currency",
+        "payment_id",
+        "special_marks",
+        "subtotal",
+        "tax_amount",
+        "total_amount",
     ]
 
     for field_name in top_fields:
         value = extracted.get(field_name)
 
         if value is None:
-            results.append(FieldConfidence(
-                field_name=field_name,
-                value=None,
-                confidence=0.0,
-                reason=ConfidenceReason.missing_field,
-            ))
+            results.append(
+                FieldConfidence(
+                    field_name=field_name,
+                    value=None,
+                    confidence=0.0,
+                    reason=ConfidenceReason.missing_field,
+                )
+            )
             continue
 
         str_value = str(value)
@@ -102,12 +111,14 @@ def compute_field_confidences(
             elif field_name in warning_fields:
                 confidence, reason = 0.6, ConfidenceReason.ambiguous_value
 
-        results.append(FieldConfidence(
-            field_name=field_name,
-            value=str_value,
-            confidence=round(confidence, 2),
-            reason=reason,
-        ))
+        results.append(
+            FieldConfidence(
+                field_name=field_name,
+                value=str_value,
+                confidence=round(confidence, 2),
+                reason=reason,
+            )
+        )
 
     def _add_party_field(prefix: str, data: dict, key: str, checksum=None):
         """Add a party field. ``checksum`` (bool result) → verified/failed;
@@ -121,12 +132,14 @@ def compute_field_confidences(
             reason = ConfidenceReason.high_quality_ocr if ok else ConfidenceReason.format_mismatch
         else:
             conf, reason = unverifiable_prior, ConfidenceReason.high_quality_ocr
-        results.append(FieldConfidence(
-            field_name=f"{prefix}.{key}",
-            value=str(val),
-            confidence=round(conf, 2),
-            reason=reason,
-        ))
+        results.append(
+            FieldConfidence(
+                field_name=f"{prefix}.{key}",
+                value=str(val),
+                confidence=round(conf, 2),
+                reason=reason,
+            )
+        )
 
     # Supplier fields — ИНН/БИК/счета verified by control-digit checksums.
     supplier = extracted.get("supplier", {}) or {}
@@ -141,7 +154,9 @@ def compute_field_confidences(
         _add_party_field("supplier", supplier, "bank_name")
         _add_party_field("supplier", supplier, "bank_bik", rv.bik_valid)
         _add_party_field("supplier", supplier, "bank_account", lambda v: rv.account_valid(v, sbik))
-        _add_party_field("supplier", supplier, "corr_account", lambda v: rv.corr_account_valid(v, sbik))
+        _add_party_field(
+            "supplier", supplier, "corr_account", lambda v: rv.corr_account_valid(v, sbik)
+        )
 
     # Buyer fields
     buyer = extracted.get("buyer", {}) or {}
@@ -166,18 +181,24 @@ def compute_field_confidences(
                 return
             if key == "amount":
                 conf = _FAILED if line_amount_failed else _VERIFIED
-                rsn = ConfidenceReason.arithmetic_error if line_amount_failed else ConfidenceReason.high_quality_ocr
+                rsn = (
+                    ConfidenceReason.arithmetic_error
+                    if line_amount_failed
+                    else ConfidenceReason.high_quality_ocr
+                )
             elif numeric and line_amount_failed:
                 # qty / unit_price implicated by a broken line equation
                 conf, rsn = 0.6, ConfidenceReason.ambiguous_value
             else:
                 conf, rsn = unverifiable_prior, ConfidenceReason.high_quality_ocr
-            results.append(FieldConfidence(
-                field_name=f"line_{n}.{key}",
-                value=str(val),
-                confidence=round(conf, 2),
-                reason=rsn,
-            ))
+            results.append(
+                FieldConfidence(
+                    field_name=f"line_{n}.{key}",
+                    value=str(val),
+                    confidence=round(conf, 2),
+                    reason=rsn,
+                )
+            )
 
         _line_field("description", numeric=False)
         _line_field("sku", numeric=False)
@@ -194,8 +215,11 @@ def compute_field_confidences(
 # name, free-text supplier/buyer name) are deliberately excluded from the gate so
 # a blurry phone number never holds up an otherwise-correct invoice.
 _SIGNIFICANT_TOP = {
-    "invoice_number", "invoice_date",
-    "subtotal", "tax_amount", "total_amount",
+    "invoice_number",
+    "invoice_date",
+    "subtotal",
+    "tax_amount",
+    "total_amount",
 }
 _SIGNIFICANT_PARTY_SUFFIXES = {"inn", "kpp", "bank_bik", "bank_account", "corr_account"}
 _SIGNIFICANT_LINE_SUFFIXES = {"description", "sku", "quantity", "unit_price", "amount"}
@@ -214,8 +238,8 @@ def _is_significant(field_name: str) -> bool:
 
 @dataclass
 class SignificantConfidence:
-    score: float                       # weighted confidence over significant fields
-    low_fields: list[dict]             # significant fields below the threshold
+    score: float  # weighted confidence over significant fields
+    low_fields: list[dict]  # significant fields below the threshold
     significant_count: int
 
 
@@ -232,8 +256,7 @@ def significant_fields_confidence(
     """
     critical = {"total_amount", "invoice_number", "invoice_date", "supplier.inn"}
     significant = [
-        fc for fc in field_confidences
-        if fc.value is not None and _is_significant(fc.field_name)
+        fc for fc in field_confidences if fc.value is not None and _is_significant(fc.field_name)
     ]
     if not significant:
         return SignificantConfidence(score=0.0, low_fields=[], significant_count=0)
@@ -246,12 +269,14 @@ def significant_fields_confidence(
         weighted_sum += fc.confidence * weight
         weight_total += weight
         if fc.confidence < threshold:
-            low_fields.append({
-                "field": fc.field_name,
-                "value": fc.value,
-                "confidence": fc.confidence,
-                "reason": fc.reason.value if hasattr(fc.reason, "value") else str(fc.reason),
-            })
+            low_fields.append(
+                {
+                    "field": fc.field_name,
+                    "value": fc.value,
+                    "confidence": fc.confidence,
+                    "reason": fc.reason.value if hasattr(fc.reason, "value") else str(fc.reason),
+                }
+            )
 
     score = round(weighted_sum / weight_total, 2) if weight_total else 0.0
     return SignificantConfidence(
@@ -312,13 +337,16 @@ def validate_arithmetic(extracted: dict) -> list[dict]:
         if qty is not None and price is not None and amount is not None:
             if round(qty * price, 2) - amount > 0.5:
                 discounted_lines += 1
-    _line_sum_precheck = sum(l.get("amount", 0) or 0 for l in lines) if lines else 0.0
+    _line_sum_precheck = sum(ln.get("amount", 0) or 0 for ln in lines) if lines else 0.0
     _totals_reconcile = (
-        subtotal is not None and tax_amount is not None and total_amount is not None
+        subtotal is not None
+        and tax_amount is not None
+        and total_amount is not None
         and rv.arith_total_ok(subtotal, tax_amount, total_amount)
     )
     _lines_match_subtotal = (
-        subtotal is not None and lines
+        subtotal is not None
+        and lines
         and abs(_line_sum_precheck - subtotal) <= max(1.0, 0.01 * abs(subtotal))
     )
     discount_pattern = discounted_lines >= 2 and _totals_reconcile and _lines_match_subtotal
@@ -339,23 +367,24 @@ def validate_arithmetic(extracted: dict) -> list[dict]:
         if abs(expected - target) > 0.5:
             if pre_discount is None and discount_pattern:
                 continue  # expected: post-discount amount ≠ qty × price by design
-            errors.append({
-                "field": f"line_{line.get('line_number', '?')}.amount",
-                "error_type": "arithmetic",
-                "message": f"Line amount mismatch: {qty} × {price} = {expected}, got {target}",
-                "expected": str(expected),
-                "actual": str(target),
-                "severity": "error",
-            })
+            errors.append(
+                {
+                    "field": f"line_{line.get('line_number', '?')}.amount",
+                    "error_type": "arithmetic",
+                    "message": f"Line amount mismatch: {qty} × {price} = {expected}, got {target}",
+                    "expected": str(expected),
+                    "actual": str(target),
+                    "severity": "error",
+                }
+            )
 
     # Check line amounts sum ≈ subtotal (net lines) OR ≈ total (VAT-inclusive
     # lines) — both conventions occur on real Russian invoices.
     if subtotal is not None and lines:
-        line_sum = sum(l.get("amount", 0) or 0 for l in lines)
+        line_sum = sum(ln.get("amount", 0) or 0 for ln in lines)
         matches_subtotal = abs(line_sum - subtotal) <= max(1.0, 0.01 * abs(subtotal))
-        matches_total = (
-            total_amount is not None
-            and abs(line_sum - total_amount) <= max(1.0, 0.01 * abs(total_amount))
+        matches_total = total_amount is not None and abs(line_sum - total_amount) <= max(
+            1.0, 0.01 * abs(total_amount)
         )
         if not matches_subtotal and not matches_total:
             # Discount-invoice pattern: lines > subtotal but subtotal/tax/total
@@ -370,27 +399,31 @@ def validate_arithmetic(extracted: dict) -> list[dict]:
                 and rv.arith_total_ok(subtotal, tax_amount, total_amount)
             )
             if _totals_ok:
-                errors.append({
-                    "field": "subtotal",
-                    "error_type": "arithmetic",
-                    "message": (
-                        f"Sum of line amounts ({line_sum}) > subtotal ({subtotal}): "
-                        "line amounts may be from pre-discount 'Сумма без скидки' column; "
-                        "please verify individual line amounts"
-                    ),
-                    "expected": str(subtotal),
-                    "actual": str(line_sum),
-                    "severity": "warning",
-                })
+                errors.append(
+                    {
+                        "field": "subtotal",
+                        "error_type": "arithmetic",
+                        "message": (
+                            f"Sum of line amounts ({line_sum}) > subtotal ({subtotal}): "
+                            "line amounts may be from pre-discount 'Сумма без скидки' column; "
+                            "please verify individual line amounts"
+                        ),
+                        "expected": str(subtotal),
+                        "actual": str(line_sum),
+                        "severity": "warning",
+                    }
+                )
             else:
-                errors.append({
-                    "field": "subtotal",
-                    "error_type": "arithmetic",
-                    "message": f"Sum of lines ({line_sum}) ≠ subtotal ({subtotal})",
-                    "expected": str(line_sum),
-                    "actual": str(subtotal),
-                    "severity": "error",
-                })
+                errors.append(
+                    {
+                        "field": "subtotal",
+                        "error_type": "arithmetic",
+                        "message": f"Sum of lines ({line_sum}) ≠ subtotal ({subtotal})",
+                        "expected": str(line_sum),
+                        "actual": str(subtotal),
+                        "severity": "error",
+                    }
+                )
 
     # Check subtotal / tax / total reconcile under either VAT convention
     # (НДС сверху OR НДС в том числе) — see ru_validators.arith_total_ok.
@@ -406,38 +439,40 @@ def validate_arithmetic(extracted: dict) -> list[dict]:
                 s = float(subtotal)
                 t = float(tax_amount)
                 g = float(total_amount)
-                total_self_consistent = (
-                    s > g and (
-                        rv.arith_total_ok(g, t, g)           # В т.ч. НДС: gross == total
-                        or rv.arith_total_ok(g - t, t, g)    # НДС сверху: net + tax = total
-                    )
+                total_self_consistent = s > g and (
+                    rv.arith_total_ok(g, t, g)  # В т.ч. НДС: gross == total
+                    or rv.arith_total_ok(g - t, t, g)  # НДС сверху: net + tax = total
                 )
             except (TypeError, ValueError):
                 total_self_consistent = False
 
             if total_self_consistent:
                 # Flag subtotal (the pre-discount gross): total_amount is correct.
-                errors.append({
-                    "field": "subtotal",
-                    "error_type": "arithmetic",
-                    "message": (
-                        f"subtotal ({subtotal}) > total ({total_amount}): likely the "
-                        "pre-discount 'Сумма без скидки' column was used instead of "
-                        "the final post-discount 'Сумма' column"
-                    ),
-                    "expected": "post-discount net or gross consistent with total",
-                    "actual": str(subtotal),
-                    "severity": "error",
-                })
+                errors.append(
+                    {
+                        "field": "subtotal",
+                        "error_type": "arithmetic",
+                        "message": (
+                            f"subtotal ({subtotal}) > total ({total_amount}): likely the "
+                            "pre-discount 'Сумма без скидки' column was used instead of "
+                            "the final post-discount 'Сумма' column"
+                        ),
+                        "expected": "post-discount net or gross consistent with total",
+                        "actual": str(subtotal),
+                        "severity": "error",
+                    }
+                )
             else:
-                errors.append({
-                    "field": "total_amount",
-                    "error_type": "arithmetic",
-                    "message": f"subtotal ({subtotal}) + tax ({tax_amount}) ≠ total ({total_amount})",
-                    "expected": "consistent VAT total",
-                    "actual": str(total_amount),
-                    "severity": "error",
-                })
+                errors.append(
+                    {
+                        "field": "total_amount",
+                        "error_type": "arithmetic",
+                        "message": f"subtotal ({subtotal}) + tax ({tax_amount}) ≠ total ({total_amount})",
+                        "expected": "consistent VAT total",
+                        "actual": str(total_amount),
+                        "severity": "error",
+                    }
+                )
 
     return errors
 

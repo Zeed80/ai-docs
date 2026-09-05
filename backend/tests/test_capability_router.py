@@ -1,8 +1,8 @@
 """Tests for capability dispatcher (POST /api/agent/cap/{capability})."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi import HTTPException
 from httpx import AsyncClient
 
@@ -27,9 +27,7 @@ async def test_missing_action_returns_400(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_unknown_action_returns_400(client: AsyncClient):
-    r = await client.post(
-        "/api/agent/cap/documents", json={"action": "nonexistent_action"}
-    )
+    r = await client.post("/api/agent/cap/documents", json={"action": "nonexistent_action"})
     assert r.status_code == 400
     detail = r.json()["detail"]
     assert detail["error_code"] == "unknown_action"
@@ -58,7 +56,6 @@ async def test_dispatch_flattens_filters_field(client: AsyncClient):
         )
     assert r.status_code == 200
     # The flattened "status" key should be passed to _proxy
-    _, kwargs_or_args = proxy_mock.call_args[0], proxy_mock.call_args
     call_body = proxy_mock.call_args[0][3]  # body is 4th positional arg
     assert call_body.get("status") == "approved"
 
@@ -171,7 +168,9 @@ async def test_image_studio_accept_techdraw_requires_approval(client: AsyncClien
 
 
 @pytest.mark.asyncio
-async def test_image_studio_accept_techdraw_dispatches_with_approval(client: AsyncClient, monkeypatch):
+async def test_image_studio_accept_techdraw_dispatches_with_approval(
+    client: AsyncClient, monkeypatch
+):
     from app.api import capability_router
 
     monkeypatch.setattr(capability_router.settings, "agent_service_key", "", raising=False)

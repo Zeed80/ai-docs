@@ -50,8 +50,11 @@ def _roughness_mark_entities(
         Segment(p1=p0, p2=p2, **common),
         Segment(p1=p2, p2=p3, **common),
         TextEntity(
-            position=P(mx + 7.5, my + 14.0), text=f"Ra {ra:g}", height=2.8 * px_per_mm,
-            origin="spec", assurance="constraint_validated",
+            position=P(mx + 7.5, my + 14.0),
+            text=f"Ra {ra:g}",
+            height=2.8 * px_per_mm,
+            origin="spec",
+            assurance="constraint_validated",
         ),
     ]
 
@@ -61,7 +64,9 @@ def shaft_spec_to_ir(spec, px_per_mm: float = 4.0) -> CadIR:
     ``techdraw._dxf_draw_shaft`` exactly (same per-segment top/bottom lines,
     step transitions, bore/thread centerlines, dimension placement) so this
     is a genuine like-for-like port, not a reinterpretation."""
-    from app.ai.techdraw import ShaftSpec  # local import: avoid a cycle (techdraw imports nothing from here)
+    from app.ai.techdraw import (
+        ShaftSpec,  # local import: avoid a cycle (techdraw imports nothing from here)
+    )
 
     s: ShaftSpec = spec if isinstance(spec, ShaftSpec) else ShaftSpec(**spec)
     segments = s.segments
@@ -85,13 +90,28 @@ def shaft_spec_to_ir(spec, px_per_mm: float = 4.0) -> CadIR:
             y=image_height_px - (y_mm + cy_mm) * px_per_mm,
         )
 
-    common = {"line_class": "contour", "width_class": "main", "origin": "spec", "assurance": "constraint_validated"}
-    axis = {"line_class": "axis", "width_class": "thin", "origin": "spec", "assurance": "constraint_validated"}
+    common = {
+        "line_class": "contour",
+        "width_class": "main",
+        "origin": "spec",
+        "assurance": "constraint_validated",
+    }
+    axis = {
+        "line_class": "axis",
+        "width_class": "thin",
+        "origin": "spec",
+        "assurance": "constraint_validated",
+    }
     dim_common = {"origin": "spec", "assurance": "constraint_validated"}
     # Roughness marks are annotation, not object geometry — "dim" is the
     # closest existing line_class (thin, DIM layer), same choice
     # DimensionEntity itself defaults to.
-    roughness_common = {"line_class": "dim", "width_class": "thin", "origin": "spec", "assurance": "constraint_validated"}
+    roughness_common = {
+        "line_class": "dim",
+        "width_class": "thin",
+        "origin": "spec",
+        "assurance": "constraint_validated",
+    }
 
     entities: list[Entity] = []
     x = 0.0
@@ -116,22 +136,37 @@ def shaft_spec_to_ir(spec, px_per_mm: float = 4.0) -> CadIR:
 
         entities.append(
             DimensionEntity(
-                p1=P(x, -dim_base_offset), p2=P(x + w, -dim_base_offset),
-                kind="linear", text=f"{seg.length:g}", value_mm=seg.length, **dim_common,
+                p1=P(x, -dim_base_offset),
+                p2=P(x + w, -dim_base_offset),
+                kind="linear",
+                text=f"{seg.length:g}",
+                value_mm=seg.length,
+                **dim_common,
             )
         )
         dia_text = seg.thread or _spec_dia_label(seg.diameter, seg.tolerance)
         entities.append(
             DimensionEntity(
-                p1=P(x + w / 2, bot), p2=P(x + w / 2, top),
-                kind="diameter", text=dia_text, value_mm=seg.diameter,
-                tolerance=seg.tolerance or None, **dim_common,
+                p1=P(x + w / 2, bot),
+                p2=P(x + w / 2, top),
+                kind="diameter",
+                text=dia_text,
+                value_mm=seg.diameter,
+                tolerance=seg.tolerance or None,
+                **dim_common,
             )
         )
         if seg.roughness is not None:
-            entities.extend(_roughness_mark_entities(
-                x + w / 2 + 8, top + 8, seg.roughness, P, roughness_common, px_per_mm,
-            ))
+            entities.extend(
+                _roughness_mark_entities(
+                    x + w / 2 + 8,
+                    top + 8,
+                    seg.roughness,
+                    P,
+                    roughness_common,
+                    px_per_mm,
+                )
+            )
         prev_h = h
         x += w
 
@@ -141,12 +176,17 @@ def shaft_spec_to_ir(spec, px_per_mm: float = 4.0) -> CadIR:
         DimensionEntity(
             p1=P(0, -dim_base_offset - _TOTAL_DIM_GAP_MM),
             p2=P(total_len, -dim_base_offset - _TOTAL_DIM_GAP_MM),
-            kind="linear", text=f"{total_len:g}", value_mm=total_len, **dim_common,
+            kind="linear",
+            text=f"{total_len:g}",
+            value_mm=total_len,
+            **dim_common,
         )
     )
 
     return CadIR(
-        source=SourceInfo(image_width=int(image_width_px), image_height=int(image_height_px), kind="blank"),
+        source=SourceInfo(
+            image_width=int(image_width_px), image_height=int(image_height_px), kind="blank"
+        ),
         scale=1.0 / px_per_mm,
         sheet=SheetInfo(),
         entities=entities,

@@ -15,7 +15,6 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.domain.engineering_model_graph import EngineeringModelGraph, GraphPatch
 
-
 SCHEMAS = {
     "engineering-model-graph-1.0.schema.json": (
         EngineeringModelGraph,
@@ -34,9 +33,7 @@ def rendered_schemas() -> dict[str, str]:
         schema = model.model_json_schema(mode="validation")
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
         schema["$id"] = schema_id
-        result[filename] = json.dumps(
-            schema, ensure_ascii=False, indent=2, sort_keys=True
-        ) + "\n"
+        result[filename] = json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     return result
 
 

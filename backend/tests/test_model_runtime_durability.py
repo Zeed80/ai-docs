@@ -5,22 +5,17 @@ from Postgres on hydrate), and concurrent persistence must not violate the
 UNIQUE constraint.
 """
 
-import asyncio
-import json
-
 import pytest
 
 from app.ai import model_runtime_store as store
-from app.db.models import ModelCatalogRuntimeEntry, TaskRoutingOverride
+from app.db.models import ModelCatalogRuntimeEntry
 
 
 @pytest.fixture
 def captured_redis(monkeypatch):
     """Capture what hydrate writes to Redis without a live server."""
     written: dict[str, object] = {}
-    monkeypatch.setattr(
-        store, "_redis_set_json", lambda k, v: written.__setitem__(k, v)
-    )
+    monkeypatch.setattr(store, "_redis_set_json", lambda k, v: written.__setitem__(k, v))
     return written
 
 
@@ -101,11 +96,15 @@ async def test_catalog_upsert_is_idempotent(db_session, captured_redis):
         )
     await db_session.commit()
     rows = (
-        await db_session.execute(
-            __import__("sqlalchemy").select(ModelCatalogRuntimeEntry).where(
-                ModelCatalogRuntimeEntry.model_key == "k1"
+        (
+            await db_session.execute(
+                __import__("sqlalchemy")
+                .select(ModelCatalogRuntimeEntry)
+                .where(ModelCatalogRuntimeEntry.model_key == "k1")
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(rows) == 1
     assert rows[0].provider_model == "gemma4:e2b-v2"  # last write wins

@@ -70,14 +70,20 @@ def test_view_is_not_mirrored_by_the_canvas_flip():
     """The projector is y-up, the canvas y-down; a missed flip mirrors the part."""
     entities, placements = place_views(_views(), px_per_mm=4.0)
     top_edge = next(
-        e for e in entities
-        if isinstance(e, Segment) and e.line_class == "contour"
-        and e.p1.y == pytest.approx(e.p2.y) and e.p1.y < 100
+        e
+        for e in entities
+        if isinstance(e, Segment)
+        and e.line_class == "contour"
+        and e.p1.y == pytest.approx(e.p2.y)
+        and e.p1.y < 100
     )
     bottom_edge = next(
-        e for e in entities
-        if isinstance(e, Segment) and e.line_class == "contour"
-        and e.p1.y == pytest.approx(e.p2.y) and e.p1.y > 100
+        e
+        for e in entities
+        if isinstance(e, Segment)
+        and e.line_class == "contour"
+        and e.p1.y == pytest.approx(e.p2.y)
+        and e.p1.y > 100
     )
     # v=+25 must land ABOVE v=-25 on a y-down canvas.
     assert top_edge.p1.y < bottom_edge.p1.y
@@ -111,7 +117,10 @@ def test_verification_catches_a_swapped_view_frame():
     """A wrong axis mapping draws a plausible picture of the wrong part."""
     views = _views()
     views["front"]["bounds_mm"] = {
-        "u_min": -25.0, "u_max": 25.0, "v_min": 0.0, "v_max": 100.0,
+        "u_min": -25.0,
+        "u_max": 25.0,
+        "v_min": 0.0,
+        "v_max": 100.0,
     }
     result = verify_views_against_solid(views, _report())
     assert not result["ok"]

@@ -67,6 +67,7 @@ AGENT_SYNC_TASKS: list[AITask] = [AITask.ORCHESTRATOR_PLANNING, AITask.TOOL_CALL
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class DocumentGroup(BaseModel):
     """Catalog keys for the document-processing slots."""
 
@@ -92,6 +93,7 @@ class AgentGroup(BaseModel):
 # Read
 # ---------------------------------------------------------------------------
 
+
 def _primary_for(task: AITask) -> str | None:
     return get_routing_for(task).primary
 
@@ -99,6 +101,7 @@ def _primary_for(task: AITask) -> str | None:
 def get_document_group() -> DocumentGroup:
     try:
         from app.api.ai_settings import get_ai_config
+
         _fallback_name = get_ai_config().get("model_ocr_fallback")
     except Exception:
         _fallback_name = None
@@ -133,6 +136,7 @@ def get_groups() -> dict:
 # Write
 # ---------------------------------------------------------------------------
 
+
 def prune_dead_keys(keys: list[str]) -> tuple[list[str], list[str]]:
     """(kept, dropped) — выбросить из цепочки то, чего заведомо нет.
 
@@ -151,9 +155,7 @@ def prune_dead_keys(keys: list[str]) -> tuple[list[str], list[str]]:
     try:
         from app.ai.model_registry import ModelRegistry
 
-        catalog = ModelRegistry.from_yaml(
-            "backend/app/ai/config/model_registry.yaml"
-        ).models
+        catalog = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml").models
     except Exception as exc:  # noqa: BLE001
         # Без каталога судить не о чем — ничего не трогаем.
         logger.warning("prune_catalog_unavailable", error=str(exc))
@@ -191,7 +193,8 @@ def _set_primary(task: AITask, model_key: str) -> None:
     if dropped:
         logger.info(
             "task_routing_dead_fallbacks_pruned",
-            task=str(task), dropped=dropped,
+            task=str(task),
+            dropped=dropped,
         )
     routing = current.model_copy(update={"models": [model_key, *tail]})
     save_task_routing(task, routing)

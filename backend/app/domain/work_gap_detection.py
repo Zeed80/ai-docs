@@ -103,15 +103,11 @@ async def create_gap_proposals(
     open_metadata = list(
         (
             await db.execute(
-                select(CapabilityProposal.metadata_).where(
-                    CapabilityProposal.status == "draft"
-                )
+                select(CapabilityProposal.metadata_).where(CapabilityProposal.status == "draft")
             )
         ).scalars()
     )
-    open_signature_values = {
-        m.get("gap_signature") for m in open_metadata if isinstance(m, dict)
-    }
+    open_signature_values = {m.get("gap_signature") for m in open_metadata if isinstance(m, dict)}
 
     created = 0
     for gap in gaps:

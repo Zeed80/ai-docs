@@ -30,13 +30,16 @@ async def agent_action(db_session):
 
 @pytest.mark.asyncio
 async def test_create_agent_action(client: AsyncClient):
-    resp = await client.post("/api/agent-actions", json={
-        "session_id": "sess-abc",
-        "iteration": 1,
-        "action_type": "tool_call",
-        "tool_name": "documents.list",
-        "duration_ms": 200,
-    })
+    resp = await client.post(
+        "/api/agent-actions",
+        json={
+            "session_id": "sess-abc",
+            "iteration": 1,
+            "action_type": "tool_call",
+            "tool_name": "documents.list",
+            "duration_ms": 200,
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["session_id"] == "sess-abc"

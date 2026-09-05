@@ -12,16 +12,15 @@ Skills:
 
 from __future__ import annotations
 
+import json
+import re
+import uuid
 from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
-
-import json
-import re
-import uuid
 
 from app.auth.acting import get_effective_user
 from app.auth.models import UserInfo
@@ -93,9 +92,7 @@ def _coerce_spec_fields(spec: dict[str, Any]) -> dict[str, Any]:
     if isinstance(cols, str):
         cols = [c.strip() for c in re.split(r"[;,\n]", cols) if c.strip()]
     if isinstance(cols, list):
-        out["columns"] = [
-            {"field": c} if isinstance(c, str) else c for c in cols
-        ]
+        out["columns"] = [{"field": c} if isinstance(c, str) else c for c in cols]
     elif cols is not None:
         out["columns"] = cols
 
@@ -119,7 +116,7 @@ def _coerce_spec_fields(spec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _effective_spec(payload: "SpecTableRequest") -> dict[str, Any] | None:
+def _effective_spec(payload: SpecTableRequest) -> dict[str, Any] | None:
     """Reconstruct a spec dict from whatever shape the model produced."""
     raw = payload.spec
     if isinstance(raw, str):
@@ -168,7 +165,10 @@ async def _render_and_publish(
         result = await execute_spec(db, spec, viewer=viewer)
     except ValueError as exc:
         return SpecTableResponse(
-            status="error", canvas_id=canvas_id, total=0, shown=0,
+            status="error",
+            canvas_id=canvas_id,
+            total=0,
+            shown=0,
             message=f"Неверная спецификация: {exc}",
         )
 
@@ -178,7 +178,10 @@ async def _render_and_publish(
         # an empty table here reads as "task done" when the agent actually
         # couldn't find who the user meant. See AGENT_LIVE_TEST_FINDINGS.md #5.
         return SpecTableResponse(
-            status="not_found", canvas_id=canvas_id, total=0, shown=0,
+            status="not_found",
+            canvas_id=canvas_id,
+            total=0,
+            shown=0,
             message=f"Поставщик «{result.unresolved_entity}» не найден в базе.",
         )
 
@@ -195,11 +198,13 @@ async def _render_and_publish(
         "source": "workspace.spec_table",
     }
     stored = upsert_workspace_block(canvas_id, block)
-    await chat_bus.publish({
-        "type": "workspace.updated",
-        "canvas_id": canvas_id,
-        "block": stored,
-    })
+    await chat_bus.publish(
+        {
+            "type": "workspace.updated",
+            "canvas_id": canvas_id,
+            "block": stored,
+        }
+    )
     suffix = f" (показаны первые {len(result.rows)})" if result.truncated else ""
     note_part = f"{note}. " if note else ""
     return SpecTableResponse(
@@ -232,7 +237,10 @@ async def publish_spec_table(
     effective = _effective_spec(payload)
     if not effective:
         return SpecTableResponse(
-            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            status="error",
+            canvas_id=payload.canvas_id,
+            total=0,
+            shown=0,
             message=(
                 "Не передана спецификация. Передай spec как объект: "
                 f"{{source: {sources}, columns: [{{field, header?}}], "
@@ -244,7 +252,10 @@ async def publish_spec_table(
         spec = TableSpec.model_validate(effective)
     except Exception as exc:
         return SpecTableResponse(
-            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            status="error",
+            canvas_id=payload.canvas_id,
+            total=0,
+            shown=0,
             message=(
                 f"Спецификация не разобрана: {str(exc)[:300]}. "
                 f"Формат: {{source: {sources}, columns: [{{field, header?}}], "
@@ -260,7 +271,10 @@ async def publish_spec_table(
     spec, repairs = repair_spec_to_catalog(spec)
     if had_columns and not spec.columns:
         return SpecTableResponse(
-            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            status="error",
+            canvas_id=payload.canvas_id,
+            total=0,
+            shown=0,
             message=(
                 "Ни одно из указанных полей не найдено в каталоге источника "
                 f"«{spec.source}» (" + "; ".join(repairs) + "). "
@@ -270,9 +284,13 @@ async def publish_spec_table(
     problems = validate_spec(spec)
     if problems:
         return SpecTableResponse(
-            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            status="error",
+            canvas_id=payload.canvas_id,
+            total=0,
+            shown=0,
             message=(
-                "Неверная спецификация: " + "; ".join(problems)
+                "Неверная спецификация: "
+                + "; ".join(problems)
                 + ". Справочник полей: action=spec_table_catalog."
             ),
         )
@@ -295,7 +313,10 @@ async def patch_spec_table(
     block = get_workspace_block(payload.canvas_id)
     if not block or not isinstance(block.get("spec"), dict):
         return SpecTableResponse(
-            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            status="error",
+            canvas_id=payload.canvas_id,
+            total=0,
+            shown=0,
             message=(
                 "Блок не найден или не является spec-таблицей — "
                 "сначала постройте таблицу через workspace.spec_table."
@@ -309,8 +330,10 @@ async def patch_spec_table(
         parsed = parse_patch_command(payload.command, spec)
         if parsed is None:
             return SpecTableResponse(
-                status="unrecognized", canvas_id=payload.canvas_id,
-                total=0, shown=0,
+                status="unrecognized",
+                canvas_id=payload.canvas_id,
+                total=0,
+                shown=0,
                 message=(
                     "Команда не распознана детерминированно — сформируйте ops "
                     "явно (add_column/remove_column/set_sort/add_filter)."
@@ -321,7 +344,10 @@ async def patch_spec_table(
         note = parsed.description
     if not ops:
         return SpecTableResponse(
-            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            status="error",
+            canvas_id=payload.canvas_id,
+            total=0,
+            shown=0,
             message="Не передано ни ops, ни command.",
         )
 
@@ -329,7 +355,10 @@ async def patch_spec_table(
         new_spec = apply_patch(spec, ops)
     except ValueError as exc:
         return SpecTableResponse(
-            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            status="error",
+            canvas_id=payload.canvas_id,
+            total=0,
+            shown=0,
             message=f"Невозможно применить правку: {exc}",
             spec=spec.model_dump(mode="json"),
         )
@@ -420,9 +449,7 @@ async def edit_spec_table_cell(
 
     return SpecTableCellEditResponse(
         status="pending_approval",
-        message=(
-            f"Правка поля «{payload.field}» отправлена на подтверждение."
-        ),
+        message=(f"Правка поля «{payload.field}» отправлена на подтверждение."),
         approval_id=str(approval.id),
     )
 
@@ -437,8 +464,8 @@ async def spec_table_catalog() -> dict[str, Any]:
             "filters": "[{field, op, value}] — op: eq|ne|contains|gte|lte|between|in|smart",
             "sort": "[{field, dir: asc|desc}]",
             "group_by": "[field] — объединить/сгруппировать строки по полю "
-                        "(«объедини по поставщикам» → group_by:['supplier_name']); "
-                        "строки кластеризуются, sort применяется внутри группы",
+            "(«объедини по поставщикам» → group_by:['supplier_name']); "
+            "строки кластеризуются, sort применяется внутри группы",
             "limit": "int | null (все строки)",
         },
         "sources": {

@@ -70,7 +70,11 @@ def _pydantic_to_ollama_format(schema_cls: Any) -> dict[str, Any] | None:
 
 
 def _recovered_text(
-    text: str | None, thinking: str | None, *, model: str, request: AIRequest,
+    text: str | None,
+    thinking: str | None,
+    *,
+    model: str,
+    request: AIRequest,
 ) -> str | None:
     """Recover an answer a thinking-capable model wrote into "thinking"
     instead of the field the caller actually reads.
@@ -107,6 +111,7 @@ def _ollama_keep_alive(model: str) -> str | int:
     """Return keep_alive for a model: -1 for the pinned orchestrator, short
     (ephemeral) otherwise. See app.ai.model_lifecycle for the policy."""
     from app.ai.model_lifecycle import keep_alive_for
+
     return keep_alive_for(model)
 
 
@@ -135,8 +140,10 @@ class OllamaProvider(AIProvider):
             body = response.json()
         message = body.get("message") or {}
         text = _recovered_text(
-            message.get("content"), message.get("thinking"),
-            model=model, request=request,
+            message.get("content"),
+            message.get("thinking"),
+            model=model,
+            request=request,
         )
         return AIResponse(
             task=request.task,
@@ -180,8 +187,10 @@ class OllamaProvider(AIProvider):
             body = response.json()
         message = body.get("message") or {}
         text = _recovered_text(
-            message.get("content"), message.get("thinking"),
-            model=model, request=request,
+            message.get("content"),
+            message.get("thinking"),
+            model=model,
+            request=request,
         )
         return AIResponse(
             task=request.task,
@@ -300,10 +309,7 @@ class OllamaProvider(AIProvider):
                 task=getattr(request.task, "value", str(request.task)),
                 images=len(request.images or []),
                 thinking_chars=len(thinking),
-                reason=(
-                    "answer_went_to_thinking_field" if thinking
-                    else "model_returned_nothing"
-                ),
+                reason=("answer_went_to_thinking_field" if thinking else "model_returned_nothing"),
                 recovered_from_thinking=bool(thinking),
                 eval_count=body.get("eval_count"),
                 prompt_eval_count=body.get("prompt_eval_count"),
@@ -371,8 +377,11 @@ class OllamaProvider(AIProvider):
 
         if not documents:
             return AIResponse(
-                task=request.task, provider=self.kind, model=model,
-                scores=[], usage=AIUsage(latency_ms=0),
+                task=request.task,
+                provider=self.kind,
+                model=model,
+                scores=[],
+                usage=AIUsage(latency_ms=0),
             )
 
         scores: list[float] = []
@@ -385,7 +394,10 @@ class OllamaProvider(AIProvider):
             scores = await self._rerank_via_embed(base_url, model, query, documents)
 
         return AIResponse(
-            task=request.task, provider=self.kind, model=model, scores=scores,
+            task=request.task,
+            provider=self.kind,
+            model=model,
+            scores=scores,
             usage=AIUsage(latency_ms=int((time.perf_counter() - started) * 1000)),
         )
 
@@ -421,12 +433,13 @@ class OllamaProvider(AIProvider):
         sem = asyncio.Semaphore(_RERANK_CONCURRENCY)
 
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
+
             async def score_one(doc: str) -> float:
                 prompt = (
                     "Ты — судья релевантности поиска. Оцени, помогает ли документ "
                     "ответить на запрос.\n"
-                    f"Запрос: \"{query}\"\n"
-                    f"Документ: \"{doc[:4000]}\"\n"
+                    f'Запрос: "{query}"\n'
+                    f'Документ: "{doc[:4000]}"\n'
                     "Ответь строго одним словом: yes или no."
                 )
                 async with sem:

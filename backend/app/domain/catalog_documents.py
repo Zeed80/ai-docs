@@ -158,9 +158,7 @@ async def register_catalog_document(
     return RegisteredCatalog(document=doc, job=job, is_duplicate=False)
 
 
-async def _open_job(
-    db: AsyncSession, doc: Document, *, restart: bool
-) -> DocumentProcessingJob:
+async def _open_job(db: AsyncSession, doc: Document, *, restart: bool) -> DocumentProcessingJob:
     if restart:
         result = await db.execute(
             select(DocumentProcessingJob)

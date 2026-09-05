@@ -19,9 +19,9 @@ from app.ai.schemas import (
     AIRequest,
     AIResponse,
     AIUsage,
+    ProposedToolCall,
     ProviderConfig,
     ProviderKind,
-    ProposedToolCall,
 )
 
 _ANTHROPIC_API = "https://api.anthropic.com/v1"
@@ -39,7 +39,7 @@ class AnthropicProvider(AIProvider):
     kind = ProviderKind.ANTHROPIC
 
     @classmethod
-    def from_env(cls, prompt_cache: bool = False) -> "AnthropicProvider":
+    def from_env(cls, prompt_cache: bool = False) -> AnthropicProvider:
         config = ProviderConfig(
             kind=ProviderKind.ANTHROPIC,
             base_url=_ANTHROPIC_API,
@@ -90,11 +90,13 @@ class AnthropicProvider(AIProvider):
         result = []
         for t in tools:
             fn = t.get("function", {}) if isinstance(t, dict) else {}
-            result.append({
-                "name": fn.get("name", ""),
-                "description": fn.get("description", ""),
-                "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
-            })
+            result.append(
+                {
+                    "name": fn.get("name", ""),
+                    "description": fn.get("description", ""),
+                    "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+                }
+            )
         return result
 
     @staticmethod
@@ -138,22 +140,30 @@ class AnthropicProvider(AIProvider):
                         args = fn.get("arguments", {})
                         tc_id = tc.get("id") or f"toolu_{name}_{i}"
                         pending_ids.append(tc_id)
-                        blocks.append({
-                            "type": "tool_use",
-                            "id": tc_id,
-                            "name": name,
-                            "input": args if isinstance(args, dict) else json.loads(args or "{}"),
-                        })
+                        blocks.append(
+                            {
+                                "type": "tool_use",
+                                "id": tc_id,
+                                "name": name,
+                                "input": args
+                                if isinstance(args, dict)
+                                else json.loads(args or "{}"),
+                            }
+                        )
                     result.append({"role": "assistant", "content": blocks})
                 elif content:
                     result.append({"role": "assistant", "content": content})
             elif role == "tool":
-                tc_id = pending_ids.pop(0) if pending_ids else f"toolu_unknown_{len(pending_results)}"
-                pending_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc_id,
-                    "content": content,
-                })
+                tc_id = (
+                    pending_ids.pop(0) if pending_ids else f"toolu_unknown_{len(pending_results)}"
+                )
+                pending_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
+                        "content": content,
+                    }
+                )
 
         _flush_results()
         return "\n\n".join(p for p in system_parts if p), result
@@ -193,7 +203,16 @@ class AnthropicProvider(AIProvider):
             payload["system"] = self._build_system(system_text)
         if request.tools:
             payload["tools"] = self._openai_tools_to_anthropic(
-                [{"function": {"name": t.name, "description": t.description, "parameters": t.input_schema}} for t in request.tools]
+                [
+                    {
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.input_schema,
+                        }
+                    }
+                    for t in request.tools
+                ]
             )
 
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
@@ -211,10 +230,12 @@ class AnthropicProvider(AIProvider):
             if block.get("type") == "text":
                 text_out += block.get("text", "")
             elif block.get("type") == "tool_use":
-                tool_calls.append(ProposedToolCall(
-                    name=block.get("name", ""),
-                    arguments=block.get("input", {}),
-                ))
+                tool_calls.append(
+                    ProposedToolCall(
+                        name=block.get("name", ""),
+                        arguments=block.get("input", {}),
+                    )
+                )
 
         usage = body.get("usage", {})
         return AIResponse(
@@ -239,7 +260,12 @@ class AnthropicProvider(AIProvider):
             if img.startswith("data:"):
                 media, b64 = img.split(",", 1)
                 media_type = media.split(";")[0].split(":")[1]
-                content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}})
+                content.append(
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": media_type, "data": b64},
+                    }
+                )
             else:
                 content.append({"type": "image", "source": {"type": "url", "url": img}})
         content.append({"type": "text", "text": request.prompt or request.input_text or ""})
@@ -251,11 +277,15 @@ class AnthropicProvider(AIProvider):
         }
 
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
-            resp = await client.post(f"{self._base()}/messages", headers=self._headers(), json=payload)
+            resp = await client.post(
+                f"{self._base()}/messages", headers=self._headers(), json=payload
+            )
             resp.raise_for_status()
             body = resp.json()
 
-        text_out = "".join(b.get("text", "") for b in body.get("content", []) if b.get("type") == "text")
+        text_out = "".join(
+            b.get("text", "") for b in body.get("content", []) if b.get("type") == "text"
+        )
         return AIResponse(
             task=request.task,
             provider=self.kind,

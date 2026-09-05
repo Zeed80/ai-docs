@@ -31,9 +31,11 @@ _SCENARIOS_DIR = _AIAGENT_ROOT / "scenarios"
 
 def _resolve_env(value: str) -> str:
     """Resolve ${VAR:-default} patterns from environment variables."""
+
     def replacer(m: re.Match) -> str:
         var, _, default = m.group(1).partition(":-")
         return os.environ.get(var, default)
+
     return re.sub(r"\$\{([^}]+)\}", replacer, str(value))
 
 
@@ -131,8 +133,10 @@ class GatewayConfig:
 
     @property
     def reasoning_base_url(self) -> str:
-        raw = self._raw.get("models", {}).get("reasoning", {}).get(
-            "base_url", "http://localhost:11434"
+        raw = (
+            self._raw.get("models", {})
+            .get("reasoning", {})
+            .get("base_url", "http://localhost:11434")
         )
         return _resolve_env(raw)
 

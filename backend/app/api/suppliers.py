@@ -4,16 +4,27 @@ supplier.check_requisites, supplier.trust_score, supplier.alerts"""
 import re
 import uuid
 from collections import defaultdict
+from datetime import UTC
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import delete as sa_delete, select, func, or_
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.audit.service import log_action
+from app.db.models import (
+    EmailThread,
+    Invoice,
+    InvoiceStatus,
+    Party,
+    PartyRole,
+    SupplierProfile,
+    SupplierRequisiteHistory,
+)
 from app.db.session import get_db
-from app.db.models import EmailThread, Invoice, InvoiceLine, InvoiceStatus, Party, PartyRole, SupplierProfile, SupplierRequisiteHistory
 from app.domain.suppliers import (
     DuplicateCheckResult,
     DuplicateMatch,
@@ -36,7 +47,6 @@ from app.domain.suppliers import (
     TrustScoreBreakdown,
     TrustScoreResponse,
 )
-from app.audit.service import log_action
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -76,19 +86,23 @@ async def _find_duplicates(
             if exclude_id and p.id == exclude_id:
                 continue
             seen.add(p.id)
-            matches.append(DuplicateMatch(
-                id=p.id,
-                name=p.name,
-                inn=p.inn,
-                contact_email=p.contact_email,
-                contact_phone=p.contact_phone,
-                match_reason=reason,
-            ))
+            matches.append(
+                DuplicateMatch(
+                    id=p.id,
+                    name=p.name,
+                    inn=p.inn,
+                    contact_email=p.contact_email,
+                    contact_phone=p.contact_phone,
+                    match_reason=reason,
+                )
+            )
 
     # INN exact match
     if inn:
         await _collect(
-            select(Party).where(Party.inn == inn, Party.role.in_([PartyRole.supplier, PartyRole.both])),
+            select(Party).where(
+                Party.inn == inn, Party.role.in_([PartyRole.supplier, PartyRole.both])
+            ),
             "Совпадение ИНН",
         )
 
@@ -108,11 +122,16 @@ async def _find_duplicates(
                 continue
             if name_lower in p.name.lower() or p.name.lower() in name_lower:
                 seen.add(p.id)
-                matches.append(DuplicateMatch(
-                    id=p.id, name=p.name, inn=p.inn,
-                    contact_email=p.contact_email, contact_phone=p.contact_phone,
-                    match_reason="Совпадение email + похожее название",
-                ))
+                matches.append(
+                    DuplicateMatch(
+                        id=p.id,
+                        name=p.name,
+                        inn=p.inn,
+                        contact_email=p.contact_email,
+                        contact_phone=p.contact_phone,
+                        match_reason="Совпадение email + похожее название",
+                    )
+                )
 
     # Phone + similar name
     if phone and not matches:
@@ -127,11 +146,16 @@ async def _find_duplicates(
             if _normalize_phone(p.contact_phone) == norm:
                 if name_lower in p.name.lower() or p.name.lower() in name_lower:
                     seen.add(p.id)
-                    matches.append(DuplicateMatch(
-                        id=p.id, name=p.name, inn=p.inn,
-                        contact_email=p.contact_email, contact_phone=p.contact_phone,
-                        match_reason="Совпадение телефона + похожее название",
-                    ))
+                    matches.append(
+                        DuplicateMatch(
+                            id=p.id,
+                            name=p.name,
+                            inn=p.inn,
+                            contact_email=p.contact_email,
+                            contact_phone=p.contact_phone,
+                            match_reason="Совпадение телефона + похожее название",
+                        )
+                    )
 
     # Pure name similarity (ilike) as a weak signal — only if nothing else found
     if not matches:
@@ -146,11 +170,16 @@ async def _find_duplicates(
             if p.id in seen:
                 continue
             seen.add(p.id)
-            matches.append(DuplicateMatch(
-                id=p.id, name=p.name, inn=p.inn,
-                contact_email=p.contact_email, contact_phone=p.contact_phone,
-                match_reason="Похожее название",
-            ))
+            matches.append(
+                DuplicateMatch(
+                    id=p.id,
+                    name=p.name,
+                    inn=p.inn,
+                    contact_email=p.contact_email,
+                    contact_phone=p.contact_phone,
+                    match_reason="Похожее название",
+                )
+            )
 
     return matches
 
@@ -164,7 +193,9 @@ async def check_duplicate(
     db: AsyncSession = Depends(get_db),
 ):
     """Check if a supplier with the same INN / email / phone already exists."""
-    matches = await _find_duplicates(db, payload.name, payload.inn, payload.contact_email, payload.contact_phone)
+    matches = await _find_duplicates(
+        db, payload.name, payload.inn, payload.contact_email, payload.contact_phone
+    )
     return DuplicateCheckResult(has_duplicates=bool(matches), matches=matches)
 
 
@@ -179,7 +210,9 @@ async def create_supplier(
     """Create a new supplier manually. Returns 409 with duplicate info if a match is found
     and force=False."""
     if not payload.force:
-        matches = await _find_duplicates(db, payload.name, payload.inn, payload.contact_email, payload.contact_phone)
+        matches = await _find_duplicates(
+            db, payload.name, payload.inn, payload.contact_email, payload.contact_phone
+        )
         if matches:
             raise HTTPException(
                 status_code=409,
@@ -211,8 +244,13 @@ async def create_supplier(
     profile = SupplierProfile(party_id=party.id)
     db.add(profile)
 
-    await log_action(db, action="supplier.create", entity_type="supplier",
-                     entity_id=party.id, details={"name": party.name, "inn": party.inn})
+    await log_action(
+        db,
+        action="supplier.create",
+        entity_type="supplier",
+        entity_id=party.id,
+        details={"name": party.name, "inn": party.inn},
+    )
     await db.commit()
     await db.refresh(party)
     return party
@@ -228,28 +266,29 @@ async def get_supplier(
 ):
     """Skill: supplier.get — Get supplier profile with aggregated stats."""
     result = await db.execute(
-        select(Party)
-        .where(Party.id == supplier_id)
-        .options(selectinload(Party.profile))
+        select(Party).where(Party.id == supplier_id).options(selectinload(Party.profile))
     )
     party = result.scalar_one_or_none()
     if not party:
         raise HTTPException(404, "Supplier not found")
 
     # Aggregate recent stats
-    inv_count = (await db.execute(
-        select(func.count()).select_from(
-            select(Invoice).where(Invoice.supplier_id == supplier_id).subquery()
+    inv_count = (
+        await db.execute(
+            select(func.count()).select_from(
+                select(Invoice).where(Invoice.supplier_id == supplier_id).subquery()
+            )
         )
-    )).scalar() or 0
+    ).scalar() or 0
 
-    open_amount = (await db.execute(
-        select(func.coalesce(func.sum(Invoice.total_amount), 0.0))
-        .where(
-            Invoice.supplier_id == supplier_id,
-            Invoice.status.in_([InvoiceStatus.needs_review, InvoiceStatus.draft]),
+    open_amount = (
+        await db.execute(
+            select(func.coalesce(func.sum(Invoice.total_amount), 0.0)).where(
+                Invoice.supplier_id == supplier_id,
+                Invoice.status.in_([InvoiceStatus.needs_review, InvoiceStatus.draft]),
+            )
         )
-    )).scalar() or 0.0
+    ).scalar() or 0.0
 
     out = SupplierFullOut.model_validate(party)
     out.profile = SupplierProfileOut.model_validate(party.profile) if party.profile else None
@@ -261,12 +300,18 @@ async def get_supplier(
 # ── supplier.list ─────────────────────────────────────────────────────────
 
 
-@router.get("", response_model=SupplierListResponse, summary="Skill: supplier.list — List suppliers with trust score and invoice stats.")
+@router.get(
+    "",
+    response_model=SupplierListResponse,
+    summary="Skill: supplier.list — List suppliers with trust score and invoice stats.",
+)
 async def list_suppliers_endpoint(
     role: str | None = Query(None, description="Filter by role: supplier, buyer"),
     limit: int = Query(50, le=200),
     offset: int = 0,
-    sort_by: str = Query("name", description="Sort field: name, trust_score, total_invoices, total_amount"),
+    sort_by: str = Query(
+        "name", description="Sort field: name, trust_score, total_invoices, total_amount"
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: supplier.list — List suppliers/parties with trust score and invoice aggregates."""
@@ -276,9 +321,9 @@ async def list_suppliers_endpoint(
             query = query.where(Party.role == PartyRole(role))
         except ValueError:
             pass
-    count_q = select(func.count()).select_from(select(Party).where(
-        Party.role == PartyRole(role) if role else True
-    ).subquery())
+    count_q = select(func.count()).select_from(
+        select(Party).where(Party.role == PartyRole(role) if role else True).subquery()
+    )
     total = (await db.execute(count_q)).scalar() or 0
     query = query.order_by(Party.name).offset(offset).limit(limit)
     result = await db.execute(query)
@@ -286,16 +331,18 @@ async def list_suppliers_endpoint(
     items = []
     for p in parties:
         profile = p.profile
-        items.append(SupplierListItem(
-            id=p.id,
-            name=p.name,
-            inn=p.inn,
-            role=p.role.value if hasattr(p.role, "value") else str(p.role),
-            user_rating=p.user_rating,
-            trust_score=profile.trust_score if profile else None,
-            total_invoices=profile.total_invoices if profile else 0,
-            total_amount=profile.total_amount if profile else 0.0,
-        ))
+        items.append(
+            SupplierListItem(
+                id=p.id,
+                name=p.name,
+                inn=p.inn,
+                role=p.role.value if hasattr(p.role, "value") else str(p.role),
+                user_rating=p.user_rating,
+                trust_score=profile.trust_score if profile else None,
+                total_invoices=profile.total_invoices if profile else 0,
+                total_amount=profile.total_amount if profile else 0.0,
+            )
+        )
     if sort_by == "trust_score":
         items.sort(key=lambda x: x.trust_score or 0.0, reverse=True)
     elif sort_by == "total_invoices":
@@ -359,16 +406,22 @@ async def supplier_price_history(
     # Build price history by item description
     items_map: dict[str, list[PriceHistoryPoint]] = defaultdict(list)
     for inv in invoices:
-        date_str = inv.invoice_date.strftime("%Y-%m-%d") if inv.invoice_date else inv.created_at.strftime("%Y-%m-%d")
+        date_str = (
+            inv.invoice_date.strftime("%Y-%m-%d")
+            if inv.invoice_date
+            else inv.created_at.strftime("%Y-%m-%d")
+        )
         for line in inv.lines:
             if line.description and line.unit_price is not None:
                 key = line.description.strip()
-                items_map[key].append(PriceHistoryPoint(
-                    date=date_str,
-                    price=line.unit_price,
-                    invoice_number=inv.invoice_number,
-                    invoice_id=str(inv.id),
-                ))
+                items_map[key].append(
+                    PriceHistoryPoint(
+                        date=date_str,
+                        price=line.unit_price,
+                        invoice_number=inv.invoice_number,
+                        invoice_id=str(inv.id),
+                    )
+                )
 
     items: list[PriceHistoryItem] = []
     for desc, points in items_map.items():
@@ -381,15 +434,17 @@ async def supplier_price_history(
             elif prices[-1] < prices[-2] * 0.95:
                 trend = "down"
 
-        items.append(PriceHistoryItem(
-            description=desc,
-            points=points,
-            current_price=prices[-1] if prices else None,
-            min_price=min(prices) if prices else None,
-            max_price=max(prices) if prices else None,
-            avg_price=round(avg, 2),
-            trend=trend,
-        ))
+        items.append(
+            PriceHistoryItem(
+                description=desc,
+                points=points,
+                current_price=prices[-1] if prices else None,
+                min_price=min(prices) if prices else None,
+                max_price=max(prices) if prices else None,
+                avg_price=round(avg, 2),
+                trend=trend,
+            )
+        )
 
     return SupplierPriceHistoryResponse(
         supplier_id=party.id,
@@ -418,7 +473,11 @@ async def check_requisites(
     if not party.inn:
         checks.append(RequisiteCheck(field="inn", status="missing", message="ИНН не указан"))
     elif len(party.inn) not in (10, 12):
-        checks.append(RequisiteCheck(field="inn", status="error", message=f"ИНН неверной длины: {len(party.inn)}"))
+        checks.append(
+            RequisiteCheck(
+                field="inn", status="error", message=f"ИНН неверной длины: {len(party.inn)}"
+            )
+        )
     else:
         checks.append(RequisiteCheck(field="inn", status="ok"))
 
@@ -426,28 +485,40 @@ async def check_requisites(
     if not party.kpp:
         checks.append(RequisiteCheck(field="kpp", status="warning", message="КПП не указан"))
     elif len(party.kpp) != 9:
-        checks.append(RequisiteCheck(field="kpp", status="error", message=f"КПП неверной длины: {len(party.kpp)}"))
+        checks.append(
+            RequisiteCheck(
+                field="kpp", status="error", message=f"КПП неверной длины: {len(party.kpp)}"
+            )
+        )
     else:
         checks.append(RequisiteCheck(field="kpp", status="ok"))
 
     # Bank details
     if not party.bank_account:
-        checks.append(RequisiteCheck(field="bank_account", status="warning", message="Р/с не указан"))
+        checks.append(
+            RequisiteCheck(field="bank_account", status="warning", message="Р/с не указан")
+        )
     elif len(party.bank_account) != 20:
-        checks.append(RequisiteCheck(field="bank_account", status="error", message="Р/с неверной длины"))
+        checks.append(
+            RequisiteCheck(field="bank_account", status="error", message="Р/с неверной длины")
+        )
     else:
         checks.append(RequisiteCheck(field="bank_account", status="ok"))
 
     if not party.bank_bik:
         checks.append(RequisiteCheck(field="bank_bik", status="warning", message="БИК не указан"))
     elif len(party.bank_bik) != 9:
-        checks.append(RequisiteCheck(field="bank_bik", status="error", message="БИК неверной длины"))
+        checks.append(
+            RequisiteCheck(field="bank_bik", status="error", message="БИК неверной длины")
+        )
     else:
         checks.append(RequisiteCheck(field="bank_bik", status="ok"))
 
     # Contact
     if not party.contact_email:
-        checks.append(RequisiteCheck(field="contact_email", status="warning", message="Email не указан"))
+        checks.append(
+            RequisiteCheck(field="contact_email", status="warning", message="Email не указан")
+        )
     else:
         checks.append(RequisiteCheck(field="contact_email", status="ok"))
 
@@ -469,49 +540,76 @@ async def get_trust_score(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: supplier.trust_score — Calculate supplier trust score."""
-    party = (await db.execute(
-        select(Party).where(Party.id == supplier_id).options(selectinload(Party.profile))
-    )).scalar_one_or_none()
+    party = (
+        await db.execute(
+            select(Party).where(Party.id == supplier_id).options(selectinload(Party.profile))
+        )
+    ).scalar_one_or_none()
     if not party:
         raise HTTPException(404, "Supplier not found")
 
     breakdown: list[TrustScoreBreakdown] = []
 
     # Factor 1: Requisites completeness (weight 0.2)
-    req_fields = [party.inn, party.kpp, party.bank_account, party.bank_bik, party.address, party.contact_email]
+    req_fields = [
+        party.inn,
+        party.kpp,
+        party.bank_account,
+        party.bank_bik,
+        party.address,
+        party.contact_email,
+    ]
     filled = sum(1 for f in req_fields if f)
     req_score = filled / len(req_fields)
-    breakdown.append(TrustScoreBreakdown(
-        factor="requisites", weight=0.2, score=req_score,
-        detail=f"{filled}/{len(req_fields)} реквизитов заполнено",
-    ))
+    breakdown.append(
+        TrustScoreBreakdown(
+            factor="requisites",
+            weight=0.2,
+            score=req_score,
+            detail=f"{filled}/{len(req_fields)} реквизитов заполнено",
+        )
+    )
 
     # Factor 2: Invoice history (weight 0.3)
-    inv_count = (await db.execute(
-        select(func.count()).select_from(
-            select(Invoice).where(Invoice.supplier_id == supplier_id).subquery()
+    inv_count = (
+        await db.execute(
+            select(func.count()).select_from(
+                select(Invoice).where(Invoice.supplier_id == supplier_id).subquery()
+            )
         )
-    )).scalar() or 0
+    ).scalar() or 0
     hist_score = min(inv_count / 10, 1.0)  # max at 10+ invoices
-    breakdown.append(TrustScoreBreakdown(
-        factor="invoice_history", weight=0.3, score=hist_score,
-        detail=f"{inv_count} счетов в истории",
-    ))
+    breakdown.append(
+        TrustScoreBreakdown(
+            factor="invoice_history",
+            weight=0.3,
+            score=hist_score,
+            detail=f"{inv_count} счетов в истории",
+        )
+    )
 
     # Factor 3: Approval rate (weight 0.3)
-    approved = (await db.execute(
-        select(func.count()).select_from(
-            select(Invoice).where(
-                Invoice.supplier_id == supplier_id,
-                Invoice.status == InvoiceStatus.approved,
-            ).subquery()
+    approved = (
+        await db.execute(
+            select(func.count()).select_from(
+                select(Invoice)
+                .where(
+                    Invoice.supplier_id == supplier_id,
+                    Invoice.status == InvoiceStatus.approved,
+                )
+                .subquery()
+            )
         )
-    )).scalar() or 0
+    ).scalar() or 0
     approval_rate = approved / inv_count if inv_count > 0 else 0.5
-    breakdown.append(TrustScoreBreakdown(
-        factor="approval_rate", weight=0.3, score=approval_rate,
-        detail=f"{approved}/{inv_count} утверждено",
-    ))
+    breakdown.append(
+        TrustScoreBreakdown(
+            factor="approval_rate",
+            weight=0.3,
+            score=approval_rate,
+            detail=f"{approved}/{inv_count} утверждено",
+        )
+    )
 
     # Factor 4: Price stability (weight 0.2)
     # Check if recent prices deviate significantly
@@ -529,13 +627,19 @@ async def get_trust_score(
         amounts = [inv.total_amount for inv in recent if inv.total_amount]
         if len(amounts) >= 2:
             avg_amount = sum(amounts) / len(amounts)
-            max_dev = max(abs(a - avg_amount) / avg_amount for a in amounts) if avg_amount > 0 else 0
+            max_dev = (
+                max(abs(a - avg_amount) / avg_amount for a in amounts) if avg_amount > 0 else 0
+            )
             price_score = max(0, 1.0 - max_dev)
 
-    breakdown.append(TrustScoreBreakdown(
-        factor="price_stability", weight=0.2, score=round(price_score, 2),
-        detail=f"Стабильность цен за последние {len(recent)} счетов",
-    ))
+    breakdown.append(
+        TrustScoreBreakdown(
+            factor="price_stability",
+            weight=0.2,
+            score=round(price_score, 2),
+            detail=f"Стабильность цен за последние {len(recent)} счетов",
+        )
+    )
 
     # Calculate weighted total
     total_score = sum(b.weight * b.score for b in breakdown)
@@ -581,16 +685,26 @@ async def supplier_alerts(
     # Alert: missing requisites
     if not party.inn:
         alert_id += 1
-        alerts.append(SupplierAlert(
-            id=str(alert_id), alert_type="missing_docs", severity="warning",
-            message="ИНН не указан", created_at="",
-        ))
+        alerts.append(
+            SupplierAlert(
+                id=str(alert_id),
+                alert_type="missing_docs",
+                severity="warning",
+                message="ИНН не указан",
+                created_at="",
+            )
+        )
     if not party.bank_account:
         alert_id += 1
-        alerts.append(SupplierAlert(
-            id=str(alert_id), alert_type="missing_docs", severity="warning",
-            message="Банковские реквизиты не заполнены", created_at="",
-        ))
+        alerts.append(
+            SupplierAlert(
+                id=str(alert_id),
+                alert_type="missing_docs",
+                severity="warning",
+                message="Банковские реквизиты не заполнены",
+                created_at="",
+            )
+        )
 
     # Alert: price increases
     result = await db.execute(
@@ -607,32 +721,47 @@ async def supplier_alerts(
         if old_total > 0 and new_total > old_total * 1.15:
             pct = round((new_total - old_total) / old_total * 100, 1)
             alert_id += 1
-            alerts.append(SupplierAlert(
-                id=str(alert_id), alert_type="price_increase", severity="warning",
-                message=f"Рост суммы счёта на {pct}% (с {old_total:.0f} до {new_total:.0f})",
-                created_at=recent_invs[0].created_at.isoformat() if recent_invs[0].created_at else "",
-                entity_id=str(recent_invs[0].id),
-            ))
+            alerts.append(
+                SupplierAlert(
+                    id=str(alert_id),
+                    alert_type="price_increase",
+                    severity="warning",
+                    message=f"Рост суммы счёта на {pct}% (с {old_total:.0f} до {new_total:.0f})",
+                    created_at=recent_invs[0].created_at.isoformat()
+                    if recent_invs[0].created_at
+                    else "",
+                    entity_id=str(recent_invs[0].id),
+                )
+            )
 
     # Alert: overdue (needs_review for too long)
-    from datetime import datetime, timedelta, timezone
-    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    stale_count = (await db.execute(
-        select(func.count()).select_from(
-            select(Invoice).where(
-                Invoice.supplier_id == supplier_id,
-                Invoice.status == InvoiceStatus.needs_review,
-                Invoice.created_at < stale_cutoff,
-            ).subquery()
+    from datetime import datetime, timedelta
+
+    stale_cutoff = datetime.now(UTC) - timedelta(days=7)
+    stale_count = (
+        await db.execute(
+            select(func.count()).select_from(
+                select(Invoice)
+                .where(
+                    Invoice.supplier_id == supplier_id,
+                    Invoice.status == InvoiceStatus.needs_review,
+                    Invoice.created_at < stale_cutoff,
+                )
+                .subquery()
+            )
         )
-    )).scalar() or 0
+    ).scalar() or 0
     if stale_count > 0:
         alert_id += 1
-        alerts.append(SupplierAlert(
-            id=str(alert_id), alert_type="overdue", severity="error",
-            message=f"{stale_count} счетов на проверке более 7 дней",
-            created_at="",
-        ))
+        alerts.append(
+            SupplierAlert(
+                id=str(alert_id),
+                alert_type="overdue",
+                severity="error",
+                message=f"{stale_count} счетов на проверке более 7 дней",
+                created_at="",
+            )
+        )
 
     return SupplierAlertsResponse(supplier_id=party.id, alerts=alerts, total=len(alerts))
 
@@ -648,9 +777,10 @@ async def update_supplier(
 ):
     """Skill: supplier.update — Update supplier details."""
     from sqlalchemy.orm import joinedload as _jl
-    party = (await db.execute(
-        select(Party).where(Party.id == supplier_id).options(_jl(Party.profile))
-    )).scalar_one_or_none()
+
+    party = (
+        await db.execute(select(Party).where(Party.id == supplier_id).options(_jl(Party.profile)))
+    ).scalar_one_or_none()
     if not party:
         raise HTTPException(404, "Supplier not found")
 
@@ -672,13 +802,15 @@ async def update_supplier(
             old_val = getattr(party, field, None)
             new_val = update_data[field]
             if old_val != new_val:
-                db.add(SupplierRequisiteHistory(
-                    party_id=party.id,
-                    field_name=field,
-                    old_value=str(old_val) if old_val is not None else None,
-                    new_value=str(new_val) if new_val is not None else None,
-                    source="manual",
-                ))
+                db.add(
+                    SupplierRequisiteHistory(
+                        party_id=party.id,
+                        field_name=field,
+                        old_value=str(old_val) if old_val is not None else None,
+                        new_value=str(new_val) if new_val is not None else None,
+                        source="manual",
+                    )
+                )
 
     for field, value in update_data.items():
         setattr(party, field, value)
@@ -698,8 +830,11 @@ async def update_supplier(
             db.add(SupplierProfile(**kwargs))
 
     await log_action(
-        db, action="supplier.update", entity_type="supplier",
-        entity_id=party.id, details=update_data,
+        db,
+        action="supplier.update",
+        entity_type="supplier",
+        entity_id=party.id,
+        details=update_data,
     )
     await db.commit()
     await db.refresh(party)
@@ -735,6 +870,7 @@ async def _delete_supplier_cascade(party_id: uuid.UUID, db) -> dict:
         for ts_id in ts_ids:
             try:
                 from app.vector.qdrant_store import delete_tool_catalog_by_supplier
+
                 delete_tool_catalog_by_supplier(str(ts_id))
             except Exception:
                 pass
@@ -746,6 +882,7 @@ async def _delete_supplier_cascade(party_id: uuid.UUID, db) -> dict:
         for entry_id in entries_result.scalars().all():
             try:
                 from app.domain.drawing_graph import delete_tool_catalog_graph
+
                 await delete_tool_catalog_graph(entry_id, db)
             except Exception:
                 pass
@@ -758,16 +895,16 @@ async def _delete_supplier_cascade(party_id: uuid.UUID, db) -> dict:
     # 2. Graph: party-level nodes
     try:
         from app.domain.drawing_graph import delete_party_graph
+
         await delete_party_graph(party_id, db)
     except Exception:
         pass
 
     # 3. Nullify EmailThread references (preserve email history)
     from sqlalchemy import update as sa_update
+
     await db.execute(
-        sa_update(EmailThread)
-        .where(EmailThread.party_id == party_id)
-        .values(party_id=None)
+        sa_update(EmailThread).where(EmailThread.party_id == party_id).values(party_id=None)
     )
 
     # 4. SupplierProfile
@@ -787,7 +924,9 @@ async def _delete_supplier_cascade(party_id: uuid.UUID, db) -> dict:
     return {"deleted": 1, "party_id": str(party_id)}
 
 
-@router.delete("/bulk-delete", summary="Skill: supplier.bulk_delete — Bulk delete suppliers with cascade.")
+@router.delete(
+    "/bulk-delete", summary="Skill: supplier.bulk_delete — Bulk delete suppliers with cascade."
+)
 async def bulk_delete_suppliers(
     payload: SupplierBulkDeleteRequest,
     db: AsyncSession = Depends(get_db),
@@ -808,14 +947,19 @@ async def bulk_delete_suppliers(
 
     await db.commit()
     await log_action(
-        db, action="supplier.bulk_delete", entity_type="supplier",
-        entity_id=None, details={"deleted": deleted, "errors": len(errors)},
+        db,
+        action="supplier.bulk_delete",
+        entity_type="supplier",
+        entity_id=None,
+        details={"deleted": deleted, "errors": len(errors)},
     )
     logger.info("suppliers_bulk_deleted", deleted=deleted, errors=len(errors))
     return {"deleted": deleted, "errors": errors}
 
 
-@router.delete("/{supplier_id}", summary="Skill: supplier.delete — Delete supplier with full cascade.")
+@router.delete(
+    "/{supplier_id}", summary="Skill: supplier.delete — Delete supplier with full cascade."
+)
 async def delete_supplier(
     supplier_id: uuid.UUID,
     confirm: bool = Query(False),
@@ -839,8 +983,11 @@ async def delete_supplier(
     await db.commit()
 
     await log_action(
-        db, action="supplier.delete", entity_type="supplier",
-        entity_id=supplier_id, details={"name": party_name},
+        db,
+        action="supplier.delete",
+        entity_type="supplier",
+        entity_id=supplier_id,
+        details={"name": party_name},
     )
     logger.info("supplier_deleted", supplier_id=str(supplier_id), name=party_name)
     return result

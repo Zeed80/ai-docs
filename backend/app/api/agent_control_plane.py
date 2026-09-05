@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import structlog
@@ -27,6 +27,8 @@ from app.ai.agent_config import (
 from app.ai.capability_sandbox import promote_capability, run_capability_sandbox
 from app.ai.gateway_config import gateway_config
 from app.ai.policy_engine import classify_skill_risk, is_protected_setting
+from app.auth.jwt import require_human_role, require_role
+from app.auth.models import UserInfo, UserRole
 from app.core.chat_bus import chat_bus
 from app.db.models import (
     AgentAction,
@@ -45,8 +47,6 @@ from app.db.models import (
     RecipeSkill,
     TechnologyLearningRule,
 )
-from app.auth.jwt import require_human_role, require_role
-from app.auth.models import UserInfo, UserRole
 from app.db.session import get_db
 
 router = APIRouter()
@@ -77,10 +77,7 @@ def _approval_gates_total(config: BuiltinAgentConfig) -> int:
         try:
             from app.ai.capability_manifest import load_capability_manifest
 
-            return sum(
-                len(c.gate_actions or ())
-                for c in load_capability_manifest().capabilities
-            )
+            return sum(len(c.gate_actions or ()) for c in load_capability_manifest().capabilities)
         except Exception:
             pass
     return len(config.approval_gates)
@@ -402,8 +399,7 @@ def _draft_contains_executable_code(draft: dict) -> bool:
         if isinstance(value, dict) and value:
             return True
         if isinstance(value, list) and any(
-            isinstance(item, dict) and (item.get("content") or item.get("code"))
-            for item in value
+            isinstance(item, dict) and (item.get("content") or item.get("code")) for item in value
         ):
             return True
     return False
@@ -425,12 +421,16 @@ def _safe_auto_approval_reason(proposal: CapabilityProposal) -> str | None:
     draft = proposal.draft or {}
     if _draft_contains_executable_code(draft):
         return None
-    tool_name = _draft_value(draft, "tool_name") or _draft_value(
-        draft, "skill_registry_entry", "name"
-    ) or ""
-    endpoint_path = _draft_value(draft, "endpoint_path") or _draft_value(
-        draft, "skill_registry_entry", "path"
-    ) or ""
+    tool_name = (
+        _draft_value(draft, "tool_name")
+        or _draft_value(draft, "skill_registry_entry", "name")
+        or ""
+    )
+    endpoint_path = (
+        _draft_value(draft, "endpoint_path")
+        or _draft_value(draft, "skill_registry_entry", "path")
+        or ""
+    )
     method = (
         _draft_value(draft, "method")
         or _draft_value(draft, "skill_registry_entry", "method")
@@ -450,7 +450,9 @@ def _safe_auto_approval_reason(proposal: CapabilityProposal) -> str | None:
 
     # High risk: require human review unless explicitly safe
     if proposal.risk_level == "high":
-        safe_high = tool_name.startswith("workspace.") or endpoint_path.startswith("/api/workspace/")
+        safe_high = tool_name.startswith("workspace.") or endpoint_path.startswith(
+            "/api/workspace/"
+        )
         if not safe_high:
             return None
 
@@ -458,26 +460,29 @@ def _safe_auto_approval_reason(proposal: CapabilityProposal) -> str | None:
 
 
 async def _publish_capability_approval_request(proposal: CapabilityProposal) -> None:
-    await chat_bus.publish({
-        "type": "approval_request",
-        "tool": "capability.proposal",
-        "args": {
-            "proposal_id": str(proposal.id),
-            "title": proposal.title,
-            "risk_level": proposal.risk_level,
-            "suggested_artifact": proposal.suggested_artifact,
-            "reason": proposal.reason,
-        },
-        "preview": (
-            f"{proposal.title}\n"
-            f"Риск: {proposal.risk_level} · Тип: {proposal.suggested_artifact}\n"
-            f"{proposal.reason or proposal.missing_capability or ''}"
-        ),
-    })
+    await chat_bus.publish(
+        {
+            "type": "approval_request",
+            "tool": "capability.proposal",
+            "args": {
+                "proposal_id": str(proposal.id),
+                "title": proposal.title,
+                "risk_level": proposal.risk_level,
+                "suggested_artifact": proposal.suggested_artifact,
+                "reason": proposal.reason,
+            },
+            "preview": (
+                f"{proposal.title}\n"
+                f"Риск: {proposal.risk_level} · Тип: {proposal.suggested_artifact}\n"
+                f"{proposal.reason or proposal.missing_capability or ''}"
+            ),
+        }
+    )
 
 
 def _current_setting_value(setting_path: str) -> Any:
     from app.ai.agent_config import BuiltinAgentConfig
+
     top_level = setting_path.split(".")[0]
     known_fields = set(BuiltinAgentConfig.model_fields.keys())
     if top_level not in known_fields:
@@ -521,7 +526,7 @@ async def _create_config_proposal(
     )
     if not protected:
         _apply_setting(payload.setting_path, payload.proposed_value)
-        proposal.applied_at = datetime.now(timezone.utc)
+        proposal.applied_at = datetime.now(UTC)
     db.add(proposal)
     await db.commit()
     await db.refresh(proposal)
@@ -641,9 +646,7 @@ async def control_plane_status(db: AsyncSession = Depends(get_db)) -> AgentContr
         permission_mode=config.permission_mode,
         safe_auto_apply_enabled=config.safe_auto_apply_enabled,
         protected_settings=sorted(
-            name
-            for name in type(config).model_fields
-            if is_protected_setting(name)
+            name for name in type(config).model_fields if is_protected_setting(name)
         ),
         skills_total=_count_active_skills(config),
         approval_gates_total=_approval_gates_total(config),
@@ -688,15 +691,19 @@ async def agent_quality(
     «какие действия у нас чаще всего отклоняют» это и есть список того, что
     агент делает не так.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from sqlalchemy import func
 
     from app.db.models import (
-        Approval, ApprovalStatus, EmailTriageResult, MemoryFact, MessageRating,
+        Approval,
+        ApprovalStatus,
+        EmailTriageResult,
+        MemoryFact,
+        MessageRating,
     )
 
-    since = datetime.now(timezone.utc) - timedelta(days=max(1, days))
+    since = datetime.now(UTC) - timedelta(days=max(1, days))
 
     rows = (
         await db.execute(
@@ -761,19 +768,15 @@ async def agent_quality(
         approvals_rejected=rejected,
         top_rejected=[
             {"action": action, "count": count}
-            for action, count in sorted(
-                rejected_by_action.items(), key=lambda kv: -kv[1]
-            )[:10]
+            for action, count in sorted(rejected_by_action.items(), key=lambda kv: -kv[1])[:10]
         ],
         triage_corrections=[
-            {"was": was, "now": now_, "count": int(count)}
-            for was, now_, count in corrections
+            {"was": was, "now": now_, "count": int(count)} for was, now_, count in corrections
         ],
         ratings_up=up,
         ratings_down=down,
         recent_complaints=[
-            {"text": text, "at": at.isoformat() if at else None}
-            for text, at in complaints
+            {"text": text, "at": at.isoformat() if at else None} for text, at in complaints
         ],
     )
 
@@ -782,7 +785,7 @@ async def agent_quality(
 async def runtime_status(db: AsyncSession = Depends(get_db)) -> AgentRuntimeStatus:
     """Runtime observability for the built-in agent and memory stack."""
     config = get_builtin_agent_config()
-    day_ago = datetime.now(timezone.utc) - timedelta(hours=24)
+    day_ago = datetime.now(UTC) - timedelta(hours=24)
 
     llm_calls = await db.scalar(
         select(func.count())
@@ -819,11 +822,7 @@ async def runtime_status(db: AsyncSession = Depends(get_db)) -> AgentRuntimeStat
         .first()
     )
     recent_actions = list(
-        (
-            await db.execute(
-                select(AgentAction).order_by(AgentAction.created_at.desc()).limit(12)
-            )
-        )
+        (await db.execute(select(AgentAction).order_by(AgentAction.created_at.desc()).limit(12)))
         .scalars()
         .all()
     )
@@ -844,8 +843,9 @@ async def runtime_status(db: AsyncSession = Depends(get_db)) -> AgentRuntimeStat
     evidence = await db.scalar(select(func.count()).select_from(EvidenceSpan))
     embedding_rows = (
         await db.execute(
-            select(MemoryEmbeddingRecord.status, func.count())
-            .group_by(MemoryEmbeddingRecord.status)
+            select(MemoryEmbeddingRecord.status, func.count()).group_by(
+                MemoryEmbeddingRecord.status
+            )
         )
     ).all()
     embeddings_by_status = {str(status): int(count) for status, count in embedding_rows}
@@ -952,7 +952,7 @@ async def decide_config_proposal(
     if proposal.status not in {"pending", "applied"}:
         raise HTTPException(status_code=409, detail="Proposal already decided")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     proposal.decided_by = payload.decided_by
     proposal.decided_at = now
     proposal.decision_comment = payload.comment
@@ -983,15 +983,17 @@ async def list_skills() -> dict:
         name = str(skill.get("name") or "")
         if not name:
             continue
-        skills.append({
-            "name": name,
-            "description": skill.get("description", ""),
-            "method": skill.get("method", ""),
-            "path": skill.get("path", ""),
-            "enabled": name in exposed,
-            "approval_required": name in approval_gates,
-            "risk_level": classify_skill_risk(name),
-        })
+        skills.append(
+            {
+                "name": name,
+                "description": skill.get("description", ""),
+                "method": skill.get("method", ""),
+                "path": skill.get("path", ""),
+                "enabled": name in exposed,
+                "approval_required": name in approval_gates,
+                "risk_level": classify_skill_risk(name),
+            }
+        )
     return {"skills": skills}
 
 
@@ -1038,12 +1040,14 @@ async def decide_agent_task(
     if task.status != "proposed":
         raise HTTPException(status_code=409, detail=f"Task is not proposed (status={task.status})")
     metadata = dict(task.metadata_ or {})
-    metadata.update({
-        "decision_status": "approved" if payload.approved else "rejected",
-        "decided_by": payload.decided_by,
-        "decision_comment": payload.comment,
-        "decided_at": datetime.now(timezone.utc).isoformat(),
-    })
+    metadata.update(
+        {
+            "decision_status": "approved" if payload.approved else "rejected",
+            "decided_by": payload.decided_by,
+            "decision_comment": payload.comment,
+            "decided_at": datetime.now(UTC).isoformat(),
+        }
+    )
     task.metadata_ = metadata
     task.status = "created" if payload.approved else "rejected"
     await db.commit()
@@ -1064,12 +1068,14 @@ async def run_agent_task(
     if task.status != "created":
         raise HTTPException(status_code=409, detail=f"Task is not runnable (status={task.status})")
 
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     metadata = dict(task.metadata_ or {})
-    metadata.update({
-        "run_status": "running",
-        "run_started_at": started_at.isoformat(),
-    })
+    metadata.update(
+        {
+            "run_status": "running",
+            "run_started_at": started_at.isoformat(),
+        }
+    )
     task.metadata_ = metadata
     task.status = "running"
     await db.commit()
@@ -1082,9 +1088,7 @@ async def run_agent_task(
         f"\n\nКонтекст задачи:\n{task.description}" if task.description else ""
     )
     work_order = (
-        await db.execute(
-            select(WorkOrder).where(WorkOrder.legacy_agent_task_id == task.id)
-        )
+        await db.execute(select(WorkOrder).where(WorkOrder.legacy_agent_task_id == task.id))
     ).scalar_one_or_none()
     if work_order is None:
         work_order = await create_work_order(
@@ -1109,9 +1113,8 @@ async def run_agent_task(
         task.metadata_ = metadata
         await db.commit()
     try:
-        from app.tasks.work_orders import execute_work_order_now
-
         from app.config import settings
+        from app.tasks.work_orders import execute_work_order_now
 
         execution_factory = (
             async_sessionmaker(bind=db.bind, expire_on_commit=False)
@@ -1129,15 +1132,17 @@ async def run_agent_task(
         )
     ok = work_order.status == "completed"
 
-    finished_at = datetime.now(timezone.utc)
+    finished_at = datetime.now(UTC)
     metadata = dict(task.metadata_ or {})
-    metadata.update({
-        "run_status": "completed" if ok else "failed",
-        "work_order_id": str(work_order.id),
-        "work_order_status": work_order.status,
-        "run_finished_at": finished_at.isoformat(),
-        "run_duration_ms": int((finished_at - started_at).total_seconds() * 1000),
-    })
+    metadata.update(
+        {
+            "run_status": "completed" if ok else "failed",
+            "work_order_id": str(work_order.id),
+            "work_order_status": work_order.status,
+            "run_finished_at": finished_at.isoformat(),
+            "run_duration_ms": int((finished_at - started_at).total_seconds() * 1000),
+        }
+    )
     task.metadata_ = metadata
     task.status = "completed" if ok else "failed"
     task.output = output or None
@@ -1343,7 +1348,7 @@ async def sandbox_apply_capability(
     if proposal.status in {"approved", "rejected", "promoted", "rolled_back"}:
         raise HTTPException(status_code=409, detail="Capability proposal already decided")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = run_capability_sandbox(proposal)
     if not result.ok:
         proposal.status = "draft"
@@ -1418,6 +1423,7 @@ async def sandbox_apply_capability(
             proposal.metadata_ = metadata
             # Reload gateway so new skill is visible immediately
             from app.ai.gateway_config import gateway_config as _gw
+
             _gw.reload()
         else:
             # Promote failed — stay approved, user promotes manually
@@ -1473,7 +1479,7 @@ async def decide_capability_proposal(
     if proposal.status in {"promoted", "rolled_back"}:
         return proposal
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     proposal.decided_by = payload.decided_by
     proposal.decided_at = now
     proposal.decision_comment = payload.comment
@@ -1501,6 +1507,7 @@ async def decide_capability_proposal(
             }
             proposal.metadata_ = metadata
             from app.ai.gateway_config import gateway_config as _gw
+
             _gw.reload()
 
     await db.commit()
@@ -1538,7 +1545,7 @@ async def promote_capability_proposal(
             detail={"message": "Promotion failed", "errors": result.errors},
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     proposal.status = "promoted"
     proposal.decided_by = decided_by
     proposal.decided_at = now
@@ -1554,6 +1561,7 @@ async def promote_capability_proposal(
 
     # Reload gateway config so the new skill is visible immediately
     from app.ai.gateway_config import gateway_config as _gw
+
     _gw.reload()
 
     await db.commit()
@@ -1605,9 +1613,7 @@ async def list_recipes(
 
 
 @router.get("/recipes/{recipe_id}", response_model=RecipeSkillOut)
-async def get_recipe(
-    recipe_id: uuid.UUID, db: AsyncSession = Depends(get_db)
-) -> RecipeSkill:
+async def get_recipe(recipe_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> RecipeSkill:
     recipe = await db.get(RecipeSkill, recipe_id)
     if not recipe:
         raise HTTPException(status_code=404, detail="Recipe not found")
@@ -1699,6 +1705,7 @@ async def get_agent_diagnostics() -> dict:
     # --- Redis health ---
     try:
         from app.utils.redis_client import get_sync_redis
+
         r = get_sync_redis()
         r.ping()
         result["redis"] = {"status": "ok"}
@@ -1708,6 +1715,7 @@ async def get_agent_diagnostics() -> dict:
     # --- Workspace blocks ---
     try:
         from app.domain.workspace import list_workspace_blocks
+
         blocks = list_workspace_blocks()
         result["workspace"] = {
             "status": "ok",
@@ -1721,14 +1729,21 @@ async def get_agent_diagnostics() -> dict:
     # --- Recent agent errors (from DB action log) ---
     try:
         from app.db.session import _get_session_factory
+
         factory = _get_session_factory()
         async with factory() as db:
-            rows = (await db.execute(
-                select(AgentAction)
-                .where(AgentAction.action_type == "error")
-                .order_by(AgentAction.created_at.desc())
-                .limit(5)
-            )).scalars().all()
+            rows = (
+                (
+                    await db.execute(
+                        select(AgentAction)
+                        .where(AgentAction.action_type == "error")
+                        .order_by(AgentAction.created_at.desc())
+                        .limit(5)
+                    )
+                )
+                .scalars()
+                .all()
+            )
             result["recent_errors"] = [
                 {
                     "created_at": str(row.created_at),

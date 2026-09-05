@@ -13,8 +13,8 @@ Revision ID: 20260903_0003
 Revises: 20260903_0002
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "20260903_0003"
 down_revision = "20260903_0002"
@@ -31,9 +31,7 @@ def upgrade() -> None:
         op.add_column("users", sa.Column("timezone", sa.String(64), nullable=True))
 
     if "user_notification_settings" in inspector.get_table_names():
-        settings_columns = {
-            c["name"] for c in inspector.get_columns("user_notification_settings")
-        }
+        settings_columns = {c["name"] for c in inspector.get_columns("user_notification_settings")}
         if "timezone" in settings_columns:
             op.execute(
                 sa.text(
@@ -48,9 +46,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.add_column(
-        "user_notification_settings", sa.Column("timezone", sa.String(64), nullable=True)
-    )
+    op.add_column("user_notification_settings", sa.Column("timezone", sa.String(64), nullable=True))
     op.execute(
         sa.text(
             "UPDATE user_notification_settings s SET timezone = u.timezone "

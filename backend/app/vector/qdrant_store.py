@@ -1,7 +1,8 @@
 """Qdrant vector store — collection management, upsert, search."""
 
-import structlog
 import uuid
+
+import structlog
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -11,7 +12,6 @@ from qdrant_client.models import (
     MatchValue,
     PayloadSchemaType,
     PointStruct,
-    Query,
     ScalarQuantization,
     ScalarQuantizationConfig,
     ScalarType,
@@ -96,12 +96,16 @@ def ensure_collection(
             if not recreate_on_mismatch:
                 logger.warning(
                     "qdrant_collection_dimension_mismatch",
-                    collection=collection_name, existing=current, expected=vector_size,
+                    collection=collection_name,
+                    existing=current,
+                    expected=vector_size,
                 )
                 return
             logger.warning(
                 "qdrant_collection_recreated_for_new_dimension",
-                collection=collection_name, existing=current, expected=vector_size,
+                collection=collection_name,
+                existing=current,
+                expected=vector_size,
             )
             client.delete_collection(collection_name)
             existing.discard(collection_name)
@@ -152,15 +156,21 @@ def ensure_drawing_collections(
         ),
         (
             COLLECTION_DRAWING_FEATURES,
-            [("drawing_id", PayloadSchemaType.KEYWORD), ("feature_type", PayloadSchemaType.KEYWORD)],
+            [
+                ("drawing_id", PayloadSchemaType.KEYWORD),
+                ("feature_type", PayloadSchemaType.KEYWORD),
+            ],
         ),
         (
             COLLECTION_TOOL_CATALOG,
-            [("tool_type", PayloadSchemaType.KEYWORD), ("supplier_id", PayloadSchemaType.KEYWORD),
-             ("is_active", PayloadSchemaType.KEYWORD),
-             # Scoping a vector search to one catalog needs this indexed too.
-             ("catalog_document_id", PayloadSchemaType.KEYWORD),
-             ("has_image", PayloadSchemaType.KEYWORD)],
+            [
+                ("tool_type", PayloadSchemaType.KEYWORD),
+                ("supplier_id", PayloadSchemaType.KEYWORD),
+                ("is_active", PayloadSchemaType.KEYWORD),
+                # Scoping a vector search to one catalog needs this indexed too.
+                ("catalog_document_id", PayloadSchemaType.KEYWORD),
+                ("has_image", PayloadSchemaType.KEYWORD),
+            ],
         ),
     ]:
         ensure_collection(
@@ -169,7 +179,9 @@ def ensure_drawing_collections(
             recreate_on_mismatch=recreate_on_mismatch,
         )
         client = get_client()
-        existing_collection = client.get_collection(collection_name)
+        # Коллекцию только что обеспечил ensure_collection выше; вызов
+        # оставлен как явная проверка, что она действительно есть.
+        client.get_collection(collection_name)
         for field, schema_type in payload_indexes:
             try:
                 client.create_payload_index(
@@ -181,7 +193,9 @@ def ensure_drawing_collections(
                 pass
 
 
-def ensure_visual_catalog_collection(vector_size: int, *, recreate_on_mismatch: bool = False) -> None:
+def ensure_visual_catalog_collection(
+    vector_size: int, *, recreate_on_mismatch: bool = False
+) -> None:
     """Collection for multimodal (image+text) catalog vectors.
 
     ``vector_size`` is the sidecar's reported dimension — pass what /info says,
@@ -465,14 +479,10 @@ def search_tool_catalog(
         must.append(FieldCondition(key="supplier_id", match=MatchValue(value=supplier_id)))
     if catalog_document_id:
         must.append(
-            FieldCondition(
-                key="catalog_document_id", match=MatchValue(value=catalog_document_id)
-            )
+            FieldCondition(key="catalog_document_id", match=MatchValue(value=catalog_document_id))
         )
     if has_image is not None:
-        must.append(
-            FieldCondition(key="has_image", match=MatchValue(value=str(has_image).lower()))
-        )
+        must.append(FieldCondition(key="has_image", match=MatchValue(value=str(has_image).lower())))
     query_filter = Filter(must=must)
     response = client.query_points(
         collection_name=COLLECTION_TOOL_CATALOG,
@@ -499,16 +509,18 @@ def search_tool_catalog(
 def delete_drawing(drawing_id: str) -> None:
     """Delete all Qdrant points for a drawing."""
     from qdrant_client.models import FilterSelector
+
     client = get_client()
     for collection in [COLLECTION_DRAWINGS, COLLECTION_DRAWING_FEATURES]:
-        id_field = "drawing_id" if collection == COLLECTION_DRAWING_FEATURES else None
         try:
             if collection == COLLECTION_DRAWINGS:
                 client.delete(
                     collection_name=collection,
                     points_selector=FilterSelector(
                         filter=Filter(
-                            must=[FieldCondition(key="drawing_id", match=MatchValue(value=drawing_id))]
+                            must=[
+                                FieldCondition(key="drawing_id", match=MatchValue(value=drawing_id))
+                            ]
                         )
                     ),
                 )
@@ -517,7 +529,9 @@ def delete_drawing(drawing_id: str) -> None:
                     collection_name=collection,
                     points_selector=FilterSelector(
                         filter=Filter(
-                            must=[FieldCondition(key="drawing_id", match=MatchValue(value=drawing_id))]
+                            must=[
+                                FieldCondition(key="drawing_id", match=MatchValue(value=drawing_id))
+                            ]
                         )
                     ),
                 )
@@ -632,6 +646,7 @@ def search_similar(
 def delete_tool_catalog_entry(entry_id: str) -> None:
     """Delete a single tool catalog entry from Qdrant by entry_id."""
     from qdrant_client.models import FilterSelector
+
     client = get_client()
     try:
         client.delete(
@@ -649,6 +664,7 @@ def delete_tool_catalog_entry(entry_id: str) -> None:
 def delete_tool_catalog_by_supplier(supplier_id: str) -> None:
     """Delete all tool catalog entries for a given supplier from Qdrant."""
     from qdrant_client.models import FilterSelector
+
     client = get_client()
     try:
         client.delete(
@@ -660,11 +676,14 @@ def delete_tool_catalog_by_supplier(supplier_id: str) -> None:
             ),
         )
     except Exception as exc:
-        logger.warning("qdrant_delete_supplier_catalog_failed", supplier_id=supplier_id, error=str(exc))
+        logger.warning(
+            "qdrant_delete_supplier_catalog_failed", supplier_id=supplier_id, error=str(exc)
+        )
 
 
 def delete_document(doc_id: str) -> None:
     from qdrant_client.models import PointIdsList
+
     client = get_client()
     client.delete(
         collection_name=COLLECTION,
@@ -688,6 +707,7 @@ def collection_count_for(collection_name: str = COLLECTION) -> int:
 def _uuid_to_uint64(uuid_str: str) -> int:
     """Convert UUID string to uint64 for Qdrant point ID."""
     import uuid as uuid_mod
+
     return uuid_mod.UUID(uuid_str).int & 0xFFFFFFFFFFFFFFFF
 
 

@@ -50,9 +50,7 @@ def isolated_cloud_slots(monkeypatch):
         def srem(self, _key, member):
             allowed.discard(member)
 
-    monkeypatch.setattr(
-        "app.utils.redis_client.get_sync_redis", lambda: _FakeRedis()
-    )
+    monkeypatch.setattr("app.utils.redis_client.get_sync_redis", lambda: _FakeRedis())
     return allowed
 
 

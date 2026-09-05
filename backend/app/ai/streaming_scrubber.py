@@ -110,7 +110,7 @@ class StreamingContextScrubber:
                     held = _max_partial_suffix(buf, close)
                     self._buf = buf[-held:] if held else ""
                     return "".join(out)
-                buf = buf[idx + len(close):]
+                buf = buf[idx + len(close) :]
                 self._in_span = False
                 self._close_tag = ""
             else:
@@ -136,7 +136,7 @@ class StreamingContextScrubber:
                 open_tag, close_tag = matched_pair
                 if earliest_idx > 0:
                     out.append(buf[:earliest_idx])
-                buf = buf[earliest_idx + len(open_tag):]
+                buf = buf[earliest_idx + len(open_tag) :]
                 self._in_span = True
                 self._close_tag = close_tag
 
@@ -161,6 +161,7 @@ class StreamingContextScrubber:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _max_partial_suffix(buf: str, tag: str) -> int:
     """Longest suffix of *buf* that is a prefix of *tag* (case-insensitive)."""

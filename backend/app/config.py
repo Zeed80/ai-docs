@@ -72,10 +72,10 @@ class Settings(BaseSettings):
     morning_briefing_enabled: bool = True
 
     # Security
-    csrf_secret: str = "dev-csrf-secret"   # set to secrets.token_hex(32) in production
+    csrf_secret: str = "dev-csrf-secret"  # set to secrets.token_hex(32) in production
     rate_limit_login_per_minute: int = 30  # 30/min = 1 request per 2s; plenty for dev, still safe
-    rate_limit_api_per_minute: int = 600   # 10 req/s per IP — generous for rich SPA polling
-    csp_enabled: bool = False              # enable in production
+    rate_limit_api_per_minute: int = 600  # 10 req/s per IP — generous for rich SPA polling
+    csp_enabled: bool = False  # enable in production
     # Set to true only when the backend sits behind a trusted reverse proxy (Traefik/nginx)
     # that sets X-Forwarded-For. False by default to prevent IP spoofing via that header.
     trusted_proxy: bool = False
@@ -114,8 +114,8 @@ class Settings(BaseSettings):
     cad_code_runner_url: str = "http://cad-code-runner:8078"
 
     # Auth (Authentik SSO)
-    auth_enabled: bool = False          # set True in production
-    authentik_url: str = "http://authentik-server:9000"   # internal Docker URL for JWKS/token
+    auth_enabled: bool = False  # set True in production
+    authentik_url: str = "http://authentik-server:9000"  # internal Docker URL for JWKS/token
     # External URL for browser login redirects (same as authentik_url when not split-brain)
     authentik_external_url: str = ""
     authentik_slug: str = "ai-workspace"
@@ -134,9 +134,9 @@ class Settings(BaseSettings):
     # Push notifications (self-hosted ntfy — no Google services).
     # Internal URL the backend POSTs to; external URL is what the mobile app subscribes to.
     ntfy_enabled: bool = False
-    ntfy_url: str = "http://ntfy:80"          # internal publish endpoint
-    ntfy_external_url: str = ""               # e.g. https://push.example.com (for the mobile app)
-    ntfy_token: str = ""                      # optional bearer token for ntfy auth
+    ntfy_url: str = "http://ntfy:80"  # internal publish endpoint
+    ntfy_external_url: str = ""  # e.g. https://push.example.com (for the mobile app)
+    ntfy_token: str = ""  # optional bearer token for ntfy auth
 
     # Mobile app APK distribution — directory served (without auth) at /download.
     releases_dir: str = "/releases"
@@ -149,9 +149,9 @@ class Settings(BaseSettings):
 
     # llama.cpp server (optional embedded backend)
     # Defaults match docker-compose.yml values; env vars always win via Pydantic BaseSettings.
-    llamacpp_url: str = "http://localhost:11436"   # override: LLAMACPP_URL=http://llama-server:8080
+    llamacpp_url: str = "http://localhost:11436"  # override: LLAMACPP_URL=http://llama-server:8080
     llamacpp_model: str = "/models/model.gguf"
-    llamacpp_ctx_size: int = 16384   # 16 384 / parallel(2) = 8 192 tokens per slot
+    llamacpp_ctx_size: int = 16384  # 16 384 / parallel(2) = 8 192 tokens per slot
     llamacpp_kv_cache_type: str = "q8_0"
 
     # ComfyUI (image generation / editing — drawings studio). On-prem only.
@@ -184,25 +184,24 @@ class Settings(BaseSettings):
     def emg_enabled_for(self, profile: str) -> bool:
         """Limit the rollout to explicit domain profiles."""
         allowed = {
-            item.strip().lower()
-            for item in self.emg_pipeline_profiles.split(",")
-            if item.strip()
+            item.strip().lower() for item in self.emg_pipeline_profiles.split(",") if item.strip()
         }
         normalized = profile.strip().lower()
         if normalized == "mechanical_eskd":
             normalized = "mechanical"
         return self.emg_pipeline_enabled and normalized in allowed
-    llamacpp_n_gpu_layers: int = -1   # -1 = all layers on GPU
-    llamacpp_parallel: int = 2        # 2 slots × 8 192 tokens; was 4 (too many, caused OOM)
+
+    llamacpp_n_gpu_layers: int = -1  # -1 = all layers on GPU
+    llamacpp_parallel: int = 2  # 2 slots × 8 192 tokens; was 4 (too many, caused OOM)
     llamacpp_flash_attn: bool = True
 
     # OCR (local VLM fallback for scanned PDFs / images)
-    ocr_max_pages: int = 15             # max PDF pages rendered for VLM OCR
-    ocr_render_scale: float = 2.5       # PyMuPDF render matrix scale for OCR pages
+    ocr_max_pages: int = 15  # max PDF pages rendered for VLM OCR
+    ocr_render_scale: float = 2.5  # PyMuPDF render matrix scale for OCR pages
 
     # Upload limits
-    max_upload_size_mb: int = 100       # max single file size in MB
-    max_batch_size: int = 50            # max files per batch upload
+    max_upload_size_mb: int = 100  # max single file size in MB
+    max_batch_size: int = 50  # max files per batch upload
 
     # Celery beat schedules (intervals in seconds or minutes)
     imap_poll_interval_minutes: int = 5

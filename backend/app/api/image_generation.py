@@ -16,7 +16,7 @@ import io
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
@@ -54,17 +54,21 @@ _ALLOWED_OPERATIONS = {"edit", "generate", "inpaint", "cleanup", "eskd", "vector
 # Engineering results whose acceptance is approval-gated for the agent.
 _GATED_OPERATIONS = {"techdraw", "vectorize"}
 _ALLOWED_UPLOAD_TYPES = {
-    "image/png", "image/jpeg", "image/jpg", "image/webp",
-    "application/pdf", "application/octet-stream",
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/webp",
+    "application/pdf",
+    "application/octet-stream",
 }
 _ALLOWED_UPLOAD_EXTS = {"png", "jpg", "jpeg", "webp", "pdf"}
 _MAX_SOURCE_BYTES = 50 * 1024 * 1024
 
 
 class CadCertificationRequest(BaseModel):
-    profile: Literal[
-        "auto", "mechanical", "construction", "electrical", "hydraulic", "pid"
-    ] = "auto"
+    profile: Literal["auto", "mechanical", "construction", "electrical", "hydraulic", "pid"] = (
+        "auto"
+    )
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
@@ -132,7 +136,7 @@ class HumanAssertionCorrectionRequest(BaseModel):
     rebuild: bool = False
 
     @model_validator(mode="after")
-    def validate_source_bbox(self) -> "HumanAssertionCorrectionRequest":
+    def validate_source_bbox(self) -> HumanAssertionCorrectionRequest:
         if self.source_bbox_normalized is None:
             return self
         x0, y0, x1, y1 = self.source_bbox_normalized
@@ -148,7 +152,7 @@ class HumanAssertionBatchItem(BaseModel):
     source_bbox_normalized: tuple[float, float, float, float] | None = None
 
     @model_validator(mode="after")
-    def validate_source_bbox(self) -> "HumanAssertionBatchItem":
+    def validate_source_bbox(self) -> HumanAssertionBatchItem:
         if self.source_bbox_normalized is None:
             return self
         x0, y0, x1, y1 = self.source_bbox_normalized
@@ -164,7 +168,7 @@ class HumanAssertionBatchCorrectionRequest(BaseModel):
     rebuild: bool = False
 
     @model_validator(mode="after")
-    def validate_unique_assertions(self) -> "HumanAssertionBatchCorrectionRequest":
+    def validate_unique_assertions(self) -> HumanAssertionBatchCorrectionRequest:
         ids = [item.assertion_id for item in self.corrections]
         if len(ids) != len(set(ids)):
             raise ValueError("batch correction contains duplicate assertion ids")
@@ -200,9 +204,7 @@ def _set_compat_spec_value(spec: dict[str, Any], predicate: str, value: Any) -> 
     return True
 
 
-def _apply_compat_spec_update(
-    compatibility: dict[str, Any], previous: Any, value: Any
-) -> bool:
+def _apply_compat_spec_update(compatibility: dict[str, Any], previous: Any, value: Any) -> bool:
     """Mirror one corrected assertion into the legacy compatibility spec.
 
     Two subjects have a corresponding leaf there:
@@ -271,7 +273,9 @@ def _build_human_correction_change(
     add_nodes: list[Any] = []
     add_edges: list[Any] = []
     decision_payload: dict[str, Any] = {
-        "actor_sub": actor_sub, "note": note, "superseded_assertion_id": previous.id,
+        "actor_sub": actor_sub,
+        "note": note,
+        "superseded_assertion_id": previous.id,
     }
     if batch_patch_id is not None:
         decision_payload["batch_patch_id"] = batch_patch_id
@@ -281,30 +285,47 @@ def _build_human_correction_change(
             raise HTTPException(422, "Граф не содержит источник для SourceRegion")
         region_id = f"region:human:{digest}"
         raster_id = f"evidence:raster:human:{digest}"
-        add_nodes.append(GraphNode(
-            id=region_id, type="SourceRegion",
-            name=f"Human region for {previous.predicate}",
-        ))
-        add_edges.append(GraphEdge(
-            id=f"located:{region_id}", type="located_in",
-            source_id=region_id, target_id=location_node_id or previous.subject_id,
-        ))
-        add_evidence.append(Evidence(
-            id=raster_id, kind="raster_region", source_id=source.id,
-            source_region_id=region_id,
-            payload={
-                "bbox_normalized": list(source_bbox_normalized),
-                "fallback": False, "selected_by": "human",
-            },
-            sha256=source.sha256,
-        ))
+        add_nodes.append(
+            GraphNode(
+                id=region_id,
+                type="SourceRegion",
+                name=f"Human region for {previous.predicate}",
+            )
+        )
+        add_edges.append(
+            GraphEdge(
+                id=f"located:{region_id}",
+                type="located_in",
+                source_id=region_id,
+                target_id=location_node_id or previous.subject_id,
+            )
+        )
+        add_evidence.append(
+            Evidence(
+                id=raster_id,
+                kind="raster_region",
+                source_id=source.id,
+                source_region_id=region_id,
+                payload={
+                    "bbox_normalized": list(source_bbox_normalized),
+                    "fallback": False,
+                    "selected_by": "human",
+                },
+                sha256=source.sha256,
+            )
+        )
         evidence_ids.append(raster_id)
     replacement = Assertion(
-        id=f"assertion:human:{digest}", subject_id=previous.subject_id,
-        predicate=previous.predicate, value=value,
+        id=f"assertion:human:{digest}",
+        subject_id=previous.subject_id,
+        predicate=previous.predicate,
+        value=value,
         unit=unit if unit is not None else previous.unit,
-        coordinate_system=previous.coordinate_system, origin="human",
-        assurance="human_approved", evidence_ids=evidence_ids, confidence=1.0,
+        coordinate_system=previous.coordinate_system,
+        origin="human",
+        assurance="human_approved",
+        evidence_ids=evidence_ids,
+        confidence=1.0,
         impacts=previous.impacts,
         impact_magnitude_percent=previous.impact_magnitude_percent,
         hypothesis_id=previous.hypothesis_id,
@@ -332,10 +353,14 @@ def _is_admin(user: UserInfo) -> bool:
 
 
 def _can_use_studio(user: UserInfo) -> bool:
-    return _is_admin(user) or any(
-        role in (user.roles or [])
-        for role in (UserRole.engineer, UserRole.technologist, UserRole.manager)
-    ) or _is_agent_service(user)
+    return (
+        _is_admin(user)
+        or any(
+            role in (user.roles or [])
+            for role in (UserRole.engineer, UserRole.technologist, UserRole.manager)
+        )
+        or _is_agent_service(user)
+    )
 
 
 def _can_manage_workflows(user: UserInfo) -> bool:
@@ -357,9 +382,7 @@ def _can_access_document(doc: Document | None, user: UserInfo) -> bool:
 
 def _can_read_workflow(wf: ComfyWorkflow | None, user: UserInfo) -> bool:
     return wf is not None and (
-        wf.is_builtin
-        or wf.owner_sub in (None, user.sub)
-        or _can_manage_workflows(user)
+        wf.is_builtin or wf.owner_sub in (None, user.sub) or _can_manage_workflows(user)
     )
 
 
@@ -470,7 +493,7 @@ def _gen_out(gen: ImageGeneration) -> dict:
                 "max": 100,
                 "pct": pct,
                 "node": process.get("current_message") or process.get("current_stage"),
-                "ts": int(datetime.now(timezone.utc).timestamp()),
+                "ts": int(datetime.now(UTC).timestamp()),
             }
     public_params = dict(gen.params or {})
     # Full model transcripts and per-pass recovery specs are fetched on demand.
@@ -576,10 +599,7 @@ async def generate(
         if wf.operation != body.operation:
             raise HTTPException(400, "Воркфлоу не подходит для выбранной операции")
 
-    source_paths = [
-        await _resolve_source_path(path, db, user)
-        for path in body.source_image_paths
-    ]
+    source_paths = [await _resolve_source_path(path, db, user) for path in body.source_image_paths]
     for doc_id in body.source_document_ids:
         doc = await db.get(Document, doc_id)
         if not _can_access_document(doc, user):
@@ -689,12 +709,16 @@ async def list_generations(
     if not _is_agent_service(user):
         query = query.where(ImageGeneration.owner_sub == user.sub)
     rows = (
-        await db.execute(
-            query.order_by(ImageGeneration.created_at.desc())
-            .limit(min(limit, 200))
-            .offset(offset)
+        (
+            await db.execute(
+                query.order_by(ImageGeneration.created_at.desc())
+                .limit(min(limit, 200))
+                .offset(offset)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return {"items": [_gen_out(g) for g in rows]}
 
 
@@ -751,9 +775,7 @@ def _generation_graph_response(gen, row, graph) -> dict:
         "generation_id": str(gen.id),
         "source_generation_status": gen.status.value,
         "workflow_status": (
-            "review_required"
-            if gen.status == ImageGenStatus.failed
-            else gen.status.value
+            "review_required" if gen.status == ImageGenStatus.failed else gen.status.value
         ),
         "id": str(row.id),
         "engineering_project_id": None,
@@ -860,28 +882,33 @@ async def download_generation_diagnostics_package(
         try:
             entries[name] = download_file(path)
         except Exception as exc:  # noqa: BLE001 — recorded in manifest, not hidden
-            missing.append({
-                "name": name,
-                "reason": f"storage_read_failed:{type(exc).__name__}",
-            })
+            missing.append(
+                {
+                    "name": name,
+                    "reason": f"storage_read_failed:{type(exc).__name__}",
+                }
+            )
 
     params = dict(gen.params or {})
-    add_json("generation.json", {
-        "id": str(gen.id),
-        "operation": gen.operation,
-        "status": gen.status.value,
-        "prompt": gen.prompt,
-        "negative_prompt": gen.negative_prompt,
-        "params": params,
-        "workflow_snapshot": gen.workflow_snapshot,
-        "celery_task_id": gen.celery_task_id,
-        "comfyui_prompt_id": gen.comfyui_prompt_id,
-        "error": gen.error,
-        "accepted": gen.accepted,
-        "accepted_revision": gen.accepted_revision,
-        "created_at": gen.created_at,
-        "updated_at": gen.updated_at,
-    })
+    add_json(
+        "generation.json",
+        {
+            "id": str(gen.id),
+            "operation": gen.operation,
+            "status": gen.status.value,
+            "prompt": gen.prompt,
+            "negative_prompt": gen.negative_prompt,
+            "params": params,
+            "workflow_snapshot": gen.workflow_snapshot,
+            "celery_task_id": gen.celery_task_id,
+            "comfyui_prompt_id": gen.comfyui_prompt_id,
+            "error": gen.error,
+            "accepted": gen.accepted,
+            "accepted_revision": gen.accepted_revision,
+            "created_at": gen.created_at,
+            "updated_at": gen.updated_at,
+        },
+    )
 
     source_paths = list(gen.source_image_paths or [])
     for index, path in enumerate(source_paths):
@@ -931,21 +958,22 @@ async def download_generation_diagnostics_package(
     ).scalar_one_or_none()
     if ir_revision is not None:
         add_storage("cad_ir/current.json", ir_revision.ir_path, required=True)
-        add_json("cad_ir/revision.json", {
-            "revision": ir_revision.revision,
-            "ir_sha256": ir_revision.ir_sha256,
-            "artifact_hashes": ir_revision.artifact_hashes,
-            "created_at": ir_revision.created_at,
-            "approved_by": ir_revision.approved_by,
-            "approved_at": ir_revision.approved_at,
-        })
+        add_json(
+            "cad_ir/revision.json",
+            {
+                "revision": ir_revision.revision,
+                "ir_sha256": ir_revision.ir_sha256,
+                "artifact_hashes": ir_revision.artifact_hashes,
+                "created_at": ir_revision.created_at,
+                "approved_by": ir_revision.approved_by,
+                "approved_at": ir_revision.approved_at,
+            },
+        )
     else:
         missing.append({"name": "cad_ir/current.json", "reason": "revision_not_found"})
 
     try:
-        _owned_gen, graph_row, graph = await _owned_generation_graph(
-            generation_id, db, user
-        )
+        _owned_gen, graph_row, graph = await _owned_generation_graph(generation_id, db, user)
     except HTTPException as exc:
         if exc.status_code != 404:
             raise
@@ -954,25 +982,36 @@ async def download_generation_diagnostics_package(
         missing.append({"name": "model_graph/current.emg.json", "reason": "graph_not_found"})
     if graph_row is not None and graph is not None:
         add_json("model_graph/current.emg.json", graph.model_dump(mode="json"))
-        patch_rows = list((await db.execute(
-            select(GraphPatchRecord)
-            .where(GraphPatchRecord.graph_id == graph_row.graph_id)
-            .order_by(GraphPatchRecord.created_at, GraphPatchRecord.id)
-        )).scalars())
-        add_json("model_graph/patches.json", [{
-            "id": str(item.id),
-            "patch_id": item.patch_id,
-            "base_revision": item.base_revision,
-            "base_sha256": item.base_sha256,
-            "result_revision_id": str(item.result_revision_id)
-            if item.result_revision_id else None,
-            "producer": item.producer,
-            "pass_id": item.pass_id,
-            "accepted": item.accepted,
-            "payload": item.payload,
-            "validation_errors": item.validation_errors,
-            "created_at": item.created_at,
-        } for item in patch_rows])
+        patch_rows = list(
+            (
+                await db.execute(
+                    select(GraphPatchRecord)
+                    .where(GraphPatchRecord.graph_id == graph_row.graph_id)
+                    .order_by(GraphPatchRecord.created_at, GraphPatchRecord.id)
+                )
+            ).scalars()
+        )
+        add_json(
+            "model_graph/patches.json",
+            [
+                {
+                    "id": str(item.id),
+                    "patch_id": item.patch_id,
+                    "base_revision": item.base_revision,
+                    "base_sha256": item.base_sha256,
+                    "result_revision_id": str(item.result_revision_id)
+                    if item.result_revision_id
+                    else None,
+                    "producer": item.producer,
+                    "pass_id": item.pass_id,
+                    "accepted": item.accepted,
+                    "payload": item.payload,
+                    "validation_errors": item.validation_errors,
+                    "created_at": item.created_at,
+                }
+                for item in patch_rows
+            ],
+        )
 
     manifest = {
         "schema": "cad-diagnostics/1.0",
@@ -1019,24 +1058,31 @@ async def list_generation_model_graph_patches(
     from app.db.models import GraphPatchRecord
 
     _gen, row, _graph = await _owned_generation_graph(generation_id, db, user)
-    rows = list((await db.execute(
-        select(GraphPatchRecord)
-        .where(GraphPatchRecord.graph_id == row.graph_id)
-        .order_by(GraphPatchRecord.created_at.desc())
-    )).scalars())
-    return [{
-        "id": str(item.id),
-        "patch_id": item.patch_id,
-        "producer": item.producer,
-        "pass_id": item.pass_id,
-        "accepted": item.accepted,
-        "payload": item.payload,
-        "validation_errors": item.validation_errors,
-        "result_revision_id": (
-            str(item.result_revision_id) if item.result_revision_id else None
-        ),
-        "created_at": item.created_at,
-    } for item in rows]
+    rows = list(
+        (
+            await db.execute(
+                select(GraphPatchRecord)
+                .where(GraphPatchRecord.graph_id == row.graph_id)
+                .order_by(GraphPatchRecord.created_at.desc())
+            )
+        ).scalars()
+    )
+    return [
+        {
+            "id": str(item.id),
+            "patch_id": item.patch_id,
+            "producer": item.producer,
+            "pass_id": item.pass_id,
+            "accepted": item.accepted,
+            "payload": item.payload,
+            "validation_errors": item.validation_errors,
+            "result_revision_id": (
+                str(item.result_revision_id) if item.result_revision_id else None
+            ),
+            "created_at": item.created_at,
+        }
+        for item in rows
+    ]
 
 
 @router.get("/{generation_id}/model-graph/trace-proposals")
@@ -1048,34 +1094,49 @@ async def list_generation_model_graph_traces(
     from app.db.models import TraceProposalRecord, VisualVerificationRun
 
     _gen, row, _graph = await _owned_generation_graph(generation_id, db, user)
-    proposals = list((await db.execute(
-        select(TraceProposalRecord)
-        .where(TraceProposalRecord.graph_revision_id == row.id)
-        .order_by(TraceProposalRecord.source_region_id, TraceProposalRecord.rank)
-    )).scalars())
+    proposals = list(
+        (
+            await db.execute(
+                select(TraceProposalRecord)
+                .where(TraceProposalRecord.graph_revision_id == row.id)
+                .order_by(TraceProposalRecord.source_region_id, TraceProposalRecord.rank)
+            )
+        ).scalars()
+    )
     proposal_ids = [item.id for item in proposals]
-    visuals = list((await db.execute(
-        select(VisualVerificationRun).where(
-            VisualVerificationRun.trace_proposal_id.in_(proposal_ids)
+    visuals = (
+        list(
+            (
+                await db.execute(
+                    select(VisualVerificationRun).where(
+                        VisualVerificationRun.trace_proposal_id.in_(proposal_ids)
+                    )
+                )
+            ).scalars()
         )
-    )).scalars()) if proposal_ids else []
+        if proposal_ids
+        else []
+    )
     visual_by_proposal = {}
     for visual in visuals:
         visual_by_proposal.setdefault(visual.trace_proposal_id, []).append(visual)
-    return [{
-        "id": str(item.id),
-        "proposal_id": item.proposal_id,
-        "source_region_id": item.source_region_id,
-        "assertion_id": item.assertion_id,
-        "rank": item.rank,
-        "status": item.status,
-        "score": item.score,
-        "payload": item.payload,
-        "visual_verifications": [
-            run.result | {"raw_output": run.raw_output}
-            for run in visual_by_proposal.get(item.id, [])
-        ],
-    } for item in proposals]
+    return [
+        {
+            "id": str(item.id),
+            "proposal_id": item.proposal_id,
+            "source_region_id": item.source_region_id,
+            "assertion_id": item.assertion_id,
+            "rank": item.rank,
+            "status": item.status,
+            "score": item.score,
+            "payload": item.payload,
+            "visual_verifications": [
+                run.result | {"raw_output": run.raw_output}
+                for run in visual_by_proposal.get(item.id, [])
+            ],
+        }
+        for item in proposals
+    ]
 
 
 @router.get("/{generation_id}/model-graph/assertions/{assertion_id}/impact")
@@ -1090,9 +1151,7 @@ async def get_generation_assertion_impact(
 
     _gen, _row, graph = await _owned_generation_graph(generation_id, db, user)
     try:
-        return assertion_impact_report(
-            graph, assertion_id, target_id
-        ).model_dump(mode="json")
+        return assertion_impact_report(graph, assertion_id, target_id).model_dump(mode="json")
     except KeyError as exc:
         raise HTTPException(404, "Assertion или build target не найден") from exc
 
@@ -1118,9 +1177,7 @@ async def verify_generation_model_graph(
     return {
         "run_id": str(run.id),
         "workflow_status": (
-            "review_required"
-            if gen.status == ImageGenStatus.failed
-            else gen.status.value
+            "review_required" if gen.status == ImageGenStatus.failed else gen.status.value
         ),
         "state": state.model_dump(mode="json"),
         "issues": issues,
@@ -1139,9 +1196,7 @@ async def start_generation_model_reader(
         raise HTTPException(404, "Build target не найден")
     from app.tasks.engineering_model_reader import run_engineering_model_reader
 
-    task = run_engineering_model_reader.apply_async(
-        args=[row.graph_id, target_id], queue="gpu"
-    )
+    task = run_engineering_model_reader.apply_async(args=[row.graph_id, target_id], queue="gpu")
     return {
         "task_id": task.id,
         "generation_id": str(generation_id),
@@ -1161,8 +1216,7 @@ def _assertion_source_crop(gen, graph, assertion, *, full_sheet: bool = False):
     regions = [
         evidence_by_id[item_id]
         for item_id in assertion.evidence_ids
-        if item_id in evidence_by_id
-        and evidence_by_id[item_id].kind == "raster_region"
+        if item_id in evidence_by_id and evidence_by_id[item_id].kind == "raster_region"
     ]
     regions.sort(key=lambda item: bool(item.payload.get("fallback")))
     if not regions:
@@ -1194,9 +1248,7 @@ def _assertion_source_crop(gen, graph, assertion, *, full_sheet: bool = False):
             min(image.width, round(x1 * image.width)),
             min(image.height, round(y1 * image.height)),
         )
-    elif isinstance(pixels, dict) and all(
-        key in pixels for key in ("x0", "y0", "x1", "y1")
-    ):
+    elif isinstance(pixels, dict) and all(key in pixels for key in ("x0", "y0", "x1", "y1")):
         bbox = (
             max(0, round(float(pixels["x0"]))),
             max(0, round(float(pixels["y0"]))),
@@ -1214,9 +1266,7 @@ def _assertion_source_crop(gen, graph, assertion, *, full_sheet: bool = False):
     return evidence, buffer.getvalue()
 
 
-@router.get(
-    "/{generation_id}/model-graph/assertions/{assertion_id}/source-overlay"
-)
+@router.get("/{generation_id}/model-graph/assertions/{assertion_id}/source-overlay")
 async def get_generation_assertion_source_overlay(
     generation_id: uuid.UUID,
     assertion_id: str,
@@ -1232,9 +1282,7 @@ async def get_generation_assertion_source_overlay(
     assertion = next((item for item in graph.assertions if item.id == assertion_id), None)
     if assertion is None:
         raise HTTPException(404, "Assertion не найден")
-    evidence, crop = _assertion_source_crop(
-        gen, graph, assertion, full_sheet=mode == "sheet"
-    )
+    evidence, crop = _assertion_source_crop(gen, graph, assertion, full_sheet=mode == "sheet")
     content = crop
     resolved_proposal_id = None
     if mode not in {"source", "sheet"}:
@@ -1245,8 +1293,8 @@ async def get_generation_assertion_source_overlay(
         if proposal_id:
             query = query.where(TraceProposalRecord.proposal_id == proposal_id)
         proposal_row = (
-            await db.execute(query.order_by(TraceProposalRecord.rank))
-        ).scalars().first()
+            (await db.execute(query.order_by(TraceProposalRecord.rank))).scalars().first()
+        )
         if proposal_row is None:
             raise HTTPException(404, "Trace proposal для overlay не найден")
         try:
@@ -1269,9 +1317,7 @@ async def get_generation_assertion_source_overlay(
     )
 
 
-@router.post(
-    "/{generation_id}/model-graph/assertions/{assertion_id}/corrections"
-)
+@router.post("/{generation_id}/model-graph/assertions/{assertion_id}/corrections")
 async def correct_generation_model_assertion(
     generation_id: uuid.UUID,
     assertion_id: str,
@@ -1292,10 +1338,7 @@ async def correct_generation_model_assertion(
 
     gen, row, graph = await _owned_generation_graph(generation_id, db, user)
     previous = next(
-        (
-            item for item in graph.assertions
-            if item.id == assertion_id and item.state == "active"
-        ),
+        (item for item in graph.assertions if item.id == assertion_id and item.state == "active"),
         None,
     )
     if previous is None:
@@ -1304,17 +1347,12 @@ async def correct_generation_model_assertion(
         value = TypeAdapter(AssertionValue).validate_python(body.value)
     except ValueError as exc:
         raise HTTPException(422, "Значение assertion не соответствует closed union") from exc
-    digest = hashlib.sha256(
-        f"{graph.graph_id}:{body.idempotency_key}".encode()
-    ).hexdigest()[:20]
+    digest = hashlib.sha256(f"{graph.graph_id}:{body.idempotency_key}".encode()).hexdigest()[:20]
     params = dict(gen.params or {})
     correction_event_id = None
-    compatibility = json.loads(json.dumps(
-        params.get("spec_corrected") or params.get("spec") or {}
-    ))
-    compatibility_updated = (
-        isinstance(compatibility, dict)
-        and _apply_compat_spec_update(compatibility, previous, value)
+    compatibility = json.loads(json.dumps(params.get("spec_corrected") or params.get("spec") or {}))
+    compatibility_updated = isinstance(compatibility, dict) and _apply_compat_spec_update(
+        compatibility, previous, value
     )
     if compatibility_updated:
         correction_event_id = f"human-graph:{digest}"
@@ -1334,10 +1372,15 @@ async def correct_generation_model_assertion(
         next((item.id for item in graph.nodes if item.type == "DocumentSet"), None),
     )
     add_nodes, add_edges, replacement, add_evidence = _build_human_correction_change(
-        previous=previous, value=value, unit=body.unit, note=body.note,
-        actor_sub=user.sub, digest=digest,
+        previous=previous,
+        value=value,
+        unit=body.unit,
+        note=body.note,
+        actor_sub=user.sub,
+        digest=digest,
         source_bbox_normalized=body.source_bbox_normalized,
-        source=source, location_node_id=location,
+        source=source,
+        location_node_id=location,
     )
     patch = GraphPatch(
         patch_id=f"patch:human:{digest}",
@@ -1383,7 +1426,8 @@ async def correct_generation_model_assertion(
         "compatibility_spec_updated": compatibility_updated,
         "rebuild_task_id": rebuild_task_id,
         "dependency_validation": _dependency_validation_report(
-            revised_graph, [replacement.id],
+            revised_graph,
+            [replacement.id],
             kernel_input_changed=compatibility_updated,
         ),
     }
@@ -1403,7 +1447,9 @@ async def correct_generation_model_assertions_batch(
         summarize_patch_errors,
     )
     from app.services.engineering_model_graph import (
-        DuplicatePatchError, load_graph, merge_and_persist_patch,
+        DuplicatePatchError,
+        load_graph,
+        merge_and_persist_patch,
     )
 
     gen, row, graph = await _owned_generation_graph(generation_id, db, user)
@@ -1419,13 +1465,11 @@ async def correct_generation_model_assertions_batch(
     except ValueError as exc:
         raise HTTPException(422, "Значение assertion не соответствует closed union") from exc
 
-    patch_digest = hashlib.sha256(
-        f"{graph.graph_id}:{body.idempotency_key}".encode()
-    ).hexdigest()[:20]
+    patch_digest = hashlib.sha256(f"{graph.graph_id}:{body.idempotency_key}".encode()).hexdigest()[
+        :20
+    ]
     params = dict(gen.params or {})
-    compatibility = json.loads(json.dumps(
-        params.get("spec_corrected") or params.get("spec") or {}
-    ))
+    compatibility = json.loads(json.dumps(params.get("spec_corrected") or params.get("spec") or {}))
     compatibility_updated = False
     correction_event_id = f"human-graph:{patch_digest}"
     source = next((item for item in graph.sources if item.uri), None)
@@ -1444,10 +1488,15 @@ async def correct_generation_model_assertions_batch(
             f"{graph.graph_id}:{body.idempotency_key}:{previous.id}".encode()
         ).hexdigest()[:20]
         item_nodes, item_edges, replacement, item_evidence = _build_human_correction_change(
-            previous=previous, value=value, unit=correction.unit, note=body.note,
-            actor_sub=user.sub, digest=digest,
+            previous=previous,
+            value=value,
+            unit=correction.unit,
+            note=body.note,
+            actor_sub=user.sub,
+            digest=digest,
             source_bbox_normalized=correction.source_bbox_normalized,
-            source=source, location_node_id=location,
+            source=source,
+            location_node_id=location,
             batch_patch_id=batch_patch_id,
         )
         add_nodes.extend(item_nodes)
@@ -1456,8 +1505,7 @@ async def correct_generation_model_assertions_batch(
         add_assertions.append(replacement)
         superseded_ids.append(previous.id)
         compatibility_updated = (
-            _apply_compat_spec_update(compatibility, previous, value)
-            or compatibility_updated
+            _apply_compat_spec_update(compatibility, previous, value) or compatibility_updated
         )
 
     if body.rebuild and not compatibility_updated:
@@ -1472,11 +1520,17 @@ async def correct_generation_model_assertions_batch(
         params["spec_corrected"] = compatibility
         params["spec_correction_event_id"] = correction_event_id
     patch = GraphPatch(
-        patch_id=f"patch:human:{patch_digest}", base_revision=graph.revision,
-        base_sha256=graph.canonical_sha256, producer="human",
-        pass_id="human-batch-correction", idempotency_key=body.idempotency_key,
-        add_nodes=add_nodes, add_edges=add_edges, add_assertions=add_assertions,
-        add_evidence=add_evidence, supersede_assertion_ids=superseded_ids,
+        patch_id=f"patch:human:{patch_digest}",
+        base_revision=graph.revision,
+        base_sha256=graph.canonical_sha256,
+        producer="human",
+        pass_id="human-batch-correction",
+        idempotency_key=body.idempotency_key,
+        add_nodes=add_nodes,
+        add_edges=add_edges,
+        add_assertions=add_assertions,
+        add_evidence=add_evidence,
+        supersede_assertion_ids=superseded_ids,
     )
     try:
         revised_row, errors = await merge_and_persist_patch(
@@ -1489,7 +1543,8 @@ async def correct_generation_model_assertions_batch(
         await db.commit()
         raise HTTPException(409, {"validation_errors": summarize_patch_errors(errors)})
     params["engineering_model_graph"] = {
-        "revision_id": str(revised_row.id), "graph_id": revised_row.graph_id,
+        "revision_id": str(revised_row.id),
+        "graph_id": revised_row.graph_id,
         "revision": revised_row.revision,
         "canonical_sha256": revised_row.canonical_sha256,
     }
@@ -1508,7 +1563,8 @@ async def correct_generation_model_assertions_batch(
         "corrected_assertion_ids": superseded_ids,
         "rebuild_task_id": rebuild_task_id,
         "dependency_validation": _dependency_validation_report(
-            revised_graph, [item.id for item in add_assertions],
+            revised_graph,
+            [item.id for item in add_assertions],
             kernel_input_changed=compatibility_updated,
         ),
     }
@@ -1550,10 +1606,7 @@ def _dependency_validation_report(
             if impact.critical_for_target:
                 critical_assertions.add(assertion_id)
     requires_kernel_rebuild = bool(
-        kernel_input_changed
-        or affected_operations
-        or affected_topology
-        or affected_artifacts
+        kernel_input_changed or affected_operations or affected_topology or affected_artifacts
     )
     return {
         "status": "blocked" if errors else "passed",
@@ -1778,9 +1831,7 @@ async def get_solid_preview(
         media_type=_ARTIFACT_MEDIA_TYPES[kind],
         headers={
             "Cache-Control": "no-store",
-            "X-CAD-Artifact-Status": str(
-                solid.get("build_status") or "built-unverified"
-            ),
+            "X-CAD-Artifact-Status": str(solid.get("build_status") or "built-unverified"),
         },
     )
 
@@ -1789,7 +1840,16 @@ async def get_solid_preview(
 async def get_artifact(
     generation_id: uuid.UUID,
     kind: Literal[
-        "dxf", "dwg", "svg", "ir", "step", "iges", "fcstd", "stl", "pdf", "topology",
+        "dxf",
+        "dwg",
+        "svg",
+        "ir",
+        "step",
+        "iges",
+        "fcstd",
+        "stl",
+        "pdf",
+        "topology",
     ] = "dxf",
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
@@ -1860,7 +1920,9 @@ async def get_artifact(
     from app.core import metrics
 
     metrics.cad_export_total.labels(kind=kind, status="ok").inc()
-    return Response(content=data, media_type=_ARTIFACT_MEDIA_TYPES.get(kind, "application/octet-stream"))
+    return Response(
+        content=data, media_type=_ARTIFACT_MEDIA_TYPES.get(kind, "application/octet-stream")
+    )
 
 
 # ── Accept / iterate / delete ────────────────────────────────────────────────
@@ -1876,7 +1938,10 @@ def _is_agent_service_call(request: Request) -> bool:
     """
     from app.config import settings
 
-    return bool(settings.agent_service_key) and request.headers.get("X-API-Key") == settings.agent_service_key
+    return (
+        bool(settings.agent_service_key)
+        and request.headers.get("X-API-Key") == settings.agent_service_key
+    )
 
 
 @router.post("/{generation_id}/accept")
@@ -1910,7 +1975,7 @@ async def accept_generation(
         )
     gen.accepted = True
     gen.accepted_by = user.sub
-    gen.accepted_at = datetime.now(timezone.utc)
+    gen.accepted_at = datetime.now(UTC)
     await db.commit()
     return _gen_out(gen)
 
@@ -1937,7 +2002,7 @@ async def accept_techdraw_generation(
         raise HTTPException(400, "Это не точный чертёж — используйте /accept.")
     gen.accepted = True
     gen.accepted_by = user.sub
-    gen.accepted_at = datetime.now(timezone.utc)
+    gen.accepted_at = datetime.now(UTC)
     await db.commit()
     return _gen_out(gen)
 
@@ -2024,17 +2089,14 @@ async def correct_vectorize_spec(
         from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
 
         try:
-            corrected = EngineeringDrawingSpec.model_validate(corrected).model_dump(
-                mode="json"
-            )
+            corrected = EngineeringDrawingSpec.model_validate(corrected).model_dump(mode="json")
         except ValidationError as exc:
             raise HTTPException(
                 422,
                 {
                     "message": "Исправленная спецификация не прошла проверку",
                     "fields": [
-                        ".".join(str(part) for part in error["loc"])
-                        for error in exc.errors()[:12]
+                        ".".join(str(part) for part in error["loc"]) for error in exc.errors()[:12]
                     ],
                 },
             ) from exc
@@ -2149,9 +2211,7 @@ async def accept_vectorize_generation(
     if params.get("vectorize_method") == "spec":
         solid = dict(params.get("solid_3d") or {})
         geometry_ok = bool((solid.get("verification") or {}).get("ok"))
-        feature_complete = bool(
-            (solid.get("verification") or {}).get("feature_complete", True)
-        )
+        feature_complete = bool((solid.get("verification") or {}).get("feature_complete", True))
         if not solid.get("built") or not geometry_ok or not feature_complete:
             raise HTTPException(
                 409,
@@ -2188,7 +2248,7 @@ async def accept_vectorize_generation(
             f"Неразрешённых элементов в очереди проверки: {len(open_review)} — "
             "подтвердите, исправьте или удалите их перед приёмкой.",
         )
-    accepted_at = datetime.now(timezone.utc)
+    accepted_at = datetime.now(UTC)
     gen.accepted = True
     gen.accepted_by = user.sub
     gen.accepted_at = accepted_at
@@ -2260,9 +2320,7 @@ async def approve_vectorize_as_drafter(
         raise HTTPException(400, "Сертифицировать можно только готовую оцифровку.")
     revision, ir = await _load_current_ir(db, gen)
     try:
-        row = await approve_by_drafter(
-            db, revision, ir, actor_sub=user.sub, profile=body.profile
-        )
+        row = await approve_by_drafter(db, revision, ir, actor_sub=user.sub, profile=body.profile)
     except CertificationBlocked as exc:
         raise HTTPException(409, str(exc)) from exc
     await db.commit()
@@ -2290,9 +2348,7 @@ async def approve_vectorize_as_normcontroller(
         raise HTTPException(400, "Сертифицировать можно только готовую оцифровку.")
     revision, ir = await _load_current_ir(db, gen)
     try:
-        row = await approve_by_normcontroller(
-            db, gen, revision, ir, actor_sub=user.sub
-        )
+        row = await approve_by_normcontroller(db, gen, revision, ir, actor_sub=user.sub)
     except CertificationBlocked as exc:
         raise HTTPException(409, str(exc)) from exc
     await db.commit()
@@ -2336,10 +2392,12 @@ async def _build_manifest(db: AsyncSession, gen: ImageGeneration) -> dict:
                 "profile": certificate.profile,
                 "drafter_approved_by": certificate.drafter_approved_by,
                 "drafter_approved_at": certificate.drafter_approved_at.isoformat()
-                if certificate.drafter_approved_at else None,
+                if certificate.drafter_approved_at
+                else None,
                 "normcontrol_approved_by": certificate.normcontrol_approved_by,
                 "normcontrol_approved_at": certificate.normcontrol_approved_at.isoformat()
-                if certificate.normcontrol_approved_at else None,
+                if certificate.normcontrol_approved_at
+                else None,
                 "manifest_hash": certificate.manifest_hash,
             },
         )
@@ -2512,16 +2570,13 @@ async def run_full_check(
     if paired_required:
         solid = dict(updated_params.get("solid_3d") or {})
         previous = dict(solid.get("source_projection_verification") or {})
-        sheet_ok = bool(
-            (((solid.get("sheet") or {}).get("verification") or {}).get("ok"))
-        )
+        sheet_ok = bool(((solid.get("sheet") or {}).get("verification") or {}).get("ok"))
         comparison_ok = bool(comparison["ok"] and sheet_ok)
         solid["source_projection_verification"] = {
             **previous,
             "ok": comparison_ok,
             "status": (
-                "paired_full_check_passed" if comparison_ok
-                else "paired_full_check_findings"
+                "paired_full_check_passed" if comparison_ok else "paired_full_check_findings"
             ),
             "paired_comparison": comparison,
             "revision": row.revision,
@@ -2561,7 +2616,7 @@ class AddedFeatureRequest(BaseModel):
     pitch_mm: float | None = Field(default=None, gt=0, le=100)
 
     @model_validator(mode="after")
-    def validate_profile_dimensions(self) -> "AddedFeatureRequest":
+    def validate_profile_dimensions(self) -> AddedFeatureRequest:
         if self.kind == "shell":
             if self.thickness_mm is None:
                 raise ValueError("shell требует thickness_mm")
@@ -2575,13 +2630,27 @@ class AddedFeatureRequest(BaseModel):
         if self.kind in ("fillet", "chamfer"):
             if self.edge_key is None or self.size_mm is None:
                 raise ValueError("Операция ребра требует edge_key и size_mm")
-            if any(value is not None for value in (
-                self.profile, self.center_x_mm, self.center_y_mm, self.depth_mm,
-                self.diameter_mm, self.width_mm, self.height_mm, self.sketch_profile,
-            )):
+            if any(
+                value is not None
+                for value in (
+                    self.profile,
+                    self.center_x_mm,
+                    self.center_y_mm,
+                    self.depth_mm,
+                    self.diameter_mm,
+                    self.width_mm,
+                    self.height_mm,
+                    self.sketch_profile,
+                )
+            ):
                 raise ValueError("Операция ребра не принимает параметры профиля")
             return self
-        if self.profile is None or self.center_x_mm is None or self.center_y_mm is None or self.depth_mm is None:
+        if (
+            self.profile is None
+            or self.center_x_mm is None
+            or self.center_y_mm is None
+            or self.depth_mm is None
+        ):
             raise ValueError("Операция тела требует профиль, центр и глубину")
         if self.edge_key is not None or self.size_mm is not None:
             raise ValueError("Операция тела не принимает параметры ребра")
@@ -2726,9 +2795,7 @@ class CircularPatternSpec(BaseModel):
     total_angle_deg: float = Field(default=360.0, gt=0, le=360)
 
 
-PatternSpec = Annotated[
-    LinearPatternSpec | CircularPatternSpec, Field(discriminator="kind")
-]
+PatternSpec = Annotated[LinearPatternSpec | CircularPatternSpec, Field(discriminator="kind")]
 
 
 class PatternFeatureRequest(BaseModel):
@@ -2800,12 +2867,16 @@ async def list_generation_design_history(
         raise HTTPException(404, "Не найдено")
     graph_id = f"image-generation:{generation_id}:design"
     rows = (
-        await db.execute(
-            select(EngineeringGraphRevision)
-            .where(EngineeringGraphRevision.graph_id == graph_id)
-            .order_by(EngineeringGraphRevision.revision.asc())
+        (
+            await db.execute(
+                select(EngineeringGraphRevision)
+                .where(EngineeringGraphRevision.graph_id == graph_id)
+                .order_by(EngineeringGraphRevision.revision.asc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return {
         "graph_id": graph_id,
         "current_revision": rows[-1].revision if rows else None,
@@ -2946,13 +3017,34 @@ def _patch_error(status: int, code: IrPatchErrorCode, message: str) -> HTTPExcep
 
 class IrPatchOp(BaseModel):
     op: Literal[
-        "confirm", "delete", "update", "add", "set_scale", "set_sheet_format",
-        "move", "copy", "mirror", "fillet", "chamfer", "hatch_click",
-        "trim", "extend", "offset", "pattern_linear", "pattern_polar",
-        "split", "join", "set_construction",
-        "set_constraints", "set_parameters", "set_title_block",
-        "set_configurations", "apply_configuration",
-        "define_block", "insert_block", "delete_block",
+        "confirm",
+        "delete",
+        "update",
+        "add",
+        "set_scale",
+        "set_sheet_format",
+        "move",
+        "copy",
+        "mirror",
+        "fillet",
+        "chamfer",
+        "hatch_click",
+        "trim",
+        "extend",
+        "offset",
+        "pattern_linear",
+        "pattern_polar",
+        "split",
+        "join",
+        "set_construction",
+        "set_constraints",
+        "set_parameters",
+        "set_title_block",
+        "set_configurations",
+        "apply_configuration",
+        "define_block",
+        "insert_block",
+        "delete_block",
         "resolve_region",
     ]
     sheet_format: str | None = None  # A4..A0, for set_sheet_format
@@ -3113,7 +3205,9 @@ async def patch_ir(
                 ir.entities[idx] = entity_adapter.validate_python(payload)
             except ValidationError as exc:
                 raise _patch_error(
-                    422, IrPatchErrorCode.INVALID_ENTITY, f"Некорректный элемент: {exc.errors()[:3]}"
+                    422,
+                    IrPatchErrorCode.INVALID_ENTITY,
+                    f"Некорректный элемент: {exc.errors()[:3]}",
                 ) from exc
             for item in ir.review:
                 if item.entity_id == op.entity_id:
@@ -3128,7 +3222,9 @@ async def patch_ir(
                 entity = entity_adapter.validate_python(payload)
             except ValidationError as exc:
                 raise _patch_error(
-                    422, IrPatchErrorCode.INVALID_ENTITY, f"Некорректный элемент: {exc.errors()[:3]}"
+                    422,
+                    IrPatchErrorCode.INVALID_ENTITY,
+                    f"Некорректный элемент: {exc.errors()[:3]}",
                 ) from exc
             ir.entities.append(entity)
             by_id[entity.id] = len(ir.entities) - 1
@@ -3149,28 +3245,21 @@ async def patch_ir(
             fmt = op.sheet_format
             if fmt not in _GOST_SHEETS:
                 raise _patch_error(
-                    400, IrPatchErrorCode.MISSING_FIELD,
+                    400,
+                    IrPatchErrorCode.MISSING_FIELD,
                     f"Неизвестный формат листа: {fmt}. Допустимо: {', '.join(_GOST_SHEETS)}",
                 )
             short_mm, long_mm = _GOST_SHEETS[fmt]
             frame_px = ir.sheet.frame_px
             landscape = ir.source.image_width >= ir.source.image_height
             if frame_px:
-                expected_w, expected_h = _frame_dimensions_mm(
-                    fmt, landscape=landscape
-                )
+                expected_w, expected_h = _frame_dimensions_mm(fmt, landscape=landscape)
                 ir.scale = (
-                    expected_w / max(frame_px[2], 1.0)
-                    + expected_h / max(frame_px[3], 1.0)
+                    expected_w / max(frame_px[2], 1.0) + expected_h / max(frame_px[3], 1.0)
                 ) / 2
             else:
-                paper_w, paper_h = (
-                    (long_mm, short_mm) if landscape else (short_mm, long_mm)
-                )
-                ir.scale = (
-                    paper_w / ir.source.image_width
-                    + paper_h / ir.source.image_height
-                ) / 2
+                paper_w, paper_h = (long_mm, short_mm) if landscape else (short_mm, long_mm)
+                ir.scale = (paper_w / ir.source.image_width + paper_h / ir.source.image_height) / 2
             ir.scale_source = "sheet_format"
             ir.sheet.format = fmt
             ir.sheet.width_mm, ir.sheet.height_mm = (
@@ -3211,17 +3300,23 @@ async def patch_ir(
             seg1, seg2 = ir.entities[idx1], ir.entities[idx2]
             if not isinstance(seg1, Segment) or not isinstance(seg2, Segment):
                 raise _patch_error(
-                    400, IrPatchErrorCode.NOT_A_SEGMENT, f"{op.op} работает только с двумя отрезками"
+                    400,
+                    IrPatchErrorCode.NOT_A_SEGMENT,
+                    f"{op.op} работает только с двумя отрезками",
                 )
             if not op.value or op.value <= 0:
                 param = "радиус" if op.op == "fillet" else "дистанция"
                 raise _patch_error(
-                    400, IrPatchErrorCode.MISSING_FIELD, f"Для {op.op} нужен положительный {param} (value)"
+                    400,
+                    IrPatchErrorCode.MISSING_FIELD,
+                    f"Для {op.op} нужен положительный {param} (value)",
                 )
             try:
                 new1, new2, extra = (fillet if op.op == "fillet" else chamfer)(seg1, seg2, op.value)
             except FilletChamferError as exc:
-                raise _patch_error(422, IrPatchErrorCode.FILLET_CHAMFER_GEOMETRY_INVALID, str(exc)) from exc
+                raise _patch_error(
+                    422, IrPatchErrorCode.FILLET_CHAMFER_GEOMETRY_INVALID, str(exc)
+                ) from exc
             ir.entities[idx1] = new1
             ir.entities[idx2] = new2
             ir.entities.append(extra)
@@ -3351,17 +3446,31 @@ async def patch_ir(
         elif op.op == "set_constraints":
             _require(op.constraints, "constraints")
             try:
-                ir.constraints = TypeAdapter(list[GeometricConstraint]).validate_python(op.constraints)
+                ir.constraints = TypeAdapter(list[GeometricConstraint]).validate_python(
+                    op.constraints
+                )
             except ValidationError as exc:
-                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, f"Некорректные ограничения: {exc.errors()[:3]}") from exc
+                raise _patch_error(
+                    422,
+                    IrPatchErrorCode.INVALID_CONSTRAINT,
+                    f"Некорректные ограничения: {exc.errors()[:3]}",
+                ) from exc
         elif op.op == "set_parameters":
             _require(op.parameters, "parameters")
             try:
                 parameters = TypeAdapter(list[CadParameter]).validate_python(op.parameters)
             except ValidationError as exc:
-                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, f"Некорректные параметры: {exc.errors()[:3]}") from exc
+                raise _patch_error(
+                    422,
+                    IrPatchErrorCode.INVALID_CONSTRAINT,
+                    f"Некорректные параметры: {exc.errors()[:3]}",
+                ) from exc
             if len({parameter.name for parameter in parameters}) != len(parameters):
-                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, "Имена параметров должны быть уникальны")
+                raise _patch_error(
+                    422,
+                    IrPatchErrorCode.INVALID_CONSTRAINT,
+                    "Имена параметров должны быть уникальны",
+                )
             # A1: resolve expression-driven parameters (width = 2*height…) in
             # dependency order so the stored value is the computed number.
             from app.ai.cad_ir.param_expr import ParamExprError, apply_parameter_expressions
@@ -3378,9 +3487,17 @@ async def patch_ir(
             try:
                 configs = TypeAdapter(list[SketchConfiguration]).validate_python(op.configurations)
             except ValidationError as exc:
-                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, f"Некорректные конфигурации: {exc.errors()[:3]}") from exc
+                raise _patch_error(
+                    422,
+                    IrPatchErrorCode.INVALID_CONSTRAINT,
+                    f"Некорректные конфигурации: {exc.errors()[:3]}",
+                ) from exc
             if len({c.name for c in configs}) != len(configs):
-                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, "Имена конфигураций должны быть уникальны")
+                raise _patch_error(
+                    422,
+                    IrPatchErrorCode.INVALID_CONSTRAINT,
+                    "Имена конфигураций должны быть уникальны",
+                )
             ir.configurations = configs
         elif op.op == "apply_configuration":
             from app.ai.cad_ir.param_expr import ParamExprError, apply_parameter_expressions
@@ -3388,7 +3505,11 @@ async def patch_ir(
             _require(op.config_name, "config_name")
             config = next((c for c in ir.configurations if c.name == op.config_name), None)
             if config is None:
-                raise _patch_error(404, IrPatchErrorCode.ENTITY_NOT_FOUND, f"Конфигурация {op.config_name!r} не найдена")
+                raise _patch_error(
+                    404,
+                    IrPatchErrorCode.ENTITY_NOT_FOUND,
+                    f"Конфигурация {op.config_name!r} не найдена",
+                )
             # write the config's values onto matching parameters, then re-resolve
             # any expression-driven parameters that depend on them.
             for parameter in ir.parameters:
@@ -3416,9 +3537,7 @@ async def patch_ir(
             _require(op.click_x, "click_x")
             _require(op.click_y, "click_y")
             try:
-                inserted = insert_block(
-                    ir, op.block_name, op.click_x, op.click_y, op.value or 0.0
-                )
+                inserted = insert_block(ir, op.block_name, op.click_x, op.click_y, op.value or 0.0)
             except SketchOpError as exc:
                 raise _patch_error(422, IrPatchErrorCode.SKETCH_OP_INVALID, str(exc)) from exc
             by_id = {e.id: i for i, e in enumerate(ir.entities)}
@@ -3428,7 +3547,9 @@ async def patch_ir(
             before = len(ir.blocks)
             ir.blocks = [b for b in ir.blocks if b.name != op.block_name]
             if len(ir.blocks) == before:
-                raise _patch_error(404, IrPatchErrorCode.ENTITY_NOT_FOUND, f"Блок {op.block_name!r} не найден")
+                raise _patch_error(
+                    404, IrPatchErrorCode.ENTITY_NOT_FOUND, f"Блок {op.block_name!r} не найден"
+                )
         elif op.op == "set_title_block":
             from app.ai.cad_ir.title_block import apply_title_block
 
@@ -3463,14 +3584,23 @@ async def patch_ir(
             )
             ir.digitization_status = "review_required"
     validate_ir(ir)
-    origin = "review" if all(
-        o.op in ("confirm", "delete", "set_scale", "set_sheet_format", "resolve_region")
-        for o in body.ops
-    ) else "editor"
+    origin = (
+        "review"
+        if all(
+            o.op in ("confirm", "delete", "set_scale", "set_sheet_format", "resolve_region")
+            for o in body.ops
+        )
+        else "editor"
+    )
     _invalidate_vector_approval(gen)
     row = await cad_ir_store.save_revision(db, gen, ir, origin=origin, created_by=user.sub)
     await db.commit()
-    return {"revision": row.revision, "origin": row.origin, "summary": row.summary, "ir": ir.model_dump()}
+    return {
+        "revision": row.revision,
+        "origin": row.origin,
+        "summary": row.summary,
+        "ir": ir.model_dump(),
+    }
 
 
 class IrRevertRequest(BaseModel):
@@ -3499,12 +3629,19 @@ async def solve_ir_constraints(
     _revision, ir = await _load_current_ir(db, gen)
     result = solve_constraints(ir, max_nfev=body.max_nfev)
     if not result.converged:
-        raise HTTPException(422, {"message": "Ограничения не удалось согласовать", "solver": result.__dict__})
+        raise HTTPException(
+            422, {"message": "Ограничения не удалось согласовать", "solver": result.__dict__}
+        )
     validate_ir(ir)
     _invalidate_vector_approval(gen)
     row = await cad_ir_store.save_revision(db, gen, ir, origin="solver", created_by=user.sub)
     await db.commit()
-    return {"revision": row.revision, "summary": row.summary, "solver": result.__dict__, "ir": ir.model_dump()}
+    return {
+        "revision": row.revision,
+        "summary": row.summary,
+        "solver": result.__dict__,
+        "ir": ir.model_dump(),
+    }
 
 
 @router.get("/{generation_id}/ir/constraints/evaluate")
@@ -3703,7 +3840,9 @@ async def create_blank_sheet(
         from app.ai.cad_ir.blank_sheet import TB_H_MM, TB_W_MM, frame_and_title_block_entities
 
         entities = frame_and_title_block_entities(
-            w_mm, h_mm, _BLANK_PX_PER_MM,
+            w_mm,
+            h_mm,
+            _BLANK_PX_PER_MM,
             name=body.title or "",
             designation=body.designation or "",
             company=body.company or "",
@@ -3726,8 +3865,11 @@ async def create_blank_sheet(
         scale=1.0 / _BLANK_PX_PER_MM,
         scale_source="sheet_format",
         sheet=SheetInfo(
-            format=body.format, width_mm=w_mm, height_mm=h_mm,
-            frame=body.with_frame, title_block=title_block,
+            format=body.format,
+            width_mm=w_mm,
+            height_mm=h_mm,
+            frame=body.with_frame,
+            title_block=title_block,
         ),
         entities=entities,
         recognizer_used="manual",
@@ -3849,6 +3991,7 @@ async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
     gen must always be removable)."""
     from sqlalchemy import delete as sa_delete
     from sqlalchemy import update as sa_update
+
     from app.db.models import CadIrRevision
 
     source_paths = [
@@ -3857,22 +4000,36 @@ async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
         if isinstance(path, str) and path.startswith(f"{_SOURCE_PREFIX}/")
     ]
     revisions = (
-        await db.execute(select(CadIrRevision).where(CadIrRevision.generation_id == gen.id))
-    ).scalars().all()
+        (await db.execute(select(CadIrRevision).where(CadIrRevision.generation_id == gen.id)))
+        .scalars()
+        .all()
+    )
     params = gen.params or {}
     derived_paths = [
         params.get(key)
         for key in (
-            "normalized_source_path", "keep_raster_path", "svg_path", "dxf_path", "dwg_path",
-            "pdf_path", "step_path", "fcstd_path", "stl_path", "cad_report_path",
+            "normalized_source_path",
+            "keep_raster_path",
+            "svg_path",
+            "dxf_path",
+            "dwg_path",
+            "pdf_path",
+            "step_path",
+            "fcstd_path",
+            "stl_path",
+            "cad_report_path",
         )
     ]
     revision_paths = [revision.ir_path for revision in revisions]
     paths = {
         path
         for path in [
-            gen.result_path, gen.thumbnail_path, gen.mask_path,
-            *source_paths, *derived_paths, *revision_paths,
+            gen.result_path,
+            gen.thumbnail_path,
+            gen.mask_path,
+            *source_paths,
+            *derived_paths,
+            *revision_paths,
         ]
         if path
     }
@@ -3885,9 +4042,7 @@ async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
             except Exception:  # noqa: BLE001 — leftover file is cosmetic
                 pass
     await db.execute(
-        sa_update(ImageGeneration)
-        .where(ImageGeneration.parent_id == gen.id)
-        .values(parent_id=None)
+        sa_update(ImageGeneration).where(ImageGeneration.parent_id == gen.id).values(parent_id=None)
     )
     await db.execute(sa_delete(StudioJob).where(StudioJob.generation_id == gen.id))
     await db.execute(sa_delete(CadIrRevision).where(CadIrRevision.generation_id == gen.id))
@@ -3957,16 +4112,20 @@ async def list_workflows(
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     rows = (
-        await db.execute(
-            select(ComfyWorkflow)
-            .where(
-                (ComfyWorkflow.is_builtin.is_(True))
-                | (ComfyWorkflow.owner_sub == user.sub)
-                | (ComfyWorkflow.owner_sub.is_(None))
+        (
+            await db.execute(
+                select(ComfyWorkflow)
+                .where(
+                    (ComfyWorkflow.is_builtin.is_(True))
+                    | (ComfyWorkflow.owner_sub == user.sub)
+                    | (ComfyWorkflow.owner_sub.is_(None))
+                )
+                .order_by(ComfyWorkflow.category, ComfyWorkflow.title)
             )
-            .order_by(ComfyWorkflow.category, ComfyWorkflow.title)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return {"items": [_wf_out(w) for w in rows]}
 
 
@@ -4121,7 +4280,9 @@ async def push_workflow_to_comfyui(
         except httpx.RequestError as exc:
             raise HTTPException(502, f"ComfyUI сервер сейчас недоступен: {exc}") from None
     if resp.status_code >= 400:
-        raise HTTPException(502, f"ComfyUI отклонил сохранение: {resp.status_code} {resp.text[:200]}")
+        raise HTTPException(
+            502, f"ComfyUI отклонил сохранение: {resp.status_code} {resp.text[:200]}"
+        )
     return {"ok": True, "filename": filename}
 
 
@@ -4159,9 +4320,7 @@ async def prompt_help(
         if doc and getattr(doc, "summary", None):
             grounding = f"\nКонтекст приложенного изображения: {doc.summary[:600]}"
 
-    user_msg = (
-        f"Операция: {body.operation}. Описание задачи: {body.description}{grounding}"
-    )
+    user_msg = f"Операция: {body.operation}. Описание задачи: {body.description}{grounding}"
     try:
         from app.ai.router import AIRouter
         from app.ai.schemas import AIRequest, AITask, ChatMessage
@@ -4227,8 +4386,12 @@ async def _nl_to_spec(description: str) -> dict:
 
     async def _ask(messages: list) -> dict | None:
         resp = await AIRouter().run(
-            AIRequest(task=AITask.ENGINEERING_REASONING, messages=messages,
-                      confidential=True, allow_cloud=False)
+            AIRequest(
+                task=AITask.ENGINEERING_REASONING,
+                messages=messages,
+                confidential=True,
+                allow_cloud=False,
+            )
         )
         return _extract_json((resp.text or "").strip())
 
@@ -4248,11 +4411,16 @@ async def _nl_to_spec(description: str) -> dict:
         return spec
 
     fix_note = "; ".join(f"{i.field_path}: {i.message}" for i in issues)
-    spec2 = await _ask([
-        *base_messages,
-        ChatMessage(role="assistant", content=json.dumps(spec, ensure_ascii=False)),
-        ChatMessage(role="user", content=f"В спецификации есть ошибки, исправь и верни ЗАНОВО весь JSON: {fix_note}"),
-    ])
+    spec2 = await _ask(
+        [
+            *base_messages,
+            ChatMessage(role="assistant", content=json.dumps(spec, ensure_ascii=False)),
+            ChatMessage(
+                role="user",
+                content=f"В спецификации есть ошибки, исправь и верни ЗАНОВО весь JSON: {fix_note}",
+            ),
+        ]
+    )
     if spec2:
         try:
             issues2 = techdraw_validate.blocking(techdraw_validate.validate_spec(spec2))

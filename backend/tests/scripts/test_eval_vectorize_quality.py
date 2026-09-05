@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
 
-from eval_vectorize import _geometry_quality, _ground_truth_integrity, _recognize  # noqa: E402
+from eval_vectorize import _geometry_quality, _ground_truth_integrity  # noqa: E402
 
 from app.ai.cad_ir.schema import Point, Segment  # noqa: E402
 
@@ -93,5 +93,3 @@ def test_broken_insert_excludes_sheet_from_ground_truth() -> None:
 
     assert complete is False
     assert issues == ["broken_insert:MISSING_BLOCK"]
-
-

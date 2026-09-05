@@ -57,27 +57,39 @@ async def test_control_plane_status(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_control_plane_status_counts_review_queues(client: AsyncClient):
-    await client.post("/api/agent/tasks/propose", json={
-        "objective": "Проверить источник",
-        "rationale": "Нужна очередь review",
-    })
-    await client.post("/api/memory/promotions", json={
-        "title": "Факт для review queue",
-        "summary": "Достаточно длинная формулировка факта для проверки.",
-        "metadata": {"url": "https://example.com/fact"},
-    })
-    await client.post("/api/memory/sources/propose", json={
-        "title": "Источник для review queue",
-        "url": "https://example.com/source",
-    })
-    await client.post("/api/technology/learning-rules", json={
-        "rule_type": "behavior",
-        "entity_type": "agent",
-        "field_name": "supplier_catalog_search",
-        "replacement_value": "Сначала проверяй официальный каталог поставщика.",
-        "confidence": 0.8,
-        "occurrences": 2,
-    })
+    await client.post(
+        "/api/agent/tasks/propose",
+        json={
+            "objective": "Проверить источник",
+            "rationale": "Нужна очередь review",
+        },
+    )
+    await client.post(
+        "/api/memory/promotions",
+        json={
+            "title": "Факт для review queue",
+            "summary": "Достаточно длинная формулировка факта для проверки.",
+            "metadata": {"url": "https://example.com/fact"},
+        },
+    )
+    await client.post(
+        "/api/memory/sources/propose",
+        json={
+            "title": "Источник для review queue",
+            "url": "https://example.com/source",
+        },
+    )
+    await client.post(
+        "/api/technology/learning-rules",
+        json={
+            "rule_type": "behavior",
+            "entity_type": "agent",
+            "field_name": "supplier_catalog_search",
+            "replacement_value": "Сначала проверяй официальный каталог поставщика.",
+            "confidence": 0.8,
+            "occurrences": 2,
+        },
+    )
 
     resp = await client.get("/api/agent/control-plane/status")
 
@@ -91,15 +103,21 @@ async def test_control_plane_status_counts_review_queues(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_control_plane_status_does_not_count_rejected_tasks_as_open(client: AsyncClient):
-    created = await client.post("/api/agent/tasks", json={
-        "objective": "Открытая задача",
-        "role": "analyst",
-    })
+    created = await client.post(
+        "/api/agent/tasks",
+        json={
+            "objective": "Открытая задача",
+            "role": "analyst",
+        },
+    )
     assert created.status_code == 200
-    proposed = await client.post("/api/agent/tasks/propose", json={
-        "objective": "Отклоняемая задача",
-        "rationale": "Проверка счетчика",
-    })
+    proposed = await client.post(
+        "/api/agent/tasks/propose",
+        json={
+            "objective": "Отклоняемая задача",
+            "rationale": "Проверка счетчика",
+        },
+    )
     assert proposed.status_code == 200
     rejected = await client.post(
         f"/api/agent/tasks/{proposed.json()['id']}/decide",
@@ -126,10 +144,13 @@ async def test_runtime_status(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_agent_task(client: AsyncClient):
-    resp = await client.post("/api/agent/tasks", json={
-        "objective": "Сформировать отчёт по закупкам",
-        "role": "analyst",
-    })
+    resp = await client.post(
+        "/api/agent/tasks",
+        json={
+            "objective": "Сформировать отчёт по закупкам",
+            "role": "analyst",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "id" in data
@@ -138,13 +159,16 @@ async def test_create_agent_task(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_propose_agent_task_requires_later_approval(client: AsyncClient):
-    resp = await client.post("/api/agent/tasks/propose", json={
-        "objective": "Найти каталоги поставщиков крепежа",
-        "description": "Подготовить источники для регулярного мониторинга цен",
-        "role": "procurement_specialist",
-        "rationale": "Не хватает внешних каталогов для сверки цен",
-        "suggested_trigger": "weekly",
-    })
+    resp = await client.post(
+        "/api/agent/tasks/propose",
+        json={
+            "objective": "Найти каталоги поставщиков крепежа",
+            "description": "Подготовить источники для регулярного мониторинга цен",
+            "role": "procurement_specialist",
+            "rationale": "Не хватает внешних каталогов для сверки цен",
+            "suggested_trigger": "weekly",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "proposed"
@@ -154,11 +178,14 @@ async def test_propose_agent_task_requires_later_approval(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_decide_agent_task_proposal(client: AsyncClient):
-    proposed = await client.post("/api/agent/tasks/propose", json={
-        "objective": "Проверить новые каталоги поставщиков",
-        "role": "procurement_specialist",
-        "rationale": "Нужна фоновая проверка источников",
-    })
+    proposed = await client.post(
+        "/api/agent/tasks/propose",
+        json={
+            "objective": "Проверить новые каталоги поставщиков",
+            "role": "procurement_specialist",
+            "rationale": "Нужна фоновая проверка источников",
+        },
+    )
     assert proposed.status_code == 200
     task_id = proposed.json()["id"]
 
@@ -180,10 +207,13 @@ async def test_agent_service_account_cannot_decide_task(client: AsyncClient):
     from app.auth.models import UserInfo, UserRole
     from app.main import app
 
-    proposed = await client.post("/api/agent/tasks/propose", json={
-        "objective": "Сам себя утвердить нельзя",
-        "role": "worker",
-    })
+    proposed = await client.post(
+        "/api/agent/tasks/propose",
+        json={
+            "objective": "Сам себя утвердить нельзя",
+            "role": "worker",
+        },
+    )
     assert proposed.status_code == 200
     task_id = proposed.json()["id"]
 
@@ -216,11 +246,14 @@ async def test_run_created_agent_task(client: AsyncClient, monkeypatch):
         fake_run,
     )
 
-    created = await client.post("/api/agent/tasks", json={
-        "objective": "Сформировать краткий отчёт",
-        "description": "Использовать тестовый headless runner",
-        "role": "analyst",
-    })
+    created = await client.post(
+        "/api/agent/tasks",
+        json={
+            "objective": "Сформировать краткий отчёт",
+            "description": "Использовать тестовый headless runner",
+            "role": "analyst",
+        },
+    )
     assert created.status_code == 200
 
     run = await client.post(f"/api/agent/tasks/{created.json()['id']}/run")
@@ -247,10 +280,13 @@ async def test_list_agent_tasks(client: AsyncClient, agent_task):
 
 @pytest.mark.asyncio
 async def test_create_agent_team(client: AsyncClient):
-    resp = await client.post("/api/agent/teams", json={
-        "name": "Финансовый отдел",
-        "purpose": "Контроль платежей и договоров",
-    })
+    resp = await client.post(
+        "/api/agent/teams",
+        json={
+            "name": "Финансовый отдел",
+            "purpose": "Контроль платежей и договоров",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "id" in data
@@ -272,11 +308,14 @@ async def test_list_agent_teams(client: AsyncClient, agent_team):
 
 @pytest.mark.asyncio
 async def test_create_agent_cron(client: AsyncClient):
-    resp = await client.post("/api/agent/cron", json={
-        "schedule": "0 18 * * 5",
-        "prompt": "Сформируй сводку по аномалиям за неделю",
-        "description": "Еженедельный пятничный отчёт",
-    })
+    resp = await client.post(
+        "/api/agent/cron",
+        json={
+            "schedule": "0 18 * * 5",
+            "prompt": "Сформируй сводку по аномалиям за неделю",
+            "description": "Еженедельный пятничный отчёт",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "id" in data
@@ -295,10 +334,13 @@ async def test_list_agent_cron(client: AsyncClient, agent_cron):
 
 @pytest.mark.asyncio
 async def test_patch_agent_cron(client: AsyncClient, agent_cron):
-    resp = await client.patch(f"/api/agent/cron/{agent_cron.id}", json={
-        "enabled": False,
-        "description": "Временно отключено",
-    })
+    resp = await client.patch(
+        f"/api/agent/cron/{agent_cron.id}",
+        json={
+            "enabled": False,
+            "description": "Временно отключено",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["enabled"] is False
@@ -309,14 +351,17 @@ async def test_patch_agent_cron(client: AsyncClient, agent_cron):
 
 @pytest.mark.asyncio
 async def test_create_agent_plugin(client: AsyncClient):
-    resp = await client.post("/api/agent/plugins", json={
-        "plugin_key": "test-plugin-001",
-        "name": "Тестовый плагин",
-        "version": "0.1.0",
-        "description": "Плагин для тестирования",
-        "manifest": {"tools": [], "permissions": []},
-        "risk_level": "low",
-    })
+    resp = await client.post(
+        "/api/agent/plugins",
+        json={
+            "plugin_key": "test-plugin-001",
+            "name": "Тестовый плагин",
+            "version": "0.1.0",
+            "description": "Плагин для тестирования",
+            "manifest": {"tools": [], "permissions": []},
+            "risk_level": "low",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "id" in data
@@ -348,11 +393,14 @@ async def test_get_agent_skills(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_config_proposal(client: AsyncClient):
-    resp = await client.post("/api/agent/config/proposals", json={
-        "setting_path": "model",
-        "proposed_value": "qwen3.5:14b",
-        "reason": "Тест производительности на новой модели",
-    })
+    resp = await client.post(
+        "/api/agent/config/proposals",
+        json={
+            "setting_path": "model",
+            "proposed_value": "qwen3.5:14b",
+            "reason": "Тест производительности на новой модели",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "id" in data
@@ -393,17 +441,21 @@ def _isolated_agent_config(tmp_path, monkeypatch):
 async def test_agent_tone_proposal_applies_immediately_without_approval(
     client: AsyncClient, _isolated_agent_config
 ):
-    resp = await client.post("/api/agent/config/proposals", json={
-        "setting_path": "agent_tone",
-        "proposed_value": "friendly",
-        "reason": "Тест Ф7: тон не защищённая настройка",
-    })
+    resp = await client.post(
+        "/api/agent/config/proposals",
+        json={
+            "setting_path": "agent_tone",
+            "proposed_value": "friendly",
+            "reason": "Тест Ф7: тон не защищённая настройка",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["protected"] is False
     assert data["status"] == "applied"
 
     from app.ai.agent_config import get_builtin_agent_config
+
     assert get_builtin_agent_config().agent_tone == "friendly"
 
 
@@ -414,15 +466,19 @@ async def test_system_prompt_proposal_still_requires_protected_flow(
     """Regression guard: Ф7 only carves out agent_tone — system_prompt (and
     every other PROTECTED_SETTINGS entry) must still land as a pending
     proposal, not apply itself."""
-    resp = await client.post("/api/agent/config/proposals", json={
-        "setting_path": "system_prompt",
-        "proposed_value": "Ты — другой агент.",
-        "reason": "Regression test",
-    })
+    resp = await client.post(
+        "/api/agent/config/proposals",
+        json={
+            "setting_path": "system_prompt",
+            "proposed_value": "Ты — другой агент.",
+            "reason": "Regression test",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["protected"] is True
     assert data["status"] == "pending"
 
     from app.ai.agent_config import get_builtin_agent_config
+
     assert get_builtin_agent_config().system_prompt != "Ты — другой агент."

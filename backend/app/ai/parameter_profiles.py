@@ -83,8 +83,8 @@ TASK_DEFAULT_PROFILE: dict[AITask, str] = {
 # Hardware-specific provider defaults for RTX 3090 24 GB
 PROVIDER_HARDWARE_DEFAULTS: dict[str, dict[str, Any]] = {
     "llamacpp": {
-        "n_gpu_layers": -1,        # all layers on GPU
-        "kv_cache_type": "q8_0",   # 2× memory savings, minimal quality loss
+        "n_gpu_layers": -1,  # all layers on GPU
+        "kv_cache_type": "q8_0",  # 2× memory savings, minimal quality loss
         "flash_attn": True,
         "ctx_size": 16384,
         "parallel": 2,
@@ -110,9 +110,11 @@ _TASK_OVERRIDES_KEY = "inference_task_profile_overrides"
 # Redis helpers
 # ---------------------------------------------------------------------------
 
+
 def _redis_get(key: str) -> dict | None:
     try:
         from app.utils.redis_client import get_sync_redis
+
         raw = get_sync_redis().get(key)
         return json.loads(raw) if raw else None
     except Exception:
@@ -122,6 +124,7 @@ def _redis_get(key: str) -> dict | None:
 def _redis_set(key: str, value: dict) -> None:
     try:
         from app.utils.redis_client import get_sync_redis
+
         get_sync_redis().set(key, json.dumps(value, ensure_ascii=False))
     except Exception as exc:
         logger.warning("inference_profiles_redis_write_failed", key=key, error=str(exc))
@@ -130,6 +133,7 @@ def _redis_set(key: str, value: dict) -> None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def get_all_profiles() -> dict[str, dict[str, Any]]:
     """Return all profiles (built-in + user-saved), built-in always present."""

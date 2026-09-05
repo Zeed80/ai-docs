@@ -5,7 +5,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-
 # ── Party / Supplier ───────────────────────────────────────────────────────
 
 
@@ -48,6 +47,7 @@ class SupplierProfileOut(BaseModel):
 
 class SupplierFullOut(PartyOut):
     """Party + aggregated profile data."""
+
     profile: SupplierProfileOut | None = None
     recent_invoices_count: int = 0
     open_invoices_amount: float = 0.0

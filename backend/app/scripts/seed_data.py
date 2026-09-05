@@ -3,8 +3,7 @@
 Usage: python -m app.scripts.seed_data
 """
 
-import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -12,12 +11,12 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.base import Base
 from app.db.models import (
-    Approval,
-    ApprovalActionType,
-    ApprovalStatus,
     AnomalyCard,
     AnomalyStatus,
     AnomalyType,
+    Approval,
+    ApprovalActionType,
+    ApprovalStatus,
     CalendarEvent,
     CanonicalItem,
     CompareSession,
@@ -57,7 +56,7 @@ def seed():
             print("Database already seeded, skipping.")
             return
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # ── Parties (Suppliers) ──────────────────────────────────────────
 
@@ -90,7 +89,7 @@ def seed():
                 contact_phone="+7 (495) 234-56-78",
             ),
             Party(
-                name='ИП Сидоров А.В.',
+                name="ИП Сидоров А.В.",
                 inn="772012345678",
                 address="г. Москва, ул. Мастеровая, д. 3",
                 role=PartyRole.supplier,
@@ -177,7 +176,9 @@ def seed():
             received_at=now - timedelta(hours=4),
             has_attachments=True,
             attachment_count=1,
-            attachments_meta=[{"filename": "schet_123.pdf", "size": 245760, "content_type": "application/pdf"}],
+            attachments_meta=[
+                {"filename": "schet_123.pdf", "size": 245760, "content_type": "application/pdf"}
+            ],
             is_inbound=True,
         )
         db.add(email1)
@@ -353,11 +354,50 @@ def seed():
 
         # ── Canonical Items ───────────────────────────────────────────────
         canonical_data = [
-            {"name": "Болт М8×30 ГОСТ 7798", "category": "Крепёж", "unit": "шт", "okpd2_code": "25.94.11", "gost": "ГОСТ 7798-70", "is_confirmed": True, "aliases": ["Болт М8", "Bolt M8x30"]},
-            {"name": "Гайка М8 ГОСТ 5915", "category": "Крепёж", "unit": "шт", "okpd2_code": "25.94.12", "gost": "ГОСТ 5915-70", "is_confirmed": True, "aliases": ["Гайка М8"]},
-            {"name": "Подшипник 6205 ГОСТ 8338", "category": "Подшипники", "unit": "шт", "okpd2_code": "28.15.20", "gost": "ГОСТ 8338-75", "is_confirmed": True, "aliases": ["6205", "Подшипник шариковый 6205"]},
-            {"name": "Масло И-20А ГОСТ 20799", "category": "Смазочные материалы", "unit": "л", "okpd2_code": "19.20.29", "gost": "ГОСТ 20799-88", "is_confirmed": False, "aliases": ["И-20А", "Масло индустриальное"]},
-            {"name": "Электрод МР-3 Ø3мм", "category": "Сварочные материалы", "unit": "кг", "okpd2_code": "25.99.29", "is_confirmed": True, "aliases": ["МР-3", "Электрод сварочный МР-3"]},
+            {
+                "name": "Болт М8×30 ГОСТ 7798",
+                "category": "Крепёж",
+                "unit": "шт",
+                "okpd2_code": "25.94.11",
+                "gost": "ГОСТ 7798-70",
+                "is_confirmed": True,
+                "aliases": ["Болт М8", "Bolt M8x30"],
+            },
+            {
+                "name": "Гайка М8 ГОСТ 5915",
+                "category": "Крепёж",
+                "unit": "шт",
+                "okpd2_code": "25.94.12",
+                "gost": "ГОСТ 5915-70",
+                "is_confirmed": True,
+                "aliases": ["Гайка М8"],
+            },
+            {
+                "name": "Подшипник 6205 ГОСТ 8338",
+                "category": "Подшипники",
+                "unit": "шт",
+                "okpd2_code": "28.15.20",
+                "gost": "ГОСТ 8338-75",
+                "is_confirmed": True,
+                "aliases": ["6205", "Подшипник шариковый 6205"],
+            },
+            {
+                "name": "Масло И-20А ГОСТ 20799",
+                "category": "Смазочные материалы",
+                "unit": "л",
+                "okpd2_code": "19.20.29",
+                "gost": "ГОСТ 20799-88",
+                "is_confirmed": False,
+                "aliases": ["И-20А", "Масло индустриальное"],
+            },
+            {
+                "name": "Электрод МР-3 Ø3мм",
+                "category": "Сварочные материалы",
+                "unit": "кг",
+                "okpd2_code": "25.99.29",
+                "is_confirmed": True,
+                "aliases": ["МР-3", "Электрод сварочный МР-3"],
+            },
         ]
         canonical_items = []
         for cd in canonical_data:
@@ -368,11 +408,41 @@ def seed():
 
         # ── Price History for canonical items ─────────────────────────────
         ph_entries = [
-            PriceHistoryEntry(canonical_item_id=canonical_items[0].id, price=12.50, currency="RUB", recorded_at=datetime.now(timezone.utc) - timedelta(days=90), source="invoice"),
-            PriceHistoryEntry(canonical_item_id=canonical_items[0].id, price=13.80, currency="RUB", recorded_at=datetime.now(timezone.utc) - timedelta(days=30), source="invoice"),
-            PriceHistoryEntry(canonical_item_id=canonical_items[0].id, price=14.20, currency="RUB", recorded_at=datetime.now(timezone.utc) - timedelta(days=5), source="invoice"),
-            PriceHistoryEntry(canonical_item_id=canonical_items[2].id, price=480.00, currency="RUB", recorded_at=datetime.now(timezone.utc) - timedelta(days=60), source="invoice"),
-            PriceHistoryEntry(canonical_item_id=canonical_items[2].id, price=520.00, currency="RUB", recorded_at=datetime.now(timezone.utc) - timedelta(days=10), source="invoice"),
+            PriceHistoryEntry(
+                canonical_item_id=canonical_items[0].id,
+                price=12.50,
+                currency="RUB",
+                recorded_at=datetime.now(UTC) - timedelta(days=90),
+                source="invoice",
+            ),
+            PriceHistoryEntry(
+                canonical_item_id=canonical_items[0].id,
+                price=13.80,
+                currency="RUB",
+                recorded_at=datetime.now(UTC) - timedelta(days=30),
+                source="invoice",
+            ),
+            PriceHistoryEntry(
+                canonical_item_id=canonical_items[0].id,
+                price=14.20,
+                currency="RUB",
+                recorded_at=datetime.now(UTC) - timedelta(days=5),
+                source="invoice",
+            ),
+            PriceHistoryEntry(
+                canonical_item_id=canonical_items[2].id,
+                price=480.00,
+                currency="RUB",
+                recorded_at=datetime.now(UTC) - timedelta(days=60),
+                source="invoice",
+            ),
+            PriceHistoryEntry(
+                canonical_item_id=canonical_items[2].id,
+                price=520.00,
+                currency="RUB",
+                recorded_at=datetime.now(UTC) - timedelta(days=10),
+                source="invoice",
+            ),
         ]
         for ph in ph_entries:
             db.add(ph)
@@ -411,7 +481,7 @@ def seed():
             db.add(a)
 
         # ── Calendar Events (Scenario 5: Proactive Follow-up) ─────────────
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         calendar_events = [
             CalendarEvent(
                 title="Срок оплаты счёта №123 (ООО «ТехноПром»)",
@@ -448,7 +518,7 @@ def seed():
             entity_type="invoice",
             entity_id=inv1.id,
             remind_at=now + timedelta(days=2),
-            message=f"Срок оплаты счёта приближается (через 3 дня). Требуется утверждение.",
+            message="Срок оплаты счёта приближается (через 3 дня). Требуется утверждение.",
             is_sent=False,
         )
         db.add(reminder)
@@ -512,8 +582,13 @@ def seed():
                 description="Наружная цилиндрическая поверхность под подшипник",
                 sort_order=1,
                 confidence=0.95,
-                ai_raw={"nominal_mm": 50.0, "upper_tol": -0.016, "lower_tol": -0.029,
-                        "roughness_ra": 0.8, "fit_system": "h6"},
+                ai_raw={
+                    "nominal_mm": 50.0,
+                    "upper_tol": -0.016,
+                    "lower_tol": -0.029,
+                    "roughness_ra": 0.8,
+                    "fit_system": "h6",
+                },
             ),
             DrawingFeature(
                 drawing_id=drawing.id,
@@ -522,8 +597,13 @@ def seed():
                 description="Посадочная поверхность под шкив",
                 sort_order=2,
                 confidence=0.93,
-                ai_raw={"nominal_mm": 40.0, "upper_tol": 0.018, "lower_tol": 0.002,
-                        "roughness_ra": 1.6, "fit_system": "k6"},
+                ai_raw={
+                    "nominal_mm": 40.0,
+                    "upper_tol": 0.018,
+                    "lower_tol": 0.002,
+                    "roughness_ra": 1.6,
+                    "fit_system": "k6",
+                },
             ),
             DrawingFeature(
                 drawing_id=drawing.id,
@@ -561,51 +641,69 @@ def seed():
 
         operations = [
             ManufacturingOperation(
-                process_plan_id=process_plan.id, sequence_no=5,
-                operation_code="4110", name="Токарная",
+                process_plan_id=process_plan.id,
+                sequence_no=5,
+                operation_code="4110",
+                name="Токарная",
                 operation_type="turning",
                 description="Черновая обточка, подрезка торцов. Уст. A.",
-                setup_time_min=15.0, machine_time_min=24.5,
+                setup_time_min=15.0,
+                machine_time_min=24.5,
                 tsht_minutes=39.5,
             ),
             ManufacturingOperation(
-                process_plan_id=process_plan.id, sequence_no=10,
-                operation_code="4110", name="Токарная (чистовая)",
+                process_plan_id=process_plan.id,
+                sequence_no=10,
+                operation_code="4110",
+                name="Токарная (чистовая)",
                 operation_type="turning",
                 description="Чистовая обточка Ø50h6, Ø40k6. Уст. A и B.",
-                setup_time_min=15.0, machine_time_min=31.0,
+                setup_time_min=15.0,
+                machine_time_min=31.0,
                 tsht_minutes=46.0,
             ),
             ManufacturingOperation(
-                process_plan_id=process_plan.id, sequence_no=15,
-                operation_code="4140", name="Фрезерная",
+                process_plan_id=process_plan.id,
+                sequence_no=15,
+                operation_code="4140",
+                name="Фрезерная",
                 operation_type="milling",
                 description="Фрезерование шпоночного паза.",
-                setup_time_min=12.0, machine_time_min=8.5,
+                setup_time_min=12.0,
+                machine_time_min=8.5,
                 tsht_minutes=20.5,
             ),
             ManufacturingOperation(
-                process_plan_id=process_plan.id, sequence_no=20,
-                operation_code="4180", name="Резьбонарезная",
+                process_plan_id=process_plan.id,
+                sequence_no=20,
+                operation_code="4180",
+                name="Резьбонарезная",
                 operation_type="threading",
                 description="Нарезание резьбы М24×1.5-6g.",
-                setup_time_min=10.0, machine_time_min=5.0,
+                setup_time_min=10.0,
+                machine_time_min=5.0,
                 tsht_minutes=15.0,
             ),
             ManufacturingOperation(
-                process_plan_id=process_plan.id, sequence_no=25,
-                operation_code="4120", name="Шлифовальная",
+                process_plan_id=process_plan.id,
+                sequence_no=25,
+                operation_code="4120",
+                name="Шлифовальная",
                 operation_type="grinding",
                 description="Шлифование Ø50h6 Ra 0.8.",
-                setup_time_min=20.0, machine_time_min=18.0,
+                setup_time_min=20.0,
+                machine_time_min=18.0,
                 tsht_minutes=38.0,
             ),
             ManufacturingOperation(
-                process_plan_id=process_plan.id, sequence_no=30,
-                operation_code="0220", name="Контроль",
+                process_plan_id=process_plan.id,
+                sequence_no=30,
+                operation_code="0220",
+                name="Контроль",
                 operation_type="inspection",
                 description="Окончательный контроль ОТК.",
-                setup_time_min=5.0, machine_time_min=10.0,
+                setup_time_min=5.0,
+                machine_time_min=10.0,
                 tsht_minutes=15.0,
             ),
         ]
@@ -628,7 +726,7 @@ def seed():
                 name="Подшипник шариковый 6210 SKF",
                 unit="шт",
                 current_qty=12.0,
-                min_qty=20.0,   # below minimum → triggers low_stock_alert
+                min_qty=20.0,  # below minimum → triggers low_stock_alert
                 location="Склад Б, стеллаж 7-1",
             ),
             InventoryItem(
@@ -636,7 +734,7 @@ def seed():
                 name="Уплотнение V-кольцо Ø50",
                 unit="шт",
                 current_qty=3.0,
-                min_qty=10.0,   # below minimum
+                min_qty=10.0,  # below minimum
                 location="Склад Б, стеллаж 7-3",
             ),
             InventoryItem(
@@ -690,15 +788,17 @@ def seed():
         print(f"  Suppliers: {len(suppliers)}")
         print(f"  Documents: {len(docs) + 1} (+1 drawing doc)")
         print(f"  Invoices: 1 ({len(lines)} lines)")
-        print(f"  Email threads: 2")
-        print(f"  Pending approvals: 1")
+        print("  Email threads: 2")
+        print("  Pending approvals: 1")
         print(f"  Canonical items: {len(canonical_items)}")
         print(f"  Anomalies: {len(anomalies)}")
         print(f"  Calendar events: {len(calendar_events)}")
-        print(f"  Compare sessions: 1")
+        print("  Compare sessions: 1")
         print(f"  Drawing: 1 ({len(drawing_features)} features)")
         print(f"  Process plan: 1 ({len(operations)} operations)")
-        print(f"  Inventory items: {len(inventory_items)} ({sum(1 for i in inventory_items if i.current_qty < (i.min_qty or 0))} below min)")
+        print(
+            f"  Inventory items: {len(inventory_items)} ({sum(1 for i in inventory_items if i.current_qty < (i.min_qty or 0))} below min)"
+        )
         print(f"  Warehouse receipt: 1 ({len(receipt_lines)} lines)")
 
 

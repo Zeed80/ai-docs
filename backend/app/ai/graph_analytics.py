@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import networkx as nx
@@ -79,6 +79,7 @@ def save_graph_analytics_settings(settings: GraphAnalyticsSettings) -> GraphAnal
     _redis_set_settings(settings.model_dump())
     return settings
 
+
 _GOD_NODE_TOP_N = 8
 _GOD_NODE_MIN_DEGREE = 2
 _CLUSTER_MIN_SIZE = 3
@@ -108,7 +109,7 @@ async def _save_run_state(db: AsyncSession, *, max_updated_at: datetime | None) 
     )
     fact = result.scalar_one_or_none()
     payload = {
-        "last_run_at": datetime.now(timezone.utc).isoformat(),
+        "last_run_at": datetime.now(UTC).isoformat(),
         "max_graph_updated_at": max_updated_at.isoformat() if max_updated_at else None,
     }
     if fact is None:
@@ -187,17 +188,20 @@ def _surprising_connections(graph: nx.Graph) -> list[dict[str, Any]]:
 
     domain_pair_counts = Counter(item[3] for item in cross_domain_edges)
     rare = [
-        item for item in cross_domain_edges
+        item
+        for item in cross_domain_edges
         if domain_pair_counts[item[3]] <= _SURPRISING_MAX_DOMAIN_EDGE_COUNT
     ]
     out = []
     for u, v, edge_type, domain_pair in rare[:_SURPRISING_TOP_N]:
-        out.append({
-            "source_title": graph.nodes[u]["title"],
-            "target_title": graph.nodes[v]["title"],
-            "edge_type": edge_type,
-            "domain_pair": domain_pair,
-        })
+        out.append(
+            {
+                "source_title": graph.nodes[u]["title"],
+                "target_title": graph.nodes[v]["title"],
+                "edge_type": edge_type,
+                "domain_pair": domain_pair,
+            }
+        )
     return out
 
 
@@ -215,7 +219,8 @@ def _god_nodes_fact(god_nodes: list[dict[str, Any]]) -> MemoryFact | None:
         scope="project",
         kind=_INSIGHT_KIND,
         title="Самые связанные узлы графа памяти",
-        summary="Узлы с наибольшим числом связей — кандидаты на приоритетное внимание:\n" + "\n".join(lines),
+        summary="Узлы с наибольшим числом связей — кандидаты на приоритетное внимание:\n"
+        + "\n".join(lines),
         source="graph_analytics",
         confidence=0.8,
         pinned=False,
@@ -226,35 +231,39 @@ def _god_nodes_fact(god_nodes: list[dict[str, Any]]) -> MemoryFact | None:
 def _cluster_facts(clusters: list[list[str]]) -> list[MemoryFact]:
     facts = []
     for idx, titles in enumerate(clusters, start=1):
-        facts.append(MemoryFact(
-            scope="project",
-            kind=_INSIGHT_KIND,
-            title=f"Кластер графа памяти #{idx}",
-            summary=f"Группа взаимосвязанных узлов ({len(titles)}): " + ", ".join(titles),
-            source="graph_analytics",
-            confidence=0.7,
-            pinned=False,
-            metadata_={"insight_type": "cluster", "titles": titles},
-        ))
+        facts.append(
+            MemoryFact(
+                scope="project",
+                kind=_INSIGHT_KIND,
+                title=f"Кластер графа памяти #{idx}",
+                summary=f"Группа взаимосвязанных узлов ({len(titles)}): " + ", ".join(titles),
+                source="graph_analytics",
+                confidence=0.7,
+                pinned=False,
+                metadata_={"insight_type": "cluster", "titles": titles},
+            )
+        )
     return facts
 
 
 def _surprising_facts(surprising: list[dict[str, Any]]) -> list[MemoryFact]:
     facts = []
     for item in surprising:
-        facts.append(MemoryFact(
-            scope="project",
-            kind=_INSIGHT_KIND,
-            title=f"Неожиданная связь: {item['source_title']} ↔ {item['target_title']}",
-            summary=(
-                f"Редкая связь между доменами {item['domain_pair']} "
-                f"(тип ребра: {item['edge_type']}) — обычно эти типы узлов не пересекаются."
-            ),
-            source="graph_analytics",
-            confidence=0.6,
-            pinned=False,
-            metadata_={"insight_type": "surprising_connection", **item},
-        ))
+        facts.append(
+            MemoryFact(
+                scope="project",
+                kind=_INSIGHT_KIND,
+                title=f"Неожиданная связь: {item['source_title']} ↔ {item['target_title']}",
+                summary=(
+                    f"Редкая связь между доменами {item['domain_pair']} "
+                    f"(тип ребра: {item['edge_type']}) — обычно эти типы узлов не пересекаются."
+                ),
+                source="graph_analytics",
+                confidence=0.6,
+                pinned=False,
+                metadata_={"insight_type": "surprising_connection", **item},
+            )
+        )
     return facts
 
 
@@ -273,7 +282,7 @@ async def run_graph_analytics_async(db: AsyncSession, *, force: bool = False) ->
 
         last_run_at = state.get("last_run_at") if state else None
         if last_run_at:
-            elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(last_run_at)).total_seconds()
+            elapsed = (datetime.now(UTC) - datetime.fromisoformat(last_run_at)).total_seconds()
             if elapsed < settings.interval_seconds:
                 return {"skipped": True, "reason": "interval_not_elapsed"}
 

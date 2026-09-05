@@ -20,18 +20,49 @@ class StrictModel(BaseModel):
 
 
 Profile = Literal[
-    "mechanical", "assembly", "construction", "mep", "electrical",
-    "hydraulic", "pid", "mixed",
+    "mechanical",
+    "assembly",
+    "construction",
+    "mep",
+    "electrical",
+    "hydraulic",
+    "pid",
+    "mixed",
 ]
 NodeType = Literal[
-    "DocumentSet", "Document", "Sheet", "View", "SourceRegion", "Product",
-    "Component", "Feature", "Geometry", "Material", "Parameter", "Constraint",
-    "System", "Port", "BuildOperation", "Artifact", "TopologyElement",
+    "DocumentSet",
+    "Document",
+    "Sheet",
+    "View",
+    "SourceRegion",
+    "Product",
+    "Component",
+    "Feature",
+    "Geometry",
+    "Material",
+    "Parameter",
+    "Constraint",
+    "System",
+    "Port",
+    "BuildOperation",
+    "Artifact",
+    "TopologyElement",
 ]
 EdgeType = Literal[
-    "contains", "part_of", "instance_of", "located_in", "represented_by",
-    "same_object_across_views", "defines", "depends_on", "constrains",
-    "applies_to", "mates_with", "connects_to", "opens_in", "generated_by",
+    "contains",
+    "part_of",
+    "instance_of",
+    "located_in",
+    "represented_by",
+    "same_object_across_views",
+    "defines",
+    "depends_on",
+    "constrains",
+    "applies_to",
+    "mates_with",
+    "connects_to",
+    "opens_in",
+    "generated_by",
     "maps_to_topology",
     # Ф2.6c: a compiled BuildOperation -> the descriptive native Feature
     # node(s) (Ф1.2) it was built from. Deliberately NOT in
@@ -45,15 +76,34 @@ EdgeType = Literal[
 ]
 Origin = Literal["observed", "traced", "derived", "standard", "assumed", "human"]
 Assurance = Literal[
-    "proposed", "observed", "corroborated", "constraint_validated",
-    "human_approved", "contradicted",
+    "proposed",
+    "observed",
+    "corroborated",
+    "constraint_validated",
+    "human_approved",
+    "contradicted",
 ]
 Impact = Literal[
-    "base_topology", "component_count", "assembly_interface", "mate", "fit",
-    "interchangeability", "envelope", "connection_opening", "load_path",
-    "structural_capacity", "regulatory_check", "connectivity", "required_view",
-    "required_section", "required_dimension", "manufacturing_safety",
-    "operational_safety", "material_quantity", "mass", "visual_only",
+    "base_topology",
+    "component_count",
+    "assembly_interface",
+    "mate",
+    "fit",
+    "interchangeability",
+    "envelope",
+    "connection_opening",
+    "load_path",
+    "structural_capacity",
+    "regulatory_check",
+    "connectivity",
+    "required_view",
+    "required_section",
+    "required_dimension",
+    "manufacturing_safety",
+    "operational_safety",
+    "material_quantity",
+    "mass",
+    "visual_only",
 ]
 
 # The two BuildOperation predicates every domain agrees on — compile_build_plan
@@ -78,7 +128,7 @@ class IntervalValue(StrictModel):
     upper_inclusive: bool = True
 
     @model_validator(mode="after")
-    def validate_bounds(self) -> "IntervalValue":
+    def validate_bounds(self) -> IntervalValue:
         if self.lower > self.upper:
             raise ValueError("interval lower must not exceed upper")
         return self
@@ -135,9 +185,18 @@ class GraphEdge(StrictModel):
 class Evidence(StrictModel):
     id: str
     kind: Literal[
-        "raster_region", "vector_entity", "text", "dimension", "standard",
-        "calculation", "trace_run", "visual_verification", "human_decision",
-        "kernel_topology", "projection_comparison", "model_raw_output",
+        "raster_region",
+        "vector_entity",
+        "text",
+        "dimension",
+        "standard",
+        "calculation",
+        "trace_run",
+        "visual_verification",
+        "human_decision",
+        "kernel_topology",
+        "projection_comparison",
+        "model_raw_output",
     ]
     source_id: str | None = None
     source_region_id: str | None = None
@@ -185,8 +244,18 @@ class HypothesisSet(StrictModel):
 class Requirement(StrictModel):
     id: str
     kind: Literal[
-        "topology", "interface", "envelope", "load", "connectivity", "view",
-        "section", "dimension", "safety", "quantity", "mass", "domain",
+        "topology",
+        "interface",
+        "envelope",
+        "load",
+        "connectivity",
+        "view",
+        "section",
+        "dimension",
+        "safety",
+        "quantity",
+        "mass",
+        "domain",
     ]
     target_node_ids: list[str] = Field(default_factory=list)
     assertion_ids: list[str] = Field(default_factory=list)
@@ -196,23 +265,48 @@ class Requirement(StrictModel):
 class BuildTarget(StrictModel):
     id: str
     kind: Literal[
-        "preview_brep", "production_step", "provisional_step", "preview_ifc",
-        "production_ifc", "provisional_ifc", "stl", "dxf", "pdf",
+        "preview_brep",
+        "production_step",
+        "provisional_step",
+        "preview_ifc",
+        "production_ifc",
+        "provisional_ifc",
+        "stl",
+        "dxf",
+        "pdf",
     ]
     root_node_ids: list[str]
     requirement_ids: list[str] = Field(default_factory=list)
-    critical_impacts: list[Impact] = Field(default_factory=lambda: [
-        "base_topology", "component_count", "assembly_interface", "mate", "fit",
-        "interchangeability", "envelope", "connection_opening", "load_path",
-        "structural_capacity", "regulatory_check", "connectivity", "required_view",
-        "required_section", "required_dimension", "manufacturing_safety",
-        "operational_safety", "material_quantity", "mass",
-    ])
+    critical_impacts: list[Impact] = Field(
+        default_factory=lambda: [
+            "base_topology",
+            "component_count",
+            "assembly_interface",
+            "mate",
+            "fit",
+            "interchangeability",
+            "envelope",
+            "connection_opening",
+            "load_path",
+            "structural_capacity",
+            "regulatory_check",
+            "connectivity",
+            "required_view",
+            "required_section",
+            "required_dimension",
+            "manufacturing_safety",
+            "operational_safety",
+            "material_quantity",
+            "mass",
+        ]
+    )
     mass_tolerance_percent: float = Field(default=1.0, ge=0.0)
 
 
 class VerificationState(StrictModel):
-    comprehension: Literal["accumulating", "converged", "contradictory", "review_needed"] = "accumulating"
+    comprehension: Literal["accumulating", "converged", "contradictory", "review_needed"] = (
+        "accumulating"
+    )
     build: Literal["not_ready", "preview_ready", "preview_built", "verified"] = "not_ready"
     release: Literal["blocked", "approved", "certified"] = "blocked"
     issue_codes: list[str] = Field(default_factory=list)
@@ -259,12 +353,16 @@ class EngineeringModelGraph(StrictModel):
     extension_registry: list[ExtensionRegistration] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_integrity(self) -> "EngineeringModelGraph":
+    def validate_integrity(self) -> EngineeringModelGraph:
         collections = {
-            "source": self.sources, "node": self.nodes, "edge": self.edges,
-            "assertion": self.assertions, "evidence": self.evidence,
+            "source": self.sources,
+            "node": self.nodes,
+            "edge": self.edges,
+            "assertion": self.assertions,
+            "evidence": self.evidence,
             "hypothesis option": self.hypothesis_options,
-            "hypothesis set": self.hypothesis_sets, "requirement": self.requirements,
+            "hypothesis set": self.hypothesis_sets,
+            "requirement": self.requirements,
             "build target": self.build_targets,
         }
         for label, items in collections.items():
@@ -312,7 +410,9 @@ class EngineeringModelGraph(StrictModel):
                 raise ValueError(f"broken build target requirement: {item.id}")
         registry = {item.namespace for item in self.extension_registry}
         extensible = [*self.nodes, *self.edges, *self.assertions]
-        if any(item.extension is not None and item.namespace not in registry for item in extensible):
+        if any(
+            item.extension is not None and item.namespace not in registry for item in extensible
+        ):
             raise ValueError("unregistered extension namespace")
         if self.parent_revision is not None and self.parent_revision >= self.revision:
             raise ValueError("parent revision must precede revision")
@@ -324,7 +424,7 @@ class EngineeringModelGraph(StrictModel):
         canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()
 
-    def sealed(self) -> "EngineeringModelGraph":
+    def sealed(self) -> EngineeringModelGraph:
         return self.model_copy(update={"canonical_sha256": self.calculated_sha256()})
 
 
@@ -383,9 +483,7 @@ def summarize_patch_errors(errors: list[str], *, limit: int = 20) -> list[str]:
             summarized.append(error)
             continue
         kept = ",".join(ids[:limit])
-        summarized.append(
-            f"{code}:{kept} (и ещё {len(ids) - limit} подтверждённых значений)"
-        )
+        summarized.append(f"{code}:{kept} (и ещё {len(ids) - limit} подтверждённых значений)")
     return summarized
 
 
@@ -393,7 +491,7 @@ _MODEL_PRODUCERS = {"reader", "tracer", "visual_verifier"}
 _FORBIDDEN_MODEL_ASSURANCE = {"constraint_validated", "human_approved"}
 
 
-def _supersede_preserves_value(patch: "GraphPatch", old_id: str, old_value: "AssertionValue") -> bool:
+def _supersede_preserves_value(patch: GraphPatch, old_id: str, old_value: AssertionValue) -> bool:
     """True when ``old_id`` is being superseded by a same-value replacement.
 
     Some callers (feature_tree_revision_patch, in particular) deliberately
@@ -442,8 +540,7 @@ def apply_graph_patch(
     ):
         errors.append("reader_runtime_metadata_requires_call")
     if (
-        patch.replace_requirements is not None
-        or patch.replace_build_targets is not None
+        patch.replace_requirements is not None or patch.replace_build_targets is not None
     ) and patch.producer not in {"system", "human"}:
         errors.append("contract_replacement_requires_system_or_human")
     if patch.replace_requirements is not None:
@@ -465,7 +562,8 @@ def apply_graph_patch(
     if missing:
         errors.append("unknown_assertions:" + ",".join(missing))
     protected = [
-        item_id for item_id in touched
+        item_id
+        for item_id in touched
         if item_id in current
         and current[item_id].assurance in _FORBIDDEN_MODEL_ASSURANCE
         and patch.producer != "human"
@@ -499,25 +597,17 @@ def apply_graph_patch(
             for assertion in patch.add_assertions
             for evidence_id in assertion.evidence_ids
         }
-        contradicted = {
-            item.id for item in graph.assertions if item.assurance == "contradicted"
-        }
+        contradicted = {item.id for item in graph.assertions if item.assurance == "contradicted"}
         progress = ReaderProgress(
             # Keep every raw response in the journal, but do not call a repeated
             # unreadable answer progress unless a new assertion actually uses it.
-            new_evidence=sum(
-                item.id in supported_evidence_ids for item in patch.add_evidence
-            ),
+            new_evidence=sum(item.id in supported_evidence_ids for item in patch.add_evidence),
             contradictions_closed=len(
                 contradicted
-                & (
-                    set(patch.supersede_assertion_ids)
-                    | set(patch.retract_assertion_ids)
-                )
+                & (set(patch.supersede_assertion_ids) | set(patch.retract_assertion_ids))
             ),
             validated_assertions_added=sum(
-                item.assurance in _FORBIDDEN_MODEL_ASSURANCE
-                for item in patch.add_assertions
+                item.assurance in _FORBIDDEN_MODEL_ASSURANCE for item in patch.add_assertions
             ),
         )
         attempts = dict(reader_manifest.ordinary_attempts)
@@ -535,28 +625,30 @@ def apply_graph_patch(
         )
 
     try:
-        merged = graph.model_copy(update={
-            "revision": graph.revision + 1,
-            "parent_revision": graph.revision,
-            "canonical_sha256": "",
-            "nodes": [*graph.nodes, *patch.add_nodes],
-            "edges": [*graph.edges, *patch.add_edges],
-            "assertions": assertions,
-            "evidence": [*graph.evidence, *patch.add_evidence],
-            "hypothesis_options": [*graph.hypothesis_options, *patch.add_hypothesis_options],
-            "hypothesis_sets": [*graph.hypothesis_sets, *patch.add_hypothesis_sets],
-            "requirements": (
-                patch.replace_requirements
-                if patch.replace_requirements is not None
-                else graph.requirements
-            ),
-            "build_targets": (
-                patch.replace_build_targets
-                if patch.replace_build_targets is not None
-                else graph.build_targets
-            ),
-            "reader_manifest": reader_manifest,
-        })
+        merged = graph.model_copy(
+            update={
+                "revision": graph.revision + 1,
+                "parent_revision": graph.revision,
+                "canonical_sha256": "",
+                "nodes": [*graph.nodes, *patch.add_nodes],
+                "edges": [*graph.edges, *patch.add_edges],
+                "assertions": assertions,
+                "evidence": [*graph.evidence, *patch.add_evidence],
+                "hypothesis_options": [*graph.hypothesis_options, *patch.add_hypothesis_options],
+                "hypothesis_sets": [*graph.hypothesis_sets, *patch.add_hypothesis_sets],
+                "requirements": (
+                    patch.replace_requirements
+                    if patch.replace_requirements is not None
+                    else graph.requirements
+                ),
+                "build_targets": (
+                    patch.replace_build_targets
+                    if patch.replace_build_targets is not None
+                    else graph.build_targets
+                ),
+                "reader_manifest": reader_manifest,
+            }
+        )
         merged = EngineeringModelGraph.model_validate(merged.model_dump(mode="json"))
     except ValueError as exc:
         raise PatchMergeError(["graph_integrity", str(exc)]) from exc
@@ -571,31 +663,25 @@ def graph_contract_upgrade_patch(
 ) -> GraphPatch | None:
     """Create a non-destructive system patch for a newer adapter contract."""
     active_keys = {
-        (item.subject_id, item.predicate)
-        for item in current.assertions if item.state == "active"
+        (item.subject_id, item.predicate) for item in current.assertions if item.state == "active"
     }
     known_assertion_ids = {item.id for item in current.assertions}
     add_assertions = [
-        item for item in desired.assertions
+        item
+        for item in desired.assertions
         if (item.subject_id, item.predicate) not in active_keys
         and item.id not in known_assertion_ids
     ]
     current_requirements = {item.id: item for item in current.requirements}
     desired_requirements = {item.id: item for item in desired.requirements}
-    merged_requirements = [
-        desired_requirements.get(item.id, item) for item in current.requirements
-    ]
+    merged_requirements = [desired_requirements.get(item.id, item) for item in current.requirements]
     merged_requirements.extend(
         item for item in desired.requirements if item.id not in current_requirements
     )
     current_targets = {item.id: item for item in current.build_targets}
     desired_targets = {item.id: item for item in desired.build_targets}
-    merged_targets = [
-        desired_targets.get(item.id, item) for item in current.build_targets
-    ]
-    merged_targets.extend(
-        item for item in desired.build_targets if item.id not in current_targets
-    )
+    merged_targets = [desired_targets.get(item.id, item) for item in current.build_targets]
+    merged_targets.extend(item for item in desired.build_targets if item.id not in current_targets)
     requirements_changed = merged_requirements != current.requirements
     targets_changed = merged_targets != current.build_targets
     if not add_assertions and not requirements_changed and not targets_changed:
@@ -652,7 +738,14 @@ def critical_assertion_ids(graph: EngineeringModelGraph, target_id: str) -> set[
     }
     reverse: dict[str, set[str]] = defaultdict(set)
     for edge in graph.edges:
-        if edge.type in {"depends_on", "constrains", "defines", "applies_to", "part_of", "contains"}:
+        if edge.type in {
+            "depends_on",
+            "constrains",
+            "defines",
+            "applies_to",
+            "part_of",
+            "contains",
+        }:
             reverse[edge.target_id].add(edge.source_id)
             reverse[edge.source_id].add(edge.target_id)
     reachable = set(target.root_node_ids)
@@ -721,11 +814,20 @@ def assertion_impact_report(
     adjacency: dict[str, set[str]] = defaultdict(set)
     symmetric = {"same_object_across_views", "mates_with", "connects_to"}
     forward = {
-        "contains", "represented_by", "defines", "constrains", "applies_to",
-        "opens_in", "maps_to_topology",
+        "contains",
+        "represented_by",
+        "defines",
+        "constrains",
+        "applies_to",
+        "opens_in",
+        "maps_to_topology",
     }
     reverse = {
-        "part_of", "instance_of", "located_in", "depends_on", "generated_by",
+        "part_of",
+        "instance_of",
+        "located_in",
+        "depends_on",
+        "generated_by",
         # realizes: source=operation, target=feature — correcting the
         # Feature assertion must show the operation as affected.
         "realizes",
@@ -761,18 +863,14 @@ def assertion_impact_report(
         paths[node_id] = list(reversed(path))
 
     def affected_of_type(node_type: NodeType) -> list[str]:
-        return sorted(
-            node_id for node_id in affected_ids
-            if node_by_id[node_id].type == node_type
-        )
+        return sorted(node_id for node_id in affected_ids if node_by_id[node_id].type == node_type)
 
     is_critical = assertion_id in critical
     bim_profiles = {"construction", "mep", "electrical", "hydraulic", "pid", "mixed"}
     explicit_bim_node_ids = {
         item.subject_id
         for item in graph.assertions
-        if item.state == "active"
-        and item.predicate.startswith(("ifc.", "bim.", "spatial."))
+        if item.state == "active" and item.predicate.startswith(("ifc.", "bim.", "spatial."))
     }
     affected_bim_object_ids = sorted(
         node_id
@@ -788,9 +886,7 @@ def assertion_impact_report(
         target_id=target_id,
         subject_node_id=subject_id,
         critical_for_target=is_critical,
-        classification=(
-            "critical_for_target" if is_critical else "non_critical_for_target"
-        ),
+        classification=("critical_for_target" if is_critical else "non_critical_for_target"),
         declared_impacts=assertion.impacts,
         direct_dependency_node_ids=sorted(adjacency[subject_id]),
         affected_node_ids=affected_ids,
@@ -801,8 +897,7 @@ def assertion_impact_report(
         affected_bim_object_ids=affected_bim_object_ids,
         evidence_ids=assertion.evidence_ids,
         superseded_by_assertion_ids=sorted(
-            item.id for item in graph.assertions
-            if item.supersedes_assertion_id == assertion_id
+            item.id for item in graph.assertions if item.supersedes_assertion_id == assertion_id
         ),
         dependency_paths=paths,
     )
@@ -827,14 +922,20 @@ class DeterministicTraceChecks(StrictModel):
 
     @property
     def passed(self) -> bool:
-        return all((
-            self.connected, self.closed, self.no_self_intersections,
-            self.no_dangling_ends, self.anchors_satisfied,
-            self.dimensions_satisfied, self.forbidden_geometry_clear,
-            self.pixel_precision >= 0.75,
-            self.pixel_recall >= 0.70,
-            not self.critical_impact_detected,
-        ))
+        return all(
+            (
+                self.connected,
+                self.closed,
+                self.no_self_intersections,
+                self.no_dangling_ends,
+                self.anchors_satisfied,
+                self.dimensions_satisfied,
+                self.forbidden_geometry_clear,
+                self.pixel_precision >= 0.75,
+                self.pixel_recall >= 0.70,
+                not self.critical_impact_detected,
+            )
+        )
 
 
 class TraceProposal(StrictModel):
@@ -964,7 +1065,8 @@ def compile_build_plan(graph: EngineeringModelGraph, target_id: str) -> BuildPla
     critical = critical_assertion_ids(graph, target_id)
     assertions = {item.id: item for item in graph.assertions}
     unresolved = sorted(
-        item_id for item_id in critical
+        item_id
+        for item_id in critical
         if assertions[item_id].assurance not in {"constraint_validated", "human_approved"}
         or assertions[item_id].value.kind == "unknown"
     )
@@ -1045,11 +1147,13 @@ def next_reader_manifest(
         or progress.contradictions_closed
         or progress.validated_assertions_added
     )
-    updated = manifest.model_copy(update={
-        "calls_used": manifest.calls_used + call_count,
-        "elapsed_seconds": manifest.elapsed_seconds + call_elapsed_seconds,
-        "no_progress_passes": 0 if useful else manifest.no_progress_passes + 1,
-    })
+    updated = manifest.model_copy(
+        update={
+            "calls_used": manifest.calls_used + call_count,
+            "elapsed_seconds": manifest.elapsed_seconds + call_elapsed_seconds,
+            "no_progress_passes": 0 if useful else manifest.no_progress_passes + 1,
+        }
+    )
     reason = None
     if updated.elapsed_seconds >= updated.max_wall_seconds:
         reason = "wall_budget_exhausted"
@@ -1084,7 +1188,8 @@ def plan_next_reader_pass(
     )
     critical = critical_assertion_ids(graph, target_id)
     unresolved = [
-        item for item in graph.assertions
+        item
+        for item in graph.assertions
         if item.state == "active"
         and item.value.kind == "unknown"
         and item.assurance not in {"constraint_validated", "human_approved"}
@@ -1092,14 +1197,18 @@ def plan_next_reader_pass(
     critical_frontier = sorted(item.id for item in unresolved if item.id in critical)
     if critical_frontier:
         return ReaderPassPlan(
-            kind="read_critical", assertion_ids=critical_frontier[:8],
-            questions=[f"Resolve build-critical assertion {item}" for item in critical_frontier[:8]],
+            kind="read_critical",
+            assertion_ids=critical_frontier[:8],
+            questions=[
+                f"Resolve build-critical assertion {item}" for item in critical_frontier[:8]
+            ],
             reason="build_critical_unresolved",
         )
     ordinary = sorted(item.id for item in unresolved if attempts.get(item.id, 0) == 0)
     if ordinary:
         return ReaderPassPlan(
-            kind="read_focused", assertion_ids=ordinary[:8],
+            kind="read_focused",
+            assertion_ids=ordinary[:8],
             questions=[f"Read assertion {item} from its evidence region" for item in ordinary[:8]],
             reason="unresolved_observation_frontier",
         )
@@ -1111,14 +1220,20 @@ def plan_next_reader_pass(
         and is_hybrid_trace_candidate(graph, item)
     )
     if traceable:
-        region_ids = sorted({
-            evidence.source_region_id
-            for assertion in unresolved if assertion.id in traceable
-            for evidence_id in assertion.evidence_ids
-            for evidence in graph.evidence if evidence.id == evidence_id and evidence.source_region_id
-        })
+        region_ids = sorted(
+            {
+                evidence.source_region_id
+                for assertion in unresolved
+                if assertion.id in traceable
+                for evidence_id in assertion.evidence_ids
+                for evidence in graph.evidence
+                if evidence.id == evidence_id and evidence.source_region_id
+            }
+        )
         return ReaderPassPlan(
-            kind="hybrid_trace", assertion_ids=traceable[:1], source_region_ids=region_ids[:1],
+            kind="hybrid_trace",
+            assertion_ids=traceable[:1],
+            source_region_ids=region_ids[:1],
             reason="non_critical_reading_exhausted",
         )
     if unresolved:
@@ -1146,9 +1261,7 @@ def is_hybrid_trace_candidate(
         and evidence[evidence_id].kind == "raster_region"
         and evidence[evidence_id].source_region_id
     ]
-    return bool(regions) and all(
-        not bool(item.payload.get("fallback")) for item in regions
-    )
+    return bool(regions) and all(not bool(item.payload.get("fallback")) for item in regions)
 
 
 def rank_trace_proposals(
@@ -1164,7 +1277,8 @@ def rank_trace_proposals(
         (
             proposal,
             evaluate_trace_admission(
-                proposal, visual,
+                proposal,
+                visual,
                 assertion_is_non_critical=assertion_is_non_critical,
                 conflicts_with_validated=conflicts_with_validated,
             ),
@@ -1188,9 +1302,45 @@ class DomainAdapter(StrictModel):
 DOMAIN_ADAPTERS: dict[str, DomainAdapter] = {
     "mechanical": DomainAdapter(
         profile="mechanical",
-        supported_node_types=["DocumentSet", "Document", "Sheet", "View", "SourceRegion", "Product", "Component", "Feature", "Geometry", "Material", "Parameter", "Constraint", "BuildOperation", "Artifact", "TopologyElement"],
-        supported_edge_types=["contains", "part_of", "represented_by", "same_object_across_views", "defines", "depends_on", "constrains", "applies_to", "generated_by", "maps_to_topology", "realizes"],
-        critical_impacts=["base_topology", "envelope", "assembly_interface", "fit", "connection_opening", "manufacturing_safety", "mass"],
+        supported_node_types=[
+            "DocumentSet",
+            "Document",
+            "Sheet",
+            "View",
+            "SourceRegion",
+            "Product",
+            "Component",
+            "Feature",
+            "Geometry",
+            "Material",
+            "Parameter",
+            "Constraint",
+            "BuildOperation",
+            "Artifact",
+            "TopologyElement",
+        ],
+        supported_edge_types=[
+            "contains",
+            "part_of",
+            "represented_by",
+            "same_object_across_views",
+            "defines",
+            "depends_on",
+            "constrains",
+            "applies_to",
+            "generated_by",
+            "maps_to_topology",
+            "realizes",
+        ],
+        critical_impacts=[
+            "base_topology",
+            "envelope",
+            "assembly_interface",
+            "fit",
+            "connection_opening",
+            "manufacturing_safety",
+            "mass",
+        ],
         hybrid_trace_cases=["decorative_profile", "secondary_fillet", "visual_local_contour"],
         mandatory_assertions=["operation.kind", "material.designation"],
         build_gates=["critical_constraints_satisfied", "build_plan_compiles"],
@@ -1198,19 +1348,91 @@ DOMAIN_ADAPTERS: dict[str, DomainAdapter] = {
     ),
     "assembly": DomainAdapter(
         profile="assembly",
-        supported_node_types=["DocumentSet", "Document", "Sheet", "View", "SourceRegion", "Product", "Component", "Feature", "Geometry", "Material", "Parameter", "Constraint", "BuildOperation", "Artifact", "TopologyElement"],
-        supported_edge_types=["contains", "part_of", "instance_of", "represented_by", "applies_to", "mates_with", "depends_on", "generated_by", "maps_to_topology"],
-        critical_impacts=["component_count", "assembly_interface", "mate", "fit", "interchangeability", "envelope", "operational_safety", "mass"],
+        supported_node_types=[
+            "DocumentSet",
+            "Document",
+            "Sheet",
+            "View",
+            "SourceRegion",
+            "Product",
+            "Component",
+            "Feature",
+            "Geometry",
+            "Material",
+            "Parameter",
+            "Constraint",
+            "BuildOperation",
+            "Artifact",
+            "TopologyElement",
+        ],
+        supported_edge_types=[
+            "contains",
+            "part_of",
+            "instance_of",
+            "represented_by",
+            "applies_to",
+            "mates_with",
+            "depends_on",
+            "generated_by",
+            "maps_to_topology",
+        ],
+        critical_impacts=[
+            "component_count",
+            "assembly_interface",
+            "mate",
+            "fit",
+            "interchangeability",
+            "envelope",
+            "operational_safety",
+            "mass",
+        ],
         hybrid_trace_cases=["non_functional_instance_outline"],
         mandatory_assertions=["component.quantity", "mate.type"],
         build_gates=["components_resolved", "mates_solvable"],
-        release_gates=["critical_mates_approved", "degrees_of_freedom_validated", "required_2d_complete"],
+        release_gates=[
+            "critical_mates_approved",
+            "degrees_of_freedom_validated",
+            "required_2d_complete",
+        ],
     ),
     "construction": DomainAdapter(
         profile="construction",
-        supported_node_types=["DocumentSet", "Document", "Sheet", "View", "Product", "Component", "Feature", "Geometry", "Material", "System", "Port", "BuildOperation", "Artifact", "TopologyElement"],
-        supported_edge_types=["contains", "part_of", "located_in", "connects_to", "opens_in", "depends_on", "generated_by", "maps_to_topology"],
-        critical_impacts=["base_topology", "envelope", "connection_opening", "load_path", "structural_capacity", "regulatory_check", "operational_safety", "material_quantity"],
+        supported_node_types=[
+            "DocumentSet",
+            "Document",
+            "Sheet",
+            "View",
+            "Product",
+            "Component",
+            "Feature",
+            "Geometry",
+            "Material",
+            "System",
+            "Port",
+            "BuildOperation",
+            "Artifact",
+            "TopologyElement",
+        ],
+        supported_edge_types=[
+            "contains",
+            "part_of",
+            "located_in",
+            "connects_to",
+            "opens_in",
+            "depends_on",
+            "generated_by",
+            "maps_to_topology",
+        ],
+        critical_impacts=[
+            "base_topology",
+            "envelope",
+            "connection_opening",
+            "load_path",
+            "structural_capacity",
+            "regulatory_check",
+            "operational_safety",
+            "material_quantity",
+        ],
         hybrid_trace_cases=["finish_boundary", "non_structural_symbolic_outline"],
         mandatory_assertions=["spatial.level", "element.material"],
         build_gates=["spatial_hierarchy_valid", "openings_contained"],
@@ -1218,9 +1440,40 @@ DOMAIN_ADAPTERS: dict[str, DomainAdapter] = {
     ),
     "mep": DomainAdapter(
         profile="mep",
-        supported_node_types=["DocumentSet", "Document", "Sheet", "View", "SourceRegion", "Component", "Feature", "Geometry", "System", "Port", "Parameter", "Constraint", "BuildOperation", "Artifact", "TopologyElement"],
-        supported_edge_types=["contains", "part_of", "represented_by", "connects_to", "opens_in", "depends_on", "generated_by", "maps_to_topology"],
-        critical_impacts=["connectivity", "connection_opening", "envelope", "regulatory_check", "operational_safety"],
+        supported_node_types=[
+            "DocumentSet",
+            "Document",
+            "Sheet",
+            "View",
+            "SourceRegion",
+            "Component",
+            "Feature",
+            "Geometry",
+            "System",
+            "Port",
+            "Parameter",
+            "Constraint",
+            "BuildOperation",
+            "Artifact",
+            "TopologyElement",
+        ],
+        supported_edge_types=[
+            "contains",
+            "part_of",
+            "represented_by",
+            "connects_to",
+            "opens_in",
+            "depends_on",
+            "generated_by",
+            "maps_to_topology",
+        ],
+        critical_impacts=[
+            "connectivity",
+            "connection_opening",
+            "envelope",
+            "regulatory_check",
+            "operational_safety",
+        ],
         hybrid_trace_cases=["symbol_outline", "non_connective_route_shape"],
         mandatory_assertions=["system.kind", "port.kind"],
         build_gates=["ports_typed", "connectivity_closed"],
@@ -1237,11 +1490,21 @@ def domain_adapter_for(profile: Profile) -> DomainAdapter:
         adapters = list(DOMAIN_ADAPTERS.values())
         return DomainAdapter(
             profile="mixed",
-            supported_node_types=sorted({item for adapter in adapters for item in adapter.supported_node_types}),
-            supported_edge_types=sorted({item for adapter in adapters for item in adapter.supported_edge_types}),
-            critical_impacts=sorted({item for adapter in adapters for item in adapter.critical_impacts}),
-            hybrid_trace_cases=sorted({item for adapter in adapters for item in adapter.hybrid_trace_cases}),
-            mandatory_assertions=sorted({item for adapter in adapters for item in adapter.mandatory_assertions}),
+            supported_node_types=sorted(
+                {item for adapter in adapters for item in adapter.supported_node_types}
+            ),
+            supported_edge_types=sorted(
+                {item for adapter in adapters for item in adapter.supported_edge_types}
+            ),
+            critical_impacts=sorted(
+                {item for adapter in adapters for item in adapter.critical_impacts}
+            ),
+            hybrid_trace_cases=sorted(
+                {item for adapter in adapters for item in adapter.hybrid_trace_cases}
+            ),
+            mandatory_assertions=sorted(
+                {item for adapter in adapters for item in adapter.mandatory_assertions}
+            ),
             build_gates=sorted({item for adapter in adapters for item in adapter.build_gates}),
             release_gates=sorted({item for adapter in adapters for item in adapter.release_gates}),
         )

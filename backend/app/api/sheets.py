@@ -241,11 +241,7 @@ async def create_sheet(
     payload: CreateSheetRequest, db: AsyncSession = Depends(get_db)
 ) -> SheetResponse:
     """Skill: sheets.create — Create a new editable sheet."""
-    columns = (
-        [c.model_dump() for c in payload.columns]
-        if payload.columns
-        else _default_columns()
-    )
+    columns = [c.model_dump() for c in payload.columns] if payload.columns else _default_columns()
     rows = payload.rows if payload.rows is not None else [{} for _ in range(3)]
     sheet = WorkspaceSheet(
         title=payload.title or "Лист",
@@ -264,10 +260,14 @@ async def create_sheet(
 async def list_sheets(db: AsyncSession = Depends(get_db)) -> dict:
     """Skill: sheets.list — List ad-hoc sheets."""
     rows = (
-        await db.execute(
-            select(WorkspaceSheet).order_by(WorkspaceSheet.updated_at.desc()).limit(200)
+        (
+            await db.execute(
+                select(WorkspaceSheet).order_by(WorkspaceSheet.updated_at.desc()).limit(200)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return {
         "sheets": [
             {
@@ -284,9 +284,7 @@ async def list_sheets(db: AsyncSession = Depends(get_db)) -> dict:
 
 
 @router.get("/sheets/{sheet_id}")
-async def get_sheet(
-    sheet_id: uuid.UUID, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def get_sheet(sheet_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> dict:
     """Skill: sheets.get — Read a sheet (raw + computed rows)."""
     sheet = await _load(db, sheet_id)
     computed = evaluate_sheet(list(sheet.columns or []), list(sheet.rows or []))
@@ -486,9 +484,7 @@ async def unmerge_cells(
 
 
 @router.delete("/sheets/{sheet_id}", response_model=SheetResponse)
-async def delete_sheet(
-    sheet_id: uuid.UUID, db: AsyncSession = Depends(get_db)
-) -> SheetResponse:
+async def delete_sheet(sheet_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> SheetResponse:
     """Skill: sheets.delete — Delete a sheet and its workspace block."""
     sheet = await _load(db, sheet_id)
     resp = _resp(sheet, "deleted")
@@ -499,9 +495,7 @@ async def delete_sheet(
 
 
 @router.post("/sheets/from-spec", response_model=SheetResponse)
-async def from_spec(
-    payload: FromSpecRequest, db: AsyncSession = Depends(get_db)
-) -> SheetResponse:
+async def from_spec(payload: FromSpecRequest, db: AsyncSession = Depends(get_db)) -> SheetResponse:
     """Skill: sheets.from_spec — Copy a read-only spec-table into an editable sheet."""
     block = get_workspace_block(payload.canvas_id)
     if not block or block.get("type") != "table":
@@ -518,10 +512,7 @@ async def from_spec(
         if c.get("type") not in ("link", "download", "delete")
     ]
     keys = {c["key"] for c in columns}
-    rows = [
-        {k: v for k, v in (r or {}).items() if k in keys}
-        for r in (block.get("rows") or [])
-    ]
+    rows = [{k: v for k, v in (r or {}).items() if k in keys} for r in (block.get("rows") or [])]
     sheet = WorkspaceSheet(
         title=payload.title or f"{block.get('title') or 'Лист'} (правка)",
         owner_sub=payload.owner_sub,

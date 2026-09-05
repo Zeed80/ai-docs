@@ -16,7 +16,8 @@ work_planning.py into mcp_client.py.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import structlog
 
@@ -51,7 +52,9 @@ async def _ensure_loaded() -> None:
         _tool_names = sorted(
             t["function"]["name"]
             for t in tools
-            if isinstance(t, dict) and isinstance(t.get("function"), dict) and t["function"].get("name")
+            if isinstance(t, dict)
+            and isinstance(t.get("function"), dict)
+            and t["function"].get("name")
         )
         logger.info("mcp_capability_loaded", count=len(_tool_names), servers=len(servers))
 

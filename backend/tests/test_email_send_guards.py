@@ -8,7 +8,7 @@ the single error-level detector could not stop anything.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -19,11 +19,19 @@ from app.db.models import DraftAction, MailboxConfig, Party, PartyRole
 
 @pytest_asyncio.fixture
 async def mailbox(db_session):
-    db_session.add(MailboxConfig(
-        name="procurement", display_name="Закупки", imap_host="m.example.com",
-        imap_port=993, imap_user="procurement", imap_password_encrypted="x",
-        imap_ssl=True, is_active=True, smtp_from_address="zakupki@ourfirm.example",
-    ))
+    db_session.add(
+        MailboxConfig(
+            name="procurement",
+            display_name="Закупки",
+            imap_host="m.example.com",
+            imap_port=993,
+            imap_user="procurement",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            is_active=True,
+            smtp_from_address="zakupki@ourfirm.example",
+        )
+    )
     await db_session.commit()
 
 
@@ -63,15 +71,18 @@ def _send_body(**over):
 
 
 async def test_sensitive_content_blocks_a_human_send(client: AsyncClient, mailbox, _no_real_send):
-    resp = await client.post("/api/email/send", json=_send_body(
-        body_text="Это конфиденциально, никому не пересылайте",
-        body_html="<p>Это конфиденциально</p>",
-    ))
+    resp = await client.post(
+        "/api/email/send",
+        json=_send_body(
+            body_text="Это конфиденциально, никому не пересылайте",
+            body_html="<p>Это конфиденциально</p>",
+        ),
+    )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "blocked"
     assert [f["code"] for f in body["blocked_by"]] == ["sensitive_content"]
-    assert _no_real_send == []          # nothing was dispatched
+    assert _no_real_send == []  # nothing was dispatched
 
 
 async def test_the_person_can_override_and_the_override_is_audited(
@@ -81,28 +92,39 @@ async def test_the_person_can_override_and_the_override_is_audited(
 
     from app.db.models import AuditLog
 
-    resp = await client.post("/api/email/send", json=_send_body(
-        body_text="Это конфиденциально", acknowledged_risks=["sensitive_content"],
-    ))
+    resp = await client.post(
+        "/api/email/send",
+        json=_send_body(
+            body_text="Это конфиденциально",
+            acknowledged_risks=["sensitive_content"],
+        ),
+    )
     assert resp.json()["status"] == "queued"
     assert len(_no_real_send) == 1
 
     actions = (
-        await db_session.execute(select(AuditLog.action).where(
-            AuditLog.action == "email.risk_override"))
-    ).scalars().all()
+        (
+            await db_session.execute(
+                select(AuditLog.action).where(AuditLog.action == "email.risk_override")
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert actions, "решение отправить вопреки риску должно попадать в аудит"
 
 
 async def test_lookalike_domain_is_caught(client: AsyncClient, db_session, mailbox, _no_real_send):
     """rornex.example vs romex.example — invisible at a glance, and exactly how
     invoice-redirection fraud lands."""
-    db_session.add(Party(name="ООО Ромекс", role=PartyRole.supplier,
-                         contact_email="sales@romex.example"))
+    db_session.add(
+        Party(name="ООО Ромекс", role=PartyRole.supplier, contact_email="sales@romex.example")
+    )
     await db_session.commit()
 
-    resp = await client.post("/api/email/send", json=_send_body(
-        to_addresses=["sales@rornex.example"]))
+    resp = await client.post(
+        "/api/email/send", json=_send_body(to_addresses=["sales@rornex.example"])
+    )
     body = resp.json()
     assert body["status"] == "blocked"
     assert body["blocked_by"][0]["code"] == "lookalike_domain"
@@ -112,10 +134,12 @@ async def test_lookalike_domain_is_caught(client: AsyncClient, db_session, mailb
 async def test_promised_attachment_is_a_warning_not_a_wall(
     client: AsyncClient, mailbox, _no_real_send
 ):
-    resp = await client.post("/api/email/send", json=_send_body(
-        body_text="Во вложении счёт на оплату", attachment_ids=[]))
+    resp = await client.post(
+        "/api/email/send",
+        json=_send_body(body_text="Во вложении счёт на оплату", attachment_ids=[]),
+    )
     body = resp.json()
-    assert body["status"] == "queued"       # advisory, not blocking
+    assert body["status"] == "queued"  # advisory, not blocking
     codes = {w["code"] for w in body["warnings"]}
     assert "promised_attachment_missing" in codes
 
@@ -133,7 +157,7 @@ async def test_undo_window_is_clamped(client: AsyncClient, mailbox, _no_real_sen
 
 
 async def test_scheduled_send_accepts_a_future_time(client: AsyncClient, mailbox, _no_real_send):
-    when = datetime.now(timezone.utc) + timedelta(hours=2)
+    when = datetime.now(UTC) + timedelta(hours=2)
     resp = await client.post("/api/email/send", json=_send_body(send_at=when.isoformat()))
     assert resp.json()["status"] == "queued"
     assert 7000 < _no_real_send[0]["countdown"] <= 7200
@@ -173,9 +197,15 @@ def test_the_worker_honours_the_cancel_flag(test_engine):
     try:
         with Session(engine) as db:
             draft = DraftAction(
-                action_type="email.send", entity_type="email",
-                draft_data={"to_addresses": ["x@example.com"], "subject": "s",
-                            "body_text": "t", "status": "queued", "cancelled": True},
+                action_type="email.send",
+                entity_type="email",
+                draft_data={
+                    "to_addresses": ["x@example.com"],
+                    "subject": "s",
+                    "body_text": "t",
+                    "status": "queued",
+                    "cancelled": True,
+                },
             )
             db.add(draft)
             db.commit()
@@ -195,9 +225,15 @@ async def test_cancelling_an_already_sent_message_is_refused(
     client: AsyncClient, db_session, mailbox
 ):
     draft = DraftAction(
-        action_type="email.send", entity_type="email", executed=True,
-        draft_data={"to_addresses": ["x@example.com"], "subject": "s",
-                    "status": "sent", "mailbox": "procurement"},
+        action_type="email.send",
+        entity_type="email",
+        executed=True,
+        draft_data={
+            "to_addresses": ["x@example.com"],
+            "subject": "s",
+            "status": "sent",
+            "mailbox": "procurement",
+        },
     )
     db_session.add(draft)
     await db_session.commit()
@@ -216,20 +252,28 @@ async def test_thread_list_paginates_and_reaches_older_mail(
     endpoint returned a capped list and the client had no way to ask for more."""
     from app.db.models import EmailMessage, EmailThread
 
-    base = datetime.now(timezone.utc)
+    base = datetime.now(UTC)
     for i in range(7):
         thread = EmailThread(
-            subject=f"Письмо {i}", mailbox="procurement", message_count=1,
-            last_message_at=base - timedelta(hours=i), folder="inbox",
+            subject=f"Письмо {i}",
+            mailbox="procurement",
+            message_count=1,
+            last_message_at=base - timedelta(hours=i),
+            folder="inbox",
         )
         db_session.add(thread)
         await db_session.flush()
-        db_session.add(EmailMessage(
-            thread_id=thread.id, mailbox="procurement", subject=f"Письмо {i}",
-            from_address="x@y.example", to_addresses=["procurement@example.com"],
-            received_at=base - timedelta(hours=i),
-            message_id_header=f"<page-{i}-{uuid.uuid4()}@y.example>",
-        ))
+        db_session.add(
+            EmailMessage(
+                thread_id=thread.id,
+                mailbox="procurement",
+                subject=f"Письмо {i}",
+                from_address="x@y.example",
+                to_addresses=["procurement@example.com"],
+                received_at=base - timedelta(hours=i),
+                message_id_header=f"<page-{i}-{uuid.uuid4()}@y.example>",
+            )
+        )
     await db_session.commit()
 
     first = await client.get("/api/email/threads?limit=3")
@@ -263,22 +307,33 @@ async def test_search_pagination_was_declared_and_now_works(
     db_session.add(thread)
     await db_session.flush()
     for i in range(5):
-        db_session.add(EmailMessage(
-            thread_id=thread.id, mailbox="procurement", subject=f"Уникальное слово {i}",
-            from_address="x@y.example", to_addresses=["procurement@example.com"],
-            body_text="ключевоеслово тест", received_at=datetime.now(timezone.utc),
-            message_id_header=f"<s-{i}-{uuid.uuid4()}@y.example>",
-        ))
+        db_session.add(
+            EmailMessage(
+                thread_id=thread.id,
+                mailbox="procurement",
+                subject=f"Уникальное слово {i}",
+                from_address="x@y.example",
+                to_addresses=["procurement@example.com"],
+                body_text="ключевоеслово тест",
+                received_at=datetime.now(UTC),
+                message_id_header=f"<s-{i}-{uuid.uuid4()}@y.example>",
+            )
+        )
     await db_session.commit()
 
-    first = (await client.post("/api/email/search",
-                               json={"query": "ключевоеслово", "limit": 2})).json()
+    first = (
+        await client.post("/api/email/search", json={"query": "ключевоеслово", "limit": 2})
+    ).json()
     assert len(first["results"]) == 2
     assert first["total"] >= 5
     assert first["next_cursor"] == "2"
 
-    second = (await client.post("/api/email/search", json={
-        "query": "ключевоеслово", "limit": 2, "cursor": first["next_cursor"]})).json()
+    second = (
+        await client.post(
+            "/api/email/search",
+            json={"query": "ключевоеслово", "limit": 2, "cursor": first["next_cursor"]},
+        )
+    ).json()
     ids = {m["id"] for m in first["results"]} & {m["id"] for m in second["results"]}
     assert not ids, "страницы не должны пересекаться"
 
@@ -297,7 +352,8 @@ def test_a_failure_after_delivery_never_causes_a_second_send(test_engine, monkey
     from sqlalchemy.orm import Session
 
     import app.tasks.email_sender as sender
-    from app.db.models import DraftAction as DA, MailboxConfig as MC
+    from app.db.models import DraftAction as DA
+    from app.db.models import MailboxConfig as MC
 
     sync_url = test_engine.url.render_as_string(hide_password=False).replace(
         "postgresql+asyncpg://", "postgresql://"
@@ -338,18 +394,35 @@ def test_a_failure_after_delivery_never_causes_a_second_send(test_engine, monkey
     draft_id = None
     try:
         with Session(engine) as db:
-            db.add(MC(
-                name="sendbox", display_name="Send", imap_host="m.example.com",
-                imap_port=993, imap_user="sendbox", imap_password_encrypted="x",
-                imap_ssl=True, is_active=True, smtp_host="smtp.example.com",
-                smtp_port=587, smtp_user="sendbox", smtp_password_encrypted="x",
-                smtp_use_tls=True, smtp_from_address="sendbox@example.com",
-            ))
+            db.add(
+                MC(
+                    name="sendbox",
+                    display_name="Send",
+                    imap_host="m.example.com",
+                    imap_port=993,
+                    imap_user="sendbox",
+                    imap_password_encrypted="x",
+                    imap_ssl=True,
+                    is_active=True,
+                    smtp_host="smtp.example.com",
+                    smtp_port=587,
+                    smtp_user="sendbox",
+                    smtp_password_encrypted="x",
+                    smtp_use_tls=True,
+                    smtp_from_address="sendbox@example.com",
+                )
+            )
             draft = DA(
-                action_type="email.send", entity_type="email",
-                draft_data={"to_addresses": ["x@example.com"], "subject": "s",
-                            "body_text": "t", "mailbox": "sendbox",
-                            "status": "approved", "attachment_ids": []},
+                action_type="email.send",
+                entity_type="email",
+                draft_data={
+                    "to_addresses": ["x@example.com"],
+                    "subject": "s",
+                    "body_text": "t",
+                    "mailbox": "sendbox",
+                    "status": "approved",
+                    "attachment_ids": [],
+                },
             )
             db.add(draft)
             db.commit()
@@ -375,7 +448,8 @@ def test_a_failure_after_delivery_never_causes_a_second_send(test_engine, monkey
         # The send mirrors itself into a thread via record_outbound_message;
         # leaving those rows behind leaks into every later test that counts
         # messages (it broke test_spec_tables once).
-        from app.db.models import EmailMessage as EM, EmailThread as ET
+        from app.db.models import EmailMessage as EM
+        from app.db.models import EmailThread as ET
 
         with Session(engine) as db:
             db.execute(delete(EM).where(EM.mailbox == "sendbox"))

@@ -55,7 +55,7 @@ def is_agent_instruction_email(parsed: Any) -> bool:
 def _objective_from_email(parsed: Any) -> str:
     subject = str(parsed.subject or "").strip()
     if subject.casefold().startswith(INSTRUCTION_MARKER):
-        subject = subject[len(INSTRUCTION_MARKER):].strip()
+        subject = subject[len(INSTRUCTION_MARKER) :].strip()
     if subject:
         return subject
     body = str(parsed.body_text or "").strip()
@@ -87,9 +87,13 @@ async def create_work_order_from_email(
     # попадает и пересланная переписка, и цитаты третьих лиц.
     letter = str(parsed.body_text or parsed.subject or "").strip()
     prompt = (
-        f"{UNTRUSTED_NOTE}\n\nПоручение из письма:\n"
-        + wrap_untrusted(letter, "email-instruction")
-    ) if letter else ""
+        (
+            f"{UNTRUSTED_NOTE}\n\nПоручение из письма:\n"
+            + wrap_untrusted(letter, "email-instruction")
+        )
+        if letter
+        else ""
+    )
     order = await create_work_order(
         db,
         owner_key=f"email:{parsed.from_address}",
@@ -132,9 +136,7 @@ async def create_work_order_from_email(
                     # Reply from the ingress mailbox itself; without this the
                     # send falls back to the global .env account.
                     "mailbox": mailbox,
-                    "in_reply_to_message_id": (
-                        str(email_message_pk) if email_message_pk else None
-                    ),
+                    "in_reply_to_message_id": (str(email_message_pk) if email_message_pk else None),
                 },
                 "depends_on": ["answer"],
             },

@@ -9,7 +9,7 @@
 критерий НЕ приводит к повторному ингесту всей истории.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import create_engine, delete
@@ -54,22 +54,35 @@ def test_watermark_starts_from_what_we_already_have(sync_db):
     from app.db.models import EmailMessage, EmailThread, MailboxConfig
     from app.tasks.imap_client import _known_max_uid
 
-    sync_db.add(MailboxConfig(
-        name="wmbox", imap_host="m.example.com", imap_port=993, imap_user="wmbox",
-        imap_password_encrypted="x", imap_ssl=True, is_active=True,
-        mailbox_type="shared",
-    ))
+    sync_db.add(
+        MailboxConfig(
+            name="wmbox",
+            imap_host="m.example.com",
+            imap_port=993,
+            imap_user="wmbox",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            is_active=True,
+            mailbox_type="shared",
+        )
+    )
     thread = EmailThread(subject="Т", mailbox="wmbox", message_count=1)
     sync_db.add(thread)
     sync_db.flush()
     for uid, folder in ((17, "INBOX"), (42, "INBOX"), (5, "INBOX/ToMyself")):
-        sync_db.add(EmailMessage(
-            thread_id=thread.id, mailbox="wmbox", subject=f"uid {uid}",
-            from_address="a@b.example", to_addresses=["wmbox@example.com"],
-            received_at=datetime.now(timezone.utc),
-            message_id_header=f"<{folder}-{uid}@b.example>",
-            imap_uid=uid, imap_folder=folder,
-        ))
+        sync_db.add(
+            EmailMessage(
+                thread_id=thread.id,
+                mailbox="wmbox",
+                subject=f"uid {uid}",
+                from_address="a@b.example",
+                to_addresses=["wmbox@example.com"],
+                received_at=datetime.now(UTC),
+                message_id_header=f"<{folder}-{uid}@b.example>",
+                imap_uid=uid,
+                imap_folder=folder,
+            )
+        )
     sync_db.commit()
 
     assert _known_max_uid("wmbox", "INBOX") == 42
@@ -85,10 +98,16 @@ def test_folder_state_and_uid_validity_reset(sync_db):
     from app.db.models import MailboxFolder
     from app.tasks.imap_client import _folder_state, _save_folder_uid_validity
 
-    sync_db.add(MailboxFolder(
-        mailbox="wmbox2", remote_name="INBOX", local_folder="inbox",
-        sync_enabled=True, uid_validity=1000, last_seen_uid=77,
-    ))
+    sync_db.add(
+        MailboxFolder(
+            mailbox="wmbox2",
+            remote_name="INBOX",
+            local_folder="inbox",
+            sync_enabled=True,
+            uid_validity=1000,
+            last_seen_uid=77,
+        )
+    )
     sync_db.commit()
 
     assert _folder_state("wmbox2", "INBOX") == (77, 1000)
@@ -118,7 +137,7 @@ def test_the_seen_flag_is_no_longer_the_selection_criterion():
         "поиск по UNSEEN теряет письма, прочитанные кем-то другим"
     )
     # Флаг всё ещё ставится общему ящику — он его состояние обработки.
-    assert 'if not personal:' in src and '"+FLAGS"' in src
+    assert "if not personal:" in src and '"+FLAGS"' in src
 
 
 def test_idle_watcher_survives_several_folders_mapped_to_the_inbox(sync_db):
@@ -132,16 +151,27 @@ def test_idle_watcher_survives_several_folders_mapped_to_the_inbox(sync_db):
     from app.db.models import MailboxConfig, MailboxFolder
     from app.tasks import email_idle
 
-    sync_db.add(MailboxConfig(
-        name="wmbox", imap_host="m.example.com", imap_port=993, imap_user="wmbox",
-        imap_password_encrypted="x", imap_ssl=True, is_active=True,
-        imap_folder="INBOX",
-    ))
+    sync_db.add(
+        MailboxConfig(
+            name="wmbox",
+            imap_host="m.example.com",
+            imap_port=993,
+            imap_user="wmbox",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            is_active=True,
+            imap_folder="INBOX",
+        )
+    )
     for remote in ("INBOX", "INBOX/ToMyself", "INBOX/Newsletters"):
-        sync_db.add(MailboxFolder(
-            mailbox="wmbox", remote_name=remote, local_folder="inbox",
-            sync_enabled=True,
-        ))
+        sync_db.add(
+            MailboxFolder(
+                mailbox="wmbox",
+                remote_name=remote,
+                local_folder="inbox",
+                sync_enabled=True,
+            )
+        )
     sync_db.commit()
 
     src = inspect.getsource(email_idle.idle_watch)
@@ -151,12 +181,16 @@ def test_idle_watcher_survives_several_folders_mapped_to_the_inbox(sync_db):
 
     from sqlalchemy import select
 
-    candidates = sync_db.execute(
-        select(MailboxFolder.remote_name).where(
-            MailboxFolder.mailbox == "wmbox",
-            MailboxFolder.local_folder == "inbox",
+    candidates = (
+        sync_db.execute(
+            select(MailboxFolder.remote_name).where(
+                MailboxFolder.mailbox == "wmbox",
+                MailboxFolder.local_folder == "inbox",
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(candidates) == 3
     # Основная папка ящика выигрывает у автосортированных подпапок.
     assert "INBOX" in candidates

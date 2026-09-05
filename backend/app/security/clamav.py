@@ -7,10 +7,10 @@ Falls back gracefully when ClamAV is not available.
 
 from __future__ import annotations
 
+import logging
 import os
 import socket
 import struct
-import logging
 
 logger = logging.getLogger(__name__)
 

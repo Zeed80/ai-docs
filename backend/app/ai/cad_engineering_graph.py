@@ -211,9 +211,7 @@ def _view_for_entity(views: list[ViewNode], entity_id: str) -> str | None:
 def _dimension_relations(ir: CadIR) -> list[DimensionRelation]:
     geometry = [entity for entity in ir.entities if _bbox(entity) is not None]
     relations = []
-    for dimension in (
-        entity for entity in ir.entities if isinstance(entity, DimensionEntity)
-    ):
+    for dimension in (entity for entity in ir.entities if isinstance(entity, DimensionEntity)):
         center = (
             (dimension.p1.x + dimension.p2.x) / 2,
             (dimension.p1.y + dimension.p2.y) / 2,
@@ -267,15 +265,10 @@ def _mechanical_features(ir: CadIR, views: list[ViewNode]) -> list[FeatureHypoth
         if len(members) < 2:
             continue
         members_verified = all(
-            circle.assurance in ("constraint_validated", "human_approved")
-            for circle in members
+            circle.assurance in ("constraint_validated", "human_approved") for circle in members
         )
         view_ids = sorted(
-            {
-                view_id
-                for circle in members
-                if (view_id := _view_for_entity(views, circle.id))
-            }
+            {view_id for circle in members if (view_id := _view_for_entity(views, circle.id))}
         )
         features.append(
             FeatureHypothesis(
@@ -289,11 +282,7 @@ def _mechanical_features(ir: CadIR, views: list[ViewNode]) -> list[FeatureHypoth
                 evidence=[
                     "equal-radii",
                     "repeated-circle-observations",
-                    *(
-                        ["verified-member-geometry"]
-                        if members_verified
-                        else []
-                    ),
+                    *(["verified-member-geometry"] if members_verified else []),
                 ],
             )
         )
@@ -316,8 +305,8 @@ def build_engineering_graph(
         for relation in dimensions
         if relation.relation == "unresolved"
     )
-    exact_ready = bool(views) and not unresolved and all(
-        feature.status != "inferred" for feature in features
+    exact_ready = (
+        bool(views) and not unresolved and all(feature.status != "inferred" for feature in features)
     )
     return EngineeringGraph(
         profile=profile,

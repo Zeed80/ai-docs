@@ -117,11 +117,13 @@ def _geometry_facts(path: pathlib.Path) -> dict[str, Any]:
                     minimum[axis] = min(minimum[axis], value)
                     maximum[axis] = max(maximum[axis], value)
         except Exception as exc:  # noqa: BLE001
-            failures.append({
-                "guid": str(getattr(product, "GlobalId", "")),
-                "ifc_class": product.is_a(),
-                "error": f"{type(exc).__name__}:{exc}",
-            })
+            failures.append(
+                {
+                    "guid": str(getattr(product, "GlobalId", "")),
+                    "ifc_class": product.is_a(),
+                    "error": f"{type(exc).__name__}:{exc}",
+                }
+            )
     bbox = [maximum[axis] - minimum[axis] for axis in range(3)] if represented else [0.0] * 3
     return {
         "represented_products": represented,
@@ -208,24 +210,36 @@ def evaluate_manifest(manifest: pathlib.Path) -> dict[str, Any]:
             result = evaluate_ifc(pathlib.Path(row["output_path"]))
         except Exception as exc:  # noqa: BLE001
             result = {"ok": False, "issues": [f"parse_failed:{type(exc).__name__}:{exc}"]}
-        records.append({
-            "source_group_id": row["source_group_id"],
-            "drawing_class": row["drawing_class"],
-            **result,
-        })
+        records.append(
+            {
+                "source_group_id": row["source_group_id"],
+                "drawing_class": row["drawing_class"],
+                **result,
+            }
+        )
     return {
         "ok": bool(records) and all(record["ok"] for record in records),
         "ifc_assets": len(records),
         "parsed": sum(record["ok"] for record in records),
         "failed": sum(not record["ok"] for record in records),
-        "schemas": dict(sorted(Counter(record.get("schema", "failed") for record in records).items())),
+        "schemas": dict(
+            sorted(Counter(record.get("schema", "failed") for record in records).items())
+        ),
         "classes": dict(sorted(Counter(record["drawing_class"] for record in records).items())),
         "totals": {
             key: sum(int(record.get(key, 0)) for record in records)
             for key in (
-                "entities", "products", "represented_products", "sites", "buildings",
-                "storeys", "spaces", "containment_relations", "aggregate_relations",
-                "distribution_elements", "port_connections",
+                "entities",
+                "products",
+                "represented_products",
+                "sites",
+                "buildings",
+                "storeys",
+                "spaces",
+                "containment_relations",
+                "aggregate_relations",
+                "distribution_elements",
+                "port_connections",
             )
         },
         "records": records,

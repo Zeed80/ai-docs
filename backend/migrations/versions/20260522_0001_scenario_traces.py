@@ -24,7 +24,12 @@ def upgrade() -> None:
 
     op.create_table(
         "scenario_traces",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            nullable=False,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column("scenario_name", sa.String(), nullable=False),
         sa.Column("status", sa.String(), nullable=False, server_default="ok"),
         sa.Column("trigger", postgresql.JSONB(astext_type=sa.Text()), nullable=True),

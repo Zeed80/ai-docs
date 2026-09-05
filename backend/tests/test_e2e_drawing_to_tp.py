@@ -32,7 +32,6 @@ import subprocess
 import time
 import uuid
 import zlib
-from typing import Any
 
 import httpx
 import pytest
@@ -44,18 +43,20 @@ pytestmark = [pytest.mark.live, pytest.mark.slow]
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 BASE_URL = "http://localhost"
-POLL_INTERVAL = 10          # seconds between status polls
-ANALYSIS_TIMEOUT = 600      # 10 min: VLM (qwen3.6:35b) classification + extraction
-TP_TIMEOUT = 300            # 5 min: TP generation is mostly algorithmic
+POLL_INTERVAL = 10  # seconds between status polls
+ANALYSIS_TIMEOUT = 600  # 10 min: VLM (qwen3.6:35b) classification + extraction
+TP_TIMEOUT = 300  # 5 min: TP generation is mostly algorithmic
 ANALYSIS_TERMINAL = {"analyzed", "needs_review", "failed"}
 
 
 # ── Test drawing file content ──────────────────────────────────────────────────
 
+
 def _shaft_dxf() -> bytes:
     """Realistic shaft DXF generated via ezdxf API: Ø50h6 shaft, Ø12H7 bore, keyway, Ra marks."""
-    import ezdxf
     import io as _io
+
+    import ezdxf
 
     doc = ezdxf.new("R2010")
     doc.header["$INSUNITS"] = 4  # mm
@@ -79,11 +80,19 @@ def _shaft_dxf() -> bytes:
     msp.add_line((-10, 28), (10, 28))
 
     # Dimensions
-    msp.add_text("ø50h6", dxfattribs={"layer": "DIMENSIONS", "height": 4.0}).set_placement((-120, -5))
-    msp.add_text("ø12H7", dxfattribs={"layer": "DIMENSIONS", "height": 3.5}).set_placement((-30, 10))
-    msp.add_text("L=200", dxfattribs={"layer": "DIMENSIONS", "height": 3.5}).set_placement((110, -5))
+    msp.add_text("ø50h6", dxfattribs={"layer": "DIMENSIONS", "height": 4.0}).set_placement(
+        (-120, -5)
+    )
+    msp.add_text("ø12H7", dxfattribs={"layer": "DIMENSIONS", "height": 3.5}).set_placement(
+        (-30, 10)
+    )
+    msp.add_text("L=200", dxfattribs={"layer": "DIMENSIONS", "height": 3.5}).set_placement(
+        (110, -5)
+    )
     msp.add_text("8P9", dxfattribs={"layer": "DIMENSIONS", "height": 2.5}).set_placement((-10, 32))
-    msp.add_mtext("0.02 A\nперпендикулярность", dxfattribs={"layer": "DIMENSIONS", "char_height": 3.0}).set_location((60, 5))
+    msp.add_mtext(
+        "0.02 A\nперпендикулярность", dxfattribs={"layer": "DIMENSIONS", "char_height": 3.0}
+    ).set_location((60, 5))
 
     # Surface roughness
     msp.add_text("Ra1.6", dxfattribs={"layer": "ROUGHNESS", "height": 2.5}).set_placement((90, 30))
@@ -91,10 +100,18 @@ def _shaft_dxf() -> bytes:
     msp.add_text("Ra0.8", dxfattribs={"layer": "ROUGHNESS", "height": 2.5}).set_placement((0, 30))
 
     # Title block (Russian)
-    msp.add_text("Вал-шестерня", dxfattribs={"layer": "TITLEBLOCK", "height": 5.0}).set_placement((-50, -50))
-    msp.add_text("Сталь 45 ГОСТ 1050-88", dxfattribs={"layer": "TITLEBLOCK", "height": 3.5}).set_placement((-50, -58))
-    msp.add_text("Масса 2.5 кг", dxfattribs={"layer": "TITLEBLOCK", "height": 3.5}).set_placement((-50, -64))
-    msp.add_text("5-05-001", dxfattribs={"layer": "TITLEBLOCK", "height": 3.0}).set_placement((-50, -70))
+    msp.add_text("Вал-шестерня", dxfattribs={"layer": "TITLEBLOCK", "height": 5.0}).set_placement(
+        (-50, -50)
+    )
+    msp.add_text(
+        "Сталь 45 ГОСТ 1050-88", dxfattribs={"layer": "TITLEBLOCK", "height": 3.5}
+    ).set_placement((-50, -58))
+    msp.add_text("Масса 2.5 кг", dxfattribs={"layer": "TITLEBLOCK", "height": 3.5}).set_placement(
+        (-50, -64)
+    )
+    msp.add_text("5-05-001", dxfattribs={"layer": "TITLEBLOCK", "height": 3.0}).set_placement(
+        (-50, -70)
+    )
 
     buf = _io.StringIO()
     doc.write(buf)
@@ -110,6 +127,7 @@ def _minimal_png() -> bytes:
     """
     try:
         from PIL import Image, ImageDraw
+
         img = Image.new("RGB", (400, 400), "white")
         draw = ImageDraw.Draw(img)
         # External shaft outline (Ø50h6)
@@ -163,7 +181,9 @@ def _psql_exec(sql: str) -> str:
     try:
         result = subprocess.run(
             _PSQL + ["-c", sql, "-t", "-A"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
     except FileNotFoundError:
         # No ``docker`` CLI (e.g. running the suite inside a container) — this is
@@ -193,8 +213,7 @@ def _delete_api_key(key_hash: str) -> None:
 def _force_drawing_status(drawing_id: str, status: str) -> None:
     """Directly set drawing status in DB (bypasses Celery)."""
     _psql_exec(
-        f"UPDATE drawings SET status = '{status}', analysis_error = NULL "
-        f"WHERE id = '{drawing_id}';"
+        f"UPDATE drawings SET status = '{status}', analysis_error = NULL WHERE id = '{drawing_id}';"
     )
 
 
@@ -236,6 +255,7 @@ def _get_plan_from_db(plan_id: str) -> dict:
 
 
 # ── Polling helpers ────────────────────────────────────────────────────────────
+
 
 def _poll_drawing_status(
     client: httpx.Client,
@@ -291,6 +311,7 @@ def _poll_task_status(
 
 # ── Session fixtures ────────────────────────────────────────────────────────────
 
+
 @pytest.fixture(scope="session")
 def e2e_api_key():
     """Create test API key in production DB; delete after session."""
@@ -322,6 +343,7 @@ def live_client(e2e_api_key: str):
 # ── State carried between E2E tests ───────────────────────────────────────────
 # We use a mutable session dict so test functions can share drawing_id / plan_id.
 
+
 @pytest.fixture(scope="session")
 def e2e_state() -> dict:
     return {}
@@ -330,6 +352,7 @@ def e2e_state() -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 0 — Preflight
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def test_e2e_00_preflight(live_client: httpx.Client):
     """Verify live stack is reachable and auth works."""
@@ -345,6 +368,7 @@ def test_e2e_00_preflight(live_client: httpx.Client):
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 1 — Upload DXF drawing
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def test_e2e_01_upload_dxf(live_client: httpx.Client, e2e_state: dict):
     """Upload shaft DXF drawing; verify drawing_id returned and status=uploaded."""
@@ -375,13 +399,16 @@ def test_e2e_01_upload_dxf(live_client: httpx.Client, e2e_state: dict):
     dn = drawing.get("drawing_number")
     if dn != "E2E-5-05-001":
         print(f"  [warn] drawing_number={dn!r} (expected E2E-5-05-001)")
-    assert drawing["status"] in ("uploaded", "analyzing"), f"Unexpected initial status: {drawing.get('status')}"
+    assert drawing["status"] in ("uploaded", "analyzing"), (
+        f"Unexpected initial status: {drawing.get('status')}"
+    )
     print(f"[step 1] Initial status: {drawing['status']}, drawing_number: {dn}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 2 — Wait for drawing analysis (VLM)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def test_e2e_02_analysis_completes(live_client: httpx.Client, e2e_state: dict):
     """Poll until drawing analysis completes. Accept analyzed/needs_review; fail on timeout."""
@@ -394,7 +421,7 @@ def test_e2e_02_analysis_completes(live_client: httpx.Client, e2e_state: dict):
 
     if final_status == "failed":
         # VLM might fail if model unavailable — force to needs_review and continue
-        print(f"[step 2] Analysis failed — checking error…")
+        print("[step 2] Analysis failed — checking error…")
         db_info = _get_drawing_from_db(drawing_id)
         error = db_info.get("analysis_error", "")
         print(f"[step 2] analysis_error: {error[:200]}")
@@ -403,7 +430,7 @@ def test_e2e_02_analysis_completes(live_client: httpx.Client, e2e_state: dict):
         _force_drawing_status(drawing_id, "needs_review")
         e2e_state["drawing_status"] = "needs_review"
         e2e_state["analysis_forced"] = True
-        print(f"[step 2] Forced status → needs_review (VLM unavailable)")
+        print("[step 2] Forced status → needs_review (VLM unavailable)")
 
     assert e2e_state["drawing_status"] in ("analyzed", "needs_review"), (
         f"Drawing stuck in status: {final_status}"
@@ -415,6 +442,7 @@ def test_e2e_02_analysis_completes(live_client: httpx.Client, e2e_state: dict):
 # STEP 3 — Verify drawing data
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def test_e2e_03_verify_drawing_data(live_client: httpx.Client, e2e_state: dict):
     """Check drawing fields: drawing_type, features, title_block."""
     drawing_id = e2e_state.get("drawing_id")
@@ -422,7 +450,7 @@ def test_e2e_03_verify_drawing_data(live_client: httpx.Client, e2e_state: dict):
     assert resp.status_code == 200
     drawing = resp.json()
 
-    print(f"\n[step 3] Drawing data:")
+    print("\n[step 3] Drawing data:")
     print(f"  status       = {drawing.get('status')}")
     print(f"  drawing_type = {drawing.get('drawing_type')}")
     print(f"  part_class   = {drawing.get('part_class')}")
@@ -443,8 +471,8 @@ def test_e2e_03_verify_drawing_data(live_client: httpx.Client, e2e_state: dict):
     # either via VLM or deterministic DXF rule-based fallback.
     if not e2e_state.get("analysis_forced"):
         assert len(features) > 0, (
-            f"DXF shaft drawing should have ≥1 feature extracted (got 0). "
-            f"Check Celery logs for vlm_router_extraction_failed or rule extraction."
+            "DXF shaft drawing should have ≥1 feature extracted (got 0). "
+            "Check Celery logs for vlm_router_extraction_failed or rule extraction."
         )
         print(f"  ✓ {len(features)} features extracted")
 
@@ -460,6 +488,7 @@ def test_e2e_03_verify_drawing_data(live_client: httpx.Client, e2e_state: dict):
 # STEP 4 — Uncertain features endpoint
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def test_e2e_04_uncertain_features(live_client: httpx.Client, e2e_state: dict):
     """GET /drawings/{id}/uncertain-features returns list (may be empty)."""
     drawing_id = e2e_state.get("drawing_id")
@@ -472,12 +501,15 @@ def test_e2e_04_uncertain_features(live_client: httpx.Client, e2e_state: dict):
     assert isinstance(items, list), f"Expected list, got: {type(items)}"
     print(f"\n[step 4] Uncertain features (< 70% confidence): {len(items)}")
     for item in items[:5]:
-        print(f"  → {item.get('feature_type')}: {item.get('name')} conf={item.get('confidence', 0):.2f}")
+        print(
+            f"  → {item.get('feature_type')}: {item.get('name')} conf={item.get('confidence', 0):.2f}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 5 — Trigger TP generation
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def test_e2e_05_generate_tp(live_client: httpx.Client, e2e_state: dict):
     """POST generate-from-drawing: auto-creates plan + queues Celery 9-step pipeline."""
@@ -492,7 +524,9 @@ def test_e2e_05_generate_tp(live_client: httpx.Client, e2e_state: dict):
             "created_by": "e2e-tester",
         },
     )
-    assert resp.status_code == 200, f"generate-from-drawing failed: {resp.status_code} {resp.text[:300]}"
+    assert resp.status_code == 200, (
+        f"generate-from-drawing failed: {resp.status_code} {resp.text[:300]}"
+    )
     data = resp.json()
     assert "plan_id" in data, f"No plan_id in response: {data}"
     assert "task_id" in data, f"No task_id in response: {data}"
@@ -508,6 +542,7 @@ def test_e2e_05_generate_tp(live_client: httpx.Client, e2e_state: dict):
 # STEP 6 — Wait for TP generation to complete
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def test_e2e_06_tp_completes(live_client: httpx.Client, e2e_state: dict):
     """Poll process plan until TP pipeline finishes (9 steps)."""
     plan_id = e2e_state.get("plan_id")
@@ -518,7 +553,6 @@ def test_e2e_06_tp_completes(live_client: httpx.Client, e2e_state: dict):
     # Primary: poll plan's tp_pipeline_steps via GET /process-plans/{id}
     deadline = time.monotonic() + TP_TIMEOUT
     last_step_info = ""
-    final_metadata: dict = {}
 
     while time.monotonic() < deadline:
         resp = live_client.get(f"/api/technology/process-plans/{plan_id}")
@@ -571,6 +605,7 @@ def test_e2e_06_tp_completes(live_client: httpx.Client, e2e_state: dict):
 # STEP 7 — Verify process plan completeness
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def test_e2e_07_verify_process_plan(live_client: httpx.Client, e2e_state: dict):
     """Verify: operations exist, blank_spec set, time norms > 0, normcontrol ran."""
     plan = e2e_state.get("plan_final_data")
@@ -580,7 +615,7 @@ def test_e2e_07_verify_process_plan(live_client: httpx.Client, e2e_state: dict):
         assert resp.status_code == 200
         plan = resp.json()
 
-    print(f"\n[step 7] Process plan verification:")
+    print("\n[step 7] Process plan verification:")
     print(f"  product_name     = {plan.get('product_name')}")
     print(f"  material         = {plan.get('material')}")
     print(f"  blank_type       = {plan.get('blank_type')}")
@@ -611,6 +646,7 @@ def test_e2e_07_verify_process_plan(live_client: httpx.Client, e2e_state: dict):
 # STEP 8 — Verify surface specs
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def test_e2e_08_surface_specs(live_client: httpx.Client, e2e_state: dict):
     """GET /process-plans/{id}/surface-specs returns machining specs."""
     plan_id = e2e_state.get("plan_id")
@@ -620,12 +656,15 @@ def test_e2e_08_surface_specs(live_client: httpx.Client, e2e_state: dict):
     surfaces = data if isinstance(data, list) else data.get("items", [])
     print(f"\n[step 8] Surface machining specs: {len(surfaces)}")
     for s in surfaces[:5]:
-        print(f"  → {s.get('surface_type', '?')}: Ø{s.get('nominal_mm', '?')} Ra{s.get('roughness_ra', '?')}")
+        print(
+            f"  → {s.get('surface_type', '?')}: Ø{s.get('nominal_mm', '?')} Ra{s.get('roughness_ra', '?')}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 9 — Export TP to Excel
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def test_e2e_09_export_excel(live_client: httpx.Client, e2e_state: dict):
     """GET /process-plans/{id}/export?format=excel returns XLSX file."""
@@ -649,20 +688,25 @@ def test_e2e_09_export_excel(live_client: httpx.Client, e2e_state: dict):
 # STEP 10 — Normcontrol validation
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def test_e2e_10_normcontrol(live_client: httpx.Client, e2e_state: dict):
     """POST /process-plans/{id}/normcontrol — re-run normcontrol check."""
     plan_id = e2e_state.get("plan_id")
     resp = live_client.post(f"/api/technology/process-plans/{plan_id}/normcontrol")
     if resp.status_code == 404:
         pytest.skip("Normcontrol endpoint not available")
-    assert resp.status_code in (200, 201), f"Normcontrol failed: {resp.status_code} {resp.text[:300]}"
+    assert resp.status_code in (200, 201), (
+        f"Normcontrol failed: {resp.status_code} {resp.text[:300]}"
+    )
     data = resp.json()
-    print(f"\n[step 10] Normcontrol result:")
+    print("\n[step 10] Normcontrol result:")
     if isinstance(data, dict):
         checks = data.get("checks") or []
         print(f"  checks: {len(checks)}")
         for ch in checks[:5]:
-            print(f"  → [{ch.get('severity','?')}] {ch.get('code','?')}: {ch.get('message','')[:80]}")
+            print(
+                f"  → [{ch.get('severity', '?')}] {ch.get('code', '?')}: {ch.get('message', '')[:80]}"
+            )
     elif isinstance(data, list):
         print(f"  {len(data)} checks returned")
 
@@ -670,6 +714,7 @@ def test_e2e_10_normcontrol(live_client: httpx.Client, e2e_state: dict):
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 11 — Raster path: PNG drawing → two-stage VLM (classify → extract)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def test_e2e_11_png_raster_pipeline(live_client: httpx.Client, e2e_state: dict):
     """Upload PNG shaft cross-section; verify two-stage VLM classification."""
@@ -699,18 +744,18 @@ def test_e2e_11_png_raster_pipeline(live_client: httpx.Client, e2e_state: dict):
     drawing_type = png_drawing.get("drawing_type")
     features = png_drawing.get("features") or []
 
-    print(f"[step 11] PNG analysis:")
+    print("[step 11] PNG analysis:")
     print(f"  status       = {status}")
     print(f"  drawing_type = {drawing_type}")
     print(f"  features     = {len(features)}")
     for f in features[:3]:
-        print(f"  → {f.get('feature_type')}: {f.get('name')} (conf={f.get('confidence',0):.2f})")
+        print(f"  → {f.get('feature_type')}: {f.get('name')} (conf={f.get('confidence', 0):.2f})")
 
     # For raster drawings with two-stage VLM, drawing_type should be set
     if status in ("analyzed", "needs_review") and not e2e_state.get("analysis_forced"):
         assert len(features) > 0, (
-            f"PNG shaft drawing should have ≥1 feature extracted (got 0). "
-            f"The PNG includes text annotations (Ø50h6, Ø12H7, Ra1.6, 8P9) readable by VLM."
+            "PNG shaft drawing should have ≥1 feature extracted (got 0). "
+            "The PNG includes text annotations (Ø50h6, Ø12H7, Ra1.6, 8P9) readable by VLM."
         )
         print(f"[step 11] Two-stage VLM pipeline ran successfully: {len(features)} features")
 
@@ -718,6 +763,7 @@ def test_e2e_11_png_raster_pipeline(live_client: httpx.Client, e2e_state: dict):
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 12 — Management: filtering, update, download
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def test_e2e_12_drawing_management(live_client: httpx.Client, e2e_state: dict):
     """Test management endpoints: filter list, update status, download."""
@@ -760,6 +806,7 @@ def test_e2e_12_drawing_management(live_client: httpx.Client, e2e_state: dict):
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 13 — Cleanup
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def test_e2e_13_cleanup(live_client: httpx.Client, e2e_state: dict):
     """Delete created drawings and process plan."""

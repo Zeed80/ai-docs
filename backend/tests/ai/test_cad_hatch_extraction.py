@@ -104,7 +104,9 @@ def test_hatch_region_with_hole_reaches_dxf_as_two_boundary_paths():
     assert len(hatch_entities) == 1
     assert len(hatch_entities[0].holes) == 1
 
-    ir = CadIR(source=SourceInfo(image_width=400, image_height=300), scale=1.0, entities=out.entities)
+    ir = CadIR(
+        source=SourceInfo(image_width=400, image_height=300), scale=1.0, entities=out.entities
+    )
     dxf_bytes = render_ir_to_dxf(ir)
     doc = ezdxf.read(io.StringIO(dxf_bytes.decode("utf-8")))
     hatch = next(e for e in doc.modelspace() if e.dxftype() == "HATCH")
@@ -144,7 +146,9 @@ def test_hatch_region_reaches_dxf_output():
     ink = _sheet_with_filled_triangle()
     out = CvRecognizer().recognize(ink)
     assert out is not None
-    ir = CadIR(source=SourceInfo(image_width=400, image_height=300), scale=1.0, entities=out.entities)
+    ir = CadIR(
+        source=SourceInfo(image_width=400, image_height=300), scale=1.0, entities=out.entities
+    )
     dxf_bytes = render_ir_to_dxf(ir)
     doc = ezdxf.read(io.StringIO(dxf_bytes.decode("utf-8")))
     types = [e.dxftype() for e in doc.modelspace()]

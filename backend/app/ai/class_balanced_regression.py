@@ -14,14 +14,26 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 StageName = Literal["reader", "graph", "model_3d_bim", "drawing_2d"]
 StageStatus = Literal[
-    "passed", "failed", "blocked", "review_required", "not_run", "not_applicable",
+    "passed",
+    "failed",
+    "blocked",
+    "review_required",
+    "not_run",
+    "not_applicable",
 ]
 FailureCluster = Literal[
-    "routing", "ocr_symbol", "view_association", "parameter", "feature",
-    "topology", "bim_relation", "connectivity", "projection", "editor",
+    "routing",
+    "ocr_symbol",
+    "view_association",
+    "parameter",
+    "feature",
+    "topology",
+    "bim_relation",
+    "connectivity",
+    "projection",
+    "editor",
 ]
 
 
@@ -36,7 +48,7 @@ class StageObservation(StrictModel):
     evidence_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_pass_evidence(self) -> "StageObservation":
+    def validate_pass_evidence(self) -> StageObservation:
         if self.status == "passed" and not self.evidence_ids:
             raise ValueError("passed stage requires evidence_ids")
         if self.status == "not_applicable" and not self.blocker_codes:
@@ -53,7 +65,7 @@ class SafetyObservation(StrictModel):
     evidence_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_evidence(self) -> "SafetyObservation":
+    def validate_evidence(self) -> SafetyObservation:
         if self.status == "evaluated" and (
             self.invented_geometry is None or self.critical_miss is None
         ):
@@ -82,7 +94,7 @@ class PipelineCase(StrictModel):
     safety: SafetyObservation
 
     @model_validator(mode="after")
-    def validate_stages(self) -> "PipelineCase":
+    def validate_stages(self) -> PipelineCase:
         expected = {"reader", "graph", "model_3d_bim", "drawing_2d"}
         if set(self.stages) != expected:
             raise ValueError(f"pipeline case must define stages {sorted(expected)}")
@@ -98,7 +110,7 @@ class PipelineManifest(StrictModel):
     cases: list[PipelineCase] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def validate_classes_and_groups(self) -> "PipelineManifest":
+    def validate_classes_and_groups(self) -> PipelineManifest:
         if len(self.required_classes) != len(set(self.required_classes)):
             raise ValueError("required_classes must be unique")
         declared = set(self.required_classes)
@@ -109,8 +121,7 @@ class PipelineManifest(StrictModel):
         for item in self.cases:
             group_classes[item.source_group_id].add(item.drawing_class)
         mixed = {
-            group: sorted(classes)
-            for group, classes in group_classes.items() if len(classes) != 1
+            group: sorted(classes) for group, classes in group_classes.items() if len(classes) != 1
         }
         if mixed:
             raise ValueError(f"source groups span drawing classes: {mixed}")
@@ -127,9 +138,7 @@ def _aggregate_group(cases: list[PipelineCase]) -> dict[str, Any]:
     blocker_codes: set[str] = set()
     for stage in ("reader", "graph", "model_3d_bim", "drawing_2d"):
         observations = [item.stages[stage] for item in cases]
-        applicable = [
-            item for item in observations if item.status != "not_applicable"
-        ]
+        applicable = [item for item in observations if item.status != "not_applicable"]
         for item in observations:
             failure_clusters.update(item.failure_clusters)
             blocker_codes.update(item.blocker_codes)
@@ -137,53 +146,51 @@ def _aggregate_group(cases: list[PipelineCase]) -> dict[str, Any]:
             "case_count": len(observations),
             "applicable_case_count": len(applicable),
             "applicable": bool(applicable),
-            "coverage_rate": _mean([
-                float(item.status != "not_run") for item in applicable
-            ]) if applicable else None,
-            "pass_rate": _mean([
-                float(item.status == "passed") for item in applicable
-            ]) if applicable else None,
+            "coverage_rate": _mean([float(item.status != "not_run") for item in applicable])
+            if applicable
+            else None,
+            "pass_rate": _mean([float(item.status == "passed") for item in applicable])
+            if applicable
+            else None,
             "status_counts": {
                 status: sum(item.status == status for item in observations)
                 for status in (
-                    "passed", "failed", "blocked", "review_required", "not_run",
+                    "passed",
+                    "failed",
+                    "blocked",
+                    "review_required",
+                    "not_run",
                     "not_applicable",
                 )
                 if any(item.status == status for item in observations)
             },
-            "evidence_ids": sorted({
-                evidence_id
-                for item in observations
-                for evidence_id in item.evidence_ids
-            }),
+            "evidence_ids": sorted(
+                {evidence_id for item in observations for evidence_id in item.evidence_ids}
+            ),
         }
     safety = [item.safety for item in cases]
     evaluated = [item for item in safety if item.status == "evaluated"]
     return {
         "case_count": len(cases),
         "stages": stages,
-        "safety_coverage_rate": _mean([
-            float(item.status == "evaluated") for item in safety
-        ]),
+        "safety_coverage_rate": _mean([float(item.status == "evaluated") for item in safety]),
         "invented_geometry_rate": (
             _mean([float(bool(item.invented_geometry)) for item in evaluated])
-            if evaluated else None
+            if evaluated
+            else None
         ),
         "critical_miss_rate": (
-            _mean([float(bool(item.critical_miss)) for item in evaluated])
-            if evaluated else None
+            _mean([float(bool(item.critical_miss)) for item in evaluated]) if evaluated else None
         ),
-        "safety_evidence_ids": sorted({
-            evidence_id for item in evaluated for evidence_id in item.evidence_ids
-        }),
+        "safety_evidence_ids": sorted(
+            {evidence_id for item in evaluated for evidence_id in item.evidence_ids}
+        ),
         "failure_clusters": sorted(failure_clusters),
         "blocker_codes": sorted(blocker_codes),
     }
 
 
-def _regression_report(
-    current: dict[str, Any], baseline: dict[str, Any] | None
-) -> dict[str, Any]:
+def _regression_report(current: dict[str, Any], baseline: dict[str, Any] | None) -> dict[str, Any]:
     if baseline is None:
         return {"status": "not_checked", "regressions": []}
     if baseline.get("schema_version") != "cad-class-balanced-report/1.0":
@@ -200,37 +207,39 @@ def _regression_report(
             after_stage = after["stages"][stage]
             if not after_stage.get("applicable", True):
                 if before_stage.get("pass_rate") not in (None, 0, 0.0):
-                    regressions.append({
-                        "code": "stage_became_not_applicable",
-                        "class": class_name,
-                        "stage": stage,
-                    })
+                    regressions.append(
+                        {
+                            "code": "stage_became_not_applicable",
+                            "class": class_name,
+                            "stage": stage,
+                        }
+                    )
                 continue
             for metric in ("coverage_rate", "pass_rate"):
                 before_value = before_stage.get(metric)
                 after_value = after_stage.get(metric)
-                if before_value is not None and (
-                    after_value is None or after_value < before_value
-                ):
-                    regressions.append({
-                        "code": f"stage_{metric}_regression",
-                        "class": class_name,
-                        "stage": stage,
-                        "before": before_stage[metric],
-                        "after": after_stage[metric],
-                    })
+                if before_value is not None and (after_value is None or after_value < before_value):
+                    regressions.append(
+                        {
+                            "code": f"stage_{metric}_regression",
+                            "class": class_name,
+                            "stage": stage,
+                            "before": before_stage[metric],
+                            "after": after_stage[metric],
+                        }
+                    )
         for metric in ("invented_geometry_rate", "critical_miss_rate"):
             before_value = before.get(metric)
             after_value = after.get(metric)
-            if before_value is not None and (
-                after_value is None or after_value > before_value
-            ):
-                regressions.append({
-                    "code": f"{metric}_regression",
-                    "class": class_name,
-                    "before": before_value,
-                    "after": after_value,
-                })
+            if before_value is not None and (after_value is None or after_value > before_value):
+                regressions.append(
+                    {
+                        "code": f"{metric}_regression",
+                        "class": class_name,
+                        "before": before_value,
+                        "after": after_value,
+                    }
+                )
     return {
         "status": "passed" if not regressions else "failed",
         "regressions": regressions,
@@ -245,7 +254,8 @@ def _validate_safety_evidence(
     if safety_report.get("schema_version") != "emg-admission-corruption-report/1.0":
         raise ValueError("unsupported safety evidence report schema")
     scenarios = {
-        item.get("id"): item for item in safety_report.get("scenarios", [])
+        item.get("id"): item
+        for item in safety_report.get("scenarios", [])
         if isinstance(item, dict) and item.get("id")
     }
     for case in manifest.cases:
@@ -255,26 +265,18 @@ def _validate_safety_evidence(
         for evidence_id in case.safety.evidence_ids:
             scenario = scenarios.get(evidence_id)
             if scenario is None:
-                raise ValueError(
-                    f"{case.id}: safety evidence not found: {evidence_id}"
-                )
+                raise ValueError(f"{case.id}: safety evidence not found: {evidence_id}")
             if scenario.get("source_group_id") != case.source_group_id:
-                raise ValueError(
-                    f"{case.id}: safety evidence source group mismatch: {evidence_id}"
-                )
+                raise ValueError(f"{case.id}: safety evidence source group mismatch: {evidence_id}")
             if scenario.get("drawing_class") != case.drawing_class:
-                raise ValueError(
-                    f"{case.id}: safety evidence class mismatch: {evidence_id}"
-                )
+                raise ValueError(f"{case.id}: safety evidence class mismatch: {evidence_id}")
             evidence.append(scenario)
         actual_critical_miss = any(bool(item.get("critical_miss")) for item in evidence)
         actual_invented = any(bool(item.get("generator_allowed")) for item in evidence)
         if case.safety.critical_miss != actual_critical_miss:
             raise ValueError(f"{case.id}: critical_miss disagrees with safety evidence")
         if case.safety.invented_geometry != actual_invented:
-            raise ValueError(
-                f"{case.id}: invented_geometry disagrees with safety evidence"
-            )
+            raise ValueError(f"{case.id}: invented_geometry disagrees with safety evidence")
 
 
 def _stage_evidence_index(
@@ -332,21 +334,17 @@ def _validate_stage_evidence(
             for evidence_id in observation.evidence_ids:
                 item = evidence.get(evidence_id)
                 if item is None:
-                    raise ValueError(
-                        f"{case.id}: stage evidence not found: {evidence_id}"
-                    )
+                    raise ValueError(f"{case.id}: stage evidence not found: {evidence_id}")
                 if item.get("case_id") != case.id or item.get("stage") != stage:
-                    raise ValueError(
-                        f"{case.id}: stage evidence target mismatch: {evidence_id}"
-                    )
+                    raise ValueError(f"{case.id}: stage evidence target mismatch: {evidence_id}")
                 if item.get("passed") is not True:
-                    raise ValueError(
-                        f"{case.id}: stage evidence did not pass: {evidence_id}"
-                    )
+                    raise ValueError(f"{case.id}: stage evidence did not pass: {evidence_id}")
 
 
 def evaluate_class_balanced_manifest(
-    payload: dict[str, Any], *, baseline: dict[str, Any] | None = None,
+    payload: dict[str, Any],
+    *,
+    baseline: dict[str, Any] | None = None,
     safety_report: dict[str, Any] | None = None,
     evidence_reports: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -356,14 +354,9 @@ def evaluate_class_balanced_manifest(
     by_group_cases: dict[str, list[PipelineCase]] = defaultdict(list)
     for item in manifest.cases:
         by_group_cases[item.source_group_id].append(item)
-    groups = {
-        group: _aggregate_group(cases)
-        for group, cases in sorted(by_group_cases.items())
-    }
+    groups = {group: _aggregate_group(cases) for group, cases in sorted(by_group_cases.items())}
     class_groups: dict[str, list[str]] = defaultdict(list)
-    group_class = {
-        group: cases[0].drawing_class for group, cases in by_group_cases.items()
-    }
+    group_class = {group: cases[0].drawing_class for group, cases in by_group_cases.items()}
     for group, class_name in group_class.items():
         class_groups[class_name].append(group)
 
@@ -380,98 +373,110 @@ def evaluate_class_balanced_manifest(
             "stages": {},
         }
         if len(group_ids) < manifest.min_source_groups_per_class:
-            promotion_failures.append({
-                "code": "insufficient_source_groups",
-                "class": class_name,
-                "required": manifest.min_source_groups_per_class,
-                "actual": len(group_ids),
-            })
+            promotion_failures.append(
+                {
+                    "code": "insufficient_source_groups",
+                    "class": class_name,
+                    "required": manifest.min_source_groups_per_class,
+                    "actual": len(group_ids),
+                }
+            )
         for stage in ("reader", "graph", "model_3d_bim", "drawing_2d"):
             applicable_groups = [
-                groups[group] for group in group_ids
-                if groups[group]["stages"][stage]["applicable"]
+                groups[group] for group in group_ids if groups[group]["stages"][stage]["applicable"]
             ]
             applicable = bool(applicable_groups)
-            coverage = _mean([
-                group["stages"][stage]["coverage_rate"]
-                for group in applicable_groups
-            ]) if applicable else None
-            passed = _mean([
-                group["stages"][stage]["pass_rate"]
-                for group in applicable_groups
-            ]) if applicable else None
+            coverage = (
+                _mean([group["stages"][stage]["coverage_rate"] for group in applicable_groups])
+                if applicable
+                else None
+            )
+            passed = (
+                _mean([group["stages"][stage]["pass_rate"] for group in applicable_groups])
+                if applicable
+                else None
+            )
             class_result["stages"][stage] = {
                 "applicable": applicable,
                 "coverage_rate": coverage,
                 "pass_rate": passed,
             }
             if applicable and coverage < 1.0:
-                promotion_failures.append({
-                    "code": "stage_coverage_incomplete",
-                    "class": class_name,
-                    "stage": stage,
-                    "actual": coverage,
-                })
+                promotion_failures.append(
+                    {
+                        "code": "stage_coverage_incomplete",
+                        "class": class_name,
+                        "stage": stage,
+                        "actual": coverage,
+                    }
+                )
             if applicable and passed < manifest.min_stage_pass_rate:
-                promotion_failures.append({
-                    "code": "stage_pass_rate_below_gate",
-                    "class": class_name,
-                    "stage": stage,
-                    "required": manifest.min_stage_pass_rate,
-                    "actual": passed,
-                })
+                promotion_failures.append(
+                    {
+                        "code": "stage_pass_rate_below_gate",
+                        "class": class_name,
+                        "stage": stage,
+                        "required": manifest.min_stage_pass_rate,
+                        "actual": passed,
+                    }
+                )
         safety_coverage = _mean([groups[group]["safety_coverage_rate"] for group in group_ids])
         invented_values = [
-            groups[group]["invented_geometry_rate"] for group in group_ids
+            groups[group]["invented_geometry_rate"]
+            for group in group_ids
             if groups[group]["invented_geometry_rate"] is not None
         ]
         critical_values = [
-            groups[group]["critical_miss_rate"] for group in group_ids
+            groups[group]["critical_miss_rate"]
+            for group in group_ids
             if groups[group]["critical_miss_rate"] is not None
         ]
         class_result["safety_coverage_rate"] = safety_coverage
-        class_result["invented_geometry_rate"] = (
-            _mean(invented_values) if invented_values else None
+        class_result["invented_geometry_rate"] = _mean(invented_values) if invented_values else None
+        class_result["critical_miss_rate"] = _mean(critical_values) if critical_values else None
+        class_result["failure_clusters"] = sorted(
+            {cluster for group in group_ids for cluster in groups[group]["failure_clusters"]}
         )
-        class_result["critical_miss_rate"] = (
-            _mean(critical_values) if critical_values else None
-        )
-        class_result["failure_clusters"] = sorted({
-            cluster for group in group_ids for cluster in groups[group]["failure_clusters"]
-        })
         if safety_coverage < 1.0:
-            promotion_failures.append({
-                "code": "safety_coverage_incomplete",
-                "class": class_name,
-                "actual": safety_coverage,
-            })
+            promotion_failures.append(
+                {
+                    "code": "safety_coverage_incomplete",
+                    "class": class_name,
+                    "actual": safety_coverage,
+                }
+            )
         for metric in ("invented_geometry_rate", "critical_miss_rate"):
             value = class_result[metric]
             if value is not None and value > 0:
-                promotion_failures.append({
-                    "code": metric.removesuffix("_rate") + "_detected",
-                    "class": class_name,
-                    "actual": value,
-                })
+                promotion_failures.append(
+                    {
+                        "code": metric.removesuffix("_rate") + "_detected",
+                        "class": class_name,
+                        "actual": value,
+                    }
+                )
         by_class[class_name] = class_result
 
     macro = {
         "stages": {
             stage: {
                 "applicable_class_count": sum(
-                    item["stages"][stage]["applicable"]
-                    for item in by_class.values()
+                    item["stages"][stage]["applicable"] for item in by_class.values()
                 ),
-                "coverage_rate": _mean([
-                    item["stages"][stage]["coverage_rate"]
-                    for item in by_class.values()
-                    if item["stages"][stage]["applicable"]
-                ]),
-                "pass_rate": _mean([
-                    item["stages"][stage]["pass_rate"]
-                    for item in by_class.values()
-                    if item["stages"][stage]["applicable"]
-                ]),
+                "coverage_rate": _mean(
+                    [
+                        item["stages"][stage]["coverage_rate"]
+                        for item in by_class.values()
+                        if item["stages"][stage]["applicable"]
+                    ]
+                ),
+                "pass_rate": _mean(
+                    [
+                        item["stages"][stage]["pass_rate"]
+                        for item in by_class.values()
+                        if item["stages"][stage]["applicable"]
+                    ]
+                ),
             }
             for stage in ("reader", "graph", "model_3d_bim", "drawing_2d")
         },

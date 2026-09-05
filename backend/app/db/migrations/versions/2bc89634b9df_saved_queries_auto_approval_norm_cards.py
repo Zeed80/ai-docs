@@ -11,13 +11,11 @@ session and already exist in the database. This stub records the state.
 
 from __future__ import annotations
 
-from typing import Union
-
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "2bc89634b9df"
-down_revision: Union[tuple, None] = (
+down_revision: tuple | None = (
     "a3b4c5d6e7f8",
     "b4c5d6e7f8a9",
     "c6d7e8f9a0b1",

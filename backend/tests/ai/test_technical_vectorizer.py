@@ -26,7 +26,9 @@ def _sheet() -> np.ndarray:
 
 
 def test_technical_vectorizer_declines_on_connection_error():
-    rec = TechnicalVectorizerRecognizer(base_url="http://technical-vectorizer-does-not-exist.invalid:1")
+    rec = TechnicalVectorizerRecognizer(
+        base_url="http://technical-vectorizer-does-not-exist.invalid:1"
+    )
     assert rec.recognize(_sheet()) is None
 
 
@@ -101,9 +103,7 @@ def test_technical_vectorizer_masks_ocr_regions_before_inference():
     rec = TechnicalVectorizerRecognizer(base_url="http://fake")
     resp = MagicMock()
     resp.raise_for_status.return_value = None
-    resp.json.return_value = {
-        "segments": [{"x1": 1, "y1": 1, "x2": 5, "y2": 1, "confidence": 0.8}]
-    }
+    resp.json.return_value = {"segments": [{"x1": 1, "y1": 1, "x2": 5, "y2": 1, "confidence": 0.8}]}
     with patch("httpx.post", return_value=resp) as post:
         rec.recognize(_sheet(), exclusion_boxes=[(0, 0, 8, 8)])
 

@@ -60,7 +60,9 @@ def diffusion_change_masks(result_ink, source_image_bytes: bytes):
             src_warped = cv2.resize(source_ink, (w, h), interpolation=cv2.INTER_NEAREST)
         else:
             src_warped = cv2.warpAffine(
-                source_ink, np.asarray(matrix, dtype=np.float32)[:2], (w, h),
+                source_ink,
+                np.asarray(matrix, dtype=np.float32)[:2],
+                (w, h),
                 flags=cv2.INTER_NEAREST,
             )
 
@@ -89,9 +91,7 @@ def _drop_specks(mask):
     import cv2
     import numpy as np
 
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(
-        mask.astype(np.uint8), connectivity=8
-    )
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
     out = np.zeros_like(mask)
     for i in range(1, n):
         if stats[i, cv2.CC_STAT_AREA] >= _MIN_CHANGED_COMPONENT_PX:
@@ -102,7 +102,6 @@ def _drop_specks(mask):
 def entities_in_mask(entities, added_mask, thin_px: int, thick_px: int) -> list[str]:
     """Ids of entities whose own rasterized ink lies substantially inside the
     ``added`` mask — i.e. geometry the diffusion pass invented."""
-    import numpy as np
 
     from app.ai.cad_ir.png_render import rasterize_entities
 
@@ -126,9 +125,7 @@ def mask_regions(mask, max_regions: int = 20) -> list[tuple[int, int, int, int]]
     """Bounding boxes of significant connected components (x0, y0, x1, y1)."""
     import cv2
 
-    n, _labels, stats, _ = cv2.connectedComponentsWithStats(
-        mask.astype("uint8"), connectivity=8
-    )
+    n, _labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype("uint8"), connectivity=8)
     boxes = []
     for i in range(1, n):
         x, y, w, h, area = stats[i]

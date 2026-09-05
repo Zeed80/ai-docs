@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import base64
+import json
 from io import BytesIO
 from pathlib import Path
 
@@ -14,7 +14,6 @@ from app.domain.schemas import (
     StructuredDocumentExtraction,
 )
 from app.domain.storage import LocalFileStorage
-
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 TEXT_PREVIEW_LIMIT = 12000
@@ -94,9 +93,7 @@ def extract_text(document: Document) -> RawExtractionResult:
             unsupported_reason="Stored file does not exist.",
         )
 
-    parsed = parse_document(
-        path.read_bytes(), document.filename, document.content_type
-    )
+    parsed = parse_document(path.read_bytes(), document.filename, document.content_type)
     if parsed.text.strip():
         return RawExtractionResult(
             status=ProcessingJobStatus.COMPLETED,

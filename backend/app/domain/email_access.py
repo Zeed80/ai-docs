@@ -52,9 +52,9 @@ async def hidden_mailbox_names(
     for_agent = acting_as_agent(user, for_agent)
     rows = (
         await db.execute(
-            select(
-                MailboxConfig.name, MailboxConfig.owner_sub, MailboxConfig.sweep_enabled
-            ).where(MailboxConfig.mailbox_type == "personal")
+            select(MailboxConfig.name, MailboxConfig.owner_sub, MailboxConfig.sweep_enabled).where(
+                MailboxConfig.mailbox_type == "personal"
+            )
         )
     ).all()
     sub = user.sub if user else None

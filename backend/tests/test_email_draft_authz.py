@@ -11,16 +11,16 @@ always may; otherwise it is exactly "may you send from this draft's mailbox".
 """
 
 import uuid
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC
 
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from app.auth.models import UserInfo, UserRole
 from app.db.models import DraftAction, MailboxConfig
 
-OWNER_SUB = "dev-user"          # whoever the default test client authenticates as
+OWNER_SUB = "dev-user"  # whoever the default test client authenticates as
 COLLEAGUE_SUB = "colleague-sub"
 
 
@@ -78,12 +78,18 @@ async def colleague_client(db_session) -> AsyncIterator[AsyncClient]:
     settings.rate_limit_api_per_minute = 0
     people = {
         COLLEAGUE_SUB: UserInfo(
-            sub=COLLEAGUE_SUB, email="colleague@example.com", name="Коллега",
-            preferred_username="colleague", roles=[UserRole.viewer],
+            sub=COLLEAGUE_SUB,
+            email="colleague@example.com",
+            name="Коллега",
+            preferred_username="colleague",
+            roles=[UserRole.viewer],
         ),
         OWNER_SUB: UserInfo(
-            sub=OWNER_SUB, email="dev@example.com", name="Владелец",
-            preferred_username="dev", roles=[UserRole.admin],
+            sub=OWNER_SUB,
+            email="dev@example.com",
+            name="Владелец",
+            preferred_username="dev",
+            roles=[UserRole.admin],
         ),
     }
 
@@ -105,11 +111,13 @@ async def colleague_client(db_session) -> AsyncIterator[AsyncClient]:
 
 @pytest_asyncio.fixture
 async def mailboxes(db_session):
-    db_session.add_all([
-        _mailbox("procurement", owner_sub=None, mailbox_type="shared"),
-        _mailbox("me@example.com", owner_sub=OWNER_SUB, mailbox_type="personal"),
-        _mailbox("colleague@example.com", owner_sub=COLLEAGUE_SUB, mailbox_type="personal"),
-    ])
+    db_session.add_all(
+        [
+            _mailbox("procurement", owner_sub=None, mailbox_type="shared"),
+            _mailbox("me@example.com", owner_sub=OWNER_SUB, mailbox_type="personal"),
+            _mailbox("colleague@example.com", owner_sub=COLLEAGUE_SUB, mailbox_type="personal"),
+        ]
+    )
     await db_session.commit()
 
 
@@ -146,9 +154,7 @@ async def test_colleague_cannot_read_edit_or_send_a_private_draft(
     assert (
         await colleague_client.post(f"/api/email/drafts/{draft_id}/risk-check")
     ).status_code == 404
-    assert (
-        await colleague_client.post(f"/api/email/drafts/{draft_id}/send")
-    ).status_code == 404
+    assert (await colleague_client.post(f"/api/email/drafts/{draft_id}/send")).status_code == 404
 
     await db_session.refresh(private)
     assert private.draft_data["to_addresses"] == ["supplier@example.com"]
@@ -169,7 +175,9 @@ async def test_shared_mailbox_draft_stays_visible_to_the_team(
     assert (await colleague_client.get(f"/api/email/drafts/{shared.id}")).status_code == 200
 
 
-async def test_cannot_create_a_draft_in_someone_elses_mailbox(colleague_client: AsyncClient, mailboxes):
+async def test_cannot_create_a_draft_in_someone_elses_mailbox(
+    colleague_client: AsyncClient, mailboxes
+):
     resp = await colleague_client.post(
         "/api/email/drafts",
         json={
@@ -358,7 +366,7 @@ async def test_editing_a_draft_changes_its_digest(colleague_client: AsyncClient,
 
 @pytest_asyncio.fixture
 async def message_with_attachments(db_session, mailboxes):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.db.models import EmailAttachment, EmailMessage, EmailThread
 
@@ -370,22 +378,32 @@ async def message_with_attachments(db_session, mailboxes):
         from_address="sender@example.com",
         to_addresses=["procurement@example.com"],
         body_text="см. вложения",
-        received_at=datetime.now(timezone.utc),
+        received_at=datetime.now(UTC),
         message_id_header=f"<{uuid.uuid4()}@example.com>",
         has_attachments=True,
     )
     db_session.add_all([thread, msg])
     await db_session.flush()
-    db_session.add_all([
-        EmailAttachment(
-            message_id=msg.id, filename="payload.html", content_type="text/html",
-            size=10, storage_path="documents/aa/bb/hash1", sha256="1" * 64,
-        ),
-        EmailAttachment(
-            message_id=msg.id, filename="Счёт №123.pdf", content_type="application/pdf",
-            size=10, storage_path="documents/aa/bb/hash2", sha256="2" * 64,
-        ),
-    ])
+    db_session.add_all(
+        [
+            EmailAttachment(
+                message_id=msg.id,
+                filename="payload.html",
+                content_type="text/html",
+                size=10,
+                storage_path="documents/aa/bb/hash1",
+                sha256="1" * 64,
+            ),
+            EmailAttachment(
+                message_id=msg.id,
+                filename="Счёт №123.pdf",
+                content_type="application/pdf",
+                size=10,
+                storage_path="documents/aa/bb/hash2",
+                sha256="2" * 64,
+            ),
+        ]
+    )
     await db_session.commit()
     return msg
 

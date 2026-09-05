@@ -46,7 +46,9 @@ class NormRuleSuggestRequest(BaseModel):
 
     document_id: uuid.UUID | None = None
     field_name: str | None = None
-    min_corrections: int = Field(3, ge=1, description="Minimum repeated corrections to suggest a rule")
+    min_corrections: int = Field(
+        3, ge=1, description="Minimum repeated corrections to suggest a rule"
+    )
 
 
 class NormRuleSuggestResponse(BaseModel):

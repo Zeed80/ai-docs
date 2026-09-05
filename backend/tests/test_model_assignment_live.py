@@ -103,7 +103,8 @@ async def test_live_assignment_read_model_is_consistent() -> None:
         assert smoke.json()["dry_run"] is True
 
         selectable = [
-            model for model in live_models.json()
+            model
+            for model in live_models.json()
             if model.get("loaded") or model.get("status") != "disabled"
         ]
         assert selectable, "live-models returned no selectable models"
@@ -127,7 +128,8 @@ async def test_live_slot_reasoning_override_roundtrip_safe_mutation() -> None:
         slots = before_resp.json().get("slots") or []
         slot = next(
             (
-                item for item in slots
+                item
+                for item in slots
                 if item.get("thinking_supported_by_slot")
                 and item.get("thinking_supported_by_model")
             ),
@@ -151,8 +153,7 @@ async def test_live_slot_reasoning_override_roundtrip_safe_mutation() -> None:
             after_resp = await client.get("/api/providers/assignment-draft")
             assert after_resp.status_code == 200, after_resp.text[:300]
             after_slot = next(
-                item for item in after_resp.json().get("slots", [])
-                if item.get("slot") == slot_name
+                item for item in after_resp.json().get("slots", []) if item.get("slot") == slot_name
             )
             assert after_slot["thinking_override"] is target
             assert after_slot["thinking_effective"] is target

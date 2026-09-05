@@ -23,21 +23,21 @@ from pydantic import BaseModel, Field
 class AuditCode(StrEnum):
     # Workspace publication
     WORKSPACE_NOT_PUBLISHED = "workspace_not_published"  # rich output requested, none verified
-    WRONG_CANVAS = "wrong_canvas"                        # published to a canvas other than planned
-    CHAT_TABLE_LEAK = "chat_table_leak"                  # markdown table dumped into chat
+    WRONG_CANVAS = "wrong_canvas"  # published to a canvas other than planned
+    CHAT_TABLE_LEAK = "chat_table_leak"  # markdown table dumped into chat
     # Tool usage
-    FILTER_MISSING = "filter_missing"                    # required filter not passed to the tool
-    FILTER_MISMATCH = "filter_mismatch"                  # filter passed/reported with a wrong value
-    UNKNOWN_SKILL = "unknown_skill"                      # executor called a non-existent skill
-    TOOL_ERROR = "tool_error"                            # tool call returned an error
-    TOOL_OFF_PLAN = "tool_off_plan"                      # executor picked a tool outside the plan
+    FILTER_MISSING = "filter_missing"  # required filter not passed to the tool
+    FILTER_MISMATCH = "filter_mismatch"  # filter passed/reported with a wrong value
+    UNKNOWN_SKILL = "unknown_skill"  # executor called a non-existent skill
+    TOOL_ERROR = "tool_error"  # tool call returned an error
+    TOOL_OFF_PLAN = "tool_off_plan"  # executor picked a tool outside the plan
     # Answer quality
-    EMPTY_ANSWER = "empty_answer"                        # no text and no workspace output
-    UNGROUNDED_ANSWER = "ungrounded_answer"              # factual answer with no data tool call
-    SEMANTIC_SUSPECT = "semantic_suspect"                # semantic audit doubts the answer
-    INTENT_MISMATCH = "intent_mismatch"                  # published artifact doesn't match the request
-    ACTION_NOT_PERFORMED = "action_not_performed"        # user asked to DO something; only reads happened
-    TOTAL_OVERSTATED = "total_overstated"                # title claims more rows than were published
+    EMPTY_ANSWER = "empty_answer"  # no text and no workspace output
+    UNGROUNDED_ANSWER = "ungrounded_answer"  # factual answer with no data tool call
+    SEMANTIC_SUSPECT = "semantic_suspect"  # semantic audit doubts the answer
+    INTENT_MISMATCH = "intent_mismatch"  # published artifact doesn't match the request
+    ACTION_NOT_PERFORMED = "action_not_performed"  # user asked to DO something; only reads happened
+    TOTAL_OVERSTATED = "total_overstated"  # title claims more rows than were published
 
 
 Severity = Literal["blocking", "advisory"]
@@ -57,23 +57,27 @@ class AuditIssue(BaseModel):
 # WRONG_CANVAS is absent too: the planned canvas is a heuristic GUESS — when a
 # table was actually published and verified, re-doing it on another canvas
 # duplicates work the user already sees (the «делает по два раза» bug).
-RETRYABLE: frozenset[AuditCode] = frozenset({
-    AuditCode.WORKSPACE_NOT_PUBLISHED,
-    AuditCode.CHAT_TABLE_LEAK,
-    AuditCode.FILTER_MISSING,
-    AuditCode.FILTER_MISMATCH,
-    AuditCode.EMPTY_ANSWER,
-    AuditCode.INTENT_MISMATCH,
-    AuditCode.ACTION_NOT_PERFORMED,
-    AuditCode.TOTAL_OVERSTATED,
-})
+RETRYABLE: frozenset[AuditCode] = frozenset(
+    {
+        AuditCode.WORKSPACE_NOT_PUBLISHED,
+        AuditCode.CHAT_TABLE_LEAK,
+        AuditCode.FILTER_MISSING,
+        AuditCode.FILTER_MISMATCH,
+        AuditCode.EMPTY_ANSWER,
+        AuditCode.INTENT_MISMATCH,
+        AuditCode.ACTION_NOT_PERFORMED,
+        AuditCode.TOTAL_OVERSTATED,
+    }
+)
 
 # Issues that signal a genuinely missing capability (feed the builder flow).
-CAPABILITY_GAP_CODES: frozenset[AuditCode] = frozenset({
-    AuditCode.UNKNOWN_SKILL,
-    AuditCode.WRONG_CANVAS,
-    AuditCode.TOOL_OFF_PLAN,
-})
+CAPABILITY_GAP_CODES: frozenset[AuditCode] = frozenset(
+    {
+        AuditCode.UNKNOWN_SKILL,
+        AuditCode.WRONG_CANVAS,
+        AuditCode.TOOL_OFF_PLAN,
+    }
+)
 
 
 def blocking(issues: list[AuditIssue]) -> list[AuditIssue]:

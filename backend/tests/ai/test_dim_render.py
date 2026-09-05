@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 from app.ai.cad_ir.dim_render import (
     arrow_len_mm,
     arrow_len_px,
@@ -69,7 +67,9 @@ def test_dimension_label_radial_gets_r_prefix() -> None:
 
 
 def test_dimension_label_falls_back_to_value_mm_when_no_text() -> None:
-    e = DimensionEntity(p1=Point(x=0, y=0), p2=Point(x=10, y=0), text="", value_mm=12.5, kind="linear")
+    e = DimensionEntity(
+        p1=Point(x=0, y=0), p2=Point(x=10, y=0), text="", value_mm=12.5, kind="linear"
+    )
     assert dimension_label(e) == "12.5"
 
 

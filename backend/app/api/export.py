@@ -1,18 +1,18 @@
 """Export API — Excel and 1C exports with approval gate for 1C."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
-from app.db.models import ExportJob, Invoice, ApprovalActionType, Approval, ApprovalStatus
 from app.audit.service import log_action
+from app.db.models import Approval, ApprovalActionType, ApprovalStatus, ExportJob, Invoice
+from app.db.session import get_db
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -63,13 +63,16 @@ async def export_invoice_excel(
     # Queue Celery task
     try:
         from app.tasks.export import generate_excel_export
+
         generate_excel_export.delay(str(job.id))
     except Exception as e:
         logger.warning("export_task_queue_failed", error=str(e))
 
     await log_action(
-        db, action="export.create_excel",
-        entity_type="invoice", entity_id=invoice_id,
+        db,
+        action="export.create_excel",
+        entity_type="invoice",
+        entity_id=invoice_id,
         details={"job_id": str(job.id)},
     )
     return job
@@ -169,6 +172,7 @@ async def download_export(
 
     try:
         from app.storage import get_presigned_url
+
         url = get_presigned_url(job.storage_path, expiry=3600)
         return RedirectResponse(url=url)
     except Exception as e:

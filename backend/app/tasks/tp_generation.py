@@ -29,15 +29,15 @@ from app.tasks.celery_app import celery_app
 logger = structlog.get_logger()
 
 TP_PIPELINE_STEPS = [
-    ("drawing_features",   "Загрузка признаков чертежа"),
-    ("surface_analysis",   "Анализ поверхностей"),
-    ("blank_selection",    "Подбор заготовки"),
+    ("drawing_features", "Загрузка признаков чертежа"),
+    ("surface_analysis", "Анализ поверхностей"),
+    ("blank_selection", "Подбор заготовки"),
     ("operation_drafting", "Формирование операций"),
     ("equipment_matching", "Подбор оборудования"),
-    ("cutting_params",     "Расчёт режимов резания"),
-    ("time_norms",         "Нормирование"),
-    ("normcontrol",        "Нормоконтроль"),
-    ("graph_update",       "Обновление графа знаний"),
+    ("cutting_params", "Расчёт режимов резания"),
+    ("time_norms", "Нормирование"),
+    ("normcontrol", "Нормоконтроль"),
+    ("graph_update", "Обновление графа знаний"),
 ]
 
 
@@ -47,7 +47,7 @@ def _get_sync_session() -> Session:
 
 
 def _default_steps() -> list[dict]:
-    return [{"key": k, "label": l, "status": "pending"} for k, l in TP_PIPELINE_STEPS]
+    return [{"key": k, "label": lbl, "status": "pending"} for k, lbl in TP_PIPELINE_STEPS]
 
 
 def _set_step(steps: list[dict], key: str, status: str, error: str | None = None) -> list[dict]:
@@ -129,9 +129,11 @@ async def _generate_tp_async(
     steps = _default_steps()
 
     try:
-        plan = db.query(ManufacturingProcessPlan).filter(
-            ManufacturingProcessPlan.id == plan_uuid
-        ).first()
+        plan = (
+            db.query(ManufacturingProcessPlan)
+            .filter(ManufacturingProcessPlan.id == plan_uuid)
+            .first()
+        )
         if not plan:
             raise ValueError(f"ProcessPlan {plan_id} not found")
 
@@ -142,6 +144,7 @@ async def _generate_tp_async(
         # Guard: drawing must be fully analyzed before TP generation
         if drawing.status not in (DrawingStatus.analyzed, DrawingStatus.needs_review):
             from app.tasks.drawing_analysis import analyze_drawing
+
             if drawing.status == DrawingStatus.uploaded:
                 analyze_drawing.delay(str(drawing_id), None, False, 6, None)
             raise ValueError(
@@ -149,7 +152,9 @@ async def _generate_tp_async(
                 "Анализ запущен автоматически, повторите через несколько минут."
             )
 
-        material = plan.material or (drawing.title_block or {}).get("material", "Сталь 45") or "Сталь 45"
+        material = (
+            plan.material or (drawing.title_block or {}).get("material", "Сталь 45") or "Сталь 45"
+        )
 
         def _save_steps():
             plan.metadata_ = {**(plan.metadata_ or {}), "tp_pipeline_steps": steps}
@@ -192,13 +197,13 @@ async def _generate_tp_async(
         # Use 3D bounding box from STEP/IGES if available (precise КИМ calculation)
         bounding_box_mm = drawing.bounding_box if drawing.bounding_box else None
         blank_data = recommend_blank(
-            material, dims, mass_kg,
+            material,
+            dims,
+            mass_kg,
             annual_volume=batch_size,
             bounding_box_mm=bounding_box_mm,
         )
-        existing_blank = db.query(BlankSpec).filter(
-            BlankSpec.process_plan_id == plan_uuid
-        ).first()
+        existing_blank = db.query(BlankSpec).filter(BlankSpec.process_plan_id == plan_uuid).first()
         if existing_blank:
             for k, v in blank_data.items():
                 setattr(existing_blank, k, v)
@@ -251,16 +256,26 @@ async def _generate_tp_async(
         _save_steps()
 
         for op in operations:
-            if op.operation_type not in {"turning", "milling", "drilling", "grinding",
-                                          "boring", "reaming", "honing", "broaching"}:
+            if op.operation_type not in {
+                "turning",
+                "milling",
+                "drilling",
+                "grinding",
+                "boring",
+                "reaming",
+                "honing",
+                "broaching",
+            }:
                 continue
             if not op.cutting_parameters:
                 # Find first surface for this operation
                 nominal_mm = None
                 roughness_ra = None
-                linked = db.query(SurfaceMachiningSpec).filter(
-                    SurfaceMachiningSpec.operation_id == op.id
-                ).first()
+                linked = (
+                    db.query(SurfaceMachiningSpec)
+                    .filter(SurfaceMachiningSpec.operation_id == op.id)
+                    .first()
+                )
                 if linked:
                     nominal_mm = linked.nominal_mm
                     roughness_ra = linked.roughness_ra
@@ -292,9 +307,7 @@ async def _generate_tp_async(
 
         # Update plan total norms
         total = sum(
-            (op.tsht_k_minutes or 0.0)
-            for op in operations
-            if op.tsht_k_minutes is not None
+            (op.tsht_k_minutes or 0.0) for op in operations if op.tsht_k_minutes is not None
         )
         plan.total_norm_minutes = round(total, 2)
 
@@ -325,7 +338,11 @@ async def _generate_tp_async(
         _save_steps()
 
         # Final commit
-        plan.metadata_ = {**(plan.metadata_ or {}), "tp_pipeline_steps": steps, "tp_completed_at": datetime.now(UTC).isoformat()}
+        plan.metadata_ = {
+            **(plan.metadata_ or {}),
+            "tp_pipeline_steps": steps,
+            "tp_completed_at": datetime.now(UTC).isoformat(),
+        }
         db.commit()
 
         result = {
@@ -339,13 +356,19 @@ async def _generate_tp_async(
             "status": "completed",
         }
 
-        logger.info("tp_generation_completed", **{k: v for k, v in result.items() if k != "blank_spec"})
+        logger.info(
+            "tp_generation_completed", **{k: v for k, v in result.items() if k != "blank_spec"}
+        )
         return result
 
     except Exception as exc:
         try:
             steps = _set_step(steps, _current_running_step(steps), "failed", error=str(exc))
-            plan.metadata_ = {**(plan.metadata_ or {}), "tp_pipeline_steps": steps, "tp_error": str(exc)}
+            plan.metadata_ = {
+                **(plan.metadata_ or {}),
+                "tp_pipeline_steps": steps,
+                "tp_error": str(exc),
+            }
             db.commit()
         except Exception:
             pass
@@ -371,11 +394,17 @@ def _try_update_graph(
     try:
         from app.db.models import KnowledgeEdge, KnowledgeNode
 
-        def _get_or_create_node(entity_type: str, entity_id: uuid.UUID, label: str) -> KnowledgeNode:
-            node = db.query(KnowledgeNode).filter(
-                KnowledgeNode.entity_type == entity_type,
-                KnowledgeNode.entity_id == entity_id,
-            ).first()
+        def _get_or_create_node(
+            entity_type: str, entity_id: uuid.UUID, label: str
+        ) -> KnowledgeNode:
+            node = (
+                db.query(KnowledgeNode)
+                .filter(
+                    KnowledgeNode.entity_type == entity_type,
+                    KnowledgeNode.entity_id == entity_id,
+                )
+                .first()
+            )
             if not node:
                 node = KnowledgeNode(entity_type=entity_type, entity_id=entity_id, label=label)
                 db.add(node)

@@ -8,14 +8,10 @@
   subject on the phone's lock screen with no way to prevent it.
 """
 
-import uuid
-from typing import AsyncIterator
-
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
-from app.auth.models import UserInfo, UserRole
 from app.db.models import MailboxConfig, Notification, NotificationType, User
 
 ADMIN_SUB = "dev-user"
@@ -41,20 +37,32 @@ def _stub_mail_server_config(monkeypatch):
     monkeypatch.setattr(integration_config, "get_mail_server_config", _fake)
     import app.api.admin as admin_module
 
-    monkeypatch.setattr(
-        admin_module, "get_mail_server_config", _fake, raising=False
-    )
+    monkeypatch.setattr(admin_module, "get_mail_server_config", _fake, raising=False)
 
 
 @pytest_asyncio.fixture
 async def personal_mailbox(db_session):
-    db_session.add(User(sub=OWNER_SUB, email="employee@example.com", name="Сотрудник",
-                        role="buyer", is_active=True))
+    db_session.add(
+        User(
+            sub=OWNER_SUB,
+            email="employee@example.com",
+            name="Сотрудник",
+            role="buyer",
+            is_active=True,
+        )
+    )
     cfg = MailboxConfig(
-        name="employee@example.com", display_name="Личный",
-        imap_host="mail.example.com", imap_port=993, imap_user="employee@example.com",
-        imap_password_encrypted="x", imap_ssl=True, is_active=True,
-        mailbox_type="personal", owner_sub=OWNER_SUB, sweep_enabled=False,
+        name="employee@example.com",
+        display_name="Личный",
+        imap_host="mail.example.com",
+        imap_port=993,
+        imap_user="employee@example.com",
+        imap_password_encrypted="x",
+        imap_ssl=True,
+        is_active=True,
+        mailbox_type="personal",
+        owner_sub=OWNER_SUB,
+        sweep_enabled=False,
     )
     db_session.add(cfg)
     await db_session.commit()
@@ -70,15 +78,15 @@ async def test_admin_cannot_switch_on_ai_reading_of_private_mail(
     assert resp.status_code == 200, resp.text
 
     await db_session.refresh(personal_mailbox)
-    assert personal_mailbox.sweep_enabled is False   # still the owner's call
+    assert personal_mailbox.sweep_enabled is False  # still the owner's call
 
     from sqlalchemy import select
 
     notif = (
-        await db_session.execute(
-            select(Notification).where(Notification.user_sub == OWNER_SUB)
-        )
-    ).scalars().all()
+        (await db_session.execute(select(Notification).where(Notification.user_sub == OWNER_SUB)))
+        .scalars()
+        .all()
+    )
     assert len(notif) == 1
     assert "разрешить" in notif[0].title.lower()
 
@@ -108,7 +116,10 @@ async def test_preferences_round_trip(client: AsyncClient):
     )
     assert saved.status_code == 200, saved.text
     assert saved.json() == {
-        "type": "email_received", "in_app": True, "push": False, "private_preview": True,
+        "type": "email_received",
+        "in_app": True,
+        "push": False,
+        "private_preview": True,
     }
 
     again = await client.get("/api/notifications/preferences")
@@ -135,15 +146,21 @@ async def test_push_is_suppressed_and_redacted_per_preference(db_session, monkey
 
     # 1. No preference row, non-sensitive content → full preview.
     await notif_service.create_notification(
-        db_session, user_sub=OWNER_SUB, type=NotificationType.email_received,
-        title="Новое письмо · procurement", body="supplier@example.com: Счёт",
+        db_session,
+        user_sub=OWNER_SUB,
+        type=NotificationType.email_received,
+        title="Новое письмо · procurement",
+        body="supplier@example.com: Счёт",
     )
     assert sent[-1] == ("Новое письмо · procurement", "supplier@example.com: Счёт")
 
     # 2. Personal mailbox → redacted by default, row still has the full text.
     notif = await notif_service.create_notification(
-        db_session, user_sub=OWNER_SUB, type=NotificationType.email_received,
-        title="Новое письмо · employee@example.com", body="doctor@clinic.example: Анализы",
+        db_session,
+        user_sub=OWNER_SUB,
+        type=NotificationType.email_received,
+        title="Новое письмо · employee@example.com",
+        body="doctor@clinic.example: Анализы",
         private_preview=True,
     )
     assert sent[-1][0] == "Новое уведомление"
@@ -151,14 +168,22 @@ async def test_push_is_suppressed_and_redacted_per_preference(db_session, monkey
     assert notif.body == "doctor@clinic.example: Анализы"
 
     # 3. An explicit preference wins over the caller's default.
-    db_session.add(UserNotificationPref(
-        user_sub=OWNER_SUB, type="email_received", in_app=True, push=True,
-        private_preview=False,
-    ))
+    db_session.add(
+        UserNotificationPref(
+            user_sub=OWNER_SUB,
+            type="email_received",
+            in_app=True,
+            push=True,
+            private_preview=False,
+        )
+    )
     await db_session.commit()
     await notif_service.create_notification(
-        db_session, user_sub=OWNER_SUB, type=NotificationType.email_received,
-        title="Новое письмо · employee@example.com", body="doctor@clinic.example: Анализы",
+        db_session,
+        user_sub=OWNER_SUB,
+        type=NotificationType.email_received,
+        title="Новое письмо · employee@example.com",
+        body="doctor@clinic.example: Анализы",
         private_preview=True,
     )
     assert sent[-1][1] == "doctor@clinic.example: Анализы"
@@ -175,7 +200,10 @@ async def test_push_is_suppressed_and_redacted_per_preference(db_session, monkey
     await db_session.commit()
     before = len(sent)
     await notif_service.create_notification(
-        db_session, user_sub=OWNER_SUB, type=NotificationType.email_received,
-        title="Ещё письмо", body="кто-то: тема",
+        db_session,
+        user_sub=OWNER_SUB,
+        type=NotificationType.email_received,
+        title="Ещё письмо",
+        body="кто-то: тема",
     )
     assert len(sent) == before

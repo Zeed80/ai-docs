@@ -15,8 +15,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
 SEARCH_DIRS = ("app", "lib", "components")
 
@@ -31,9 +29,7 @@ def _sources() -> list[Path]:
         if not root.exists():
             continue
         for suffix in ("*.ts", "*.tsx"):
-            files.extend(
-                path for path in root.rglob(suffix) if "node_modules" not in path.parts
-            )
+            files.extend(path for path in root.rglob(suffix) if "node_modules" not in path.parts)
     return files
 
 
@@ -52,8 +48,8 @@ def test_frontend_backend_calls_use_api_prefix():
 
 def test_the_contract_would_catch_the_original_defect():
     """Guard the guard: the regex must flag the exact line that was broken."""
-    broken = '        `${API}/tool-catalog/by-supplier/${partyId}/catalog`,'
-    fixed = '        `${API}/api/tool-catalog/by-supplier/${partyId}/catalog`,'
+    broken = "        `${API}/tool-catalog/by-supplier/${partyId}/catalog`,"
+    fixed = "        `${API}/api/tool-catalog/by-supplier/${partyId}/catalog`,"
     assert _BAD_CALL.search(broken)
     assert not _BAD_CALL.search(fixed)
 

@@ -22,11 +22,13 @@ def _ir(entities):
 
 
 def test_exact_entities_are_an_exact_sheet():
-    truth = _ir([
-        Segment(p1=Point(x=10, y=20), p2=Point(x=900, y=20)),
-        Circle(center=Point(x=300, y=200), radius=50),
-        TextEntity(position=Point(x=50, y=80), text="Ø18H7"),
-    ])
+    truth = _ir(
+        [
+            Segment(p1=Point(x=10, y=20), p2=Point(x=900, y=20)),
+            Circle(center=Point(x=300, y=200), radius=50),
+            TextEntity(position=Point(x=50, y=80), text="Ø18H7"),
+        ]
+    )
     predicted = CadIR.model_validate(truth.model_dump())
 
     result = compare_ir(predicted, truth)
@@ -36,13 +38,17 @@ def test_exact_entities_are_an_exact_sheet():
 
 
 def test_pixel_like_geometry_without_text_is_not_exact():
-    truth = _ir([
-        Segment(p1=Point(x=10, y=20), p2=Point(x=900, y=20)),
-        TextEntity(position=Point(x=50, y=80), text="Ø18H7"),
-    ])
-    predicted = _ir([
-        Segment(p1=Point(x=10, y=20), p2=Point(x=900, y=20)),
-    ])
+    truth = _ir(
+        [
+            Segment(p1=Point(x=10, y=20), p2=Point(x=900, y=20)),
+            TextEntity(position=Point(x=50, y=80), text="Ø18H7"),
+        ]
+    )
+    predicted = _ir(
+        [
+            Segment(p1=Point(x=10, y=20), p2=Point(x=900, y=20)),
+        ]
+    )
 
     result = compare_ir(predicted, truth)
 
@@ -85,34 +91,38 @@ def test_error_details_identify_geometry_near_miss():
 
 
 def test_dimension_symbol_variants_and_annotation_canonical_text_match():
-    truth = _ir([
-        DimensionEntity(
-            p1=Point(x=10, y=10),
-            p2=Point(x=50, y=10),
-            kind="diameter",
-            text="Ø40",
-            value_mm=40,
-        ),
-        AnnotationEntity(
-            position=Point(x=20, y=20),
-            kind="roughness",
-            value="3.2",
-        ),
-    ])
-    predicted = _ir([
-        DimensionEntity(
-            p1=Point(x=10, y=10),
-            p2=Point(x=50, y=10),
-            kind="diameter",
-            text="⌀40",
-            value_mm=40,
-        ),
-        AnnotationEntity(
-            position=Point(x=20, y=20),
-            kind="roughness",
-            value="Ra 3,2",
-        ),
-    ])
+    truth = _ir(
+        [
+            DimensionEntity(
+                p1=Point(x=10, y=10),
+                p2=Point(x=50, y=10),
+                kind="diameter",
+                text="Ø40",
+                value_mm=40,
+            ),
+            AnnotationEntity(
+                position=Point(x=20, y=20),
+                kind="roughness",
+                value="3.2",
+            ),
+        ]
+    )
+    predicted = _ir(
+        [
+            DimensionEntity(
+                p1=Point(x=10, y=10),
+                p2=Point(x=50, y=10),
+                kind="diameter",
+                text="⌀40",
+                value_mm=40,
+            ),
+            AnnotationEntity(
+                position=Point(x=20, y=20),
+                kind="roughness",
+                value="Ra 3,2",
+            ),
+        ]
+    )
 
     assert compare_ir(predicted, truth)["exact_sheet"] is True
 

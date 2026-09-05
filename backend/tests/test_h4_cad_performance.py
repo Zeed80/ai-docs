@@ -31,11 +31,17 @@ def _dense_ir(n_segments: int = 3000, n_circles: int = 200, n_texts: int = 100) 
         )
     for i in range(n_texts):
         entities.append(
-            TextEntity(position=Point(x=50 + (i % 10) * 180, y=40 + (i // 10) * 70), text=f"Ø{10 + i}", height=12)
+            TextEntity(
+                position=Point(x=50 + (i % 10) * 180, y=40 + (i // 10) * 70),
+                text=f"Ø{10 + i}",
+                height=12,
+            )
         )
     return CadIR(
         source=SourceInfo(image_width=2000, image_height=1400, kind="blank"),
-        scale=0.5, scale_source="manual", entities=entities,
+        scale=0.5,
+        scale_source="manual",
+        entities=entities,
     )
 
 
@@ -89,18 +95,16 @@ def test_parallel_analysis_solvers():
     """H4: solver jobs run concurrently without shared-state corruption —
     every result must equal its own sequential answer."""
     import concurrent.futures
-
     from types import SimpleNamespace
 
     from app.domain.analysis_solvers import solve_bending
 
-    steel = SimpleNamespace(yield_strength_mpa=300.0, elastic_modulus_mpa=200_000.0,
-                            thermal_expansion_1_k=1.2e-5)
+    steel = SimpleNamespace(
+        yield_strength_mpa=300.0, elastic_modulus_mpa=200_000.0, thermal_expansion_1_k=1.2e-5
+    )
 
     def run(i: int) -> float:
-        out = solve_bending(
-            {"force_n": 100 + i, "length_mm": 100, "diameter_mm": 20}, steel
-        )
+        out = solve_bending({"force_n": 100 + i, "length_mm": 100, "diameter_mm": 20}, steel)
         return out.results["stress_mpa"]
 
     sequential = [run(i) for i in range(50)]

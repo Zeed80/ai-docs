@@ -278,21 +278,15 @@ async def test_paused_catalog_is_not_reported_as_running(
     assert resp.status_code == 200, resp.text
 
     listing = await client.get(f"/api/catalogs?party_id={party.id}")
-    item = next(
-        row for row in listing.json()["items"] if row["document_id"] == str(doc.id)
-    )
+    item = next(row for row in listing.json()["items"] if row["document_id"] == str(doc.id))
     assert item["paused"] is True
     assert item["status"] == "paused", "status must not stay 'running'"
 
-    with patch(
-        "app.tasks.catalog_pages.render_catalog_page_batch.delay", lambda *a, **k: None
-    ):
+    with patch("app.tasks.catalog_pages.render_catalog_page_batch.delay", lambda *a, **k: None):
         resumed = await client.post(f"/api/catalogs/{doc.id}/pause?resume=true")
     assert resumed.status_code == 200
     again = await client.get(f"/api/catalogs?party_id={party.id}")
-    item = next(
-        row for row in again.json()["items"] if row["document_id"] == str(doc.id)
-    )
+    item = next(row for row in again.json()["items"] if row["document_id"] == str(doc.id))
     assert item["paused"] is False
     assert item["status"] == "running"
 
@@ -429,17 +423,15 @@ async def test_delete_data_keeps_the_file_for_a_re_parse(
 
     assert await db_session.get(Document, doc.id) is not None, "the file record stays"
     left = (
-        await db_session.execute(
-            select(CatalogPage).where(CatalogPage.document_id == doc.id)
-        )
-    ).scalars().all()
+        (await db_session.execute(select(CatalogPage).where(CatalogPage.document_id == doc.id)))
+        .scalars()
+        .all()
+    )
     assert left == [], "the page registry is cleared with the data"
 
 
 @pytest.mark.asyncio
-async def test_delete_file_keeps_positions(
-    client: AsyncClient, db_session, supplier_with_catalogs
-):
+async def test_delete_file_keeps_positions(client: AsyncClient, db_session, supplier_with_catalogs):
     """Reclaiming storage must not cost the prices already extracted."""
     from unittest.mock import patch
 
@@ -450,10 +442,14 @@ async def test_delete_file_keeps_positions(
     assert resp.json()["images"] == 7
 
     entries = (
-        await db_session.execute(
-            select(ToolCatalogEntry).where(ToolCatalogEntry.source_document_id == doc.id)
+        (
+            await db_session.execute(
+                select(ToolCatalogEntry).where(ToolCatalogEntry.source_document_id == doc.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(entries) == 1, "positions survive"
     await db_session.refresh(doc)
     assert (doc.metadata_ or {}).get("file_removed") is True, "and the card says so"
@@ -478,10 +474,8 @@ async def test_delete_all_removes_pages_too(
 
 
 @pytest.mark.asyncio
-async def test_search_across_several_selected_catalogs(
-    client: AsyncClient, supplier_with_catalogs
-):
-    """"Искать в этих двух каталогах" — a one-at-a-time filter could not say it."""
+async def test_search_across_several_selected_catalogs(client: AsyncClient, supplier_with_catalogs):
+    """ "Искать в этих двух каталогах" — a one-at-a-time filter could not say it."""
     first = supplier_with_catalogs["first"]
     second = supplier_with_catalogs["second"]
 
@@ -492,9 +486,7 @@ async def test_search_across_several_selected_catalogs(
     assert both.status_code == 200, both.text
     assert both.json()["total"] == 2
 
-    one = await client.post(
-        "/api/catalogs/search", json={"catalog_document_ids": [str(second.id)]}
-    )
+    one = await client.post("/api/catalogs/search", json={"catalog_document_ids": [str(second.id)]})
     assert [item["name"] for item in one.json()["items"]] == ["Сверло спиральное Ø6.5"]
 
 

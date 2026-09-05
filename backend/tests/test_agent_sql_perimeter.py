@@ -18,7 +18,6 @@ from app.ai.table_sql_pipeline import (
     validate_sql,
 )
 
-
 # ── Белый список таблиц ──────────────────────────────────────────────────────
 
 
@@ -42,9 +41,9 @@ def test_a_table_the_model_never_saw_is_refused(sql):
 def test_the_allowlist_matches_what_the_model_is_shown():
     """Если список схемы и список разрешённого разойдутся, модель начнёт
     получать отказы на таблицы, которые ей сами же и показали."""
-    from app.ai import table_sql_pipeline as m
-
     import inspect
+
+    from app.ai import table_sql_pipeline as m
 
     src = inspect.getsource(m._get_schema_context)
     for table in ALLOWED_TABLES:

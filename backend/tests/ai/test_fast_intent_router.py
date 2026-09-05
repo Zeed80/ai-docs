@@ -59,17 +59,17 @@ def test_plain_count_has_no_status_filter():
 @pytest.mark.parametrize(
     "text",
     [
-        "покажи все счета таблицей",       # rich output → LLM
-        "выведи счета по поставщикам",      # grouping → LLM
-        "построй график по месяцам",        # chart → LLM
-        "экспортируй счета в excel",         # export → LLM
-        "объясни почему счёт отклонён",      # not a count
-        "утверди счёт 42",                   # action
-        "сколько стоит счёт 123",            # price, not count
-        "сколько денег по счёту",            # amount, not count
-        "на какую сумму счетов",             # amount, not count
-        "остатки болтов на складе",          # no count marker → may want a table
-        "",                                   # empty
+        "покажи все счета таблицей",  # rich output → LLM
+        "выведи счета по поставщикам",  # grouping → LLM
+        "построй график по месяцам",  # chart → LLM
+        "экспортируй счета в excel",  # export → LLM
+        "объясни почему счёт отклонён",  # not a count
+        "утверди счёт 42",  # action
+        "сколько стоит счёт 123",  # price, not count
+        "сколько денег по счёту",  # amount, not count
+        "на какую сумму счетов",  # amount, not count
+        "остатки болтов на складе",  # no count marker → may want a table
+        "",  # empty
     ],
 )
 def test_non_count_intents_defer(text):

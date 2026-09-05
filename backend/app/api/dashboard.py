@@ -6,26 +6,29 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
-from sqlalchemy import exists
-
 from app.db.models import (
-    Approval, ApprovalStatus,
-    AnomalyCard, AnomalyStatus, AnomalySeverity,
-    Document, DocumentStatus,
+    AnomalyCard,
+    AnomalySeverity,
+    AnomalyStatus,
+    Approval,
+    ApprovalStatus,
+    AuditTimelineEvent,
+    Document,
+    DocumentStatus,
     EmailMessage,
     Invoice,
     QuarantineEntry,
-    AuditTimelineEvent,
 )
+from app.db.session import get_db
 
 router = APIRouter()
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
+
 
 async def _count(db: AsyncSession, q) -> int:
     result = await db.execute(select(func.count()).select_from(q.subquery()))
@@ -33,6 +36,7 @@ async def _count(db: AsyncSession, q) -> int:
 
 
 # ── Unified feed ───────────────────────────────────────────────────────────────
+
 
 class FeedItem(BaseModel):
     id: uuid.UUID
@@ -57,88 +61,112 @@ async def decision_feed(db: AsyncSession = Depends(get_db)):
     items: list[FeedItem] = []
 
     # Pending approvals — skip orphans (entity document/invoice no longer exists)
-    approvals = (await db.execute(
-        select(Approval)
-        .where(
-            Approval.status == ApprovalStatus.pending,
-            # Keep only if the referenced entity still exists
-            (
-                (Approval.entity_type == "document") &
-                exists().where(Document.id == Approval.entity_id)
-            ) | (
-                (Approval.entity_type == "invoice") &
-                exists().where(Invoice.id == Approval.entity_id)
-            ) | (
-                ~Approval.entity_type.in_(["document", "invoice"])
-            ),
+    approvals = (
+        (
+            await db.execute(
+                select(Approval)
+                .where(
+                    Approval.status == ApprovalStatus.pending,
+                    # Keep only if the referenced entity still exists
+                    (
+                        (Approval.entity_type == "document")
+                        & exists().where(Document.id == Approval.entity_id)
+                    )
+                    | (
+                        (Approval.entity_type == "invoice")
+                        & exists().where(Invoice.id == Approval.entity_id)
+                    )
+                    | (~Approval.entity_type.in_(["document", "invoice"])),
+                )
+                .order_by(Approval.created_at.desc())
+                .limit(50)
+            )
         )
-        .order_by(Approval.created_at.desc())
-        .limit(50)
-    )).scalars().all()
+        .scalars()
+        .all()
+    )
     for a in approvals:
-        items.append(FeedItem(
-            id=a.id,
-            type="approval",
-            priority="critical",
-            title=f"Требует согласования: {a.action_type.value}",
-            summary=(a.context or {}).get("description", "") or str(a.action_type.value),
-            entity_type=a.entity_type,
-            entity_id=a.entity_id,
-            created_at=a.created_at,
-            meta={"action_type": a.action_type.value, "requested_by": a.requested_by},
-        ))
+        items.append(
+            FeedItem(
+                id=a.id,
+                type="approval",
+                priority="critical",
+                title=f"Требует согласования: {a.action_type.value}",
+                summary=(a.context or {}).get("description", "") or str(a.action_type.value),
+                entity_type=a.entity_type,
+                entity_id=a.entity_id,
+                created_at=a.created_at,
+                meta={"action_type": a.action_type.value, "requested_by": a.requested_by},
+            )
+        )
 
     # Open anomalies — skip orphans
-    anomalies = (await db.execute(
-        select(AnomalyCard)
-        .where(
-            AnomalyCard.status == AnomalyStatus.open,
-            (
-                (AnomalyCard.entity_type == "document") &
-                exists().where(Document.id == AnomalyCard.entity_id)
-            ) | (
-                (AnomalyCard.entity_type == "invoice") &
-                exists().where(Invoice.id == AnomalyCard.entity_id)
-            ) | (
-                ~AnomalyCard.entity_type.in_(["document", "invoice"])
-            ),
+    anomalies = (
+        (
+            await db.execute(
+                select(AnomalyCard)
+                .where(
+                    AnomalyCard.status == AnomalyStatus.open,
+                    (
+                        (AnomalyCard.entity_type == "document")
+                        & exists().where(Document.id == AnomalyCard.entity_id)
+                    )
+                    | (
+                        (AnomalyCard.entity_type == "invoice")
+                        & exists().where(Invoice.id == AnomalyCard.entity_id)
+                    )
+                    | (~AnomalyCard.entity_type.in_(["document", "invoice"])),
+                )
+                .order_by(AnomalyCard.created_at.desc())
+                .limit(50)
+            )
         )
-        .order_by(AnomalyCard.created_at.desc())
-        .limit(50)
-    )).scalars().all()
+        .scalars()
+        .all()
+    )
     for a in anomalies:
         priority = "critical" if a.severity == AnomalySeverity.critical else "warning"
-        items.append(FeedItem(
-            id=a.id,
-            type="anomaly",
-            priority=priority,
-            title=a.title,
-            summary=a.description or "",
-            entity_type=a.entity_type,
-            entity_id=a.entity_id,
-            created_at=a.created_at,
-            meta={"anomaly_type": a.anomaly_type.value, "severity": a.severity.value},
-        ))
+        items.append(
+            FeedItem(
+                id=a.id,
+                type="anomaly",
+                priority=priority,
+                title=a.title,
+                summary=a.description or "",
+                entity_type=a.entity_type,
+                entity_id=a.entity_id,
+                created_at=a.created_at,
+                meta={"anomaly_type": a.anomaly_type.value, "severity": a.severity.value},
+            )
+        )
 
     # Quarantine
-    quarantine = (await db.execute(
-        select(QuarantineEntry)
-        .where(QuarantineEntry.decision.is_(None))
-        .order_by(QuarantineEntry.created_at.desc())
-        .limit(50)
-    )).scalars().all()
+    quarantine = (
+        (
+            await db.execute(
+                select(QuarantineEntry)
+                .where(QuarantineEntry.decision.is_(None))
+                .order_by(QuarantineEntry.created_at.desc())
+                .limit(50)
+            )
+        )
+        .scalars()
+        .all()
+    )
     for q in quarantine:
-        items.append(FeedItem(
-            id=q.id,
-            type="quarantine",
-            priority="warning",
-            title=f"Файл в карантине: {q.original_filename}",
-            summary=f"Причина: {q.reason}",
-            entity_type="document",
-            entity_id=q.document_id,
-            created_at=q.created_at,
-            meta={"reason": q.reason, "filename": q.original_filename, "mime": q.detected_mime},
-        ))
+        items.append(
+            FeedItem(
+                id=q.id,
+                type="quarantine",
+                priority="warning",
+                title=f"Файл в карантине: {q.original_filename}",
+                summary=f"Причина: {q.reason}",
+                entity_type="document",
+                entity_id=q.document_id,
+                created_at=q.created_at,
+                meta={"reason": q.reason, "filename": q.original_filename, "mime": q.detected_mime},
+            )
+        )
 
     items.sort(key=lambda x: (0 if x.priority == "critical" else 1, x.created_at), reverse=False)
     items.sort(key=lambda x: x.priority == "critical", reverse=True)
@@ -147,6 +175,7 @@ async def decision_feed(db: AsyncSession = Depends(get_db)):
 
 
 # ── Counters ───────────────────────────────────────────────────────────────────
+
 
 class ActivityItem(BaseModel):
     timestamp: datetime
@@ -181,15 +210,17 @@ async def dashboard_today(db: AsyncSession = Depends(get_db)):
     quarantine_count = await _count(
         db, select(QuarantineEntry).where(QuarantineEntry.decision.is_(None))
     )
-    unread_emails = await _count(
-        db, select(EmailMessage).where(EmailMessage.is_inbound == True)
-    )
+    unread_emails = await _count(db, select(EmailMessage).where(EmailMessage.is_inbound == True))
 
-    events = (await db.execute(
-        select(AuditTimelineEvent)
-        .order_by(AuditTimelineEvent.timestamp.desc())
-        .limit(15)
-    )).scalars().all()
+    events = (
+        (
+            await db.execute(
+                select(AuditTimelineEvent).order_by(AuditTimelineEvent.timestamp.desc()).limit(15)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     return DashboardToday(
         pending_approvals=pending_approvals,

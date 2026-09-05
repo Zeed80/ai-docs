@@ -562,7 +562,10 @@ async def execute_web_research(payload: WebResearchRequest) -> WebResearchRespon
     if not angles and not payload.urls:
         raise HTTPException(
             status_code=400,
-            detail={"error_code": "web_research_no_query", "message": "query, queries or urls required."},
+            detail={
+                "error_code": "web_research_no_query",
+                "message": "query, queries or urls required.",
+            },
         )
 
     diagnostics: list[str] = []
@@ -618,7 +621,9 @@ async def execute_web_research(payload: WebResearchRequest) -> WebResearchRespon
             )
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
-            return WebResearchSource(url=u, diagnostics=[str(detail.get("error_code") or detail.get("message"))])
+            return WebResearchSource(
+                url=u, diagnostics=[str(detail.get("error_code") or detail.get("message"))]
+            )
         except Exception as exc:  # noqa: BLE001
             return WebResearchSource(url=u, diagnostics=[f"read_error:{str(exc)[:80]}"])
 

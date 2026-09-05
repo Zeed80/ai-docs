@@ -31,8 +31,8 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     task_soft_time_limit=300,  # 5 minutes — soft limit raises exception
-    task_time_limit=360,       # 6 minutes — hard kill
-    worker_concurrency=1,      # sequential processing (safe for GPU)
+    task_time_limit=360,  # 6 minutes — hard kill
+    worker_concurrency=1,  # sequential processing (safe for GPU)
     task_routes={
         # ── GPU lane (strictly sequential) ──────────────────────────────────
         # Every step that loads an Ollama model (OCR / extraction / verify /
@@ -256,38 +256,40 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-celery_app.autodiscover_tasks([
-    "app.tasks.extraction",
-    "app.tasks.ingest",
-    "app.tasks.email_triage",
-    "app.tasks.email_sync",
-    "app.tasks.email_idle",
-    "app.tasks.scenario_cron",
-    "app.tasks.embedding",
-    "app.tasks.email_sender",
-])
+celery_app.autodiscover_tasks(
+    [
+        "app.tasks.extraction",
+        "app.tasks.ingest",
+        "app.tasks.email_triage",
+        "app.tasks.email_sync",
+        "app.tasks.email_idle",
+        "app.tasks.scenario_cron",
+        "app.tasks.embedding",
+        "app.tasks.email_sender",
+    ]
+)
 
 # Flat module — not discovered by autodiscover_tasks(related_name="tasks").
-from app.tasks import notification_digest as _notification_digest  # noqa: F401
-from app.tasks import drawing_analysis as _drawing_analysis  # noqa: F401
-from app.tasks import catalog_ingest as _catalog_ingest  # noqa: F401
+from app.tasks import agent_cron as _agent_cron  # noqa: F401
+from app.tasks import approval_escalation as _approval_escalation  # noqa: F401
+from app.tasks import cad_trace as _cad_trace  # noqa: F401
+from app.tasks import canonical_cluster as _canonical_cluster  # noqa: F401
 from app.tasks import catalog_archive as _catalog_archive  # noqa: F401
 from app.tasks import catalog_crawl as _catalog_crawl  # noqa: F401
+from app.tasks import catalog_ingest as _catalog_ingest  # noqa: F401
 from app.tasks import catalog_pages as _catalog_pages  # noqa: F401
 from app.tasks import catalog_visual as _catalog_visual  # noqa: F401
-from app.tasks import approval_escalation as _approval_escalation  # noqa: F401
+from app.tasks import drawing_analysis as _drawing_analysis  # noqa: F401
 from app.tasks import email_compose_task as _email_compose_task  # noqa: F401
-from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
-from app.tasks import proactive as _proactive  # noqa: F401
-from app.tasks import saved_query_alerts as _saved_query_alerts  # noqa: F401
-from app.tasks import canonical_cluster as _canonical_cluster  # noqa: F401
-from app.tasks import tp_generation as _tp_generation  # noqa: F401
-from app.tasks import agent_cron as _agent_cron  # noqa: F401
-from app.tasks import work_orders as _work_orders  # noqa: F401
-from app.tasks import graph_memory as _graph_memory  # noqa: F401
+from app.tasks import engineering_model_reader as _engineering_model_reader  # noqa: F401
 from app.tasks import graph_analytics as _graph_analytics  # noqa: F401
+from app.tasks import graph_memory as _graph_memory  # noqa: F401
 from app.tasks import idle_reflection as _idle_reflection  # noqa: F401
 from app.tasks import image_generation as _image_generation  # noqa: F401
 from app.tasks import lora_training as _lora_training  # noqa: F401
-from app.tasks import cad_trace as _cad_trace  # noqa: F401
-from app.tasks import engineering_model_reader as _engineering_model_reader  # noqa: F401
+from app.tasks import notification_digest as _notification_digest  # noqa: F401
+from app.tasks import proactive as _proactive  # noqa: F401
+from app.tasks import saved_query_alerts as _saved_query_alerts  # noqa: F401
+from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
+from app.tasks import tp_generation as _tp_generation  # noqa: F401
+from app.tasks import work_orders as _work_orders  # noqa: F401

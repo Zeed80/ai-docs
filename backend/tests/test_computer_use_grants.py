@@ -19,17 +19,32 @@ async def test_computer_use_broker_enforces_grant_and_audits_file_action(client,
     target = tmp_path / "result.txt"
     denied = await client.post(
         "/api/computer-use/execute",
-        json={"action": "file_write", "work_order_id": order_id, "target": str(target), "arguments": {"content": "verified"}},
+        json={
+            "action": "file_write",
+            "work_order_id": order_id,
+            "target": str(target),
+            "arguments": {"content": "verified"},
+        },
     )
     assert denied.status_code == 423
     granted = await client.post(
         f"/api/work-orders/{order_id}/computer-grants",
-        json={"actions": ["file_write", "file_read"], "allowed_roots": [str(tmp_path)], "max_actions": 2, "reason": "test"},
+        json={
+            "actions": ["file_write", "file_read"],
+            "allowed_roots": [str(tmp_path)],
+            "max_actions": 2,
+            "reason": "test",
+        },
     )
     assert granted.status_code == 201, granted.text
     written = await client.post(
         "/api/computer-use/execute",
-        json={"action": "file_write", "work_order_id": order_id, "target": str(target), "arguments": {"content": "verified"}},
+        json={
+            "action": "file_write",
+            "work_order_id": order_id,
+            "target": str(target),
+            "arguments": {"content": "verified"},
+        },
     )
     assert written.status_code == 200, written.text
     assert written.json()["result"]["sha256"]

@@ -13,7 +13,26 @@ from sqlalchemy.orm import selectinload
 from app.audit.service import add_timeline_event, log_action
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo, require_permission
-from app.db.models import BOM, CadIrRevision, Drawing, DrawingAssemblyBOM, EngineeringAnalysisCase, EngineeringAnalysisRun, EngineeringAssembly, EngineeringAssemblyComponent, EngineeringAssemblyMate, EngineeringChangeRequest, EngineeringMaterial, EngineeringMaterialAssignment, EngineeringProject, EngineeringProjection, EngineeringRevision, EngineeringValidationRun, ManufacturingCheckResult, ManufacturingProcessPlan
+from app.db.models import (
+    BOM,
+    CadIrRevision,
+    Drawing,
+    DrawingAssemblyBOM,
+    EngineeringAnalysisCase,
+    EngineeringAnalysisRun,
+    EngineeringAssembly,
+    EngineeringAssemblyComponent,
+    EngineeringAssemblyMate,
+    EngineeringChangeRequest,
+    EngineeringMaterial,
+    EngineeringMaterialAssignment,
+    EngineeringProject,
+    EngineeringProjection,
+    EngineeringRevision,
+    EngineeringValidationRun,
+    ManufacturingCheckResult,
+    ManufacturingProcessPlan,
+)
 from app.db.session import get_db
 from app.domain.emg_predicates import PREDICATE
 from app.domain.engineering import (
@@ -25,6 +44,9 @@ from app.domain.engineering import (
     ChangeRequestCreate,
     ChangeRequestOut,
     ChangeRequestSign,
+    EngineeringAnalysisCaseCreate,
+    EngineeringAnalysisCaseOut,
+    EngineeringAnalysisRunOut,
     EngineeringApprovalRequest,
     EngineeringAssemblyComponentCreate,
     EngineeringAssemblyComponentOut,
@@ -33,21 +55,18 @@ from app.domain.engineering import (
     EngineeringAssemblyMateOut,
     EngineeringAssemblyOut,
     EngineeringAssemblyValidation,
-    EngineeringAnalysisCaseCreate,
-    EngineeringAnalysisCaseOut,
-    EngineeringAnalysisRunOut,
-    EngineeringValidationRunOut,
     EngineeringMaterialAssignmentCreate,
     EngineeringMaterialAssignmentOut,
     EngineeringMaterialCreate,
     EngineeringMaterialOut,
     EngineeringProjectCreate,
     EngineeringProjectDetail,
-    EngineeringProjectOut,
     EngineeringProjectionCreate,
     EngineeringProjectionOut,
+    EngineeringProjectOut,
     EngineeringRevisionCreate,
     EngineeringRevisionOut,
+    EngineeringValidationRunOut,
 )
 
 router = APIRouter()
@@ -70,10 +89,7 @@ def _artifact_report_with_storage(
     import hashlib
     import json
 
-    enriched = {
-        key: value for key, value in report.items()
-        if key != "canonical_report_sha256"
-    }
+    enriched = {key: value for key, value in report.items() if key != "canonical_report_sha256"}
     enriched.update({"artifact_path": artifact_path, "report_path": report_path})
     enriched["canonical_report_sha256"] = hashlib.sha256(
         json.dumps(enriched, sort_keys=True, separators=(",", ":")).encode()
@@ -102,7 +118,8 @@ async def _persist_verified_svg_patch(
     artifact_sha = report["artifact_sha256"]
     existing = next(
         (
-            item for item in graph.evidence
+            item
+            for item in graph.evidence
             if item.kind == "projection_comparison"
             and item.payload.get("artifact_sha256") == artifact_sha
             and item.payload.get("artifact_path") == report["artifact_path"]
@@ -116,17 +133,13 @@ async def _persist_verified_svg_patch(
     ).encode()
     uploaded: list[str] = []
     try:
-        await to_thread.run_sync(
-            upload_file, svg, report["artifact_path"], "image/svg+xml"
-        )
+        await to_thread.run_sync(upload_file, svg, report["artifact_path"], "image/svg+xml")
         uploaded.append(report["artifact_path"])
         await to_thread.run_sync(
             upload_file, report_bytes, report["report_path"], "application/json"
         )
         uploaded.append(report["report_path"])
-        row, errors = await merge_and_persist_patch(
-            db, patch, expected_graph_id=graph_id
-        )
+        row, errors = await merge_and_persist_patch(db, patch, expected_graph_id=graph_id)
         if row is None:
             raise ValueError("SVG GraphPatch отклонён: " + ", ".join(errors))
         await db.commit()
@@ -163,7 +176,12 @@ async def create_project(
     )
     db.add(project)
     await db.flush()
-    await log_action(db, action="engineering.project.create", entity_type="engineering_project", entity_id=project.id)
+    await log_action(
+        db,
+        action="engineering.project.create",
+        entity_type="engineering_project",
+        entity_id=project.id,
+    )
     await db.commit()
     await db.refresh(project)
     return project
@@ -171,17 +189,27 @@ async def create_project(
 
 @router.get("/projects", response_model=list[EngineeringProjectOut])
 async def list_projects(db: AsyncSession = Depends(get_db)) -> list[EngineeringProject]:
-    result = await db.execute(select(EngineeringProject).order_by(EngineeringProject.updated_at.desc()))
+    result = await db.execute(
+        select(EngineeringProject).order_by(EngineeringProject.updated_at.desc())
+    )
     return list(result.scalars())
 
 
 @router.get("/materials", response_model=list[EngineeringMaterialOut])
 async def list_materials(db: AsyncSession = Depends(get_db)) -> list[EngineeringMaterial]:
-    return list((await db.execute(select(EngineeringMaterial).order_by(EngineeringMaterial.designation))).scalars())
+    return list(
+        (
+            await db.execute(select(EngineeringMaterial).order_by(EngineeringMaterial.designation))
+        ).scalars()
+    )
 
 
-@router.post("/materials", response_model=EngineeringMaterialOut, status_code=status.HTTP_201_CREATED)
-async def create_material(body: EngineeringMaterialCreate, db: AsyncSession = Depends(get_db)) -> EngineeringMaterial:
+@router.post(
+    "/materials", response_model=EngineeringMaterialOut, status_code=status.HTTP_201_CREATED
+)
+async def create_material(
+    body: EngineeringMaterialCreate, db: AsyncSession = Depends(get_db)
+) -> EngineeringMaterial:
     material = EngineeringMaterial(**body.model_dump())
     db.add(material)
     await db.commit()
@@ -190,9 +218,13 @@ async def create_material(body: EngineeringMaterialCreate, db: AsyncSession = De
 
 
 @router.get("/projects/{project_id}", response_model=EngineeringProjectDetail)
-async def get_project(project_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> EngineeringProject:
+async def get_project(
+    project_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> EngineeringProject:
     result = await db.execute(
-        select(EngineeringProject).where(EngineeringProject.id == project_id).options(selectinload(EngineeringProject.revisions))
+        select(EngineeringProject)
+        .where(EngineeringProject.id == project_id)
+        .options(selectinload(EngineeringProject.revisions))
     )
     project = result.scalar_one_or_none()
     if not project:
@@ -200,7 +232,11 @@ async def get_project(project_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     return project
 
 
-@router.post("/projects/{project_id}/revisions", response_model=EngineeringRevisionOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/projects/{project_id}/revisions",
+    response_model=EngineeringRevisionOut,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_revision(
     project_id: uuid.UUID,
     body: EngineeringRevisionCreate,
@@ -211,11 +247,17 @@ async def create_revision(
     project = await db.get(EngineeringProject, project_id)
     if not project:
         raise HTTPException(404, "Инженерный проект не найден")
-    await db.execute(select(EngineeringProject.id).where(EngineeringProject.id == project_id).with_for_update())
-    latest = (await db.execute(
-        select(EngineeringRevision).where(EngineeringRevision.engineering_project_id == project_id)
-        .order_by(EngineeringRevision.revision.desc()).limit(1)
-    )).scalar_one_or_none()
+    await db.execute(
+        select(EngineeringProject.id).where(EngineeringProject.id == project_id).with_for_update()
+    )
+    latest = (
+        await db.execute(
+            select(EngineeringRevision)
+            .where(EngineeringRevision.engineering_project_id == project_id)
+            .order_by(EngineeringRevision.revision.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
     latest_number = latest.revision if latest else None
     if body.base_revision != latest_number:
         raise HTTPException(409, "Ревизия устарела: обновите проект перед сохранением")
@@ -235,23 +277,37 @@ async def create_revision(
     # source revision. Their underlying business records remain readable but
     # cannot be mistaken for current engineering output.
     if latest:
-        stale = (await db.execute(
-            select(EngineeringProjection).join(EngineeringRevision).where(
-                EngineeringRevision.engineering_project_id == project_id,
-                EngineeringProjection.state == "current",
+        stale = (
+            await db.execute(
+                select(EngineeringProjection)
+                .join(EngineeringRevision)
+                .where(
+                    EngineeringRevision.engineering_project_id == project_id,
+                    EngineeringProjection.state == "current",
+                )
             )
-        )).scalars()
+        ).scalars()
         for projection in stale:
             projection.state = "stale"
     project.status = "needs_review" if revision.status == "needs_review" else "validated"
     await db.flush()
-    await log_action(db, action="engineering.revision.create", entity_type="engineering_revision", entity_id=revision.id, user_id=body.created_by)
+    await log_action(
+        db,
+        action="engineering.revision.create",
+        entity_type="engineering_revision",
+        entity_id=revision.id,
+        user_id=body.created_by,
+    )
     await db.commit()
     await db.refresh(revision)
     return revision
 
 
-@router.post("/revisions/{revision_id}/projections", response_model=EngineeringProjectionOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/revisions/{revision_id}/projections",
+    response_model=EngineeringProjectionOut,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_projection(
     revision_id: uuid.UUID, body: EngineeringProjectionCreate, db: AsyncSession = Depends(get_db)
 ) -> EngineeringProjection:
@@ -262,7 +318,10 @@ async def create_projection(
         raise HTTPException(400, "Нельзя изменять проекции утвержденной ревизии")
     target_model = _PROJECTABLE_MODELS.get(body.entity_type)
     if target_model is None:
-        raise HTTPException(400, "Поддерживаются проекции drawing, cad_ir_revision, bom и manufacturing_process_plan")
+        raise HTTPException(
+            400,
+            "Поддерживаются проекции drawing, cad_ir_revision, bom и manufacturing_process_plan",
+        )
     target = await db.get(target_model, body.entity_id)
     if target is None:
         raise HTTPException(404, "Объект проекции не найден")
@@ -285,7 +344,9 @@ async def create_projection(
 
 
 @router.get("/revisions/{revision_id}/projections", response_model=list[EngineeringProjectionOut])
-async def list_projections(revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringProjection]:
+async def list_projections(
+    revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> list[EngineeringProjection]:
     result = await db.execute(
         select(EngineeringProjection)
         .where(EngineeringProjection.engineering_revision_id == revision_id)
@@ -294,8 +355,12 @@ async def list_projections(revision_id: uuid.UUID, db: AsyncSession = Depends(ge
     return list(result.scalars())
 
 
-@router.get("/revisions/{revision_id}/materials", response_model=list[EngineeringMaterialAssignmentOut])
-async def list_material_assignments(revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringMaterialAssignment]:
+@router.get(
+    "/revisions/{revision_id}/materials", response_model=list[EngineeringMaterialAssignmentOut]
+)
+async def list_material_assignments(
+    revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> list[EngineeringMaterialAssignment]:
     result = await db.execute(
         select(EngineeringMaterialAssignment)
         .where(EngineeringMaterialAssignment.engineering_revision_id == revision_id)
@@ -304,9 +369,15 @@ async def list_material_assignments(revision_id: uuid.UUID, db: AsyncSession = D
     return list(result.scalars())
 
 
-@router.post("/revisions/{revision_id}/materials", response_model=EngineeringMaterialAssignmentOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/revisions/{revision_id}/materials",
+    response_model=EngineeringMaterialAssignmentOut,
+    status_code=status.HTTP_201_CREATED,
+)
 async def assign_material(
-    revision_id: uuid.UUID, body: EngineeringMaterialAssignmentCreate, db: AsyncSession = Depends(get_db)
+    revision_id: uuid.UUID,
+    body: EngineeringMaterialAssignmentCreate,
+    db: AsyncSession = Depends(get_db),
 ) -> EngineeringMaterialAssignment:
     revision = await db.get(EngineeringRevision, revision_id)
     if not revision:
@@ -315,11 +386,14 @@ async def assign_material(
         raise HTTPException(400, "Нельзя изменять материал утвержденной ревизии")
     if not await db.get(EngineeringMaterial, body.material_id):
         raise HTTPException(404, "Материал не найден")
-    assignment = EngineeringMaterialAssignment(engineering_revision_id=revision_id, **body.model_dump())
+    assignment = EngineeringMaterialAssignment(
+        engineering_revision_id=revision_id, **body.model_dump()
+    )
     db.add(assignment)
     await db.commit()
     result = await db.execute(
-        select(EngineeringMaterialAssignment).where(EngineeringMaterialAssignment.id == assignment.id)
+        select(EngineeringMaterialAssignment)
+        .where(EngineeringMaterialAssignment.id == assignment.id)
         .options(selectinload(EngineeringMaterialAssignment.material))
     )
     return result.scalar_one()
@@ -335,12 +409,28 @@ async def _editable_revision(db: AsyncSession, revision_id: uuid.UUID) -> Engine
 
 
 @router.get("/revisions/{revision_id}/assemblies", response_model=list[EngineeringAssemblyOut])
-async def list_assemblies(revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringAssembly]:
-    return list((await db.execute(select(EngineeringAssembly).where(EngineeringAssembly.engineering_revision_id == revision_id))).scalars())
+async def list_assemblies(
+    revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> list[EngineeringAssembly]:
+    return list(
+        (
+            await db.execute(
+                select(EngineeringAssembly).where(
+                    EngineeringAssembly.engineering_revision_id == revision_id
+                )
+            )
+        ).scalars()
+    )
 
 
-@router.post("/revisions/{revision_id}/assemblies", response_model=EngineeringAssemblyOut, status_code=status.HTTP_201_CREATED)
-async def create_assembly(revision_id: uuid.UUID, body: EngineeringAssemblyCreate, db: AsyncSession = Depends(get_db)) -> EngineeringAssembly:
+@router.post(
+    "/revisions/{revision_id}/assemblies",
+    response_model=EngineeringAssemblyOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_assembly(
+    revision_id: uuid.UUID, body: EngineeringAssemblyCreate, db: AsyncSession = Depends(get_db)
+) -> EngineeringAssembly:
     await _editable_revision(db, revision_id)
     assembly = EngineeringAssembly(engineering_revision_id=revision_id, **body.model_dump())
     db.add(assembly)
@@ -349,13 +439,23 @@ async def create_assembly(revision_id: uuid.UUID, body: EngineeringAssemblyCreat
     return assembly
 
 
-@router.post("/assemblies/{assembly_id}/components", response_model=EngineeringAssemblyComponentOut, status_code=status.HTTP_201_CREATED)
-async def add_assembly_component(assembly_id: uuid.UUID, body: EngineeringAssemblyComponentCreate, db: AsyncSession = Depends(get_db)) -> EngineeringAssemblyComponent:
+@router.post(
+    "/assemblies/{assembly_id}/components",
+    response_model=EngineeringAssemblyComponentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_assembly_component(
+    assembly_id: uuid.UUID,
+    body: EngineeringAssemblyComponentCreate,
+    db: AsyncSession = Depends(get_db),
+) -> EngineeringAssemblyComponent:
     assembly = await db.get(EngineeringAssembly, assembly_id)
     if not assembly:
         raise HTTPException(404, "Сборка не найдена")
     await _editable_revision(db, assembly.engineering_revision_id)
-    component = EngineeringAssemblyComponent(engineering_assembly_id=assembly_id, **body.model_dump())
+    component = EngineeringAssemblyComponent(
+        engineering_assembly_id=assembly_id, **body.model_dump()
+    )
     db.add(component)
     await db.commit()
     await db.refresh(component)
@@ -391,19 +491,27 @@ async def sync_assembly_components_from_bom(
     if not drawing:
         raise HTTPException(404, "Чертёж не найден")
 
-    bom_rows = list((await db.execute(
-        select(DrawingAssemblyBOM)
-        .where(DrawingAssemblyBOM.drawing_id == body.drawing_id)
-        .order_by(DrawingAssemblyBOM.item_no)
-    )).scalars())
+    bom_rows = list(
+        (
+            await db.execute(
+                select(DrawingAssemblyBOM)
+                .where(DrawingAssemblyBOM.drawing_id == body.drawing_id)
+                .order_by(DrawingAssemblyBOM.item_no)
+            )
+        ).scalars()
+    )
     if not bom_rows:
         raise HTTPException(409, "У чертежа нет извлечённой спецификации (assembly-bom/extract)")
 
     existing_components = {
         c.instance_key: c
-        for c in (await db.execute(select(EngineeringAssemblyComponent).where(
-            EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
-        ))).scalars()
+        for c in (
+            await db.execute(
+                select(EngineeringAssemblyComponent).where(
+                    EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
+                )
+            )
+        ).scalars()
     }
 
     matched: list[EngineeringAssemblyComponent] = []
@@ -424,30 +532,46 @@ async def sync_assembly_components_from_bom(
         }
 
         if not normalized:
-            unresolved.append(AssemblyComponentUnresolved(
-                item_no=item.item_no, designation=item.designation,
-                drawing_number=item.drawing_number, reason="missing_drawing_number",
-            ))
-        else:
-            candidates = list((await db.execute(
-                select(Drawing).where(
-                    func.lower(func.trim(Drawing.drawing_number)) == normalized.lower(),
-                    Drawing.engineering_revision_id.is_not(None),
+            unresolved.append(
+                AssemblyComponentUnresolved(
+                    item_no=item.item_no,
+                    designation=item.designation,
+                    drawing_number=item.drawing_number,
+                    reason="missing_drawing_number",
                 )
-            )).scalars())
+            )
+        else:
+            candidates = list(
+                (
+                    await db.execute(
+                        select(Drawing).where(
+                            func.lower(func.trim(Drawing.drawing_number)) == normalized.lower(),
+                            Drawing.engineering_revision_id.is_not(None),
+                        )
+                    )
+                ).scalars()
+            )
             if len(candidates) == 1:
                 component_revision_id = candidates[0].engineering_revision_id
             elif len(candidates) == 0:
-                unresolved.append(AssemblyComponentUnresolved(
-                    item_no=item.item_no, designation=item.designation,
-                    drawing_number=item.drawing_number, reason="no_match",
-                ))
+                unresolved.append(
+                    AssemblyComponentUnresolved(
+                        item_no=item.item_no,
+                        designation=item.designation,
+                        drawing_number=item.drawing_number,
+                        reason="no_match",
+                    )
+                )
             else:
                 bom_meta["ambiguous_drawing_ids"] = [str(c.id) for c in candidates]
-                unresolved.append(AssemblyComponentUnresolved(
-                    item_no=item.item_no, designation=item.designation,
-                    drawing_number=item.drawing_number, reason="ambiguous",
-                ))
+                unresolved.append(
+                    AssemblyComponentUnresolved(
+                        item_no=item.item_no,
+                        designation=item.designation,
+                        drawing_number=item.drawing_number,
+                        reason="ambiguous",
+                    )
+                )
 
         existing = existing_components.get(instance_key)
         if existing:
@@ -481,14 +605,32 @@ async def sync_assembly_components_from_bom(
     )
 
 
-@router.post("/assemblies/{assembly_id}/mates", response_model=EngineeringAssemblyMateOut, status_code=status.HTTP_201_CREATED)
-async def add_assembly_mate(assembly_id: uuid.UUID, body: EngineeringAssemblyMateCreate, db: AsyncSession = Depends(get_db)) -> EngineeringAssemblyMate:
+@router.post(
+    "/assemblies/{assembly_id}/mates",
+    response_model=EngineeringAssemblyMateOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_assembly_mate(
+    assembly_id: uuid.UUID, body: EngineeringAssemblyMateCreate, db: AsyncSession = Depends(get_db)
+) -> EngineeringAssemblyMate:
     assembly = await db.get(EngineeringAssembly, assembly_id)
     if not assembly:
         raise HTTPException(404, "Сборка не найдена")
     await _editable_revision(db, assembly.engineering_revision_id)
-    keys = set((await db.execute(select(EngineeringAssemblyComponent.instance_key).where(EngineeringAssemblyComponent.engineering_assembly_id == assembly_id))).scalars())
-    if body.first_instance_key not in keys or body.second_instance_key not in keys or body.first_instance_key == body.second_instance_key:
+    keys = set(
+        (
+            await db.execute(
+                select(EngineeringAssemblyComponent.instance_key).where(
+                    EngineeringAssemblyComponent.engineering_assembly_id == assembly_id
+                )
+            )
+        ).scalars()
+    )
+    if (
+        body.first_instance_key not in keys
+        or body.second_instance_key not in keys
+        or body.first_instance_key == body.second_instance_key
+    ):
         raise HTTPException(422, "Сопряжение должно ссылаться на два разных экземпляра сборки")
     mate = EngineeringAssemblyMate(engineering_assembly_id=assembly_id, **body.model_dump())
     db.add(mate)
@@ -508,13 +650,15 @@ def _solve_frame(raw: Any) -> dict[str, Any] | None:
         return None
     position = raw.get("position_mm")
     if (
-        not isinstance(position, list) or len(position) != 3
+        not isinstance(position, list)
+        or len(position) != 3
         or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in position)
     ):
         return None
     axis = raw.get("axis", [0.0, 0.0, 1.0])
     if (
-        not isinstance(axis, list) or len(axis) != 3
+        not isinstance(axis, list)
+        or len(axis) != 3
         or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in axis)
         or all(abs(float(v)) < 1e-12 for v in axis)
     ):
@@ -577,19 +721,32 @@ async def solve_assembly_preview(
     assembly = await db.get(EngineeringAssembly, assembly_id)
     if not assembly:
         raise HTTPException(404, "Сборка не найдена")
-    components = list((await db.execute(select(EngineeringAssemblyComponent).where(
-        EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
-        EngineeringAssemblyComponent.suppressed.is_(False),
-    ))).scalars())
+    components = list(
+        (
+            await db.execute(
+                select(EngineeringAssemblyComponent).where(
+                    EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
+                    EngineeringAssemblyComponent.suppressed.is_(False),
+                )
+            )
+        ).scalars()
+    )
     if not components:
         raise HTTPException(409, "Сборка не содержит активных компонентов")
-    mates = list((await db.execute(select(EngineeringAssemblyMate).where(
-        EngineeringAssemblyMate.engineering_assembly_id == assembly_id,
-    ))).scalars())
+    mates = list(
+        (
+            await db.execute(
+                select(EngineeringAssemblyMate).where(
+                    EngineeringAssemblyMate.engineering_assembly_id == assembly_id,
+                )
+            )
+        ).scalars()
+    )
 
     key_set = {component.instance_key for component in components}
     grounded_keys = {
-        component.instance_key for component in components
+        component.instance_key
+        for component in components
         if bool((component.metadata_ or {}).get("grounded"))
     }
     if not grounded_keys:
@@ -601,41 +758,57 @@ async def solve_assembly_preview(
         translate = transform.get("translate", [0.0, 0.0, 0.0])
         if not isinstance(translate, list) or len(translate) != 3:
             translate = [0.0, 0.0, 0.0]
-        kernel_components.append({
-            "key": component.instance_key,
-            "position_mm": [float(value) for value in translate],
-            "axis": [0.0, 0.0, 1.0],
-            "angle_deg": float(transform.get("rotate_z_deg", 0.0) or 0.0),
-            "grounded": component.instance_key in grounded_keys,
-        })
+        kernel_components.append(
+            {
+                "key": component.instance_key,
+                "position_mm": [float(value) for value in translate],
+                "axis": [0.0, 0.0, 1.0],
+                "angle_deg": float(transform.get("rotate_z_deg", 0.0) or 0.0),
+                "grounded": component.instance_key in grounded_keys,
+            }
+        )
 
     joints = []
     skipped: list[AssemblySolveSkippedMate] = []
     for mate in mates:
         joint_type = MATE_TYPE_TO_JOINT_TYPE.get(mate.mate_type.lower())
         if joint_type is None:
-            skipped.append(AssemblySolveSkippedMate(
-                mate_id=mate.id, mate_type=mate.mate_type, reason="unsupported_mate_type",
-            ))
+            skipped.append(
+                AssemblySolveSkippedMate(
+                    mate_id=mate.id,
+                    mate_type=mate.mate_type,
+                    reason="unsupported_mate_type",
+                )
+            )
             continue
         if mate.first_instance_key not in key_set or mate.second_instance_key not in key_set:
-            skipped.append(AssemblySolveSkippedMate(
-                mate_id=mate.id, mate_type=mate.mate_type, reason="invalid_component_reference",
-            ))
+            skipped.append(
+                AssemblySolveSkippedMate(
+                    mate_id=mate.id,
+                    mate_type=mate.mate_type,
+                    reason="invalid_component_reference",
+                )
+            )
             continue
         parameters = mate.parameters or {}
         first_frame = _solve_frame(parameters.get("first_frame"))
         second_frame = _solve_frame(parameters.get("second_frame"))
         if first_frame is None or second_frame is None:
-            skipped.append(AssemblySolveSkippedMate(
-                mate_id=mate.id, mate_type=mate.mate_type, reason="missing_frames",
-            ))
+            skipped.append(
+                AssemblySolveSkippedMate(
+                    mate_id=mate.id,
+                    mate_type=mate.mate_type,
+                    reason="missing_frames",
+                )
+            )
             continue
-        joints.append({
-            "type": joint_type,
-            "first": {"key": mate.first_instance_key, **first_frame},
-            "second": {"key": mate.second_instance_key, **second_frame},
-        })
+        joints.append(
+            {
+                "type": joint_type,
+                "first": {"key": mate.first_instance_key, **first_frame},
+                "second": {"key": mate.second_instance_key, **second_frame},
+            }
+        )
 
     payload = {"components": kernel_components, "joints": joints}
     result = await _call_kernel_assembly_solve(payload)
@@ -655,10 +828,16 @@ def _overlap(a: dict, b: dict) -> bool:
     required = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
     if not all(key in a and key in b for key in required):
         return False
-    return all(float(a[f"{axis}_min"]) < float(b[f"{axis}_max"]) and float(b[f"{axis}_min"]) < float(a[f"{axis}_max"]) for axis in ("x", "y", "z"))
+    return all(
+        float(a[f"{axis}_min"]) < float(b[f"{axis}_max"])
+        and float(b[f"{axis}_min"]) < float(a[f"{axis}_max"])
+        for axis in ("x", "y", "z")
+    )
 
 
-async def _exact_interference(components: list[EngineeringAssemblyComponent]) -> tuple[list[dict], list[str], str | None]:
+async def _exact_interference(
+    components: list[EngineeringAssemblyComponent],
+) -> tuple[list[dict], list[str], str | None]:
     """E5: exact B-Rep interference via the CAD kernel for components that
     declare an occupancy solid (metadata.shape: box|cylinder + transform).
     Returns (collisions, checked_instance_keys, degradation_note)."""
@@ -667,7 +846,8 @@ async def _exact_interference(components: list[EngineeringAssemblyComponent]) ->
     from app.config import settings
 
     exact = [
-        component for component in components
+        component
+        for component in components
         if not component.suppressed and isinstance(component.metadata_.get("shape"), dict)
     ]
     if len(exact) < 2:
@@ -684,10 +864,16 @@ async def _exact_interference(components: list[EngineeringAssemblyComponent]) ->
     }
     try:
         async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(f"{settings.cad_kernel_url.rstrip('/')}/interference", json=payload)
+            response = await client.post(
+                f"{settings.cad_kernel_url.rstrip('/')}/interference", json=payload
+            )
         if response.status_code != 200:
             return [], [], f"kernel отклонил exact-проверку: {response.text[:200]}"
-        return response.json().get("collisions", []), [component.instance_key for component in exact], None
+        return (
+            response.json().get("collisions", []),
+            [component.instance_key for component in exact],
+            None,
+        )
     except httpx.HTTPError as exc:
         # The kernel being down must not block validation — degrade to AABB
         # loudly, never silently.
@@ -695,11 +881,21 @@ async def _exact_interference(components: list[EngineeringAssemblyComponent]) ->
 
 
 @router.post("/assemblies/{assembly_id}/validate", response_model=EngineeringAssemblyValidation)
-async def validate_assembly(assembly_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> EngineeringAssemblyValidation:
+async def validate_assembly(
+    assembly_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> EngineeringAssemblyValidation:
     assembly = await db.get(EngineeringAssembly, assembly_id)
     if not assembly:
         raise HTTPException(404, "Сборка не найдена")
-    components = list((await db.execute(select(EngineeringAssemblyComponent).where(EngineeringAssemblyComponent.engineering_assembly_id == assembly_id))).scalars())
+    components = list(
+        (
+            await db.execute(
+                select(EngineeringAssemblyComponent).where(
+                    EngineeringAssemblyComponent.engineering_assembly_id == assembly_id
+                )
+            )
+        ).scalars()
+    )
     exact_collisions, exact_keys, degraded = await _exact_interference(components)
     exact_key_set = set(exact_keys)
     # AABB stays for components without declared geometry; exact-checked pairs
@@ -708,14 +904,30 @@ async def validate_assembly(assembly_id: uuid.UUID, db: AsyncSession = Depends(g
         (first.instance_key, second.instance_key)
         for index, first in enumerate(components)
         if not first.suppressed and first.bounds
-        for second in components[index + 1:]
-        if not second.suppressed and second.bounds and _overlap(first.bounds, second.bounds)
+        for second in components[index + 1 :]
+        if not second.suppressed
+        and second.bounds
+        and _overlap(first.bounds, second.bounds)
         and not (first.instance_key in exact_key_set and second.instance_key in exact_key_set)
     ]
     collisions.extend((item["first"], item["second"]) for item in exact_collisions)
     keys = {component.instance_key for component in components}
-    mates = list((await db.execute(select(EngineeringAssemblyMate).where(EngineeringAssemblyMate.engineering_assembly_id == assembly_id))).scalars())
-    invalid = [str(mate.id) for mate in mates if mate.first_instance_key not in keys or mate.second_instance_key not in keys or mate.first_instance_key == mate.second_instance_key]
+    mates = list(
+        (
+            await db.execute(
+                select(EngineeringAssemblyMate).where(
+                    EngineeringAssemblyMate.engineering_assembly_id == assembly_id
+                )
+            )
+        ).scalars()
+    )
+    invalid = [
+        str(mate.id)
+        for mate in mates
+        if mate.first_instance_key not in keys
+        or mate.second_instance_key not in keys
+        or mate.first_instance_key == mate.second_instance_key
+    ]
     from app.domain.assembly import analyze_assembly_dof
 
     dof = analyze_assembly_dof(components, mates)
@@ -744,16 +956,24 @@ async def sync_assembly_model_graph(
     revision = await db.get(EngineeringRevision, assembly.engineering_revision_id)
     if revision is None:
         raise HTTPException(409, "Инженерная ревизия сборки не найдена")
-    components = list((await db.execute(
-        select(EngineeringAssemblyComponent).where(
-            EngineeringAssemblyComponent.engineering_assembly_id == assembly_id
-        )
-    )).scalars())
-    mates = list((await db.execute(
-        select(EngineeringAssemblyMate).where(
-            EngineeringAssemblyMate.engineering_assembly_id == assembly_id
-        )
-    )).scalars())
+    components = list(
+        (
+            await db.execute(
+                select(EngineeringAssemblyComponent).where(
+                    EngineeringAssemblyComponent.engineering_assembly_id == assembly_id
+                )
+            )
+        ).scalars()
+    )
+    mates = list(
+        (
+            await db.execute(
+                select(EngineeringAssemblyMate).where(
+                    EngineeringAssemblyMate.engineering_assembly_id == assembly_id
+                )
+            )
+        ).scalars()
+    )
     validation = await validate_assembly(assembly_id, db)
 
     from app.ai.assembly_emg import assembly_as_graph, assembly_revision_patch
@@ -857,18 +1077,18 @@ async def build_assembly_model_graph(
     graph = load_graph(latest)
     reopen_assertion = next(
         (
-            item for item in graph.assertions
-            if item.state == "active"
-            and item.predicate == PREDICATE.ASSEMBLY_ARTIFACT_REOPEN_VALID
+            item
+            for item in graph.assertions
+            if item.state == "active" and item.predicate == PREDICATE.ASSEMBLY_ARTIFACT_REOPEN_VALID
         ),
         None,
     )
     if reopen_assertion is None:
         raise HTTPException(409, "В assembly graph отсутствует artifact reopen gate")
     non_step_blockers = {
-        item.id for item in graph.assertions
-        if item.state == "active"
-        and item.predicate == PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE
+        item.id
+        for item in graph.assertions
+        if item.state == "active" and item.predicate == PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE
     }
     admission = evaluate_build_admission(
         graph,
@@ -882,12 +1102,16 @@ async def build_assembly_model_graph(
             detail=admission.model_dump(mode="json"),
         )
     assembly = await db.get(EngineeringAssembly, assembly_id)
-    components = list((await db.execute(
-        select(EngineeringAssemblyComponent).where(
-            EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
-            EngineeringAssemblyComponent.suppressed.is_(False),
-        )
-    )).scalars())
+    components = list(
+        (
+            await db.execute(
+                select(EngineeringAssemblyComponent).where(
+                    EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
+                    EngineeringAssemblyComponent.suppressed.is_(False),
+                )
+            )
+        ).scalars()
+    )
     if assembly is None or not components:
         raise HTTPException(409, "Сборка не содержит активных компонентов")
     if any(not isinstance(item.metadata_.get("shape"), dict) for item in components):
@@ -930,10 +1154,7 @@ async def build_assembly_model_graph(
     step_sha = hashlib.sha256(step_bytes).hexdigest()
     if report["reopen"].get("step_sha256") != step_sha:
         raise HTTPException(502, "STEP SHA не совпал с kernel report")
-    artifact_path = (
-        f"engineering/assemblies/{assembly_id}/"
-        f"r{graph.revision}-{step_sha}.step"
-    )
+    artifact_path = f"engineering/assemblies/{assembly_id}/r{graph.revision}-{step_sha}.step"
     report_path = artifact_path.removesuffix(".step") + ".json"
     artifact_id = f"artifact:assembly-step:{step_sha[:20]}"
     operation_id = f"operation:assembly-compile:{step_sha[:20]}"
@@ -969,12 +1190,14 @@ async def build_assembly_model_graph(
             raise HTTPException(502, f"Kernel report содержит неизвестный instance {key}")
         topology_id = f"topology:solid:{hashlib.sha256(key.encode()).hexdigest()[:16]}"
         nodes.append(GraphNode(id=topology_id, type="TopologyElement", name=key))
-        edges.append(GraphEdge(
-            id=f"maps:{subject_id}:{topology_id}",
-            type="maps_to_topology",
-            source_id=subject_id,
-            target_id=topology_id,
-        ))
+        edges.append(
+            GraphEdge(
+                id=f"maps:{subject_id}:{topology_id}",
+                type="maps_to_topology",
+                source_id=subject_id,
+                target_id=topology_id,
+            )
+        )
     evidence_id = f"evidence:assembly-reopen:{step_sha[:20]}"
     assertions = [
         Assertion(
@@ -1022,16 +1245,18 @@ async def build_assembly_model_graph(
         add_nodes=nodes,
         add_edges=edges,
         add_assertions=assertions,
-        add_evidence=[Evidence(
-            id=evidence_id,
-            kind="kernel_topology",
-            payload={
-                "artifact_path": artifact_path,
-                "report_path": report_path,
-                "report": report,
-            },
-            sha256=hashlib.sha256(report_bytes).hexdigest(),
-        )],
+        add_evidence=[
+            Evidence(
+                id=evidence_id,
+                kind="kernel_topology",
+                payload={
+                    "artifact_path": artifact_path,
+                    "report_path": report_path,
+                    "report": report,
+                },
+                sha256=hashlib.sha256(report_bytes).hexdigest(),
+            )
+        ],
         supersede_assertion_ids=[reopen_assertion.id],
     )
     uploaded: list[str] = []
@@ -1090,13 +1315,25 @@ async def build_assembly_model_graph_drawing(
     assembly = await db.get(EngineeringAssembly, assembly_id)
     if assembly is None:
         raise HTTPException(404, "Сборка не найдена")
-    components = list((await db.execute(select(EngineeringAssemblyComponent).where(
-        EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
-        EngineeringAssemblyComponent.suppressed.is_(False),
-    ))).scalars())
-    mates = list((await db.execute(select(EngineeringAssemblyMate).where(
-        EngineeringAssemblyMate.engineering_assembly_id == assembly_id,
-    ))).scalars())
+    components = list(
+        (
+            await db.execute(
+                select(EngineeringAssemblyComponent).where(
+                    EngineeringAssemblyComponent.engineering_assembly_id == assembly_id,
+                    EngineeringAssemblyComponent.suppressed.is_(False),
+                )
+            )
+        ).scalars()
+    )
+    mates = list(
+        (
+            await db.execute(
+                select(EngineeringAssemblyMate).where(
+                    EngineeringAssemblyMate.engineering_assembly_id == assembly_id,
+                )
+            )
+        ).scalars()
+    )
     if not components:
         raise HTTPException(409, "Сборка не содержит активных компонентов")
     graph_id = f"assembly:{assembly_id}"
@@ -1198,8 +1435,7 @@ async def parse_construction_ifc(
 @router.post(
     "/construction/2d/parse",
     summary=(
-        "Skill: engineering.construction_2d_parse — "
-        "read a 2D floor plan into a ConstructionModel."
+        "Skill: engineering.construction_2d_parse — read a 2D floor plan into a ConstructionModel."
     ),
 )
 async def parse_construction_drawing(
@@ -1299,9 +1535,7 @@ async def sync_construction_model_graph(
     if revision is None:
         raise HTTPException(404, "Инженерная ревизия не найдена")
     try:
-        model = ConstructionModel.model_validate(
-            revision.payload.get("construction_model")
-        )
+        model = ConstructionModel.model_validate(revision.payload.get("construction_model"))
     except Exception as exc:
         raise HTTPException(422, f"construction_model невалиден: {exc}") from exc
     graph_id = f"construction:{revision_id}"
@@ -1330,18 +1564,22 @@ async def sync_construction_model_graph(
         )
         if upgrade is not None:
             upgraded, errors = await merge_and_persist_patch(
-                db, upgrade, expected_graph_id=graph_id,
+                db,
+                upgrade,
+                expected_graph_id=graph_id,
             )
             if upgraded is None:
                 await db.rollback()
                 raise HTTPException(
-                    409, "Construction contract GraphPatch отклонён: " + ", ".join(errors),
+                    409,
+                    "Construction contract GraphPatch отклонён: " + ", ".join(errors),
                 )
             await db.commit()
             latest = upgraded
             graph = load_graph(upgraded)
         approvable = [
-            item for item in graph.assertions
+            item
+            for item in graph.assertions
             if item.state == "active"
             and item.origin == "human"
             and item.assurance == "observed"
@@ -1352,12 +1590,14 @@ async def sync_construction_model_graph(
             approval_digest = hashlib.sha256(approval_seed.encode()).hexdigest()
             evidence_id = f"evidence:construction-approval:{approval_digest[:20]}"
             replacements = [
-                item.model_copy(update={
-                    "id": f"assertion:construction-approved:{hashlib.sha256(item.id.encode()).hexdigest()[:20]}",
-                    "assurance": "human_approved",
-                    "evidence_ids": [evidence_id],
-                    "supersedes_assertion_id": item.id,
-                })
+                item.model_copy(
+                    update={
+                        "id": f"assertion:construction-approved:{hashlib.sha256(item.id.encode()).hexdigest()[:20]}",
+                        "assurance": "human_approved",
+                        "evidence_ids": [evidence_id],
+                        "supersedes_assertion_id": item.id,
+                    }
+                )
                 for item in approvable
             ]
             patch = GraphPatch(
@@ -1368,19 +1608,20 @@ async def sync_construction_model_graph(
                 pass_id=f"construction-approval:r{graph.revision + 1}",
                 idempotency_key=f"construction-approval:{graph.canonical_sha256}:{approval_digest}",
                 add_assertions=replacements,
-                add_evidence=[Evidence(
-                    id=evidence_id,
-                    kind="human_decision",
-                    payload={
-                        "engineering_revision_id": str(revision_id),
-                        "approved_by": revision.approved_by,
-                        "approved_at": (
-                            revision.approved_at.isoformat()
-                            if revision.approved_at else None
-                        ),
-                    },
-                    sha256=approval_digest,
-                )],
+                add_evidence=[
+                    Evidence(
+                        id=evidence_id,
+                        kind="human_decision",
+                        payload={
+                            "engineering_revision_id": str(revision_id),
+                            "approved_by": revision.approved_by,
+                            "approved_at": (
+                                revision.approved_at.isoformat() if revision.approved_at else None
+                            ),
+                        },
+                        sha256=approval_digest,
+                    )
+                ],
                 supersede_assertion_ids=[item.id for item in approvable],
             )
             row, errors = await merge_and_persist_patch(
@@ -1451,9 +1692,9 @@ async def build_construction_model_graph(
     graph = load_graph(latest)
     reopen_assertion = next(
         (
-            item for item in graph.assertions
-            if item.state == "active"
-            and item.predicate == PREDICATE.CONSTRUCTION_IFC_REOPEN_VALID
+            item
+            for item in graph.assertions
+            if item.state == "active" and item.predicate == PREDICATE.CONSTRUCTION_IFC_REOPEN_VALID
         ),
         None,
     )
@@ -1483,9 +1724,11 @@ async def build_construction_model_graph(
             }
 
     pending_output_ids = {
-        item.id for item in graph.assertions
+        item.id
+        for item in graph.assertions
         if item.state == "active"
-        and item.predicate in {
+        and item.predicate
+        in {
             PREDICATE.CONSTRUCTION_IFC_REOPEN_VALID,
             PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE,
         }
@@ -1540,17 +1783,21 @@ async def build_construction_model_graph(
         if subject_id not in graph_node_ids:
             raise HTTPException(502, f"IFC report содержит неизвестный source element {source_id}")
         topology_id = f"topology:ifc:{product['global_id']}"
-        nodes.append(GraphNode(
-            id=topology_id,
-            type="TopologyElement",
-            name=f"{product['ifc_class']} {product.get('name') or source_id}",
-        ))
-        edges.append(GraphEdge(
-            id=f"maps:{subject_id}:{topology_id}",
-            type="maps_to_topology",
-            source_id=subject_id,
-            target_id=topology_id,
-        ))
+        nodes.append(
+            GraphNode(
+                id=topology_id,
+                type="TopologyElement",
+                name=f"{product['ifc_class']} {product.get('name') or source_id}",
+            )
+        )
+        edges.append(
+            GraphEdge(
+                id=f"maps:{subject_id}:{topology_id}",
+                type="maps_to_topology",
+                source_id=subject_id,
+                target_id=topology_id,
+            )
+        )
     report_bytes = json.dumps(
         report,
         ensure_ascii=False,
@@ -1592,16 +1839,18 @@ async def build_construction_model_graph(
                 impacts=["base_topology"],
             ),
         ],
-        add_evidence=[Evidence(
-            id=evidence_id,
-            kind="kernel_topology",
-            payload={
-                "artifact_path": artifact_path,
-                "report_path": report_path,
-                "report": report,
-            },
-            sha256=hashlib.sha256(report_bytes).hexdigest(),
-        )],
+        add_evidence=[
+            Evidence(
+                id=evidence_id,
+                kind="kernel_topology",
+                payload={
+                    "artifact_path": artifact_path,
+                    "report_path": report_path,
+                    "report": report,
+                },
+                sha256=hashlib.sha256(report_bytes).hexdigest(),
+            )
+        ],
         supersede_assertion_ids=[reopen_assertion.id],
     )
     uploaded: list[str] = []
@@ -1739,9 +1988,7 @@ async def sync_system_model_graph(
     if revision is None:
         raise HTTPException(404, "Инженерная ревизия не найдена")
     try:
-        model = EngineeringSystemModel.model_validate(
-            revision.payload.get("system_model")
-        )
+        model = EngineeringSystemModel.model_validate(revision.payload.get("system_model"))
     except Exception as exc:
         raise HTTPException(422, f"system_model невалиден: {exc}") from exc
     graph_id = f"system:{revision_id}"
@@ -1770,18 +2017,22 @@ async def sync_system_model_graph(
         )
         if upgrade is not None:
             upgraded, errors = await merge_and_persist_patch(
-                db, upgrade, expected_graph_id=graph_id,
+                db,
+                upgrade,
+                expected_graph_id=graph_id,
             )
             if upgraded is None:
                 await db.rollback()
                 raise HTTPException(
-                    409, "System contract GraphPatch отклонён: " + ", ".join(errors),
+                    409,
+                    "System contract GraphPatch отклонён: " + ", ".join(errors),
                 )
             await db.commit()
             latest = upgraded
             graph = load_graph(upgraded)
         approvable = [
-            item for item in graph.assertions
+            item
+            for item in graph.assertions
             if item.state == "active"
             and item.origin == "human"
             and item.assurance == "observed"
@@ -1792,12 +2043,14 @@ async def sync_system_model_graph(
             approval_digest = hashlib.sha256(approval_seed.encode()).hexdigest()
             evidence_id = f"evidence:system-approval:{approval_digest[:20]}"
             replacements = [
-                item.model_copy(update={
-                    "id": f"assertion:system-approved:{hashlib.sha256(item.id.encode()).hexdigest()[:20]}",
-                    "assurance": "human_approved",
-                    "evidence_ids": [evidence_id],
-                    "supersedes_assertion_id": item.id,
-                })
+                item.model_copy(
+                    update={
+                        "id": f"assertion:system-approved:{hashlib.sha256(item.id.encode()).hexdigest()[:20]}",
+                        "assurance": "human_approved",
+                        "evidence_ids": [evidence_id],
+                        "supersedes_assertion_id": item.id,
+                    }
+                )
                 for item in approvable
             ]
             patch = GraphPatch(
@@ -1808,19 +2061,20 @@ async def sync_system_model_graph(
                 pass_id=f"system-approval:r{graph.revision + 1}",
                 idempotency_key=f"system-approval:{graph.canonical_sha256}:{approval_digest}",
                 add_assertions=replacements,
-                add_evidence=[Evidence(
-                    id=evidence_id,
-                    kind="human_decision",
-                    payload={
-                        "engineering_revision_id": str(revision_id),
-                        "approved_by": revision.approved_by,
-                        "approved_at": (
-                            revision.approved_at.isoformat()
-                            if revision.approved_at else None
-                        ),
-                    },
-                    sha256=approval_digest,
-                )],
+                add_evidence=[
+                    Evidence(
+                        id=evidence_id,
+                        kind="human_decision",
+                        payload={
+                            "engineering_revision_id": str(revision_id),
+                            "approved_by": revision.approved_by,
+                            "approved_at": (
+                                revision.approved_at.isoformat() if revision.approved_at else None
+                            ),
+                        },
+                        sha256=approval_digest,
+                    )
+                ],
                 supersede_assertion_ids=[item.id for item in approvable],
             )
             row, errors = await merge_and_persist_patch(
@@ -1949,12 +2203,14 @@ async def sync_mixed_model_graph(
         raise HTTPException(422, f"mixed_model невалиден: {exc}") from exc
     member_graphs = {}
     for member in model.members:
-        row = (await db.execute(
-            select(EngineeringGraphRevision).where(
-                EngineeringGraphRevision.graph_id == member.graph_id,
-                EngineeringGraphRevision.revision == member.revision,
+        row = (
+            await db.execute(
+                select(EngineeringGraphRevision).where(
+                    EngineeringGraphRevision.graph_id == member.graph_id,
+                    EngineeringGraphRevision.revision == member.revision,
+                )
             )
-        )).scalar_one_or_none()
+        ).scalar_one_or_none()
         if row is None:
             raise HTTPException(
                 409,
@@ -1989,7 +2245,8 @@ async def sync_mixed_model_graph(
     else:
         graph = load_graph(latest)
         approvable = [
-            item for item in graph.assertions
+            item
+            for item in graph.assertions
             if item.state == "active"
             and item.predicate == PREDICATE.CROSS_PROFILE_LINK
             and item.origin == "human"
@@ -2000,12 +2257,14 @@ async def sync_mixed_model_graph(
             approval_digest = hashlib.sha256(approval_seed.encode()).hexdigest()
             evidence_id = f"evidence:mixed-approval:{approval_digest[:20]}"
             replacements = [
-                item.model_copy(update={
-                    "id": f"assertion:mixed-approved:{hashlib.sha256(item.id.encode()).hexdigest()[:20]}",
-                    "assurance": "human_approved",
-                    "evidence_ids": [evidence_id],
-                    "supersedes_assertion_id": item.id,
-                })
+                item.model_copy(
+                    update={
+                        "id": f"assertion:mixed-approved:{hashlib.sha256(item.id.encode()).hexdigest()[:20]}",
+                        "assurance": "human_approved",
+                        "evidence_ids": [evidence_id],
+                        "supersedes_assertion_id": item.id,
+                    }
+                )
                 for item in approvable
             ]
             patch = GraphPatch(
@@ -2016,19 +2275,20 @@ async def sync_mixed_model_graph(
                 pass_id=f"mixed-approval:r{graph.revision + 1}",
                 idempotency_key=f"mixed-approval:{graph.canonical_sha256}:{approval_digest}",
                 add_assertions=replacements,
-                add_evidence=[Evidence(
-                    id=evidence_id,
-                    kind="human_decision",
-                    payload={
-                        "engineering_revision_id": str(revision_id),
-                        "approved_by": revision.approved_by,
-                        "approved_at": (
-                            revision.approved_at.isoformat()
-                            if revision.approved_at else None
-                        ),
-                    },
-                    sha256=approval_digest,
-                )],
+                add_evidence=[
+                    Evidence(
+                        id=evidence_id,
+                        kind="human_decision",
+                        payload={
+                            "engineering_revision_id": str(revision_id),
+                            "approved_by": revision.approved_by,
+                            "approved_at": (
+                                revision.approved_at.isoformat() if revision.approved_at else None
+                            ),
+                        },
+                        sha256=approval_digest,
+                    )
+                ],
                 supersede_assertion_ids=[item.id for item in approvable],
             )
             row, errors = await merge_and_persist_patch(
@@ -2116,11 +2376,15 @@ async def build_mixed_model_bundle(
     mixed_graph = load_graph(mixed_row)
     members = {}
     for member in model.members:
-        row = (await db.execute(select(EngineeringGraphRevision).where(
-            EngineeringGraphRevision.graph_id == member.graph_id,
-            EngineeringGraphRevision.revision == member.revision,
-            EngineeringGraphRevision.canonical_sha256 == member.canonical_sha256,
-        ))).scalar_one_or_none()
+        row = (
+            await db.execute(
+                select(EngineeringGraphRevision).where(
+                    EngineeringGraphRevision.graph_id == member.graph_id,
+                    EngineeringGraphRevision.revision == member.revision,
+                    EngineeringGraphRevision.canonical_sha256 == member.canonical_sha256,
+                )
+            )
+        ).scalar_one_or_none()
         if row is None or row.engineering_project_id != revision.engineering_project_id:
             raise HTTPException(409, f"Pinned member {member.alias} больше недоступен")
         members[member.alias] = load_graph(row)
@@ -2134,7 +2398,8 @@ async def build_mixed_model_bundle(
     fingerprint = mixed_bundle_fingerprint(mixed_graph, members, mode)
     replay = next(
         (
-            item for item in reversed(mixed_graph.evidence)
+            item
+            for item in reversed(mixed_graph.evidence)
             if item.kind == "calculation"
             and item.payload.get("bundle_kind") == "mixed_artifact_bundle"
             and item.payload.get("input_fingerprint") == fingerprint
@@ -2169,8 +2434,7 @@ async def build_mixed_model_bundle(
         raise HTTPException(409, f"Bundle verification failed: {exc}") from exc
     if mode == "production" and not manifest["complete"]:
         missing = ", ".join(
-            f"{item['member']}:{item['reason']}"
-            for item in manifest["missing_required_artifacts"]
+            f"{item['member']}:{item['reason']}" for item in manifest["missing_required_artifacts"]
         )
         raise HTTPException(409, "Production bundle неполон: " + missing)
     bundle_sha = manifest["bundle_sha256"]
@@ -2227,21 +2491,23 @@ async def build_mixed_model_bundle(
                 confidence=1.0,
             ),
         ],
-        add_evidence=[Evidence(
-            id=evidence_id,
-            kind="calculation",
-            payload={
-                "bundle_kind": "mixed_artifact_bundle",
-                "mode": mode,
-                "input_fingerprint": fingerprint,
-                "bundle_path": bundle_path,
-                "manifest_path": manifest_path,
-                "bundle_sha256": bundle_sha,
-                "complete": manifest["complete"],
-                "missing_required_artifacts": manifest["missing_required_artifacts"],
-            },
-            sha256=hashlib.sha256(manifest_bytes).hexdigest(),
-        )],
+        add_evidence=[
+            Evidence(
+                id=evidence_id,
+                kind="calculation",
+                payload={
+                    "bundle_kind": "mixed_artifact_bundle",
+                    "mode": mode,
+                    "input_fingerprint": fingerprint,
+                    "bundle_path": bundle_path,
+                    "manifest_path": manifest_path,
+                    "bundle_sha256": bundle_sha,
+                    "complete": manifest["complete"],
+                    "missing_required_artifacts": manifest["missing_required_artifacts"],
+                },
+                sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+            )
+        ],
     )
     uploaded = []
     try:
@@ -2301,7 +2567,8 @@ async def download_mixed_model_bundle(
     graph = load_graph(row)
     evidence = next(
         (
-            item for item in reversed(graph.evidence)
+            item
+            for item in reversed(graph.evidence)
             if item.kind == "calculation"
             and item.payload.get("bundle_kind") == "mixed_artifact_bundle"
             and item.payload.get("mode") == mode
@@ -2322,66 +2589,158 @@ async def download_mixed_model_bundle(
     )
 
 
-@router.get("/revisions/{revision_id}/validation-runs", response_model=list[EngineeringValidationRunOut])
-async def list_validation_runs(revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringValidationRun]:
-    return list((await db.execute(
-        select(EngineeringValidationRun).where(EngineeringValidationRun.engineering_revision_id == revision_id)
-        .order_by(EngineeringValidationRun.created_at.desc())
-    )).scalars())
+@router.get(
+    "/revisions/{revision_id}/validation-runs", response_model=list[EngineeringValidationRunOut]
+)
+async def list_validation_runs(
+    revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> list[EngineeringValidationRun]:
+    return list(
+        (
+            await db.execute(
+                select(EngineeringValidationRun)
+                .where(EngineeringValidationRun.engineering_revision_id == revision_id)
+                .order_by(EngineeringValidationRun.created_at.desc())
+            )
+        ).scalars()
+    )
 
 
 @router.post("/revisions/{revision_id}/validate", response_model=EngineeringValidationRunOut)
-async def validate_revision(revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> EngineeringValidationRun:
+async def validate_revision(
+    revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> EngineeringValidationRun:
     """Aggregate deterministic CAD, assembly and technology findings for release."""
     revision = await db.get(EngineeringRevision, revision_id)
     if not revision:
         raise HTTPException(404, "Инженерная ревизия не найдена")
     findings = list((revision.validation or {}).get("issues", []))
-    assemblies = list((await db.execute(select(EngineeringAssembly).where(EngineeringAssembly.engineering_revision_id == revision_id))).scalars())
+    assemblies = list(
+        (
+            await db.execute(
+                select(EngineeringAssembly).where(
+                    EngineeringAssembly.engineering_revision_id == revision_id
+                )
+            )
+        ).scalars()
+    )
     for assembly in assemblies:
-        components = list((await db.execute(select(EngineeringAssemblyComponent).where(EngineeringAssemblyComponent.engineering_assembly_id == assembly.id))).scalars())
+        components = list(
+            (
+                await db.execute(
+                    select(EngineeringAssemblyComponent).where(
+                        EngineeringAssemblyComponent.engineering_assembly_id == assembly.id
+                    )
+                )
+            ).scalars()
+        )
         for index, first in enumerate(components):
-            for second in components[index + 1:]:
-                if not first.suppressed and not second.suppressed and first.bounds and second.bounds and _overlap(first.bounds, second.bounds):
-                    findings.append({"code": "ASSEMBLY_INTERFERENCE", "severity": "error", "entity_ids": [str(first.id), str(second.id)], "message_ru": f"Коллизия {first.instance_key} / {second.instance_key}", "level": 2})
-    projections = list((await db.execute(select(EngineeringProjection).where(EngineeringProjection.engineering_revision_id == revision_id))).scalars())
-    cad_revision_ids = [item.entity_id for item in projections if item.entity_type == "cad_ir_revision"]
+            for second in components[index + 1 :]:
+                if (
+                    not first.suppressed
+                    and not second.suppressed
+                    and first.bounds
+                    and second.bounds
+                    and _overlap(first.bounds, second.bounds)
+                ):
+                    findings.append(
+                        {
+                            "code": "ASSEMBLY_INTERFERENCE",
+                            "severity": "error",
+                            "entity_ids": [str(first.id), str(second.id)],
+                            "message_ru": f"Коллизия {first.instance_key} / {second.instance_key}",
+                            "level": 2,
+                        }
+                    )
+    projections = list(
+        (
+            await db.execute(
+                select(EngineeringProjection).where(
+                    EngineeringProjection.engineering_revision_id == revision_id
+                )
+            )
+        ).scalars()
+    )
+    cad_revision_ids = [
+        item.entity_id for item in projections if item.entity_type == "cad_ir_revision"
+    ]
     if cad_revision_ids:
-        cad_revisions = list((await db.execute(
-            select(CadIrRevision).where(CadIrRevision.id.in_(cad_revision_ids))
-        )).scalars())
-        approved_cad_ids = {item.id for item in cad_revisions if item.approved_by and item.approved_at}
+        cad_revisions = list(
+            (
+                await db.execute(
+                    select(CadIrRevision).where(CadIrRevision.id.in_(cad_revision_ids))
+                )
+            ).scalars()
+        )
+        approved_cad_ids = {
+            item.id for item in cad_revisions if item.approved_by and item.approved_at
+        }
         for cad_revision_id in cad_revision_ids:
             if cad_revision_id not in approved_cad_ids:
-                findings.append({
-                    "code": "CAD_IR_NOT_APPROVED",
-                    "severity": "error",
-                    "entity_ids": [str(cad_revision_id)],
-                    "message_ru": "Связанная CAD IR ревизия не принята человеком",
-                    "level": 2,
-                })
-    plan_ids = [item.entity_id for item in projections if item.entity_type == "manufacturing_process_plan"]
+                findings.append(
+                    {
+                        "code": "CAD_IR_NOT_APPROVED",
+                        "severity": "error",
+                        "entity_ids": [str(cad_revision_id)],
+                        "message_ru": "Связанная CAD IR ревизия не принята человеком",
+                        "level": 2,
+                    }
+                )
+    plan_ids = [
+        item.entity_id for item in projections if item.entity_type == "manufacturing_process_plan"
+    ]
     if plan_ids:
-        checks = list((await db.execute(select(ManufacturingCheckResult).where(ManufacturingCheckResult.process_plan_id.in_(plan_ids), ManufacturingCheckResult.status == "open"))).scalars())
-        findings.extend({"code": check.check_code, "severity": "error" if check.severity in {"critical", "error"} else "warn", "entity_ids": [], "message_ru": check.message, "level": 5} for check in checks)
-    analysis_cases = list((await db.execute(
-        select(EngineeringAnalysisCase).where(EngineeringAnalysisCase.engineering_revision_id == revision_id)
-    )).scalars())
+        checks = list(
+            (
+                await db.execute(
+                    select(ManufacturingCheckResult).where(
+                        ManufacturingCheckResult.process_plan_id.in_(plan_ids),
+                        ManufacturingCheckResult.status == "open",
+                    )
+                )
+            ).scalars()
+        )
+        findings.extend(
+            {
+                "code": check.check_code,
+                "severity": "error" if check.severity in {"critical", "error"} else "warn",
+                "entity_ids": [],
+                "message_ru": check.message,
+                "level": 5,
+            }
+            for check in checks
+        )
+    analysis_cases = list(
+        (
+            await db.execute(
+                select(EngineeringAnalysisCase).where(
+                    EngineeringAnalysisCase.engineering_revision_id == revision_id
+                )
+            )
+        ).scalars()
+    )
     for case in analysis_cases:
         if case.status == "failed":
-            findings.append({
-                "code": "ANALYSIS_FAILED",
-                "severity": "error",
-                "entity_ids": [str(case.id)],
-                "message_ru": f"Расчет {case.name} не прошел критерий прочности",
-                "level": 2,
-            })
+            findings.append(
+                {
+                    "code": "ANALYSIS_FAILED",
+                    "severity": "error",
+                    "entity_ids": [str(case.id)],
+                    "message_ru": f"Расчет {case.name} не прошел критерий прочности",
+                    "level": 2,
+                }
+            )
     blocked = any(item.get("severity") == "error" for item in findings if isinstance(item, dict))
     run = EngineeringValidationRun(
         engineering_revision_id=revision_id,
         status="failed" if blocked else "passed",
         findings=findings,
-        summary={"total": len(findings), "errors": sum(item.get("severity") == "error" for item in findings if isinstance(item, dict))},
+        summary={
+            "total": len(findings),
+            "errors": sum(
+                item.get("severity") == "error" for item in findings if isinstance(item, dict)
+            ),
+        },
     )
     db.add(run)
     revision.validation = {"issues": findings}
@@ -2391,13 +2750,31 @@ async def validate_revision(revision_id: uuid.UUID, db: AsyncSession = Depends(g
     return run
 
 
-@router.get("/revisions/{revision_id}/analysis-cases", response_model=list[EngineeringAnalysisCaseOut])
-async def list_analysis_cases(revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringAnalysisCase]:
-    return list((await db.execute(select(EngineeringAnalysisCase).where(EngineeringAnalysisCase.engineering_revision_id == revision_id))).scalars())
+@router.get(
+    "/revisions/{revision_id}/analysis-cases", response_model=list[EngineeringAnalysisCaseOut]
+)
+async def list_analysis_cases(
+    revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> list[EngineeringAnalysisCase]:
+    return list(
+        (
+            await db.execute(
+                select(EngineeringAnalysisCase).where(
+                    EngineeringAnalysisCase.engineering_revision_id == revision_id
+                )
+            )
+        ).scalars()
+    )
 
 
-@router.post("/revisions/{revision_id}/analysis-cases", response_model=EngineeringAnalysisCaseOut, status_code=status.HTTP_201_CREATED)
-async def create_analysis_case(revision_id: uuid.UUID, body: EngineeringAnalysisCaseCreate, db: AsyncSession = Depends(get_db)) -> EngineeringAnalysisCase:
+@router.post(
+    "/revisions/{revision_id}/analysis-cases",
+    response_model=EngineeringAnalysisCaseOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_analysis_case(
+    revision_id: uuid.UUID, body: EngineeringAnalysisCaseCreate, db: AsyncSession = Depends(get_db)
+) -> EngineeringAnalysisCase:
     await _editable_revision(db, revision_id)
     if body.material_id and not await db.get(EngineeringMaterial, body.material_id):
         raise HTTPException(404, "Материал не найден")
@@ -2456,7 +2833,10 @@ async def run_analysis_case(
     await _editable_revision(db, case.engineering_revision_id)
     solver = SOLVERS.get(case.analysis_type)
     if solver is None:
-        raise HTTPException(422, f"Для типа {case.analysis_type!r} нет solver; доступны: {', '.join(sorted(SOLVERS))}")
+        raise HTTPException(
+            422,
+            f"Для типа {case.analysis_type!r} нет solver; доступны: {', '.join(sorted(SOLVERS))}",
+        )
     material = await db.get(EngineeringMaterial, case.material_id) if case.material_id else None
     run = EngineeringAnalysisRun(
         analysis_case_id=case.id,
@@ -2475,7 +2855,9 @@ async def run_analysis_case(
         await db.commit()
         from app.core import metrics
 
-        metrics.cad_solver_runs_total.labels(analysis_type=case.analysis_type, status="invalid_input").inc()
+        metrics.cad_solver_runs_total.labels(
+            analysis_type=case.analysis_type, status="invalid_input"
+        ).inc()
         raise HTTPException(422, str(exc)) from exc
     run.status = (
         "computed" if outcome.passed is None else ("passed" if outcome.passed else "failed")
@@ -2496,7 +2878,9 @@ async def run_analysis_case(
 
 
 @router.get("/analysis-cases/{case_id}/runs", response_model=list[EngineeringAnalysisRunOut])
-async def list_analysis_runs(case_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringAnalysisRun]:
+async def list_analysis_runs(
+    case_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> list[EngineeringAnalysisRun]:
     """F2: the immutable execution history, newest first."""
     return list(
         (
@@ -2528,8 +2912,21 @@ async def approve_revision(
     project = await db.get(EngineeringProject, revision.engineering_project_id)
     if project:
         project.status = "approved"
-    await log_action(db, action="engineering.revision.approve", entity_type="engineering_revision", entity_id=revision.id, user_id=body.approved_by)
-    await add_timeline_event(db, entity_type="engineering_revision", entity_id=revision.id, event_type="approved", summary="Инженерная ревизия утверждена", actor=body.approved_by)
+    await log_action(
+        db,
+        action="engineering.revision.approve",
+        entity_type="engineering_revision",
+        entity_id=revision.id,
+        user_id=body.approved_by,
+    )
+    await add_timeline_event(
+        db,
+        entity_type="engineering_revision",
+        entity_id=revision.id,
+        event_type="approved",
+        summary="Инженерная ревизия утверждена",
+        actor=body.approved_by,
+    )
     await db.commit()
     await db.refresh(revision)
     return revision
@@ -2542,26 +2939,38 @@ async def _change_impact(db: AsyncSession, revision: EngineeringRevision) -> dic
     """Auto impact analysis of the affected revision — plain data, no LLM:
     what depends on this geometry and would go stale if it changes."""
     projections = (
-        await db.execute(
-            select(EngineeringProjection).where(
-                EngineeringProjection.engineering_revision_id == revision.id
+        (
+            await db.execute(
+                select(EngineeringProjection).where(
+                    EngineeringProjection.engineering_revision_id == revision.id
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assemblies = (
-        await db.execute(
-            select(EngineeringAssembly).where(
-                EngineeringAssembly.engineering_revision_id == revision.id
+        (
+            await db.execute(
+                select(EngineeringAssembly).where(
+                    EngineeringAssembly.engineering_revision_id == revision.id
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     analysis_cases = (
-        await db.execute(
-            select(EngineeringAnalysisCase).where(
-                EngineeringAnalysisCase.engineering_revision_id == revision.id
+        (
+            await db.execute(
+                select(EngineeringAnalysisCase).where(
+                    EngineeringAnalysisCase.engineering_revision_id == revision.id
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     last_run = (
         await db.execute(
             select(EngineeringValidationRun)
@@ -2581,7 +2990,11 @@ async def _change_impact(db: AsyncSession, revision: EngineeringRevision) -> dic
             "total": len(projections),
             "by_state": by_state,
             "targets": [
-                {"type": p.projection_type, "entity_type": p.entity_type, "entity_id": str(p.entity_id)}
+                {
+                    "type": p.projection_type,
+                    "entity_type": p.entity_type,
+                    "entity_id": str(p.entity_id),
+                }
                 for p in projections
             ],
         },
@@ -2591,7 +3004,11 @@ async def _change_impact(db: AsyncSession, revision: EngineeringRevision) -> dic
     }
 
 
-@router.post("/projects/{project_id}/change-requests", response_model=ChangeRequestOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/projects/{project_id}/change-requests",
+    response_model=ChangeRequestOut,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_change_request(
     project_id: uuid.UUID,
     body: ChangeRequestCreate,
@@ -2611,7 +3028,10 @@ async def create_change_request(
         if not superseded or superseded.engineering_project_id != project_id:
             raise HTTPException(404, "Заменяемый запрос изменения не найден в этом проекте")
         if superseded.status == "applied":
-            raise HTTPException(409, "Применённый запрос изменения нельзя заменить — создайте новый поверх его ревизии")
+            raise HTTPException(
+                409,
+                "Применённый запрос изменения нельзя заменить — создайте новый поверх его ревизии",
+            )
     last_number = (
         await db.execute(
             select(EngineeringChangeRequest.number)
@@ -2637,15 +3057,30 @@ async def create_change_request(
     if superseded is not None:
         superseded.status = "superseded"
     await db.flush()
-    await log_action(db, action="engineering.change_request.create", entity_type="engineering_change_request", entity_id=change.id, user_id=body.created_by)
-    await add_timeline_event(db, entity_type="engineering_change_request", entity_id=change.id, event_type="created", summary=f"Запрос изменения №{change.number}: {change.title}", actor=body.created_by)
+    await log_action(
+        db,
+        action="engineering.change_request.create",
+        entity_type="engineering_change_request",
+        entity_id=change.id,
+        user_id=body.created_by,
+    )
+    await add_timeline_event(
+        db,
+        entity_type="engineering_change_request",
+        entity_id=change.id,
+        event_type="created",
+        summary=f"Запрос изменения №{change.number}: {change.title}",
+        actor=body.created_by,
+    )
     await db.commit()
     await db.refresh(change)
     return change
 
 
 @router.get("/projects/{project_id}/change-requests", response_model=list[ChangeRequestOut])
-async def list_change_requests(project_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringChangeRequest]:
+async def list_change_requests(
+    project_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> list[EngineeringChangeRequest]:
     return list(
         (
             await db.execute(
@@ -2688,13 +3123,28 @@ async def sign_change_request(
     if body.decision == "reject":
         change.status = "rejected"
         change.decided_at = datetime.now(UTC)
-    elif {s["reviewer"] for s in change.signatures if s["decision"] == "approve"} >= set(change.reviewers):
+    elif {s["reviewer"] for s in change.signatures if s["decision"] == "approve"} >= set(
+        change.reviewers
+    ):
         change.status = "approved"
         change.decided_at = datetime.now(UTC)
     else:
         change.status = "review"
-    await log_action(db, action="engineering.change_request.sign", entity_type="engineering_change_request", entity_id=change.id, user_id=body.reviewer)
-    await add_timeline_event(db, entity_type="engineering_change_request", entity_id=change.id, event_type=f"signed_{body.decision}", summary=f"{body.reviewer}: {body.decision}", actor=body.reviewer)
+    await log_action(
+        db,
+        action="engineering.change_request.sign",
+        entity_type="engineering_change_request",
+        entity_id=change.id,
+        user_id=body.reviewer,
+    )
+    await add_timeline_event(
+        db,
+        entity_type="engineering_change_request",
+        entity_id=change.id,
+        event_type=f"signed_{body.decision}",
+        summary=f"{body.reviewer}: {body.decision}",
+        actor=body.reviewer,
+    )
     await db.commit()
     await db.refresh(change)
     return change
@@ -2714,7 +3164,9 @@ async def apply_change_request(
     if not change:
         raise HTTPException(404, "Запрос изменения не найден")
     if change.status != "approved":
-        raise HTTPException(409, "Применить можно только согласованный запрос (все подписи approve)")
+        raise HTTPException(
+            409, "Применить можно только согласованный запрос (все подписи approve)"
+        )
     affected = await db.get(EngineeringRevision, change.affected_revision_id)
     if not affected:
         raise HTTPException(404, "Затронутая ревизия не найдена")
@@ -2741,8 +3193,21 @@ async def apply_change_request(
     await db.flush()
     change.status = "applied"
     change.applied_revision_id = new_revision.id
-    await log_action(db, action="engineering.change_request.apply", entity_type="engineering_change_request", entity_id=change.id, user_id=change.created_by)
-    await add_timeline_event(db, entity_type="engineering_change_request", entity_id=change.id, event_type="applied", summary=f"Создана ревизия {new_revision.revision} (база {affected.revision})", actor=change.created_by)
+    await log_action(
+        db,
+        action="engineering.change_request.apply",
+        entity_type="engineering_change_request",
+        entity_id=change.id,
+        user_id=change.created_by,
+    )
+    await add_timeline_event(
+        db,
+        entity_type="engineering_change_request",
+        entity_id=change.id,
+        event_type="applied",
+        summary=f"Создана ревизия {new_revision.revision} (база {affected.revision})",
+        actor=change.created_by,
+    )
     await db.commit()
     await db.refresh(change)
     return change

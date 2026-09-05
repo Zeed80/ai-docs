@@ -16,12 +16,19 @@ async def test_graph_query_neighborhood(db_session):
     item = KnowledgeNode(node_type="material", title="Фреза ⌀5")
     db_session.add_all([supplier, inv, item])
     await db_session.flush()
-    db_session.add_all([
-        KnowledgeEdge(source_node_id=inv.id, target_node_id=supplier.id,
-                      edge_type="purchased_from", confidence=0.9),
-        KnowledgeEdge(source_node_id=inv.id, target_node_id=item.id,
-                      edge_type="mentions", confidence=0.8),
-    ])
+    db_session.add_all(
+        [
+            KnowledgeEdge(
+                source_node_id=inv.id,
+                target_node_id=supplier.id,
+                edge_type="purchased_from",
+                confidence=0.9,
+            ),
+            KnowledgeEdge(
+                source_node_id=inv.id, target_node_id=item.id, edge_type="mentions", confidence=0.8
+            ),
+        ]
+    )
     await db_session.flush()
 
     # The invoice node is the hub — both edges touch it.
@@ -35,7 +42,10 @@ async def test_graph_query_neighborhood(db_session):
     assert edge_types == {"purchased_from", "mentions"}
     # Default columns projected.
     assert [c["key"] for c in result.columns] == [
-        "source_title", "edge_type", "target_title", "target_type",
+        "source_title",
+        "edge_type",
+        "target_title",
+        "target_type",
     ]
     # Virtual rows are read-only.
     assert all(c["editable"] is False for c in result.columns)
@@ -68,15 +78,28 @@ async def test_vector_search_requires_query(db_session):
 @pytest.mark.asyncio
 async def test_vector_search_maps_hits(db_session, monkeypatch):
     """vector_search projects Qdrant hits into table rows (engine mocked)."""
+
     async def fake_embed(text, task_type="passage"):
         return [0.1, 0.2, 0.3]
 
     def fake_search(vector, *, limit=20, doc_type=None, **kw):
         return [
-            {"doc_id": "d1", "score": 0.91, "file_name": "act.pdf",
-             "doc_type": "act", "status": "approved", "payload": {"text": "акт фрезы"}},
-            {"doc_id": "d2", "score": 0.72, "file_name": "inv.pdf",
-             "doc_type": "invoice", "status": "ingested", "payload": {}},
+            {
+                "doc_id": "d1",
+                "score": 0.91,
+                "file_name": "act.pdf",
+                "doc_type": "act",
+                "status": "approved",
+                "payload": {"text": "акт фрезы"},
+            },
+            {
+                "doc_id": "d2",
+                "score": 0.72,
+                "file_name": "inv.pdf",
+                "doc_type": "invoice",
+                "status": "ingested",
+                "payload": {},
+            },
         ]
 
     monkeypatch.setattr("app.ai.embeddings.embed_text", fake_embed)
@@ -84,8 +107,11 @@ async def test_vector_search_maps_hits(db_session, monkeypatch):
 
     spec = ts.TableSpec(
         source="vector_search",
-        columns=[ts.ColumnSpec(field="score"), ts.ColumnSpec(field="file_name"),
-                 ts.ColumnSpec(field="doc_type")],
+        columns=[
+            ts.ColumnSpec(field="score"),
+            ts.ColumnSpec(field="file_name"),
+            ts.ColumnSpec(field="doc_type"),
+        ],
         filters=[ts.FilterSpec(field="query", op="contains", value="фрезы")],
         sort=[ts.SortSpec(field="score", dir="desc")],
     )

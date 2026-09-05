@@ -129,7 +129,6 @@ def test_already_drawn_skips_matching_structure():
     """Redundant-paste filter: a window frame the model already redrew must
     not be pasted again (double exposure), while genuine text over the
     model's pseudo-glyph mush must still be pasted."""
-    import numpy as np
     from PIL import Image, ImageDraw
 
     from app.ai.text_preserve import _already_drawn
@@ -165,8 +164,8 @@ def test_isolate_glyphs_keeps_lettering_and_drops_linework():
     from app.ai.text_preserve import isolate_glyphs
 
     canvas = np.full((800, 1200), 255, dtype=np.uint8)
-    cv2.line(canvas, (50, 400), (1150, 400), 0, 3)      # a contour
-    cv2.line(canvas, (600, 50), (600, 750), 0, 2)       # a dimension line
+    cv2.line(canvas, (50, 400), (1150, 400), 0, 3)  # a contour
+    cv2.line(canvas, (600, 50), (600, 750), 0, 2)  # a dimension line
     cv2.putText(canvas, "8100", (200, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
 
     kept = np.asarray(isolate_glyphs(Image.fromarray(canvas)).convert("L"))

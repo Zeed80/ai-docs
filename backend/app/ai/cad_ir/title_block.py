@@ -28,20 +28,20 @@ TB_H_MM = tdref.TITLE_BLOCK_H_MM  # 55
 
 # The editable fields of ГОСТ 2.104 form 1. Order = form order for the UI.
 TITLE_BLOCK_FIELDS: tuple[str, ...] = (
-    "designation",   # обозначение (децимальный номер)
-    "name",          # наименование
-    "material",      # материал
-    "scale",         # масштаб, напр. "1:2"
-    "mass_kg",       # масса, кг
-    "litera",        # литера (У/О1/…)
-    "sheet_no",      # лист
-    "sheet_count",   # листов
-    "developer",     # разраб.
-    "checked_by",    # пров.
+    "designation",  # обозначение (децимальный номер)
+    "name",  # наименование
+    "material",  # материал
+    "scale",  # масштаб, напр. "1:2"
+    "mass_kg",  # масса, кг
+    "litera",  # литера (У/О1/…)
+    "sheet_no",  # лист
+    "sheet_count",  # листов
+    "developer",  # разраб.
+    "checked_by",  # пров.
     "norm_checked_by",  # н.контр.
-    "approved_by",   # утв.
-    "date",          # дата
-    "company",       # предприятие
+    "approved_by",  # утв.
+    "date",  # дата
+    "company",  # предприятие
 )
 
 _TEXT_TAG = "title_block_text"
@@ -49,7 +49,7 @@ _FRAME_TAG = "title_block_frame"
 
 _FRAME_LEFT_MARGIN_MM = 20.0
 _FRAME_MARGIN_MM = 5.0
-_STAMP_RIGHT_MM = 25.0   # stamp inset from the sheet's right edge
+_STAMP_RIGHT_MM = 25.0  # stamp inset from the sheet's right edge
 _STAMP_BOTTOM_MM = 10.0  # stamp inset from the sheet's bottom edge
 
 
@@ -66,8 +66,7 @@ def stamp_region_px(ir: CadIR) -> tuple[float, float, float, float] | None:
     tb = ir.sheet.title_block or {}
     region = tb.get("region")
     if isinstance(region, dict) and all(k in region for k in ("x0", "y0", "x1", "y1")):
-        return (float(region["x0"]), float(region["y0"]),
-                float(region["x1"]), float(region["y1"]))
+        return (float(region["x0"]), float(region["y0"]), float(region["x1"]), float(region["y1"]))
     if ir.scale and ir.sheet.width_mm and ir.sheet.height_mm:
         ppm = 1.0 / ir.scale
         x0 = (ir.sheet.width_mm - _STAMP_RIGHT_MM - TB_W_MM) * ppm
@@ -87,10 +86,20 @@ def _frame_and_grid(ir: CadIR) -> list[Entity]:
     def px(x_mm: float, y_mm: float) -> Point:
         return Point(x=x_mm * ppm, y=y_mm * ppm)
 
-    main = {"line_class": "contour", "width_class": "main", "origin": "human",
-            "assurance": "human_approved", "evidence": [_FRAME_TAG]}
-    thin = {"line_class": "contour", "width_class": "thin", "origin": "human",
-            "assurance": "human_approved", "evidence": [_FRAME_TAG]}
+    main = {
+        "line_class": "contour",
+        "width_class": "main",
+        "origin": "human",
+        "assurance": "human_approved",
+        "evidence": [_FRAME_TAG],
+    }
+    thin = {
+        "line_class": "contour",
+        "width_class": "thin",
+        "origin": "human",
+        "assurance": "human_approved",
+        "evidence": [_FRAME_TAG],
+    }
     fx0, fy0 = _FRAME_LEFT_MARGIN_MM, _FRAME_MARGIN_MM
     fx1, fy1 = w - _FRAME_MARGIN_MM, h - _FRAME_MARGIN_MM
     x0 = w - _STAMP_RIGHT_MM - TB_W_MM
@@ -112,7 +121,9 @@ def _frame_and_grid(ir: CadIR) -> list[Entity]:
     return ents
 
 
-def _render_labels(region: tuple[float, float, float, float], fields: dict[str, Any]) -> list[Entity]:
+def _render_labels(
+    region: tuple[float, float, float, float], fields: dict[str, Any]
+) -> list[Entity]:
     """Field text placed into the ГОСТ 2.104 cells, proportional to ``region``
     (the 185×55 form mapped onto the region's pixel box)."""
     x0, y0, x1, y1 = region
@@ -130,16 +141,18 @@ def _render_labels(region: tuple[float, float, float, float], fields: dict[str, 
         s = (text or "").strip()
         if not s:
             return
-        ents.append(TextEntity(
-            position=at(mm_x, mm_y),
-            text=s,
-            height=height_px(size_mm),
-            line_class="dim",
-            width_class="thin",
-            origin="human",
-            assurance="human_approved",
-            evidence=[_TEXT_TAG],
-        ))
+        ents.append(
+            TextEntity(
+                position=at(mm_x, mm_y),
+                text=s,
+                height=height_px(size_mm),
+                line_class="dim",
+                width_class="thin",
+                origin="human",
+                assurance="human_approved",
+                evidence=[_TEXT_TAG],
+            )
+        )
 
     def sval(key: str) -> str:
         v = fields.get(key)
@@ -187,10 +200,7 @@ def apply_title_block(ir: CadIR, fields: dict[str, Any]) -> int:
     merged = {**_get_fields(ir), **{k: v for k, v in fields.items() if k in TITLE_BLOCK_FIELDS}}
 
     # Drop previously generated labels; keep everything else (incl. the frame).
-    ir.entities = [
-        e for e in ir.entities
-        if _TEXT_TAG not in (e.evidence or [])
-    ]
+    ir.entities = [e for e in ir.entities if _TEXT_TAG not in (e.evidence or [])]
 
     need_frame = not ir.sheet.frame and not any(
         _FRAME_TAG in (e.evidence or []) for e in ir.entities

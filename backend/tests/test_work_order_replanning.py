@@ -30,7 +30,12 @@ async def test_terminal_step_failure_enters_bounded_replanning(db_session):
         budgets={"max_replans": 1},
     )
     await create_single_step_plan(
-        db_session, order, kind="agent_turn", title="Execute", input_data={"prompt": "x"}, max_attempts=1
+        db_session,
+        order,
+        kind="agent_turn",
+        title="Execute",
+        input_data={"prompt": "x"},
+        max_attempts=1,
     )
     claimed = await claim_ready_step(db_session, worker_id="worker", work_order_id=order.id)
     assert claimed is not None
@@ -50,7 +55,9 @@ async def test_terminal_step_failure_enters_bounded_replanning(db_session):
     active = list(
         (
             await db_session.execute(
-                select(WorkPlan).where(WorkPlan.work_order_id == order.id, WorkPlan.status == "active")
+                select(WorkPlan).where(
+                    WorkPlan.work_order_id == order.id, WorkPlan.status == "active"
+                )
             )
         ).scalars()
     )
@@ -108,14 +115,24 @@ async def test_exploratory_order_survives_far_more_replans_than_the_bounded_defa
     )
     for _ in range(5):
         await create_single_step_plan(
-            db_session, order, kind="agent_turn", title="Execute", input_data={"prompt": "x"}, max_attempts=1
+            db_session,
+            order,
+            kind="agent_turn",
+            title="Execute",
+            input_data={"prompt": "x"},
+            max_attempts=1,
         )
         claimed = await claim_ready_step(db_session, worker_id="worker", work_order_id=order.id)
         assert claimed is not None
         claimed_order, step, attempt = claimed
         await fail_attempt(
-            db_session, order=claimed_order, step=step, attempt=attempt,
-            error={"code": "boom"}, retryable=False, actor="worker",
+            db_session,
+            order=claimed_order,
+            step=step,
+            attempt=attempt,
+            error={"code": "boom"},
+            retryable=False,
+            actor="worker",
         )
         # A bounded order (default max_replans=2) would already be "blocked"
         # well before plan_revision reaches 5 — this one must still be

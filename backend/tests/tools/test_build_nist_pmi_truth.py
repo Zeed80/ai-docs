@@ -6,8 +6,9 @@ import pathlib
 import pytest
 from openpyxl import Workbook
 
-
-SCRIPT_PATH = pathlib.Path(__file__).resolve().parents[3] / "tools/cad-dataset/build_nist_pmi_truth.py"
+SCRIPT_PATH = (
+    pathlib.Path(__file__).resolve().parents[3] / "tools/cad-dataset/build_nist_pmi_truth.py"
+)
 SPEC = importlib.util.spec_from_file_location("build_nist_pmi_truth", SCRIPT_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -21,8 +22,30 @@ def _workbook(path: pathlib.Path, suite: str = "CTC") -> pathlib.Path:
     workbook = Workbook()
     sheet = workbook.active
     sheet.append([])
-    sheet.append([f"Primary {suite}", "Primary ATC", "PMI Category", "Description", "Specification", "Measurand", "Comments", "Standards"])
-    sheet.append([1, 7, "Geometric Tolerances", "Profile tolerance", "⌓ | 0.5 | A", "surface", "official", "Y14.5"])
+    sheet.append(
+        [
+            f"Primary {suite}",
+            "Primary ATC",
+            "PMI Category",
+            "Description",
+            "Specification",
+            "Measurand",
+            "Comments",
+            "Standards",
+        ]
+    )
+    sheet.append(
+        [
+            1,
+            7,
+            "Geometric Tolerances",
+            "Profile tolerance",
+            "⌓ | 0.5 | A",
+            "surface",
+            "official",
+            "Y14.5",
+        ]
+    )
     workbook.save(workbook_path)
     return workbook_path
 

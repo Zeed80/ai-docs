@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.domain.models import AgentAction, ApprovalGate, Document, Invoice
+from app.domain.schemas import AgentScenarioRunRequest
 from app.domain.services import (
     add_agent_scenario_completed_audit,
     add_agent_scenario_started_audit,
@@ -14,8 +15,6 @@ from app.domain.services import (
     create_task_job,
     record_agent_action,
 )
-from app.domain.schemas import AgentScenarioRunRequest
-
 
 AIAGENT_ROOT = Path("aiagent")
 REGISTRY_PATH = AIAGENT_ROOT / "skills" / "registry.json"
@@ -57,7 +56,9 @@ def run_aiagent_scenario(
     )
 
     if len(requested_tools) > max_steps:
-        warnings.append(f"Requested {len(requested_tools)} steps; truncated to max_steps={max_steps}")
+        warnings.append(
+            f"Requested {len(requested_tools)} steps; truncated to max_steps={max_steps}"
+        )
         requested_tools = requested_tools[:max_steps]
 
     for step_no, tool_name in enumerate(requested_tools, start=1):
@@ -114,7 +115,11 @@ def run_aiagent_scenario(
             result=result,
         )
         actions.append(action)
-        if action_status == "planned" and _tool_can_be_queued(tool_name) and result.get("queue", True):
+        if (
+            action_status == "planned"
+            and _tool_can_be_queued(tool_name)
+            and result.get("queue", True)
+        ):
             task = create_task_job(
                 db,
                 task_type=tool_name,
@@ -144,9 +149,16 @@ def _simulate_safe_tool(
 ) -> tuple[str, dict[str, Any]]:
     if tool_name == "document.process" and not payload.document_id:
         return "skipped_missing_input", {"missing": "document_id"}
-    if tool_name in {"document.invoice_extraction", "document.drawing_analysis"} and not payload.document_id:
+    if (
+        tool_name in {"document.invoice_extraction", "document.drawing_analysis"}
+        and not payload.document_id
+    ):
         return "skipped_missing_input", {"missing": "document_id"}
-    if tool_name.startswith("document.") and payload.document_id and db.get(Document, payload.document_id) is None:
+    if (
+        tool_name.startswith("document.")
+        and payload.document_id
+        and db.get(Document, payload.document_id) is None
+    ):
         return "planned", {
             "note": "Tool is allowlisted, but execution was not queued because document_id is not present locally",
             "queue": False,
@@ -155,12 +167,18 @@ def _simulate_safe_tool(
         return "skipped_missing_input", {"missing": "case_id_or_draft_id"}
     if tool_name.startswith("invoice.") and not payload.invoice_id:
         return "skipped_missing_input", {"missing": "invoice_id"}
-    if tool_name.startswith("invoice.") and payload.invoice_id and db.get(Invoice, payload.invoice_id) is None:
+    if (
+        tool_name.startswith("invoice.")
+        and payload.invoice_id
+        and db.get(Invoice, payload.invoice_id) is None
+    ):
         return "planned", {
             "note": "Tool is allowlisted, but execution was not queued because invoice_id is not present locally",
             "queue": False,
         }
-    return "planned", {"note": "Tool is allowlisted and safe; execution is delegated to explicit API endpoint"}
+    return "planned", {
+        "note": "Tool is allowlisted and safe; execution is delegated to explicit API endpoint"
+    }
 
 
 def _tool_can_be_queued(tool_name: str) -> bool:

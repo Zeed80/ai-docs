@@ -1,9 +1,7 @@
 """Tests for normcontrol_agent.py — one test per check_code ESTD_*."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
+from unittest.mock import MagicMock
 
 from app.ai.normcontrol_agent import (
     _check_gost_3_1102,
@@ -72,6 +70,7 @@ def _surface(**kwargs):
 
 # ── ГОСТ 3.1102 ────────────────────────────────────────────────────────────────
 
+
 def _codes(checks) -> list[str]:
     return [c.check_code for c in checks]
 
@@ -101,6 +100,7 @@ def test_estd_gen_003_fails_when_version_empty():
 
 
 # ── ГОСТ 3.1118 ────────────────────────────────────────────────────────────────
+
 
 def test_estd_mk_001_fails_when_no_material():
     plan = _plan(material=None)
@@ -157,6 +157,7 @@ def test_mk_passes_on_valid_plan():
 
 # ── ГОСТ 3.1404 ────────────────────────────────────────────────────────────────
 
+
 def test_estd_ok_001_fails_when_no_machine():
     ops = [_operation(operation_type="turning", machine_resource_id=None)]
     checks = _check_gost_3_1404(ops, uuid.uuid4())
@@ -196,6 +197,7 @@ def test_ok_passes_on_valid_op():
 
 # ── ГОСТ 3.1107 ────────────────────────────────────────────────────────────────
 
+
 def test_estd_ra_001_fails_on_nonstandard_ra():
     surfaces = [_surface(roughness_ra=0.7)]  # Not in standard Ra set
     checks = _check_gost_3_1107(surfaces, uuid.uuid4())
@@ -215,6 +217,7 @@ def test_estd_ra_002_warns_finish_fit_with_rough_stage():
 
 
 # ── ГОСТ 3.1127 ────────────────────────────────────────────────────────────────
+
 
 def test_estd_nc_001_fails_when_tsht_k_missing():
     ops = [_operation(operation_type="turning", tsht_k_minutes=None)]
@@ -240,6 +243,7 @@ def test_nc_passes_on_normed_op():
 
 
 # ── Integration: all checks pass on valid plan ─────────────────────────────────
+
 
 def test_all_checks_pass_on_valid_plan():
     plan = _plan()

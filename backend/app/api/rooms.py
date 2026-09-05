@@ -1,16 +1,25 @@
 """Team Rooms API — group chat + direct messages between users and agent."""
+
 from __future__ import annotations
 
 import re
 import unicodedata
 import uuid
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
 import structlog
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel
-from sqlalchemy import and_, func, or_, select, outerjoin
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,10 +33,10 @@ router = APIRouter()
 logger = structlog.get_logger()
 
 _MIME_SIZE_LIMITS: dict[str, int] = {
-    "image/": 20 * 1024 * 1024,   # 20 MB
+    "image/": 20 * 1024 * 1024,  # 20 MB
     "video/": 200 * 1024 * 1024,  # 200 MB
     "application/pdf": 50 * 1024 * 1024,
-    "": 50 * 1024 * 1024,          # default
+    "": 50 * 1024 * 1024,  # default
 }
 
 _MENTION_RE = re.compile(r"@([\w\-\.]+)", re.UNICODE)
@@ -80,7 +89,7 @@ class MessageOut(BaseModel):
     is_edited: bool
     edited_at: datetime | None
     created_at: datetime
-    attachments: list["AttachmentOut"] = []
+    attachments: list[AttachmentOut] = []
 
 
 class AttachmentOut(BaseModel):
@@ -125,13 +134,9 @@ def _size_limit(mime: str) -> int:
     return _MIME_SIZE_LIMITS[""]
 
 
-async def _get_member_or_403(
-    db: AsyncSession, room_id: uuid.UUID, user_sub: str
-) -> RoomMember:
+async def _get_member_or_403(db: AsyncSession, room_id: uuid.UUID, user_sub: str) -> RoomMember:
     result = await db.execute(
-        select(RoomMember).where(
-            RoomMember.room_id == room_id, RoomMember.user_sub == user_sub
-        )
+        select(RoomMember).where(RoomMember.room_id == room_id, RoomMember.user_sub == user_sub)
     )
     member = result.scalar_one_or_none()
     if member is None:
@@ -150,9 +155,7 @@ async def _load_message(db: AsyncSession, msg_id: uuid.UUID) -> RoomMessage:
 
 
 async def _enrich_message(db: AsyncSession, msg: RoomMessage) -> dict:
-    user_result = await db.execute(
-        select(User.name).where(User.sub == msg.sender_sub)
-    )
+    user_result = await db.execute(select(User.name).where(User.sub == msg.sender_sub))
     sender_name = user_result.scalar_one_or_none() or msg.sender_sub
     attachments = [
         AttachmentOut(
@@ -189,9 +192,7 @@ async def _unread_count(db: AsyncSession, room_id: uuid.UUID, user_sub: str) -> 
     )
     last_read = member_result.scalar_one_or_none()
     if last_read is None:
-        result = await db.execute(
-            select(func.count()).where(RoomMessage.room_id == room_id)
-        )
+        result = await db.execute(select(func.count()).where(RoomMessage.room_id == room_id))
     else:
         result = await db.execute(
             select(func.count()).where(
@@ -206,16 +207,14 @@ async def _fire_mention_notifications(
     db: AsyncSession, room_id: uuid.UUID, msg: RoomMessage
 ) -> None:
     """Create Notification records for @mentioned users."""
-    from app.services.notifications import create_notification
     from app.db.models import NotificationType
+    from app.services.notifications import create_notification
 
     mentions = set(_MENTION_RE.findall(msg.content))
     for mention in mentions:
         # resolve mention to user_sub (try username then email prefix)
         user_q = await db.execute(
-            select(User).where(
-                or_(User.preferred_username == mention, User.sub == mention)
-            )
+            select(User).where(or_(User.preferred_username == mention, User.sub == mention))
         )
         user = user_q.scalar_one_or_none()
         if user and user.sub != msg.sender_sub:
@@ -327,9 +326,14 @@ async def create_room(
     await db.commit()
     await db.refresh(room)
     return RoomOut(
-        id=room.id, name=room.name, type=room.type.value if hasattr(room.type, "value") else str(room.type),
-        description=room.description, created_by=room.created_by,
-        is_archived=room.is_archived, unread_count=0, member_count=1,
+        id=room.id,
+        name=room.name,
+        type=room.type.value if hasattr(room.type, "value") else str(room.type),
+        description=room.description,
+        created_by=room.created_by,
+        is_archived=room.is_archived,
+        unread_count=0,
+        member_count=1,
     )
 
 
@@ -358,9 +362,13 @@ async def get_or_create_dm(
         if target_sub in subs and len(subs) == 2:
             unread = await _unread_count(db, room.id, user.sub)
             return RoomOut(
-                id=room.id, name=room.name, type=room.type.value if hasattr(room.type, "value") else str(room.type),
-                description=room.description, created_by=room.created_by,
-                is_archived=room.is_archived, unread_count=unread,
+                id=room.id,
+                name=room.name,
+                type=room.type.value if hasattr(room.type, "value") else str(room.type),
+                description=room.description,
+                created_by=room.created_by,
+                is_archived=room.is_archived,
+                unread_count=unread,
                 member_count=2,
             )
 
@@ -373,9 +381,14 @@ async def get_or_create_dm(
     await db.commit()
     await db.refresh(room)
     return RoomOut(
-        id=room.id, name=room.name, type=room.type.value if hasattr(room.type, "value") else str(room.type),
-        description=room.description, created_by=room.created_by,
-        is_archived=room.is_archived, unread_count=0, member_count=2,
+        id=room.id,
+        name=room.name,
+        type=room.type.value if hasattr(room.type, "value") else str(room.type),
+        description=room.description,
+        created_by=room.created_by,
+        is_archived=room.is_archived,
+        unread_count=0,
+        member_count=2,
     )
 
 
@@ -414,23 +427,21 @@ async def list_members(
     db: AsyncSession = Depends(get_db),
 ) -> list[MemberOut]:
     await _get_member_or_403(db, room_id, user.sub)
-    result = await db.execute(
-        select(RoomMember).where(RoomMember.room_id == room_id)
-    )
+    result = await db.execute(select(RoomMember).where(RoomMember.room_id == room_id))
     members = result.scalars().all()
     out = []
     for m in members:
-        user_result = await db.execute(
-            select(User.name, User.email).where(User.sub == m.user_sub)
-        )
+        user_result = await db.execute(select(User.name, User.email).where(User.sub == m.user_sub))
         row = user_result.first()
-        out.append(MemberOut(
-            user_sub=m.user_sub,
-            role=m.role,
-            joined_at=m.joined_at,
-            name=row.name if row else None,
-            email=row.email if row else None,
-        ))
+        out.append(
+            MemberOut(
+                user_sub=m.user_sub,
+                role=m.role,
+                joined_at=m.joined_at,
+                name=row.name if row else None,
+                email=row.email if row else None,
+            )
+        )
     return out
 
 
@@ -453,7 +464,9 @@ async def add_member(
         return {"status": "already_member"}
     db.add(RoomMember(room_id=room_id, user_sub=payload.user_sub))
     await db.commit()
-    await chat_bus.push_to_room(str(room_id), {"type": "member_joined", "user_sub": payload.user_sub})
+    await chat_bus.push_to_room(
+        str(room_id), {"type": "member_joined", "user_sub": payload.user_sub}
+    )
     return {"status": "added"}
 
 
@@ -561,7 +574,7 @@ async def edit_message(
         raise HTTPException(status_code=403, detail="Not your message")
     msg.content = payload.content
     msg.is_edited = True
-    msg.edited_at = datetime.now(timezone.utc)
+    msg.edited_at = datetime.now(UTC)
     await db.commit()
     msg = await _load_message(db, msg.id)
     enriched = await _enrich_message(db, msg)
@@ -584,7 +597,9 @@ async def delete_message(
         raise HTTPException(status_code=403, detail="Not your message")
     await db.delete(msg)
     await db.commit()
-    await chat_bus.push_to_room(str(room_id), {"type": "message_deleted", "data": {"id": str(msg_id)}})
+    await chat_bus.push_to_room(
+        str(room_id), {"type": "message_deleted", "data": {"id": str(msg_id)}}
+    )
 
 
 @router.post("/{room_id}/upload", status_code=201)
@@ -601,6 +616,7 @@ async def upload_file(
     # Verify MIME type from file content, not just browser header
     try:
         import filetype as _ft
+
         detected = _ft.guess(data)
         mime = detected.mime if detected else (file.content_type or "application/octet-stream")
     except Exception:
@@ -615,8 +631,10 @@ async def upload_file(
     # Store in MinIO
     try:
         from app.core.storage import get_minio_client
+
         client = get_minio_client()
         import io
+
         client.put_object(
             "documents",
             storage_key,
@@ -652,7 +670,11 @@ async def upload_file(
     enriched = await _enrich_message(db, msg)
     await chat_bus.push_to_room(str(room_id), {"type": "message", "data": enriched})
 
-    return {"message_id": str(msg.id), "attachment_id": str(attachment.id), "storage_key": storage_key}
+    return {
+        "message_id": str(msg.id),
+        "attachment_id": str(attachment.id),
+        "storage_key": storage_key,
+    }
 
 
 @router.post("/{room_id}/read")
@@ -663,7 +685,7 @@ async def mark_read(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     member = await _get_member_or_403(db, room_id, user.sub)
-    member.last_read_at = datetime.now(timezone.utc)
+    member.last_read_at = datetime.now(UTC)
     await db.commit()
     return {"status": "ok"}
 
@@ -691,6 +713,7 @@ async def recognize_attachment(
     # Dispatch Celery ingest task
     try:
         from app.tasks.ingest import ingest_from_storage
+
         task = ingest_from_storage.delay(
             storage_key=attachment.storage_key,
             file_name=attachment.file_name,
@@ -764,7 +787,9 @@ async def forward_document(
     await _get_member_or_403(db, room_id, user.sub)
 
     msg_result = await db.execute(
-        select(RoomMessage).options(selectinload(RoomMessage.attachments)).where(RoomMessage.id == msg_id)
+        select(RoomMessage)
+        .options(selectinload(RoomMessage.attachments))
+        .where(RoomMessage.id == msg_id)
     )
     msg = msg_result.scalar_one_or_none()
     if not msg:
@@ -801,6 +826,7 @@ async def room_websocket(
     try:
         from app.auth.jwt import _verify_token
         from app.config import settings
+
         if settings.auth_enabled:
             user_info = await _verify_token(token)
             user_sub = user_info.sub
@@ -812,9 +838,7 @@ async def room_websocket(
 
     # Verify membership
     result = await db.execute(
-        select(RoomMember).where(
-            RoomMember.room_id == room_id, RoomMember.user_sub == user_sub
-        )
+        select(RoomMember).where(RoomMember.room_id == room_id, RoomMember.user_sub == user_sub)
     )
     if result.scalar_one_or_none() is None:
         await websocket.close(code=4003)

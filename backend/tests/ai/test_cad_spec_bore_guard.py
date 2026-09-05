@@ -16,25 +16,24 @@ _OUTER = [
 ]
 _CALLOUTS = {
     "dimensions": [
-        {"value": "Ø102"}, {"value": "Ø80js6"}, {"value": "Ø60H7"},
-        {"value": "470"}, {"value": "150"},
+        {"value": "Ø102"},
+        {"value": "Ø80js6"},
+        {"value": "Ø60H7"},
+        {"value": "470"},
+        {"value": "150"},
     ]
 }
 
 
 def test_a_bore_the_sheet_carries_is_kept():
-    bore, problem = _checked_bore(
-        [{"diameter_mm": 60.0, "length_mm": 300.0}], _OUTER, _CALLOUTS
-    )
+    bore, problem = _checked_bore([{"diameter_mm": 60.0, "length_mm": 300.0}], _OUTER, _CALLOUTS)
     assert problem is None
     assert bore == [{"diameter_mm": 60.0, "length_mm": 300.0}]
 
 
 def test_a_bore_no_callout_supports_is_refused():
     """Ø18 appears nowhere on a sheet whose bore callout says Ø60H7."""
-    bore, problem = _checked_bore(
-        [{"diameter_mm": 18.0, "length_mm": 300.0}], _OUTER, _CALLOUTS
-    )
+    bore, problem = _checked_bore([{"diameter_mm": 18.0, "length_mm": 300.0}], _OUTER, _CALLOUTS)
     assert bore == []
     assert problem is not None and "выносок" in problem
 
@@ -48,9 +47,7 @@ def test_a_bore_wider_than_the_part_is_refused():
 
 
 def test_a_bore_longer_than_the_part_is_refused():
-    bore, problem = _checked_bore(
-        [{"diameter_mm": 60.0, "length_mm": 700.0}], _OUTER, _CALLOUTS
-    )
+    bore, problem = _checked_bore([{"diameter_mm": 60.0, "length_mm": 700.0}], _OUTER, _CALLOUTS)
     assert bore == []
     assert problem is not None and "длиннее детали" in problem
 
@@ -62,9 +59,7 @@ def test_no_bore_is_not_a_problem():
 
 def test_a_sheet_with_no_callouts_read_does_not_veto_the_bore():
     """Silence about the callouts is not evidence against the geometry."""
-    bore, problem = _checked_bore(
-        [{"diameter_mm": 60.0, "length_mm": 300.0}], _OUTER, {}
-    )
+    bore, problem = _checked_bore([{"diameter_mm": 60.0, "length_mm": 300.0}], _OUTER, {})
     assert bore and problem is None
 
 

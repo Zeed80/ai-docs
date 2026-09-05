@@ -10,7 +10,7 @@ to happen when a connected mailbox is deleted.
 """
 
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -88,7 +88,7 @@ def test_imap_authobject_answers_the_failure_continuation_with_an_empty_string()
 async def test_valid_token_is_reused_without_calling_the_provider(db_session):
     mb = _mailbox(
         oauth_access_token_encrypted=encrypt_password("cached-token"),
-        oauth_token_expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        oauth_token_expires_at=datetime.now(UTC) + timedelta(minutes=30),
     )
     db_session.add(mb)
     await db_session.commit()
@@ -105,7 +105,7 @@ async def test_expiring_token_is_refreshed_and_persisted(db_session):
     mb = _mailbox(
         oauth_access_token_encrypted=encrypt_password("old-token"),
         # Inside the 60s safety margin — treated as already gone.
-        oauth_token_expires_at=datetime.now(timezone.utc) + timedelta(seconds=5),
+        oauth_token_expires_at=datetime.now(UTC) + timedelta(seconds=5),
     )
     db_session.add(mb)
     await db_session.commit()
@@ -113,7 +113,7 @@ async def test_expiring_token_is_refreshed_and_persisted(db_session):
     fresh = oauth_mail.TokenResult(
         access_token="new-token",
         refresh_token=None,  # Google omits it on refresh — the old one must survive
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
         email=None,
         scope=None,
     )
@@ -140,7 +140,7 @@ async def test_concurrent_callers_refresh_the_token_only_once(db_session):
     mb = _mailbox(
         name="shared-race",
         oauth_access_token_encrypted=encrypt_password("stale"),
-        oauth_token_expires_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        oauth_token_expires_at=datetime.now(UTC) - timedelta(minutes=5),
     )
     db_session.add(mb)
     await db_session.commit()
@@ -153,7 +153,7 @@ async def test_concurrent_callers_refresh_the_token_only_once(db_session):
         return oauth_mail.TokenResult(
             access_token=f"token-{calls['n']}",
             refresh_token=None,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
             email=None,
             scope=None,
         )
@@ -167,9 +167,9 @@ async def test_concurrent_callers_refresh_the_token_only_once(db_session):
     assert calls["n"] == 1, "оба вызова обновили токен — лок не сработал"
     assert tokens[0] == tokens[1] == "token-1"
 
+
 async def test_password_mailbox_is_never_treated_as_oauth_connected(db_session):
-    mb = _mailbox(auth_method="password", oauth_provider=None,
-                  oauth_refresh_token_encrypted=None)
+    mb = _mailbox(auth_method="password", oauth_provider=None, oauth_refresh_token_encrypted=None)
     db_session.add(mb)
     await db_session.commit()
 
@@ -179,7 +179,7 @@ async def test_password_mailbox_is_never_treated_as_oauth_connected(db_session):
 
 async def test_refresh_without_a_configured_app_fails_loudly(db_session):
     """No Client ID/Secret → a named error, not a confusing HTTP failure."""
-    mb = _mailbox(oauth_token_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    mb = _mailbox(oauth_token_expires_at=datetime.now(UTC) - timedelta(minutes=1))
     db_session.add(mb)
     await db_session.commit()
 
@@ -224,8 +224,12 @@ async def test_preset_reports_oauth_unconfigured_until_an_admin_sets_it_up(
 def _as_user(sub: str, *roles: UserRole):
     """Replace the dev admin identity for one test."""
     user = UserInfo(
-        sub=sub, email=f"{sub}@example.com", name=sub,
-        preferred_username=sub, roles=list(roles), groups=[],
+        sub=sub,
+        email=f"{sub}@example.com",
+        name=sub,
+        preferred_username=sub,
+        roles=list(roles),
+        groups=[],
     )
     app.dependency_overrides[get_current_user] = lambda: user
     return user
@@ -237,21 +241,21 @@ def _restore_identity():
     app.dependency_overrides.pop(get_current_user, None)
 
 
-async def test_non_admin_cannot_read_or_change_shared_mailboxes(
-    client: AsyncClient, db_session
-):
+async def test_non_admin_cannot_read_or_change_shared_mailboxes(client: AsyncClient, db_session):
     """A shared mailbox decides which address the company sends from — editing
     it is an admin act, not something any logged-in viewer may do."""
-    mb = _mailbox(auth_method="password", oauth_provider=None,
-                  oauth_refresh_token_encrypted=None)
+    mb = _mailbox(auth_method="password", oauth_provider=None, oauth_refresh_token_encrypted=None)
     db_session.add(mb)
     await db_session.commit()
 
     _as_user("viewer-sub", UserRole.viewer)
 
     assert (await client.get("/api/mailbox/configs")).status_code == 403
-    assert (await client.patch(f"/api/mailbox/configs/{mb.id}",
-                               json={"imap_user": "attacker@evil.test"})).status_code == 403
+    assert (
+        await client.patch(
+            f"/api/mailbox/configs/{mb.id}", json={"imap_user": "attacker@evil.test"}
+        )
+    ).status_code == 403
     assert (await client.delete(f"/api/mailbox/configs/{mb.id}")).status_code == 403
 
 
@@ -259,37 +263,39 @@ async def test_owner_may_connect_their_own_personal_mailbox_but_not_a_shared_one
     client: AsyncClient, db_session
 ):
     await _google_app(db_session)
-    personal = _mailbox(name="ivan@example.com", mailbox_type="personal",
-                        owner_sub="ivan-sub")
+    personal = _mailbox(name="ivan@example.com", mailbox_type="personal", owner_sub="ivan-sub")
     shared = _mailbox(name="accounting")
     db_session.add_all([personal, shared])
     await db_session.commit()
 
     _as_user("ivan-sub", UserRole.accountant)
 
-    own = await client.post("/api/oauth/start",
-                            json={"provider": "google", "mailbox_id": str(personal.id)})
+    own = await client.post(
+        "/api/oauth/start", json={"provider": "google", "mailbox_id": str(personal.id)}
+    )
     assert own.status_code == 200
     assert own.json()["authorize_url"].startswith("https://accounts.google.com/")
 
-    other = await client.post("/api/oauth/start",
-                              json={"provider": "google", "mailbox_id": str(shared.id)})
+    other = await client.post(
+        "/api/oauth/start", json={"provider": "google", "mailbox_id": str(shared.id)}
+    )
     assert other.status_code == 403
 
 
 # ── Switching away from OAuth / deleting a connected mailbox ────────────────
 
 
-async def test_reverting_to_password_auth_clears_the_stale_grant(
-    client: AsyncClient, db_session
-):
-    mb = _mailbox(oauth_email="buy@example.com",
-                  oauth_access_token_encrypted=encrypt_password("tok"))
+async def test_reverting_to_password_auth_clears_the_stale_grant(client: AsyncClient, db_session):
+    mb = _mailbox(
+        oauth_email="buy@example.com", oauth_access_token_encrypted=encrypt_password("tok")
+    )
     db_session.add(mb)
     await db_session.commit()
 
-    resp = await client.patch(f"/api/mailbox/configs/{mb.id}",
-                              json={"auth_method": "password", "imap_password": "app-password"})
+    resp = await client.patch(
+        f"/api/mailbox/configs/{mb.id}",
+        json={"auth_method": "password", "imap_password": "app-password"},
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["auth_method"] == "password"
@@ -301,9 +307,7 @@ async def test_reverting_to_password_auth_clears_the_stale_grant(
     assert mb.oauth_access_token_encrypted is None
 
 
-async def test_deleting_a_connected_mailbox_revokes_the_grant(
-    client: AsyncClient, db_session
-):
+async def test_deleting_a_connected_mailbox_revokes_the_grant(client: AsyncClient, db_session):
     """Otherwise the refresh token stays valid on the provider's side with no
     local record left of it for anyone to revoke."""
     mb = _mailbox()
@@ -317,16 +321,13 @@ async def test_deleting_a_connected_mailbox_revokes_the_grant(
     revoke.assert_awaited_once()
 
 
-async def test_delete_still_succeeds_when_revocation_fails(
-    client: AsyncClient, db_session
-):
+async def test_delete_still_succeeds_when_revocation_fails(client: AsyncClient, db_session):
     """A provider outage must not leave an un-deletable mailbox behind."""
     mb = _mailbox(name="general")
     db_session.add(mb)
     await db_session.commit()
 
-    with patch.object(oauth_mail, "revoke_tokens",
-                      new=AsyncMock(return_value="HTTP 503")):
+    with patch.object(oauth_mail, "revoke_tokens", new=AsyncMock(return_value="HTTP 503")):
         resp = await client.delete(f"/api/mailbox/configs/{mb.id}")
 
     assert resp.status_code == 204

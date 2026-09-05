@@ -54,20 +54,19 @@ def _axial_circle_patterns(
         for first_index, first in enumerate(items):
             if first is center:
                 continue
-            for second in items[first_index + 1:]:
+            for second in items[first_index + 1 :]:
                 if second is center or second is first:
                     continue
-                midpoint_error = ((
-                    (first["x"] + second["x"]) / 2.0 - center["x"]
-                ) ** 2 + (
-                    (first["y"] + second["y"]) / 2.0 - center["y"]
-                ) ** 2) ** 0.5
-                first_distance = ((first["x"] - center["x"]) ** 2 + (
-                    first["y"] - center["y"]
-                ) ** 2) ** 0.5
-                second_distance = ((second["x"] - center["x"]) ** 2 + (
-                    second["y"] - center["y"]
-                ) ** 2) ** 0.5
+                midpoint_error = (
+                    ((first["x"] + second["x"]) / 2.0 - center["x"]) ** 2
+                    + ((first["y"] + second["y"]) / 2.0 - center["y"]) ** 2
+                ) ** 0.5
+                first_distance = (
+                    (first["x"] - center["x"]) ** 2 + (first["y"] - center["y"]) ** 2
+                ) ** 0.5
+                second_distance = (
+                    (second["x"] - center["x"]) ** 2 + (second["y"] - center["y"]) ** 2
+                ) ** 0.5
                 if (
                     midpoint_error > 5.0
                     or not 30.0 <= first_distance <= 170.0
@@ -102,7 +101,8 @@ def _axial_circle_patterns(
     matches: list[tuple[float, float, float, float]] = []
     known = [float(value) for value in known_diameters if 1 < float(value) < 500]
     outer_candidates = {
-        float(value) for value in outer_diameters
+        float(value)
+        for value in outer_diameters
         if isinstance(value, (int, float)) and 1 < float(value) < 500
     }
     # An end view is scaled by its visible outer silhouette, i.e. by the
@@ -111,7 +111,7 @@ def _axial_circle_patterns(
     # Ø80 outline, although the two large M8 circles visibly lie on the stated
     # Ø80 pitch circle inside the Ø102 silhouette. Smaller diameters belong to
     # inner circles/details and are not valid scale references for this view.
-    for outer in ([max(outer_candidates)] if outer_candidates else []):
+    for outer in [max(outer_candidates)] if outer_candidates else []:
         # Both quantities are radii in pixels. Scaling their ratio by the
         # stated outer *diameter* directly yields the pitch-circle diameter;
         # multiplying by two here would count the radius-to-diameter
@@ -133,27 +133,27 @@ def _axial_circle_patterns(
         return []
     error, outer, stated_pcd, measured_pcd = matches[0]
     pair = sorted([first, second], key=lambda item: (item["y"], item["x"]))
-    return [{
-        "id": "axial-hole-pattern-1",
-        "count": 2,
-        "view_center_px": [round(center["x"], 1), round(center["y"], 1)],
-        "hole_centers_px": [
-            [round(item["x"], 1), round(item["y"], 1)] for item in pair
-        ],
-        "view_outer_diameter_mm": outer,
-        "bolt_circle_diameter_mm": stated_pcd,
-        "measured_bolt_circle_diameter_mm": round(measured_pcd, 3),
-        "start_angle_deg": 90.0,
-        "spacing_deg": 180.0,
-        "bbox": [
-            int(min(item["x"] - item["radius"] for item in pair)),
-            int(min(item["y"] - item["radius"] for item in pair)),
-            int(max(item["x"] + item["radius"] for item in pair)),
-            int(max(item["y"] + item["radius"] for item in pair)),
-        ],
-        "source": "opposed_end_view_circles_and_pitch_circle_crosscheck",
-        "confidence": round(max(0.72, 0.9 - error), 3),
-    }]
+    return [
+        {
+            "id": "axial-hole-pattern-1",
+            "count": 2,
+            "view_center_px": [round(center["x"], 1), round(center["y"], 1)],
+            "hole_centers_px": [[round(item["x"], 1), round(item["y"], 1)] for item in pair],
+            "view_outer_diameter_mm": outer,
+            "bolt_circle_diameter_mm": stated_pcd,
+            "measured_bolt_circle_diameter_mm": round(measured_pcd, 3),
+            "start_angle_deg": 90.0,
+            "spacing_deg": 180.0,
+            "bbox": [
+                int(min(item["x"] - item["radius"] for item in pair)),
+                int(min(item["y"] - item["radius"] for item in pair)),
+                int(max(item["x"] + item["radius"] for item in pair)),
+                int(max(item["y"] + item["radius"] for item in pair)),
+            ],
+            "source": "opposed_end_view_circles_and_pitch_circle_crosscheck",
+            "confidence": round(max(0.72, 0.9 - error), 3),
+        }
+    ]
 
 
 def _nearest_stated(
@@ -164,12 +164,12 @@ def _nearest_stated(
     relative_tolerance: float,
 ) -> float | None:
     candidates = [
-        float(value) for value in values
+        float(value)
+        for value in values
         if isinstance(value, (int, float))
         and not isinstance(value, bool)
         and value > 0
-        and abs(float(value) - measured)
-        <= max(absolute_tolerance, measured * relative_tolerance)
+        and abs(float(value) - measured) <= max(absolute_tolerance, measured * relative_tolerance)
     ]
     if not candidates:
         return None
@@ -210,11 +210,7 @@ def localize_turned_features(
         }
 
     rgb = np.asarray(image.convert("RGB"))
-    blue = (
-        (rgb[:, :, 2] >= 180)
-        & (rgb[:, :, 0] <= 60)
-        & (rgb[:, :, 1] <= 60)
-    ).astype("uint8")
+    blue = ((rgb[:, :, 2] >= 180) & (rgb[:, :, 0] <= 60) & (rgb[:, :, 1] <= 60)).astype("uint8")
     if int(blue.sum()) < 1000:
         return {
             "status": "unresolved",
@@ -278,9 +274,8 @@ def localize_turned_features(
         # A number elsewhere on the sheet (notably roughness 3.2 or radius R4)
         # is not.  The lower slot on the control sheet therefore remains
         # unresolved until its removed section is explicitly linked.
-        if (
-            isinstance(profile_center_y_px, (int, float))
-            and component_center_y < float(profile_center_y_px)
+        if isinstance(profile_center_y_px, (int, float)) and component_center_y < float(
+            profile_center_y_px
         ):
             import pytesseract
 
@@ -292,9 +287,7 @@ def localize_turned_features(
                 min(rgb.shape[0], int(y + component_height + 134)),
             )
             crop = image.crop(crop_box).rotate(90, expand=True)
-            raw = pytesseract.image_to_string(
-                crop, lang="rus+eng", config="--psm 11"
-            )
+            raw = pytesseract.image_to_string(crop, lang="rus+eng", config="--psm 11")
             tokens: list[float] = []
             import re
 
@@ -303,13 +296,15 @@ def localize_turned_features(
                 if 0 < value <= max(measured_width, 1.0):
                     tokens.append(value)
             matched_depths = [
-                value for value in tokens
+                value
+                for value in tokens
                 if _nearest_stated(
                     value,
                     known_linear_values,
                     absolute_tolerance=0.15,
                     relative_tolerance=0.01,
-                ) is not None
+                )
+                is not None
             ]
             if len(set(matched_depths)) == 1:
                 depth = matched_depths[0]
@@ -326,19 +321,21 @@ def localize_turned_features(
             confidence += 0.16
         if stated_width is not None:
             confidence += 0.12
-        candidates.append({
-            "id": "",
-            "kind": "keyway_outline",
-            "bbox": [int(x), int(y), int(x + width - 1), int(y + component_height - 1)],
-            "axial_start_mm": round(axial_start, 3),
-            "measured_length_mm": round(measured_length, 3),
-            "stated_length_mm": stated_length,
-            "measured_width_mm": round(measured_width, 3),
-            "stated_width_mm": stated_width,
-            "depth_observation": depth_observation,
-            "source": "vector_contour_and_axial_scale",
-            "confidence": round(confidence, 3),
-        })
+        candidates.append(
+            {
+                "id": "",
+                "kind": "keyway_outline",
+                "bbox": [int(x), int(y), int(x + width - 1), int(y + component_height - 1)],
+                "axial_start_mm": round(axial_start, 3),
+                "measured_length_mm": round(measured_length, 3),
+                "stated_length_mm": stated_length,
+                "measured_width_mm": round(measured_width, 3),
+                "stated_width_mm": stated_width,
+                "depth_observation": depth_observation,
+                "source": "vector_contour_and_axial_scale",
+                "confidence": round(confidence, 3),
+            }
+        )
 
     candidates.sort(key=lambda item: item["axial_start_mm"])
     for index, item in enumerate(candidates, start=1):
@@ -365,7 +362,7 @@ def localize_turned_features(
         search_y0 = sy + int(sh * 0.72)
         wall_columns = []
         for column in range(sx + int(sw * 0.35), sx + int(sw * 0.65)):
-            ys = np.where(blue[search_y0:bottom + 1, column])[0] + search_y0
+            ys = np.where(blue[search_y0 : bottom + 1, column])[0] + search_y0
             runs: list[list[int]] = []
             for row in ys.tolist():
                 if not runs or row > runs[-1][-1] + 1:
@@ -373,10 +370,7 @@ def localize_turned_features(
                 else:
                     runs[-1].append(row)
             bottom_run = next(
-                (
-                    run for run in reversed(runs)
-                    if run[-1] >= bottom - 2 and len(run) >= 7
-                ),
+                (run for run in reversed(runs) if run[-1] >= bottom - 2 and len(run) >= 7),
                 None,
             )
             if bottom_run:
@@ -400,8 +394,9 @@ def localize_turned_features(
             min(rgb.shape[1], sx + sw + 16),
             min(rgb.shape[0], bottom + 95),
         )
-        import pytesseract
         import re
+
+        import pytesseract
 
         raw_depth = pytesseract.image_to_string(
             image.crop(label_box).rotate(-90, expand=True),
@@ -418,7 +413,7 @@ def localize_turned_features(
             if not isinstance(slot_width, (int, float)):
                 continue
             for first_index, (first_x, first_top) in enumerate(walls):
-                for second_x, second_top in walls[first_index + 1:]:
+                for second_x, second_top in walls[first_index + 1 :]:
                     separation = second_x - first_x
                     for outer_diameter in outer_diameter_values or []:
                         if not isinstance(outer_diameter, (int, float)) or outer_diameter <= 0:
@@ -433,16 +428,16 @@ def localize_turned_features(
                                 continue
                             if abs(measured_depth - depth) > max(0.25, depth * 0.08):
                                 continue
-                            matches.append({
-                                "slot": slot,
-                                "depth": depth,
-                                "measured_depth": measured_depth,
-                                "outer_diameter": float(outer_diameter),
-                                "walls": [first_x, second_x],
-                            })
-        unique = {
-            (item["slot"]["id"], item["depth"]): item for item in matches
-        }
+                            matches.append(
+                                {
+                                    "slot": slot,
+                                    "depth": depth,
+                                    "measured_depth": measured_depth,
+                                    "outer_diameter": float(outer_diameter),
+                                    "walls": [first_x, second_x],
+                                }
+                            )
+        unique = {(item["slot"]["id"], item["depth"]): item for item in matches}
         if len(unique) == 1:
             match = next(iter(unique.values()))
             match["slot"]["depth_observation"] = {
@@ -457,16 +452,19 @@ def localize_turned_features(
             }
     radial_candidates: list[dict[str, Any]] = []
     radial_blockers: list[str] = []
-    small_diameters = sorted({
-        float(value) for value in (known_diameter_values or [])
-        if isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and 3 <= float(value) <= 25
-    })
+    small_diameters = sorted(
+        {
+            float(value)
+            for value in (known_diameter_values or [])
+            if isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and 3 <= float(value) <= 25
+        }
+    )
     if isinstance(profile_center_y_px, (int, float)) and small_diameters:
         center_y = int(float(profile_center_y_px))
         y0, y1 = max(0, center_y - 195), min(rgb.shape[0], center_y + 195)
-        column_counts = blue[y0:y1, int(left):int(right) + 1].sum(axis=0)
+        column_counts = blue[y0:y1, int(left) : int(right) + 1].sum(axis=0)
         strong = np.where((column_counts >= 18) & (column_counts <= 90))[0] + int(left)
         line_groups: list[list[int]] = []
         for column in strong.tolist():
@@ -477,35 +475,36 @@ def localize_turned_features(
         lines = [int(round((group[0] + group[-1]) / 2)) for group in line_groups]
         for index, first in enumerate(lines):
             first_rows = blue[y0:y1, first].astype(bool)
-            for second in lines[index + 1:]:
+            for second in lines[index + 1 :]:
                 measured = (second - first) / px_per_mm
                 if measured > 26:
                     break
                 supported = [
-                    value for value in small_diameters
+                    value
+                    for value in small_diameters
                     if abs(value - measured) <= max(0.8, value * 0.07)
                 ]
                 if not supported:
                     continue
                 second_rows = blue[y0:y1, second].astype(bool)
                 union = int((first_rows | second_rows).sum())
-                similarity = (
-                    int((first_rows & second_rows).sum()) / union if union else 0.0
-                )
+                similarity = int((first_rows & second_rows).sum()) / union if union else 0.0
                 if similarity < 0.78:
                     continue
                 station = (((first + second) / 2.0) - left) / px_per_mm
-                radial_candidates.append({
-                    "id": "",
-                    "kind": "radial_opening_walls",
-                    "bbox": [first, y0, second, y1 - 1],
-                    "axial_position_mm": round(station, 3),
-                    "measured_axial_span_mm": round(measured, 3),
-                    "supported_diameters_mm": supported,
-                    "wall_row_similarity": round(similarity, 3),
-                    "source": "paired_vector_walls_and_axial_scale",
-                    "confidence": 0.78 if len(supported) == 1 else 0.62,
-                })
+                radial_candidates.append(
+                    {
+                        "id": "",
+                        "kind": "radial_opening_walls",
+                        "bbox": [first, y0, second, y1 - 1],
+                        "axial_position_mm": round(station, 3),
+                        "measured_axial_span_mm": round(measured, 3),
+                        "supported_diameters_mm": supported,
+                        "wall_row_similarity": round(similarity, 3),
+                        "source": "paired_vector_walls_and_axial_scale",
+                        "confidence": 0.78 if len(supported) == 1 else 0.62,
+                    }
+                )
     radial_candidates.sort(key=lambda item: item["axial_position_mm"])
     for index, item in enumerate(radial_candidates, start=1):
         item["id"] = f"radial-opening-{index}"
@@ -515,10 +514,7 @@ def localize_turned_features(
                 + "/".join(f"Ø{value:g}" for value in item["supported_diameters_mm"])
             )
     for diameter in small_diameters:
-        matches = [
-            item for item in radial_candidates
-            if diameter in item["supported_diameters_mm"]
-        ]
+        matches = [item for item in radial_candidates if diameter in item["supported_diameters_mm"]]
         if len(matches) > 1:
             radial_blockers.append(
                 f"Ø{diameter:g}: найдено несколько осевых положений "
@@ -571,22 +567,24 @@ def localize_turned_features(
                 second_center = second["y"] + second["height"] / 2
                 if abs(first_center - second_center) > 8:
                     continue
-                joined.append({
-                    "raw_text": f"{first['raw_text']} {second['raw_text']}",
-                    "x": first["x"],
-                    "y": min(first["y"], second["y"]),
-                    "width": second["x"] + second["width"] - first["x"],
-                    "height": max(
-                        first["y"] + first["height"],
-                        second["y"] + second["height"],
-                    ) - min(first["y"], second["y"]),
-                })
+                joined.append(
+                    {
+                        "raw_text": f"{first['raw_text']} {second['raw_text']}",
+                        "x": first["x"],
+                        "y": min(first["y"], second["y"]),
+                        "width": second["x"] + second["width"] - first["x"],
+                        "height": max(
+                            first["y"] + first["height"],
+                            second["y"] + second["height"],
+                        )
+                        - min(first["y"], second["y"]),
+                    }
+                )
 
         for token in joined:
             raw_text = token["raw_text"]
-            if (
-                token["x"] < right - 30
-                and not any(sign in raw_text for sign in ("#", "Ø", "Ф", "⌀"))
+            if token["x"] < right - 30 and not any(
+                sign in raw_text for sign in ("#", "Ø", "Ф", "⌀")
             ):
                 continue
             digits = "".join(character for character in raw_text if character.isdigit())
@@ -607,9 +605,8 @@ def localize_turned_features(
                 nominal = str(int(value)) if value.is_integer() else f"{value:g}".replace(".", "")
                 direct = nominal in digits or nominal in repaired_digits
                 digit_iterator = iter(digits)
-                one_noise_digit = (
-                    len(digits) == len(nominal) + 1
-                    and all(character in digit_iterator for character in nominal)
+                one_noise_digit = len(digits) == len(nominal) + 1 and all(
+                    character in digit_iterator for character in nominal
                 )
                 lost_leading_one = (
                     digits == "0" and nominal == "10" and raw_text[:1] in {"#", "Ø", "Ф"}
@@ -619,16 +616,15 @@ def localize_turned_features(
             if len(matches) > 1:
                 label_center_x = x + width / 2
                 geometry_matches = [
-                    value for value in matches
+                    value
+                    for value in matches
                     if any(
-                        abs(
-                            float(item.get("measured_axial_span_mm") or -1000)
-                            - value
-                        ) <= max(0.8, value * 0.07)
+                        abs(float(item.get("measured_axial_span_mm") or -1000) - value)
+                        <= max(0.8, value * 0.07)
                         and abs(
-                            (float(item["bbox"][0]) + float(item["bbox"][2])) / 2
-                            - label_center_x
-                        ) <= 140
+                            (float(item["bbox"][0]) + float(item["bbox"][2])) / 2 - label_center_x
+                        )
+                        <= 140
                         for item in radial_candidates
                     )
                 ]
@@ -636,18 +632,20 @@ def localize_turned_features(
             if len(matches) != 1:
                 continue
             value = matches[0]
-            diameter_labels.append({
-                "value_mm": value,
-                "raw_text": raw_text,
-                "bbox": [x, y, x + width, y + token_height],
-                "side": (
-                    "top"
-                    if y + token_height / 2 < float(profile_center_y_px or 0)
-                    else "bottom"
-                ),
-                "confidence": 0.68,
-                "source": "spatial_ocr_small_diameter_callout",
-            })
+            diameter_labels.append(
+                {
+                    "value_mm": value,
+                    "raw_text": raw_text,
+                    "bbox": [x, y, x + width, y + token_height],
+                    "side": (
+                        "top"
+                        if y + token_height / 2 < float(profile_center_y_px or 0)
+                        else "bottom"
+                    ),
+                    "confidence": 0.68,
+                    "source": "spatial_ocr_small_diameter_callout",
+                }
+            )
 
         unique_labels: dict[tuple[float, str], dict[str, Any]] = {}
         for item in diameter_labels:
@@ -662,12 +660,15 @@ def localize_turned_features(
     axial_patterns = _axial_circle_patterns(
         blue,
         datum_right=right,
-        known_diameters=small_diameters + [
-            float(value) for value in (known_diameter_values or [])
+        known_diameters=small_diameters
+        + [
+            float(value)
+            for value in (known_diameter_values or [])
             if isinstance(value, (int, float)) and not isinstance(value, bool)
         ],
         outer_diameters=[
-            float(value) for value in (outer_diameter_values or [])
+            float(value)
+            for value in (outer_diameter_values or [])
             if isinstance(value, (int, float)) and not isinstance(value, bool)
         ],
     )

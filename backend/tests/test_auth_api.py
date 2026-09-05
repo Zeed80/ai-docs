@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-import pytest
-from httpx import AsyncClient, ASGITransport
 from unittest.mock import MagicMock
 
-from app.main import app
-from app.auth.models import UserRole
+import pytest
+from httpx import ASGITransport, AsyncClient
 
+from app.main import app
 
 # ── /me ───────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_me_returns_dev_user_in_dev_mode():
     """GET /api/auth/me in dev mode (AUTH_ENABLED=false) returns the dev user."""
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/auth/me")
 
     assert resp.status_code == 200
@@ -32,9 +30,7 @@ async def test_me_returns_dev_user_in_dev_mode():
 
 @pytest.mark.asyncio
 async def test_me_has_required_fields():
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/auth/me")
 
     data = resp.json()
@@ -44,11 +40,13 @@ async def test_me_has_required_fields():
 
 # ── /login ────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_login_dev_mode_sets_cookie_and_redirects():
     """GET /api/auth/login in dev mode sets access_token cookie and redirects."""
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test",
+        transport=ASGITransport(app=app),
+        base_url="http://test",
         follow_redirects=False,
     ) as client:
         resp = await client.get(
@@ -66,7 +64,8 @@ async def test_login_dev_mode_sets_cookie_and_redirects():
 async def test_login_sanitizes_next_param():
     """next param with non-slash prefix is ignored (open-redirect protection)."""
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test",
+        transport=ASGITransport(app=app),
+        base_url="http://test",
         follow_redirects=False,
     ) as client:
         resp = await client.get(
@@ -84,12 +83,11 @@ async def test_login_sanitizes_next_param():
 
 # ── /logout ───────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_logout_clears_cookie():
     """POST /api/auth/logout returns 200 and deletes the access_token cookie."""
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post("/api/auth/logout")
 
     assert resp.status_code == 200
@@ -100,11 +98,14 @@ async def test_logout_clears_cookie():
 
 # ── /users ────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_users_returns_list():
     """GET /api/auth/users returns a list — mocks DB via dependency_overrides."""
     from unittest.mock import AsyncMock
+
     from sqlalchemy.ext.asyncio import AsyncSession
+
     from app.db.session import get_db
 
     mock_result = MagicMock()
@@ -117,9 +118,7 @@ async def test_users_returns_list():
 
     app.dependency_overrides[get_db] = override_get_db
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/api/auth/users")
     finally:
         app.dependency_overrides.pop(get_db, None)

@@ -9,6 +9,7 @@ try:
     from scripts.encrypted_backup import create_encrypted_backup
 except ImportError:
     import pytest
+
     pytest.skip("scripts.encrypted_backup not yet implemented", allow_module_level=True)
 
 

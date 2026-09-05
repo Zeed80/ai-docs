@@ -35,6 +35,7 @@ os.environ.setdefault("CELERY_TASK_ALWAYS_EAGER", "true")
 
 # ── DB URL resolution ──────────────────────────────────────────────────────────
 
+
 def _resolve_db_url() -> tuple[str, str]:
     """Return (async_url, display_label) for the test database."""
     # 1. Explicit env var
@@ -81,8 +82,12 @@ def _can_connect_to(host: str, port: int, user: str, password: str, dbname: str)
     async def _probe() -> bool:
         try:
             conn = await asyncpg.connect(
-                host=host, port=port, user=user, password=password,
-                database=dbname, timeout=3,
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+                database=dbname,
+                timeout=3,
             )
         except Exception:
             return False
@@ -100,6 +105,7 @@ _DB_URL, _DB_LABEL = _resolve_db_url()
 
 # ── Session-scoped container (only when testcontainers needed) ─────────────────
 
+
 @pytest.fixture(scope="session")
 def _pg_container():
     """Lazily start a PostgreSQL container only when the stack is unavailable."""
@@ -107,12 +113,15 @@ def _pg_container():
         yield None
         return
     from testcontainers.postgres import PostgresContainer
-    with PostgresContainer(image="postgres:16-alpine", username="test",
-                           password="test", dbname="test_db") as pg:
+
+    with PostgresContainer(
+        image="postgres:16-alpine", username="test", password="test", dbname="test_db"
+    ) as pg:
         yield pg
 
 
 # ── Engine ─────────────────────────────────────────────────────────────────────
+
 
 @pytest_asyncio.fixture(scope="session")
 async def test_engine(_pg_container):
@@ -138,8 +147,8 @@ async def test_engine(_pg_container):
         await conn.execute(
             FileExtensionAllowlist.__table__.insert(),
             [
-                {"extension": ".pdf",  "is_allowed": True, "added_by": "test"},
-                {"extension": ".txt",  "is_allowed": True, "added_by": "test"},
+                {"extension": ".pdf", "is_allowed": True, "added_by": "test"},
+                {"extension": ".txt", "is_allowed": True, "added_by": "test"},
                 {"extension": ".docx", "is_allowed": True, "added_by": "test"},
                 {"extension": ".xlsx", "is_allowed": True, "added_by": "test"},
             ],
@@ -153,6 +162,7 @@ async def test_engine(_pg_container):
 
 
 # ── Per-test transaction isolation ────────────────────────────────────────────
+
 
 @pytest_asyncio.fixture
 async def db_session(test_engine) -> AsyncIterator[AsyncSession]:

@@ -135,8 +135,5 @@ async def ai_health() -> dict[str, Any]:
         if not result.get("ok") and not result.get("skipped"):
             logger.warning("ai_provider_health_failed", provider=kind.value, **result)
 
-    overall_ok = all(
-        r.get("ok") or r.get("skipped")
-        for r in results.values()
-    )
+    overall_ok = all(r.get("ok") or r.get("skipped") for r in results.values())
     return {"ok": overall_ok, "providers": results}

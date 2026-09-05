@@ -89,16 +89,30 @@ def _unregistered(graph) -> list[tuple[str, str]]:
 
 def test_assembly_builder_only_emits_registered_predicates():
     components = [
-        {"instance_key": "housing", "designation": "Housing", "quantity": 1,
-         "metadata_": {"grounded": True}, "transform": {}},
-        {"instance_key": "shaft", "designation": "Shaft", "quantity": 1,
-         "metadata_": {}, "transform": {"x": 12.0}},
+        {
+            "instance_key": "housing",
+            "designation": "Housing",
+            "quantity": 1,
+            "metadata_": {"grounded": True},
+            "transform": {},
+        },
+        {
+            "instance_key": "shaft",
+            "designation": "Shaft",
+            "quantity": 1,
+            "metadata_": {},
+            "transform": {"x": 12.0},
+        },
     ]
-    mates = [{
-        "id": "mate-1", "mate_type": "fixed",
-        "first_instance_key": "housing", "second_instance_key": "shaft",
-        "parameters": {},
-    }]
+    mates = [
+        {
+            "id": "mate-1",
+            "mate_type": "fixed",
+            "first_instance_key": "housing",
+            "second_instance_key": "shaft",
+            "parameters": {},
+        }
+    ]
     graph = assembly_as_graph(
         graph_id="assembly:predicate-check",
         name="Predicate-check assembly",
@@ -114,17 +128,31 @@ def test_assembly_builder_only_emits_registered_predicates():
 
 
 def test_construction_builder_only_emits_registered_predicates():
-    model = ConstructionModel.model_validate({
-        "site_name": "Predicate-check site",
-        "building_name": "Predicate-check building",
-        "storeys": [{"id": "level-1", "name": "Level 1", "elevation_mm": 0}],
-        "elements": [{
-            "id": "wall-1", "kind": "wall", "name": "External wall",
-            "storey_id": "level-1", "material": "Concrete C30/37", "load_bearing": True,
-            "box": {"x_mm": 0, "y_mm": 0, "z_mm": 0,
-                    "width_mm": 5000, "depth_mm": 200, "height_mm": 3000},
-        }],
-    })
+    model = ConstructionModel.model_validate(
+        {
+            "site_name": "Predicate-check site",
+            "building_name": "Predicate-check building",
+            "storeys": [{"id": "level-1", "name": "Level 1", "elevation_mm": 0}],
+            "elements": [
+                {
+                    "id": "wall-1",
+                    "kind": "wall",
+                    "name": "External wall",
+                    "storey_id": "level-1",
+                    "material": "Concrete C30/37",
+                    "load_bearing": True,
+                    "box": {
+                        "x_mm": 0,
+                        "y_mm": 0,
+                        "z_mm": 0,
+                        "width_mm": 5000,
+                        "depth_mm": 200,
+                        "height_mm": 3000,
+                    },
+                }
+            ],
+        }
+    )
     graph = construction_as_graph(
         graph_id="construction:predicate-check",
         model=model,
@@ -135,17 +163,25 @@ def test_construction_builder_only_emits_registered_predicates():
 
 
 def test_system_builder_only_emits_registered_predicates():
-    model = EngineeringSystemModel.model_validate({
-        "profile": "mep",
-        "name": "Predicate-check system",
-        "system_kind": "supply_air",
-        "equipment": [{"id": "ahu-1", "name": "AHU 1", "equipment_type": "air_handling_unit"}],
-        "ports": [{
-            "id": "port-1", "equipment_id": "ahu-1", "kind": "supply",
-            "direction": "out", "medium": "air", "nominal_size_mm": 200,
-        }],
-        "connections": [],
-    })
+    model = EngineeringSystemModel.model_validate(
+        {
+            "profile": "mep",
+            "name": "Predicate-check system",
+            "system_kind": "supply_air",
+            "equipment": [{"id": "ahu-1", "name": "AHU 1", "equipment_type": "air_handling_unit"}],
+            "ports": [
+                {
+                    "id": "port-1",
+                    "equipment_id": "ahu-1",
+                    "kind": "supply",
+                    "direction": "out",
+                    "medium": "air",
+                    "nominal_size_mm": 200,
+                }
+            ],
+            "connections": [],
+        }
+    )
     graph = system_as_graph(
         graph_id="system:predicate-check",
         model=model,
@@ -166,6 +202,10 @@ def test_legacy_spec_passthrough_predicates_are_not_flagged_as_unregistered():
     assert _unregistered(graph) == []
     predicates = {item.predicate for item in graph.assertions}
     assert "main_view.outer[0].diameter_mm" in predicates
-    assert classify_predicate(
-        "main_view.outer[0].diameter_mm", "product:legacy-spec",
-    ) == "legacy_passthrough"
+    assert (
+        classify_predicate(
+            "main_view.outer[0].diameter_mm",
+            "product:legacy-spec",
+        )
+        == "legacy_passthrough"
+    )

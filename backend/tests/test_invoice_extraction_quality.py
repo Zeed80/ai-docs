@@ -68,9 +68,10 @@ def _supplier_key(stem: str) -> str:
     Handles patterns like 'Supplier № 123', 'Supplier №123', 'Supplier N9 2032'.
     """
     import re
+
     # Split on '№' (with optional surrounding spaces) or standalone 'N' followed by digits
     m = re.search(r"\s*№\s*|\s+N\d", stem)
-    return stem[:m.start()].strip() if m else stem[:40].strip()
+    return stem[: m.start()].strip() if m else stem[:40].strip()
 
 
 def _select_files() -> list[Path]:
@@ -78,11 +79,13 @@ def _select_files() -> list[Path]:
     if not _INVOICES_DIR.is_dir():
         return []
     jpgs = sorted(
-        p for p in _INVOICES_DIR.iterdir()
+        p
+        for p in _INVOICES_DIR.iterdir()
         if p.suffix.lower() in (".jpg", ".jpeg") and not p.name.startswith(".")
     )
     all_pdfs = sorted(
-        p for p in _INVOICES_DIR.iterdir()
+        p
+        for p in _INVOICES_DIR.iterdir()
         if p.suffix.lower() == ".pdf" and not p.name.startswith(".")
     )
     # One PDF per supplier — first file alphabetically within each supplier group
@@ -105,6 +108,7 @@ def _ollama_up() -> bool:
 
 
 # ── Russian objective validators ─────────────────────────────────────────────
+
 
 def _digits(s) -> str:
     return "".join(ch for ch in str(s) if ch.isdigit()) if s is not None else ""
@@ -220,6 +224,7 @@ def arith_total_ok(subtotal: float, tax: float, total: float) -> bool:
 
 # ── Pipeline: refactored text path + extraction ──────────────────────────────
 
+
 def _extract_text(content: bytes, path: Path) -> tuple[str, str]:
     """Run the refactored text path: parser registry → VLM OCR fallback.
 
@@ -251,13 +256,16 @@ def _extract_text(content: bytes, path: Path) -> tuple[str, str]:
         if mime == "application/pdf":
             import fitz
 
-            scale = getattr(__import__("app.config", fromlist=["settings"]).settings,
-                            "ocr_render_scale", 2.5)
+            scale = getattr(
+                __import__("app.config", fromlist=["settings"]).settings, "ocr_render_scale", 2.5
+            )
             encs: list[str] = []
             with fitz.open(stream=content, filetype="pdf") as pdf:
                 for i in range(pdf.page_count):
                     pixmap = pdf[i].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
-                    encs.append(base64.b64encode(_preprocess_ocr_page(pixmap.tobytes("png"))).decode())
+                    encs.append(
+                        base64.b64encode(_preprocess_ocr_page(pixmap.tobytes("png"))).decode()
+                    )
         else:
             encs = [base64.b64encode(_preprocess_ocr_page(content)).decode()]
         return _ollama_vision_ocr(encs, _MODEL_OVERRIDE, _OCR_PROMPT), f"ocr:{_MODEL_OVERRIDE}"
@@ -330,7 +338,9 @@ def _evaluate(data: dict) -> dict:
 
     if subtotal is not None and tax is not None and total is not None:
         add("arith_total", True, arith_total_ok(subtotal, tax, total))
-    line_amounts = [_money(li.get("amount")) for li in lines if _money(li.get("amount")) is not None]
+    line_amounts = [
+        _money(li.get("amount")) for li in lines if _money(li.get("amount")) is not None
+    ]
     if line_amounts and subtotal is not None:
         add("arith_lines_sum", True, _approx(sum(line_amounts), subtotal, subtotal))
     # Per-line qty×price ≈ amount (allow VAT-inclusive lines)
@@ -360,6 +370,7 @@ def _evaluate(data: dict) -> dict:
 
 
 # ── The test ─────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.timeout(3600)
 def test_invoice_extraction_quality() -> None:
@@ -406,7 +417,7 @@ def test_invoice_extraction_quality() -> None:
             conf = ev["confidence"]
             mark = "✓" if conf == 1.0 else ("~" if (conf or 0) >= 0.8 else "✗")
             print(
-                f"  {mark} {path.name[:48]:48s} conf={None if conf is None else round(conf,3)} "
+                f"  {mark} {path.name[:48]:48s} conf={None if conf is None else round(conf, 3)} "
                 f"({ev['passed']}/{ev['applicable']}) fail={ev['failed']} [{source}]"
             )
         except Exception as exc:  # noqa: BLE001

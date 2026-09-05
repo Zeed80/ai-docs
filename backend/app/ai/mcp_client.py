@@ -29,7 +29,6 @@ import asyncio
 import json
 import logging
 import shutil
-import subprocess
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -43,6 +42,7 @@ def _sanitize(name: str) -> str:
 
 
 # ── Stdio transport ───────────────────────���───────────────────────────────────
+
 
 class StdioMCPClient:
     """Connects to an MCP server as a subprocess (stdio JSON-RPC)."""
@@ -58,7 +58,8 @@ class StdioMCPClient:
     async def start(self) -> None:
         cmd = shutil.which(self._command) or self._command
         self._proc = await asyncio.create_subprocess_exec(
-            cmd, *self._args,
+            cmd,
+            *self._args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
@@ -75,11 +76,14 @@ class StdioMCPClient:
         return json.loads(raw)
 
     async def _initialize(self) -> None:
-        resp = await self._rpc("initialize", {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "sveta-agent", "version": "1.0"},
-        })
+        resp = await self._rpc(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "sveta-agent", "version": "1.0"},
+            },
+        )
         if resp.get("error"):
             raise RuntimeError(f"MCP init error: {resp['error']}")
         await self._rpc("notifications/initialized", {})
@@ -113,6 +117,7 @@ class StdioMCPClient:
 
 # ── HTTP transport ────────────────────────────────────────────────────────────
 
+
 class HttpMCPClient:
     """Connects to a running MCP server over HTTP."""
 
@@ -124,11 +129,14 @@ class HttpMCPClient:
 
     async def start(self) -> None:
         import httpx
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{self._url}/mcp",
                 json={
-                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
                     "params": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {},
@@ -153,11 +161,14 @@ class HttpMCPClient:
 
     async def call_tool(self, tool_name: str, arguments: dict) -> Any:
         import httpx
+
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{self._url}/mcp",
                 json={
-                    "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
                     "params": {"name": tool_name, "arguments": arguments},
                 },
                 headers={"Content-Type": "application/json"},
@@ -180,6 +191,7 @@ class HttpMCPClient:
 
 # ── Public API ──────────────────────────────────────────────────────���─────────
 
+
 async def _start_with_retry(client: StdioMCPClient | HttpMCPClient) -> bool:
     """Try to start client with exponential backoff. Return True on success."""
     for attempt in range(_MAX_RETRIES):
@@ -188,10 +200,14 @@ async def _start_with_retry(client: StdioMCPClient | HttpMCPClient) -> bool:
             logger.info("MCP server connected: %s", client.name)
             return True
         except Exception as exc:
-            wait = _BACKOFF_BASE ** attempt
+            wait = _BACKOFF_BASE**attempt
             logger.warning(
                 "MCP server '%s' failed (attempt %d/%d): %s — retrying in %.1fs",
-                client.name, attempt + 1, _MAX_RETRIES, exc, wait,
+                client.name,
+                attempt + 1,
+                _MAX_RETRIES,
+                exc,
+                wait,
             )
             await asyncio.sleep(wait)
     logger.error("MCP server '%s' failed after %d attempts — skipping", client.name, _MAX_RETRIES)
@@ -275,7 +291,17 @@ _BUILTIN_TOOL_SCHEMAS: list[dict] = [
                     "tool_type": {
                         "type": "string",
                         "description": "Тип инструмента: drill, endmill, insert, holder, tap, reamer, boring_bar, saw, other",
-                        "enum": ["drill", "endmill", "insert", "holder", "tap", "reamer", "boring_bar", "saw", "other"],
+                        "enum": [
+                            "drill",
+                            "endmill",
+                            "insert",
+                            "holder",
+                            "tap",
+                            "reamer",
+                            "boring_bar",
+                            "saw",
+                            "other",
+                        ],
                     },
                     "diameter_min": {
                         "type": "number",
@@ -309,6 +335,7 @@ _BUILTIN_TOOL_SCHEMAS: list[dict] = [
 async def _handle_drawing_analysis_mcp(args: dict) -> dict:
     """Call internal /drawings/{id} and optionally /drawings/{id}/reanalyze."""
     import httpx
+
     from app.core.config import settings
 
     drawing_id = args.get("drawing_id")
@@ -369,6 +396,7 @@ async def _handle_drawing_analysis_mcp(args: dict) -> dict:
 async def _handle_tool_search_mcp(args: dict) -> dict:
     """Call internal /tool-catalog/search endpoint."""
     import httpx
+
     from app.core.config import settings
 
     query = args.get("query", "")
@@ -460,7 +488,9 @@ async def load_mcp_tools(
             captured_client = client
             captured_raw = raw_tool_name
 
-            async def _handler(args: dict, _c: Any = captured_client, _t: str = captured_raw) -> dict:
+            async def _handler(
+                args: dict, _c: Any = captured_client, _t: str = captured_raw
+            ) -> dict:
                 return await _c.call_tool(_t, args)
 
             handlers[fn_name] = {

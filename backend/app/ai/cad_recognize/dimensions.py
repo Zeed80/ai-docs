@@ -101,7 +101,7 @@ def _parse_label(text: str) -> tuple[str, float | None, str | None] | None:
         kind = "radial"
 
     # Tolerance/fit = whatever trails the number (H7, js6, ±0.1, -0.05).
-    tail = raw[match.end():].strip() if match.end() < len(raw) else ""
+    tail = raw[match.end() :].strip() if match.end() < len(raw) else ""
     tolerance = tail or None
     return kind, value, tolerance
 
@@ -110,9 +110,7 @@ def _seg_len(s: Segment) -> float:
     return math.hypot(s.p2.x - s.p1.x, s.p2.y - s.p1.y)
 
 
-def _point_to_segment(
-    px: float, py: float, s: Segment
-) -> tuple[float, float]:
+def _point_to_segment(px: float, py: float, s: Segment) -> tuple[float, float]:
     """(perpendicular distance, projection parameter t∈[0,1]) of a point
     onto a segment. t outside [0,1] means the point is beyond an end."""
     dx, dy = s.p2.x - s.p1.x, s.p2.y - s.p1.y
@@ -147,8 +145,7 @@ def reconstruct_dimensions(
     candidates = [
         e
         for e in entities
-        if isinstance(e, Segment)
-        and _seg_len(e) <= _MAX_DIM_LINE_FRACTION * short_side
+        if isinstance(e, Segment) and _seg_len(e) <= _MAX_DIM_LINE_FRACTION * short_side
     ]
     if not candidates:
         return entities, texts, 0
@@ -217,9 +214,7 @@ def reconstruct_dimensions(
         return entities, texts, 0
 
     remaining_geometry = [
-        e
-        for e in entities
-        if not (isinstance(e, Segment) and e.id in used_segment_ids)
+        e for e in entities if not (isinstance(e, Segment) and e.id in used_segment_ids)
     ]
     remaining_texts = [t for t in texts if t.id not in used_text_ids]
     logger.info("cad_dimensions_reconstructed", count=len(dimensions))

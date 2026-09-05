@@ -12,7 +12,7 @@ Three defects this covers:
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -62,7 +62,7 @@ def _parsed(subject: str, sender: str):
         subject=subject,
         body_text="Собери отчёт по поставщику Ромекс",
         body_html="",
-        sent_at=datetime.now(timezone.utc),
+        sent_at=datetime.now(UTC),
         has_attachments=False,
         attachments=[],
     )
@@ -70,10 +70,16 @@ def _parsed(subject: str, sender: str):
 
 def _ingress_mailbox(allowed=None) -> MailboxConfig:
     return MailboxConfig(
-        name="agent@example.com", display_name="Поручения",
-        imap_host="mail.example.com", imap_port=993, imap_user="agent@example.com",
-        imap_password_encrypted="x", imap_ssl=True, is_active=True,
-        assigned_role="agent_ingress", ingress_allowed_senders=allowed,
+        name="agent@example.com",
+        display_name="Поручения",
+        imap_host="mail.example.com",
+        imap_port=993,
+        imap_user="agent@example.com",
+        imap_password_encrypted="x",
+        imap_ssl=True,
+        is_active=True,
+        assigned_role="agent_ingress",
+        ingress_allowed_senders=allowed,
     )
 
 
@@ -90,12 +96,17 @@ def test_sender_allowlist_defaults_to_known_users(sync_session_factory):
     from app.tasks.ingest import _ingress_sender_allowed
 
     sync_session_factory.add(_ingress_mailbox())
-    sync_session_factory.add(User(sub="u1", email="ivanov@example.com", name="Иванов",
-                     role="buyer", is_active=True))
+    sync_session_factory.add(
+        User(sub="u1", email="ivanov@example.com", name="Иванов", role="buyer", is_active=True)
+    )
     sync_session_factory.commit()
 
-    assert _ingress_sender_allowed(sync_session_factory, "agent@example.com", "Иванов <ivanov@example.com>")
-    assert not _ingress_sender_allowed(sync_session_factory, "agent@example.com", "stranger@evil.example")
+    assert _ingress_sender_allowed(
+        sync_session_factory, "agent@example.com", "Иванов <ivanov@example.com>"
+    )
+    assert not _ingress_sender_allowed(
+        sync_session_factory, "agent@example.com", "stranger@evil.example"
+    )
     assert not _ingress_sender_allowed(sync_session_factory, "agent@example.com", "")
 
 
@@ -103,24 +114,30 @@ def test_explicit_allowlist_accepts_address_and_bare_domain(sync_session_factory
     from app.tasks.ingest import _ingress_sender_allowed
 
     sync_session_factory.add(_ingress_mailbox(allowed=["boss@example.com", "partner.example"]))
-    sync_session_factory.add(User(sub="u2", email="ivanov@example.com", name="Иванов",
-                     role="buyer", is_active=True))
+    sync_session_factory.add(
+        User(sub="u2", email="ivanov@example.com", name="Иванов", role="buyer", is_active=True)
+    )
     sync_session_factory.commit()
 
     assert _ingress_sender_allowed(sync_session_factory, "agent@example.com", "boss@example.com")
-    assert _ingress_sender_allowed(sync_session_factory, "agent@example.com", "anyone@partner.example")
+    assert _ingress_sender_allowed(
+        sync_session_factory, "agent@example.com", "anyone@partner.example"
+    )
     # An explicit list replaces the "any known user" default, it does not extend it.
-    assert not _ingress_sender_allowed(sync_session_factory, "agent@example.com", "ivanov@example.com")
+    assert not _ingress_sender_allowed(
+        sync_session_factory, "agent@example.com", "ivanov@example.com"
+    )
 
 
 def test_ingress_role_does_not_route_notifications_as_a_user_role(sync_session_factory):
-    """"agent_ingress" is not a UserRole; matching it against User.role found
+    """ "agent_ingress" is not a UserRole; matching it against User.role found
     nobody and silently fell through to "notify every admin"."""
     from app.tasks.ingest import _mailbox_recipients
 
     sync_session_factory.add(_ingress_mailbox())
-    sync_session_factory.add(User(sub="admin-1", email="admin@example.com", name="Админ",
-                     role="admin", is_active=True))
+    sync_session_factory.add(
+        User(sub="admin-1", email="admin@example.com", name="Админ", role="admin", is_active=True)
+    )
     sync_session_factory.commit()
 
     # Falls back to admins (the mailbox is shared and claims no real role) —
@@ -133,9 +150,12 @@ async def test_assigned_role_is_validated(client, db_session):
     resp = await client.post(
         "/api/mailbox/configs",
         json={
-            "name": "typo@example.com", "imap_host": "mail.example.com",
-            "imap_port": 993, "imap_user": "typo@example.com",
-            "imap_password": "secret", "assigned_role": "accountnat",
+            "name": "typo@example.com",
+            "imap_host": "mail.example.com",
+            "imap_port": 993,
+            "imap_user": "typo@example.com",
+            "imap_password": "secret",
+            "assigned_role": "accountnat",
         },
     )
     assert resp.status_code == 422
@@ -146,9 +166,12 @@ async def test_agent_ingress_role_is_accepted_and_round_trips(client, db_session
     resp = await client.post(
         "/api/mailbox/configs",
         json={
-            "name": "orders@example.com", "imap_host": "mail.example.com",
-            "imap_port": 993, "imap_user": "orders@example.com",
-            "imap_password": "secret", "assigned_role": "agent_ingress",
+            "name": "orders@example.com",
+            "imap_host": "mail.example.com",
+            "imap_port": 993,
+            "imap_user": "orders@example.com",
+            "imap_password": "secret",
+            "assigned_role": "agent_ingress",
             "ingress_allowed_senders": ["boss@example.com"],
         },
     )
@@ -161,9 +184,10 @@ async def test_agent_ingress_role_is_accepted_and_round_trips(client, db_session
 async def test_work_order_reply_goes_out_from_the_ingress_mailbox(db_session):
     """The reply steps carried no mailbox, so the answer would have been sent
     from the global .env account instead of the address it arrived at."""
-    from app.domain.work_email_ingress import create_work_order_from_email
-    from app.db.models import WorkPlan, WorkStep
     from sqlalchemy import select
+
+    from app.db.models import WorkPlan, WorkStep
+    from app.domain.work_email_ingress import create_work_order_from_email
 
     message_pk = uuid.uuid4()
     order = await create_work_order_from_email(
@@ -175,13 +199,15 @@ async def test_work_order_reply_goes_out_from_the_ingress_mailbox(db_session):
     await db_session.commit()
 
     plan = (
-        await db_session.execute(select(WorkPlan).where(WorkPlan.work_order_id == order.id))
-    ).scalars().first()
+        (await db_session.execute(select(WorkPlan).where(WorkPlan.work_order_id == order.id)))
+        .scalars()
+        .first()
+    )
     steps = {
         s.step_key: s
-        for s in (
-            await db_session.execute(select(WorkStep).where(WorkStep.plan_id == plan.id))
-        ).scalars().all()
+        for s in (await db_session.execute(select(WorkStep).where(WorkStep.plan_id == plan.id)))
+        .scalars()
+        .all()
     }
     assert steps["draft_reply"].input_["mailbox"] == "agent@example.com"
     assert steps["draft_reply"].input_["in_reply_to_message_id"] == str(message_pk)

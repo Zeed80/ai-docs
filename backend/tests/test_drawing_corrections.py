@@ -1,10 +1,17 @@
 """Tests for the drawing feature correction and few-shot learning endpoints."""
 
 import uuid
+
 import pytest
 from httpx import AsyncClient
 
-from app.db.models import Drawing, DrawingStatus, DrawingFeature, DrawingFeatureType, DrawingFeatureCorrection
+from app.db.models import (
+    Drawing,
+    DrawingFeature,
+    DrawingFeatureCorrection,
+    DrawingFeatureType,
+    DrawingStatus,
+)
 
 
 @pytest.fixture
@@ -24,7 +31,7 @@ async def drawing_with_features(db_session):
             drawing_id=d.id,
             feature_type=DrawingFeatureType.hole,
             name="Отверстие Ø10",
-            confidence=0.3,   # uncertain
+            confidence=0.3,  # uncertain
         ),
         DrawingFeature(
             drawing_id=d.id,
@@ -76,18 +83,20 @@ async def test_get_uncertain_features_ordered_by_confidence(
 
 
 @pytest.mark.asyncio
-async def test_get_uncertain_features_empty_when_all_confident(
-    client: AsyncClient, db_session
-):
+async def test_get_uncertain_features_empty_when_all_confident(client: AsyncClient, db_session):
     d = Drawing(
-        filename="perfect.dxf", format="dxf", status=DrawingStatus.analyzed,
+        filename="perfect.dxf",
+        format="dxf",
+        status=DrawingStatus.analyzed,
         metadata_={"drawing_type": "detail"},
     )
     db_session.add(d)
     await db_session.flush()
     feat = DrawingFeature(
-        drawing_id=d.id, feature_type=DrawingFeatureType.hole,
-        name="Уверенное отверстие", confidence=0.95,
+        drawing_id=d.id,
+        feature_type=DrawingFeatureType.hole,
+        name="Уверенное отверстие",
+        confidence=0.95,
     )
     db_session.add(feat)
     await db_session.commit()
@@ -98,9 +107,7 @@ async def test_get_uncertain_features_empty_when_all_confident(
 
 
 @pytest.mark.asyncio
-async def test_get_uncertain_features_custom_threshold(
-    client: AsyncClient, drawing_with_features
-):
+async def test_get_uncertain_features_custom_threshold(client: AsyncClient, drawing_with_features):
     drawing, _ = drawing_with_features
     # threshold=0.5 — only the 0.3 feature should appear
     resp = await client.get(
@@ -121,9 +128,7 @@ async def test_get_uncertain_features_drawing_not_found(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_correct_feature_updates_type(
-    client: AsyncClient, drawing_with_features, db_session
-):
+async def test_correct_feature_updates_type(client: AsyncClient, drawing_with_features, db_session):
     drawing, feats = drawing_with_features
     uncertain = feats[0]  # hole, confidence=0.3
 
@@ -153,9 +158,7 @@ async def test_correct_feature_sets_reviewed_at(
 
 
 @pytest.mark.asyncio
-async def test_correct_feature_updates_name(
-    client: AsyncClient, drawing_with_features
-):
+async def test_correct_feature_updates_name(client: AsyncClient, drawing_with_features):
     drawing, feats = drawing_with_features
     uncertain = feats[2]  # pocket, confidence=0.55
 
@@ -177,6 +180,7 @@ async def test_correct_feature_stores_correction_record(
     client: AsyncClient, drawing_with_features, db_session
 ):
     from sqlalchemy import select
+
     drawing, feats = drawing_with_features
     uncertain = feats[0]
 
@@ -186,9 +190,7 @@ async def test_correct_feature_stores_correction_record(
     )
 
     result = await db_session.execute(
-        select(DrawingFeatureCorrection).where(
-            DrawingFeatureCorrection.feature_id == uncertain.id
-        )
+        select(DrawingFeatureCorrection).where(DrawingFeatureCorrection.feature_id == uncertain.id)
     )
     record = result.scalar_one_or_none()
     assert record is not None
@@ -202,6 +204,7 @@ async def test_correct_feature_records_corrected_by(
     client: AsyncClient, drawing_with_features, db_session
 ):
     from sqlalchemy import select
+
     drawing, feats = drawing_with_features
 
     await client.post(
@@ -213,9 +216,7 @@ async def test_correct_feature_records_corrected_by(
         },
     )
     result = await db_session.execute(
-        select(DrawingFeatureCorrection).where(
-            DrawingFeatureCorrection.feature_id == feats[0].id
-        )
+        select(DrawingFeatureCorrection).where(DrawingFeatureCorrection.feature_id == feats[0].id)
     )
     record = result.scalar_one_or_none()
     assert record.corrected_by == "technologist_ivanov"
@@ -237,7 +238,9 @@ async def test_correct_feature_wrong_drawing(
 ):
     drawing, feats = drawing_with_features
     other_drawing = Drawing(
-        filename="other.dxf", format="dxf", status=DrawingStatus.analyzed,
+        filename="other.dxf",
+        format="dxf",
+        status=DrawingStatus.analyzed,
     )
     db_session.add(other_drawing)
     await db_session.commit()
@@ -261,8 +264,10 @@ async def test_few_shot_format(db_session):
     db_session.add(d)
     await db_session.flush()
     feat = DrawingFeature(
-        drawing_id=d.id, feature_type=DrawingFeatureType.hole,
-        name="Тестовое отверстие", confidence=0.4,
+        drawing_id=d.id,
+        feature_type=DrawingFeatureType.hole,
+        name="Тестовое отверстие",
+        confidence=0.4,
     )
     db_session.add(feat)
     await db_session.flush()
@@ -297,8 +302,10 @@ async def test_few_shot_filters_by_drawing_type(db_session):
     db_session.add(d)
     await db_session.flush()
     feat = DrawingFeature(
-        drawing_id=d.id, feature_type=DrawingFeatureType.hole,
-        name="Позиция 1", confidence=0.4,
+        drawing_id=d.id,
+        feature_type=DrawingFeatureType.hole,
+        name="Позиция 1",
+        confidence=0.4,
     )
     db_session.add(feat)
     await db_session.flush()

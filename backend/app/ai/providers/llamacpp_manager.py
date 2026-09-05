@@ -12,12 +12,12 @@ import json
 import os
 import re
 import shutil
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 import httpx
 import structlog
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import BackgroundTasks, HTTPException, Query
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -44,9 +44,11 @@ _downloads: dict[str, dict] = {}
 
 # ── Redis helpers ─────────────────────────────────────────────────────────────
 
+
 def _redis_get(key: str) -> dict | None:
     try:
         from app.utils.redis_client import get_sync_redis
+
         raw = get_sync_redis().get(key)
         return json.loads(raw) if raw else None
     except Exception:
@@ -56,6 +58,7 @@ def _redis_get(key: str) -> dict | None:
 def _redis_set(key: str, value: dict) -> None:
     try:
         from app.utils.redis_client import get_sync_redis
+
         get_sync_redis().set(key, json.dumps(value, ensure_ascii=False))
     except Exception as e:
         logger.warning("redis_write_failed", key=key, error=str(e))
@@ -117,6 +120,7 @@ def _human_size(n: int) -> str:
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
+
 class LlamaCppConfig(BaseModel):
     url: str
     model: str
@@ -146,7 +150,7 @@ class LlamaCppStatus(BaseModel):
     slots_processing: int | None
     version: str | None
     kv_cache_type: str | None
-    vision: bool = False          # True when mmproj is loaded and vision=true in /props
+    vision: bool = False  # True when mmproj is loaded and vision=true in /props
     mmproj_path: str | None = None  # path of the loaded mmproj file (from /props)
 
 
@@ -156,7 +160,7 @@ class GgufModel(BaseModel):
     size_bytes: int
     size_human: str
     active: bool = False
-    is_mmproj: bool = False   # True for mmproj-*.gguf vision projector files
+    is_mmproj: bool = False  # True for mmproj-*.gguf vision projector files
 
 
 class TokensUpdate(BaseModel):
@@ -173,10 +177,10 @@ class HFFile(BaseModel):
     filename: str
     size_bytes: int
     size_human: str
-    quant: str                # detected quant type (Q4_K_M, Q8_0, F16, …)
-    is_split: bool            # multi-part file
-    split_group: str | None = None   # e.g. "q8_0" — all parts share same group
-    part_index: int | None = None    # 1-based part number
+    quant: str  # detected quant type (Q4_K_M, Q8_0, F16, …)
+    is_split: bool  # multi-part file
+    split_group: str | None = None  # e.g. "q8_0" — all parts share same group
+    part_index: int | None = None  # 1-based part number
     total_parts: int | None = None
 
 
@@ -203,8 +207,8 @@ class MSModelResult(BaseModel):
 class DownloadRequest(BaseModel):
     repo_id: str
     filename: str
-    source: str = "huggingface"   # huggingface | modelscope | url
-    url: str | None = None        # override download URL
+    source: str = "huggingface"  # huggingface | modelscope | url
+    url: str | None = None  # override download URL
 
 
 class DownloadStatus(BaseModel):
@@ -219,14 +223,15 @@ class DownloadStatus(BaseModel):
 
 
 class ActivateModelResponse(BaseModel):
-    status: str           # "ok" | "restarting" | "no_docker" | "error"
-    model: str            # backend path that was activated
-    server_path: str      # path as seen inside llama-server container
+    status: str  # "ok" | "restarting" | "no_docker" | "error"
+    model: str  # backend path that was activated
+    server_path: str  # path as seen inside llama-server container
     message: str
     server_running: bool = False
 
 
 # ── Docker helpers ────────────────────────────────────────────────────────────
+
 
 def _backend_to_server_path(backend_path: str) -> str:
     """Translate /llamacpp-models/foo.gguf → /models/foo.gguf (llama-server view)."""
@@ -252,9 +257,7 @@ async def _docker_find_container(service_name: str) -> str | None:
             # between activations, and Docker's default /containers/json lists
             # only running containers. Without it activate could not restart a
             # stopped llama-server — it would report the service as "not found".
-            r = await client.get(
-                "/containers/json", params={"filters": filters, "all": "true"}
-            )
+            r = await client.get("/containers/json", params={"filters": filters, "all": "true"})
             if r.status_code == 200:
                 containers = r.json()
                 if containers:
@@ -320,18 +323,27 @@ async def ensure_server_running() -> dict:
 
 # ── Status & Config ───────────────────────────────────────────────────────────
 
+
 async def get_llamacpp_status() -> LlamaCppStatus:
     base = _get_llamacpp_base_url()
     cfg = _load_config()
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
+            # Тело /health не нужно: llama.cpp отдаёт в нём только
+            # {"status": "ok"}, а всё содержательное читается ниже из /props.
             r = await client.get(f"{base}/health")
             r.raise_for_status()
-            health = r.json()
     except Exception:
-        return LlamaCppStatus(running=False, url=base, model_loaded=None, ctx_size=None,
-                              slots_idle=None, slots_processing=None, version=None,
-                              kv_cache_type=cfg.get("kv_cache_type"))
+        return LlamaCppStatus(
+            running=False,
+            url=base,
+            model_loaded=None,
+            ctx_size=None,
+            slots_idle=None,
+            slots_processing=None,
+            version=None,
+            kv_cache_type=cfg.get("kv_cache_type"),
+        )
 
     model_loaded = None
     ctx_size = None
@@ -357,7 +369,7 @@ async def get_llamacpp_status() -> LlamaCppStatus:
             # v1/models: n_ctx from meta
             rm = await client.get(f"{base}/v1/models")
             if rm.status_code == 200:
-                models_data = (rm.json().get("data") or [])
+                models_data = rm.json().get("data") or []
                 if models_data:
                     ctx_size = (models_data[0].get("meta") or {}).get("n_ctx")
 
@@ -370,10 +382,18 @@ async def get_llamacpp_status() -> LlamaCppStatus:
     except Exception:
         pass
 
-    return LlamaCppStatus(running=True, url=base, model_loaded=model_loaded, ctx_size=ctx_size,
-                          slots_idle=slots_idle, slots_processing=slots_processing,
-                          version=version, kv_cache_type=cfg.get("kv_cache_type"),
-                          vision=vision, mmproj_path=mmproj_path)
+    return LlamaCppStatus(
+        running=True,
+        url=base,
+        model_loaded=model_loaded,
+        ctx_size=ctx_size,
+        slots_idle=slots_idle,
+        slots_processing=slots_processing,
+        version=version,
+        kv_cache_type=cfg.get("kv_cache_type"),
+        vision=vision,
+        mmproj_path=mmproj_path,
+    )
 
 
 async def get_llamacpp_config() -> LlamaCppConfig:
@@ -390,10 +410,12 @@ async def update_llamacpp_config(update: LlamaCppConfigUpdate) -> LlamaCppConfig
 
 # ── Token management ──────────────────────────────────────────────────────────
 
+
 async def get_tokens_status() -> TokensStatus:
     t = _load_tokens()
-    return TokensStatus(huggingface_set=bool(t.get("huggingface")),
-                        modelscope_set=bool(t.get("modelscope")))
+    return TokensStatus(
+        huggingface_set=bool(t.get("huggingface")), modelscope_set=bool(t.get("modelscope"))
+    )
 
 
 async def update_tokens(update: TokensUpdate) -> TokensStatus:
@@ -403,8 +425,9 @@ async def update_tokens(update: TokensUpdate) -> TokensStatus:
     if update.modelscope is not None:
         t["modelscope"] = update.modelscope.strip()
     _save_tokens(t)
-    return TokensStatus(huggingface_set=bool(t.get("huggingface")),
-                        modelscope_set=bool(t.get("modelscope")))
+    return TokensStatus(
+        huggingface_set=bool(t.get("huggingface")), modelscope_set=bool(t.get("modelscope"))
+    )
 
 
 async def delete_token(provider: str) -> TokensStatus:
@@ -413,20 +436,48 @@ async def delete_token(provider: str) -> TokensStatus:
     t = _load_tokens()
     t.pop(provider, None)
     _save_tokens(t)
-    return TokensStatus(huggingface_set=bool(t.get("huggingface")),
-                        modelscope_set=bool(t.get("modelscope")))
+    return TokensStatus(
+        huggingface_set=bool(t.get("huggingface")), modelscope_set=bool(t.get("modelscope"))
+    )
 
 
 # ── HuggingFace search ────────────────────────────────────────────────────────
 
+
 def _detect_quant(filename: str) -> str:
     """Detect quantization from GGUF filename."""
     fn = filename.upper()
-    for q in ("Q2_K_S", "Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q3_K",
-              "Q4_0", "Q4_1", "Q4_K_S", "Q4_K_M", "Q4_K_L", "Q4_K",
-              "Q5_0", "Q5_1", "Q5_K_S", "Q5_K_M", "Q5_K",
-              "Q6_K", "Q8_0", "F16", "BF16", "F32",
-              "IQ1_S", "IQ2_S", "IQ2_M", "IQ3_S", "IQ3_M", "IQ4_XS", "IQ4_NL"):
+    for q in (
+        "Q2_K_S",
+        "Q2_K",
+        "Q3_K_S",
+        "Q3_K_M",
+        "Q3_K_L",
+        "Q3_K",
+        "Q4_0",
+        "Q4_1",
+        "Q4_K_S",
+        "Q4_K_M",
+        "Q4_K_L",
+        "Q4_K",
+        "Q5_0",
+        "Q5_1",
+        "Q5_K_S",
+        "Q5_K_M",
+        "Q5_K",
+        "Q6_K",
+        "Q8_0",
+        "F16",
+        "BF16",
+        "F32",
+        "IQ1_S",
+        "IQ2_S",
+        "IQ2_M",
+        "IQ3_S",
+        "IQ3_M",
+        "IQ4_XS",
+        "IQ4_NL",
+    ):
         if q in fn:
             return q
     return "UNKNOWN"
@@ -435,15 +486,22 @@ def _detect_quant(filename: str) -> str:
 def _parse_hf_file(f: dict) -> HFFile:
     fn = f.get("rfilename", "")
     size = f.get("size") or 0
-    m = re.search(r'-(\d+)-of-(\d+)', fn)
+    m = re.search(r"-(\d+)-of-(\d+)", fn)
     is_split = m is not None
     part_index = int(m.group(1)) if m else None
     total_parts = int(m.group(2)) if m else None
     # group key = base name without -XXXXX-of-YYYYY part
-    split_group = re.sub(r'-\d+-of-\d+', '', fn).rstrip(".gguf").lower() if is_split else None
-    return HFFile(filename=fn, size_bytes=size, size_human=_human_size(size),
-                  quant=_detect_quant(fn), is_split=is_split,
-                  split_group=split_group, part_index=part_index, total_parts=total_parts)
+    split_group = re.sub(r"-\d+-of-\d+", "", fn).rstrip(".gguf").lower() if is_split else None
+    return HFFile(
+        filename=fn,
+        size_bytes=size,
+        size_human=_human_size(size),
+        quant=_detect_quant(fn),
+        is_split=is_split,
+        split_group=split_group,
+        part_index=part_index,
+        total_parts=total_parts,
+    )
 
 
 async def search_hf_models(
@@ -469,7 +527,9 @@ async def search_hf_models(
             raw = r.json()
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 401:
-            raise HTTPException(status_code=401, detail="HuggingFace token required for gated models")
+            raise HTTPException(
+                status_code=401, detail="HuggingFace token required for gated models"
+            )
         raise HTTPException(status_code=502, detail=f"HuggingFace API error: {e}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"HuggingFace API unavailable: {e}")
@@ -492,19 +552,28 @@ async def search_hf_models(
             files = [f for f in files if qt in f.quant.upper()]
 
         # Filter by size
-        files = [f for f in files
-                 if not f.is_split  # skip split files by default
-                 and (min_gb * 1e9 <= f.size_bytes <= max_gb * 1e9 or f.size_bytes == 0)]
+        files = [
+            f
+            for f in files
+            if not f.is_split  # skip split files by default
+            and (min_gb * 1e9 <= f.size_bytes <= max_gb * 1e9 or f.size_bytes == 0)
+        ]
 
         # Sort files by size
         files.sort(key=lambda f: f.size_bytes)
 
-        results.append(HFModelResult(
-            repo_id=repo_id, author=author, model_name=model_name,
-            downloads=m.get("downloads", 0) or 0,
-            likes=m.get("likes", 0) or 0,
-            tags=tags, gated=gated, files=files,
-        ))
+        results.append(
+            HFModelResult(
+                repo_id=repo_id,
+                author=author,
+                model_name=model_name,
+                downloads=m.get("downloads", 0) or 0,
+                likes=m.get("likes", 0) or 0,
+                tags=tags,
+                gated=gated,
+                files=files,
+            )
+        )
 
     # Sort results & trim
     results = results[:limit]
@@ -558,22 +627,25 @@ async def get_hf_model_files(
             continue
         rep = group_files[0]
         # Annotate representative with total size
-        split_representatives.append(HFFile(
-            filename=rep.filename,
-            size_bytes=total_size,
-            size_human=f"{_human_size(total_size)} ({len(group_files)} частей)",
-            quant=rep.quant,
-            is_split=True,
-            split_group=rep.split_group,
-            part_index=1,
-            total_parts=len(group_files),
-        ))
+        split_representatives.append(
+            HFFile(
+                filename=rep.filename,
+                size_bytes=total_size,
+                size_human=f"{_human_size(total_size)} ({len(group_files)} частей)",
+                quant=rep.quant,
+                is_split=True,
+                split_group=rep.split_group,
+                part_index=1,
+                total_parts=len(group_files),
+            )
+        )
 
     split_representatives.sort(key=lambda f: f.size_bytes)
     return single_files + split_representatives
 
 
 # ── ModelScope search ─────────────────────────────────────────────────────────
+
 
 async def search_ms_models(
     q: str = Query(..., min_length=1),
@@ -604,22 +676,20 @@ async def search_ms_models(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"ModelScope API error: {e}")
 
-    models_raw = (
-        (data.get("Data") or {}).get("Models")
-        or data.get("data")
-        or []
-    )
+    models_raw = (data.get("Data") or {}).get("Models") or data.get("data") or []
     results: list[MSModelResult] = []
     for m in models_raw:
         repo_id = m.get("Path") or m.get("name") or ""
-        results.append(MSModelResult(
-            repo_id=repo_id,
-            name=m.get("Name") or m.get("name") or repo_id,
-            downloads=m.get("Downloads") or m.get("downloads") or 0,
-            stars=m.get("Stars") or m.get("stars") or 0,
-            tags=m.get("Tags") or m.get("tags") or [],
-            files=[],
-        ))
+        results.append(
+            MSModelResult(
+                repo_id=repo_id,
+                name=m.get("Name") or m.get("name") or repo_id,
+                downloads=m.get("Downloads") or m.get("downloads") or 0,
+                stars=m.get("Stars") or m.get("stars") or 0,
+                tags=m.get("Tags") or m.get("tags") or [],
+                files=[],
+            )
+        )
     return results
 
 
@@ -640,13 +710,21 @@ async def get_ms_model_files(repo_id: str) -> list[HFFile]:
         if not fn.endswith(".gguf"):
             continue
         size = f.get("Size") or f.get("size") or 0
-        files.append(HFFile(filename=fn, size_bytes=size, size_human=_human_size(size),
-                            quant=_detect_quant(fn), is_split=False))
+        files.append(
+            HFFile(
+                filename=fn,
+                size_bytes=size,
+                size_human=_human_size(size),
+                quant=_detect_quant(fn),
+                is_split=False,
+            )
+        )
     files.sort(key=lambda f: f.size_bytes)
     return files
 
 
 # ── Local model management ────────────────────────────────────────────────────
+
 
 async def list_gguf_models() -> list[GgufModel]:
     active_path = _load_config().get("model", "")
@@ -655,14 +733,21 @@ async def list_gguf_models() -> list[GgufModel]:
         for p in sorted(_MODELS_DIR.rglob("*.gguf")):
             size = p.stat().st_size
             is_mmproj = p.name.startswith("mmproj")
-            result.append(GgufModel(name=p.name, path=str(p), size_bytes=size,
-                                    size_human=_human_size(size), active=(str(p) == active_path),
-                                    is_mmproj=is_mmproj))
+            result.append(
+                GgufModel(
+                    name=p.name,
+                    path=str(p),
+                    size_bytes=size,
+                    size_human=_human_size(size),
+                    active=(str(p) == active_path),
+                    is_mmproj=is_mmproj,
+                )
+            )
     return result
 
 
 async def delete_gguf_model(filename: str) -> dict:
-    if not re.match(r'^[\w\-\. ]+\.gguf$', filename):
+    if not re.match(r"^[\w\-\. ]+\.gguf$", filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
     path = _MODELS_DIR / filename
     if not path.exists():
@@ -726,7 +811,9 @@ async def activate_model(body: dict) -> ActivateModelResponse:
 
     # 4. Restart the container (graceful stop → start)
     try:
-        logger.info("llamacpp_restart_triggered", container=container_id[:12], model=Path(path).name)
+        logger.info(
+            "llamacpp_restart_triggered", container=container_id[:12], model=Path(path).name
+        )
         await _docker_restart_container(container_id)
     except Exception as exc:
         logger.error("llamacpp_restart_failed", error=str(exc))
@@ -788,21 +875,24 @@ async def restart_llamacpp_server() -> ActivateModelResponse:
 
 # ── Download ──────────────────────────────────────────────────────────────────
 
+
 async def list_downloads() -> list[DownloadStatus]:
     result = []
     for dl_id, d in _downloads.items():
         total = d.get("total_bytes", 0)
         progress = d.get("progress_bytes", 0)
-        result.append(DownloadStatus(
-            download_id=dl_id,
-            repo_id=d.get("repo_id", ""),
-            filename=d.get("filename", ""),
-            status=d.get("status", "unknown"),
-            progress_bytes=progress,
-            total_bytes=total,
-            progress_pct=round(progress / total * 100, 1) if total > 0 else 0.0,
-            error=d.get("error"),
-        ))
+        result.append(
+            DownloadStatus(
+                download_id=dl_id,
+                repo_id=d.get("repo_id", ""),
+                filename=d.get("filename", ""),
+                status=d.get("status", "unknown"),
+                progress_bytes=progress,
+                total_bytes=total,
+                progress_pct=round(progress / total * 100, 1) if total > 0 else 0.0,
+                error=d.get("error"),
+            )
+        )
     return result
 
 
@@ -826,8 +916,14 @@ async def start_download(req: DownloadRequest, background_tasks: BackgroundTasks
         raise HTTPException(status_code=400, detail="Unknown source")
 
     dest_name = req.filename
-    _downloads[dl_id] = {"status": "pending", "progress_bytes": 0, "total_bytes": 0,
-                         "error": None, "repo_id": req.repo_id, "filename": req.filename}
+    _downloads[dl_id] = {
+        "status": "pending",
+        "progress_bytes": 0,
+        "total_bytes": 0,
+        "error": None,
+        "repo_id": req.repo_id,
+        "filename": req.filename,
+    }
     background_tasks.add_task(_download_model, dl_id, url, dest_name, req.source)
     return {"message": "Download started", "download_id": dl_id, "dest": dest_name}
 
@@ -844,11 +940,16 @@ async def get_download_status(dl_id: str) -> DownloadStatus:
         raise HTTPException(status_code=404, detail="Download not found")
     total = d.get("total_bytes", 0)
     progress = d.get("progress_bytes", 0)
-    return DownloadStatus(download_id=dl_id, repo_id=d.get("repo_id", ""),
-                          filename=d.get("filename", ""), status=d.get("status", "unknown"),
-                          progress_bytes=progress, total_bytes=total,
-                          progress_pct=round(progress / total * 100, 1) if total > 0 else 0.0,
-                          error=d.get("error"))
+    return DownloadStatus(
+        download_id=dl_id,
+        repo_id=d.get("repo_id", ""),
+        filename=d.get("filename", ""),
+        status=d.get("status", "unknown"),
+        progress_bytes=progress,
+        total_bytes=total,
+        progress_pct=round(progress / total * 100, 1) if total > 0 else 0.0,
+        error=d.get("error"),
+    )
 
 
 async def stream_download(dl_id: str):
@@ -860,13 +961,18 @@ async def stream_download(dl_id: str):
                 break
             total = d.get("total_bytes", 0)
             progress = d.get("progress_bytes", 0)
-            payload = {"status": d.get("status"), "progress_bytes": progress, "total_bytes": total,
-                       "progress_pct": round(progress / total * 100, 1) if total > 0 else 0.0,
-                       "error": d.get("error")}
+            payload = {
+                "status": d.get("status"),
+                "progress_bytes": progress,
+                "total_bytes": total,
+                "progress_pct": round(progress / total * 100, 1) if total > 0 else 0.0,
+                "error": d.get("error"),
+            }
             yield f"data: {json.dumps(payload)}\n\n"
             if d.get("status") in ("done", "error", "cancelled"):
                 break
             await asyncio.sleep(0.5)
+
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
@@ -919,14 +1025,22 @@ async def _maybe_download_mmproj(repo_id: str | None, source: str, model_filenam
 
 
 async def _download_model(
-    dl_id: str, url: str, dest_name: str, source: str = "huggingface",
+    dl_id: str,
+    url: str,
+    dest_name: str,
+    source: str = "huggingface",
     repo_id: str | None = None,
 ) -> None:
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)
     dest = _MODELS_DIR / dest_name
     tmp = _MODELS_DIR / f"{dest_name}.tmp"
-    _downloads[dl_id] = {**_downloads.get(dl_id, {}), "status": "downloading",
-                         "progress_bytes": 0, "total_bytes": 0, "error": None}
+    _downloads[dl_id] = {
+        **_downloads.get(dl_id, {}),
+        "status": "downloading",
+        "progress_bytes": 0,
+        "total_bytes": 0,
+        "error": None,
+    }
     logger.info("llamacpp_download_start", dl_id=dl_id, url=url[:80])
 
     headers: dict = {}
@@ -941,10 +1055,14 @@ async def _download_model(
     headers["User-Agent"] = "llama-manager/1.0"
 
     try:
-        async with httpx.AsyncClient(timeout=None, follow_redirects=True, headers=headers) as client:
+        async with httpx.AsyncClient(
+            timeout=None, follow_redirects=True, headers=headers
+        ) as client:
             async with client.stream("GET", url) as resp:
                 if resp.status_code == 401:
-                    raise RuntimeError("Authentication required — set your API token in Настройки токенов")
+                    raise RuntimeError(
+                        "Authentication required — set your API token in Настройки токенов"
+                    )
                 if resp.status_code != 200:
                     raise RuntimeError(f"HTTP {resp.status_code} from server")
                 total = int(resp.headers.get("content-length", 0))
@@ -976,6 +1094,7 @@ async def _download_model(
 
 # ── Diagnostics ───────────────────────────────────────────────────────────────
 
+
 async def get_llamacpp_slots() -> dict:
     base = _get_llamacpp_base_url()
     try:
@@ -999,13 +1118,20 @@ async def get_llamacpp_metrics():
 
 async def test_generation() -> dict:
     base = _get_llamacpp_base_url()
-    payload = {"messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-               "max_tokens": 16, "temperature": 0}
+    payload = {
+        "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+        "max_tokens": 16,
+        "temperature": 0,
+    }
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(f"{base}/v1/chat/completions", json=payload)
             r.raise_for_status()
             data = r.json()
-            return {"ok": True, "response": data["choices"][0]["message"]["content"], "model": data.get("model")}
+            return {
+                "ok": True,
+                "response": data["choices"][0]["message"]["content"],
+                "model": data.get("model"),
+            }
     except Exception as e:
         return {"ok": False, "error": str(e)}

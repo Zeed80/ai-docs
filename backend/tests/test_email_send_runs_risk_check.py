@@ -22,32 +22,51 @@ def _no_real_send(monkeypatch):
         id = "task-123"
 
     monkeypatch.setattr(sender.send_email_draft, "delay", lambda *a, **k: _Task())
-    monkeypatch.setattr(
-        sender.send_email_draft, "apply_async", lambda *a, **k: _Task()
-    )
+    monkeypatch.setattr(sender.send_email_draft, "apply_async", lambda *a, **k: _Task())
     return _Task
 
 
-async def _draft(client, db_session, *, to="supplier@example.com", subject="Тема",
-                 body="<p>Обычный текст письма.</p>"):
+async def _draft(
+    client,
+    db_session,
+    *,
+    to="supplier@example.com",
+    subject="Тема",
+    body="<p>Обычный текст письма.</p>",
+):
     from app.db.models import MailboxConfig
 
-    if not (await db_session.execute(
-        __import__("sqlalchemy").select(MailboxConfig).where(MailboxConfig.name == "riskbox")
-    )).scalar_one_or_none():
-        db_session.add(MailboxConfig(
-            name="riskbox", imap_host="imap.example.com", imap_port=993,
-            imap_user="riskbox", imap_password_encrypted="x", imap_ssl=True,
-            smtp_host="smtp.example.com", smtp_port=587,
-            smtp_user="riskbox@example.com", smtp_password_encrypted="y",
-            is_active=True,
-        ))
+    if not (
+        await db_session.execute(
+            __import__("sqlalchemy").select(MailboxConfig).where(MailboxConfig.name == "riskbox")
+        )
+    ).scalar_one_or_none():
+        db_session.add(
+            MailboxConfig(
+                name="riskbox",
+                imap_host="imap.example.com",
+                imap_port=993,
+                imap_user="riskbox",
+                imap_password_encrypted="x",
+                imap_ssl=True,
+                smtp_host="smtp.example.com",
+                smtp_port=587,
+                smtp_user="riskbox@example.com",
+                smtp_password_encrypted="y",
+                is_active=True,
+            )
+        )
         await db_session.commit()
 
-    resp = await client.post("/api/email/drafts", json={
-        "to_addresses": [to], "subject": subject, "body_html": body,
-        "mailbox": "riskbox",
-    })
+    resp = await client.post(
+        "/api/email/drafts",
+        json={
+            "to_addresses": [to],
+            "subject": subject,
+            "body_html": body,
+            "mailbox": "riskbox",
+        },
+    )
     assert resp.status_code == 200, resp.text
     return resp.json()["id"]
 
@@ -86,7 +105,8 @@ async def test_send_without_a_prior_risk_check_now_works(client, db_session, _no
 async def test_a_blocking_flag_still_stops_the_send(client, db_session, _no_real_send):
     """Главное свойство: авто-проверка не превращается в авто-разрешение."""
     draft_id = await _draft(
-        client, db_session,
+        client,
+        db_session,
         body="<p>Это конфиденциально, никому не пересылайте.</p>",
         subject="Конфиденциально",
     )
@@ -98,25 +118,27 @@ async def test_a_blocking_flag_still_stops_the_send(client, db_session, _no_real
     assert "sensitive_content" in detail["blocked_by"]
 
 
-async def test_a_human_can_override_a_block_and_it_is_audited(
-    client, db_session, _no_real_send
-):
+async def test_a_human_can_override_a_block_and_it_is_audited(client, db_session, _no_real_send):
     from sqlalchemy import select
 
     from app.db.models import AuditLog
 
     draft_id = await _draft(
-        client, db_session,
-        body="<p>Коммерческая тайна: не пересылать.</p>", subject="Тайна",
+        client,
+        db_session,
+        body="<p>Коммерческая тайна: не пересылать.</p>",
+        subject="Тайна",
     )
     assert (await _send(client, draft_id)).status_code == 400
 
     resp = await _send(client, draft_id, acknowledged_risks=["sensitive_content"])
     assert resp.status_code == 200, resp.text
 
-    rows = (await db_session.execute(
-        select(AuditLog).where(AuditLog.action == "email.risk_override")
-    )).scalars().all()
+    rows = (
+        (await db_session.execute(select(AuditLog).where(AuditLog.action == "email.risk_override")))
+        .scalars()
+        .all()
+    )
     assert rows, "обход блокирующей проверки обязан попадать в аудит"
 
 
@@ -124,15 +146,19 @@ async def test_content_changed_after_the_check_is_rechecked(client, db_session, 
     """Изменение после проверки не проходит по старому вердикту: раньше это
     был отказ с просьбой повторить risk_check, теперь проверка повторяется
     сама — но на НОВОМ содержимом."""
-    from app.db.models import DraftAction
 
     draft_id = await _draft(client, db_session)
-    assert (await client.post(f"/api/email/drafts/{draft_id}/risk-check", json={})).status_code == 200
+    assert (
+        await client.post(f"/api/email/drafts/{draft_id}/risk-check", json={})
+    ).status_code == 200
 
     # Подменяем тело на то, что проверка обязана заблокировать.
-    resp = await client.patch(f"/api/email/drafts/{draft_id}", json={
-        "body_html": "<p>Это конфиденциально, не для распространения.</p>",
-    })
+    resp = await client.patch(
+        f"/api/email/drafts/{draft_id}",
+        json={
+            "body_html": "<p>Это конфиденциально, не для распространения.</p>",
+        },
+    )
     assert resp.status_code == 200, resp.text
 
     resp = await _send(client, draft_id)
@@ -154,7 +180,8 @@ async def test_an_approval_for_other_content_is_still_refused(client, db_session
     await client.patch(f"/api/email/drafts/{draft_id}", json={"subject": "Совсем другая тема"})
 
     resp = await client.post(
-        f"/api/email/drafts/{draft_id}/send", json={"expected_digest": stale_digest},
+        f"/api/email/drafts/{draft_id}/send",
+        json={"expected_digest": stale_digest},
     )
     assert resp.status_code == 409, resp.text
 

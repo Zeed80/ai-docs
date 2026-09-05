@@ -18,6 +18,7 @@ def embed_document(self, document_id: str) -> dict:
     If an active extraction job is still running (race condition), retries in 15 s.
     """
     from app.tasks.gpu_lock import gpu_single_flight
+
     try:
         with gpu_single_flight(f"embed:{document_id}"):
             result = asyncio.run(_embed_document(document_id))
@@ -72,9 +73,7 @@ async def _embed_document(document_id: str) -> dict:
         result = await db.execute(
             select(Document)
             .where(Document.id == document_id)
-            .options(
-                selectinload(Document.extractions).selectinload(DocumentExtraction.fields)
-            )
+            .options(selectinload(Document.extractions).selectinload(DocumentExtraction.fields))
         )
         doc = result.scalar_one_or_none()
         if not doc:
@@ -159,10 +158,10 @@ async def _embed_document(document_id: str) -> dict:
             from app.vector.qdrant_store import upsert_memory_embedding
 
             chunks = (
-                await db.execute(
-                    select(DocumentChunk).where(DocumentChunk.document_id == doc.id)
-                )
-            ).scalars().all()
+                (await db.execute(select(DocumentChunk).where(DocumentChunk.document_id == doc.id)))
+                .scalars()
+                .all()
+            )
             for chunk in chunks:
                 if not (chunk.text or "").strip():
                     continue
@@ -202,8 +201,7 @@ async def _embed_document(document_id: str) -> dict:
             if job.status != "running":
                 job.current_step = "completed"
             if all(
-                step.get("status") in {"done", "skipped"}
-                for step in (job.pipeline_steps or [])
+                step.get("status") in {"done", "skipped"} for step in (job.pipeline_steps or [])
             ):
                 job.status = "done"
                 job.current_step = "completed"

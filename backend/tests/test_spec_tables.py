@@ -43,31 +43,62 @@ async def seeded(db_session):
         db_session.add(doc)
         await db_session.flush()
         inv = Invoice(
-            document_id=doc.id, invoice_number=number,
+            document_id=doc.id,
+            invoice_number=number,
             invoice_date=datetime(*date, tzinfo=UTC),
-            supplier_id=supplier.id, total_amount=total, tax_amount=tax,
+            supplier_id=supplier.id,
+            total_amount=total,
+            tax_amount=tax,
         )
         db_session.add(inv)
         await db_session.flush()
         for idx, (desc, qty, price, canon) in enumerate(lines, start=1):
-            db_session.add(InvoiceLine(
-                invoice_id=inv.id, line_number=idx, description=desc,
-                quantity=qty, unit="шт", unit_price=price, amount=qty * price,
-                canonical_item_id=canon.id if canon else None,
-            ))
+            db_session.add(
+                InvoiceLine(
+                    invoice_id=inv.id,
+                    line_number=idx,
+                    description=desc,
+                    quantity=qty,
+                    unit="шт",
+                    unit_price=price,
+                    amount=qty * price,
+                    canonical_item_id=canon.id if canon else None,
+                )
+            )
         await db_session.flush()
         return inv
 
-    await _invoice("INV-001", romashka, (2026, 5, 10), 12000.0, 2000.0, [
-        ("Фреза концевая ⌀5 мм Z4", 10, 800.0, canonical),
-        ("Болт М8х40 DIN 933", 100, 40.0, None),
-    ])
-    await _invoice("INV-002", lutik, (2026, 5, 20), 5000.0, 833.33, [
-        ("Фреза дисковая 50 мм", 2, 2500.0, None),
-    ])
-    await _invoice("INV-003", romashka, (2026, 6, 1), 900.0, 150.0, [
-        ("Сверло 5 мм HSS", 30, 30.0, None),
-    ])
+    await _invoice(
+        "INV-001",
+        romashka,
+        (2026, 5, 10),
+        12000.0,
+        2000.0,
+        [
+            ("Фреза концевая ⌀5 мм Z4", 10, 800.0, canonical),
+            ("Болт М8х40 DIN 933", 100, 40.0, None),
+        ],
+    )
+    await _invoice(
+        "INV-002",
+        lutik,
+        (2026, 5, 20),
+        5000.0,
+        833.33,
+        [
+            ("Фреза дисковая 50 мм", 2, 2500.0, None),
+        ],
+    )
+    await _invoice(
+        "INV-003",
+        romashka,
+        (2026, 6, 1),
+        900.0,
+        150.0,
+        [
+            ("Сверло 5 мм HSS", 30, 30.0, None),
+        ],
+    )
     return {"romashka": romashka, "lutik": lutik}
 
 
@@ -93,7 +124,11 @@ async def test_execute_user_example_full_data(db_session, seeded):
     assert result.total == 3 and len(result.rows) == 3 and not result.truncated
     headers = [c["header"] for c in result.columns]
     assert headers == [
-        "Поставщик", "Номер счета", "Дата счета", "Перечень товаров", "Общая сумма счета",
+        "Поставщик",
+        "Номер счета",
+        "Дата счета",
+        "Перечень товаров",
+        "Общая сумма счета",
     ]
     first = result.rows[0]
     assert first["supplier_name"] == "ООО Ромашка"
@@ -172,10 +207,13 @@ async def test_api_spec_table_unresolved_supplier_not_published(client, seeded):
     a workspace block for a supplier name that matches nobody."""
     spec = _user_spec()
     spec.filters = [ts.FilterSpec(field="supplier_name", op="contains", value="ЦНК")]
-    resp = await client.post("/api/workspace/agent/spec-table", json={
-        "canvas_id": "agent:spec-table-цнк",
-        "spec": spec.model_dump(mode="json"),
-    })
+    resp = await client.post(
+        "/api/workspace/agent/spec-table",
+        json={
+            "canvas_id": "agent:spec-table-цнк",
+            "spec": spec.model_dump(mode="json"),
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "not_found"
@@ -188,10 +226,13 @@ async def test_api_spec_table_unresolved_supplier_not_published(client, seeded):
 @pytest.mark.asyncio
 async def test_api_build_then_patch_command(client, seeded):
     # 1. Построение по спецификации пользователя.
-    resp = await client.post("/api/workspace/agent/spec-table", json={
-        "canvas_id": "agent:spec-table",
-        "spec": _user_spec().model_dump(mode="json"),
-    })
+    resp = await client.post(
+        "/api/workspace/agent/spec-table",
+        json={
+            "canvas_id": "agent:spec-table",
+            "spec": _user_spec().model_dump(mode="json"),
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "published"
@@ -199,10 +240,13 @@ async def test_api_build_then_patch_command(client, seeded):
     assert "полные данные" in data["message"]
 
     # 2. «добавь столбец с ндс перед суммой» — детерминированный патч.
-    resp = await client.post("/api/workspace/agent/spec-table/patch", json={
-        "canvas_id": "agent:spec-table",
-        "command": "добавь столбец с ндс перед суммой",
-    })
+    resp = await client.post(
+        "/api/workspace/agent/spec-table/patch",
+        json={
+            "canvas_id": "agent:spec-table",
+            "command": "добавь столбец с ндс перед суммой",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "published"
@@ -210,22 +254,29 @@ async def test_api_build_then_patch_command(client, seeded):
     assert fields.index("tax_amount") == fields.index("total_amount") - 1
 
     # 3. Сортировка командой.
-    resp = await client.post("/api/workspace/agent/spec-table/patch", json={
-        "canvas_id": "agent:spec-table",
-        "command": "отсортируй по сумме по убыванию",
-    })
+    resp = await client.post(
+        "/api/workspace/agent/spec-table/patch",
+        json={
+            "canvas_id": "agent:spec-table",
+            "command": "отсортируй по сумме по убыванию",
+        },
+    )
     assert resp.json()["spec"]["sort"] == [{"field": "total_amount", "dir": "desc"}]
 
     # 4. Smart-фильтр командой «покажи только…».
-    resp = await client.post("/api/workspace/agent/spec-table/patch", json={
-        "canvas_id": "agent:spec-table",
-        "command": "покажи только фрезы диаметра 5",
-    })
+    resp = await client.post(
+        "/api/workspace/agent/spec-table/patch",
+        json={
+            "canvas_id": "agent:spec-table",
+            "command": "покажи только фрезы диаметра 5",
+        },
+    )
     data = resp.json()
     assert data["total"] == 1
 
     # 5. Блок на Рабочем столе обновлён и хранит spec.
     from app.domain.workspace import get_workspace_block
+
     block = get_workspace_block("agent:spec-table")
     assert block and block["spec"]["filters"][0]["op"] == "smart"
     assert block["total_rows"] == 1
@@ -245,9 +296,9 @@ async def test_execute_spec_carries_pk_and_editable_flag(db_session, seeded):
 async def test_apply_cell_writeback_coerces_and_guards(db_session, seeded):
     from sqlalchemy import select as sa_select
 
-    inv = (await db_session.execute(
-        sa_select(Invoice).where(Invoice.invoice_number == "INV-001")
-    )).scalar_one()
+    inv = (
+        await db_session.execute(sa_select(Invoice).where(Invoice.invoice_number == "INV-001"))
+    ).scalar_one()
 
     ok, _ = await ts.apply_cell_writeback(
         db_session, "invoices", inv.id, "total_amount", "15 000,50"
@@ -255,9 +306,7 @@ async def test_apply_cell_writeback_coerces_and_guards(db_session, seeded):
     assert ok and inv.total_amount == 15000.5
 
     # Non-editable / read-only field rejected.
-    bad, msg = await ts.apply_cell_writeback(
-        db_session, "invoices", inv.id, "supplier_name", "X"
-    )
+    bad, msg = await ts.apply_cell_writeback(db_session, "invoices", inv.id, "supplier_name", "X")
     assert not bad and "нередактируемо" in msg
 
 
@@ -269,23 +318,29 @@ async def test_cell_edit_is_draft_first_then_applied(client, db_session, seeded)
     from app.db.models import Approval, ApprovalStatus, DraftAction
 
     # Build the spec-table so the block (with spec) lives in the workspace store.
-    await client.post("/api/workspace/agent/spec-table", json={
-        "canvas_id": "agent:spec-table",
-        "spec": _user_spec().model_dump(mode="json"),
-    })
+    await client.post(
+        "/api/workspace/agent/spec-table",
+        json={
+            "canvas_id": "agent:spec-table",
+            "spec": _user_spec().model_dump(mode="json"),
+        },
+    )
 
-    inv = (await db_session.execute(
-        sa_select(Invoice).where(Invoice.invoice_number == "INV-001")
-    )).scalar_one()
+    inv = (
+        await db_session.execute(sa_select(Invoice).where(Invoice.invoice_number == "INV-001"))
+    ).scalar_one()
     original = inv.total_amount
 
     # Cell edit files an approval — NOT a direct write.
-    resp = await client.post("/api/workspace/agent/spec-table/cell-edit", json={
-        "canvas_id": "agent:spec-table",
-        "row_pk": str(inv.id),
-        "field": "total_amount",
-        "value": "99999",
-    })
+    resp = await client.post(
+        "/api/workspace/agent/spec-table/cell-edit",
+        json={
+            "canvas_id": "agent:spec-table",
+            "row_pk": str(inv.id),
+            "field": "total_amount",
+            "value": "99999",
+        },
+    )
     data = resp.json()
     assert data["status"] == "pending_approval"
     approval_id = data["approval_id"]
@@ -293,22 +348,27 @@ async def test_cell_edit_is_draft_first_then_applied(client, db_session, seeded)
     await db_session.refresh(inv)
     assert inv.total_amount == original  # nothing written yet
 
-    approval = (await db_session.execute(
-        sa_select(Approval).where(Approval.id == approval_id)
-    )).scalar_one()
+    approval = (
+        await db_session.execute(sa_select(Approval).where(Approval.id == approval_id))
+    ).scalar_one()
     assert approval.status == ApprovalStatus.pending
-    draft = (await db_session.execute(
-        sa_select(DraftAction).where(DraftAction.approval_id == approval.id)
-    )).scalar_one()
+    draft = (
+        await db_session.execute(
+            sa_select(DraftAction).where(DraftAction.approval_id == approval.id)
+        )
+    ).scalar_one()
     assert draft.executed is False and draft.draft_data["field"] == "total_amount"
 
     # Read-only field is rejected at the gate (never reaches approval).
-    bad = await client.post("/api/workspace/agent/spec-table/cell-edit", json={
-        "canvas_id": "agent:spec-table",
-        "row_pk": str(inv.id),
-        "field": "supplier_name",
-        "value": "X",
-    })
+    bad = await client.post(
+        "/api/workspace/agent/spec-table/cell-edit",
+        json={
+            "canvas_id": "agent:spec-table",
+            "row_pk": str(inv.id),
+            "field": "supplier_name",
+            "value": "X",
+        },
+    )
     assert bad.json()["status"] == "error"
 
     # A manager approves → the executor applies the writeback.
@@ -316,8 +376,11 @@ async def test_cell_edit_is_draft_first_then_applied(client, db_session, seeded)
     from app.main import app
 
     manager = UserInfo(
-        sub="boss", email="boss@x", name="boss",
-        preferred_username="boss", roles=[UserRole.manager],
+        sub="boss",
+        email="boss@x",
+        name="boss",
+        preferred_username="boss",
+        roles=[UserRole.manager],
     )
     app.dependency_overrides[get_current_user] = lambda: manager
     try:
@@ -338,17 +401,24 @@ async def test_cell_edit_is_draft_first_then_applied(client, db_session, seeded)
 @pytest.mark.asyncio
 async def test_cell_edit_read_only_source_rejected(client, seeded):
     # documents is a read-only source (no writeback registered).
-    await client.post("/api/workspace/agent/spec-table", json={
-        "canvas_id": "agent:docs",
-        "spec": {"source": "documents", "columns": [{"field": "file_name"}]},
-    })
+    await client.post(
+        "/api/workspace/agent/spec-table",
+        json={
+            "canvas_id": "agent:docs",
+            "spec": {"source": "documents", "columns": [{"field": "file_name"}]},
+        },
+    )
     import uuid as _uuid
-    resp = await client.post("/api/workspace/agent/spec-table/cell-edit", json={
-        "canvas_id": "agent:docs",
-        "row_pk": str(_uuid.uuid4()),
-        "field": "file_name",
-        "value": "x",
-    })
+
+    resp = await client.post(
+        "/api/workspace/agent/spec-table/cell-edit",
+        json={
+            "canvas_id": "agent:docs",
+            "row_pk": str(_uuid.uuid4()),
+            "field": "file_name",
+            "value": "x",
+        },
+    )
     data = resp.json()
     assert data["status"] == "error" and "только для чтения" in data["message"]
 
@@ -359,24 +429,36 @@ async def test_api_tolerates_flattened_and_string_specs(client, seeded):
     spec_dict = _user_spec().model_dump(mode="json")
 
     # 1. Flattened: spec fields at the top level (no "spec" wrapper).
-    resp = await client.post("/api/workspace/agent/spec-table", json={
-        "canvas_id": "agent:spec-table", **spec_dict,
-    })
+    resp = await client.post(
+        "/api/workspace/agent/spec-table",
+        json={
+            "canvas_id": "agent:spec-table",
+            **spec_dict,
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["status"] == "published" and resp.json()["total"] == 3
 
     # 2. spec passed as a JSON string.
     import json as _json
-    resp = await client.post("/api/workspace/agent/spec-table", json={
-        "canvas_id": "agent:spec-table", "spec": _json.dumps(spec_dict),
-    })
+
+    resp = await client.post(
+        "/api/workspace/agent/spec-table",
+        json={
+            "canvas_id": "agent:spec-table",
+            "spec": _json.dumps(spec_dict),
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["status"] == "published" and resp.json()["total"] == 3
 
     # 3. Empty body → structured error, never a bare 422.
-    resp = await client.post("/api/workspace/agent/spec-table", json={
-        "canvas_id": "agent:spec-table",
-    })
+    resp = await client.post(
+        "/api/workspace/agent/spec-table",
+        json={
+            "canvas_id": "agent:spec-table",
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["status"] == "error"
 
@@ -387,61 +469,94 @@ async def test_api_tolerates_stringified_subfields(client, seeded):
     import json as _json
 
     # columns/filters as JSON strings, limit as string.
-    resp = await client.post("/api/workspace/agent/spec-table", json={
-        "spec": {
-            "source": "invoice_items",
-            "columns": _json.dumps([{"field": "description"}, {"field": "unit_price"}]),
-            "filters": _json.dumps([{"field": "description", "op": "smart", "value": "фрезы"}]),
-            "limit": "100",
+    resp = await client.post(
+        "/api/workspace/agent/spec-table",
+        json={
+            "spec": {
+                "source": "invoice_items",
+                "columns": _json.dumps([{"field": "description"}, {"field": "unit_price"}]),
+                "filters": _json.dumps([{"field": "description", "op": "smart", "value": "фрезы"}]),
+                "limit": "100",
+            },
         },
-    })
+    )
     assert resp.status_code == 200
     assert resp.json()["status"] == "published"
 
     # columns as a comma-separated list of bare field names.
-    resp = await client.post("/api/workspace/agent/spec-table", json={
-        "spec": {"source": "invoice_items", "columns": "description, unit_price"},
-    })
+    resp = await client.post(
+        "/api/workspace/agent/spec-table",
+        json={
+            "spec": {"source": "invoice_items", "columns": "description, unit_price"},
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["status"] == "published"
 
 
 @pytest.mark.asyncio
 async def test_api_patch_unrecognized_command(client, seeded):
-    await client.post("/api/workspace/agent/spec-table", json={
-        "spec": _user_spec().model_dump(mode="json"),
-    })
-    resp = await client.post("/api/workspace/agent/spec-table/patch", json={
-        "command": "сделай красиво",
-    })
+    await client.post(
+        "/api/workspace/agent/spec-table",
+        json={
+            "spec": _user_spec().model_dump(mode="json"),
+        },
+    )
+    resp = await client.post(
+        "/api/workspace/agent/spec-table/patch",
+        json={
+            "command": "сделай красиво",
+        },
+    )
     assert resp.json()["status"] == "unrecognized"
 
 
 @pytest.mark.asyncio
 async def test_api_rejects_unknown_fields(client, seeded):
-    resp = await client.post("/api/workspace/agent/spec-table", json={
-        "spec": {"source": "invoices", "columns": [{"field": "password_hash"}]},
-    })
+    resp = await client.post(
+        "/api/workspace/agent/spec-table",
+        json={
+            "spec": {"source": "invoices", "columns": [{"field": "password_hash"}]},
+        },
+    )
     assert resp.json()["status"] == "error"
     assert "password_hash" in resp.json()["message"]
 
 
 @pytest_asyncio.fixture
 async def warehouse_seeded(db_session):
-    canonical = CanonicalItem(
-        name="Фреза концевая 5 мм", aliases=["фреза 5"], unit="шт"
-    )
+    canonical = CanonicalItem(name="Фреза концевая 5 мм", aliases=["фреза 5"], unit="шт")
     db_session.add(canonical)
     await db_session.flush()
-    db_session.add_all([
-        InventoryItem(name="Фреза концевая ⌀5 мм Z4", sku="FR-5-Z4", unit="шт",
-                      current_qty=3, min_qty=10, location="A-01",
-                      canonical_item_id=canonical.id),
-        InventoryItem(name="Фреза дисковая 50 мм", sku="FR-50-D", unit="шт",
-                      current_qty=12, min_qty=2, location="A-02"),
-        InventoryItem(name="Болт М8х40 DIN 933", sku="BLT-M8-40", unit="шт",
-                      current_qty=500, min_qty=100, location="B-11"),
-    ])
+    db_session.add_all(
+        [
+            InventoryItem(
+                name="Фреза концевая ⌀5 мм Z4",
+                sku="FR-5-Z4",
+                unit="шт",
+                current_qty=3,
+                min_qty=10,
+                location="A-01",
+                canonical_item_id=canonical.id,
+            ),
+            InventoryItem(
+                name="Фреза дисковая 50 мм",
+                sku="FR-50-D",
+                unit="шт",
+                current_qty=12,
+                min_qty=2,
+                location="A-02",
+            ),
+            InventoryItem(
+                name="Болт М8х40 DIN 933",
+                sku="BLT-M8-40",
+                unit="шт",
+                current_qty=500,
+                min_qty=100,
+                location="B-11",
+            ),
+        ]
+    )
     await db_session.flush()
 
 
@@ -508,7 +623,9 @@ async def test_documents_source(db_session, seeded):
     result = await ts.execute_spec(db_session, spec)
     assert result.total == 3  # три документа из seeded-счетов
     assert [r["file_name"] for r in result.rows] == [
-        "INV-001.pdf", "INV-002.pdf", "INV-003.pdf",
+        "INV-001.pdf",
+        "INV-002.pdf",
+        "INV-003.pdf",
     ]
     # Enum-статус сериализуется в строку.
     assert result.rows[0]["status"] == "ingested"
@@ -516,8 +633,9 @@ async def test_documents_source(db_session, seeded):
 
 def test_repair_spec_heals_source_and_field_synonyms():
     """Near-miss source/field names are mapped to catalog keys, not rejected."""
-    spec = ts.TableSpec(source="счета", columns=[
-        ts.ColumnSpec(field="поставщик"), ts.ColumnSpec(field="сумма")])
+    spec = ts.TableSpec(
+        source="счета", columns=[ts.ColumnSpec(field="поставщик"), ts.ColumnSpec(field="сумма")]
+    )
     repaired, notes = ts.repair_spec_to_catalog(spec)
     assert repaired.source == "invoices"
     fields = [c.field for c in repaired.columns]
@@ -526,8 +644,10 @@ def test_repair_spec_heals_source_and_field_synonyms():
 
 
 def test_repair_spec_drops_unknown_keeps_known():
-    spec = ts.TableSpec(source="invoices", columns=[
-        ts.ColumnSpec(field="invoice_number"), ts.ColumnSpec(field="ляляля")])
+    spec = ts.TableSpec(
+        source="invoices",
+        columns=[ts.ColumnSpec(field="invoice_number"), ts.ColumnSpec(field="ляляля")],
+    )
     repaired, notes = ts.repair_spec_to_catalog(spec)
     fields = [c.field for c in repaired.columns]
     assert fields == ["invoice_number"]
@@ -536,18 +656,30 @@ def test_repair_spec_drops_unknown_keeps_known():
 
 def test_repair_heals_numeric_and_search_filters():
     """A dropped FILTER returns wrong data — numeric/search pseudo-fields heal."""
-    sp, _ = ts.repair_spec_to_catalog(ts.TableSpec(source="invoices",
-        columns=[ts.ColumnSpec(field="supplier_name")],
-        filters=[ts.FilterSpec(field="amount_min", op="gte", value=100000)]))
+    sp, _ = ts.repair_spec_to_catalog(
+        ts.TableSpec(
+            source="invoices",
+            columns=[ts.ColumnSpec(field="supplier_name")],
+            filters=[ts.FilterSpec(field="amount_min", op="gte", value=100000)],
+        )
+    )
     assert [(f.field, f.op, f.value) for f in sp.filters] == [("total_amount", "gte", 100000)]
     # eq on a *_от pseudo-field becomes gte; search_text → smart on primary text.
-    sp2, _ = ts.repair_spec_to_catalog(ts.TableSpec(source="invoices",
-        columns=[ts.ColumnSpec(field="supplier_name")],
-        filters=[ts.FilterSpec(field="сумма_от", op="eq", value=5000)]))
+    sp2, _ = ts.repair_spec_to_catalog(
+        ts.TableSpec(
+            source="invoices",
+            columns=[ts.ColumnSpec(field="supplier_name")],
+            filters=[ts.FilterSpec(field="сумма_от", op="eq", value=5000)],
+        )
+    )
     assert sp2.filters[0].field == "total_amount" and sp2.filters[0].op == "gte"
-    sp3, _ = ts.repair_spec_to_catalog(ts.TableSpec(source="invoice_items",
-        columns=[ts.ColumnSpec(field="supplier_name")],
-        filters=[ts.FilterSpec(field="search_text", op="contains", value="фреза")]))
+    sp3, _ = ts.repair_spec_to_catalog(
+        ts.TableSpec(
+            source="invoice_items",
+            columns=[ts.ColumnSpec(field="supplier_name")],
+            filters=[ts.FilterSpec(field="search_text", op="contains", value="фреза")],
+        )
+    )
     assert sp3.filters[0].field == "description" and sp3.filters[0].op == "smart"
 
 
@@ -555,18 +687,24 @@ def test_repair_heals_numeric_and_search_filters():
 async def test_correct_category_error_suppliers_to_items(db_session, seeded):
     """suppliers.name ~ «фреза» (matches no supplier, matches items) → rebuilt on
     invoice_items with a smart description filter + supplier grouping."""
-    bad = ts.TableSpec(source="suppliers",
+    bad = ts.TableSpec(
+        source="suppliers",
         columns=[ts.ColumnSpec(field="name")],
-        filters=[ts.FilterSpec(field="name", op="smart", value="фреза")])
+        filters=[ts.FilterSpec(field="name", op="smart", value="фреза")],
+    )
     fixed = await ts.correct_category_error(db_session, bad, "выведи все фрезы по поставщику")
     assert fixed is not None
     assert fixed.source == "invoice_items"
     assert fixed.group_by == ["supplier_name"]
-    assert any(f.field == "description" and f.op == "smart" and f.value == "фреза"
-               for f in fixed.filters)
+    assert any(
+        f.field == "description" and f.op == "smart" and f.value == "фреза" for f in fixed.filters
+    )
     # A real supplier-name filter must be left alone.
-    ok = ts.TableSpec(source="suppliers", columns=[ts.ColumnSpec(field="name")],
-        filters=[ts.FilterSpec(field="name", op="contains", value="Ромашка")])
+    ok = ts.TableSpec(
+        source="suppliers",
+        columns=[ts.ColumnSpec(field="name")],
+        filters=[ts.FilterSpec(field="name", op="contains", value="Ромашка")],
+    )
     assert await ts.correct_category_error(db_session, ok, "поставщики Ромашка") is None
 
 
@@ -586,16 +724,24 @@ def test_reconcile_recovers_dropped_item_filter():
     base = ts.TableSpec(source="invoice_items", columns=[ts.ColumnSpec(field="supplier_name")])
     ops, _ = ts.reconcile_ops(base, "выведи все фрезы по поставщику")
     flt = [o.filter for o in ops if o.op == "add_filter"]
-    assert flt and flt[0].field == "description" and flt[0].op == "smart" and flt[0].value == "фрезы"
+    assert (
+        flt and flt[0].field == "description" and flt[0].op == "smart" and flt[0].value == "фрезы"
+    )
     # A source-type word is the dataset, not an item → no filter.
-    assert not [o for o in ts.reconcile_ops(base, "покажи позиции по поставщику")[0]
-                if o.op == "add_filter"]
+    assert not [
+        o for o in ts.reconcile_ops(base, "покажи позиции по поставщику")[0] if o.op == "add_filter"
+    ]
     # Already-filtered spec → не дублируем.
-    filtered = ts.TableSpec(source="invoice_items",
+    filtered = ts.TableSpec(
+        source="invoice_items",
         columns=[ts.ColumnSpec(field="supplier_name")],
-        filters=[ts.FilterSpec(field="description", op="smart", value="фрезы")])
-    assert not [o for o in ts.reconcile_ops(filtered, "выведи фрезы по поставщику")[0]
-                if o.op == "add_filter"]
+        filters=[ts.FilterSpec(field="description", op="smart", value="фрезы")],
+    )
+    assert not [
+        o
+        for o in ts.reconcile_ops(filtered, "выведи фрезы по поставщику")[0]
+        if o.op == "add_filter"
+    ]
 
 
 def test_reconcile_bare_trailing_grouping():
@@ -614,8 +760,10 @@ def test_reconcile_bare_trailing_grouping():
 @pytest.mark.asyncio
 async def test_repair_applied_in_execute_spec(db_session, seeded):
     """A spec with a synonym source/field executes after catalog grounding."""
-    spec = ts.TableSpec(source="счета", columns=[
-        ts.ColumnSpec(field="поставщик"), ts.ColumnSpec(field="номер счета")])
+    spec = ts.TableSpec(
+        source="счета",
+        columns=[ts.ColumnSpec(field="поставщик"), ts.ColumnSpec(field="номер счета")],
+    )
     res = await ts.execute_spec(db_session, spec)
     assert res.total == 3
     assert "supplier_name" in {c["key"] for c in res.columns}
@@ -625,11 +773,14 @@ async def test_repair_applied_in_execute_spec(db_session, seeded):
 async def test_grouped_aggregate_functions(db_session, seeded):
     """avg/min/max/count/sum по unit_price в разрезе поставщика на реальных позициях.
     Ромашка: 800/40/30 (3 позиции); Лютик: 2500 (1)."""
+
     async def agg_map(agg):
         spec = ts.TableSpec(
             source="invoice_items",
-            columns=[ts.ColumnSpec(field="supplier_name"),
-                     ts.ColumnSpec(field="unit_price", agg=agg)],
+            columns=[
+                ts.ColumnSpec(field="supplier_name"),
+                ts.ColumnSpec(field="unit_price", agg=agg),
+            ],
             group_by=["supplier_name"],
         )
         res = await ts.execute_spec(db_session, spec)
@@ -652,9 +803,10 @@ def test_columnspec_agg_lenient_aliases():
 
 def test_reconcile_compare_prices_sets_group_and_avg():
     """«сравни цены фрез по поставщику» → group_by supplier + avg(unit_price)."""
-    spec = ts.TableSpec(source="invoice_items",
-                        columns=[ts.ColumnSpec(field="description"),
-                                 ts.ColumnSpec(field="unit_price")])
+    spec = ts.TableSpec(
+        source="invoice_items",
+        columns=[ts.ColumnSpec(field="description"), ts.ColumnSpec(field="unit_price")],
+    )
     ops, notes = ts.reconcile_ops(spec, "сравни цены фрез по поставщику")
     by = {o.op: o for o in ops}
     assert by["set_group_by"].field == "supplier_name"
@@ -665,8 +817,7 @@ def test_reconcile_compare_prices_sets_group_and_avg():
 
 def test_reconcile_min_price_and_group_synonym():
     """«минимальная цена в разрезе поставщиков» → group synonym + min."""
-    spec = ts.TableSpec(source="invoice_items",
-                        columns=[ts.ColumnSpec(field="unit_price")])
+    spec = ts.TableSpec(source="invoice_items", columns=[ts.ColumnSpec(field="unit_price")])
     ops, _ = ts.reconcile_ops(spec, "минимальная цена в разрезе поставщиков")
     by = {o.op: o for o in ops}
     assert by["set_group_by"].field == "supplier_name"
@@ -674,8 +825,7 @@ def test_reconcile_min_price_and_group_synonym():
 
 
 def test_reconcile_count_per_supplier():
-    spec = ts.TableSpec(source="invoice_items",
-                        columns=[ts.ColumnSpec(field="unit_price")])
+    spec = ts.TableSpec(source="invoice_items", columns=[ts.ColumnSpec(field="unit_price")])
     ops, _ = ts.reconcile_ops(spec, "сколько позиций по каждому поставщику")
     by = {o.op: o for o in ops}
     assert by["set_group_by"].field == "supplier_name"
@@ -684,8 +834,7 @@ def test_reconcile_count_per_supplier():
 
 def test_reconcile_agg_skipped_without_grouping():
     """Агрегат без группировки не навязывается (пусть решает воркер)."""
-    spec = ts.TableSpec(source="invoice_items",
-                        columns=[ts.ColumnSpec(field="unit_price")])
+    spec = ts.TableSpec(source="invoice_items", columns=[ts.ColumnSpec(field="unit_price")])
     ops, _ = ts.reconcile_ops(spec, "покажи среднюю цену фрез")
     assert not any(o.op == "set_agg" for o in ops)
 
@@ -742,9 +891,10 @@ async def test_documents_project_object_filter(db_session, seeded):
 
     # Tag the first seeded document.
     from sqlalchemy import select as sa_select
-    docs = (await db_session.execute(
-        sa_select(Document).order_by(Document.file_name)
-    )).scalars().all()
+
+    docs = (
+        (await db_session.execute(sa_select(Document).order_by(Document.file_name))).scalars().all()
+    )
     docs[0].project_id = pid
     docs[0].object_id = oid
     await db_session.flush()
@@ -773,13 +923,17 @@ async def test_payments_source_with_supplier_join(db_session, seeded):
 
     from app.db.models import Invoice, PaymentSchedule
 
-    invoice = (await db_session.execute(
-        sa_select(Invoice).where(Invoice.invoice_number == "INV-001")
-    )).scalar_one()
-    db_session.add(PaymentSchedule(
-        invoice_id=invoice.id, due_date=datetime(2026, 6, 20, tzinfo=UTC),
-        amount=12000.0, status="overdue",
-    ))
+    invoice = (
+        await db_session.execute(sa_select(Invoice).where(Invoice.invoice_number == "INV-001"))
+    ).scalar_one()
+    db_session.add(
+        PaymentSchedule(
+            invoice_id=invoice.id,
+            due_date=datetime(2026, 6, 20, tzinfo=UTC),
+            amount=12000.0,
+            status="overdue",
+        )
+    )
     await db_session.flush()
 
     spec = ts.TableSpec(
@@ -807,15 +961,27 @@ async def test_emails_source_computed_fields(db_session):
 
     from app.db.models import EmailMessage
 
-    db_session.add_all([
-        EmailMessage(mailbox="procurement", from_address="supplier@romashka.ru",
-                     subject="Счёт на фрезы", has_attachments=True,
-                     attachment_count=2, is_inbound=True,
-                     received_at=datetime(2026, 6, 10, tzinfo=UTC)),
-        EmailMessage(mailbox="procurement", from_address="buyer@example.com",
-                     subject="Запрос КП", has_attachments=False,
-                     attachment_count=0, is_inbound=False),
-    ])
+    db_session.add_all(
+        [
+            EmailMessage(
+                mailbox="procurement",
+                from_address="supplier@romashka.ru",
+                subject="Счёт на фрезы",
+                has_attachments=True,
+                attachment_count=2,
+                is_inbound=True,
+                received_at=datetime(2026, 6, 10, tzinfo=UTC),
+            ),
+            EmailMessage(
+                mailbox="procurement",
+                from_address="buyer@example.com",
+                subject="Запрос КП",
+                has_attachments=False,
+                attachment_count=0,
+                is_inbound=False,
+            ),
+        ]
+    )
     await db_session.flush()
 
     spec = ts.TableSpec(
@@ -844,12 +1010,17 @@ async def test_emails_source_computed_fields(db_session):
 async def test_drawings_source_json_title_block(db_session):
     from app.db.models import Drawing
 
-    db_session.add(Drawing(
-        drawing_number="АБВГ.123456.001", revision="А",
-        filename="val_privoda.dxf", format="dxf",
-        drawing_type="detail", part_class="shaft",
-        title_block={"title": "Вал привода", "material": "Сталь 40Х"},
-    ))
+    db_session.add(
+        Drawing(
+            drawing_number="АБВГ.123456.001",
+            revision="А",
+            filename="val_privoda.dxf",
+            format="dxf",
+            drawing_type="detail",
+            part_class="shaft",
+            title_block={"title": "Вал привода", "material": "Сталь 40Х"},
+        )
+    )
     await db_session.flush()
 
     spec = ts.TableSpec(
@@ -875,11 +1046,16 @@ async def test_anomalies_source(db_session):
 
     from app.db.models import AnomalyCard, AnomalySeverity, AnomalyStatus, AnomalyType
 
-    db_session.add(AnomalyCard(
-        anomaly_type=AnomalyType.price_spike, severity=AnomalySeverity.critical,
-        status=AnomalyStatus.open, entity_type="invoice",
-        entity_id=uuid_module.uuid4(), title="Скачок цены на фрезы +40%",
-    ))
+    db_session.add(
+        AnomalyCard(
+            anomaly_type=AnomalyType.price_spike,
+            severity=AnomalySeverity.critical,
+            status=AnomalyStatus.open,
+            entity_type="invoice",
+            entity_id=uuid_module.uuid4(),
+            title="Скачок цены на фрезы +40%",
+        )
+    )
     await db_session.flush()
 
     spec = ts.TableSpec(
@@ -1067,12 +1243,26 @@ async def test_spec_table_can_show_a_supplier_catalog(db_session):
     supplier = ToolSupplier(name="ООО Каталожный", main_supplier_id=party.id)
     db_session.add(supplier)
     await db_session.flush()
-    db_session.add_all([
-        ToolCatalogEntry(supplier_id=supplier.id, part_number="MT-100", name="Фреза концевая",
-                         tool_type=ToolTypeEnum.endmill, diameter_mm=12.0, price_value=1500.0),
-        ToolCatalogEntry(supplier_id=supplier.id, part_number="DR-050", name="Сверло",
-                         tool_type=ToolTypeEnum.drill, diameter_mm=5.0, price_value=300.0),
-    ])
+    db_session.add_all(
+        [
+            ToolCatalogEntry(
+                supplier_id=supplier.id,
+                part_number="MT-100",
+                name="Фреза концевая",
+                tool_type=ToolTypeEnum.endmill,
+                diameter_mm=12.0,
+                price_value=1500.0,
+            ),
+            ToolCatalogEntry(
+                supplier_id=supplier.id,
+                part_number="DR-050",
+                name="Сверло",
+                tool_type=ToolTypeEnum.drill,
+                diameter_mm=5.0,
+                price_value=300.0,
+            ),
+        ]
+    )
     await db_session.commit()
 
     spec = ts.TableSpec(
@@ -1099,7 +1289,9 @@ def test_tool_catalog_source_is_in_the_public_catalog():
 
     assert "tool_catalog" in ts.SOURCES
     source = ts.SOURCES["tool_catalog"]
-    field_names = {f.key for f in source.fields.values()} if isinstance(source.fields, dict) else {
-        f.key for f in source.fields
-    }
+    field_names = (
+        {f.key for f in source.fields.values()}
+        if isinstance(source.fields, dict)
+        else {f.key for f in source.fields}
+    )
     assert {"part_number", "name", "supplier_name", "price_value"} <= field_names

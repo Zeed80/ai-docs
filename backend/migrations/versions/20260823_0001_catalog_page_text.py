@@ -9,15 +9,16 @@ Revision ID: 20260823_0001
 Revises: 20260822_0002
 Create Date: 2026-08-23
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20260823_0001"
-down_revision: Union[str, None] = "20260822_0002"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260822_0002"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # Byte-for-byte what app/db/text_search.py::immutable_fts_expression produces
 # for this column — the planner uses the index only on an exact match, and a

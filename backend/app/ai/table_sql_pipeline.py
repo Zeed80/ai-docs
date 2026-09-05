@@ -11,6 +11,7 @@ this pipeline:
 
 This gives: zero hallucination, correct aggregations, fast formatting.
 """
+
 from __future__ import annotations
 
 import re
@@ -39,8 +40,13 @@ def _get_schema_context() -> str:
 
     try:
         from app.db.models import (
-            Document, Invoice, InvoiceLine, Party,
-            AnomalyCard, Approval, User,
+            AnomalyCard,
+            Approval,
+            Document,
+            Invoice,
+            InvoiceLine,
+            Party,
+            User,
         )
         from app.db.session import engine  # noqa: F401
 
@@ -102,21 +108,21 @@ _MAX_SQL_CHARS = 4_000
 # тексту, который может прийти из письма или документа, — то есть содержимое
 # запроса не полностью под нашим контролем, и список разрешённого надёжнее
 # списка запрещённого.
-ALLOWED_TABLES = frozenset({
-    "documents",
-    "invoices",
-    "invoice_lines",
-    "parties",
-    "anomaly_cards",
-    "approvals",
-    "users",
-})
+ALLOWED_TABLES = frozenset(
+    {
+        "documents",
+        "invoices",
+        "invoice_lines",
+        "parties",
+        "anomaly_cards",
+        "approvals",
+        "users",
+    }
+)
 
 # FROM / JOIN <таблица>. Подзапросы и CTE тоже сюда попадают: после FROM у них
 # стоит скобка, а не имя, и такое совпадение просто не матчится.
-_TABLE_REF_RE = re.compile(
-    r"\b(?:FROM|JOIN)\s+(?!\()([a-zA-Z_][a-zA-Z0-9_]*)", re.IGNORECASE
-)
+_TABLE_REF_RE = re.compile(r"\b(?:FROM|JOIN)\s+(?!\()([a-zA-Z_][a-zA-Z0-9_]*)", re.IGNORECASE)
 
 # Комментарии убираем ДО проверок: `SELECT 1 -- DROP TABLE x` и
 # `/* */`-вставки иначе позволяют спрятать что угодно от регулярных выражений.
@@ -229,6 +235,7 @@ async def generate_sql(
     try:
         if generate_fn is None:
             from app.ai.ollama_client import reasoning_generate
+
             raw = await reasoning_generate(prompt, system=_SQL_SYSTEM, format_json=False)
         else:
             raw = await generate_fn(prompt, _SQL_SYSTEM)
@@ -262,9 +269,11 @@ def _extract_sql(text: str) -> str:
 
 # ── Query execution ────────────────────────────────────────────────────────────
 
+
 async def execute_sql(sql: str, *, max_rows: int = 200) -> list[dict[str, Any]]:
     """Execute a validated SELECT query and return rows as list of dicts."""
     from sqlalchemy import text
+
     from app.db.session import _get_session_factory
 
     safe_sql = validate_sql(sql)
@@ -293,6 +302,7 @@ async def execute_sql(sql: str, *, max_rows: int = 200) -> list[dict[str, Any]]:
 
 # ── Canvas block formatting ────────────────────────────────────────────────────
 
+
 def format_as_canvas_table(
     rows: list[dict[str, Any]],
     *,
@@ -315,10 +325,7 @@ def format_as_canvas_table(
             "generated_by": "sql_pipeline",
         }
 
-    columns = [
-        {"key": col, "label": col.replace("_", " ").title()}
-        for col in rows[0].keys()
-    ]
+    columns = [{"key": col, "label": col.replace("_", " ").title()} for col in rows[0].keys()]
 
     formatted_rows = []
     for row in rows:
@@ -347,6 +354,7 @@ def format_as_canvas_table(
 
 
 # ── High-level pipeline entry point ───────────────────────────────────────────
+
 
 async def build_table_from_task(
     task: str,
@@ -388,13 +396,14 @@ async def build_table_from_task(
             raw_title = await generate_fn(_TITLE_PROMPT.format(task=task), None)
         else:
             from app.ai.ollama_client import reasoning_generate
+
             raw_title = await reasoning_generate(
                 _TITLE_PROMPT.format(task=task),
                 system="Дай краткое название таблице. Только название — без кавычек.",
                 format_json=False,
             )
         if raw_title:
-            title = raw_title.strip().strip('"\'«»').split("\n")[0][:80]
+            title = raw_title.strip().strip("\"'«»").split("\n")[0][:80]
             block["title"] = title or block["title"]
     except Exception:
         pass  # title is optional

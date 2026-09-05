@@ -13,7 +13,7 @@ dropped connection or a crashed watcher must not mean "mail stops arriving".
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import select
@@ -66,6 +66,7 @@ def _idle_watch_body(mailbox: str, folder: str | None = None) -> dict:
 
     from app.db.models import MailboxConfig, MailboxFolder
     from app.db.sync_session import sync_session
+
     with sync_session() as db:
         config = db.execute(
             select(MailboxConfig).where(
@@ -84,15 +85,18 @@ def _idle_watch_body(mailbox: str, folder: str | None = None) -> dict:
         watch_folder = folder
         if not watch_folder:
             primary = (config.imap_folder or "INBOX").strip()
-            candidates = db.execute(
-                select(MailboxFolder.remote_name).where(
-                    MailboxFolder.mailbox == mailbox,
-                    MailboxFolder.local_folder == "inbox",
+            candidates = (
+                db.execute(
+                    select(MailboxFolder.remote_name).where(
+                        MailboxFolder.mailbox == mailbox,
+                        MailboxFolder.local_folder == "inbox",
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             watch_folder = (
-                primary if primary in candidates
-                else (candidates[0] if candidates else primary)
+                primary if primary in candidates else (candidates[0] if candidates else primary)
             )
         password = None
         if (config.auth_method or "password") != "oauth2":
@@ -125,15 +129,17 @@ def _idle_watch_body(mailbox: str, folder: str | None = None) -> dict:
         while time.monotonic() - started < _WATCH_BUDGET_SECONDS:
             client.idle()
             try:
-                responses = client.idle_check(timeout=min(
-                    _IDLE_REFRESH_SECONDS,
-                    max(30, _WATCH_BUDGET_SECONDS - (time.monotonic() - started)),
-                ))
+                responses = client.idle_check(
+                    timeout=min(
+                        _IDLE_REFRESH_SECONDS,
+                        max(30, _WATCH_BUDGET_SECONDS - (time.monotonic() - started)),
+                    )
+                )
             finally:
                 client.idle_done()
 
             if not responses:
-                continue          # timeout: re-issue IDLE, nothing arrived
+                continue  # timeout: re-issue IDLE, nothing arrived
             events += 1
             logger.info("imap_idle_activity", mailbox=mailbox, folder=watch_folder)
             _on_activity(mailbox)
@@ -188,11 +194,15 @@ def idle_dispatch(self) -> dict:
     from app.utils.redis_client import get_sync_redis
 
     with sync_session() as db:
-        names = list(db.execute(
-            select(MailboxConfig.name).where(
-                MailboxConfig.is_active == True  # noqa: E712
+        names = list(
+            db.execute(
+                select(MailboxConfig.name).where(
+                    MailboxConfig.is_active == True  # noqa: E712
+                )
             )
-        ).scalars().all())
+            .scalars()
+            .all()
+        )
 
     started: list[str] = []
     try:
@@ -204,8 +214,7 @@ def idle_dispatch(self) -> dict:
         if redis is not None:
             key = f"email:idle:{name}"
             # Lease slightly longer than the watcher's budget.
-            if not redis.set(key, str(datetime.now(timezone.utc)), nx=True,
-                             ex=_WATCH_BUDGET_SECONDS + 120):
+            if not redis.set(key, str(datetime.now(UTC)), nx=True, ex=_WATCH_BUDGET_SECONDS + 120):
                 continue
         idle_watch.apply_async(args=[name], queue="mail")
         started.append(name)

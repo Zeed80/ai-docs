@@ -48,28 +48,50 @@ def test_bore_larger_than_shaft_flagged():
 
 
 def test_hole_too_large_for_plate_flagged():
-    spec = {"type": "plate", "shape": "circle", "diameter": 40,
-            "holes": [{"x": 0, "y": 0, "diameter": 50}]}
+    spec = {
+        "type": "plate",
+        "shape": "circle",
+        "diameter": 40,
+        "holes": [{"x": 0, "y": 0, "diameter": 50}],
+    }
     assert "HOLE_TOO_LARGE" in _codes(spec)
 
 
 def test_bolt_circle_too_large_flagged():
-    spec = {"type": "plate", "shape": "circle", "diameter": 40,
-            "bolt_circle_d": 60, "bolt_circle_n": 6, "bolt_hole_d": 5}
+    spec = {
+        "type": "plate",
+        "shape": "circle",
+        "diameter": 40,
+        "bolt_circle_d": 60,
+        "bolt_circle_n": 6,
+        "bolt_hole_d": 5,
+    }
     assert "BOLT_CIRCLE_TOO_LARGE" in _codes(spec)
 
 
 def test_bolt_hole_larger_than_bolt_circle_flagged():
-    spec = {"type": "plate", "shape": "circle", "diameter": 200,
-            "bolt_circle_d": 90, "bolt_circle_n": 6, "bolt_hole_d": 100}
+    spec = {
+        "type": "plate",
+        "shape": "circle",
+        "diameter": 200,
+        "bolt_circle_d": 90,
+        "bolt_circle_n": 6,
+        "bolt_hole_d": 100,
+    }
     assert "BOLT_HOLE_TOO_LARGE" in _codes(spec)
 
 
 def test_valid_plate_has_no_issues():
     spec = {
-        "type": "plate", "shape": "circle", "diameter": 120, "thickness": 14,
+        "type": "plate",
+        "shape": "circle",
+        "diameter": 120,
+        "thickness": 14,
         "holes": [{"x": 0, "y": 0, "diameter": 40, "tolerance": "H7"}],
-        "bolt_circle_d": 90, "bolt_circle_n": 6, "bolt_hole_d": 11, "bolt_hole_tol": "H12",
+        "bolt_circle_d": 90,
+        "bolt_circle_n": 6,
+        "bolt_hole_d": 11,
+        "bolt_hole_tol": "H12",
     }
     assert validate_spec(spec) == []
 
@@ -78,9 +100,17 @@ def test_assembly_recurses_into_components():
     spec = {
         "type": "assembly",
         "components": [
-            {"ref": "1", "spec": {"type": "shaft", "segments": [
-                {"diameter": 45, "length": 60, "roughness": 0.9},
-            ]}, "x": 0, "y": 0},
+            {
+                "ref": "1",
+                "spec": {
+                    "type": "shaft",
+                    "segments": [
+                        {"diameter": 45, "length": 60, "roughness": 0.9},
+                    ],
+                },
+                "x": 0,
+                "y": 0,
+            },
         ],
     }
     assert "RA_INVALID" in _codes(spec)

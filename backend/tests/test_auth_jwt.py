@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
-import pytest
-from fastapi import HTTPException
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.auth.models import UserInfo, UserRole, ROLE_PERMISSIONS
+import pytest
+from fastapi import HTTPException
+
 from app.auth.jwt import (
-    _groups_to_roles,
-    require_role,
-    get_current_user,
     _DEV_USER,
     _assert_user_active,
+    _groups_to_roles,
+    get_current_user,
+    require_role,
 )
-
+from app.auth.models import ROLE_PERMISSIONS, UserInfo, UserRole
 
 # ── _groups_to_roles ──────────────────────────────────────────────────────────
+
 
 def test_admins_group_maps_to_admin():
     assert UserRole.admin in _groups_to_roles(["admins"])
@@ -64,6 +65,7 @@ def test_group_name_is_case_insensitive():
 
 # ── UserRole enum completeness ─────────────────────────────────────────────────
 
+
 def test_technologist_in_user_role_enum():
     assert UserRole.technologist.value == "technologist"
 
@@ -86,6 +88,7 @@ def test_technologist_has_technology_permissions():
 
 
 # ── Dev mode bypass ────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_dev_mode_returns_dev_user():
@@ -117,6 +120,7 @@ async def test_auth_enabled_no_token_raises_401():
 
 # ── _assert_user_active (token revocation) ─────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_active_cache_hit_allows():
     """Cached '1' (active) returns without touching the DB."""
@@ -140,17 +144,23 @@ async def test_active_cache_inactive_raises_403():
 @pytest.mark.asyncio
 async def test_active_check_fails_open_on_infra_error():
     """If Redis and DB both fail, access is allowed (no global lockout)."""
-    with patch("app.utils.redis_client.get_async_redis", side_effect=RuntimeError("down")), \
-         patch("app.db.session._get_session_factory", side_effect=RuntimeError("db down")):
+    with (
+        patch("app.utils.redis_client.get_async_redis", side_effect=RuntimeError("down")),
+        patch("app.db.session._get_session_factory", side_effect=RuntimeError("db down")),
+    ):
         await _assert_user_active("sub-any")  # no exception
 
 
 # ── require_role ───────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_require_role_passes_for_matching_role():
     user = UserInfo(
-        sub="u1", email="e@t.com", name="T", preferred_username="t",
+        sub="u1",
+        email="e@t.com",
+        name="T",
+        preferred_username="t",
         roles=[UserRole.technologist],
     )
     checker = require_role(UserRole.technologist)
@@ -164,7 +174,10 @@ async def test_require_role_passes_for_matching_role():
 async def test_require_role_passes_for_admin():
     """Admin always passes any role check."""
     admin = UserInfo(
-        sub="a1", email="a@t.com", name="A", preferred_username="a",
+        sub="a1",
+        email="a@t.com",
+        name="A",
+        preferred_username="a",
         roles=[UserRole.admin],
     )
     checker = require_role(UserRole.accountant)
@@ -176,7 +189,10 @@ async def test_require_role_passes_for_admin():
 @pytest.mark.asyncio
 async def test_require_role_raises_403_for_wrong_role():
     viewer = UserInfo(
-        sub="v1", email="v@t.com", name="V", preferred_username="v",
+        sub="v1",
+        email="v@t.com",
+        name="V",
+        preferred_username="v",
         roles=[UserRole.viewer],
     )
     checker = require_role(UserRole.manager)

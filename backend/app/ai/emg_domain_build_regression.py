@@ -21,13 +21,10 @@ def _assembly_result(case: dict[str, Any]) -> dict[str, Any]:
     status, body, _ = _post("/assembly/compile", kernel_payload)
     if status != 200:
         raise RuntimeError(f"assembly compile HTTP {status}: {body[:400]!r}")
-    repeated_status, repeated_body, _ = _post(
-        "/assembly/compile", kernel_payload
-    )
+    repeated_status, repeated_body, _ = _post("/assembly/compile", kernel_payload)
     if repeated_status != 200:
         raise RuntimeError(
-            f"repeated assembly compile HTTP {repeated_status}: "
-            f"{repeated_body[:400]!r}"
+            f"repeated assembly compile HTTP {repeated_status}: {repeated_body[:400]!r}"
         )
     members = _zip_members(body)
     repeated = _zip_members(repeated_body)
@@ -36,12 +33,10 @@ def _assembly_result(case: dict[str, Any]) -> dict[str, Any]:
     step = members["assembly.step"]
     checks = {
         "brep_valid": report.get("assembly", {}).get("brep_valid") is True,
-        "component_count": len(report.get("components", []))
-        == len(payload["drawing_components"]),
+        "component_count": len(report.get("components", [])) == len(payload["drawing_components"]),
         "step_signature": step.startswith(b"ISO-10303-21"),
         "step_reopen_valid": reopen.get("valid") is True,
-        "step_reopen_sha_matches": reopen.get("step_sha256")
-        == hashlib.sha256(step).hexdigest(),
+        "step_reopen_sha_matches": reopen.get("step_sha256") == hashlib.sha256(step).hexdigest(),
         "artifact_deterministic": step == repeated["assembly.step"],
     }
     return {
@@ -63,11 +58,9 @@ def _construction_result(case: dict[str, Any]) -> dict[str, Any]:
         "ifc_signature": artifact.startswith(b"ISO-10303-21"),
         "ifc_reopen_valid": report.get("valid") is True,
         "schema_ifc4": report.get("schema") == "IFC4",
-        "all_products_represented": report.get("represented_product_count")
-        == len(model.elements),
+        "all_products_represented": report.get("represented_product_count") == len(model.elements),
         "geometry_reopened": not report.get("geometry_failures"),
-        "artifact_sha_matches": report.get("ifc_sha256")
-        == hashlib.sha256(artifact).hexdigest(),
+        "artifact_sha_matches": report.get("ifc_sha256") == hashlib.sha256(artifact).hexdigest(),
         "artifact_deterministic": artifact == repeated_artifact
         and report.get("ifc_sha256") == repeated_report.get("ifc_sha256"),
     }

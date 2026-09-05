@@ -14,26 +14,45 @@ from __future__ import annotations
 
 import re
 import uuid
-import structlog
 from dataclasses import dataclass, field
 from typing import Any
+
+import structlog
 
 logger = structlog.get_logger()
 
 # Valid Ra roughness values per ГОСТ 2789 (preferred series R10)
-_VALID_RA_VALUES = frozenset({
-    0.012, 0.025, 0.050, 0.100, 0.200, 0.400, 0.800,
-    1.600, 3.200, 6.300, 12.500, 25.0, 50.0, 100.0,
-})
+_VALID_RA_VALUES = frozenset(
+    {
+        0.012,
+        0.025,
+        0.050,
+        0.100,
+        0.200,
+        0.400,
+        0.800,
+        1.600,
+        3.200,
+        6.300,
+        12.500,
+        25.0,
+        50.0,
+        100.0,
+    }
+)
 # Tolerance to accept nearby values (±5%)
 _RA_TOLERANCE = 0.05
 
 # OCR artifact corrections for common Ra values
 _RA_CORRECTIONS: dict[float, float] = {
-    1.5: 1.6, 1.7: 1.6,
-    3.1: 3.2, 3.3: 3.2,
-    6.2: 6.3, 6.4: 6.3,
-    12.4: 12.5, 12.6: 12.5,
+    1.5: 1.6,
+    1.7: 1.6,
+    3.1: 3.2,
+    3.3: 3.2,
+    6.2: 6.3,
+    6.4: 6.3,
+    12.4: 12.5,
+    12.6: 12.5,
 }
 
 
@@ -41,7 +60,7 @@ _RA_CORRECTIONS: dict[float, float] = {
 class DrawingValidationReport:
     drawing_id: uuid.UUID
     confidence_score: float = 1.0
-    entity_coverage_pct: float = 100.0    # % DXF entities explained by features
+    entity_coverage_pct: float = 100.0  # % DXF entities explained by features
     dimension_chain_ok: bool = True
     roughness_valid: bool = True
     tolerance_valid: bool = True
@@ -217,17 +236,14 @@ def _validate_and_fix_roughness(features_data: list[dict]) -> tuple[bool, list[s
             if ra in _RA_CORRECTIONS:
                 corrected = _RA_CORRECTIONS[ra]
                 surf["value"] = corrected
-                fixes.append(
-                    f"'{feat_name}': Ra {ra} → {corrected} (OCR-коррекция)"
-                )
+                fixes.append(f"'{feat_name}': Ra {ra} → {corrected} (OCR-коррекция)")
                 ra = corrected
 
             # Check against preferred series (with 5% tolerance)
             if not _is_valid_ra(ra):
                 all_ok = False
                 warnings.append(
-                    f"'{feat_name}': Ra {ra} не входит в ряд ГОСТ 2789. "
-                    f"Проверьте шероховатость."
+                    f"'{feat_name}': Ra {ra} не входит в ряд ГОСТ 2789. Проверьте шероховатость."
                 )
 
     return all_ok, warnings, fixes
@@ -244,14 +260,46 @@ def _is_valid_ra(value: float) -> bool:
 # ── Tolerance and GD&T validation ─────────────────────────────────────────────
 
 # GD&T symbols per ISO 1101 / ГОСТ 2.308
-_VALID_GDT_SYMBOLS = frozenset({
-    "⊥", "∥", "∠", "⌀", "○", "◎", "//", "⊙",
-    "⌯", "⌰", "⌱", "⌲", "⌳", "⌴", "⌵", "⌶",
-    "⊞", "⊟", "⊠", "⊡", "◻",
-    # ASCII equivalents often returned by VLMs
-    "perp", "para", "circ", "sym", "flat", "cyl", "cone", "run", "trun",
-    "str", "ang", "pos", "conc", "prof",
-})
+_VALID_GDT_SYMBOLS = frozenset(
+    {
+        "⊥",
+        "∥",
+        "∠",
+        "⌀",
+        "○",
+        "◎",
+        "//",
+        "⊙",
+        "⌯",
+        "⌰",
+        "⌱",
+        "⌲",
+        "⌳",
+        "⌴",
+        "⌵",
+        "⌶",
+        "⊞",
+        "⊟",
+        "⊠",
+        "⊡",
+        "◻",
+        # ASCII equivalents often returned by VLMs
+        "perp",
+        "para",
+        "circ",
+        "sym",
+        "flat",
+        "cyl",
+        "cone",
+        "run",
+        "trun",
+        "str",
+        "ang",
+        "pos",
+        "conc",
+        "prof",
+    }
+)
 
 # ISO/ГОСТ fit letter pattern: H7, k6, n6, H7/k6, etc.
 _FIT_PATTERN = re.compile(r"^[A-Za-z]{1,2}\d{1,2}(/[A-Za-z]{1,2}\d{1,2})?$")
@@ -298,9 +346,7 @@ def _validate_and_fix_tolerances(features_data: list[dict]) -> tuple[bool, list[
 
             if symbol and symbol not in _VALID_GDT_SYMBOLS:
                 # Warn but don't block — VLMs sometimes use descriptive names
-                warnings.append(
-                    f"'{feat_name}': нераспознанный символ GD&T '{symbol}'"
-                )
+                warnings.append(f"'{feat_name}': нераспознанный символ GD&T '{symbol}'")
 
     return all_ok, warnings, fixes
 

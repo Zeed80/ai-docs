@@ -35,13 +35,16 @@ def fake_storage(monkeypatch):
 
 def _ir() -> CadIR:
     return CadIR(
-        source=SourceInfo(image_width=100, image_height=100), scale=1.0,
+        source=SourceInfo(image_width=100, image_height=100),
+        scale=1.0,
         entities=[Segment(p1=Point(x=0, y=0), p2=Point(x=10, y=0))],
     )
 
 
 @pytest.mark.asyncio
-async def test_render_failure_cleans_up_already_uploaded_blobs(db_session, fake_storage, monkeypatch):
+async def test_render_failure_cleans_up_already_uploaded_blobs(
+    db_session, fake_storage, monkeypatch
+):
     blobs, deleted = fake_storage
 
     def _boom(ir):
@@ -52,8 +55,11 @@ async def test_render_failure_cleans_up_already_uploaded_blobs(db_session, fake_
     from app.services import cad_ir_store
 
     gen = ImageGeneration(
-        owner_sub="u1", operation="vectorize", status=ImageGenStatus.done,
-        params={}, source_image_paths=[],
+        owner_sub="u1",
+        operation="vectorize",
+        status=ImageGenStatus.done,
+        params={},
+        source_image_paths=[],
     )
     db_session.add(gen)
     await db_session.flush()
@@ -75,8 +81,11 @@ async def test_successful_save_leaves_all_blobs_in_place(db_session, fake_storag
     from app.services import cad_ir_store
 
     gen = ImageGeneration(
-        owner_sub="u1", operation="vectorize", status=ImageGenStatus.done,
-        params={}, source_image_paths=[],
+        owner_sub="u1",
+        operation="vectorize",
+        status=ImageGenStatus.done,
+        params={},
+        source_image_paths=[],
     )
     db_session.add(gen)
     await db_session.flush()

@@ -23,12 +23,12 @@ from app.db.models import (
     DrawingStatus,
 )
 
-
 # ── Helpers / shared byte fixtures ────────────────────────────────────────────
 
 
 def _make_png_bytes() -> bytes:
     """Return a valid 1×1 white PNG."""
+
     def _chunk(tag: bytes, data: bytes) -> bytes:
         c = zlib.crc32(tag + data) & 0xFFFFFFFF
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", c)
@@ -169,7 +169,9 @@ async def test_upload_unknown_format_accepted(client: AsyncClient):
     """Unknown extension is still accepted — format stored as-is."""
     resp = await client.post(
         "/api/drawings",
-        files={"file": ("drawing.xyz", io.BytesIO(b"fake xyz content"), "application/octet-stream")},
+        files={
+            "file": ("drawing.xyz", io.BytesIO(b"fake xyz content"), "application/octet-stream")
+        },
     )
     assert resp.status_code == 201, resp.text
     drawing_id = resp.json()["drawing_id"]
@@ -368,9 +370,7 @@ async def test_get_feature_by_id(client: AsyncClient, drawing_in_db):
     assert create_resp.status_code == 201
     feature_id = create_resp.json()["id"]
 
-    get_resp = await client.get(
-        f"/api/drawings/{drawing_in_db.id}/features/{feature_id}"
-    )
+    get_resp = await client.get(f"/api/drawings/{drawing_in_db.id}/features/{feature_id}")
     assert get_resp.status_code == 200
     assert get_resp.json()["id"] == feature_id
     assert get_resp.json()["name"] == "Groove-A"
@@ -386,14 +386,10 @@ async def test_delete_feature(client: AsyncClient, drawing_in_db):
     assert create_resp.status_code == 201
     feature_id = create_resp.json()["id"]
 
-    del_resp = await client.delete(
-        f"/api/drawings/{drawing_in_db.id}/features/{feature_id}"
-    )
+    del_resp = await client.delete(f"/api/drawings/{drawing_in_db.id}/features/{feature_id}")
     assert del_resp.status_code == 204
 
-    get_resp = await client.get(
-        f"/api/drawings/{drawing_in_db.id}/features/{feature_id}"
-    )
+    get_resp = await client.get(f"/api/drawings/{drawing_in_db.id}/features/{feature_id}")
     assert get_resp.status_code == 404
 
 

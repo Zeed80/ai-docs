@@ -97,14 +97,13 @@ async def test_run_generated_skill_proxies_to_runner(client, monkeypatch):
     # Bypass cache/shadow side machinery.
     monkeypatch.setattr(dsr, "_GENERATED_ROOT", Path("/nonexistent"))
 
-    resp = await client.post(
-        "/api/agent/generated-skill/some_skill", json={"x": 1}
-    )
+    resp = await client.post("/api/agent/generated-skill/some_skill", json={"x": 1})
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
     assert posted, "execution must be proxied to the skill-runner"
     url, payload = posted[0]
     from app.config import settings
+
     assert url.startswith(settings.skill_runner_url)
     assert url.endswith("/run/some_skill")
     assert payload == {"args": {"x": 1}}
@@ -117,7 +116,8 @@ def test_generated_capability_registration(tmp_path, monkeypatch):
     cap_path = tmp_path / "capabilities.yml"
     cap_path.write_text("version: 2\ncapabilities: []\n", encoding="utf-8")
     monkeypatch.setattr(
-        type(gateway_config.gateway_config), "capabilities_path",
+        type(gateway_config.gateway_config),
+        "capabilities_path",
         property(lambda self: cap_path),
     )
 

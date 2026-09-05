@@ -107,6 +107,7 @@ def _health_url(provider: str) -> str | None:
 # Redis last-use tracking
 # ---------------------------------------------------------------------------
 
+
 def mark_used(provider: str) -> None:
     if provider not in MANAGED_PROVIDERS:
         return
@@ -131,6 +132,7 @@ def last_used(provider: str) -> float | None:
 # ---------------------------------------------------------------------------
 # Docker socket control
 # ---------------------------------------------------------------------------
+
 
 def _docker_available() -> bool:
     return os.path.exists(_DOCKER_SOCK)
@@ -176,7 +178,9 @@ async def _docker_action(provider: str, action: str) -> bool:
             # 204 = done, 304 = already in target state.
             return resp.status_code in (204, 304)
     except Exception as exc:
-        logger.warning("server_docker_action_failed", provider=provider, action=action, error=str(exc))
+        logger.warning(
+            "server_docker_action_failed", provider=provider, action=action, error=str(exc)
+        )
         return False
 
 
@@ -202,6 +206,7 @@ async def _wait_healthy(provider: str, timeout: float = 240.0) -> bool:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 async def ensure_running(provider: str, *, wait: bool = True) -> bool:
     """Make sure a managed server is up before routing a request to it.

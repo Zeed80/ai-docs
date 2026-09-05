@@ -308,31 +308,39 @@ async def test_orchestrator_retries_when_executor_uses_wrong_workspace_tool(monk
             nonlocal calls
             calls += 1
             if calls == 1:
-                await self._send({
-                    "type": "tool_call",
-                    "tool": "workspace__invoice_items_grouped_table",
-                    "args": {},
-                })
-                await self._send({
-                    "type": "tool_result",
-                    "tool": "workspace__invoice_items_grouped_table",
-                    "result": {"canvas_id": "agent:invoice-items-grouped"},
-                })
+                await self._send(
+                    {
+                        "type": "tool_call",
+                        "tool": "workspace__invoice_items_grouped_table",
+                        "args": {},
+                    }
+                )
+                await self._send(
+                    {
+                        "type": "tool_result",
+                        "tool": "workspace__invoice_items_grouped_table",
+                        "result": {"canvas_id": "agent:invoice-items-grouped"},
+                    }
+                )
                 return
             upsert_workspace_block(
                 "agent:invoice-items-by-supplier",
                 {"type": "table", "title": "По поставщикам", "rows": [{"id": 1}]},
             )
-            await self._send({
-                "type": "tool_call",
-                "tool": "workspace__invoice_items_by_supplier_table",
-                "args": {},
-            })
-            await self._send({
-                "type": "tool_result",
-                "tool": "workspace__invoice_items_by_supplier_table",
-                "result": {"canvas_id": "agent:invoice-items-by-supplier"},
-            })
+            await self._send(
+                {
+                    "type": "tool_call",
+                    "tool": "workspace__invoice_items_by_supplier_table",
+                    "args": {},
+                }
+            )
+            await self._send(
+                {
+                    "type": "tool_result",
+                    "tool": "workspace__invoice_items_by_supplier_table",
+                    "result": {"canvas_id": "agent:invoice-items-by-supplier"},
+                }
+            )
 
     async def capture(message: dict):
         sent.append(message)
@@ -513,10 +521,12 @@ async def test_orchestrator_prompt_includes_dialog_history(monkeypatch):
 
     monkeypatch.setattr(orchestrator_module.ai_router, "run", fake_run)
     session = AgentOrchestrator(capture)
-    session.hydrate_history([
-        {"role": "user", "content": "Выведи товары по счетам"},
-        {"role": "assistant", "content": "Открыл таблицу."},
-    ])
+    session.hydrate_history(
+        [
+            {"role": "user", "content": "Выведи товары по счетам"},
+            {"role": "assistant", "content": "Открыл таблицу."},
+        ]
+    )
     await session._plan_turn_with_model("Теперь сгруппируй по поставщикам", config)
 
     assert "Выведи товары по счетам" in captured_prompt
@@ -668,9 +678,13 @@ async def test_reactive_refine_revises_flagged_generative_answer(monkeypatch):
 async def test_tier_based_model_routing(monkeypatch):
     """Simple turns route to fast_model; complex turns use the default model."""
     config = BuiltinAgentConfig(
-        department_enabled=True, audit_enabled=False,
-        model="qwen3.6:35b", fast_model="qwen3.5:9b",
-        backend_url="http://backend", ollama_url="http://ollama", exposed_skills=[],
+        department_enabled=True,
+        audit_enabled=False,
+        model="qwen3.6:35b",
+        fast_model="qwen3.5:9b",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
+        exposed_skills=[],
     )
     monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
     monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
@@ -686,15 +700,17 @@ async def test_tier_based_model_routing(monkeypatch):
 
     # Simple turn ("сколько счетов" → low tier) → fast_model.
     session = AgentOrchestrator(capture)
-    session._executor = ModelRecordingExecutor(session._send_from_executor,
-                                               [{"type": "text", "content": "ok"}, {"type": "done"}])
+    session._executor = ModelRecordingExecutor(
+        session._send_from_executor, [{"type": "text", "content": "ok"}, {"type": "done"}]
+    )
     await session.on_user_message("сколько счетов")
     assert overrides[-1] == "qwen3.5:9b"
 
     # Complex turn (high-complexity signal) → default model (None override).
     overrides.clear()
     session2 = AgentOrchestrator(capture)
-    session2._executor = ModelRecordingExecutor(session2._send_from_executor,
-                                                [{"type": "text", "content": "ok"}, {"type": "done"}])
+    session2._executor = ModelRecordingExecutor(
+        session2._send_from_executor, [{"type": "text", "content": "ok"}, {"type": "done"}]
+    )
     await session2.on_user_message("проанализируй и сравни подробно динамику цен поставщиков")
     assert overrides[-1] is None

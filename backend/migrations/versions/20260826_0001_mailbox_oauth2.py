@@ -10,15 +10,16 @@ Revision ID: 20260826_0001
 Revises: 20260823_0001
 Create Date: 2026-08-26
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20260826_0001"
-down_revision: Union[str, None] = "20260823_0001"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260823_0001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -27,17 +28,34 @@ def upgrade() -> None:
         sa.Column("auth_method", sa.String(20), nullable=False, server_default="password"),
     )
     op.add_column("mailbox_configs", sa.Column("oauth_provider", sa.String(20), nullable=True))
-    op.add_column("mailbox_configs", sa.Column("oauth_refresh_token_encrypted", sa.Text(), nullable=True))
-    op.add_column("mailbox_configs", sa.Column("oauth_access_token_encrypted", sa.Text(), nullable=True))
-    op.add_column("mailbox_configs", sa.Column("oauth_token_expires_at", sa.DateTime(timezone=True), nullable=True))
+    op.add_column(
+        "mailbox_configs", sa.Column("oauth_refresh_token_encrypted", sa.Text(), nullable=True)
+    )
+    op.add_column(
+        "mailbox_configs", sa.Column("oauth_access_token_encrypted", sa.Text(), nullable=True)
+    )
+    op.add_column(
+        "mailbox_configs",
+        sa.Column("oauth_token_expires_at", sa.DateTime(timezone=True), nullable=True),
+    )
     op.add_column("mailbox_configs", sa.Column("oauth_scope", sa.String(500), nullable=True))
     op.add_column("mailbox_configs", sa.Column("oauth_email", sa.String(500), nullable=True))
 
     op.create_table(
         "oauth_app_configs",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("provider", sa.String(20), nullable=False),
         sa.Column("client_id", sa.String(500), nullable=True),
         sa.Column("client_secret_encrypted", sa.Text(), nullable=True),

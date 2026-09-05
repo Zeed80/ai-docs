@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +20,22 @@ import yaml
 from app.db.models import CapabilityProposal
 
 # Module names whose import in generated code is forbidden — each grants OS/system access.
-_DANGEROUS_IMPORTS = frozenset({
-    "os", "sys", "subprocess", "socket", "shutil", "importlib",
-    "ctypes", "pickle", "builtins", "pty", "resource", "signal",
-})
+_DANGEROUS_IMPORTS = frozenset(
+    {
+        "os",
+        "sys",
+        "subprocess",
+        "socket",
+        "shutil",
+        "importlib",
+        "ctypes",
+        "pickle",
+        "builtins",
+        "pty",
+        "resource",
+        "signal",
+    }
+)
 
 _ROOT = Path(__file__).resolve().parents[2] / "data" / "agent_sandbox"
 
@@ -68,11 +80,16 @@ def run_capability_sandbox(proposal: CapabilityProposal) -> CapabilitySandboxRes
 
     skill_entry = _skill_entry(draft)
     if skill_entry:
-        files.append(_write_text(sandbox_dir / "skill_entry.yml", yaml.safe_dump(
-            skill_entry,
-            allow_unicode=True,
-            sort_keys=False,
-        )))
+        files.append(
+            _write_text(
+                sandbox_dir / "skill_entry.yml",
+                yaml.safe_dump(
+                    skill_entry,
+                    allow_unicode=True,
+                    sort_keys=False,
+                ),
+            )
+        )
 
     if draft.get("endpoint_path") or draft.get("tool_name"):
         files.append(_write_text(sandbox_dir / "api_stub.py", _api_stub(draft)))
@@ -162,10 +179,13 @@ def _validate_draft(draft: dict[str, Any]) -> tuple[list[str], list[str]]:
                 and isinstance(node.targets[0], ast.Name)
             ]
             if "SKILL_META" not in top_assigns:
-                warnings.append("Generated code is missing SKILL_META dict; registry entry may be incomplete.")
+                warnings.append(
+                    "Generated code is missing SKILL_META dict; registry entry may be incomplete."
+                )
 
             # Security: reject dangerous imports and dynamic execution builtins
             import ast as _ast
+
             for node in _ast.walk(tree):
                 if isinstance(node, _ast.Import):
                     for alias in node.names:
@@ -252,7 +272,7 @@ def _proposal_payload(proposal: CapabilityProposal) -> dict[str, Any]:
         "suggested_artifact": proposal.suggested_artifact,
         "risk_level": proposal.risk_level,
         "created_at": proposal.created_at.isoformat() if proposal.created_at else None,
-        "sandbox_created_at": datetime.now(timezone.utc).isoformat(),
+        "sandbox_created_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -345,12 +365,14 @@ def _diff_preview(
         "# Production files are not modified by this runner.",
     ]
     for path in files:
-        lines.extend([
-            f"--- /dev/null",
-            f"+++ b/{path.name}",
-            f"@@ sandbox artifact @@",
-            f"+{path.name}",
-        ])
+        lines.extend(
+            [
+                "--- /dev/null",
+                f"+++ b/{path.name}",
+                "@@ sandbox artifact @@",
+                f"+{path.name}",
+            ]
+        )
     if errors:
         lines.append(f"# validation_errors={json.dumps(errors, ensure_ascii=False)}")
     if warnings:
@@ -429,9 +451,7 @@ def promote_capability(proposal: CapabilityProposal) -> CapabilityPromoteResult:
             errors.append(f"Failed to update gateway.yml: {exc}")
         try:
             description = str(
-                draft.get("title")
-                or (skill_entry or {}).get("description")
-                or proposal.title
+                draft.get("title") or (skill_entry or {}).get("description") or proposal.title
             )
             _add_generated_capability(skill_name, description)
         except Exception as exc:
@@ -444,7 +464,7 @@ def promote_capability(proposal: CapabilityProposal) -> CapabilityPromoteResult:
         "skill_name": skill_name,
         "gateway_updated": gateway_updated,
         "sandbox_dir": str(sandbox_dir),
-        "promoted_at": datetime.now(timezone.utc).isoformat(),
+        "promoted_at": datetime.now(UTC).isoformat(),
         "errors": errors,
     }
     (staging_dir / "promotion_manifest.json").write_text(
@@ -479,12 +499,14 @@ def _add_generated_capability(skill_name: str, description: str) -> bool:
     generated: list[dict] = data.get("generated") or []
     if any(entry.get("name") == safe for entry in generated):
         return True
-    generated.append({
-        "name": safe,
-        "description": f"[generated] {description[:300]}",
-        "path": f"/api/agent/generated-skill/{safe}",
-        "method": "POST",
-    })
+    generated.append(
+        {
+            "name": safe,
+            "description": f"[generated] {description[:300]}",
+            "path": f"/api/agent/generated-skill/{safe}",
+            "method": "POST",
+        }
+    )
     data["generated"] = generated
     gen_path.write_text(
         "# Auto-managed: promoted agent-generated skills (capabilities mode).\n"

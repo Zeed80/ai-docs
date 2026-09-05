@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
@@ -30,25 +30,37 @@ async def _run() -> dict:
     from sqlalchemy import func, select
 
     from app.db.models import (
-        AnomalyCard, AnomalyStatus, Approval, ApprovalStatus, Document,
-        DocumentStatus, EmailThread, NotificationType, User, UserNotificationSettings,
+        AnomalyCard,
+        AnomalyStatus,
+        Approval,
+        ApprovalStatus,
+        Document,
+        DocumentStatus,
+        EmailThread,
+        NotificationType,
+        User,
+        UserNotificationSettings,
     )
     from app.db.session import _get_session_factory
     from app.domain.email_access import hidden_mailbox_names
     from app.services.notifications import create_notification, local_hour
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     since = now_utc - timedelta(days=1)
     sent = 0
 
     async with _get_session_factory()() as db:
         rows = (
-            await db.execute(
-                select(UserNotificationSettings).where(
-                    UserNotificationSettings.digest_enabled == True  # noqa: E712
+            (
+                await db.execute(
+                    select(UserNotificationSettings).where(
+                        UserNotificationSettings.digest_enabled == True  # noqa: E712
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         for row in rows:
             # Час сводки — местный для получателя, а не серверный: иначе
@@ -84,17 +96,13 @@ async def _run() -> dict:
             anomalies = (
                 await db.execute(
                     select(func.count(AnomalyCard.id)).where(
-                        AnomalyCard.status.in_(
-                            (AnomalyStatus.open, AnomalyStatus.escalated)
-                        ),
+                        AnomalyCard.status.in_((AnomalyStatus.open, AnomalyStatus.escalated)),
                     )
                 )
             ).scalar() or 0
             waiting = (
                 await db.execute(
-                    select(func.count(Approval.id)).where(
-                        Approval.status == ApprovalStatus.pending
-                    )
+                    select(func.count(Approval.id)).where(Approval.status == ApprovalStatus.pending)
                 )
             ).scalar() or 0
 

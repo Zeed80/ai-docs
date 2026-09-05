@@ -50,11 +50,14 @@ def explain_api_failure(exc: Exception) -> str:
 
 async def _client_and_base():
     import httpx
+
     from app.services.integration_config import get_mail_server_config
 
     cfg = await get_mail_server_config()
     if not cfg.configured:
-        raise MailServerNotConfigured("Mail server API is not configured (see /api/admin/mail-server)")
+        raise MailServerNotConfigured(
+            "Mail server API is not configured (see /api/admin/mail-server)"
+        )
     headers = {"X-API-Key": cfg.api_key, "Content-Type": "application/json"}
     return httpx.AsyncClient(timeout=15.0, headers=headers), cfg.api_url.rstrip("/"), cfg
 
@@ -118,7 +121,9 @@ async def set_mailbox_active(full_address: str, *, active: bool) -> None:
             json={"items": [full_address], "attr": {"active": "1" if active else "0"}},
         )
         r.raise_for_status()
-        _raise_on_api_error(r.json(), f"{'activating' if active else 'deactivating'} {full_address}")
+        _raise_on_api_error(
+            r.json(), f"{'activating' if active else 'deactivating'} {full_address}"
+        )
         logger.info("mailcow_mailbox_active_set", address=full_address, active=active)
 
 
@@ -127,7 +132,10 @@ async def edit_mailbox_password(full_address: str, new_password: str) -> None:
     async with client:
         r = await client.post(
             f"{base}/api/v1/edit/mailbox",
-            json={"items": [full_address], "attr": {"password": new_password, "password2": new_password}},
+            json={
+                "items": [full_address],
+                "attr": {"password": new_password, "password2": new_password},
+            },
         )
         r.raise_for_status()
         _raise_on_api_error(r.json(), f"resetting password for {full_address}")

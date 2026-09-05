@@ -2,17 +2,16 @@
 collection.summarize, collection.timeline"""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.session import get_db
-from pydantic import BaseModel
-
+from app.audit.service import add_timeline_event
 from app.db.models import (
     AnomalyCard,
     AnomalyStatus,
@@ -24,6 +23,7 @@ from app.db.models import (
     Invoice,
     InvoiceStatus,
 )
+from app.db.session import get_db
 from app.domain.collections import (
     CollectionAddItem,
     CollectionCreate,
@@ -32,7 +32,6 @@ from app.domain.collections import (
     CollectionTimelineEvent,
     CollectionTimelineResponse,
 )
-from app.audit.service import log_action, add_timeline_event
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -56,8 +55,7 @@ async def create_collection(
     await db.commit()
     # Re-fetch with items loaded
     result = await db.execute(
-        select(Collection).where(Collection.id == coll.id)
-        .options(selectinload(Collection.items))
+        select(Collection).where(Collection.id == coll.id).options(selectinload(Collection.items))
     )
     coll = result.scalar_one()
     logger.info("collection_created", id=str(coll.id), name=coll.name)
@@ -142,7 +140,9 @@ async def add_item(
     db.add(item)
 
     await add_timeline_event(
-        db, entity_type="collection", entity_id=collection_id,
+        db,
+        entity_type="collection",
+        entity_id=collection_id,
         event_type="item_added",
         summary=f"Added {payload.entity_type} {payload.entity_id}",
         actor="user",
@@ -195,7 +195,7 @@ async def close_collection(
         raise HTTPException(404, "Collection not found")
 
     coll.is_closed = True
-    coll.closed_at = datetime.now(timezone.utc)
+    coll.closed_at = datetime.now(UTC)
 
     # Auto-generate closure summary
     entity_counts: dict[str, int] = {}
@@ -203,11 +203,19 @@ async def close_collection(
         entity_counts[item.entity_type] = entity_counts.get(item.entity_type, 0) + 1
 
     parts = [f"{count} {etype}" for etype, count in entity_counts.items()]
-    coll.closure_summary = f"Коллекция закрыта. Содержит: {', '.join(parts)}." if parts else "Пустая коллекция закрыта."
+    coll.closure_summary = (
+        f"Коллекция закрыта. Содержит: {', '.join(parts)}."
+        if parts
+        else "Пустая коллекция закрыта."
+    )
 
     await add_timeline_event(
-        db, entity_type="collection", entity_id=collection_id,
-        event_type="closed", summary=coll.closure_summary, actor="user",
+        db,
+        entity_type="collection",
+        entity_id=collection_id,
+        event_type="closed",
+        summary=coll.closure_summary,
+        actor="user",
     )
     await db.commit()
     await db.refresh(coll)
@@ -238,10 +246,19 @@ async def summarize_collection(
 
     parts = []
     for etype, count in entity_types.items():
-        label = {"document": "документов", "invoice": "счетов", "email": "писем", "supplier": "поставщиков"}.get(etype, etype)
+        label = {
+            "document": "документов",
+            "invoice": "счетов",
+            "email": "писем",
+            "supplier": "поставщиков",
+        }.get(etype, etype)
         parts.append(f"{count} {label}")
 
-    summary = f"Коллекция «{coll.name}»: {', '.join(parts)}." if parts else f"Коллекция «{coll.name}» пуста."
+    summary = (
+        f"Коллекция «{coll.name}»: {', '.join(parts)}."
+        if parts
+        else f"Коллекция «{coll.name}» пуста."
+    )
 
     return CollectionSummaryResponse(
         collection_id=coll.id,
@@ -283,13 +300,15 @@ async def collection_timeline(
             .limit(10)
         )
         for evt in evts.scalars().all():
-            events.append(CollectionTimelineEvent(
-                timestamp=evt.timestamp.isoformat(),
-                event_type=evt.event_type,
-                entity_type=evt.entity_type,
-                entity_id=str(evt.entity_id),
-                summary=evt.summary,
-            ))
+            events.append(
+                CollectionTimelineEvent(
+                    timestamp=evt.timestamp.isoformat(),
+                    event_type=evt.event_type,
+                    entity_type=evt.entity_type,
+                    entity_id=str(evt.entity_id),
+                    summary=evt.summary,
+                )
+            )
 
     # Also include collection-level events
     coll_evts = await db.execute(
@@ -301,13 +320,15 @@ async def collection_timeline(
         .order_by(AuditTimelineEvent.timestamp.desc())
     )
     for evt in coll_evts.scalars().all():
-        events.append(CollectionTimelineEvent(
-            timestamp=evt.timestamp.isoformat(),
-            event_type=evt.event_type,
-            entity_type="collection",
-            entity_id=str(collection_id),
-            summary=evt.summary,
-        ))
+        events.append(
+            CollectionTimelineEvent(
+                timestamp=evt.timestamp.isoformat(),
+                event_type=evt.event_type,
+                entity_type="collection",
+                entity_id=str(collection_id),
+                summary=evt.summary,
+            )
+        )
 
     # Sort by time desc
     events.sort(key=lambda e: e.timestamp, reverse=True)
@@ -339,9 +360,7 @@ async def suggest_items(
     db: AsyncSession = Depends(get_db),
 ):
     """Suggest items to add to a collection based on open anomalies and pending documents."""
-    coll_result = await db.execute(
-        select(Collection).where(Collection.id == collection_id)
-    )
+    coll_result = await db.execute(select(Collection).where(Collection.id == collection_id))
     coll = coll_result.scalar_one_or_none()
     if not coll:
         raise HTTPException(status_code=404, detail="Collection not found")
@@ -360,12 +379,14 @@ async def suggest_items(
     )
     for a in anoms.scalars().all():
         if str(a.entity_id) not in existing_ids:
-            suggestions.append(SuggestItem(
-                entity_type=a.entity_type,
-                entity_id=str(a.entity_id),
-                title=a.title,
-                reason=f"Открытая аномалия: {a.anomaly_type}",
-            ))
+            suggestions.append(
+                SuggestItem(
+                    entity_type=a.entity_type,
+                    entity_id=str(a.entity_id),
+                    title=a.title,
+                    reason=f"Открытая аномалия: {a.anomaly_type}",
+                )
+            )
             existing_ids.add(str(a.entity_id))
 
     # Pending invoices not yet in collection
@@ -377,12 +398,14 @@ async def suggest_items(
     )
     for inv in pending_inv.scalars().all():
         if str(inv.id) not in existing_ids:
-            suggestions.append(SuggestItem(
-                entity_type="invoice",
-                entity_id=str(inv.id),
-                title=f"Счёт {inv.invoice_number or inv.id}",
-                reason="Ожидает проверки",
-            ))
+            suggestions.append(
+                SuggestItem(
+                    entity_type="invoice",
+                    entity_id=str(inv.id),
+                    title=f"Счёт {inv.invoice_number or inv.id}",
+                    reason="Ожидает проверки",
+                )
+            )
             existing_ids.add(str(inv.id))
 
     # Needs-review documents
@@ -394,12 +417,14 @@ async def suggest_items(
     )
     for doc in docs.scalars().all():
         if str(doc.id) not in existing_ids:
-            suggestions.append(SuggestItem(
-                entity_type="document",
-                entity_id=str(doc.id),
-                title=doc.file_name,
-                reason="Требует проверки",
-            ))
+            suggestions.append(
+                SuggestItem(
+                    entity_type="document",
+                    entity_id=str(doc.id),
+                    title=doc.file_name,
+                    reason="Требует проверки",
+                )
+            )
 
     return SuggestResponse(suggestions=suggestions[:10])
 
@@ -445,7 +470,8 @@ async def search_collection_items(
     q_lower = q.lower().strip()
     if q_lower:
         items = [
-            i for i in items
+            i
+            for i in items
             if q_lower in (i.entity_id or "").lower()
             or q_lower in (i.note or "").lower()
             or q_lower in i.entity_type.lower()

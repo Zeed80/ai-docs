@@ -5,11 +5,11 @@ the Docker socket; it writes a signed latest.apk + version.json into the release
 volume, which the backend serves at /download. The signing keystore is persisted in
 a volume so rebuilds share one signature (in-app self-update works).
 """
+
 from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 
 import structlog
@@ -136,5 +136,9 @@ async def start_build(_user: UserInfo = Depends(require_role(UserRole.admin))) -
         raise HTTPException(500, f"Не удалось запустить сборку: {exc}") from exc
 
     logger.info("apk_build_started", admin=_user.sub, version=version_name)
-    return BuildStatus(state="building", version_name=version_name, version_code=next_code,
-                       apk_available=(_RELEASES / "latest.apk").is_file())
+    return BuildStatus(
+        state="building",
+        version_name=version_name,
+        version_code=next_code,
+        apk_available=(_RELEASES / "latest.apk").is_file(),
+    )

@@ -140,9 +140,7 @@ _CV_USABLE_MIN_RECALL = 0.8
 _NEURAL_OPEN_ENDPOINT_MARGIN = 0.15
 
 
-def _open_endpoint_rate(
-    entities: list[Any], *, min_segments: int = 4
-) -> float | None:
+def _open_endpoint_rate(entities: list[Any], *, min_segments: int = 4) -> float | None:
     """Fraction of segment endpoints that meet no other geometry.
 
     A self-referential cleanliness signal: real CAD lines share vertices, so a
@@ -160,9 +158,7 @@ def _open_endpoint_rate(
         length_sq = dx * dx + dy * dy
         if length_sq <= 1e-12:
             return math.hypot(point.x - segment.p1.x, point.y - segment.p1.y)
-        projection = (
-            (point.x - segment.p1.x) * dx + (point.y - segment.p1.y) * dy
-        ) / length_sq
+        projection = ((point.x - segment.p1.x) * dx + (point.y - segment.p1.y) * dy) / length_sq
         projection = max(0.0, min(1.0, projection))
         closest_x = segment.p1.x + projection * dx
         closest_y = segment.p1.y + projection * dy
@@ -172,13 +168,13 @@ def _open_endpoint_rate(
     for own_index, own in enumerate(segments):
         for point in (own.p1, own.p2):
             connected = any(
-                other_index != own_index
-                and _distance_to_segment(point, other) <= snap
+                other_index != own_index and _distance_to_segment(point, other) <= snap
                 for other_index, other in enumerate(segments)
             )
             if not connected:
                 open_ends += 1
     return open_ends / (2 * len(segments))
+
 
 # The lone-survivor gate exists to reject a genuinely fabricated result
 # (recall AND precision both near zero — nothing recognizable overlaps real
@@ -201,7 +197,10 @@ _LONE_SURVIVOR_MIN_PRECISION = 0.3
 
 
 def _passes_lone_survivor_floor(score: CoverageScore) -> bool:
-    return score.recall >= _LONE_SURVIVOR_MIN_RECALL and score.precision >= _LONE_SURVIVOR_MIN_PRECISION
+    return (
+        score.recall >= _LONE_SURVIVOR_MIN_RECALL
+        and score.precision >= _LONE_SURVIVOR_MIN_PRECISION
+    )
 
 
 def _consolidated(out: RecognizeOutput | None) -> RecognizeOutput | None:
@@ -287,7 +286,13 @@ def arbitrate_recognition(
     if neural_out is not None and cv_out is not None:
         neural_out, supplemented_types = _supplement_neural_with_cv(neural_out, cv_out)
     neural_score = (
-        score_coverage(neural_out.entities, ink, neural_out.keep_raster, neural_out.thin_px, neural_out.thick_px)
+        score_coverage(
+            neural_out.entities,
+            ink,
+            neural_out.keep_raster,
+            neural_out.thin_px,
+            neural_out.thick_px,
+        )
         if neural_out is not None
         else CoverageScore(0.0, 0.0)
     )
@@ -303,9 +308,15 @@ def arbitrate_recognition(
         used = "cv" if cv_out is not None else "neural"
         if survivor is None or not _passes_lone_survivor_floor(survivor_score):
             return ArbitrationResult(
-                entities=[], keep_raster=None, thin_px=2, thick_px=3,
-                recognizer_used=used, score=survivor_score or CoverageScore(0.0, 0.0),
-                neural_available=neural_available, discrepancy=False, notes={},
+                entities=[],
+                keep_raster=None,
+                thin_px=2,
+                thick_px=3,
+                recognizer_used=used,
+                score=survivor_score or CoverageScore(0.0, 0.0),
+                neural_available=neural_available,
+                discrepancy=False,
+                notes={},
             )
         return ArbitrationResult(
             entities=survivor.entities,
@@ -326,9 +337,7 @@ def arbitrate_recognition(
     rel_gap = abs(n_neural - n_cv) / max(n_neural, n_cv, 1)
     discrepancy = both_pass and rel_gap >= _DISCREPANCY_RELATIVE_GAP
     neural_fragmented = (
-        n_cv > 0
-        and neural_own_count / n_cv >= _NEURAL_FRAGMENTATION_RATIO
-        and cv_score.ok
+        n_cv > 0 and neural_own_count / n_cv >= _NEURAL_FRAGMENTATION_RATIO and cv_score.ok
     )
     # Severe fragmentation: a 5×+ segment explosion is unusable CAD even when
     # CV didn't fully pass the coverage bar (visual review, 2026-07-13).
@@ -375,12 +384,15 @@ def arbitrate_recognition(
         score=chosen_score,
         neural_available=neural_available,
         discrepancy=discrepancy,
-        notes={"neural_entities": n_neural, "cv_entities": n_cv,
-               "neural_own_entities": neural_own_count,
-               "cv_supplement_types": sorted(supplemented_types),
-               "neural_fragmented": neural_fragmented or neural_severely_fragmented,
-               "neural_disconnected": neural_disconnected,
-               "open_endpoint": (cv_open, neural_open),
-               "neural_score": (neural_score.recall, neural_score.precision),
-               "cv_score": (cv_score.recall, cv_score.precision)},
+        notes={
+            "neural_entities": n_neural,
+            "cv_entities": n_cv,
+            "neural_own_entities": neural_own_count,
+            "cv_supplement_types": sorted(supplemented_types),
+            "neural_fragmented": neural_fragmented or neural_severely_fragmented,
+            "neural_disconnected": neural_disconnected,
+            "open_endpoint": (cv_open, neural_open),
+            "neural_score": (neural_score.recall, neural_score.precision),
+            "cv_score": (cv_score.recall, cv_score.precision),
+        },
     )

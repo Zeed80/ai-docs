@@ -154,7 +154,7 @@ class ModelRegistry:
         self.routes = routes
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "ModelRegistry":
+    def from_yaml(cls, path: str | Path) -> ModelRegistry:
         registry_path = Path(path)
         if not registry_path.exists() and str(registry_path).startswith("backend/"):
             registry_path = Path(str(registry_path).removeprefix("backend/"))
@@ -176,10 +176,7 @@ class ModelRegistry:
         # on top of the YAML catalog. YAML stays the canonical defaults source.
         for key, value in _load_catalog_overlay().items():
             raw_models.setdefault(key, value)
-        models = {
-            key: ModelCapability(name=key, **value)
-            for key, value in raw_models.items()
-        }
+        models = {key: ModelCapability(name=key, **value) for key, value in raw_models.items()}
         # Apply per-model thinking toggles/levels from the UI or the
         # discovery loop's live probe (override YAML defaults). This is the
         # ONLY mechanism that can attach a level determination to a
@@ -198,7 +195,9 @@ class ModelRegistry:
             # has been made, live-probed or manually curated; None → never
             # determined via this path, defer to the catalog/YAML value.
             effective_levels = (
-                override["levels"] if override.get("levels") is not None else models[key].thinking_levels
+                override["levels"]
+                if override.get("levels") is not None
+                else models[key].thinking_levels
             )
             if override.get("levels") is not None:
                 update["thinking_levels"] = override["levels"]

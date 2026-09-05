@@ -9,7 +9,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.ai.agent_config import BuiltinAgentConfig
-from app.ai.agent_loop import AgentSession, _TONE_STYLE_HINTS, _tone_style_hint
+from app.ai.agent_loop import _TONE_STYLE_HINTS, AgentSession, _tone_style_hint
 
 
 def _fake_session(*, system: str, tone: str, role_context: str | None = None) -> SimpleNamespace:

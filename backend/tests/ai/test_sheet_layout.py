@@ -23,9 +23,9 @@ def _font(size: int):
 
 def _sheet(width=1200, height=850, *, stamp_rulings=True, notes=True):
     canvas = np.full((height, width), 255, np.uint8)
-    cv2.rectangle(canvas, (30, 30), (width - 30, height - 30), 0, 3)   # ГОСТ frame
-    cv2.circle(canvas, (380, 380), 200, 0, 4)                          # a view
-    cv2.line(canvas, (180, 640), (580, 640), 0, 1)                     # its dimension
+    cv2.rectangle(canvas, (30, 30), (width - 30, height - 30), 0, 3)  # ГОСТ frame
+    cv2.circle(canvas, (380, 380), 200, 0, 4)  # a view
+    cv2.line(canvas, (180, 640), (580, 640), 0, 1)  # its dimension
     image = Image.fromarray(canvas).convert("RGB")
     draw = ImageDraw.Draw(image)
 
@@ -35,16 +35,20 @@ def _sheet(width=1200, height=850, *, stamp_rulings=True, notes=True):
         for offset in (40, 80, 120):
             draw.line([stamp_x0, stamp_y0 + offset, width - 32, stamp_y0 + offset], fill=0, width=2)
         for offset in (120, 240):
-            draw.line([stamp_x0 + offset, stamp_y0, stamp_x0 + offset, height - 32], fill=0, width=2)
+            draw.line(
+                [stamp_x0 + offset, stamp_y0, stamp_x0 + offset, height - 32], fill=0, width=2
+            )
     else:
         draw.rectangle([stamp_x0 + 4, stamp_y0 + 4, width - 36, height - 36], fill=210)
 
     if notes:
         font = _font(22)
         for index, line in enumerate(
-            ["1. Острые кромки притупить.",
-             "2. Точность конуса AT6.",
-             "3. Неуказанные отклонения H14."]
+            [
+                "1. Острые кромки притупить.",
+                "2. Точность конуса AT6.",
+                "3. Неуказанные отклонения H14.",
+            ]
         ):
             draw.text((680, 300 + index * 34), line, fill=0, font=font)
     return image

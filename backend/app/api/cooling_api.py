@@ -214,9 +214,7 @@ async def set_fan_manual(payload: FanManualUpdate) -> dict:
 @router.post("/fans/config", dependencies=_admin)
 async def apply_fan_config(payload: FanConfigUpdate) -> dict:
     try:
-        return await gpu_manager.apply_fan_config(
-            payload.model_dump(exclude_none=True)
-        )
+        return await gpu_manager.apply_fan_config(payload.model_dump(exclude_none=True))
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -225,9 +223,7 @@ async def apply_fan_config(payload: FanConfigUpdate) -> dict:
 async def preview_fan_config(payload: FanPreviewRequest) -> dict:
     """Dry run: what the curve would command. Touches no hardware."""
     try:
-        return await gpu_manager.preview_fan_config(
-            payload.model_dump(exclude_none=True)
-        )
+        return await gpu_manager.preview_fan_config(payload.model_dump(exclude_none=True))
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 

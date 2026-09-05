@@ -5,7 +5,7 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
-from app.db.models import Document, DocumentStatus, QuarantineEntry, FileExtensionAllowlist
+from app.db.models import Document, DocumentStatus, QuarantineEntry
 
 
 @pytest.fixture
@@ -142,10 +142,13 @@ async def test_get_allowlist(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_add_to_allowlist(client: AsyncClient):
-    resp = await client.post("/api/quarantine/allowlist", json={
-        "extension": ".xyz_test",
-        "is_allowed": True,
-    })
+    resp = await client.post(
+        "/api/quarantine/allowlist",
+        json={
+            "extension": ".xyz_test",
+            "is_allowed": True,
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["extension"] == ".xyz_test"
@@ -154,10 +157,13 @@ async def test_add_to_allowlist(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_remove_from_allowlist(client: AsyncClient):
-    create_resp = await client.post("/api/quarantine/allowlist", json={
-        "extension": ".tmp_del_test",
-        "is_allowed": True,
-    })
+    create_resp = await client.post(
+        "/api/quarantine/allowlist",
+        json={
+            "extension": ".tmp_del_test",
+            "is_allowed": True,
+        },
+    )
     entry_id = create_resp.json()["id"]
 
     resp = await client.delete(f"/api/quarantine/allowlist/{entry_id}")

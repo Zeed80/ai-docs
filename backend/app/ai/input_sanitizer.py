@@ -11,7 +11,10 @@ _INJECTION_PATTERNS: list[re.Pattern] = [
     re.compile(r"\[INST\]|\[/?SYS\]|<<SYS>>", re.IGNORECASE),
     re.compile(r"###\s*System\s*:", re.IGNORECASE),
     re.compile(r"ASSISTANT\s*:\s*(?:OK|Sure|Of course)", re.IGNORECASE),
-    re.compile(r"disregard\s+(?:all\s+)?(?:previous|prior)\s+(?:instructions?|prompts?|context)", re.IGNORECASE),
+    re.compile(
+        r"disregard\s+(?:all\s+)?(?:previous|prior)\s+(?:instructions?|prompts?|context)",
+        re.IGNORECASE,
+    ),
     re.compile(r"new\s+instructions?\s*:", re.IGNORECASE),
 ]
 
@@ -47,7 +50,7 @@ def sanitize_user_input(text: str) -> tuple[str, list[str]]:
 # места весь модуль применялся ровно нигде — он не был импортирован ни одним
 # файлом, — и разметки «это данные, а не инструкции» не существовало.
 
-_UNTRUSTED_OPEN = "<untrusted-content source=\"{source}\">"
+_UNTRUSTED_OPEN = '<untrusted-content source="{source}">'
 _UNTRUSTED_CLOSE = "</untrusted-content>"
 
 
@@ -63,10 +66,7 @@ def wrap_untrusted(text: str, source: str = "email") -> str:
         _UNTRUSTED_CLOSE, "&lt;/untrusted-content&gt;"
     )
     safe_source = re.sub(r"[^a-zA-Z0-9_.:-]", "", source)[:40] or "external"
-    return (
-        _UNTRUSTED_OPEN.format(source=safe_source)
-        + "\n" + cleaned + "\n" + _UNTRUSTED_CLOSE
-    )
+    return _UNTRUSTED_OPEN.format(source=safe_source) + "\n" + cleaned + "\n" + _UNTRUSTED_CLOSE
 
 
 UNTRUSTED_NOTE = (

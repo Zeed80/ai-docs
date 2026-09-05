@@ -7,10 +7,10 @@ to simulate different roles, ensuring that:
 """
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
-from app.auth.models import UserInfo, UserRole
 from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo, UserRole
 
 
 def _make_user(role: UserRole, sub: str = "test-user") -> UserInfo:
@@ -99,28 +99,57 @@ async def admin_client(db_session, admin_user):
 # ── Agent Control Plane RBAC ──────────────────────────────────────────────────
 
 AGENT_CP_MUTATING = [
-    ("POST", "/api/agent/config/proposals",
-     {"setting_path": "agent_name", "proposed_value": "Test", "reason": "test"}),
-    ("POST", "/api/agent/config/propose",
-     {"setting_path": "agent_name", "proposed_value": "Test", "reason": "test"}),
-    ("POST", "/api/agent/tasks",
-     {"objective": "test", "role": "analyst"}),
-    ("POST", "/api/agent/tasks/create",
-     {"objective": "test", "role": "analyst"}),
-    ("POST", "/api/agent/teams",
-     {"name": "team", "purpose": "test"}),
-    ("POST", "/api/agent/cron",
-     {"schedule": "0 9 * * 1", "prompt": "check", "description": "daily"}),
-    ("POST", "/api/agent/plugins",
-     {"plugin_key": "test_plugin", "name": "Test", "version": "1.0",
-      "description": "test", "manifest": {}, "risk_level": "low",
-      "installed_by": "test"}),
-    ("POST", "/api/agent/capabilities",
-     {"title": "test cap", "missing_capability": "test",
-      "reason": "test", "suggested_artifact": {}}),
-    ("POST", "/api/agent/capabilities/propose",
-     {"title": "test cap", "missing_capability": "test",
-      "reason": "test", "suggested_artifact": {}}),
+    (
+        "POST",
+        "/api/agent/config/proposals",
+        {"setting_path": "agent_name", "proposed_value": "Test", "reason": "test"},
+    ),
+    (
+        "POST",
+        "/api/agent/config/propose",
+        {"setting_path": "agent_name", "proposed_value": "Test", "reason": "test"},
+    ),
+    ("POST", "/api/agent/tasks", {"objective": "test", "role": "analyst"}),
+    ("POST", "/api/agent/tasks/create", {"objective": "test", "role": "analyst"}),
+    ("POST", "/api/agent/teams", {"name": "team", "purpose": "test"}),
+    (
+        "POST",
+        "/api/agent/cron",
+        {"schedule": "0 9 * * 1", "prompt": "check", "description": "daily"},
+    ),
+    (
+        "POST",
+        "/api/agent/plugins",
+        {
+            "plugin_key": "test_plugin",
+            "name": "Test",
+            "version": "1.0",
+            "description": "test",
+            "manifest": {},
+            "risk_level": "low",
+            "installed_by": "test",
+        },
+    ),
+    (
+        "POST",
+        "/api/agent/capabilities",
+        {
+            "title": "test cap",
+            "missing_capability": "test",
+            "reason": "test",
+            "suggested_artifact": {},
+        },
+    ),
+    (
+        "POST",
+        "/api/agent/capabilities/propose",
+        {
+            "title": "test cap",
+            "missing_capability": "test",
+            "reason": "test",
+            "suggested_artifact": {},
+        },
+    ),
 ]
 
 
@@ -145,6 +174,7 @@ async def test_agent_control_plane_get_status_viewer_allowed(viewer_client):
 
 
 # ── Approval Policy RBAC ──────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_patch_approval_policy_viewer_gets_403(viewer_client):
@@ -178,6 +208,7 @@ async def test_patch_approval_policy_admin_allowed(admin_client):
 
 # ── Document Bulk-Delete RBAC ─────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_bulk_delete_viewer_gets_403(viewer_client):
     """Viewer must not be able to bulk-delete documents."""
@@ -202,6 +233,7 @@ async def test_bulk_delete_manager_allowed(manager_client):
 
 # ── Dev Purge-All ─────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_purge_all_viewer_gets_403(viewer_client):
     """Viewer must not be able to call purge-all."""
@@ -219,6 +251,7 @@ async def test_purge_all_admin_allowed_in_production(admin_client, monkeypatch):
     phrase are the authorization. This test used to assert a production 403
     from an earlier audit and was left stale when that decision changed."""
     from app.config import settings
+
     monkeypatch.setattr(settings, "app_env", "production")
     resp = await admin_client.post(
         "/api/documents/dev/purge-all",
@@ -231,6 +264,7 @@ async def test_purge_all_admin_allowed_in_production(admin_client, monkeypatch):
 async def test_purge_all_admin_dev_allowed(admin_client, monkeypatch):
     """Admin can call purge-all in non-production environments."""
     from app.config import settings
+
     monkeypatch.setattr(settings, "app_env", "test")
     resp = await admin_client.post(
         "/api/documents/dev/purge-all",

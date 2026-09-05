@@ -33,8 +33,7 @@ RASTER = (1241, 1670)
 
 def test_product_page_is_parsed():
     verdict = page_product_verdict(
-        "Фреза концевая MT190-016C04 Ø12 мм — 3450 руб\n"
-        "Сверло спиральное DR-6.5 HSS — 480 руб"
+        "Фреза концевая MT190-016C04 Ø12 мм — 3450 руб\nСверло спиральное DR-6.5 HSS — 480 руб"
     )
     assert verdict.parse is True
 
@@ -67,7 +66,7 @@ def test_cover_and_marketing_pages_are_skipped():
 def test_gate_does_not_need_prices_to_accept_a_page():
     """Technical catalogs list articles and sizes without a single price."""
     verdict = page_product_verdict(
-        "2873-10  0-10mm/0-0.4\"  0.01mm\n2873-101  0-10mm/0-0.4\"  0.001mm"
+        '2873-10  0-10mm/0-0.4"  0.01mm\n2873-101  0-10mm/0-0.4"  0.001mm'
     )
     assert verdict.parse is True
 
@@ -132,7 +131,9 @@ def test_page_without_any_usable_picture_falls_back_to_the_page_preview():
 
 
 def test_repeated_logo_is_not_a_product_picture():
-    pages = [[{"signature": "logo", "k": "r0"}, {"signature": f"p{i}", "k": "r1"}] for i in range(20)]
+    pages = [
+        [{"signature": "logo", "k": "r0"}, {"signature": f"p{i}", "k": "r1"}] for i in range(20)
+    ]
     furniture = furniture_signatures(pages)
     assert "logo" in furniture
     assert "p3" not in furniture
@@ -172,8 +173,10 @@ def test_two_comparable_pictures_are_not_guessed_between():
 def test_variants_table_gets_the_family_picture():
     """30 sizes under 6 illustrations is a variants table — the biggest picture
     belongs to all of them, shared and with a lower confidence."""
-    six = [ImageCandidate(key=str(i), bbox=(300 * i, 400, 300 * i + 700, 1100), source="raster")
-           for i in range(6)]
+    six = [
+        ImageCandidate(key=str(i), bbox=(300 * i, 400, 300 * i + 700, 1100), source="raster")
+        for i in range(6)
+    ]
     matches = match_entries_to_images(
         [{"part_number": f"1A1-{i}"} for i in range(30)], [], six, (3544, 2500)
     )
@@ -182,9 +185,11 @@ def test_variants_table_gets_the_family_picture():
 
 
 def test_one_picture_per_position_is_assigned_in_reading_order():
-    three = [ImageCandidate(key="c", bbox=(100, 1200, 800, 1900), source="raster"),
-             ImageCandidate(key="a", bbox=(100, 100, 800, 800), source="raster"),
-             ImageCandidate(key="b", bbox=(900, 100, 1600, 800), source="raster")]
+    three = [
+        ImageCandidate(key="c", bbox=(100, 1200, 800, 1900), source="raster"),
+        ImageCandidate(key="a", bbox=(100, 100, 800, 800), source="raster"),
+        ImageCandidate(key="b", bbox=(900, 100, 1600, 800), source="raster"),
+    ]
     matches = match_entries_to_images(
         [{"part_number": "X1"}, {"part_number": "X2"}, {"part_number": "X3"}],
         [],
@@ -195,8 +200,10 @@ def test_one_picture_per_position_is_assigned_in_reading_order():
 
 
 def test_a_spread_with_more_pictures_than_positions_stays_on_the_page_preview():
-    six = [ImageCandidate(key=str(i), bbox=(300 * i, 400, 300 * i + 700, 1100), source="raster")
-           for i in range(6)]
+    six = [
+        ImageCandidate(key=str(i), bbox=(300 * i, 400, 300 * i + 700, 1100), source="raster")
+        for i in range(6)
+    ]
     matches = match_entries_to_images(
         [{"part_number": "X"}, {"part_number": "Y"}], [], six, (3544, 2500)
     )

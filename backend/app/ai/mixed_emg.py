@@ -21,10 +21,7 @@ from app.domain.engineering_model_graph import (
     Requirement,
 )
 
-
-CrossProfileEdge = Literal[
-    "depends_on", "connects_to", "located_in", "part_of", "maps_to_topology"
-]
+CrossProfileEdge = Literal["depends_on", "connects_to", "located_in", "part_of", "maps_to_topology"]
 
 
 class _StrictModel(BaseModel):
@@ -55,7 +52,7 @@ class MixedModel(_StrictModel):
     links: list[CrossProfileLink] = Field(default_factory=list, max_length=10_000)
 
     @model_validator(mode="after")
-    def validate_aliases_and_links(self) -> "MixedModel":
+    def validate_aliases_and_links(self) -> MixedModel:
         aliases = [item.alias for item in self.members]
         if len(aliases) != len(set(aliases)):
             raise ValueError("duplicate mixed graph member aliases")
@@ -113,88 +110,118 @@ def compose_mixed_graph(
         if graph.profile == "mixed":
             raise ValueError("nested mixed graphs are not supported in emg/1.0")
         graph_source_id = f"graph-revision:{member.alias}"
-        sources.append(GraphSource(
-            id=graph_source_id,
-            uri=f"emg://{member.graph_id}/r{member.revision}",
-            sha256=member.canonical_sha256,
-            revision=str(member.revision),
-            media_type="application/vnd.engineering-model-graph+json",
-        ))
+        sources.append(
+            GraphSource(
+                id=graph_source_id,
+                uri=f"emg://{member.graph_id}/r{member.revision}",
+                sha256=member.canonical_sha256,
+                revision=str(member.revision),
+                media_type="application/vnd.engineering-model-graph+json",
+            )
+        )
         for item in graph.sources:
             sources.append(item.model_copy(update={"id": _qualified(member.alias, item.id)}))
         for item in graph.nodes:
             nodes.append(item.model_copy(update={"id": _qualified(member.alias, item.id)}))
         for item in graph.edges:
-            edges.append(item.model_copy(update={
-                "id": _qualified(member.alias, item.id),
-                "source_id": _qualified(member.alias, item.source_id),
-                "target_id": _qualified(member.alias, item.target_id),
-            }))
+            edges.append(
+                item.model_copy(
+                    update={
+                        "id": _qualified(member.alias, item.id),
+                        "source_id": _qualified(member.alias, item.source_id),
+                        "target_id": _qualified(member.alias, item.target_id),
+                    }
+                )
+            )
         for item in graph.evidence:
-            evidence.append(item.model_copy(update={
-                "id": _qualified(member.alias, item.id),
-                "source_id": (
-                    _qualified(member.alias, item.source_id)
-                    if item.source_id else graph_source_id
-                ),
-                "source_region_id": (
-                    _qualified(member.alias, item.source_region_id)
-                    if item.source_region_id else None
-                ),
-            }))
+            evidence.append(
+                item.model_copy(
+                    update={
+                        "id": _qualified(member.alias, item.id),
+                        "source_id": (
+                            _qualified(member.alias, item.source_id)
+                            if item.source_id
+                            else graph_source_id
+                        ),
+                        "source_region_id": (
+                            _qualified(member.alias, item.source_region_id)
+                            if item.source_region_id
+                            else None
+                        ),
+                    }
+                )
+            )
         for item in graph.assertions:
             value = item.value
             if value.kind == "expression":
-                value = value.model_copy(update={
-                    "variable_assertion_ids": [
-                        _qualified(member.alias, assertion_id)
-                        for assertion_id in value.variable_assertion_ids
-                    ]
-                })
-            assertions.append(item.model_copy(update={
-                "id": _qualified(member.alias, item.id),
-                "subject_id": _qualified(member.alias, item.subject_id),
-                "evidence_ids": [
-                    _qualified(member.alias, evidence_id)
-                    for evidence_id in item.evidence_ids
-                ],
-                "supersedes_assertion_id": (
-                    _qualified(member.alias, item.supersedes_assertion_id)
-                    if item.supersedes_assertion_id else None
-                ),
-                "value": value,
-            }))
+                value = value.model_copy(
+                    update={
+                        "variable_assertion_ids": [
+                            _qualified(member.alias, assertion_id)
+                            for assertion_id in value.variable_assertion_ids
+                        ]
+                    }
+                )
+            assertions.append(
+                item.model_copy(
+                    update={
+                        "id": _qualified(member.alias, item.id),
+                        "subject_id": _qualified(member.alias, item.subject_id),
+                        "evidence_ids": [
+                            _qualified(member.alias, evidence_id)
+                            for evidence_id in item.evidence_ids
+                        ],
+                        "supersedes_assertion_id": (
+                            _qualified(member.alias, item.supersedes_assertion_id)
+                            if item.supersedes_assertion_id
+                            else None
+                        ),
+                        "value": value,
+                    }
+                )
+            )
         for item in graph.hypothesis_options:
-            hypothesis_options.append(item.model_copy(update={
-                "id": _qualified(member.alias, item.id),
-                "assertion_ids": [
-                    _qualified(member.alias, assertion_id)
-                    for assertion_id in item.assertion_ids
-                ],
-            }))
+            hypothesis_options.append(
+                item.model_copy(
+                    update={
+                        "id": _qualified(member.alias, item.id),
+                        "assertion_ids": [
+                            _qualified(member.alias, assertion_id)
+                            for assertion_id in item.assertion_ids
+                        ],
+                    }
+                )
+            )
         for item in graph.hypothesis_sets:
-            hypothesis_sets.append(item.model_copy(update={
-                "id": _qualified(member.alias, item.id),
-                "option_ids": [
-                    _qualified(member.alias, option_id) for option_id in item.option_ids
-                ],
-                "selected_option_id": (
-                    _qualified(member.alias, item.selected_option_id)
-                    if item.selected_option_id else None
-                ),
-            }))
+            hypothesis_sets.append(
+                item.model_copy(
+                    update={
+                        "id": _qualified(member.alias, item.id),
+                        "option_ids": [
+                            _qualified(member.alias, option_id) for option_id in item.option_ids
+                        ],
+                        "selected_option_id": (
+                            _qualified(member.alias, item.selected_option_id)
+                            if item.selected_option_id
+                            else None
+                        ),
+                    }
+                )
+            )
         requirement_map = {}
         for item in graph.requirements:
-            mapped = item.model_copy(update={
-                "id": _qualified(member.alias, item.id),
-                "target_node_ids": [
-                    _qualified(member.alias, node_id) for node_id in item.target_node_ids
-                ],
-                "assertion_ids": [
-                    _qualified(member.alias, assertion_id)
-                    for assertion_id in item.assertion_ids
-                ],
-            })
+            mapped = item.model_copy(
+                update={
+                    "id": _qualified(member.alias, item.id),
+                    "target_node_ids": [
+                        _qualified(member.alias, node_id) for node_id in item.target_node_ids
+                    ],
+                    "assertion_ids": [
+                        _qualified(member.alias, assertion_id)
+                        for assertion_id in item.assertion_ids
+                    ],
+                }
+            )
             requirements.append(mapped)
             requirement_map[item.id] = mapped
         production_targets = [item for item in graph.build_targets if item.id == "production"]
@@ -205,18 +232,18 @@ def compose_mixed_graph(
             if mapped is None:
                 raise ValueError(f"member {member.alias} has a broken production requirement")
             member_required_assertions.extend(mapped.assertion_ids)
-        member_roots = sorted({
-            node_id
-            for target in graph.build_targets
-            for node_id in target.root_node_ids
-        })
+        member_roots = sorted(
+            {node_id for target in graph.build_targets for node_id in target.root_node_ids}
+        )
         for node_id in member_roots:
-            edges.append(GraphEdge(
-                id=_qualified(member.alias, f"contained-root:{node_id}"),
-                type="contains",
-                source_id=root_id,
-                target_id=_qualified(member.alias, node_id),
-            ))
+            edges.append(
+                GraphEdge(
+                    id=_qualified(member.alias, f"contained-root:{node_id}"),
+                    type="contains",
+                    source_id=root_id,
+                    target_id=_qualified(member.alias, node_id),
+                )
+            )
         for registration in graph.extension_registry:
             if registration not in extension_registry:
                 extension_registry.append(registration)
@@ -240,30 +267,39 @@ def compose_mixed_graph(
         if source_id not in node_ids or target_id not in node_ids:
             raise ValueError(f"cross-profile link {link.id} references an unknown node")
         constraint_id = f"constraint:mixed:{hashlib.sha256(link.id.encode()).hexdigest()[:16]}"
-        nodes.append(GraphNode(id=constraint_id, type="Constraint", name=link.description or link.id))
-        edges.append(GraphEdge(
-            id=f"cross:{hashlib.sha256(link.id.encode()).hexdigest()[:20]}",
-            type=link.type,
-            source_id=source_id,
-            target_id=target_id,
-        ))
+        nodes.append(
+            GraphNode(id=constraint_id, type="Constraint", name=link.description or link.id)
+        )
+        edges.append(
+            GraphEdge(
+                id=f"cross:{hashlib.sha256(link.id.encode()).hexdigest()[:20]}",
+                type=link.type,
+                source_id=source_id,
+                target_id=target_id,
+            )
+        )
         assertion_id = f"assertion:mixed-link:{hashlib.sha256(link.id.encode()).hexdigest()[:16]}"
-        assertions.append(Assertion(
-            id=assertion_id,
-            subject_id=constraint_id,
-            predicate=PREDICATE.CROSS_PROFILE_LINK,
-            value=ExactValue(kind="exact", value={
-                "id": link.id,
-                "type": link.type,
-                "source": source_id,
-                "target": target_id,
-            }),
-            origin="human",
-            assurance=approval,
-            evidence_ids=[link_evidence.id],
-            confidence=1.0,
-            impacts=[link.impact],
-        ))
+        assertions.append(
+            Assertion(
+                id=assertion_id,
+                subject_id=constraint_id,
+                predicate=PREDICATE.CROSS_PROFILE_LINK,
+                value=ExactValue(
+                    kind="exact",
+                    value={
+                        "id": link.id,
+                        "type": link.type,
+                        "source": source_id,
+                        "target": target_id,
+                    },
+                ),
+                origin="human",
+                assurance=approval,
+                evidence_ids=[link_evidence.id],
+                confidence=1.0,
+                impacts=[link.impact],
+            )
+        )
         cross_assertions.append(assertion_id)
 
     release_requirement = Requirement(

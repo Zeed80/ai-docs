@@ -7,22 +7,21 @@ Skills: procurement.list_requests, procurement.create_request, procurement.updat
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
+from app.audit.service import add_timeline_event, log_action
 from app.auth.acting import get_effective_user
 from app.auth.models import UserInfo
+from app.db.models import Party, PurchaseRequest, SupplierContract
 from app.db.session import get_db
-from app.db.models import PurchaseRequest, SupplierContract, Party
 from app.domain.email_send import create_reply_draft
-from app.audit.service import log_action, add_timeline_event
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -141,8 +140,14 @@ async def list_purchase_requests(
         q = q.where(PurchaseRequest.status == status)
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     items = (
-        await db.execute(q.order_by(PurchaseRequest.created_at.desc()).offset(offset).limit(limit))
-    ).scalars().all()
+        (
+            await db.execute(
+                q.order_by(PurchaseRequest.created_at.desc()).offset(offset).limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
     return PurchaseRequestListResponse(items=items, total=total, offset=offset, limit=limit)
 
 
@@ -162,8 +167,13 @@ async def create_purchase_request(
     db.add(req)
     await db.commit()
     await db.refresh(req)
-    await log_action(db, action="procurement.create_request", entity_type="purchase_request",
-                     entity_id=req.id, details={"title": req.title})
+    await log_action(
+        db,
+        action="procurement.create_request",
+        entity_type="purchase_request",
+        entity_id=req.id,
+        details={"title": req.title},
+    )
     return req
 
 
@@ -206,7 +216,9 @@ async def cancel_purchase_request(
     if not req:
         raise HTTPException(status_code=404, detail="Purchase request not found")
     if req.status not in ("draft", "approved"):
-        raise HTTPException(status_code=400, detail=f"Cannot cancel request in status '{req.status}'")
+        raise HTTPException(
+            status_code=400, detail=f"Cannot cancel request in status '{req.status}'"
+        )
     req.status = "cancelled"
     await db.commit()
     return {"status": "cancelled", "id": str(req_id)}
@@ -225,9 +237,7 @@ async def send_rfq(
         raise HTTPException(status_code=404, detail="Purchase request not found")
 
     # Load suppliers
-    result = await db.execute(
-        select(Party).where(Party.id.in_(supplier_ids))
-    )
+    result = await db.execute(select(Party).where(Party.id.in_(supplier_ids)))
     suppliers = result.scalars().all()
     if not suppliers:
         raise HTTPException(status_code=400, detail="No valid suppliers found")
@@ -262,11 +272,21 @@ async def send_rfq(
         draft_ids.append(str(draft.id))
 
     req.status = "rfq_sent"
-    await log_action(db, action="procurement.send_rfq", entity_type="purchase_request",
-                     entity_id=req.id, details={"suppliers": len(suppliers), "drafts": len(draft_ids)})
-    await add_timeline_event(db, entity_type="purchase_request", entity_id=req.id,
-                             event_type="rfq_prepared", actor="sveta",
-                             summary=f"Подготовлено {len(draft_ids)} черновиков КП для {len(suppliers)} поставщиков")
+    await log_action(
+        db,
+        action="procurement.send_rfq",
+        entity_type="purchase_request",
+        entity_id=req.id,
+        details={"suppliers": len(suppliers), "drafts": len(draft_ids)},
+    )
+    await add_timeline_event(
+        db,
+        entity_type="purchase_request",
+        entity_id=req.id,
+        event_type="rfq_prepared",
+        actor="sveta",
+        summary=f"Подготовлено {len(draft_ids)} черновиков КП для {len(suppliers)} поставщиков",
+    )
     await db.commit()
     return {"draft_email_ids": draft_ids, "supplier_count": len(suppliers)}
 
@@ -290,8 +310,14 @@ async def list_supplier_contracts(
         q = q.where(SupplierContract.status == status)
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     items = (
-        await db.execute(q.order_by(SupplierContract.created_at.desc()).offset(offset).limit(limit))
-    ).scalars().all()
+        (
+            await db.execute(
+                q.order_by(SupplierContract.created_at.desc()).offset(offset).limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
     return SupplierContractListResponse(items=items, total=total, offset=offset, limit=limit)
 
 
@@ -308,8 +334,13 @@ async def create_supplier_contract(
     db.add(contract)
     await db.commit()
     await db.refresh(contract)
-    await log_action(db, action="procurement.create_contract", entity_type="supplier_contract",
-                     entity_id=contract.id, details={"supplier_id": str(payload.supplier_id)})
+    await log_action(
+        db,
+        action="procurement.create_contract",
+        entity_type="supplier_contract",
+        entity_id=contract.id,
+        details={"supplier_id": str(payload.supplier_id)},
+    )
     return contract
 
 

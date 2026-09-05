@@ -27,7 +27,7 @@ logger = structlog.get_logger()
 # Map ai-toolkit's ss_base_model_version to our catalog family. Matched by
 # substring (lowercased) so minor version suffixes still resolve.
 _BASE_VERSION_FAMILY = [
-    ("qwen", "qwen"),        # qwen_image, qwen_image_edit, qwen-image-edit-2511
+    ("qwen", "qwen"),  # qwen_image, qwen_image_edit, qwen-image-edit-2511
     ("flux2", "flux2"),
     ("flux.2", "flux2"),
     ("flux-2", "flux2"),
@@ -125,9 +125,12 @@ def check_compatibility(info: dict, base_family: str, config_rank: int) -> dict:
     level = "ok"
 
     if not info.get("ok"):
-        return {"level": "error", "compatible": False,
-                "reasons": [f"Не удалось прочитать файл: {info.get('error')}"],
-                "suggested_rank": None}
+        return {
+            "level": "error",
+            "compatible": False,
+            "reasons": [f"Не удалось прочитать файл: {info.get('error')}"],
+            "suggested_rank": None,
+        }
 
     fam = info.get("family")
     if fam == "unknown":
@@ -135,13 +138,15 @@ def check_compatibility(info: dict, base_family: str, config_rank: int) -> dict:
         reasons.append(
             "Не удалось определить базовую модель LoRA (нет метаданных "
             "ai-toolkit). Совместимость не подтверждена — дообучение может "
-            "упасть, если LoRA обучалась на другой модели.")
+            "упасть, если LoRA обучалась на другой модели."
+        )
     elif fam != base_family:
         level = "error"
         reasons.append(
             f"LoRA обучена для семейства «{fam}», а выбрана базовая модель "
             f"«{base_family}». Дообучение несовместимо — выберите базовую "
-            f"модель того же семейства.")
+            f"модель того же семейства."
+        )
 
     rank = info.get("rank")
     if rank and rank != config_rank:
@@ -149,10 +154,15 @@ def check_compatibility(info: dict, base_family: str, config_rank: int) -> dict:
             reasons.append(
                 f"Rank LoRA — {rank}; он будет использован автоматически "
                 f"(значение rank в форме, {config_rank}, игнорируется при "
-                "дообучении).")
+                "дообучении)."
+            )
 
     if level == "ok" and not reasons:
         reasons.append("Совместима: дообучение продолжит эту LoRA.")
 
-    return {"level": level, "compatible": level != "error",
-            "reasons": reasons, "suggested_rank": rank}
+    return {
+        "level": level,
+        "compatible": level != "error",
+        "reasons": reasons,
+        "suggested_rank": rank,
+    }

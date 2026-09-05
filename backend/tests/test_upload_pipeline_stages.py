@@ -24,7 +24,9 @@ EXPECTED_STEPS = [
 ]
 
 
-async def _ingest(client: AsyncClient, content: bytes = b"pipeline test pdf", name: str = "pipe.pdf") -> str:
+async def _ingest(
+    client: AsyncClient, content: bytes = b"pipeline test pdf", name: str = "pipe.pdf"
+) -> str:
     resp = await client.post(
         "/api/documents/ingest?auto_process=true",
         files={"file": (name, content, "application/pdf")},
@@ -39,9 +41,7 @@ async def _ingest(client: AsyncClient, content: bytes = b"pipeline test pdf", na
 
 
 @pytest.mark.asyncio
-async def test_pipeline_job_created_on_auto_process(
-    client: AsyncClient, db_session: AsyncSession
-):
+async def test_pipeline_job_created_on_auto_process(client: AsyncClient, db_session: AsyncSession):
     """auto_process=true must create a DocumentProcessingJob in 'queued' status."""
     import uuid
 
@@ -86,9 +86,7 @@ async def test_pipeline_job_not_created_when_auto_process_false(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_steps_all_present(
-    client: AsyncClient, db_session: AsyncSession
-):
+async def test_pipeline_steps_all_present(client: AsyncClient, db_session: AsyncSession):
     """DocumentProcessingJob.pipeline_steps must contain all 7 expected step keys."""
     import uuid
 
@@ -112,9 +110,7 @@ async def test_pipeline_steps_all_present(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_steps_have_status_field(
-    client: AsyncClient, db_session: AsyncSession
-):
+async def test_pipeline_steps_have_status_field(client: AsyncClient, db_session: AsyncSession):
     """Each pipeline step must have a 'status' field."""
     import uuid
 
@@ -142,9 +138,7 @@ async def test_pipeline_steps_have_status_field(
 
 
 @pytest.mark.asyncio
-async def test_extract_endpoint_creates_new_job(
-    client: AsyncClient, db_session: AsyncSession
-):
+async def test_extract_endpoint_creates_new_job(client: AsyncClient, db_session: AsyncSession):
     """POST /{doc_id}/extract must create a fresh pipeline job."""
     import uuid
 
@@ -204,10 +198,7 @@ async def test_workspace_includes_pipeline_steps(client: AsyncClient):
     assert data["total"] >= 1
 
     # Check at least one item has a pipeline field
-    items_with_pipeline = [
-        item for item in data["items"]
-        if item.get("pipeline") is not None
-    ]
+    items_with_pipeline = [item for item in data["items"] if item.get("pipeline") is not None]
     assert len(items_with_pipeline) >= 1, "At least one workspace item must have pipeline data"
 
 
@@ -233,6 +224,7 @@ async def test_ingest_response_contains_file_hash(client: AsyncClient):
 
     # Verify it matches the actual SHA-256 of the content
     import hashlib
+
     expected = hashlib.sha256(content).hexdigest()
     assert file_hash == expected
 

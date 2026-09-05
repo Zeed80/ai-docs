@@ -66,10 +66,7 @@ class CapabilityManifest(BaseModel):
 
     @property
     def gate_actions(self) -> dict[str, set[str]]:
-        return {
-            capability.name: set(capability.gate_actions)
-            for capability in self.capabilities
-        }
+        return {capability.name: set(capability.gate_actions) for capability in self.capabilities}
 
     @property
     def non_recipeable_actions(self) -> dict[str, set[str]]:

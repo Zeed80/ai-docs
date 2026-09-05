@@ -4,6 +4,7 @@ Scheduled by Celery beat:
   - evolve_failing_skills: every 2 hours — find and improve underperforming skills
   - evaluate_shadow_tests: every 30 min — check A/B results and promote/rollback
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,7 +32,7 @@ def evolve_failing_skills(self) -> None:  # type: ignore[override]
 
 
 async def _run_evolution() -> None:
-    from app.ai.skill_evolver import scan_underperforming_skills, evolve_skill
+    from app.ai.skill_evolver import evolve_skill, scan_underperforming_skills
 
     candidates = await scan_underperforming_skills()
     if not candidates:
@@ -64,5 +65,6 @@ def evaluate_shadow_tests(self) -> None:  # type: ignore[override]
 
 async def _run_evaluation() -> None:
     from app.ai.skill_evolver import evaluate_shadow_results
+
     await evaluate_shadow_results()
     logger.info("skill_shadow_evaluation_done")

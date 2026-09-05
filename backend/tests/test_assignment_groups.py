@@ -21,12 +21,15 @@ def stores(monkeypatch, tmp_path):
     monkeypatch.setattr(tr, "_redis_set", _routing_set)
 
     agent_store: dict = {}
-    monkeypatch.setattr(ac, "_redis_get_agent_config", lambda: dict(agent_store) if agent_store else None)
+    monkeypatch.setattr(
+        ac, "_redis_get_agent_config", lambda: dict(agent_store) if agent_store else None
+    )
     monkeypatch.setattr(ac, "_redis_set_agent_config", lambda data: agent_store.update(data))
     monkeypatch.setattr(ac, "_CONFIG_FILE", tmp_path / "agent_config.json")
 
     # Avoid touching the legacy ai_config file/redis from the mirror.
     import app.api.ai_settings as ai_settings
+
     cfg: dict = {}
     monkeypatch.setattr(ai_settings, "get_ai_config", lambda: dict(cfg))
     monkeypatch.setattr(ai_settings, "save_ai_config", lambda c: cfg.update(c))

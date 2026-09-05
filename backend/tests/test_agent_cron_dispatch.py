@@ -58,10 +58,12 @@ def test_is_due_runs_once_per_minute():
 async def cron_db(test_engine, monkeypatch):
     factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     import app.db.session as session_module
+
     monkeypatch.setattr(session_module, "_get_session_factory", lambda: factory)
     yield factory
     async with factory() as db:
         from sqlalchemy import delete
+
         await db.execute(delete(AgentTask))
         await db.execute(delete(AgentCron))
         await db.commit()
@@ -85,6 +87,7 @@ async def test_dispatch_runs_due_cron_and_records_task(cron_db, monkeypatch):
 
     async with cron_db() as db:
         from sqlalchemy import select
+
         tasks = list((await db.execute(select(AgentTask))).scalars().all())
         assert len(tasks) == 1
         assert tasks[0].status == "completed"
@@ -113,12 +116,14 @@ async def test_dispatch_records_failed_turn(cron_db, monkeypatch):
     assert executed == 1
     async with cron_db() as db:
         from sqlalchemy import select
+
         task = (await db.execute(select(AgentTask))).scalars().one()
         assert task.status == "failed"
 
 
 def test_beat_schedule_contains_dispatcher():
     from app.tasks.celery_app import celery_app
+
     entry = celery_app.conf.beat_schedule.get("agent-cron-dispatch")
     assert entry and entry["task"] == "agent.cron_dispatch"
     assert entry["schedule"] == 60.0

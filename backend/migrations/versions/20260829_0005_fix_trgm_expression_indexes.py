@@ -15,14 +15,15 @@ DROP, затем CREATE.
 Revision ID: 20260829_0005
 Revises: 20260829_0004
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "20260829_0005"
-down_revision: Union[str, None] = "20260829_0004"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260829_0004"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # (index, table, column) — the column exactly as the query filters on it.
 _REBUILD = (
@@ -39,9 +40,7 @@ def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
     for name, table, column in _REBUILD:
         op.execute(f"DROP INDEX IF EXISTS {name}")
-        op.execute(
-            f"CREATE INDEX {name} ON {table} USING gin ({column} gin_trgm_ops)"
-        )
+        op.execute(f"CREATE INDEX {name} ON {table} USING gin ({column} gin_trgm_ops)")
 
 
 def downgrade() -> None:
@@ -50,7 +49,4 @@ def downgrade() -> None:
         return
     for name, table, column in _REBUILD:
         op.execute(f"DROP INDEX IF EXISTS {name}")
-        op.execute(
-            f"CREATE INDEX {name} ON {table} "
-            f"USING gin (coalesce({column},'') gin_trgm_ops)"
-        )
+        op.execute(f"CREATE INDEX {name} ON {table} USING gin (coalesce({column},'') gin_trgm_ops)")

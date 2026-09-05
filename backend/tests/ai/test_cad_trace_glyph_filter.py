@@ -24,9 +24,9 @@ def test_drops_stroke_fully_inside_glyph_but_keeps_crossing_line():
     kept = _drop_in_glyph_segments([glyph_stroke, crossing_line, body_line], [label])
 
     kept_ids = {id(e) for e in kept}
-    assert id(glyph_stroke) not in kept_ids   # entirely inside the label box
-    assert id(crossing_line) in kept_ids       # extends beyond the box
-    assert id(body_line) in kept_ids           # far from any text
+    assert id(glyph_stroke) not in kept_ids  # entirely inside the label box
+    assert id(crossing_line) in kept_ids  # extends beyond the box
+    assert id(body_line) in kept_ids  # far from any text
 
 
 def test_no_text_keeps_everything():
@@ -44,5 +44,5 @@ def test_oversized_box_and_long_line_are_never_deleted():
 
     kept = _drop_in_glyph_segments([body, glyph], normal + [huge])
     kept_ids = {id(e) for e in kept}
-    assert id(body) in kept_ids       # long line survives (guarded box + length)
+    assert id(body) in kept_ids  # long line survives (guarded box + length)
     assert id(glyph) not in kept_ids  # a genuine short stroke is still removed

@@ -26,11 +26,11 @@ if _SENTRY_DSN:
     except ImportError:
         pass
 
-from app.middleware.csrf import CSRFMiddleware
-from app.middleware.rate_limit import RateLimitMiddleware
-from app.middleware.security import SecurityHeadersMiddleware
-from app.middleware.prometheus import PrometheusMiddleware
+from datetime import UTC
 
+import app.core.metrics  # noqa: F401 — registers Prometheus metrics at startup
+from app.api import admin as admin_api
+from app.api import admin_graph as admin_graph_api
 from app.api import (
     agent,
     agent_actions,
@@ -45,74 +45,81 @@ from app.api import (
     calendar,
     canonical,
     canvas,
+    cases,
     chat_sessions,
     collections,
-    comments as comments_api,
     compare,
     computer_use,
+    cooling_api,
     dashboard,
     documents,
     drawings,
+    dynamic_skill_runner,
     email,
     email_contacts,
     email_rules,
     email_templates,
-    inbox,
     engineering,
     engineering_graphs,
     export,
     graph,
+    handovers,
     health,
+    inbox,
     invoices,
+    local_models_api,
     mailbox,
     memory,
     normalization,
+    notifications,
     ntd,
     oauth,
     payments,
     procurement,
+    providers_api,
     quarantine,
+    rooms,
     scenarios,
     search,
+    sheets,
+    spec_tables,
     suppliers,
     tables,
     technology,
     telegram,
-    catalogs as catalogs_api,
     tool_catalog,
-    cases,
     warehouse,
     web_search,
     work_orders,
     workspace,
     workspace_export,
-    spec_tables,
-    sheets,
 )
-from app.api import admin as admin_api
-from app.api import devices as devices_api
-from app.api import mobile_build as mobile_build_api
-from app.api import image_generation as image_generation_api
 from app.api import cad_sketch as cad_sketch_api
-from app.api import lora_training as lora_training_api
-from app.api import studio_queue as studio_queue_api
+from app.api import (
+    catalogs as catalogs_api,
+)
 from app.api import comfyui_admin as comfyui_admin_api
 from app.api import comfyui_proxy as comfyui_proxy_api
-from app.api import admin_graph as admin_graph_api
-from app.api import maintenance as maintenance_api
+from app.api import (
+    comments as comments_api,
+)
+from app.api import devices as devices_api
+from app.api import image_generation as image_generation_api
+from app.api import lora_training as lora_training_api
 from app.api import mail_deploy as mail_deploy_api
-from app.api import updates as updates_api
-from app.api import dynamic_skill_runner
-from app.api import handovers, notifications, rooms
+from app.api import maintenance as maintenance_api
+from app.api import mobile_build as mobile_build_api
 from app.api import setup as setup_api
+from app.api import studio_queue as studio_queue_api
+from app.api import updates as updates_api
 from app.api.capability_router import router as capability_router
-from app.api import cooling_api
-from app.api import local_models_api
-from app.api import providers_api
 from app.auth.jwt import get_current_user as _get_current_user
 from app.config import settings
 from app.db.session import engine  # lazy proxy
-import app.core.metrics  # noqa: F401 — registers Prometheus metrics at startup
+from app.middleware.csrf import CSRFMiddleware
+from app.middleware.prometheus import PrometheusMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.security import SecurityHeadersMiddleware
 
 structlog.configure(
     processors=[
@@ -152,6 +159,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             import app.db.models  # noqa: F401 — ensure all models are registered
             from app.db.base import Base
             from app.db.session import _get_engine
+
             async with _get_engine().begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             logger.info("auto_schema_created")
@@ -163,12 +171,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _idle_sweep_task: asyncio.Task | None = None
     try:
         from app.core.chat_bus import start_redis_subscriber
+
         _redis_sub_task = await start_redis_subscriber()
     except Exception as exc:
         logger.warning("chat_bus_redis_subscriber_start_failed", error=str(exc))
 
     try:
         from app.api.telegram import bot_manager
+
         err = await bot_manager.start()
         if err:
             logger.warning("telegram bot failed to start at startup", error=err)
@@ -178,6 +188,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from app.db.seeds.email_templates import seed_builtin_templates
         from app.db.session import _get_session_factory
+
         async with _get_session_factory()() as db:
             await seed_builtin_templates(db)
     except Exception as exc:
@@ -186,6 +197,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from app.db.seeds.comfyui_workflows import seed_builtin_workflows
         from app.db.session import _get_session_factory
+
         async with _get_session_factory()() as db:
             await seed_builtin_workflows(db)
     except Exception as exc:
@@ -202,6 +214,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             from app.auth.jwt import _DEV_USER
             from app.auth.user_service import upsert_user
             from app.db.session import _get_session_factory
+
             async with _get_session_factory()() as db:
                 await upsert_user(db, _DEV_USER)
                 await db.commit()
@@ -213,9 +226,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # unified task_routing store. Idempotent — no-op once routing exists.
     try:
         from app.ai.task_routing import migrate_from_ai_config
+
         result = migrate_from_ai_config()
         if result.get("migrated"):
-            logger.info("task_routing_migration_done", **{k: v for k, v in result.items() if k != "migrated"})
+            logger.info(
+                "task_routing_migration_done",
+                **{k: v for k, v in result.items() if k != "migrated"},
+            )
     except Exception as exc:
         logger.warning("task_routing_migration_failed", error=str(exc))
 
@@ -223,6 +240,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # обновлялось только при сохранении в GUI и поэтому дрейфовало годами.
     try:
         from app.ai.assignment_groups import reconcile_ai_config
+
         reconcile_ai_config()
     except Exception as exc:
         logger.warning("ai_config_reconcile_failed", error=str(exc))
@@ -230,9 +248,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Seed provider_instances from the YAML registry (one node per kind) on first
     # run, then refresh the Redis cache used by the AI router. Idempotent.
     try:
-        from app.ai.provider_bootstrap import seed_and_refresh_providers
         from app.ai.model_runtime_store import hydrate_runtime_cache
+        from app.ai.provider_bootstrap import seed_and_refresh_providers
         from app.db.session import _get_session_factory
+
         async with _get_session_factory()() as db:
             await seed_and_refresh_providers(db)
             await hydrate_runtime_cache(db)
@@ -243,6 +262,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # response; other models load on demand and free VRAM when idle.
     try:
         from app.ai.model_lifecycle import warm_pinned
+
         warmed = await warm_pinned()
         if warmed:
             logger.info("pinned_models_warmed", models=warmed)
@@ -276,16 +296,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     try:
         from app.api.health import ai_health
+
         result = await ai_health()
         for provider, status in result.get("providers", {}).items():
             if status.get("skipped"):
                 logger.info("ai_provider_skipped_no_key", provider=provider)
             elif status.get("ok"):
-                logger.info("ai_provider_healthy", provider=provider,
-                            latency_ms=status.get("latency_ms"))
+                logger.info(
+                    "ai_provider_healthy", provider=provider, latency_ms=status.get("latency_ms")
+                )
             else:
-                logger.warning("ai_provider_unreachable", provider=provider,
-                               error=status.get("error"), status=status.get("status"))
+                logger.warning(
+                    "ai_provider_unreachable",
+                    provider=provider,
+                    error=status.get("error"),
+                    status=status.get("status"),
+                )
     except Exception as exc:
         logger.warning("ai_provider_health_check_failed", error=str(exc))
 
@@ -307,12 +333,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     try:
         from app.api.telegram import bot_manager
+
         await bot_manager.stop()
     except Exception:
         pass
 
     try:
         from app.utils.redis_client import close_pools
+
         await close_pools()
     except Exception:
         pass
@@ -342,14 +370,22 @@ def create_app() -> FastAPI:
         allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Request-ID", "X-API-Key"],
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "X-CSRF-Token",
+            "X-Request-ID",
+            "X-API-Key",
+        ],
         expose_headers=["X-Request-ID"],
     )
 
     # Auth dependency applied to every protected router.
     # In dev mode (AUTH_ENABLED=false) it's a no-op that returns _DEV_USER.
     from fastapi import Depends as _Depends
+
     from app.auth.jwt import get_current_user as _get_current_user
+
     _auth = [_Depends(_get_current_user)]
 
     # ── Public routers (no auth required) ─────────────────────────────────────
@@ -359,27 +395,59 @@ def create_app() -> FastAPI:
     app.include_router(agent.router, tags=["agent"])
 
     # ── Protected routers ──────────────────────────────────────────────────────
-    app.include_router(documents.router, prefix="/api/documents", tags=["documents"], dependencies=_auth)
-    app.include_router(invoices.router, prefix="/api/invoices", tags=["invoices"], dependencies=_auth)
+    app.include_router(
+        documents.router, prefix="/api/documents", tags=["documents"], dependencies=_auth
+    )
+    app.include_router(
+        invoices.router, prefix="/api/invoices", tags=["invoices"], dependencies=_auth
+    )
     # These routers mount BEFORE email.router: it has a catch-all
     # GET /api/email/{email_id} that would otherwise shadow their paths.
-    app.include_router(email_rules.router, prefix="/api/email/rules", tags=["email"], dependencies=_auth)
-    app.include_router(email_contacts.router, prefix="/api/email/contacts", tags=["email"], dependencies=_auth)
+    app.include_router(
+        email_rules.router, prefix="/api/email/rules", tags=["email"], dependencies=_auth
+    )
+    app.include_router(
+        email_contacts.router, prefix="/api/email/contacts", tags=["email"], dependencies=_auth
+    )
     app.include_router(email.router, prefix="/api/email", tags=["email"], dependencies=_auth)
     app.include_router(inbox.router, prefix="/api/inbox", tags=["inbox"], dependencies=_auth)
-    app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"], dependencies=_auth)
+    app.include_router(
+        approvals.router, prefix="/api/approvals", tags=["approvals"], dependencies=_auth
+    )
     app.include_router(audit.router, prefix="/api/audit", tags=["audit"], dependencies=_auth)
-    app.include_router(auto_approval.router, prefix="/api/auto-approval-rules", tags=["auto-approval"], dependencies=_auth)
+    app.include_router(
+        auto_approval.router,
+        prefix="/api/auto-approval-rules",
+        tags=["auto-approval"],
+        dependencies=_auth,
+    )
     app.include_router(search.router, prefix="/api/search", tags=["search"], dependencies=_auth)
-    app.include_router(web_search.router, prefix="/api/web-search", tags=["web-search"], dependencies=_auth)
-    app.include_router(normalization.router, prefix="/api/normalization", tags=["normalization"], dependencies=_auth)
+    app.include_router(
+        web_search.router, prefix="/api/web-search", tags=["web-search"], dependencies=_auth
+    )
+    app.include_router(
+        normalization.router,
+        prefix="/api/normalization",
+        tags=["normalization"],
+        dependencies=_auth,
+    )
     app.include_router(tables.router, prefix="/api/tables", tags=["tables"], dependencies=_auth)
-    app.include_router(suppliers.router, prefix="/api/suppliers", tags=["suppliers"], dependencies=_auth)
-    app.include_router(canonical.router, prefix="/api/canonical", tags=["canonical"], dependencies=_auth)
-    app.include_router(collections.router, prefix="/api/collections", tags=["collections"], dependencies=_auth)
-    app.include_router(anomalies.router, prefix="/api/anomalies", tags=["anomalies"], dependencies=_auth)
+    app.include_router(
+        suppliers.router, prefix="/api/suppliers", tags=["suppliers"], dependencies=_auth
+    )
+    app.include_router(
+        canonical.router, prefix="/api/canonical", tags=["canonical"], dependencies=_auth
+    )
+    app.include_router(
+        collections.router, prefix="/api/collections", tags=["collections"], dependencies=_auth
+    )
+    app.include_router(
+        anomalies.router, prefix="/api/anomalies", tags=["anomalies"], dependencies=_auth
+    )
     app.include_router(compare.router, prefix="/api/compare", tags=["compare"], dependencies=_auth)
-    app.include_router(calendar.router, prefix="/api/calendar", tags=["calendar"], dependencies=_auth)
+    app.include_router(
+        calendar.router, prefix="/api/calendar", tags=["calendar"], dependencies=_auth
+    )
     app.include_router(
         agent_control_plane.router,
         prefix="/api/agent",
@@ -399,22 +467,45 @@ def create_app() -> FastAPI:
         dependencies=_auth,
     )
     app.include_router(ai_settings.router, prefix="/api/ai", tags=["ai"], dependencies=_auth)
-    app.include_router(local_models_api.router, prefix="/api/local-models", tags=["local-models"], dependencies=_auth)
-    app.include_router(cooling_api.router, prefix="/api/cooling", tags=["cooling"], dependencies=_auth)
-    app.include_router(providers_api.router, prefix="/api/providers", tags=["providers"], dependencies=_auth)
-    app.include_router(agent_actions.router, prefix="/api/agent-actions", tags=["agent"], dependencies=_auth)
+    app.include_router(
+        local_models_api.router,
+        prefix="/api/local-models",
+        tags=["local-models"],
+        dependencies=_auth,
+    )
+    app.include_router(
+        cooling_api.router, prefix="/api/cooling", tags=["cooling"], dependencies=_auth
+    )
+    app.include_router(
+        providers_api.router, prefix="/api/providers", tags=["providers"], dependencies=_auth
+    )
+    app.include_router(
+        agent_actions.router, prefix="/api/agent-actions", tags=["agent"], dependencies=_auth
+    )
     app.include_router(export.router, prefix="/api", tags=["export"], dependencies=_auth)
-    app.include_router(quarantine.router, prefix="/api/quarantine", tags=["quarantine"], dependencies=_auth)
-    app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"], dependencies=_auth)
-    app.include_router(warehouse.router, prefix="/api/warehouse", tags=["warehouse"], dependencies=_auth)
+    app.include_router(
+        quarantine.router, prefix="/api/quarantine", tags=["quarantine"], dependencies=_auth
+    )
+    app.include_router(
+        dashboard.router, prefix="/api/dashboard", tags=["dashboard"], dependencies=_auth
+    )
+    app.include_router(
+        warehouse.router, prefix="/api/warehouse", tags=["warehouse"], dependencies=_auth
+    )
     app.include_router(procurement.router, prefix="/api", tags=["procurement"], dependencies=_auth)
     app.include_router(payments.router, prefix="/api", tags=["payments"], dependencies=_auth)
     app.include_router(boms.router, prefix="/api", tags=["boms"], dependencies=_auth)
-    app.include_router(scenarios.router, prefix="/api/scenarios", tags=["agent"], dependencies=_auth)
+    app.include_router(
+        scenarios.router, prefix="/api/scenarios", tags=["agent"], dependencies=_auth
+    )
     app.include_router(graph.router, prefix="/api/graph", tags=["graph"], dependencies=_auth)
     app.include_router(memory.router, prefix="/api/memory", tags=["memory"], dependencies=_auth)
-    app.include_router(technology.router, prefix="/api/technology", tags=["technology"], dependencies=_auth)
-    app.include_router(engineering.router, prefix="/api/engineering", tags=["engineering"], dependencies=_auth)
+    app.include_router(
+        technology.router, prefix="/api/technology", tags=["technology"], dependencies=_auth
+    )
+    app.include_router(
+        engineering.router, prefix="/api/engineering", tags=["engineering"], dependencies=_auth
+    )
     app.include_router(
         engineering_graphs.router,
         prefix="/api/engineering-model-graphs",
@@ -422,12 +513,22 @@ def create_app() -> FastAPI:
         dependencies=_auth,
     )
     app.include_router(ntd.router, prefix="/api", tags=["ntd"], dependencies=_auth)
-    app.include_router(telegram.router, prefix="/api/telegram", tags=["telegram"], dependencies=_auth)
+    app.include_router(
+        telegram.router, prefix="/api/telegram", tags=["telegram"], dependencies=_auth
+    )
     app.include_router(canvas.router, prefix="/api/canvas", tags=["canvas"], dependencies=_auth)
-    app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
-    app.include_router(workspace_export.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
-    app.include_router(spec_tables.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
-    app.include_router(sheets.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
+    app.include_router(
+        workspace.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth
+    )
+    app.include_router(
+        workspace_export.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth
+    )
+    app.include_router(
+        spec_tables.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth
+    )
+    app.include_router(
+        sheets.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth
+    )
     app.include_router(mailbox.router, prefix="/api/mailbox", tags=["mailbox"], dependencies=_auth)
     app.include_router(oauth.router, prefix="/api/oauth", tags=["oauth"], dependencies=_auth)
     app.include_router(
@@ -436,36 +537,78 @@ def create_app() -> FastAPI:
         tags=["email-templates"],
         dependencies=_auth,
     )
-    app.include_router(drawings.router, prefix="/api/drawings", tags=["drawings"], dependencies=_auth)
-    app.include_router(tool_catalog.router, prefix="/api/tool-catalog", tags=["tool-catalog"], dependencies=_auth)
-    app.include_router(catalogs_api.router, prefix="/api/catalogs", tags=["catalogs"], dependencies=_auth)
+    app.include_router(
+        drawings.router, prefix="/api/drawings", tags=["drawings"], dependencies=_auth
+    )
+    app.include_router(
+        tool_catalog.router, prefix="/api/tool-catalog", tags=["tool-catalog"], dependencies=_auth
+    )
+    app.include_router(
+        catalogs_api.router, prefix="/api/catalogs", tags=["catalogs"], dependencies=_auth
+    )
     app.include_router(cases.router, tags=["cases"], dependencies=_auth)
     app.include_router(chat_sessions.router, prefix="/api/chat", tags=["chat"], dependencies=_auth)
     app.include_router(dynamic_skill_runner.router, tags=["agent-generated"], dependencies=_auth)
-    app.include_router(capability_router, prefix="/api/agent", tags=["capabilities"], dependencies=_auth)
+    app.include_router(
+        capability_router, prefix="/api/agent", tags=["capabilities"], dependencies=_auth
+    )
     app.include_router(admin_api.router, dependencies=_auth)
     app.include_router(maintenance_api.router, dependencies=_auth)
     app.include_router(updates_api.router, dependencies=_auth)
     app.include_router(mail_deploy_api.router, dependencies=_auth)
     app.include_router(admin_graph_api.router, dependencies=_auth)
     app.include_router(rooms.router, prefix="/api/rooms", tags=["rooms"], dependencies=_auth)
-    app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"], dependencies=_auth)
-    app.include_router(handovers.router, prefix="/api/handovers", tags=["handovers"], dependencies=_auth)
+    app.include_router(
+        notifications.router,
+        prefix="/api/notifications",
+        tags=["notifications"],
+        dependencies=_auth,
+    )
+    app.include_router(
+        handovers.router, prefix="/api/handovers", tags=["handovers"], dependencies=_auth
+    )
     app.include_router(setup_api.router, prefix="/api/setup", tags=["setup"], dependencies=_auth)
-    app.include_router(comments_api.router, prefix="/api/comments", tags=["comments"], dependencies=_auth)
-    app.include_router(devices_api.router, prefix="/api/devices", tags=["devices"], dependencies=_auth)
-    app.include_router(mobile_build_api.router, prefix="/api/mobile-build", tags=["mobile-build"], dependencies=_auth)
-    app.include_router(image_generation_api.router, prefix="/api/image-gen", tags=["image-studio"], dependencies=_auth)
-    app.include_router(cad_sketch_api.router, prefix="/api/cad-sketch", tags=["cad-sketch"], dependencies=_auth)
-    app.include_router(lora_training_api.router, prefix="/api/lora", tags=["lora-training"], dependencies=_auth)
-    app.include_router(studio_queue_api.router, prefix="/api/studio", tags=["image-studio"], dependencies=_auth)
-    app.include_router(comfyui_admin_api.router, prefix="/api/comfyui-admin", tags=["image-studio"], dependencies=_auth)
+    app.include_router(
+        comments_api.router, prefix="/api/comments", tags=["comments"], dependencies=_auth
+    )
+    app.include_router(
+        devices_api.router, prefix="/api/devices", tags=["devices"], dependencies=_auth
+    )
+    app.include_router(
+        mobile_build_api.router,
+        prefix="/api/mobile-build",
+        tags=["mobile-build"],
+        dependencies=_auth,
+    )
+    app.include_router(
+        image_generation_api.router,
+        prefix="/api/image-gen",
+        tags=["image-studio"],
+        dependencies=_auth,
+    )
+    app.include_router(
+        cad_sketch_api.router, prefix="/api/cad-sketch", tags=["cad-sketch"], dependencies=_auth
+    )
+    app.include_router(
+        lora_training_api.router, prefix="/api/lora", tags=["lora-training"], dependencies=_auth
+    )
+    app.include_router(
+        studio_queue_api.router, prefix="/api/studio", tags=["image-studio"], dependencies=_auth
+    )
+    app.include_router(
+        comfyui_admin_api.router,
+        prefix="/api/comfyui-admin",
+        tags=["image-studio"],
+        dependencies=_auth,
+    )
     # No router-level `dependencies=_auth` here: the proxy's own routes already
     # call `get_current_user` explicitly (HTTP route via Depends, WS route via
     # Depends too) — this avoids resolving the dependency twice per request
     # and keeps the module self-contained/testable without relying on how
     # it happens to be registered.
-    app.include_router(comfyui_proxy_api.router, prefix=comfyui_proxy_api.PROXY_MOUNT, tags=["image-studio"])
+    app.include_router(
+        comfyui_proxy_api.router, prefix=comfyui_proxy_api.PROXY_MOUNT, tags=["image-studio"]
+    )
 
     # ── Public mobile-app distribution (no auth) ──────────────────────────────
     # APK + version.json are served at /download; assetlinks.json for Android App Links.
@@ -508,16 +651,17 @@ async def _metrics_auth(request: Request) -> None:
     await _get_current_user(request)
 
 
-@app.get("/metrics", include_in_schema=False,
-         dependencies=[Depends(_metrics_auth)])
+@app.get("/metrics", include_in_schema=False, dependencies=[Depends(_metrics_auth)])
 async def metrics_endpoint():
     """Prometheus metrics endpoint."""
     try:
-        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
         from fastapi.responses import Response as _Response
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
         return _Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
     except ImportError:
         from fastapi.responses import PlainTextResponse
+
         return PlainTextResponse("# prometheus_client not installed\n")
 
 
@@ -559,9 +703,7 @@ async def get_task_status(task_id: str) -> dict:
         # frontend pollers reading task.result.error see the same thing
         # either way.
         response["result"] = (
-            {"error": str(raw_result)}
-            if isinstance(raw_result, BaseException)
-            else raw_result
+            {"error": str(raw_result)} if isinstance(raw_result, BaseException) else raw_result
         )
     return response
 
@@ -569,13 +711,24 @@ async def get_task_status(task_id: str) -> dict:
 @app.get("/api/metrics")
 async def get_metrics() -> dict:
     """System metrics: queue depth, document counts, approval wait times, workspace."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime
+
     from sqlalchemy import func, select
+
+    from app.db.models import (
+        AnomalyCard,
+        AnomalyStatus,
+        Approval,
+        ApprovalStatus,
+        Document,
+        DocumentStatus,
+        Invoice,
+        InvoiceStatus,
+    )
     from app.db.session import _get_session_factory
-    from app.db.models import Document, Invoice, Approval, AnomalyCard, DocumentStatus, InvoiceStatus, ApprovalStatus, AnomalyStatus
 
     metrics: dict = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "documents": {},
         "invoices": {},
         "approvals": {},
@@ -589,14 +742,14 @@ async def get_metrics() -> dict:
             # Documents
             doc_total = await db.scalar(select(func.count()).select_from(Document))
             doc_processing = await db.scalar(
-                select(func.count()).select_from(Document).where(
-                    Document.status.in_([DocumentStatus.extracting, DocumentStatus.classifying])
-                )
+                select(func.count())
+                .select_from(Document)
+                .where(Document.status.in_([DocumentStatus.extracting, DocumentStatus.classifying]))
             )
             doc_needs_review = await db.scalar(
-                select(func.count()).select_from(Document).where(
-                    Document.status == DocumentStatus.needs_review
-                )
+                select(func.count())
+                .select_from(Document)
+                .where(Document.status == DocumentStatus.needs_review)
             )
             metrics["documents"] = {
                 "total": doc_total or 0,
@@ -606,21 +759,23 @@ async def get_metrics() -> dict:
 
             # Invoices
             inv_needs_review = await db.scalar(
-                select(func.count()).select_from(Invoice).where(
-                    Invoice.status == InvoiceStatus.needs_review
-                )
+                select(func.count())
+                .select_from(Invoice)
+                .where(Invoice.status == InvoiceStatus.needs_review)
             )
             metrics["invoices"] = {"needs_review": inv_needs_review or 0}
 
             # Approvals — pending + avg wait time
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             pending_approvals = await db.scalar(
-                select(func.count()).select_from(Approval).where(
-                    Approval.status == ApprovalStatus.pending
-                )
+                select(func.count())
+                .select_from(Approval)
+                .where(Approval.status == ApprovalStatus.pending)
             )
             overdue_approvals = await db.scalar(
-                select(func.count()).select_from(Approval).where(
+                select(func.count())
+                .select_from(Approval)
+                .where(
                     Approval.status == ApprovalStatus.pending,
                     Approval.expires_at != None,  # noqa: E711
                     Approval.expires_at < now,
@@ -633,9 +788,9 @@ async def get_metrics() -> dict:
 
             # Open anomalies
             open_anomalies = await db.scalar(
-                select(func.count()).select_from(AnomalyCard).where(
-                    AnomalyCard.status == AnomalyStatus.open
-                )
+                select(func.count())
+                .select_from(AnomalyCard)
+                .where(AnomalyCard.status == AnomalyStatus.open)
             )
             metrics["anomalies"] = {"open": open_anomalies or 0}
     except Exception as e:
@@ -644,6 +799,7 @@ async def get_metrics() -> dict:
     # Workspace blocks (Redis)
     try:
         from app.utils.redis_client import get_async_redis
+
         redis = get_async_redis()
         blocks = await redis.hgetall("workspace:blocks")
         metrics["workspace"]["block_count"] = len(blocks)
@@ -653,6 +809,7 @@ async def get_metrics() -> dict:
     # Celery queue depth
     try:
         from app.utils.redis_client import get_async_redis
+
         redis = get_async_redis()
         metrics["queue"]["ingest"] = await redis.llen("ingest") or 0
         metrics["queue"]["extraction"] = await redis.llen("extraction") or 0

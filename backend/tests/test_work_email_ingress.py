@@ -37,9 +37,7 @@ def test_is_agent_instruction_email_false_for_unrelated_subject():
     assert not is_agent_instruction_email(
         _FakeParsedEmail("m1", "a@b.test", "Счёт №42 от поставщика", "текст")
     )
-    assert not is_agent_instruction_email(
-        _FakeParsedEmail("m1", "a@b.test", "", "текст")
-    )
+    assert not is_agent_instruction_email(_FakeParsedEmail("m1", "a@b.test", "", "текст"))
 
 
 @pytest.mark.asyncio
@@ -62,9 +60,7 @@ async def test_create_work_order_from_email_builds_three_step_plan(db_session):
 
     steps = list(
         (
-            await db_session.execute(
-                select(WorkStep).where(WorkStep.work_order_id == order.id)
-            )
+            await db_session.execute(select(WorkStep).where(WorkStep.work_order_id == order.id))
         ).scalars()
     )
     by_key = {s.step_key: s for s in steps}

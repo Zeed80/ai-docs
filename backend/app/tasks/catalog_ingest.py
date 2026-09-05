@@ -240,13 +240,17 @@ async def _map_canonical_items(factory, doc_uuid) -> dict:
 
     async with factory() as db:
         entries = (
-            await db.execute(
-                select(ToolCatalogEntry).where(
-                    ToolCatalogEntry.source_document_id == doc_uuid,
-                    ToolCatalogEntry.is_active.is_(True),
+            (
+                await db.execute(
+                    select(ToolCatalogEntry).where(
+                        ToolCatalogEntry.source_document_id == doc_uuid,
+                        ToolCatalogEntry.is_active.is_(True),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if not entries:
             return {"mapped": 0, "for_review": 0, "prices_recorded": 0}
 

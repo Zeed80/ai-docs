@@ -32,8 +32,18 @@ def upgrade() -> None:
         op.create_table(
             "lora_datasets",
             sa.Column("id", GUID(), primary_key=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
             sa.Column("owner_sub", sa.String(255), nullable=True, index=True),
             sa.Column("name", sa.String(200), nullable=False),
             sa.Column(
@@ -56,8 +66,18 @@ def upgrade() -> None:
         op.create_table(
             "lora_training_runs",
             sa.Column("id", GUID(), primary_key=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
             sa.Column("owner_sub", sa.String(255), nullable=True, index=True),
             sa.Column(
                 "dataset_id",
@@ -70,8 +90,13 @@ def upgrade() -> None:
             sa.Column(
                 "status",
                 sa.Enum(
-                    "pending_approval", "queued", "running", "stopping",
-                    "done", "failed", "cancelled",
+                    "pending_approval",
+                    "queued",
+                    "running",
+                    "stopping",
+                    "done",
+                    "failed",
+                    "cancelled",
                     name="lorarunstatus",
                 ),
                 nullable=False,

@@ -24,8 +24,8 @@ import io
 import math
 from typing import Literal
 
-import svgwrite
 import structlog
+import svgwrite
 from pydantic import BaseModel, Field
 
 from app.ai import techdraw_reference as tdref
@@ -36,39 +36,39 @@ logger = structlog.get_logger()
 
 
 class TitleBlock(BaseModel):
-    name: str = "Деталь"            # наименование
-    designation: str = ""           # обозначение (децимальный номер)
-    material: str = ""              # материал
-    scale: str = ""                # масштаб (auto if empty)
-    mass_kg: float | None = None    # масса, кг
-    developer: str = ""            # разработал
-    checked_by: str = ""           # проверил
-    norm_checked_by: str = ""      # нормоконтроль
-    approved_by: str = ""          # утвердил
-    date: str = ""                 # дата
-    litera: str = ""               # литера (У, О1, ...)
+    name: str = "Деталь"  # наименование
+    designation: str = ""  # обозначение (децимальный номер)
+    material: str = ""  # материал
+    scale: str = ""  # масштаб (auto if empty)
+    mass_kg: float | None = None  # масса, кг
+    developer: str = ""  # разработал
+    checked_by: str = ""  # проверил
+    norm_checked_by: str = ""  # нормоконтроль
+    approved_by: str = ""  # утвердил
+    date: str = ""  # дата
+    litera: str = ""  # литера (У, О1, ...)
     sheet_no: int = 1
     sheet_count: int = 1
     sheet_format: Literal["A4", "A3", "A2", "auto"] = "auto"
     company: str = "AI-DOCS"
-    show_frame: bool = False       # ГОСТ 2.301 рамка листа + штамп формы 1 (2.104).
-                                    # По умолчанию выключено: студия/агент отдают
-                                    # только сам чертёж (вид+размеры+допуски+Ra —
-                                    # то, что реально определяет ЕСКД-соответствие
-                                    # содержания), без административного оформления
-                                    # листа. Явно включить (show_frame=True) — для
-                                    # печати на утверждённом бланке предприятия.
+    show_frame: bool = False  # ГОСТ 2.301 рамка листа + штамп формы 1 (2.104).
+    # По умолчанию выключено: студия/агент отдают
+    # только сам чертёж (вид+размеры+допуски+Ra —
+    # то, что реально определяет ЕСКД-соответствие
+    # содержания), без административного оформления
+    # листа. Явно включить (show_frame=True) — для
+    # печати на утверждённом бланке предприятия.
 
 
 class ShaftSegment(BaseModel):
-    diameter: float                 # Ø, мм
-    length: float                   # длина ступени, мм
-    tolerance: str = ""            # квалитет/посадка, напр. "h6", "k6", "H7"
+    diameter: float  # Ø, мм
+    length: float  # длина ступени, мм
+    tolerance: str = ""  # квалитет/посадка, напр. "h6", "k6", "H7"
     roughness: float | None = None  # Ra, мкм
-    chamfer: float = 0.0           # фаска, мм (45°)
-    thread: str = ""               # резьба, напр. "M20×1.5"
-    bore_diameter: float = 0.0     # внутренняя расточка, мм (0 = сплошной)
-    section_hatch: bool = False    # показать этот сегмент в разрезе
+    chamfer: float = 0.0  # фаска, мм (45°)
+    thread: str = ""  # резьба, напр. "M20×1.5"
+    bore_diameter: float = 0.0  # внутренняя расточка, мм (0 = сплошной)
+    section_hatch: bool = False  # показать этот сегмент в разрезе
     thread_end_view: bool = False  # добавить торцевой вид резьбы (¾ окружности)
 
 
@@ -79,23 +79,23 @@ class ShaftSpec(BaseModel):
 
 
 class Hole(BaseModel):
-    x: float                        # позиция от центра, мм
+    x: float  # позиция от центра, мм
     y: float
-    diameter: float                 # Ø, мм
-    tolerance: str = ""            # напр. "H7"
+    diameter: float  # Ø, мм
+    tolerance: str = ""  # напр. "H7"
     counterbore: float = 0.0
 
 
 class PlateSpec(BaseModel):
     type: Literal["plate"] = "plate"
     shape: Literal["rect", "circle"] = "rect"
-    width: float = 100.0            # для rect
-    height: float = 80.0           # для rect
-    diameter: float = 100.0        # для circle
+    width: float = 100.0  # для rect
+    height: float = 80.0  # для rect
+    diameter: float = 100.0  # для circle
     thickness: float = 10.0
     thickness_tol: str = ""
     holes: list[Hole] = Field(default_factory=list)
-    bolt_circle_d: float = 0.0     # делительная окружность, мм (0 = нет)
+    bolt_circle_d: float = 0.0  # делительная окружность, мм (0 = нет)
     bolt_circle_n: int = 0
     bolt_hole_d: float = 0.0
     bolt_hole_tol: str = ""
@@ -104,9 +104,9 @@ class PlateSpec(BaseModel):
 
 
 class ComponentPlacement(BaseModel):
-    ref: str = "1"                  # позиция в спецификации ("поз.1")
-    spec: dict                       # вложенный ShaftSpec|PlateSpec как dict
-    x: float = 0.0                   # мм, центр компонента на листе сборки
+    ref: str = "1"  # позиция в спецификации ("поз.1")
+    spec: dict  # вложенный ShaftSpec|PlateSpec как dict
+    x: float = 0.0  # мм, центр компонента на листе сборки
     y: float = 0.0
     qty: int = 1
 
@@ -129,14 +129,28 @@ class AssemblySpec(BaseModel):
 
 # ── Render constants ─────────────────────────────────────────────────────────
 
-PX = 3.78                            # px per mm at 96 dpi (1 mm ≈ 3.78 px)
+PX = 3.78  # px per mm at 96 dpi (1 mm ≈ 3.78 px)
 MARGIN = 12
 TB_W, TB_H = tdref.TITLE_BLOCK_W_MM, tdref.TITLE_BLOCK_H_MM  # ГОСТ 2.104 form 1
 LINE = "#111"
 THIN = 0.35
 THICK = 0.7
-_STD_SCALES = [(100, 1), (50, 1), (20, 1), (10, 1), (5, 1), (2, 1), (1, 1),
-               (1, 2), (1, 2.5), (1, 4), (1, 5), (1, 10), (1, 20), (1, 50)]
+_STD_SCALES = [
+    (100, 1),
+    (50, 1),
+    (20, 1),
+    (10, 1),
+    (5, 1),
+    (2, 1),
+    (1, 1),
+    (1, 2),
+    (1, 2.5),
+    (1, 4),
+    (1, 5),
+    (1, 10),
+    (1, 20),
+    (1, 50),
+]
 
 
 def _sheet_for(title: TitleBlock, extent_mm: float) -> tdref.SheetFormat:
@@ -150,12 +164,21 @@ def _new_sheet(fmt: tdref.SheetFormat, frame: bool = False):
     border — callers doing so must also skip ``_title_block`` and should call
     ``_autocrop_png`` on the rendered PNG so the result isn't a mostly-blank
     sheet-sized canvas."""
-    dwg = svgwrite.Drawing(size=(f"{fmt.width_mm*PX}px", f"{fmt.height_mm*PX}px"),
-                           viewBox=f"0 0 {fmt.width_mm} {fmt.height_mm}")
+    dwg = svgwrite.Drawing(
+        size=(f"{fmt.width_mm * PX}px", f"{fmt.height_mm * PX}px"),
+        viewBox=f"0 0 {fmt.width_mm} {fmt.height_mm}",
+    )
     dwg.add(dwg.rect((0, 0), (fmt.width_mm, fmt.height_mm), fill="white"))
     if frame:
-        dwg.add(dwg.rect((20, 5), (fmt.width_mm - 25, fmt.height_mm - 10), fill="none",
-                         stroke=LINE, stroke_width=THICK))
+        dwg.add(
+            dwg.rect(
+                (20, 5),
+                (fmt.width_mm - 25, fmt.height_mm - 10),
+                fill="none",
+                stroke=LINE,
+                stroke_width=THICK,
+            )
+        )
     g = dwg.g()
     return dwg, g
 
@@ -179,7 +202,7 @@ def _pick_scale(extent_mm: float, avail_mm: float) -> tuple[float, str]:
     for num, den in _STD_SCALES:
         f = num / den
         if extent_mm * f <= avail_mm:
-            label = f"{int(num) if num==int(num) else num}:{int(den) if den==int(den) else den}"
+            label = f"{int(num) if num == int(num) else num}:{int(den) if den == int(den) else den}"
             return f, label
     return 1 / 100, "1:100"
 
@@ -191,21 +214,24 @@ def _arrow(dwg, g, x, y, ang):
     ux, uy = math.cos(ang), math.sin(ang)
     px, py = -uy, ux
     base_x, base_y = x - length * ux, y - length * uy
-    g.add(dwg.polygon(
-        [
-            (x, y),
-            (base_x + half_w * px, base_y + half_w * py),
-            (base_x - half_w * px, base_y - half_w * py),
-        ],
-        fill=LINE,
-        stroke=LINE,
-        stroke_width=0.15,
-    ))
+    g.add(
+        dwg.polygon(
+            [
+                (x, y),
+                (base_x + half_w * px, base_y + half_w * py),
+                (base_x - half_w * px, base_y - half_w * py),
+            ],
+            fill=LINE,
+            stroke=LINE,
+            stroke_width=0.15,
+        )
+    )
 
 
 def _txt(dwg, g, x, y, s, size=3.0, anchor="middle", rot=0):
-    t = dwg.text(s, insert=(x, y), font_size=f"{size}", font_family="Arial",
-                 fill=LINE, text_anchor=anchor)
+    t = dwg.text(
+        s, insert=(x, y), font_size=f"{size}", font_family="Arial", fill=LINE, text_anchor=anchor
+    )
     if rot:
         t.rotate(rot, center=(x, y))
     g.add(t)
@@ -226,8 +252,9 @@ def _roughness_symbol(dwg, g, x, y, ra: float):
     _txt(dwg, g, x + 11.5, y - 14.0, f"Ra {ra:g}", size=2.6)
 
 
-def _hatch_rect(dwg, g, x0: float, y0: float, x1: float, y1: float,
-                 pitch: float = 2.5, angle_deg: float = 45.0):
+def _hatch_rect(
+    dwg, g, x0: float, y0: float, x1: float, y1: float, pitch: float = 2.5, angle_deg: float = 45.0
+):
     """Fill an axis-aligned rect with parallel 45°/-45° lines (ГОСТ 2.306)."""
     if x1 <= x0 or y1 <= y0 or pitch <= 0:
         return
@@ -255,8 +282,14 @@ def _thread_end_view(dwg, g, cx: float, cy: float, major_r: float, minor_r: floa
     a0, a1 = math.radians(-75), math.radians(195)
     x0p, y0p = cx + minor_r * math.cos(a0), cy + minor_r * math.sin(a0)
     x1p, y1p = cx + minor_r * math.cos(a1), cy + minor_r * math.sin(a1)
-    g.add(dwg.path(d=f"M {x0p} {y0p} A {minor_r} {minor_r} 0 1 1 {x1p} {y1p}",
-                   fill="none", stroke=LINE, stroke_width=THIN))
+    g.add(
+        dwg.path(
+            d=f"M {x0p} {y0p} A {minor_r} {minor_r} 0 1 1 {x1p} {y1p}",
+            fill="none",
+            stroke=LINE,
+            stroke_width=THIN,
+        )
+    )
 
 
 DIA = "Ø"  # U+00D8 — widely-supported diameter sign (⌀ U+2300 lacks font coverage)
@@ -271,8 +304,9 @@ def _dim_label(nominal: float, tol: str, prefix: str = "") -> str:
 # ── Shaft ────────────────────────────────────────────────────────────────────
 
 
-def _draw_shaft(dwg, g, spec: ShaftSpec, cx0: float, cy: float, sf: float,
-                 mode: str = "front") -> float:
+def _draw_shaft(
+    dwg, g, spec: ShaftSpec, cx0: float, cy: float, sf: float, mode: str = "front"
+) -> float:
     """Draw shaft geometry at a given origin/scale. Returns the right-edge x."""
     max_d = max(s.diameter for s in spec.segments)
     rough_above_y = cy - (max_d * sf) / 2 - 16
@@ -288,8 +322,14 @@ def _draw_shaft(dwg, g, spec: ShaftSpec, cx0: float, cy: float, sf: float,
         bot = cy + h / 2
         if prev_h is None or abs(prev_h - h) > 1e-6:
             yh = (prev_h or h) / 2
-            g.add(dwg.line((x, cy - max(yh, h / 2)), (x, cy + max(yh, h / 2)),
-                           stroke=LINE, stroke_width=THICK))
+            g.add(
+                dwg.line(
+                    (x, cy - max(yh, h / 2)),
+                    (x, cy + max(yh, h / 2)),
+                    stroke=LINE,
+                    stroke_width=THICK,
+                )
+            )
         ch = seg.chamfer * sf
         g.add(dwg.line((x + ch, top), (x + w - ch, top), stroke=LINE, stroke_width=THICK))
         g.add(dwg.line((x + ch, bot), (x + w - ch, bot), stroke=LINE, stroke_width=THICK))
@@ -323,17 +363,32 @@ def _draw_shaft(dwg, g, spec: ShaftSpec, cx0: float, cy: float, sf: float,
                 lo = cy + bore_h / 2 if bore_h > 0 else cy
                 _hatch_rect(dwg, g, x + ch, lo, x + w - ch, bot, pitch)
             if bore_h > 0:
-                g.add(dwg.line((x, cy - bore_h / 2), (x + w, cy - bore_h / 2),
-                               stroke=LINE, stroke_width=THIN))
-                g.add(dwg.line((x, cy + bore_h / 2), (x + w, cy + bore_h / 2),
-                               stroke=LINE, stroke_width=THIN))
+                g.add(
+                    dwg.line(
+                        (x, cy - bore_h / 2),
+                        (x + w, cy - bore_h / 2),
+                        stroke=LINE,
+                        stroke_width=THIN,
+                    )
+                )
+                g.add(
+                    dwg.line(
+                        (x, cy + bore_h / 2),
+                        (x + w, cy + bore_h / 2),
+                        stroke=LINE,
+                        stroke_width=THIN,
+                    )
+                )
         prev_h = h
         x += w
     g.add(dwg.line((x, cy - prev_h / 2), (x, cy + prev_h / 2), stroke=LINE, stroke_width=THICK))
 
     # centerline (dash-dot)
-    g.add(dwg.line((cx0 - 6, cy), (x + 6, cy), stroke=LINE,
-                   stroke_width=THIN, stroke_dasharray="8,2,1,2"))
+    g.add(
+        dwg.line(
+            (cx0 - 6, cy), (x + 6, cy), stroke=LINE, stroke_width=THIN, stroke_dasharray="8,2,1,2"
+        )
+    )
 
     # diameter callouts (stacked above) + roughness
     xi = cx0
@@ -355,8 +410,9 @@ def _draw_shaft(dwg, g, spec: ShaftSpec, cx0: float, cy: float, sf: float,
             t = tdref.parse_thread(seg.thread)
             if t:
                 evx, evy = x + 24, cy
-                _thread_end_view(dwg, g, evx, evy, (seg.diameter * sf) / 2,
-                                  tdref.minor_diameter_mm(t) * sf / 2)
+                _thread_end_view(
+                    dwg, g, evx, evy, (seg.diameter * sf) / 2, tdref.minor_diameter_mm(t) * sf / 2
+                )
                 end_view_drawn = True
         level += 1
         xi += w
@@ -408,37 +464,57 @@ def _render_shaft(spec: ShaftSpec, view: str = "front") -> str:
 # ── Plate / flange ───────────────────────────────────────────────────────────
 
 
-def _draw_plate(dwg, g, spec: PlateSpec, cx: float, cy: float, sf: float,
-                  mode: str = "front") -> None:
+def _draw_plate(
+    dwg, g, spec: PlateSpec, cx: float, cy: float, sf: float, mode: str = "front"
+) -> None:
     extent = spec.diameter if spec.shape == "circle" else max(spec.width, spec.height)
 
     def cm(px, py):  # center marks (dash-dot cross)
-        g.add(dwg.line((px - 5, py), (px + 5, py), stroke=LINE, stroke_width=THIN,
-                       stroke_dasharray="4,1,1,1"))
-        g.add(dwg.line((px, py - 5), (px, py + 5), stroke=LINE, stroke_width=THIN,
-                       stroke_dasharray="4,1,1,1"))
+        g.add(
+            dwg.line(
+                (px - 5, py),
+                (px + 5, py),
+                stroke=LINE,
+                stroke_width=THIN,
+                stroke_dasharray="4,1,1,1",
+            )
+        )
+        g.add(
+            dwg.line(
+                (px, py - 5),
+                (px, py + 5),
+                stroke=LINE,
+                stroke_width=THIN,
+                stroke_dasharray="4,1,1,1",
+            )
+        )
 
     if spec.shape == "circle":
         r = spec.diameter * sf / 2
         g.add(dwg.circle((cx, cy), r, fill="none", stroke=LINE, stroke_width=THICK))
         cm(cx, cy)
-        g.add(dwg.line((cx - r, cy + r + 10), (cx + r, cy + r + 10), stroke=LINE, stroke_width=THIN))
+        g.add(
+            dwg.line((cx - r, cy + r + 10), (cx + r, cy + r + 10), stroke=LINE, stroke_width=THIN)
+        )
         _arrow(dwg, g, cx - r, cy + r + 10, 0)
         _arrow(dwg, g, cx + r, cy + r + 10, math.pi)
         _txt(dwg, g, cx, cy + r + 8.5, _dim_label(spec.diameter, "", "⌀"), size=3.2)
     else:
         w = spec.width * sf
         h = spec.height * sf
-        g.add(dwg.rect((cx - w / 2, cy - h / 2), (w, h), fill="none",
-                       stroke=LINE, stroke_width=THICK))
+        g.add(
+            dwg.rect((cx - w / 2, cy - h / 2), (w, h), fill="none", stroke=LINE, stroke_width=THICK)
+        )
         cm(cx, cy)
         dy = cy + h / 2 + 12
         g.add(dwg.line((cx - w / 2, dy), (cx + w / 2, dy), stroke=LINE, stroke_width=THIN))
-        _arrow(dwg, g, cx - w / 2, dy, 0); _arrow(dwg, g, cx + w / 2, dy, math.pi)
+        _arrow(dwg, g, cx - w / 2, dy, 0)
+        _arrow(dwg, g, cx + w / 2, dy, math.pi)
         _txt(dwg, g, cx, dy - 1.5, f"{spec.width:g}", size=3.2)
         dx = cx + w / 2 + 12
         g.add(dwg.line((dx, cy - h / 2), (dx, cy + h / 2), stroke=LINE, stroke_width=THIN))
-        _arrow(dwg, g, dx, cy - h / 2, math.pi / 2); _arrow(dwg, g, dx, cy + h / 2, -math.pi / 2)
+        _arrow(dwg, g, dx, cy - h / 2, math.pi / 2)
+        _arrow(dwg, g, dx, cy + h / 2, -math.pi / 2)
         _txt(dwg, g, dx + 4, cy, f"{spec.height:g}", size=3.2, rot=90)
 
     for hole in spec.holes:
@@ -447,15 +523,36 @@ def _draw_plate(dwg, g, spec: PlateSpec, cx: float, cy: float, sf: float,
         hr = hole.diameter * sf / 2
         g.add(dwg.circle((hx, hy), hr, fill="none", stroke=LINE, stroke_width=THICK))
         cm(hx, hy)
-        g.add(dwg.line((hx + hr * 0.7, hy - hr * 0.7), (hx + hr + 8, hy - hr - 8),
-                       stroke=LINE, stroke_width=THIN))
-        _txt(dwg, g, hx + hr + 16, hy - hr - 9, _dim_label(hole.diameter, hole.tolerance, "⌀"),
-             size=2.8, anchor="middle")
+        g.add(
+            dwg.line(
+                (hx + hr * 0.7, hy - hr * 0.7),
+                (hx + hr + 8, hy - hr - 8),
+                stroke=LINE,
+                stroke_width=THIN,
+            )
+        )
+        _txt(
+            dwg,
+            g,
+            hx + hr + 16,
+            hy - hr - 9,
+            _dim_label(hole.diameter, hole.tolerance, "⌀"),
+            size=2.8,
+            anchor="middle",
+        )
 
     if spec.bolt_circle_d > 0 and spec.bolt_circle_n > 0:
         bcr = spec.bolt_circle_d * sf / 2
-        g.add(dwg.circle((cx, cy), bcr, fill="none", stroke=LINE, stroke_width=THIN,
-                         stroke_dasharray="6,2,1,2"))
+        g.add(
+            dwg.circle(
+                (cx, cy),
+                bcr,
+                fill="none",
+                stroke=LINE,
+                stroke_width=THIN,
+                stroke_dasharray="6,2,1,2",
+            )
+        )
         for i in range(spec.bolt_circle_n):
             ang = 2 * math.pi * i / spec.bolt_circle_n - math.pi / 2
             hx = cx + bcr * math.cos(ang)
@@ -463,9 +560,14 @@ def _draw_plate(dwg, g, spec: PlateSpec, cx: float, cy: float, sf: float,
             hr = spec.bolt_hole_d * sf / 2
             g.add(dwg.circle((hx, hy), max(hr, 1.2), fill="none", stroke=LINE, stroke_width=THICK))
             cm(hx, hy)
-        _txt(dwg, g, cx, cy - bcr - 4,
-             f"{spec.bolt_circle_n}×{_dim_label(spec.bolt_hole_d, spec.bolt_hole_tol, '⌀')}",
-             size=2.8)
+        _txt(
+            dwg,
+            g,
+            cx,
+            cy - bcr - 4,
+            f"{spec.bolt_circle_n}×{_dim_label(spec.bolt_hole_d, spec.bolt_hole_tol, '⌀')}",
+            size=2.8,
+        )
         lx, ly = cx - bcr * 0.71, cy + bcr * 0.71
         _txt(dwg, g, lx - 10, ly + 6, _dim_label(spec.bolt_circle_d, "", "⌀"), size=2.8)
 
@@ -482,12 +584,31 @@ def _draw_plate(dwg, g, spec: PlateSpec, cx: float, cy: float, sf: float,
             gap = central_hole.diameter * sf
             _hatch_rect(dwg, g, sv_x, cy - sh / 2, sv_x + th, cy - gap / 2, pitch)
             _hatch_rect(dwg, g, sv_x, cy + gap / 2, sv_x + th, cy + sh / 2, pitch)
-            g.add(dwg.line((sv_x, cy - gap / 2), (sv_x + th, cy - gap / 2), stroke=LINE, stroke_width=THIN))
-            g.add(dwg.line((sv_x, cy + gap / 2), (sv_x + th, cy + gap / 2), stroke=LINE, stroke_width=THIN))
+            g.add(
+                dwg.line(
+                    (sv_x, cy - gap / 2), (sv_x + th, cy - gap / 2), stroke=LINE, stroke_width=THIN
+                )
+            )
+            g.add(
+                dwg.line(
+                    (sv_x, cy + gap / 2), (sv_x + th, cy + gap / 2), stroke=LINE, stroke_width=THIN
+                )
+            )
         else:
             _hatch_rect(dwg, g, sv_x, cy - sh / 2, sv_x + th, cy + sh / 2, pitch)
-    g.add(dwg.line((sv_x, cy + sh / 2 + 8), (sv_x + th, cy + sh / 2 + 8), stroke=LINE, stroke_width=THIN))
-    _txt(dwg, g, sv_x + th / 2, cy + sh / 2 + 6.5, _dim_label(spec.thickness, spec.thickness_tol), size=2.8)
+    g.add(
+        dwg.line(
+            (sv_x, cy + sh / 2 + 8), (sv_x + th, cy + sh / 2 + 8), stroke=LINE, stroke_width=THIN
+        )
+    )
+    _txt(
+        dwg,
+        g,
+        sv_x + th / 2,
+        cy + sh / 2 + 6.5,
+        _dim_label(spec.thickness, spec.thickness_tol),
+        size=2.8,
+    )
 
     if spec.roughness is not None:
         _roughness_symbol(dwg, g, sv_x - 30, cy - sh / 2 - 10, spec.roughness)
@@ -595,8 +716,15 @@ def _bom_table(dwg, rows: list[BomRow], sheet: tdref.SheetFormat) -> None:
     cols = (10, 25, 45, 12, 18)  # Поз | Обозначение | Наименование | Кол | Материал
     headers = ("Поз.", "Обознач.", "Наименование", "Кол.", "Материал")
     w_total = sum(cols)
-    g.add(dwg.rect((x0, y0), (w_total, row_h * (len(shown) + 1)), fill="white",
-                   stroke=LINE, stroke_width=THIN))
+    g.add(
+        dwg.rect(
+            (x0, y0),
+            (w_total, row_h * (len(shown) + 1)),
+            fill="white",
+            stroke=LINE,
+            stroke_width=THIN,
+        )
+    )
     xc = x0
     for w, h in zip(cols, headers):
         _txt(dwg, g, xc + w / 2, y0 + row_h - 1.2, h, size=2.2)
@@ -610,16 +738,23 @@ def _bom_table(dwg, rows: list[BomRow], sheet: tdref.SheetFormat) -> None:
             _txt(dwg, g, xc + w / 2, yy + row_h - 1.2, (v or "")[:16], size=2.0)
             xc += w
     if len(rows) > _MAX_BOM_ROWS_ON_SHEET:
-        _txt(dwg, g, x0 + w_total / 2, y0 + row_h * (len(shown) + 1) + 3,
-             "см. полную спецификацию в DXF", size=2.0)
+        _txt(
+            dwg,
+            g,
+            x0 + w_total / 2,
+            y0 + row_h * (len(shown) + 1) + 3,
+            "см. полную спецификацию в DXF",
+            size=2.0,
+        )
     dwg.add(g)
 
 
 # ── ГОСТ title block (form 1) ─────────────────────────────────────────────────
 
 
-def _title_block(dwg, tb: TitleBlock, scale_label: str, default_kind: str,
-                   sheet: tdref.SheetFormat):
+def _title_block(
+    dwg, tb: TitleBlock, scale_label: str, default_kind: str, sheet: tdref.SheetFormat
+):
     x0 = sheet.width_mm - 25 - TB_W
     y0 = sheet.height_mm - 10 - TB_H
     g = dwg.g()
@@ -692,8 +827,14 @@ def _render_shaft_iso(spec: ShaftSpec) -> str:
         if i == 0 or ry > prev_ry:
             g.add(dwg.ellipse((x, cy), (rx, ry), fill="white", stroke=LINE, stroke_width=THIN))
         else:
-            g.add(dwg.path(d=f"M {x} {top} A {rx} {ry} 0 0 0 {x} {bot}",
-                           fill="none", stroke=LINE, stroke_width=THIN))
+            g.add(
+                dwg.path(
+                    d=f"M {x} {top} A {rx} {ry} 0 0 0 {x} {bot}",
+                    fill="none",
+                    stroke=LINE,
+                    stroke_width=THIN,
+                )
+            )
         g.add(dwg.ellipse((x + w, cy), (rx, ry), fill="white", stroke=LINE, stroke_width=THICK))
         for fr in (0.55, 0.72):
             yy = cy - ry + 2 * ry * fr
@@ -702,8 +843,7 @@ def _render_shaft_iso(spec: ShaftSpec) -> str:
         _txt(dwg, g, x + w / 2, top - 3, label, size=3.0)
         x += w
 
-    _txt(dwg, g, (cx0 + x) / 2, cy + max_d * sf / 2 + 12,
-         f"Изометрия · L={total_len:g}", size=3.0)
+    _txt(dwg, g, (cx0 + x) / 2, cy + max_d * sf / 2 + 12, f"Изометрия · L={total_len:g}", size=3.0)
     if show_frame:
         dwg.add(g)
         _title_block(dwg, spec.title, scale_label, "вал", sheet)
@@ -727,24 +867,60 @@ def _render_plate_iso(spec: PlateSpec) -> str:
     if spec.shape == "circle":
         r = spec.diameter * sf / 2
         g.add(dwg.ellipse((cx, cy), (r, r * 0.55), fill="white", stroke=LINE, stroke_width=THICK))
-        g.add(dwg.ellipse((cx + dxv, cy + dyv), (r, r * 0.55), fill="none",
-                          stroke=LINE, stroke_width=THIN))
+        g.add(
+            dwg.ellipse(
+                (cx + dxv, cy + dyv), (r, r * 0.55), fill="none", stroke=LINE, stroke_width=THIN
+            )
+        )
         g.add(dwg.line((cx - r, cy), (cx - r + dxv, cy + dyv), stroke=LINE, stroke_width=THICK))
         g.add(dwg.line((cx + r, cy), (cx + r + dxv, cy + dyv), stroke=LINE, stroke_width=THICK))
         if spec.holes:
             hr = spec.holes[0].diameter * sf / 2
-            g.add(dwg.ellipse((cx, cy), (hr, hr * 0.55), fill="white", stroke=LINE, stroke_width=THIN))
+            g.add(
+                dwg.ellipse((cx, cy), (hr, hr * 0.55), fill="white", stroke=LINE, stroke_width=THIN)
+            )
         _txt(dwg, g, cx, cy + r * 0.55 + 10, _dim_label(spec.diameter, "", "⌀"), size=3.2)
     else:
         w, h = spec.width * sf, spec.height * sf * 0.6
-        g.add(dwg.rect((cx - w / 2, cy - h / 2), (w, h), fill="white", stroke=LINE, stroke_width=THICK))
-        g.add(dwg.polygon([(cx - w / 2, cy - h / 2), (cx - w / 2 + dxv, cy - h / 2 + dyv),
-                           (cx + w / 2 + dxv, cy - h / 2 + dyv), (cx + w / 2, cy - h / 2)],
-                          fill="#f4f4f4", stroke=LINE, stroke_width=THIN))
-        g.add(dwg.polygon([(cx + w / 2, cy - h / 2), (cx + w / 2 + dxv, cy - h / 2 + dyv),
-                           (cx + w / 2 + dxv, cy + h / 2 + dyv), (cx + w / 2, cy + h / 2)],
-                          fill="#e9e9e9", stroke=LINE, stroke_width=THIN))
-        _txt(dwg, g, cx, cy + h / 2 + 10, f"{spec.width:g}×{spec.height:g}×{spec.thickness:g}", size=3.0)
+        g.add(
+            dwg.rect(
+                (cx - w / 2, cy - h / 2), (w, h), fill="white", stroke=LINE, stroke_width=THICK
+            )
+        )
+        g.add(
+            dwg.polygon(
+                [
+                    (cx - w / 2, cy - h / 2),
+                    (cx - w / 2 + dxv, cy - h / 2 + dyv),
+                    (cx + w / 2 + dxv, cy - h / 2 + dyv),
+                    (cx + w / 2, cy - h / 2),
+                ],
+                fill="#f4f4f4",
+                stroke=LINE,
+                stroke_width=THIN,
+            )
+        )
+        g.add(
+            dwg.polygon(
+                [
+                    (cx + w / 2, cy - h / 2),
+                    (cx + w / 2 + dxv, cy - h / 2 + dyv),
+                    (cx + w / 2 + dxv, cy + h / 2 + dyv),
+                    (cx + w / 2, cy + h / 2),
+                ],
+                fill="#e9e9e9",
+                stroke=LINE,
+                stroke_width=THIN,
+            )
+        )
+        _txt(
+            dwg,
+            g,
+            cx,
+            cy + h / 2 + 10,
+            f"{spec.width:g}×{spec.height:g}×{spec.thickness:g}",
+            size=3.0,
+        )
 
     _txt(dwg, g, cx, 24, "Изометрия", size=3.0)
     if show_frame:
@@ -794,12 +970,18 @@ def render_spec_to_svg(spec: dict, view: str = "front") -> str:
     kind = spec.get("type")
     iso = view in ("isometric", "iso", "3d")
     if kind == "shaft":
-        return _render_shaft_iso(ShaftSpec(**spec)) if iso else _render_shaft(ShaftSpec(**spec), view)
+        return (
+            _render_shaft_iso(ShaftSpec(**spec)) if iso else _render_shaft(ShaftSpec(**spec), view)
+        )
     if kind == "plate":
-        return _render_plate_iso(PlateSpec(**spec)) if iso else _render_plate(PlateSpec(**spec), view)
+        return (
+            _render_plate_iso(PlateSpec(**spec)) if iso else _render_plate(PlateSpec(**spec), view)
+        )
     if kind == "assembly":
         if iso:
-            raise ValueError("Изометрия для сборок пока не поддерживается — используйте front|section")
+            raise ValueError(
+                "Изометрия для сборок пока не поддерживается — используйте front|section"
+            )
         return _render_assembly(AssemblySpec(**spec), view)
     raise ValueError(f"Неизвестный тип чертежа: {kind!r} (ожидается shaft|plate|assembly)")
 
@@ -860,8 +1042,14 @@ def _dxf_render_dim(dim) -> None:
         logger.warning("techdraw_dxf_dimension_render_failed", error=str(exc))
 
 
-def _dxf_text(msp, text: str, at: tuple[float, float], height: float = 3.5,
-              layer: str = "ANNOTATION", rotation: float = 0.0) -> None:
+def _dxf_text(
+    msp,
+    text: str,
+    at: tuple[float, float],
+    height: float = 3.5,
+    layer: str = "ANNOTATION",
+    rotation: float = 0.0,
+) -> None:
     entity = msp.add_text(text, height=height, dxfattribs={"layer": layer, "rotation": rotation})
     entity.set_placement(at)
 
@@ -901,133 +1089,174 @@ def _dxf_draw_shaft(msp, s: ShaftSpec, ox: float = 0.0, oy: float = 0.0) -> None
         thread_spec = tdref.parse_thread(seg.thread) if seg.thread else None
         if thread_spec:
             minor = tdref.minor_diameter_mm(thread_spec)
-            msp.add_line((x, cy + minor / 2), (x + w, cy + minor / 2), dxfattribs={"layer": "CENTER"})
-            msp.add_line((x, cy - minor / 2), (x + w, cy - minor / 2), dxfattribs={"layer": "CENTER"})
+            msp.add_line(
+                (x, cy + minor / 2), (x + w, cy + minor / 2), dxfattribs={"layer": "CENTER"}
+            )
+            msp.add_line(
+                (x, cy - minor / 2), (x + w, cy - minor / 2), dxfattribs={"layer": "CENTER"}
+            )
 
         # ГОСТ-style dimensions: real DIMENSION entities, not decorative text.
-        _dxf_render_dim(msp.add_linear_dim(
-            base=(x, dim_base_y),
-            p1=(x, bot),
-            p2=(x + w, bot),
-            text=f"{seg.length:g}",
-            angle=0,
-            override=_dxf_dim_override(),
-            dxfattribs={"layer": "DIM"},
-        ))
+        _dxf_render_dim(
+            msp.add_linear_dim(
+                base=(x, dim_base_y),
+                p1=(x, bot),
+                p2=(x + w, bot),
+                text=f"{seg.length:g}",
+                angle=0,
+                override=_dxf_dim_override(),
+                dxfattribs={"layer": "DIM"},
+            )
+        )
         dia_text = seg.thread or _dim_label(seg.diameter, seg.tolerance, "⌀")
-        _dxf_render_dim(msp.add_linear_dim(
-            base=(x + w / 2 + 6, cy),
-            p1=(x + w / 2, bot),
-            p2=(x + w / 2, top),
-            text=dia_text,
-            angle=90,
-            override=_dxf_dim_override(),
-            dxfattribs={"layer": "DIM"},
-        ))
+        _dxf_render_dim(
+            msp.add_linear_dim(
+                base=(x + w / 2 + 6, cy),
+                p1=(x + w / 2, bot),
+                p2=(x + w / 2, top),
+                text=dia_text,
+                angle=90,
+                override=_dxf_dim_override(),
+                dxfattribs={"layer": "DIM"},
+            )
+        )
         if seg.roughness is not None:
             _dxf_roughness(msp, x + w / 2 + 8, top + 8, seg.roughness)
         prev_h = h
         x += w
     msp.add_line((x, cy - prev_h / 2), (x, cy + prev_h / 2), dxfattribs={"layer": "OBJECT"})
     msp.add_line((ox - 6, cy), (ox + total_len + 6, cy), dxfattribs={"layer": "CENTER"})
-    _dxf_render_dim(msp.add_linear_dim(
-        base=(ox, dim_base_y - 10),
-        p1=(ox, cy - max_d / 2),
-        p2=(ox + total_len, cy - max_d / 2),
-        text=f"{total_len:g}",
-        angle=0,
-        override=_dxf_dim_override(),
-        dxfattribs={"layer": "DIM"},
-    ))
+    _dxf_render_dim(
+        msp.add_linear_dim(
+            base=(ox, dim_base_y - 10),
+            p1=(ox, cy - max_d / 2),
+            p2=(ox + total_len, cy - max_d / 2),
+            text=f"{total_len:g}",
+            angle=0,
+            override=_dxf_dim_override(),
+            dxfattribs={"layer": "DIM"},
+        )
+    )
 
 
 def _dxf_draw_plate(msp, s: PlateSpec, ox: float = 0.0, oy: float = 0.0) -> None:
     if s.shape == "circle":
         msp.add_circle((ox, oy), s.diameter / 2, dxfattribs={"layer": "OBJECT"})
-        _dxf_render_dim(msp.add_diameter_dim(
-            center=(ox, oy),
-            radius=s.diameter / 2,
-            angle=35,
-            text=_dim_label(s.diameter, "", "⌀"),
-            override=_dxf_dim_override(),
-            dxfattribs={"layer": "DIM"},
-        ))
+        _dxf_render_dim(
+            msp.add_diameter_dim(
+                center=(ox, oy),
+                radius=s.diameter / 2,
+                angle=35,
+                text=_dim_label(s.diameter, "", "⌀"),
+                override=_dxf_dim_override(),
+                dxfattribs={"layer": "DIM"},
+            )
+        )
         extent = s.diameter
     else:
         msp.add_lwpolyline(
-            [(ox - s.width / 2, oy - s.height / 2), (ox + s.width / 2, oy - s.height / 2),
-             (ox + s.width / 2, oy + s.height / 2), (ox - s.width / 2, oy + s.height / 2)],
+            [
+                (ox - s.width / 2, oy - s.height / 2),
+                (ox + s.width / 2, oy - s.height / 2),
+                (ox + s.width / 2, oy + s.height / 2),
+                (ox - s.width / 2, oy + s.height / 2),
+            ],
             dxfattribs={"layer": "OBJECT"},
             close=True,
         )
         extent = max(s.width, s.height)
-        _dxf_render_dim(msp.add_linear_dim(
-            base=(ox - s.width / 2, oy - s.height / 2 - 12),
-            p1=(ox - s.width / 2, oy - s.height / 2),
-            p2=(ox + s.width / 2, oy - s.height / 2),
-            text=f"{s.width:g}",
-            angle=0,
-            override=_dxf_dim_override(),
-            dxfattribs={"layer": "DIM"},
-        ))
-        _dxf_render_dim(msp.add_linear_dim(
-            base=(ox + s.width / 2 + 12, oy - s.height / 2),
-            p1=(ox + s.width / 2, oy - s.height / 2),
-            p2=(ox + s.width / 2, oy + s.height / 2),
-            text=f"{s.height:g}",
-            angle=90,
-            override=_dxf_dim_override(),
-            dxfattribs={"layer": "DIM"},
-        ))
-    msp.add_line((ox - extent / 2 - 5, oy), (ox + extent / 2 + 5, oy), dxfattribs={"layer": "CENTER"})
-    msp.add_line((ox, oy - extent / 2 - 5), (ox, oy + extent / 2 + 5), dxfattribs={"layer": "CENTER"})
+        _dxf_render_dim(
+            msp.add_linear_dim(
+                base=(ox - s.width / 2, oy - s.height / 2 - 12),
+                p1=(ox - s.width / 2, oy - s.height / 2),
+                p2=(ox + s.width / 2, oy - s.height / 2),
+                text=f"{s.width:g}",
+                angle=0,
+                override=_dxf_dim_override(),
+                dxfattribs={"layer": "DIM"},
+            )
+        )
+        _dxf_render_dim(
+            msp.add_linear_dim(
+                base=(ox + s.width / 2 + 12, oy - s.height / 2),
+                p1=(ox + s.width / 2, oy - s.height / 2),
+                p2=(ox + s.width / 2, oy + s.height / 2),
+                text=f"{s.height:g}",
+                angle=90,
+                override=_dxf_dim_override(),
+                dxfattribs={"layer": "DIM"},
+            )
+        )
+    msp.add_line(
+        (ox - extent / 2 - 5, oy), (ox + extent / 2 + 5, oy), dxfattribs={"layer": "CENTER"}
+    )
+    msp.add_line(
+        (ox, oy - extent / 2 - 5), (ox, oy + extent / 2 + 5), dxfattribs={"layer": "CENTER"}
+    )
     for hole in s.holes:
         center = (ox + hole.x, oy + hole.y)
         msp.add_circle(center, hole.diameter / 2, dxfattribs={"layer": "OBJECT"})
-        _dxf_render_dim(msp.add_diameter_dim(
-            center=center,
-            radius=hole.diameter / 2,
-            angle=45,
-            text=_dim_label(hole.diameter, hole.tolerance, "⌀"),
-            override=_dxf_dim_override(),
-            dxfattribs={"layer": "DIM"},
-        ))
+        _dxf_render_dim(
+            msp.add_diameter_dim(
+                center=center,
+                radius=hole.diameter / 2,
+                angle=45,
+                text=_dim_label(hole.diameter, hole.tolerance, "⌀"),
+                override=_dxf_dim_override(),
+                dxfattribs={"layer": "DIM"},
+            )
+        )
     if s.bolt_circle_d > 0 and s.bolt_circle_n > 0:
         msp.add_circle((ox, oy), s.bolt_circle_d / 2, dxfattribs={"layer": "CENTER"})
         for i in range(s.bolt_circle_n):
             ang = 2 * math.pi * i / s.bolt_circle_n
             msp.add_circle(
-                (ox + s.bolt_circle_d / 2 * math.cos(ang), oy + s.bolt_circle_d / 2 * math.sin(ang)),
+                (
+                    ox + s.bolt_circle_d / 2 * math.cos(ang),
+                    oy + s.bolt_circle_d / 2 * math.sin(ang),
+                ),
                 s.bolt_hole_d / 2,
                 dxfattribs={"layer": "OBJECT"},
             )
-        _dxf_render_dim(msp.add_diameter_dim(
-            center=(ox, oy),
-            radius=s.bolt_circle_d / 2,
-            angle=135,
-            text=_dim_label(s.bolt_circle_d, "", "⌀"),
-            override=_dxf_dim_override(),
-            dxfattribs={"layer": "DIM"},
-        ))
-        _dxf_text(msp, f"{s.bolt_circle_n}x{_dim_label(s.bolt_hole_d, s.bolt_hole_tol, '⌀')}",
-                  (ox - s.bolt_circle_d / 2, oy + s.bolt_circle_d / 2 + 8), height=3.0)
+        _dxf_render_dim(
+            msp.add_diameter_dim(
+                center=(ox, oy),
+                radius=s.bolt_circle_d / 2,
+                angle=135,
+                text=_dim_label(s.bolt_circle_d, "", "⌀"),
+                override=_dxf_dim_override(),
+                dxfattribs={"layer": "DIM"},
+            )
+        )
+        _dxf_text(
+            msp,
+            f"{s.bolt_circle_n}x{_dim_label(s.bolt_hole_d, s.bolt_hole_tol, '⌀')}",
+            (ox - s.bolt_circle_d / 2, oy + s.bolt_circle_d / 2 + 8),
+            height=3.0,
+        )
     side_x = ox + extent / 2 + 28
     side_h = s.diameter if s.shape == "circle" else s.height
     msp.add_lwpolyline(
-        [(side_x, oy - side_h / 2), (side_x + s.thickness, oy - side_h / 2),
-         (side_x + s.thickness, oy + side_h / 2), (side_x, oy + side_h / 2)],
+        [
+            (side_x, oy - side_h / 2),
+            (side_x + s.thickness, oy - side_h / 2),
+            (side_x + s.thickness, oy + side_h / 2),
+            (side_x, oy + side_h / 2),
+        ],
         close=True,
         dxfattribs={"layer": "OBJECT"},
     )
-    _dxf_render_dim(msp.add_linear_dim(
-        base=(side_x, oy - side_h / 2 - 10),
-        p1=(side_x, oy - side_h / 2),
-        p2=(side_x + s.thickness, oy - side_h / 2),
-        text=_dim_label(s.thickness, s.thickness_tol),
-        angle=0,
-        override=_dxf_dim_override(),
-        dxfattribs={"layer": "DIM"},
-    ))
+    _dxf_render_dim(
+        msp.add_linear_dim(
+            base=(side_x, oy - side_h / 2 - 10),
+            p1=(side_x, oy - side_h / 2),
+            p2=(side_x + s.thickness, oy - side_h / 2),
+            text=_dim_label(s.thickness, s.thickness_tol),
+            angle=0,
+            override=_dxf_dim_override(),
+            dxfattribs={"layer": "DIM"},
+        )
+    )
     if s.roughness is not None:
         _dxf_roughness(msp, side_x - 12, oy + side_h / 2 + 8, s.roughness)
 
@@ -1077,8 +1306,12 @@ def render_spec_to_dxf(spec: dict) -> bytes:
                     )
                 else:
                     hatch.paths.add_polyline_path(
-                        [(comp.x - half, comp.y - half), (comp.x + half, comp.y - half),
-                         (comp.x + half, comp.y + half), (comp.x - half, comp.y + half)],
+                        [
+                            (comp.x - half, comp.y - half),
+                            (comp.x + half, comp.y - half),
+                            (comp.x + half, comp.y + half),
+                            (comp.x - half, comp.y + half),
+                        ],
                         is_closed=True,
                     )
     else:

@@ -348,9 +348,7 @@ async def get_work_learning(
 ) -> WorkLearning:
     order = await _get_owned_order(db, work_order_id, user)
     learning = (
-        await db.execute(
-            select(WorkLearning).where(WorkLearning.work_order_id == order.id)
-        )
+        await db.execute(select(WorkLearning).where(WorkLearning.work_order_id == order.id))
     ).scalar_one_or_none()
     if learning is None:
         raise HTTPException(status_code=404, detail="Work learning not found")
@@ -501,9 +499,7 @@ async def submit_verifier_verdict(
 ) -> dict:
     """Independent verifier/human-manager acceptance decision."""
     order = await db.get(WorkOrder, work_order_id, with_for_update=True)
-    criterion = await db.get(
-        WorkAcceptanceCriterion, criterion_id, with_for_update=True
-    )
+    criterion = await db.get(WorkAcceptanceCriterion, criterion_id, with_for_update=True)
     if order is None or criterion is None or criterion.work_order_id != order.id:
         raise HTTPException(status_code=404, detail="Work order criterion not found")
     try:
@@ -585,8 +581,16 @@ async def grant_computer_use(
     if order is None:
         raise HTTPException(status_code=404, detail="Work order not found")
     valid_actions = {
-        "browser_fetch", "desktop_snapshot", "desktop_start", "desktop_click",
-        "desktop_type", "desktop_read", "desktop_close", "file_read", "file_write", "shell",
+        "browser_fetch",
+        "desktop_snapshot",
+        "desktop_start",
+        "desktop_click",
+        "desktop_type",
+        "desktop_read",
+        "desktop_close",
+        "file_read",
+        "file_write",
+        "shell",
     }
     if not set(body.actions) <= valid_actions:
         raise HTTPException(status_code=422, detail="Unknown computer-use action")
@@ -611,10 +615,19 @@ async def grant_computer_use(
         order.id,
         "computer_use.granted",
         actor=user.sub,
-        payload={"grant_id": str(grant.id), "actions": grant.actions, "expires_at": grant.expires_at.isoformat()},
+        payload={
+            "grant_id": str(grant.id),
+            "actions": grant.actions,
+            "expires_at": grant.expires_at.isoformat(),
+        },
     )
     await db.commit()
-    return {"id": str(grant.id), "granted_to": grant.granted_to, "actions": grant.actions, "expires_at": grant.expires_at}
+    return {
+        "id": str(grant.id),
+        "granted_to": grant.granted_to,
+        "actions": grant.actions,
+        "expires_at": grant.expires_at,
+    }
 
 
 @router.get("/{work_order_id}/tool-calls")

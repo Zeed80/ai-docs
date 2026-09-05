@@ -2,7 +2,7 @@ import pytest
 from httpx import AsyncClient
 
 from app.ai import task_routing as tr
-from app.ai.schemas import AITask, ModelCapability, ModelStatus, Modality, ProviderKind
+from app.ai.schemas import AITask, Modality, ModelCapability, ModelStatus, ProviderKind
 from app.api.providers_api import _verification_warning
 
 

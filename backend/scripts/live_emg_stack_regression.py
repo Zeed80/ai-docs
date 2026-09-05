@@ -67,8 +67,7 @@ def _evidence_bytes(value: Any) -> bytes:
         raise TypeError(f"Object of type {type(item).__name__} is not JSON serializable")
 
     return (
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, default=default)
-        + "\n"
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, default=default) + "\n"
     ).encode()
 
 
@@ -82,11 +81,13 @@ def _write_evidence_bundle(case_id: str, files: dict[str, Any]) -> dict[str, Any
     for name, value in sorted(files.items()):
         body = _evidence_bytes(value)
         (case_dir / name).write_bytes(body)
-        entries.append({
-            "path": name,
-            "bytes": len(body),
-            "sha256": hashlib.sha256(body).hexdigest(),
-        })
+        entries.append(
+            {
+                "path": name,
+                "bytes": len(body),
+                "sha256": hashlib.sha256(body).hexdigest(),
+            }
+        )
     manifest = {
         "schema_version": "emg-live-evidence/1.0",
         "case_id": case_id,
@@ -255,12 +256,13 @@ def _run_mechanical(case_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
         {"candidate": candidate, "views": ["front", "side", "top"], "confirm_assumptions": True},
     )
     if status != 200:
-        raise RuntimeError(f"/project HTTP {status}: {projection_body[:400].decode(errors='replace')}")
+        raise RuntimeError(
+            f"/project HTTP {status}: {projection_body[:400].decode(errors='replace')}"
+        )
     projection = _json_body(projection_body)
     views = projection.get("views", {})
     primitive_count = sum(
-        len(view.get("visible", [])) + len(view.get("hidden", []))
-        for view in views.values()
+        len(view.get("visible", [])) + len(view.get("hidden", [])) for view in views.values()
     )
     checks = {
         "brep_valid": bool(report.get("brep_valid")),
@@ -280,18 +282,21 @@ def _run_mechanical(case_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
         "all_views_present": set(views) == {"front", "side", "top"},
         "projection_nonempty": primitive_count > 0,
     }
-    evidence_bundle = _write_evidence_bundle(case_id, {
-        "source.json": candidate,
-        "reader-graph.json": {
-            "status": "not_applicable",
-            "reason": "mechanical kernel case starts from a reviewed feature candidate",
+    evidence_bundle = _write_evidence_bundle(
+        case_id,
+        {
+            "source.json": candidate,
+            "reader-graph.json": {
+                "status": "not_applicable",
+                "reason": "mechanical kernel case starts from a reviewed feature candidate",
+            },
+            "generator-payload.json": compile_payload,
+            "model.step": members["model.step"],
+            "drawing-projection.json": projection,
+            "validation-report.json": report,
+            "audit-trace.json": {"checks": checks, "runtime": KERNEL_URL},
         },
-        "generator-payload.json": compile_payload,
-        "model.step": members["model.step"],
-        "drawing-projection.json": projection,
-        "validation-report.json": report,
-        "audit-trace.json": {"checks": checks, "runtime": KERNEL_URL},
-    })
+    )
     return {
         "runtime": "cad-kernel FreeCAD/OpenCascade + TechDraw",
         "evidence_level": "live_kernel_build_and_projection",
@@ -299,7 +304,10 @@ def _run_mechanical(case_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
         "checks": checks,
         "artifact_sha256": hashlib.sha256(members["model.step"]).hexdigest(),
         "volume_mm3": report.get("volume_mm3"),
-        "topology": {key: report.get(key) for key in ("solid_count", "face_count", "edge_count", "vertex_count")},
+        "topology": {
+            key: report.get(key)
+            for key in ("solid_count", "face_count", "edge_count", "vertex_count")
+        },
         "projection_primitive_count": primitive_count,
         "evidence_bundle": evidence_bundle,
     }
@@ -312,13 +320,37 @@ def _assembly_cases() -> list[tuple[str, dict[str, Any]]]:
             {
                 "name": "Bearing block assembly",
                 "components": [
-                    {"key": "base", "shape": {"kind": "box", "width_mm": 180, "height_mm": 100, "depth_mm": 20}, "transform": {}},
-                    {"key": "left-support", "shape": {"kind": "box", "width_mm": 20, "height_mm": 100, "depth_mm": 80}, "transform": {"translate": [0, 0, 20]}},
-                    {"key": "right-support", "shape": {"kind": "box", "width_mm": 20, "height_mm": 100, "depth_mm": 80}, "transform": {"translate": [160, 0, 20]}},
+                    {
+                        "key": "base",
+                        "shape": {"kind": "box", "width_mm": 180, "height_mm": 100, "depth_mm": 20},
+                        "transform": {},
+                    },
+                    {
+                        "key": "left-support",
+                        "shape": {"kind": "box", "width_mm": 20, "height_mm": 100, "depth_mm": 80},
+                        "transform": {"translate": [0, 0, 20]},
+                    },
+                    {
+                        "key": "right-support",
+                        "shape": {"kind": "box", "width_mm": 20, "height_mm": 100, "depth_mm": 80},
+                        "transform": {"translate": [160, 0, 20]},
+                    },
                 ],
                 "drawing_mates": [
-                    {"id": "base-left", "mate_type": "fixed", "first_instance_key": "base", "second_instance_key": "left-support", "parameters": {}},
-                    {"id": "base-right", "mate_type": "fixed", "first_instance_key": "base", "second_instance_key": "right-support", "parameters": {}},
+                    {
+                        "id": "base-left",
+                        "mate_type": "fixed",
+                        "first_instance_key": "base",
+                        "second_instance_key": "left-support",
+                        "parameters": {},
+                    },
+                    {
+                        "id": "base-right",
+                        "mate_type": "fixed",
+                        "first_instance_key": "base",
+                        "second_instance_key": "right-support",
+                        "parameters": {},
+                    },
                 ],
                 "metadata": {"live_case": "assembly-bearing-block"},
             },
@@ -328,13 +360,37 @@ def _assembly_cases() -> list[tuple[str, dict[str, Any]]]:
             {
                 "name": "Pump skid assembly",
                 "components": [
-                    {"key": "skid", "shape": {"kind": "box", "width_mm": 400, "height_mm": 220, "depth_mm": 20}, "transform": {}},
-                    {"key": "motor", "shape": {"kind": "cylinder", "diameter_mm": 120, "height_mm": 220}, "transform": {"translate": [90, 110, 20], "rotate_z_deg": 0}},
-                    {"key": "pump", "shape": {"kind": "cylinder", "diameter_mm": 90, "height_mm": 150}, "transform": {"translate": [270, 110, 20], "rotate_z_deg": 0}},
+                    {
+                        "key": "skid",
+                        "shape": {"kind": "box", "width_mm": 400, "height_mm": 220, "depth_mm": 20},
+                        "transform": {},
+                    },
+                    {
+                        "key": "motor",
+                        "shape": {"kind": "cylinder", "diameter_mm": 120, "height_mm": 220},
+                        "transform": {"translate": [90, 110, 20], "rotate_z_deg": 0},
+                    },
+                    {
+                        "key": "pump",
+                        "shape": {"kind": "cylinder", "diameter_mm": 90, "height_mm": 150},
+                        "transform": {"translate": [270, 110, 20], "rotate_z_deg": 0},
+                    },
                 ],
                 "drawing_mates": [
-                    {"id": "skid-motor", "mate_type": "fixed", "first_instance_key": "skid", "second_instance_key": "motor", "parameters": {}},
-                    {"id": "skid-pump", "mate_type": "fixed", "first_instance_key": "skid", "second_instance_key": "pump", "parameters": {}},
+                    {
+                        "id": "skid-motor",
+                        "mate_type": "fixed",
+                        "first_instance_key": "skid",
+                        "second_instance_key": "motor",
+                        "parameters": {},
+                    },
+                    {
+                        "id": "skid-pump",
+                        "mate_type": "fixed",
+                        "first_instance_key": "skid",
+                        "second_instance_key": "pump",
+                        "parameters": {},
+                    },
                 ],
                 "metadata": {"live_case": "assembly-pump-skid"},
             },
@@ -346,7 +402,9 @@ def _run_assembly(case_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     kernel_payload = {key: value for key, value in payload.items() if key != "drawing_mates"}
     status, body, _ = _post("/assembly/compile", kernel_payload)
     if status != 200:
-        raise RuntimeError(f"/assembly/compile HTTP {status}: {body[:400].decode(errors='replace')}")
+        raise RuntimeError(
+            f"/assembly/compile HTTP {status}: {body[:400].decode(errors='replace')}"
+        )
     members = _zip_members(body)
     report = json.loads(members["assembly-report.json"])
     reopen = report.get("reopen", {})
@@ -397,23 +455,28 @@ def _run_assembly(case_id: str, payload: dict[str, Any]) -> dict[str, Any]:
             svg == repeated_svg and drawing_report == repeated_drawing_report
         ),
         "drawing_has_both_views": drawing_report.get("views") == ["assembled", "exploded"],
-        "drawing_covers_instances": drawing_report.get("instance_occurrences") == 2 * len(payload["components"]),
+        "drawing_covers_instances": drawing_report.get("instance_occurrences")
+        == 2 * len(payload["components"]),
         "drawing_covers_mates": drawing_report.get("mate_occurrences") == 2 * len(mates),
-        "drawing_release_gate_admitted": "assertion:assembly:required-2d" not in drawing_plan.critical_assumption_ids,
+        "drawing_release_gate_admitted": "assertion:assembly:required-2d"
+        not in drawing_plan.critical_assumption_ids,
     }
-    evidence_bundle = _write_evidence_bundle(case_id, {
-        "source.json": payload,
-        "reader-graph.json": graph,
-        "generator-payload.json": kernel_payload,
-        "model.step": step,
-        "drawing.svg": svg,
-        "validation-report.json": report,
-        "audit-trace.json": {
-            "checks": checks,
-            "drawing_report": drawing_report,
-            "build_plan": drawing_plan,
+    evidence_bundle = _write_evidence_bundle(
+        case_id,
+        {
+            "source.json": payload,
+            "reader-graph.json": graph,
+            "generator-payload.json": kernel_payload,
+            "model.step": step,
+            "drawing.svg": svg,
+            "validation-report.json": report,
+            "audit-trace.json": {
+                "checks": checks,
+                "drawing_report": drawing_report,
+                "build_plan": drawing_plan,
+            },
         },
-    })
+    )
     return {
         "runtime": "cad-kernel FreeCAD/OpenCascade isolated STEP reopen",
         "evidence_level": "live_kernel_build_and_independent_reopen",
@@ -431,33 +494,139 @@ def _construction_cases() -> list[tuple[str, ConstructionModel]]:
     return [
         (
             "construction-room-opening",
-            ConstructionModel.model_validate({
-                "site_name": "Live site A",
-                "building_name": "Room and opening",
-                "storeys": [{"id": "l1", "name": "Ground floor", "elevation_mm": 0}],
-                "elements": [
-                    {"id": "wall", "kind": "wall", "name": "External wall", "storey_id": "l1", "material": "Concrete C30/37", "load_bearing": True, "box": {"x_mm": 0, "y_mm": 0, "z_mm": 0, "width_mm": 6000, "depth_mm": 250, "height_mm": 3200}},
-                    {"id": "door", "kind": "opening", "name": "Door opening", "storey_id": "l1", "host_id": "wall", "box": {"x_mm": 1200, "y_mm": 0, "z_mm": 0, "width_mm": 1000, "depth_mm": 250, "height_mm": 2200}},
-                    {"id": "room", "kind": "space", "name": "Room 101", "storey_id": "l1", "box": {"x_mm": 250, "y_mm": 250, "z_mm": 0, "width_mm": 5500, "depth_mm": 4200, "height_mm": 3000}},
-                ],
-            }),
+            ConstructionModel.model_validate(
+                {
+                    "site_name": "Live site A",
+                    "building_name": "Room and opening",
+                    "storeys": [{"id": "l1", "name": "Ground floor", "elevation_mm": 0}],
+                    "elements": [
+                        {
+                            "id": "wall",
+                            "kind": "wall",
+                            "name": "External wall",
+                            "storey_id": "l1",
+                            "material": "Concrete C30/37",
+                            "load_bearing": True,
+                            "box": {
+                                "x_mm": 0,
+                                "y_mm": 0,
+                                "z_mm": 0,
+                                "width_mm": 6000,
+                                "depth_mm": 250,
+                                "height_mm": 3200,
+                            },
+                        },
+                        {
+                            "id": "door",
+                            "kind": "opening",
+                            "name": "Door opening",
+                            "storey_id": "l1",
+                            "host_id": "wall",
+                            "box": {
+                                "x_mm": 1200,
+                                "y_mm": 0,
+                                "z_mm": 0,
+                                "width_mm": 1000,
+                                "depth_mm": 250,
+                                "height_mm": 2200,
+                            },
+                        },
+                        {
+                            "id": "room",
+                            "kind": "space",
+                            "name": "Room 101",
+                            "storey_id": "l1",
+                            "box": {
+                                "x_mm": 250,
+                                "y_mm": 250,
+                                "z_mm": 0,
+                                "width_mm": 5500,
+                                "depth_mm": 4200,
+                                "height_mm": 3000,
+                            },
+                        },
+                    ],
+                }
+            ),
         ),
         (
             "construction-two-storey-frame",
-            ConstructionModel.model_validate({
-                "site_name": "Live site B",
-                "building_name": "Two storey frame",
-                "storeys": [
-                    {"id": "l1", "name": "Level 1", "elevation_mm": 0},
-                    {"id": "l2", "name": "Level 2", "elevation_mm": 3600},
-                ],
-                "elements": [
-                    {"id": "slab-1", "kind": "slab", "name": "Ground slab", "storey_id": "l1", "material": "Concrete C25/30", "load_bearing": True, "box": {"x_mm": 0, "y_mm": 0, "z_mm": 0, "width_mm": 8000, "depth_mm": 6000, "height_mm": 250}},
-                    {"id": "column-1", "kind": "column", "name": "Column L1", "storey_id": "l1", "material": "Concrete C30/37", "load_bearing": True, "box": {"x_mm": 500, "y_mm": 500, "z_mm": 250, "width_mm": 400, "depth_mm": 400, "height_mm": 3350}},
-                    {"id": "slab-2", "kind": "slab", "name": "Level 2 slab", "storey_id": "l2", "material": "Concrete C25/30", "load_bearing": True, "box": {"x_mm": 0, "y_mm": 0, "z_mm": 0, "width_mm": 8000, "depth_mm": 6000, "height_mm": 250}},
-                    {"id": "column-2", "kind": "column", "name": "Column L2", "storey_id": "l2", "material": "Concrete C30/37", "load_bearing": True, "box": {"x_mm": 500, "y_mm": 500, "z_mm": 250, "width_mm": 400, "depth_mm": 400, "height_mm": 3350}},
-                ],
-            }),
+            ConstructionModel.model_validate(
+                {
+                    "site_name": "Live site B",
+                    "building_name": "Two storey frame",
+                    "storeys": [
+                        {"id": "l1", "name": "Level 1", "elevation_mm": 0},
+                        {"id": "l2", "name": "Level 2", "elevation_mm": 3600},
+                    ],
+                    "elements": [
+                        {
+                            "id": "slab-1",
+                            "kind": "slab",
+                            "name": "Ground slab",
+                            "storey_id": "l1",
+                            "material": "Concrete C25/30",
+                            "load_bearing": True,
+                            "box": {
+                                "x_mm": 0,
+                                "y_mm": 0,
+                                "z_mm": 0,
+                                "width_mm": 8000,
+                                "depth_mm": 6000,
+                                "height_mm": 250,
+                            },
+                        },
+                        {
+                            "id": "column-1",
+                            "kind": "column",
+                            "name": "Column L1",
+                            "storey_id": "l1",
+                            "material": "Concrete C30/37",
+                            "load_bearing": True,
+                            "box": {
+                                "x_mm": 500,
+                                "y_mm": 500,
+                                "z_mm": 250,
+                                "width_mm": 400,
+                                "depth_mm": 400,
+                                "height_mm": 3350,
+                            },
+                        },
+                        {
+                            "id": "slab-2",
+                            "kind": "slab",
+                            "name": "Level 2 slab",
+                            "storey_id": "l2",
+                            "material": "Concrete C25/30",
+                            "load_bearing": True,
+                            "box": {
+                                "x_mm": 0,
+                                "y_mm": 0,
+                                "z_mm": 0,
+                                "width_mm": 8000,
+                                "depth_mm": 6000,
+                                "height_mm": 250,
+                            },
+                        },
+                        {
+                            "id": "column-2",
+                            "kind": "column",
+                            "name": "Column L2",
+                            "storey_id": "l2",
+                            "material": "Concrete C30/37",
+                            "load_bearing": True,
+                            "box": {
+                                "x_mm": 500,
+                                "y_mm": 500,
+                                "z_mm": 250,
+                                "width_mm": 400,
+                                "depth_mm": 400,
+                                "height_mm": 3350,
+                            },
+                        },
+                    ],
+                }
+            ),
         ),
     ]
 
@@ -475,9 +644,7 @@ def _run_construction(case_id: str, model: ConstructionModel) -> dict[str, Any]:
     )
     sheets_graph = apply_graph_patch(
         graph,
-        construction_sheets_patch(
-            graph, svg=sheets_svg, report=sheets_report
-        ),
+        construction_sheets_patch(graph, svg=sheets_svg, report=sheets_report),
     )
     sheets_plan = compile_build_plan(sheets_graph, "production")
     checks = {
@@ -493,8 +660,7 @@ def _run_construction(case_id: str, model: ConstructionModel) -> dict[str, Any]:
         ),
         "sheets_svg_reopened": bool(sheets_report.get("valid")),
         "sheets_deterministic": (
-            sheets_svg == repeated_sheets_svg
-            and sheets_report == repeated_sheets_report
+            sheets_svg == repeated_sheets_svg and sheets_report == repeated_sheets_report
         ),
         "all_storey_plans_and_section_present": (
             len(sheets_report.get("views", [])) == len(model.storeys) + 1
@@ -504,23 +670,25 @@ def _run_construction(case_id: str, model: ConstructionModel) -> dict[str, Any]:
             sheets_report.get("element_occurrences") == 2 * len(model.elements)
         ),
         "sheets_release_gate_admitted": (
-            "assertion:construction:required-sheets"
-            not in sheets_plan.critical_assumption_ids
+            "assertion:construction:required-sheets" not in sheets_plan.critical_assumption_ids
         ),
     }
-    evidence_bundle = _write_evidence_bundle(case_id, {
-        "source.json": model,
-        "reader-graph.json": graph,
-        "generator-payload.json": model,
-        "model.ifc": artifact,
-        "drawing.svg": sheets_svg,
-        "validation-report.json": report,
-        "audit-trace.json": {
-            "checks": checks,
-            "sheets_report": sheets_report,
-            "build_plan": sheets_plan,
+    evidence_bundle = _write_evidence_bundle(
+        case_id,
+        {
+            "source.json": model,
+            "reader-graph.json": graph,
+            "generator-payload.json": model,
+            "model.ifc": artifact,
+            "drawing.svg": sheets_svg,
+            "validation-report.json": report,
+            "audit-trace.json": {
+                "checks": checks,
+                "sheets_report": sheets_report,
+                "build_plan": sheets_plan,
+            },
         },
-    })
+    )
     return {
         "runtime": "production backend IfcOpenShell geometry runtime",
         "evidence_level": "live_ifc_build_geometry_and_reopen",
@@ -540,49 +708,111 @@ def _system_cases() -> list[tuple[str, EngineeringSystemModel]]:
     return [
         (
             "system-hydraulic-power",
-            EngineeringSystemModel.model_validate({
-                "profile": "hydraulic",
-                "name": "Hydraulic power line",
-                "system_kind": "hydraulic_power",
-                "equipment": [
-                    {"id": "tank", "name": "Tank", "equipment_type": "reservoir"},
-                    {"id": "pump", "name": "Pump", "equipment_type": "pump"},
-                    {"id": "actuator", "name": "Cylinder", "equipment_type": "actuator"},
-                ],
-                "ports": [
-                    {"id": "tank-out", "equipment_id": "tank", "kind": "suction", "direction": "out", "medium": "oil", "nominal_size_mm": 32},
-                    {"id": "pump-in", "equipment_id": "pump", "kind": "suction", "direction": "in", "medium": "oil", "nominal_size_mm": 32},
-                    {"id": "pump-out", "equipment_id": "pump", "kind": "pressure", "direction": "out", "medium": "oil", "nominal_size_mm": 20},
-                    {"id": "actuator-in", "equipment_id": "actuator", "kind": "pressure", "direction": "in", "medium": "oil", "nominal_size_mm": 20},
-                ],
-                "connections": [
-                    {"id": "suction", "first_port_id": "tank-out", "second_port_id": "pump-in"},
-                    {"id": "pressure", "first_port_id": "pump-out", "second_port_id": "actuator-in"},
-                ],
-            }),
+            EngineeringSystemModel.model_validate(
+                {
+                    "profile": "hydraulic",
+                    "name": "Hydraulic power line",
+                    "system_kind": "hydraulic_power",
+                    "equipment": [
+                        {"id": "tank", "name": "Tank", "equipment_type": "reservoir"},
+                        {"id": "pump", "name": "Pump", "equipment_type": "pump"},
+                        {"id": "actuator", "name": "Cylinder", "equipment_type": "actuator"},
+                    ],
+                    "ports": [
+                        {
+                            "id": "tank-out",
+                            "equipment_id": "tank",
+                            "kind": "suction",
+                            "direction": "out",
+                            "medium": "oil",
+                            "nominal_size_mm": 32,
+                        },
+                        {
+                            "id": "pump-in",
+                            "equipment_id": "pump",
+                            "kind": "suction",
+                            "direction": "in",
+                            "medium": "oil",
+                            "nominal_size_mm": 32,
+                        },
+                        {
+                            "id": "pump-out",
+                            "equipment_id": "pump",
+                            "kind": "pressure",
+                            "direction": "out",
+                            "medium": "oil",
+                            "nominal_size_mm": 20,
+                        },
+                        {
+                            "id": "actuator-in",
+                            "equipment_id": "actuator",
+                            "kind": "pressure",
+                            "direction": "in",
+                            "medium": "oil",
+                            "nominal_size_mm": 20,
+                        },
+                    ],
+                    "connections": [
+                        {"id": "suction", "first_port_id": "tank-out", "second_port_id": "pump-in"},
+                        {
+                            "id": "pressure",
+                            "first_port_id": "pump-out",
+                            "second_port_id": "actuator-in",
+                        },
+                    ],
+                }
+            ),
         ),
         (
             "system-electrical-feeder",
-            EngineeringSystemModel.model_validate({
-                "profile": "electrical",
-                "name": "Electrical feeder",
-                "system_kind": "low_voltage_distribution",
-                "equipment": [
-                    {"id": "panel", "name": "Main panel", "equipment_type": "switchboard"},
-                    {"id": "load-a", "name": "Motor A", "equipment_type": "motor"},
-                    {"id": "load-b", "name": "Motor B", "equipment_type": "motor"},
-                ],
-                "ports": [
-                    {"id": "panel-a", "equipment_id": "panel", "kind": "feeder", "direction": "out", "medium": "electricity", "max_connections": 1},
-                    {"id": "panel-b", "equipment_id": "panel", "kind": "feeder", "direction": "out", "medium": "electricity", "max_connections": 1},
-                    {"id": "motor-a", "equipment_id": "load-a", "kind": "supply", "direction": "in", "medium": "electricity"},
-                    {"id": "motor-b", "equipment_id": "load-b", "kind": "supply", "direction": "in", "medium": "electricity"},
-                ],
-                "connections": [
-                    {"id": "feeder-a", "first_port_id": "panel-a", "second_port_id": "motor-a"},
-                    {"id": "feeder-b", "first_port_id": "panel-b", "second_port_id": "motor-b"},
-                ],
-            }),
+            EngineeringSystemModel.model_validate(
+                {
+                    "profile": "electrical",
+                    "name": "Electrical feeder",
+                    "system_kind": "low_voltage_distribution",
+                    "equipment": [
+                        {"id": "panel", "name": "Main panel", "equipment_type": "switchboard"},
+                        {"id": "load-a", "name": "Motor A", "equipment_type": "motor"},
+                        {"id": "load-b", "name": "Motor B", "equipment_type": "motor"},
+                    ],
+                    "ports": [
+                        {
+                            "id": "panel-a",
+                            "equipment_id": "panel",
+                            "kind": "feeder",
+                            "direction": "out",
+                            "medium": "electricity",
+                            "max_connections": 1,
+                        },
+                        {
+                            "id": "panel-b",
+                            "equipment_id": "panel",
+                            "kind": "feeder",
+                            "direction": "out",
+                            "medium": "electricity",
+                            "max_connections": 1,
+                        },
+                        {
+                            "id": "motor-a",
+                            "equipment_id": "load-a",
+                            "kind": "supply",
+                            "direction": "in",
+                            "medium": "electricity",
+                        },
+                        {
+                            "id": "motor-b",
+                            "equipment_id": "load-b",
+                            "kind": "supply",
+                            "direction": "in",
+                            "medium": "electricity",
+                        },
+                    ],
+                    "connections": [
+                        {"id": "feeder-a", "first_port_id": "panel-a", "second_port_id": "motor-a"},
+                        {"id": "feeder-b", "first_port_id": "panel-b", "second_port_id": "motor-b"},
+                    ],
+                }
+            ),
         ),
     ]
 
@@ -622,18 +852,21 @@ def _run_system(case_id: str, model: EngineeringSystemModel) -> dict[str, Any]:
             released, "production"
         ).production_export_allowed,
     }
-    evidence_bundle = _write_evidence_bundle(case_id, {
-        "source.json": model,
-        "reader-graph.json": graph,
-        "generator-payload.json": model,
-        "diagram.svg": svg,
-        "validation-report.json": {
-            "state": state,
-            "issues": issues,
-            "diagram_report": diagram_report,
+    evidence_bundle = _write_evidence_bundle(
+        case_id,
+        {
+            "source.json": model,
+            "reader-graph.json": graph,
+            "generator-payload.json": model,
+            "diagram.svg": svg,
+            "validation-report.json": {
+                "state": state,
+                "issues": issues,
+                "diagram_report": diagram_report,
+            },
+            "audit-trace.json": {"checks": checks, "released_graph": released},
         },
-        "audit-trace.json": {"checks": checks, "released_graph": released},
-    })
+    )
     return {
         "runtime": "production backend EMG adapter, deterministic SVG builder and verifier",
         "evidence_level": "live_backend_semantic_svg_reopen_and_release_gate",

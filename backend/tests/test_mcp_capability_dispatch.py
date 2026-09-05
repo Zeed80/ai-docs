@@ -12,8 +12,8 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from app.api import capability_router
 from app.ai import mcp_capability
+from app.api import capability_router
 
 
 class FakeRequest:
@@ -34,6 +34,7 @@ def _clean_mcp_cache():
 
 def _stub_registry(monkeypatch, handlers: dict):
     """Bypass the real load_mcp_tools/subprocess machinery entirely."""
+
     async def _get_handler(name):
         return handlers.get(name)
 
@@ -111,6 +112,7 @@ async def test_dispatch_mcp_with_approval_invokes_handler(monkeypatch):
 
     assert received_args == {"x": 1}
     import json
+
     assert json.loads(response.body) == {"ok": True, "answer": 42}
 
 
@@ -130,6 +132,7 @@ async def test_dispatch_mcp_handler_exception_returns_502(monkeypatch):
 
     assert response.status_code == 502
     import json
+
     assert "MCP server crashed" in json.loads(response.body)["error"]
 
 
@@ -140,6 +143,7 @@ async def test_list_mcp_tools_returns_registry_names(monkeypatch):
     response = await capability_router.list_mcp_tools()
 
     import json
+
     assert json.loads(response.body) == {"tools": ["acme__ping", "acme__pong"]}
 
 

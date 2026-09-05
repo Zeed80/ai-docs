@@ -26,12 +26,8 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
         method = request.method
         status = str(response.status_code)
 
-        metrics.http_requests_total.labels(
-            method=method, path=path, status=status
-        ).inc()
-        metrics.http_request_duration_seconds.labels(
-            method=method, path=path
-        ).observe(duration)
+        metrics.http_requests_total.labels(method=method, path=path, status=status).inc()
+        metrics.http_request_duration_seconds.labels(method=method, path=path).observe(duration)
 
         return response
 

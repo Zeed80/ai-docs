@@ -30,10 +30,9 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import gpu_manager
-from app.auth.jwt import require_role
-from app.auth.models import UserRole
 from app.ai.parameter_profiles import (
     PROVIDER_HARDWARE_DEFAULTS,
     TASK_DEFAULT_PROFILE,
@@ -45,8 +44,9 @@ from app.ai.parameter_profiles import (
     set_task_profile_override,
 )
 from app.ai.schemas import AITask
+from app.auth.jwt import require_role
+from app.auth.models import UserRole
 from app.db.session import get_db
-from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -57,6 +57,7 @@ ProviderName = Literal["ollama", "llamacpp", "vllm"]
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
 
 class VRAMLimitsUpdate(BaseModel):
     ollama: float | None = None
@@ -135,7 +136,7 @@ class PowerLimitResult(BaseModel):
 
 class ActivateRequest(BaseModel):
     model_path: str
-    vram_gb_estimate: float | None = None    # for pre-check; 0 = skip check
+    vram_gb_estimate: float | None = None  # for pre-check; 0 = skip check
 
 
 class DownloadRequest(BaseModel):
@@ -165,6 +166,7 @@ class RoutingUpdate(BaseModel):
 # Status & GPU
 # ---------------------------------------------------------------------------
 
+
 @router.get("/status")
 async def get_all_providers_status() -> dict:
     """Return status of all local providers + real GPU stats."""
@@ -189,6 +191,7 @@ async def get_all_providers_status() -> dict:
 
     # llama.cpp status
     from app.ai.providers.llamacpp_manager import get_llamacpp_status
+
     try:
         lc_status = await get_llamacpp_status()
         llamacpp_status = lc_status.model_dump()
@@ -232,14 +235,10 @@ async def get_gpu_telemetry() -> GpuTelemetryResponse:
         return GpuTelemetryResponse(available=False, ts=_time.time())
     gpu_out = None
     if gpu is not None:
-        gpu_out = GpuTelemetryGPU(
-            **{k: v for k, v in gpu.__dict__.items() if k != "ts"}
-        )
+        gpu_out = GpuTelemetryGPU(**{k: v for k, v in gpu.__dict__.items() if k != "ts"})
     cpu_out = None
     if cpu is not None:
-        cpu_out = CpuTelemetryOut(
-            **{k: v for k, v in cpu.__dict__.items() if k != "ts"}
-        )
+        cpu_out = CpuTelemetryOut(**{k: v for k, v in cpu.__dict__.items() if k != "ts"})
     return GpuTelemetryResponse(
         available=True,
         ts=(gpu.ts if gpu else cpu.ts),
@@ -332,6 +331,7 @@ async def set_gpu_budget(limits: VRAMLimitsUpdate) -> dict:
 # Unified search
 # ---------------------------------------------------------------------------
 
+
 @router.get("/search")
 async def search_models(
     q: str = Query(..., description="Model name or keyword"),
@@ -346,17 +346,17 @@ async def search_models(
     - provider=vllm → Safetensors/AWQ/GPTQ, vllm_manager search
     - provider=ollama or None → falls through to HF general search
     """
-    from app.ai.providers.vllm_manager import (
-        search_hf_models as vllm_hf_search,
-    )
-    from app.ai.providers.vllm_manager import (
-        search_ms_models as vllm_ms_search,
-    )
     from app.ai.providers.llamacpp_manager import (
         _hf_headers as lc_hf_headers,
     )
     from app.ai.providers.llamacpp_manager import (
         _ms_headers as lc_ms_headers,
+    )
+    from app.ai.providers.vllm_manager import (
+        search_hf_models as vllm_hf_search,
+    )
+    from app.ai.providers.vllm_manager import (
+        search_ms_models as vllm_ms_search,
     )
 
     # vLLM-native search (safetensors/AWQ)
@@ -369,6 +369,7 @@ async def search_models(
 
     # llama.cpp / Ollama → GGUF search via existing llamacpp search logic
     import httpx
+
     if source == "huggingface":
         hf_filter = "gguf" if provider in ("llamacpp", "ollama") else "safetensors"
         actual_filter = format or hf_filter
@@ -430,21 +431,25 @@ async def search_models(
 # Provider-specific: list local models
 # ---------------------------------------------------------------------------
 
+
 @router.get("/{provider}/models")
 async def list_provider_models(provider: ProviderName) -> dict:
     if provider == "llamacpp":
         from app.ai.providers.llamacpp_manager import list_gguf_models
+
         models = await list_gguf_models()
         return {"provider": "llamacpp", "models": [m.model_dump() for m in models]}
 
     if provider == "vllm":
         from app.ai.providers.vllm_manager import list_local_models
+
         return {"provider": "vllm", "models": list_local_models()}
 
     if provider == "ollama":
         import httpx
 
         from app.config import settings
+
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 r = await client.get(f"{settings.ollama_url.rstrip('/')}/api/tags")
@@ -471,6 +476,7 @@ async def list_provider_models(provider: ProviderName) -> dict:
 # ---------------------------------------------------------------------------
 # Provider-specific: activate model (with VRAM check)
 # ---------------------------------------------------------------------------
+
 
 @router.post("/ollama/unload-all")
 async def unload_all_ollama() -> dict:
@@ -554,11 +560,13 @@ async def activate_provider_model(provider: ProviderName, body: ActivateRequest)
 
     if provider == "llamacpp":
         from app.ai.providers.llamacpp_manager import activate_model as lc_activate
+
         result = await lc_activate({"path": body.model_path})
         return result.model_dump() if hasattr(result, "model_dump") else result
 
     if provider == "vllm":
         from app.ai.providers.vllm_manager import activate_model as vllm_activate
+
         result = await vllm_activate(body.model_path)
         return result
 
@@ -577,6 +585,7 @@ async def activate_provider_model(provider: ProviderName, body: ActivateRequest)
 # Provider-specific: download
 # ---------------------------------------------------------------------------
 
+
 @router.post("/{provider}/download")
 async def start_model_download(provider: ProviderName, body: DownloadRequest) -> dict:
     import asyncio
@@ -588,6 +597,7 @@ async def start_model_download(provider: ProviderName, body: DownloadRequest) ->
         from app.ai.providers.llamacpp_manager import (
             _downloads as lc_downloads,
         )
+
         dl_id = f"{body.repo_id}/{body.filename}".replace("/", "__")
         if dl_id in lc_downloads and lc_downloads[dl_id].get("status") == "downloading":
             return {"download_id": dl_id, "message": "Already downloading"}
@@ -596,10 +606,16 @@ async def start_model_download(provider: ProviderName, body: DownloadRequest) ->
         elif body.source == "huggingface":
             url = f"https://huggingface.co/{body.repo_id}/resolve/main/{body.filename}"
         else:
-            url = f"https://modelscope.cn/api/v1/models/{body.repo_id}/repo?FilePath={body.filename}"
+            url = (
+                f"https://modelscope.cn/api/v1/models/{body.repo_id}/repo?FilePath={body.filename}"
+            )
         lc_downloads[dl_id] = {
-            "status": "pending", "progress_bytes": 0, "total_bytes": 0,
-            "error": None, "repo_id": body.repo_id, "filename": body.filename,
+            "status": "pending",
+            "progress_bytes": 0,
+            "total_bytes": 0,
+            "error": None,
+            "repo_id": body.repo_id,
+            "filename": body.filename,
         }
         asyncio.create_task(
             lc_download_model(dl_id, url, body.filename, body.source, repo_id=body.repo_id)
@@ -608,6 +624,7 @@ async def start_model_download(provider: ProviderName, body: DownloadRequest) ->
 
     if provider == "vllm":
         from app.ai.providers.vllm_manager import start_download as vllm_download
+
         did = await vllm_download(body.repo_id, body.filename, body.source, body.url)
         return {"download_id": did}
 
@@ -617,6 +634,7 @@ async def start_model_download(provider: ProviderName, body: DownloadRequest) ->
 # ---------------------------------------------------------------------------
 # vLLM engine version / update
 # ---------------------------------------------------------------------------
+
 
 class VllmUpdateRequest(BaseModel):
     image: str = Field(..., description="Bare tag ('v0.25.1') or full 'repo:tag'")
@@ -654,6 +672,7 @@ async def stream_download_progress(provider: ProviderName, download_id: str) -> 
 
         async def gen():
             import asyncio as _asyncio
+
             while True:
                 info = lc_downloads.get(download_id)
                 if info is None:
@@ -677,6 +696,7 @@ async def stream_download_progress(provider: ProviderName, download_id: str) -> 
 # ---------------------------------------------------------------------------
 # Parameter profiles
 # ---------------------------------------------------------------------------
+
 
 @router.get("/parameter-profiles")
 async def list_parameter_profiles() -> dict:
@@ -716,6 +736,7 @@ async def remove_profile(name: str) -> dict:
 # Task → profile mapping
 # ---------------------------------------------------------------------------
 
+
 @router.get("/task-profiles")
 async def get_task_profiles() -> dict:
     overrides = get_task_profile_overrides()
@@ -723,12 +744,14 @@ async def get_task_profiles() -> dict:
     for task in AITask:
         profile = overrides.get(task.value) or TASK_DEFAULT_PROFILE.get(task, "balanced")
         params = get_inference_params(task)
-        task_map.append({
-            "task": task.value,
-            "profile": profile,
-            "overridden": task.value in overrides,
-            "params": params,
-        })
+        task_map.append(
+            {
+                "task": task.value,
+                "profile": profile,
+                "overridden": task.value in overrides,
+                "params": params,
+            }
+        )
     return {"tasks": task_map}
 
 
@@ -774,15 +797,17 @@ def _catalog_entries() -> list[dict]:
     reg = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
     out = []
     for key, cap in reg.models.items():
-        out.append({
-            "key": key,
-            "provider": cap.provider.value,
-            "provider_model": cap.provider_model,
-            "modalities": sorted(m.value for m in cap.modalities),
-            "local_only": cap.local_only,
-            "vram_gb_estimate": cap.vram_gb_estimate,
-            "status": cap.status.value,
-        })
+        out.append(
+            {
+                "key": key,
+                "provider": cap.provider.value,
+                "provider_model": cap.provider_model,
+                "modalities": sorted(m.value for m in cap.modalities),
+                "local_only": cap.local_only,
+                "vram_gb_estimate": cap.vram_gb_estimate,
+                "status": cap.status.value,
+            }
+        )
     return sorted(out, key=lambda e: (e["provider"], e["key"]))
 
 
@@ -797,19 +822,21 @@ async def get_routing() -> dict:
     tasks = []
     for task, r in routing.items():
         route = reg.routes.get(task)
-        tasks.append({
-            "task": task.value,
-            "label": TASK_LABELS.get(task.value, task.value),
-            "models": r.models,
-            "profile": r.profile,
-            "local_only": r.local_only,
-            "allow_cloud": r.allow_cloud,
-            "confidential_locked": task in CONFIDENTIAL_TASKS,
-            "required_modalities": (
-                sorted(m.value for m in route.required_modalities) if route else []
-            ),
-            "params": get_inference_params(task),
-        })
+        tasks.append(
+            {
+                "task": task.value,
+                "label": TASK_LABELS.get(task.value, task.value),
+                "models": r.models,
+                "profile": r.profile,
+                "local_only": r.local_only,
+                "allow_cloud": r.allow_cloud,
+                "confidential_locked": task in CONFIDENTIAL_TASKS,
+                "required_modalities": (
+                    sorted(m.value for m in route.required_modalities) if route else []
+                ),
+                "params": get_inference_params(task),
+            }
+        )
     return {"tasks": tasks, "catalog": _catalog_entries()}
 
 
@@ -867,6 +894,7 @@ async def reset_routing(task: str, db: AsyncSession = Depends(get_db)) -> dict:
 # Simplified assignment — two groups (Документы / Агент)
 # ---------------------------------------------------------------------------
 
+
 class DocumentGroupUpdate(BaseModel):
     vision_model: str | None = None
     text_model: str | None = None
@@ -915,8 +943,10 @@ async def set_document_assignment(
         [
             t.value
             for t in (
-                *VISION_DOC_TASKS, *TEXT_DOC_TASKS,
-                *EMBEDDING_DOC_TASKS, *RERANK_DOC_TASKS,
+                *VISION_DOC_TASKS,
+                *TEXT_DOC_TASKS,
+                *EMBEDDING_DOC_TASKS,
+                *RERANK_DOC_TASKS,
             )
         ],
     )
@@ -924,9 +954,7 @@ async def set_document_assignment(
 
 
 @router.put("/assignment/agent")
-async def set_agent_assignment(
-    body: AgentGroupUpdate, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def set_agent_assignment(body: AgentGroupUpdate, db: AsyncSession = Depends(get_db)) -> dict:
     from app.ai import model_runtime_store
     from app.ai.agent_config import get_builtin_agent_config
     from app.ai.assignment_groups import AGENT_SYNC_TASKS, AgentGroup, set_agent_group
@@ -950,6 +978,7 @@ async def set_agent_assignment(
 # Per-provider server config / tokens / lifecycle / repo files
 # ---------------------------------------------------------------------------
 
+
 class ConfigUpdate(BaseModel):
     config: dict[str, Any]
 
@@ -971,9 +1000,11 @@ _SERVICE_NAMES = {
 async def get_provider_config(provider: ProviderName) -> dict:
     if provider == "llamacpp":
         from app.ai.providers.llamacpp_manager import _load_config
+
         return {"provider": "llamacpp", "config": _load_config()}
     if provider == "vllm":
         from app.ai.providers.vllm_manager import load_vllm_config
+
         return {"provider": "vllm", "config": load_vllm_config()}
     # Ollama has no editable server config — expose hardware defaults read-only.
     return {
@@ -987,11 +1018,13 @@ async def get_provider_config(provider: ProviderName) -> dict:
 async def patch_provider_config(provider: ProviderName, body: ConfigUpdate) -> dict:
     if provider == "llamacpp":
         from app.ai.providers.llamacpp_manager import _load_config, _save_config
+
         cfg = {**_load_config(), **body.config}
         _save_config(cfg)
         return {"provider": "llamacpp", "config": cfg}
     if provider == "vllm":
         from app.ai.providers.vllm_manager import load_vllm_config, save_vllm_config
+
         cfg = {**load_vllm_config(), **body.config}
         save_vllm_config(cfg)
         return {"provider": "vllm", "config": cfg}
@@ -1002,6 +1035,7 @@ async def patch_provider_config(provider: ProviderName, body: ConfigUpdate) -> d
 async def get_tokens() -> dict:
     """HF/ModelScope tokens are shared across providers (used for gated downloads)."""
     from app.ai.providers.llamacpp_manager import _load_tokens
+
     tokens = _load_tokens()
     return {
         "huggingface": bool(tokens.get("huggingface")),
@@ -1012,6 +1046,7 @@ async def get_tokens() -> dict:
 @router.patch("/tokens")
 async def patch_tokens(body: TokensUpdate) -> dict:
     from app.ai.providers.llamacpp_manager import _load_tokens, _save_tokens
+
     tokens = _load_tokens()
     if body.huggingface is not None:
         tokens["huggingface"] = body.huggingface
@@ -1027,6 +1062,7 @@ async def patch_tokens(body: TokensUpdate) -> dict:
 @router.delete("/tokens/{token_provider}")
 async def delete_token(token_provider: Literal["huggingface", "modelscope"]) -> dict:
     from app.ai.providers.llamacpp_manager import _load_tokens, _save_tokens
+
     tokens = _load_tokens()
     tokens.pop(token_provider, None)
     _save_tokens(tokens)
@@ -1072,6 +1108,7 @@ async def control_provider_server(
     # Reset the idle timer so a just-started server isn't swept immediately.
     if action in ("start", "restart"):
         from app.ai.server_lifecycle import mark_used
+
         mark_used(provider)
     return {"ok": True, "provider": provider, "service": service, "action": action}
 
@@ -1080,15 +1117,18 @@ async def control_provider_server(
 # Hardware presets
 # ---------------------------------------------------------------------------
 
+
 @router.get("/presets")
 async def list_hardware_presets() -> dict:
     from app.ai.presets import list_presets
+
     return {"presets": list_presets()}
 
 
 @router.post("/presets/{name}/apply")
 async def apply_hardware_preset(name: str, db: AsyncSession = Depends(get_db)) -> dict:
     from app.ai.presets import apply_preset
+
     try:
         result = apply_preset(name)
     except ValueError as exc:
@@ -1101,15 +1141,18 @@ async def apply_hardware_preset(name: str, db: AsyncSession = Depends(get_db)) -
 # Usage telemetry
 # ---------------------------------------------------------------------------
 
+
 @router.get("/telemetry/summary")
 async def telemetry_summary() -> dict:
     from app.ai import telemetry
+
     return telemetry.get_summary()
 
 
 @router.post("/telemetry/reset")
 async def telemetry_reset() -> dict:
     from app.ai import telemetry
+
     telemetry.reset()
     return {"ok": True}
 
@@ -1117,6 +1160,7 @@ async def telemetry_reset() -> dict:
 # ---------------------------------------------------------------------------
 # Benchmark — measure real latency of a model on a task (forward-looking)
 # ---------------------------------------------------------------------------
+
 
 class BenchmarkRequest(BaseModel):
     model_key: str
@@ -1174,11 +1218,13 @@ async def get_model_files(
     """List downloadable files (GGUF quants / safetensors) of a repo for a provider."""
     if provider == "vllm":
         from app.ai.providers.vllm_manager import list_hf_files
+
         files = await list_hf_files(repo_id)
         return {"provider": "vllm", "repo_id": repo_id, "files": files}
 
     # llamacpp / ollama → GGUF files via existing llamacpp helpers
     from app.ai.providers.llamacpp_manager import get_hf_model_files, get_ms_model_files
+
     if source == "huggingface":
         files = await get_hf_model_files(
             repo_id, quant=quant, max_gb=max_gb if max_gb is not None else 100
@@ -1196,6 +1242,7 @@ async def get_model_files(
 # ---------------------------------------------------------------------------
 # Provider hardware defaults
 # ---------------------------------------------------------------------------
+
 
 @router.get("/provider-defaults")
 async def get_provider_defaults() -> dict:

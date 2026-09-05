@@ -107,9 +107,7 @@ async def test_cad_trace_run_end_to_end(db_session, fake_storage, monkeypatch):
     assert types & {"LINE", "LWPOLYLINE"}
 
     rev = (
-        await db_session.execute(
-            select(CadIrRevision).where(CadIrRevision.generation_id == gen.id)
-        )
+        await db_session.execute(select(CadIrRevision).where(CadIrRevision.generation_id == gen.id))
     ).scalar_one()
     assert rev.revision == 0
     assert rev.origin == "auto"
@@ -170,9 +168,7 @@ async def test_spec_redraw_with_reader_warning_is_user_reviewable(
         return None
 
     monkeypatch.setattr("app.db.session._get_session_factory", lambda: _factory)
-    monkeypatch.setattr(
-        "app.ai.cad_recognize.spec_fragments.read_spec_best_effort", _read_spec
-    )
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments.read_spec_best_effort", _read_spec)
     monkeypatch.setattr(cad_trace, "_build_spec_solid", _no_solid)
 
     fake_storage["image-gen-src/test/spec.png"] = _scan_png()
@@ -203,20 +199,15 @@ async def test_spec_redraw_with_reader_warning_is_user_reviewable(
     assert gen.params["digitization_status"] == "review_required"
 
     revision = (
-        await db_session.execute(
-            select(CadIrRevision).where(CadIrRevision.generation_id == gen.id)
-        )
+        await db_session.execute(select(CadIrRevision).where(CadIrRevision.generation_id == gen.id))
     ).scalar_one()
     ir = cad_ir_store.load_ir(revision)
     assert any(
-        entity.line_class == "contour"
-        and "sheet_frame" not in entity.evidence
+        entity.line_class == "contour" and "sheet_frame" not in entity.evidence
         for entity in ir.entities
         if entity.type in ("segment", "arc", "circle", "polyline")
     )
-    assert "SPEC_READER_UNRESOLVED" in {
-        issue.code for issue in ir.validation.issues
-    }
+    assert "SPEC_READER_UNRESOLVED" in {issue.code for issue in ir.validation.issues}
 
 
 @pytest.mark.asyncio
@@ -225,7 +216,6 @@ async def test_cad_trace_flags_diffusion_added_ink(db_session, fake_storage, mon
     photo: a stroke the diffusion invented must be flagged, not trusted."""
     import cv2
     import numpy as np
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.db.models import ImageGeneration, ImageGenStatus
@@ -301,7 +291,6 @@ async def test_cad_trace_flags_diffusion_added_ink(db_session, fake_storage, mon
 async def test_cad_trace_declines_dense_sheet(db_session, fake_storage, monkeypatch):
     import cv2
     import numpy as np
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.db.models import ImageGeneration, ImageGenStatus
@@ -362,9 +351,15 @@ async def test_cad_trace_degrades_to_raster_draft_when_recognition_empty(
     monkeypatch.setattr(
         "app.ai.cad_recognize.verify.arbitrate_recognition",
         lambda *a, **kw: ArbitrationResult(
-            entities=[], keep_raster=None, thin_px=2, thick_px=3,
-            recognizer_used="cv", score=CoverageScore(0.0, 0.0),
-            neural_available=False, discrepancy=False, notes={},
+            entities=[],
+            keep_raster=None,
+            thin_px=2,
+            thick_px=3,
+            recognizer_used="cv",
+            score=CoverageScore(0.0, 0.0),
+            neural_available=False,
+            discrepancy=False,
+            notes={},
         ),
     )
 
@@ -387,9 +382,7 @@ async def test_cad_trace_degrades_to_raster_draft_when_recognition_empty(
     assert "RECOGNITION_EMPTY" in gen.params["validation"]["codes"]
     # The revision persisted with the full ink as raster passthrough.
     rev = (
-        await db_session.execute(
-            select(CadIrRevision).where(CadIrRevision.generation_id == gen.id)
-        )
+        await db_session.execute(select(CadIrRevision).where(CadIrRevision.generation_id == gen.id))
     ).scalar_one()
     assert rev.revision == 0
     assert gen.params.get("keep_raster_path") in fake_storage
@@ -427,7 +420,9 @@ def test_binarize_retries_with_adaptive_threshold_on_stained_paper():
     ink, out_w, out_h = cad_trace._binarize(buf.tobytes())
     assert (out_w, out_h) == (w, h)
     ink_fraction = float((ink > 0).mean())
-    assert ink_fraction < 0.20, f"adaptive retry should have cleaned the staining, got {ink_fraction}"
+    assert ink_fraction < 0.20, (
+        f"adaptive retry should have cleaned the staining, got {ink_fraction}"
+    )
 
 
 def test_detect_sheet_frame_quad_and_segments():
@@ -475,7 +470,9 @@ def test_sheet_scale_requires_confirmed_format_and_never_guesses_a4():
 
 
 @pytest.mark.asyncio
-async def test_cad_trace_vlm_enrichment_promotes_thread_reading(db_session, fake_storage, monkeypatch):
+async def test_cad_trace_vlm_enrichment_promotes_thread_reading(
+    db_session, fake_storage, monkeypatch
+):
     """params.vlm_dimensions=true end-to-end: a mocked VLM call reads a
     thread designation off a low-confidence OCR text crop; Ф4.2's
     cross-check (parse_thread validity) decisively promotes it to
@@ -507,8 +504,20 @@ async def test_cad_trace_vlm_enrichment_promotes_thread_reading(db_session, fake
 
     async def _fake_vlm(_crop_bytes, **_kw):
         return [
-            {"text": "M18", "value_mm": None, "kind": "thread", "tolerance": None, "confidence": 0.6},
-            {"text": "M1B", "value_mm": None, "kind": "unclear", "tolerance": None, "confidence": 0.4},
+            {
+                "text": "M18",
+                "value_mm": None,
+                "kind": "thread",
+                "tolerance": None,
+                "confidence": 0.6,
+            },
+            {
+                "text": "M1B",
+                "value_mm": None,
+                "kind": "unclear",
+                "tolerance": None,
+                "confidence": 0.4,
+            },
         ]
 
     monkeypatch.setattr("app.ai.vlm_dimensions.read_crop_hypotheses", _fake_vlm)

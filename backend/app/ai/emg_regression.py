@@ -17,9 +17,7 @@ from app.domain.engineering_model_graph import EngineeringModelGraph, compile_bu
 from app.services.engineering_model_graph import verify_graph
 
 
-def build_regression_graph(
-    case: dict[str, Any], fixture_root: Path
-) -> EngineeringModelGraph:
+def build_regression_graph(case: dict[str, Any], fixture_root: Path) -> EngineeringModelGraph:
     case_id = str(case["id"])
     kind = case["kind"]
     payload = case["input"]
@@ -28,9 +26,7 @@ def build_regression_graph(
         candidate = feature_tree_from_spec(spec)
         if candidate is None:
             raise ValueError(f"{case_id}: mechanical feature tree was not compiled")
-        return spec_feature_tree_as_graph(
-            spec, candidate, graph_id=f"emg-regression:{case_id}"
-        )
+        return spec_feature_tree_as_graph(spec, candidate, graph_id=f"emg-regression:{case_id}")
     if kind == "assembly":
         components = payload["components"]
         mates = payload["mates"]
@@ -62,9 +58,7 @@ def build_regression_graph(
     raise ValueError(f"{case_id}: unsupported regression kind {kind!r}")
 
 
-def _case_result(
-    case: dict[str, Any], fixture_root: Path
-) -> tuple[dict[str, Any], list[str]]:
+def _case_result(case: dict[str, Any], fixture_root: Path) -> tuple[dict[str, Any], list[str]]:
     graph = build_regression_graph(case, fixture_root)
     repeated = build_regression_graph(case, fixture_root)
     preview = compile_build_plan(graph, "preview")
@@ -81,9 +75,7 @@ def _case_result(
         "preview_export_allowed": preview.production_export_allowed,
         "production_export_allowed": production.production_export_allowed,
         "checked_levels": state.checked_levels,
-        "error_codes": sorted(
-            item["code"] for item in issues if item["severity"] == "error"
-        ),
+        "error_codes": sorted(item["code"] for item in issues if item["severity"] == "error"),
     }
     if case["kind"] == "mechanical_spec":
         projected = feature_tree_from_graph(graph, target_id="preview")
@@ -95,15 +87,11 @@ def _case_result(
         failures.append("production build plan is not deterministic")
     for key, expected in case["expected"].items():
         if result.get(key) != expected:
-            failures.append(
-                f"{key}: expected {expected!r}, got {result.get(key)!r}"
-            )
+            failures.append(f"{key}: expected {expected!r}, got {result.get(key)!r}")
     return result, failures
 
 
-def run_emg_regression(
-    manifest: dict[str, Any], *, fixture_root: Path
-) -> dict[str, Any]:
+def run_emg_regression(manifest: dict[str, Any], *, fixture_root: Path) -> dict[str, Any]:
     if manifest.get("schema_version") != "emg-regression/1.0":
         raise ValueError("unsupported EMG regression manifest schema")
     cases = []
@@ -111,13 +99,15 @@ def run_emg_regression(
     for case in manifest.get("cases", []):
         actual, failures = _case_result(case, fixture_root)
         passed = passed and not failures
-        cases.append({
-            "id": case["id"],
-            "kind": case["kind"],
-            "passed": not failures,
-            "failures": failures,
-            "actual": actual,
-        })
+        cases.append(
+            {
+                "id": case["id"],
+                "kind": case["kind"],
+                "passed": not failures,
+                "failures": failures,
+                "actual": actual,
+            }
+        )
     if not cases:
         raise ValueError("EMG regression manifest has no cases")
     return {

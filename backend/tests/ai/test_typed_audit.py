@@ -113,15 +113,11 @@ def test_can_retry_with_executor_uses_codes():
     assert session._can_retry_with_executor(plan, report) is False
 
     # A verified-but-different canvas must NOT cause a duplicate re-publish.
-    report = AuditReport(
-        passed=True, issues=[_issue(AuditCode.WRONG_CANVAS, severity="advisory")]
-    )
+    report = AuditReport(passed=True, issues=[_issue(AuditCode.WRONG_CANVAS, severity="advisory")])
     assert session._can_retry_with_executor(plan, report) is False
 
     # Advisory-only report → nothing to fix by retrying.
-    report = AuditReport(
-        passed=True, issues=[_issue(AuditCode.TOOL_OFF_PLAN, severity="advisory")]
-    )
+    report = AuditReport(passed=True, issues=[_issue(AuditCode.TOOL_OFF_PLAN, severity="advisory")])
     assert session._can_retry_with_executor(plan, report) is False
 
 
@@ -274,13 +270,17 @@ def test_response_budget_reads_routes_yml_not_hardcoded(monkeypatch):
     )
     worker = orchestrator_module.WorkerAssignment(role="data_analyst", task="t")
     plan = orchestrator_module.OrchestratorPlan(
-        goal="g", intent="test", worker=worker,
+        goal="g",
+        intent="test",
+        worker=worker,
         workspace=orchestrator_module.WorkspaceOutputSpec(output_type="table"),
     )
     assert orchestrator_module._response_budget_for(Tier.NANO, plan) == 9999  # output_type wins
 
     plan_chat = orchestrator_module.OrchestratorPlan(
-        goal="g", intent="test", worker=worker,
+        goal="g",
+        intent="test",
+        worker=worker,
         workspace=orchestrator_module.WorkspaceOutputSpec(output_type="text"),
     )
     assert orchestrator_module._response_budget_for(Tier.LARGE, plan_chat) == 7777

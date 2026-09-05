@@ -11,11 +11,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.ai.cad_drawing_graph import (
+    DrawingGraphDraftError,
     DrawingGraphFragment,
     DrawingGraphLayout,
     DrawingGraphSource,
-    DrawingGraphDraftError,
     EngineeringDrawingGraph,
+    _normalize_fragment_entity_wrappers,
+    _normalize_fragment_evidence_kinds,
     assemble_drawing_graph_fragments,
     build_drawing_graph_tiles,
     draft_drawing_graph,
@@ -24,8 +26,6 @@ from app.ai.cad_drawing_graph import (
     read_drawing_graph_staged_attempt,
     verify_drawing_graph,
     verify_graph_evidence_with_vlm,
-    _normalize_fragment_evidence_kinds,
-    _normalize_fragment_entity_wrappers,
 )
 from app.ai.cad_ir.dxf_render import render_ir_to_dxf
 
@@ -58,20 +58,24 @@ def _graph_payload(*, status: str = "reader_output", assurance: str = "observed"
         },
         "scale_mm_per_px": 0.25,
         "scale_source": "calibration",
-        "evidence": [{
-            "id": "evidence-sheet",
-            "kind": "pixel_support",
-            "region": {"x0": 1, "y0": 1, "x1": 999, "y1": 799},
-            "confidence": 0.99,
-        }],
-        "views": [{
-            "id": "view-front",
-            "kind": "front",
-            "region": {"x0": 50, "y0": 50, "x1": 900, "y1": 700},
-            "entity_ids": entity_ids,
-            "confidence": 0.98,
-            "evidence": ["evidence-sheet"],
-        }],
+        "evidence": [
+            {
+                "id": "evidence-sheet",
+                "kind": "pixel_support",
+                "region": {"x0": 1, "y0": 1, "x1": 999, "y1": 799},
+                "confidence": 0.99,
+            }
+        ],
+        "views": [
+            {
+                "id": "view-front",
+                "kind": "front",
+                "region": {"x0": 50, "y0": 50, "x1": 900, "y1": 700},
+                "entity_ids": entity_ids,
+                "confidence": 0.98,
+                "evidence": ["evidence-sheet"],
+            }
+        ],
         "entities": [
             {
                 "id": "contour-1",
@@ -170,9 +174,7 @@ def test_drawing_graph_drafter_preserves_entities_relations_and_ids_in_dxf():
     graph = EngineeringDrawingGraph.model_validate(_graph_payload())
     ir = draft_drawing_graph(graph)
 
-    assert [entity.id for entity in ir.entities] == [
-        entity.id for entity in graph.entities
-    ]
+    assert [entity.id for entity in ir.entities] == [entity.id for entity in graph.entities]
     assert [relation.id for relation in ir.relations] == [
         relation.id for relation in graph.relations
     ]
@@ -192,22 +194,19 @@ def test_drawing_graph_drafter_preserves_entities_relations_and_ids_in_dxf():
 
     doc = ezdxf.read(io.StringIO(render_ir_to_dxf(ir).decode()))
     modelspace_types = {entity.dxftype() for entity in doc.modelspace()}
-    assert {"LINE", "CIRCLE", "ARC", "LWPOLYLINE", "DIMENSION", "HATCH"} <= (
-        modelspace_types
-    )
+    assert {"LINE", "CIRCLE", "ARC", "LWPOLYLINE", "DIMENSION", "HATCH"} <= (modelspace_types)
 
 
 def test_verified_graph_can_become_exact_candidate_without_reader_self_certifying():
     graph = EngineeringDrawingGraph.model_validate(
         _graph_payload(status="verified", assurance="constraint_validated")
     )
-    verification = verify_drawing_graph(
-        graph, pixel_recall=1.0, pixel_precision=1.0
-    )
+    verification = verify_drawing_graph(graph, pixel_recall=1.0, pixel_precision=1.0)
     assert verification.exact_ready is True
-    assert draft_drawing_graph(
-        graph, verification=verification
-    ).digitization_status == "exact_candidate"
+    assert (
+        draft_drawing_graph(graph, verification=verification).digitization_status
+        == "exact_candidate"
+    )
     assert draft_drawing_graph(graph).digitization_status == "review_required"
 
     payload = _graph_payload(assurance="constraint_validated")
@@ -236,14 +235,16 @@ def test_graph_rejects_missing_evidence_and_out_of_sheet_geometry():
 
 def test_graph_rejects_duplicate_view_ownership_and_broken_relation_refs():
     payload = _graph_payload()
-    payload["views"].append({
-        "id": "view-detail",
-        "kind": "detail",
-        "region": {"x0": 250, "y0": 250, "x1": 350, "y1": 350},
-        "entity_ids": ["hole-1"],
-        "confidence": 0.8,
-        "evidence": ["evidence-sheet"],
-    })
+    payload["views"].append(
+        {
+            "id": "view-detail",
+            "kind": "detail",
+            "region": {"x0": 250, "y0": 250, "x1": 350, "y1": 350},
+            "entity_ids": ["hole-1"],
+            "confidence": 0.8,
+            "evidence": ["evidence-sheet"],
+        }
+    )
     with pytest.raises(ValidationError, match="exactly one view"):
         EngineeringDrawingGraph.model_validate(payload)
 
@@ -255,11 +256,13 @@ def test_graph_rejects_duplicate_view_ownership_and_broken_relation_refs():
 
 def test_unresolved_region_blocks_drafting_even_when_graph_is_structurally_valid():
     payload = _graph_payload()
-    payload["unresolved_regions"] = [{
-        "id": "unresolved-ink-1",
-        "region": {"x0": 850, "y0": 100, "x1": 900, "y1": 150},
-        "reason": "unvectorized_ink",
-    }]
+    payload["unresolved_regions"] = [
+        {
+            "id": "unresolved-ink-1",
+            "region": {"x0": 850, "y0": 100, "x1": 900, "y1": 150},
+            "reason": "unvectorized_ink",
+        }
+    ]
     graph = EngineeringDrawingGraph.model_validate(payload)
     with pytest.raises(DrawingGraphDraftError, match="unresolved-ink-1"):
         draft_drawing_graph(graph)
@@ -268,19 +271,13 @@ def test_unresolved_region_blocks_drafting_even_when_graph_is_structurally_valid
 def test_graph_verifier_rejects_missing_pixel_check_and_dimension_mismatch():
     graph = EngineeringDrawingGraph.model_validate(_graph_payload())
     missing_pixel = verify_drawing_graph(graph)
-    assert {issue.code for issue in missing_pixel.blocking} == {
-        "GRAPH_PIXEL_CHECK_MISSING"
-    }
+    assert {issue.code for issue in missing_pixel.blocking} == {"GRAPH_PIXEL_CHECK_MISSING"}
 
     payload = _graph_payload()
     payload["entities"][5]["value_mm"] = 12
     mismatch_graph = EngineeringDrawingGraph.model_validate(payload)
-    mismatch = verify_drawing_graph(
-        mismatch_graph, pixel_recall=1.0, pixel_precision=1.0
-    )
-    assert "GRAPH_DIMENSION_MISMATCH" in {
-        issue.code for issue in mismatch.blocking
-    }
+    mismatch = verify_drawing_graph(mismatch_graph, pixel_recall=1.0, pixel_precision=1.0)
+    assert "GRAPH_DIMENSION_MISMATCH" in {issue.code for issue in mismatch.blocking}
 
 
 class _GraphRouter:
@@ -399,9 +396,7 @@ async def test_vlm_crop_evidence_verifier_is_exact_independent_and_ocr_free():
     graph = EngineeringDrawingGraph.model_validate(payload)
     router = _EvidenceRouter()
 
-    report = await verify_graph_evidence_with_vlm(
-        buffer.getvalue(), graph, router=router
-    )
+    report = await verify_graph_evidence_with_vlm(buffer.getvalue(), graph, router=router)
 
     assert report.expected_checks == 3
     assert report.exact_checks == 3
@@ -449,9 +444,7 @@ async def test_vlm_crop_evidence_must_use_a_different_model_from_reader():
         vlm_evidence=report,
         require_vlm_evidence=True,
     )
-    assert {issue.code for issue in verification.blocking} == {
-        "GRAPH_VLM_VERIFIER_NOT_INDEPENDENT"
-    }
+    assert {issue.code for issue in verification.blocking} == {"GRAPH_VLM_VERIFIER_NOT_INDEPENDENT"}
 
 
 class _StagedRouter:
@@ -465,14 +458,16 @@ class _StagedRouter:
                 "sheet": {"format": "A3", "frame": True},
                 "scale_mm_per_px": 0.25,
                 "scale_source": "calibration",
-                "views": [{
-                    "id": "view-main",
-                    "kind": "front",
-                    "region": {"x0": 0, "y0": 0, "x1": 1600, "y1": 800},
-                    "entity_ids": [],
-                    "confidence": 0.99,
-                    "evidence": [],
-                }],
+                "views": [
+                    {
+                        "id": "view-main",
+                        "kind": "front",
+                        "region": {"x0": 0, "y0": 0, "x1": 1600, "y1": 800},
+                        "entity_ids": [],
+                        "confidence": 0.99,
+                        "evidence": [],
+                    }
+                ],
                 "unresolved_regions": [],
             }
             model = "layout-vlm"
@@ -483,30 +478,34 @@ class _StagedRouter:
                 "tile_id": tile_id,
                 "source_region": request.metadata["source_region"],
                 "ownership_region": request.metadata["ownership_region"],
-                "evidence": [{
-                    "id": f"{tile_id}:ev-1",
-                    "kind": "pixel_support",
-                    "region": {
-                        "x0": left,
-                        "y0": 100,
-                        "x1": left + 100,
-                        "y1": 130,
-                    },
-                    "model_key": "fragment-vlm",
-                    "confidence": 0.99,
-                }],
-                "entities": [{
-                    "view_id": "view-main",
-                    "entity": {
-                        "id": f"{tile_id}:segment-1",
-                        "type": "segment",
-                        "p1": {"x": left, "y": 115},
-                        "p2": {"x": left + 100, "y": 115},
-                        "origin": "cv",
-                        "assurance": "observed",
-                        "evidence": [f"{tile_id}:ev-1"],
-                    },
-                }],
+                "evidence": [
+                    {
+                        "id": f"{tile_id}:ev-1",
+                        "kind": "pixel_support",
+                        "region": {
+                            "x0": left,
+                            "y0": 100,
+                            "x1": left + 100,
+                            "y1": 130,
+                        },
+                        "model_key": "fragment-vlm",
+                        "confidence": 0.99,
+                    }
+                ],
+                "entities": [
+                    {
+                        "view_id": "view-main",
+                        "entity": {
+                            "id": f"{tile_id}:segment-1",
+                            "type": "segment",
+                            "p1": {"x": left, "y": 115},
+                            "p2": {"x": left + 100, "y": 115},
+                            "origin": "cv",
+                            "assurance": "observed",
+                            "evidence": [f"{tile_id}:ev-1"],
+                        },
+                    }
+                ],
                 "relations": [],
                 "unresolved_regions": [],
             }
@@ -532,13 +531,15 @@ def test_staged_tiles_overlap_but_ownership_regions_partition_sheet():
 
 def test_layout_discards_only_empty_unresolved_string_placeholders():
     payload = {
-        "views": [{
-            "id": "view-main",
-            "kind": "front",
-            "region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
-            "entity_ids": [],
-            "confidence": 1.0,
-        }],
+        "views": [
+            {
+                "id": "view-main",
+                "kind": "front",
+                "region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
+                "entity_ids": [],
+                "confidence": 1.0,
+            }
+        ],
         "unresolved_regions": ["", "   "],
     }
 
@@ -556,9 +557,7 @@ async def test_staged_reader_assembles_layout_and_bounded_fragments():
     image.save(buffer, format="PNG")
     router = _StagedRouter()
 
-    attempt = await read_drawing_graph_staged_attempt(
-        buffer.getvalue(), router=router
-    )
+    attempt = await read_drawing_graph_staged_attempt(buffer.getvalue(), router=router)
 
     assert attempt.valid is True
     assert attempt.graph is not None
@@ -567,9 +566,7 @@ async def test_staged_reader_assembles_layout_and_bounded_fragments():
         "tile-00-00:segment-1",
         "tile-00-01:segment-1",
     ]
-    assert attempt.reader_manifest["contract"] == (
-        "engineering-drawing-graph-staged-v2"
-    )
+    assert attempt.reader_manifest["contract"] == ("engineering-drawing-graph-staged-v2")
     assert attempt.reader_manifest["tiles"] == 2
     assert len(attempt.stage_attempts) == 3
     assert [request.task.value for request in router.requests] == [
@@ -617,38 +614,48 @@ async def test_staged_reader_preserves_invalid_attempt_and_uses_next_vlm(monkeyp
 
 
 def test_fragment_assembly_rejects_entity_outside_ownership_region():
-    layout = DrawingGraphLayout.model_validate({
-        "views": [{
-            "id": "view-main",
-            "kind": "front",
-            "region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
-            "entity_ids": [],
-            "confidence": 1.0,
-        }],
-    })
-    fragment = DrawingGraphFragment.model_validate({
-        "tile_id": "tile-00-00",
-        "source_region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
-        "ownership_region": {"x0": 0, "y0": 0, "x1": 500, "y1": 800},
-        "evidence": [{
-            "id": "tile-00-00:ev-1",
-            "kind": "pixel_support",
-            "region": {"x0": 600, "y0": 100, "x1": 700, "y1": 130},
-            "confidence": 1.0,
-        }],
-        "entities": [{
-            "view_id": "view-main",
-            "entity": {
-                "id": "tile-00-00:segment-1",
-                "type": "segment",
-                "p1": {"x": 600, "y": 115},
-                "p2": {"x": 700, "y": 115},
-                "origin": "cv",
-                "assurance": "observed",
-                "evidence": ["tile-00-00:ev-1"],
-            },
-        }],
-    })
+    layout = DrawingGraphLayout.model_validate(
+        {
+            "views": [
+                {
+                    "id": "view-main",
+                    "kind": "front",
+                    "region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
+                    "entity_ids": [],
+                    "confidence": 1.0,
+                }
+            ],
+        }
+    )
+    fragment = DrawingGraphFragment.model_validate(
+        {
+            "tile_id": "tile-00-00",
+            "source_region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
+            "ownership_region": {"x0": 0, "y0": 0, "x1": 500, "y1": 800},
+            "evidence": [
+                {
+                    "id": "tile-00-00:ev-1",
+                    "kind": "pixel_support",
+                    "region": {"x0": 600, "y0": 100, "x1": 700, "y1": 130},
+                    "confidence": 1.0,
+                }
+            ],
+            "entities": [
+                {
+                    "view_id": "view-main",
+                    "entity": {
+                        "id": "tile-00-00:segment-1",
+                        "type": "segment",
+                        "p1": {"x": 600, "y": 115},
+                        "p2": {"x": 700, "y": 115},
+                        "origin": "cv",
+                        "assurance": "observed",
+                        "evidence": ["tile-00-00:ev-1"],
+                    },
+                }
+            ],
+        }
+    )
     source = DrawingGraphSource(
         image_width=1000,
         image_height=800,
@@ -685,33 +692,37 @@ def test_fragment_contract_rejects_repeated_evidence_regions():
 
 
 def test_flat_wire_entity_is_assigned_to_smallest_containing_view():
-    layout = DrawingGraphLayout.model_validate({
-        "views": [
-            {
-                "id": "main",
-                "kind": "front",
-                "region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
-                "confidence": 1.0,
-            },
-            {
-                "id": "detail",
-                "kind": "detail",
-                "region": {"x0": 100, "y0": 100, "x1": 400, "y1": 300},
-                "confidence": 1.0,
-            },
-        ],
-    })
+    layout = DrawingGraphLayout.model_validate(
+        {
+            "views": [
+                {
+                    "id": "main",
+                    "kind": "front",
+                    "region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
+                    "confidence": 1.0,
+                },
+                {
+                    "id": "detail",
+                    "kind": "detail",
+                    "region": {"x0": 100, "y0": 100, "x1": 400, "y1": 300},
+                    "confidence": 1.0,
+                },
+            ],
+        }
+    )
     payload = {
-        "entities": [{
-            "id": "tile-00-00:segment-1",
-            "type": "segment",
-            "p1": {"x": 150, "y": 150},
-            "p2": {"x": 250, "y": 150},
-            "origin": "vlm",
-            "assurance": "observed",
-            "source_region": {"x0": 140, "y0": 140, "x1": 260, "y1": 160},
-            "evidence": ["tile-00-00:ev-1"],
-        }],
+        "entities": [
+            {
+                "id": "tile-00-00:segment-1",
+                "type": "segment",
+                "p1": {"x": 150, "y": 150},
+                "p2": {"x": 250, "y": 150},
+                "origin": "vlm",
+                "assurance": "observed",
+                "source_region": {"x0": 140, "y0": 140, "x1": 260, "y1": 160},
+                "evidence": ["tile-00-00:ev-1"],
+            }
+        ],
     }
 
     normalized = _normalize_fragment_entity_wrappers(payload, layout.views)
@@ -723,8 +734,10 @@ def test_flat_wire_entity_is_assigned_to_smallest_containing_view():
 
 
 def test_fragment_wire_evidence_alias_is_normalized():
-    normalized = _normalize_fragment_evidence_kinds({
-        "evidence": [{"id": "ev-1", "kind": "dimension_detector"}],
-    })
+    normalized = _normalize_fragment_evidence_kinds(
+        {
+            "evidence": [{"id": "ev-1", "kind": "dimension_detector"}],
+        }
+    )
 
     assert normalized["evidence"][0]["kind"] == "geometry_detector"

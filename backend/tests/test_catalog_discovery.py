@@ -91,7 +91,7 @@ async def test_website_is_learned_from_existing_entries(db_session):
 
 @pytest.mark.asyncio
 async def test_attach_without_urls_discovers_them(db_session, client):
-    """"Найди и загрузи" must be one call — the model may not stop halfway."""
+    """ "Найди и загрузи" must be one call — the model may not stop halfway."""
     from unittest.mock import AsyncMock, patch
 
     from app.db.models import ToolSupplier

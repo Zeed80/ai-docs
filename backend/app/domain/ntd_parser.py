@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-
 CLAUSE_RE = re.compile(r"^\s*(?P<number>\d+(?:\.\d+){0,5})[\).\s-]+(?P<text>.+?)\s*$")
 REQUIREMENT_MARKERS = (
     "должен",
@@ -51,7 +50,9 @@ class DetectedNTDMeta:
     version: str
 
 
-def detect_normative_metadata(text: str, *, fallback_title: str = "Нормативный документ") -> DetectedNTDMeta:
+def detect_normative_metadata(
+    text: str, *, fallback_title: str = "Нормативный документ"
+) -> DetectedNTDMeta:
     normalized = _normalize_space(text)
     code_match = re.search(
         r"\b(?P<type>ГОСТ|ОСТ|СТП|ТУ|РД|МИ)\s*(?P<number>[\d.\-–—/]+(?:-\d{2,4})?)",
@@ -70,7 +71,9 @@ def detect_normative_metadata(text: str, *, fallback_title: str = "Нормат�
     return DetectedNTDMeta(code=code, title=title, document_type=document_type, version=version)
 
 
-def parse_normative_text(text: str, *, code: str, default_requirement_type: str = "generic") -> ParsedNTD:
+def parse_normative_text(
+    text: str, *, code: str, default_requirement_type: str = "generic"
+) -> ParsedNTD:
     blocks = _split_clauses(text)
     clauses: list[ParsedClause] = []
     requirements: list[ParsedRequirement] = []
@@ -186,7 +189,7 @@ def _detect_title(text: str, *, fallback_title: str, code: str) -> str:
     if not text:
         return fallback_title
     code_pos = text.lower().find(code.lower())
-    tail = text[code_pos + len(code):] if code_pos >= 0 else text
+    tail = text[code_pos + len(code) :] if code_pos >= 0 else text
     candidates = re.split(r"[.;\n]", tail, maxsplit=2)
     for candidate in candidates:
         clean = candidate.strip(" :-—")

@@ -91,9 +91,7 @@ def entity_distance(
         reverse = max(_distance(pp1, tp2), _distance(pp2, tp1))
         return min(direct, reverse)
     if predicted.type == "circle":
-        center = _distance(
-            _point(predicted.center, pw, ph), _point(truth.center, tw, th)
-        )
+        center = _distance(_point(predicted.center, pw, ph), _point(truth.center, tw, th))
         radius = abs(predicted.radius / diagonal_p - truth.radius / diagonal_t)
         return max(center, radius)
     if predicted.type == "arc":
@@ -115,9 +113,7 @@ def entity_distance(
     if predicted.type == "text":
         if _normalized_text(predicted.text) != _normalized_text(truth.text):
             return 1.0
-        return _distance(
-            _point(predicted.position, pw, ph), _point(truth.position, tw, th)
-        )
+        return _distance(_point(predicted.position, pw, ph), _point(truth.position, tw, th))
     if predicted.type == "dimension":
         from app.ai.cad_ir.dim_render import dimension_label
 
@@ -147,21 +143,18 @@ def entity_distance(
         predicted_text = annotation_text(
             predicted.kind, predicted.value, predicted.symbol, predicted.datum_refs
         )
-        truth_text = annotation_text(
-            truth.kind, truth.value, truth.symbol, truth.datum_refs
-        )
-        if predicted.kind != truth.kind or _normalized_text(
-            predicted_text
-        ) != _normalized_text(truth_text):
+        truth_text = annotation_text(truth.kind, truth.value, truth.symbol, truth.datum_refs)
+        if predicted.kind != truth.kind or _normalized_text(predicted_text) != _normalized_text(
+            truth_text
+        ):
             return 1.0
-        return _distance(
-            _point(predicted.position, pw, ph), _point(truth.position, tw, th)
-        )
+        return _distance(_point(predicted.position, pw, ph), _point(truth.position, tw, th))
     if predicted.type == "hatch":
         # Boundary geometry is the CAD meaning of a hatch. Pattern must also
         # agree; otherwise a solid fill can masquerade as section hatching.
         if predicted.pattern != truth.pattern:
             return 1.0
+
         class _Boundary:
             closed = True
 
@@ -183,20 +176,22 @@ def entity_distance(
         import numpy as np
         from scipy.optimize import linear_sum_assignment
 
-        costs = np.array([
+        costs = np.array(
             [
-                _polyline_distance(
-                    _Boundary(predicted_hole),
-                    _Boundary(truth_hole),
-                    pw,
-                    ph,
-                    tw,
-                    th,
-                )
-                for truth_hole in truth.holes
+                [
+                    _polyline_distance(
+                        _Boundary(predicted_hole),
+                        _Boundary(truth_hole),
+                        pw,
+                        ph,
+                        tw,
+                        th,
+                    )
+                    for truth_hole in truth.holes
+                ]
+                for predicted_hole in predicted.holes
             ]
-            for predicted_hole in predicted.holes
-        ])
+        )
         rows, columns = linear_sum_assignment(costs)
         return max(
             boundary_distance,
@@ -236,18 +231,20 @@ def compare_entities(
         matched = 0
         distances: list[float] = []
         if pred and gt:
-            costs = np.array([
+            costs = np.array(
                 [
-                    entity_distance(
-                        p,
-                        t,
-                        predicted_size=predicted_size,
-                        truth_size=truth_size,
-                    )
-                    for t in gt
+                    [
+                        entity_distance(
+                            p,
+                            t,
+                            predicted_size=predicted_size,
+                            truth_size=truth_size,
+                        )
+                        for t in gt
+                    ]
+                    for p in pred
                 ]
-                for p in pred
-            ])
+            )
             rows, columns = linear_sum_assignment(costs)
             matched_pred: set[int] = set()
             matched_truth: set[int] = set()
@@ -260,12 +257,16 @@ def compare_entities(
                     matched_pred.add(int(row))
                     matched_truth.add(int(column))
                 elif include_details:
-                    near_misses.append({
-                        "predicted_id": pred[row].id,
-                        "truth_id": gt[column].id,
-                        "distance": round(distance, 6),
-                        "reason": "semantic_mismatch" if distance >= 1.0 else "geometry_out_of_tolerance",
-                    })
+                    near_misses.append(
+                        {
+                            "predicted_id": pred[row].id,
+                            "truth_id": gt[column].id,
+                            "distance": round(distance, 6),
+                            "reason": "semantic_mismatch"
+                            if distance >= 1.0
+                            else "geometry_out_of_tolerance",
+                        }
+                    )
         else:
             matched_pred = set()
             matched_truth = set()
@@ -273,11 +274,7 @@ def compare_entities(
         fp, fn = len(pred) - matched, len(gt) - matched
         precision = matched / len(pred) if pred else (1.0 if not gt else 0.0)
         recall = matched / len(gt) if gt else (1.0 if not pred else 0.0)
-        f1 = (
-            2 * precision * recall / (precision + recall)
-            if precision + recall
-            else 0.0
-        )
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
         per_type[entity_type] = {
             "truth": len(gt),
             "predicted": len(pred),

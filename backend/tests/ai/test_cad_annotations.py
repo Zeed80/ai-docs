@@ -92,12 +92,16 @@ def test_invalid_annotation_becomes_profile_issue():
 
 
 def test_valid_annotations_produce_no_issue():
-    report = validate_ir(_ir([
-        _ann("roughness", value="3.2"),
-        _ann("thread", value="M20×1.5"),
-        _ann("tolerance", value="0.05", symbol="flatness"),
-        _ann("datum", symbol="A"),
-    ]))
+    report = validate_ir(
+        _ir(
+            [
+                _ann("roughness", value="3.2"),
+                _ann("thread", value="M20×1.5"),
+                _ann("tolerance", value="0.05", symbol="flatness"),
+                _ann("datum", symbol="A"),
+            ]
+        )
+    )
     assert "ESKD_ANNOTATION_INVALID" not in {i.code for i in report.issues}
 
 
@@ -113,14 +117,19 @@ def test_svg_renders_annotation_text():
 
 def test_dxf_renders_annotation_and_tolerance_frame():
     pytest.importorskip("ezdxf")
-    import ezdxf
     import io
+
+    import ezdxf
 
     from app.ai.cad_ir.dxf_render import render_ir_to_dxf
 
-    dxf = render_ir_to_dxf(_ir([
-        _ann("tolerance", value="0.05", symbol="perpendicularity", datum_refs=["A"]),
-    ]))
+    dxf = render_ir_to_dxf(
+        _ir(
+            [
+                _ann("tolerance", value="0.05", symbol="perpendicularity", datum_refs=["A"]),
+            ]
+        )
+    )
     doc = ezdxf.read(io.StringIO(dxf.decode()))
     types = {e.dxftype() for e in doc.modelspace()}
     assert "TEXT" in types
@@ -129,8 +138,9 @@ def test_dxf_renders_annotation_and_tolerance_frame():
 
 def test_annotation_not_counted_as_stroke_geometry():
     # rasterize_entities (coverage) skips annotations like text.
-    from app.ai.cad_ir.png_render import rasterize_entities
     import numpy as np
+
+    from app.ai.cad_ir.png_render import rasterize_entities
 
     canvas = rasterize_entities([_ann("roughness", value="3.2")], 400, 300)
     assert (np.asarray(canvas) < 128).sum() == 0

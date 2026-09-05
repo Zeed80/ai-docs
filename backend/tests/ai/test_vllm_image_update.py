@@ -61,6 +61,8 @@ def test_recreate_body_preserves_labels_gpu_and_networks():
     assert body["HostConfig"]["DeviceRequests"][0]["Driver"] == "nvidia"
     assert body["HostConfig"]["Binds"] == ["vllm_models:/models"]
     # the auto-generated container-id alias is dropped, the stable one kept
-    assert body["NetworkingConfig"]["EndpointsConfig"]["infra_default"]["Aliases"] == ["vllm-server"]
+    assert body["NetworkingConfig"]["EndpointsConfig"]["infra_default"]["Aliases"] == [
+        "vllm-server"
+    ]
     # env carried over verbatim
     assert "VLLM_KV_CACHE_DTYPE=fp8" in body["Env"]

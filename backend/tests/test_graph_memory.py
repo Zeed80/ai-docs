@@ -212,16 +212,16 @@ def test_memory_rrf_fusion_favours_multi_branch_agreement() -> None:
     fused = _rrf_fuse(
         [
             # `a` is top of the vector branch AND present in the lexical branch.
-            MemorySearchHit(kind="chunk", id=a, title="A", score=0.0,
-                            source="vector", vector_score=0.9),
-            MemorySearchHit(kind="chunk", id=a, title="A", score=0.0,
-                            source="sql", text_score=0.7),
+            MemorySearchHit(
+                kind="chunk", id=a, title="A", score=0.0, source="vector", vector_score=0.9
+            ),
+            MemorySearchHit(kind="chunk", id=a, title="A", score=0.0, source="sql", text_score=0.7),
             # `b` only tops the lexical branch.
-            MemorySearchHit(kind="chunk", id=b, title="B", score=0.0,
-                            source="sql", text_score=0.9),
+            MemorySearchHit(kind="chunk", id=b, title="B", score=0.0, source="sql", text_score=0.9),
             # `c` only appears low in the vector branch.
-            MemorySearchHit(kind="chunk", id=c, title="C", score=0.0,
-                            source="vector", vector_score=0.5),
+            MemorySearchHit(
+                kind="chunk", id=c, title="C", score=0.0, source="vector", vector_score=0.5
+            ),
         ]
     )
     by_id = {hit.id: hit for hit in fused}

@@ -60,8 +60,7 @@ def test_native_dxf_types_are_preserved_and_split_is_source_grouped(
 
     summary = MODULE.build(assets, tmp_path / "out", eval_variants=2, repo=ROOT)
     rows = [
-        json.loads(line)
-        for line in (tmp_path / "out" / "manifest.jsonl").read_text().splitlines()
+        json.loads(line) for line in (tmp_path / "out" / "manifest.jsonl").read_text().splitlines()
     ]
 
     assert summary["accepted_source_groups"] == 1

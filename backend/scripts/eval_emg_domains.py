@@ -17,9 +17,7 @@ from app.ai.emg_regression import run_emg_regression
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--manifest", default="tests/fixtures/emg_domain_golden.json"
-    )
+    parser.add_argument("--manifest", default="tests/fixtures/emg_domain_golden.json")
     parser.add_argument("--out")
     args = parser.parse_args()
     manifest_path = Path(args.manifest).resolve()

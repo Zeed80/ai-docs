@@ -7,18 +7,17 @@ Skills: payment.list_schedule, payment.create_schedule, payment.mark_paid,
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func, and_
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
+from app.audit.service import add_timeline_event, log_action
+from app.db.models import CalendarEvent, Invoice, Party, PaymentSchedule, Reminder
 from app.db.session import get_db
-from app.db.models import PaymentSchedule, Invoice, Party, CalendarEvent, Reminder
-from app.audit.service import log_action, add_timeline_event
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -101,8 +100,10 @@ async def list_payment_schedules(
         q = q.where(PaymentSchedule.due_date <= date_to)
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     items = (
-        await db.execute(q.order_by(PaymentSchedule.due_date.asc()).offset(offset).limit(limit))
-    ).scalars().all()
+        (await db.execute(q.order_by(PaymentSchedule.due_date.asc()).offset(offset).limit(limit)))
+        .scalars()
+        .all()
+    )
     return PaymentScheduleListResponse(items=items, total=total, offset=offset, limit=limit)
 
 
@@ -133,7 +134,7 @@ async def create_payment_schedule(
 
     # Create reminder 3 days before
     remind_at = payload.due_date - timedelta(days=3)
-    if remind_at > datetime.now(timezone.utc):
+    if remind_at > datetime.now(UTC):
         supplier_name = ""
         if invoice.supplier_id:
             supplier = await db.get(Party, invoice.supplier_id)
@@ -146,8 +147,13 @@ async def create_payment_schedule(
         )
         db.add(reminder)
 
-    await log_action(db, action="payment.create_schedule", entity_type="payment_schedule",
-                     entity_id=schedule.id, details={"invoice_id": str(payload.invoice_id), "amount": payload.amount})
+    await log_action(
+        db,
+        action="payment.create_schedule",
+        entity_type="payment_schedule",
+        entity_id=schedule.id,
+        details={"invoice_id": str(payload.invoice_id), "amount": payload.amount},
+    )
     await db.commit()
     await db.refresh(schedule)
     return schedule
@@ -160,15 +166,17 @@ async def list_overdue_payments(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: payment.overdue — List overdue payments."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     q = select(PaymentSchedule).where(
         PaymentSchedule.due_date < now,
         PaymentSchedule.status.in_(["scheduled", "partial"]),
     )
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     items = (
-        await db.execute(q.order_by(PaymentSchedule.due_date.asc()).offset(offset).limit(limit))
-    ).scalars().all()
+        (await db.execute(q.order_by(PaymentSchedule.due_date.asc()).offset(offset).limit(limit)))
+        .scalars()
+        .all()
+    )
     return PaymentScheduleListResponse(items=items, total=total, offset=offset, limit=limit)
 
 
@@ -180,7 +188,7 @@ async def list_upcoming_payments(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: payment.upcoming — List upcoming payments within N days."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     until = now + timedelta(days=days)
     q = select(PaymentSchedule).where(
         PaymentSchedule.due_date >= now,
@@ -189,8 +197,10 @@ async def list_upcoming_payments(
     )
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     items = (
-        await db.execute(q.order_by(PaymentSchedule.due_date.asc()).offset(offset).limit(limit))
-    ).scalars().all()
+        (await db.execute(q.order_by(PaymentSchedule.due_date.asc()).offset(offset).limit(limit)))
+        .scalars()
+        .all()
+    )
     return PaymentScheduleListResponse(items=items, total=total, offset=offset, limit=limit)
 
 
@@ -217,7 +227,9 @@ async def update_payment_schedule(
     if not schedule:
         raise HTTPException(status_code=404, detail="Payment schedule not found")
     if schedule.status in ("paid", "cancelled"):
-        raise HTTPException(status_code=400, detail=f"Cannot edit schedule in status '{schedule.status}'")
+        raise HTTPException(
+            status_code=400, detail=f"Cannot edit schedule in status '{schedule.status}'"
+        )
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(schedule, k, v)
     await db.commit()
@@ -241,18 +253,27 @@ async def mark_paid(
         raise HTTPException(status_code=400, detail="Payment is cancelled")
 
     schedule.status = "paid"
-    schedule.paid_at = payload.paid_at or datetime.now(timezone.utc)
+    schedule.paid_at = payload.paid_at or datetime.now(UTC)
     schedule.paid_amount = payload.paid_amount or schedule.amount
     if payload.reference:
         schedule.reference = payload.reference
 
-    await log_action(db, action="payment.mark_paid", entity_type="payment_schedule",
-                     entity_id=schedule.id,
-                     details={"amount": schedule.paid_amount, "reference": schedule.reference})
-    await add_timeline_event(db, entity_type="payment_schedule", entity_id=schedule.id,
-                             event_type="paid", actor="user",
-                             summary=f"Оплачено {schedule.paid_amount} {schedule.currency}"
-                                     + (f", п/п {schedule.reference}" if schedule.reference else ""))
+    await log_action(
+        db,
+        action="payment.mark_paid",
+        entity_type="payment_schedule",
+        entity_id=schedule.id,
+        details={"amount": schedule.paid_amount, "reference": schedule.reference},
+    )
+    await add_timeline_event(
+        db,
+        entity_type="payment_schedule",
+        entity_id=schedule.id,
+        event_type="paid",
+        actor="user",
+        summary=f"Оплачено {schedule.paid_amount} {schedule.currency}"
+        + (f", п/п {schedule.reference}" if schedule.reference else ""),
+    )
     await db.commit()
     await db.refresh(schedule)
     return schedule
@@ -261,7 +282,9 @@ async def mark_paid(
 # ── Invoice shortcuts ─────────────────────────────────────────────────────────
 
 
-@router.post("/invoices/{invoice_id}/schedule-payment", response_model=PaymentScheduleOut, status_code=201)
+@router.post(
+    "/invoices/{invoice_id}/schedule-payment", response_model=PaymentScheduleOut, status_code=201
+)
 async def schedule_invoice_payment(
     invoice_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -272,13 +295,17 @@ async def schedule_invoice_payment(
         raise HTTPException(status_code=404, detail="Invoice not found")
 
     # Check if schedule already exists
-    existing = (await db.execute(
-        select(PaymentSchedule).where(PaymentSchedule.invoice_id == invoice_id)
-    )).scalar_one_or_none()
+    existing = (
+        await db.execute(select(PaymentSchedule).where(PaymentSchedule.invoice_id == invoice_id))
+    ).scalar_one_or_none()
     if existing:
         return existing
 
-    due_date = invoice.due_date or (invoice.invoice_date + timedelta(days=30) if invoice.invoice_date else datetime.now(timezone.utc) + timedelta(days=30))
+    due_date = invoice.due_date or (
+        invoice.invoice_date + timedelta(days=30)
+        if invoice.invoice_date
+        else datetime.now(UTC) + timedelta(days=30)
+    )
     amount = invoice.total_amount or 0.0
     currency = invoice.currency or "RUB"
 
@@ -304,7 +331,7 @@ async def schedule_invoice_payment(
 
     # Reminder 3 days before
     remind_at = due_date - timedelta(days=3)
-    if remind_at > datetime.now(timezone.utc):
+    if remind_at > datetime.now(UTC):
         reminder = Reminder(
             entity_type="payment_schedule",
             entity_id=schedule.id,
@@ -313,8 +340,13 @@ async def schedule_invoice_payment(
         )
         db.add(reminder)
 
-    await log_action(db, action="payment.schedule_from_invoice", entity_type="payment_schedule",
-                     entity_id=schedule.id, details={"invoice_id": str(invoice_id), "amount": amount})
+    await log_action(
+        db,
+        action="payment.schedule_from_invoice",
+        entity_type="payment_schedule",
+        entity_id=schedule.id,
+        details={"invoice_id": str(invoice_id), "amount": amount},
+    )
     await db.commit()
     await db.refresh(schedule)
     return schedule

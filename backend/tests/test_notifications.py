@@ -59,7 +59,9 @@ async def test_list_notifications(client: AsyncClient, notification):
 
 
 @pytest.mark.asyncio
-async def test_list_notifications_unread_filter(client: AsyncClient, notification, read_notification):
+async def test_list_notifications_unread_filter(
+    client: AsyncClient, notification, read_notification
+):
     resp = await client.get("/api/notifications", params={"unread": True})
     assert resp.status_code == 200
     for n in resp.json()["items"]:
@@ -167,8 +169,9 @@ async def test_feedback_without_source_task_marks_read_but_not_calibrated(
 async def test_feedback_accepted_is_calibrated_and_recorded(
     client: AsyncClient, proactive_notification, db_session
 ):
-    from app.db.models import ProactiveTaskFeedback
     from sqlalchemy import select
+
+    from app.db.models import ProactiveTaskFeedback
 
     resp = await client.post(
         f"/api/notifications/{proactive_notification.id}/feedback",
@@ -195,8 +198,9 @@ async def test_feedback_accepted_is_calibrated_and_recorded(
 async def test_feedback_snoozed_sets_snoozed_until(
     client: AsyncClient, proactive_notification, db_session
 ):
-    from app.db.models import ProactiveTaskFeedback
     from sqlalchemy import select
+
+    from app.db.models import ProactiveTaskFeedback
 
     resp = await client.post(
         f"/api/notifications/{proactive_notification.id}/feedback",
@@ -217,9 +221,7 @@ async def test_feedback_snoozed_sets_snoozed_until(
 
 
 @pytest.mark.asyncio
-async def test_feedback_calibrates_acceptance_rate(
-    client: AsyncClient, db_session
-):
+async def test_feedback_calibrates_acceptance_rate(client: AsyncClient, db_session):
     """End-to-end: several accept/dismiss reactions move the acceptance rate."""
     from app.domain.proactive_feedback import get_proactive_task_acceptance_rate
 
@@ -234,9 +236,7 @@ async def test_feedback_calibrates_acceptance_rate(
         )
         db_session.add(n)
         await db_session.commit()
-        resp = await client.post(
-            f"/api/notifications/{n.id}/feedback", json={"action": action}
-        )
+        resp = await client.post(f"/api/notifications/{n.id}/feedback", json={"action": action})
         assert resp.status_code == 200
 
     rate = await get_proactive_task_acceptance_rate(

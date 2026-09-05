@@ -68,9 +68,7 @@ async def test_upsert_party_concurrent_single_row(test_engine):
 
     assert not errors, f"workers raised: {errors}"
     with Session(sync_engine) as s:
-        count = s.execute(
-            select(func.count()).select_from(Party).where(Party.inn == inn)
-        ).scalar()
+        count = s.execute(select(func.count()).select_from(Party).where(Party.inn == inn)).scalar()
         s.query(Party).filter(Party.inn == inn).delete()
         s.commit()
 

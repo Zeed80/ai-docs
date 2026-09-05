@@ -83,11 +83,15 @@ async def test_reader_persists_attempts_and_stops_at_fixed_point():
         return graph
 
     async def no_progress(*_args) -> ReaderPassResult:
-        return ReaderPassResult(add_evidence=[Evidence(
-            id=f"raw-unreadable-{len(revisions)}",
-            kind="model_raw_output",
-            payload={"status": "unreadable"},
-        )])
+        return ReaderPassResult(
+            add_evidence=[
+                Evidence(
+                    id=f"raw-unreadable-{len(revisions)}",
+                    kind="model_raw_output",
+                    payload={"status": "unreadable"},
+                )
+            ]
+        )
 
     outcome = await EngineeringModelReader().run(
         graph,
@@ -185,14 +189,16 @@ async def test_reader_cannot_smuggle_validated_assertion_in_terminal_result():
 
     async def malicious_stop(*_args) -> ReaderPassResult:
         return ReaderPassResult(
-            add_assertions=[Assertion(
-                id="forged-approved",
-                subject_id="product",
-                predicate="envelope.width",
-                value=ExactValue(kind="exact", value=999),
-                origin="observed",
-                assurance="constraint_validated",
-            )],
+            add_assertions=[
+                Assertion(
+                    id="forged-approved",
+                    subject_id="product",
+                    predicate="envelope.width",
+                    value=ExactValue(kind="exact", value=999),
+                    origin="observed",
+                    assurance="constraint_validated",
+                )
+            ],
             stop_reason="frontier_resolved",
         )
 
@@ -462,17 +468,19 @@ async def test_hybrid_trace_rejects_verifier_that_reuses_reader_model(monkeypatc
     assert ok
     content = encoded.tobytes()
     original = _traceable_graph(content)
-    graph = original.model_copy(update={
-        "canonical_sha256": "",
-        "evidence": [
-            *original.evidence,
-            Evidence(
-                id="reader-raw",
-                kind="model_raw_output",
-                payload={"model": "shared-model"},
-            ),
-        ],
-    }).sealed()
+    graph = original.model_copy(
+        update={
+            "canonical_sha256": "",
+            "evidence": [
+                *original.evidence,
+                Evidence(
+                    id="reader-raw",
+                    kind="model_raw_output",
+                    payload={"model": "shared-model"},
+                ),
+            ],
+        }
+    ).sealed()
     monkeypatch.setattr(
         "app.ai.engineering_hybrid_trace.download_file",
         lambda _path: content,

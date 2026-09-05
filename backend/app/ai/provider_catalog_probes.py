@@ -33,9 +33,7 @@ def _as_float(value: Any) -> float | None:
     return f if f > 0 else None
 
 
-def _openrouter_capability(
-    key: str, kind: ProviderKind, item: dict, today: str
-) -> ModelCapability:
+def _openrouter_capability(key: str, kind: ProviderKind, item: dict, today: str) -> ModelCapability:
     """OpenRouter описывает модель достаточно, чтобы не гадать."""
     arch = item.get("architecture") or {}
     params = set(item.get("supported_parameters") or [])
@@ -73,9 +71,7 @@ def _openrouter_capability(
     )
 
 
-def _unknown_capability(
-    key: str, kind: ProviderKind, item: dict, today: str
-) -> ModelCapability:
+def _unknown_capability(key: str, kind: ProviderKind, item: dict, today: str) -> ModelCapability:
     """Провайдер метаданных не дал — так и записываем.
 
     Раньше здесь проставлялось «умеет инструменты и структурный вывод», и
@@ -107,9 +103,7 @@ _PROBES = {
 }
 
 
-def capability_from_listing(
-    key: str, kind: ProviderKind, item: dict
-) -> ModelCapability:
+def capability_from_listing(key: str, kind: ProviderKind, item: dict) -> ModelCapability:
     """ModelCapability по одной записи из /v1/models."""
     today = time.strftime("%Y-%m-%d")
     probe = _PROBES.get(kind)

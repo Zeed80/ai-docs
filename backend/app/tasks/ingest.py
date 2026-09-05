@@ -1,10 +1,10 @@
 """Ingest tasks — IMAP polling, file storage, dedup, auto-linking."""
 
 import base64
-import hashlib
 import dataclasses
+import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import create_engine, select
@@ -12,7 +12,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.base import Base
 from app.db.models import (
     Document,
     DocumentLink,
@@ -23,9 +22,8 @@ from app.db.models import (
     FileExtensionAllowlist,
     QuarantineEntry,
 )
-from app.tasks.celery_app import celery_app
-
 from app.domain.email_counts import invalidate_mailbox_counts_sync
+from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
 
@@ -66,7 +64,7 @@ def _record_sync_result(mailbox_name: str, error: str | None) -> None:
             if row is None:
                 return
             if error is None:
-                row.last_sync_at = datetime.now(timezone.utc)
+                row.last_sync_at = datetime.now(UTC)
                 row.sync_error = None
             else:
                 row.sync_error = error[:2000]
@@ -125,7 +123,9 @@ def _ingress_sender_allowed(db: Session, mailbox: str, from_address: str) -> boo
         (e or "").lower()
         for e in db.execute(
             select(User.email).where(User.is_active == True)  # noqa: E712
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     }
     return addr in known
 
@@ -180,14 +180,18 @@ def _inbound_folders(mailbox: str, primary: str) -> list[str]:
     out = [primary]
     try:
         with sync_session() as db:
-            rows = db.execute(
-                select(MailboxFolder.remote_name).where(
-                    MailboxFolder.mailbox == mailbox,
-                    MailboxFolder.local_folder == "inbox",
-                    MailboxFolder.sync_enabled == True,  # noqa: E712
-                    MailboxFolder.is_selectable == True,  # noqa: E712
+            rows = (
+                db.execute(
+                    select(MailboxFolder.remote_name).where(
+                        MailboxFolder.mailbox == mailbox,
+                        MailboxFolder.local_folder == "inbox",
+                        MailboxFolder.sync_enabled == True,  # noqa: E712
+                        MailboxFolder.is_selectable == True,  # noqa: E712
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
     except Exception as exc:  # noqa: BLE001
         # Never let folder discovery break the poll that already worked.
         logger.warning("imap_inbound_folders_failed", mailbox=mailbox, error=str(exc))
@@ -206,8 +210,6 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
     come from that row. Records last_sync_at / sync_error on the row so the
     client can surface connection problems instead of showing an empty inbox.
     """
-    from app.tasks.imap_client import get_mailbox_configs, fetch_unseen_from_mailbox
-
     import time as _time
 
     from app.core.metrics import (
@@ -215,6 +217,7 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
         email_messages_ingested_total,
         email_poll_duration_seconds,
     )
+    from app.tasks.imap_client import fetch_unseen_from_mailbox, get_mailbox_configs
 
     _poll_started = _time.monotonic()
     errors_early: list[str] = []
@@ -225,7 +228,12 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
     if not config:
         logger.warning("imap_mailbox_not_configured", mailbox=mailbox)
         _record_sync_result(mailbox, "Ящик не найден среди активных конфигураций")
-        return {"mailbox": mailbox, "fetched": 0, "documents": [], "errors": ["Mailbox not configured"]}
+        return {
+            "mailbox": mailbox,
+            "fetched": 0,
+            "documents": [],
+            "errors": ["Mailbox not configured"],
+        }
 
     # Ф2 — забирать письма из ВСЕХ папок, которые синкаются во «Входящие», а
     # не только из настроенной imap_folder. Сервер сам раскладывает входящие
@@ -258,7 +266,9 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
                 raise self.retry(countdown=60, exc=e)
             logger.warning(
                 "imap_subfolder_fetch_failed",
-                mailbox=mailbox, folder=remote, error=str(e),
+                mailbox=mailbox,
+                folder=remote,
+                error=str(e),
             )
             errors_early.append(f"{remote}: {e}")
 
@@ -304,9 +314,7 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
                         continue
 
                 # Thread detection
-                thread_id = _find_or_create_thread(
-                    db, parsed.subject, parsed.in_reply_to, mailbox
-                )
+                thread_id = _find_or_create_thread(db, parsed.subject, parsed.in_reply_to, mailbox)
 
                 # Create EmailMessage
                 email_msg = EmailMessage(
@@ -326,7 +334,7 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
                     body_text=parsed.body_text,
                     body_html=parsed.body_html,
                     sent_at=parsed.sent_at,
-                    received_at=datetime.now(timezone.utc),
+                    received_at=datetime.now(UTC),
                     has_attachments=parsed.has_attachments,
                     attachment_count=sum(
                         1 for a in parsed.attachments if not getattr(a, "is_inline", False)
@@ -370,8 +378,12 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
                 message_doc_ids: list[str] = []
                 for att in parsed.attachments:
                     doc = _store_attachment(
-                        db, att, email_msg.id, mailbox,
-                        owner_sub=mailbox_owner, auto_approve=auto_approve,
+                        db,
+                        att,
+                        email_msg.id,
+                        mailbox,
+                        owner_sub=mailbox_owner,
+                        auto_approve=auto_approve,
                     )
                     if doc:
                         created_doc_ids.append(str(doc.id))
@@ -407,18 +419,21 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
                     if not is_agent_instruction_email(parsed):
                         logger.info(
                             "agent_ingress_skipped_no_marker",
-                            mailbox=mailbox, subject=parsed.subject,
+                            mailbox=mailbox,
+                            subject=parsed.subject,
                         )
                     elif not _ingress_sender_authenticated(parsed.headers_meta):
                         logger.warning(
                             "agent_ingress_sender_unauthenticated",
-                            mailbox=mailbox, sender=parsed.from_address,
+                            mailbox=mailbox,
+                            sender=parsed.from_address,
                             auth=(parsed.headers_meta or {}).get("auth"),
                         )
                     elif not _ingress_sender_allowed(db, mailbox, parsed.from_address):
                         logger.warning(
                             "agent_ingress_sender_not_allowed",
-                            mailbox=mailbox, sender=parsed.from_address,
+                            mailbox=mailbox,
+                            sender=parsed.from_address,
                         )
                     else:
                         ingress_candidates.append((email_msg.id, parsed))
@@ -446,14 +461,13 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
                     try:
                         from app.tasks.email_triage import triage_message
 
-                        triage_message.apply_async(
-                            args=[str(email_msg.id)], queue="mail"
-                        )
+                        triage_message.apply_async(args=[str(email_msg.id)], queue="mail")
                         triaged += 1
                     except Exception as exc:  # noqa: BLE001
                         logger.error(
                             "email_triage_dispatch_failed",
-                            message_id=str(email_msg.id), error=str(exc),
+                            message_id=str(email_msg.id),
+                            error=str(exc),
                         )
 
                 if process_attachments:
@@ -461,14 +475,13 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
 
                     for doc_id in message_doc_ids:
                         try:
-                            process_document.apply_async(
-                                args=[doc_id], queue="extraction"
-                            )
+                            process_document.apply_async(args=[doc_id], queue="extraction")
                             queued_for_extraction += 1
                         except Exception as exc:  # noqa: BLE001
                             logger.error(
                                 "attachment_extraction_dispatch_failed",
-                                document_id=doc_id, error=str(exc),
+                                document_id=doc_id,
+                                error=str(exc),
                             )
 
             except IntegrityError:
@@ -489,7 +502,8 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
     if pending_notify:
         _notify_untriaged_after_delay.apply_async(
             args=[mailbox, [str(m) for m in pending_notify]],
-            countdown=180, queue="mail",
+            countdown=180,
+            queue="mail",
         )
 
     if emails:
@@ -512,9 +526,13 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
     _record_sync_result(mailbox, None)
     email_poll_duration_seconds.observe(_time.monotonic() - _poll_started)
     return {
-        "mailbox": mailbox, "fetched": len(emails), "documents": created_doc_ids,
-        "queued_for_extraction": queued_for_extraction, "triaged": triaged,
-        "work_orders": work_orders, "errors": errors,
+        "mailbox": mailbox,
+        "fetched": len(emails),
+        "documents": created_doc_ids,
+        "queued_for_extraction": queued_for_extraction,
+        "triaged": triaged,
+        "work_orders": work_orders,
+        "errors": errors,
     }
 
 
@@ -558,8 +576,9 @@ def _mailbox_recipients(db: Session, mailbox: str) -> list[str]:
     from app.db.models import MailboxConfig, User
 
     cfg = db.execute(
-        select(MailboxConfig.assigned_role, MailboxConfig.mailbox_type, MailboxConfig.owner_sub)
-        .where(MailboxConfig.name == mailbox)
+        select(
+            MailboxConfig.assigned_role, MailboxConfig.mailbox_type, MailboxConfig.owner_sub
+        ).where(MailboxConfig.name == mailbox)
     ).first()
     role = cfg[0] if cfg else None
     if role == "agent_ingress":
@@ -575,23 +594,26 @@ def _mailbox_recipients(db: Session, mailbox: str) -> list[str]:
         subs = list(
             db.execute(
                 select(User.sub).where(User.role == role, User.is_active == True)  # noqa: E712
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
     if not subs:
         subs = list(
             db.execute(
                 select(User.sub).where(User.role == "admin", User.is_active == True)  # noqa: E712
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
     return subs
 
 
 def _notify_new_email(db: Session, mailbox: str, email_msg) -> None:
     """Create an in-app + push notification for a freshly ingested inbound email."""
+    from app.db.models import MailboxConfig as _MBC
     from app.db.models import NotificationType
     from app.services.notifications import create_notification_sync
-
-    from app.db.models import MailboxConfig as _MBC
 
     sender = email_msg.from_address or "—"
     subject = (email_msg.subject or "(без темы)").strip()
@@ -600,9 +622,10 @@ def _notify_new_email(db: Session, mailbox: str, email_msg) -> None:
     # Private mail must not put sender+subject on a phone's lock screen by
     # default (Ф0.8); the in-app notification, which is behind the session,
     # keeps the preview either way.
-    is_personal = db.execute(
-        select(_MBC.mailbox_type).where(_MBC.name == mailbox)
-    ).scalar_one_or_none() == "personal"
+    is_personal = (
+        db.execute(select(_MBC.mailbox_type).where(_MBC.name == mailbox)).scalar_one_or_none()
+        == "personal"
+    )
     recipients: list[str] = []
     try:
         recipients = _mailbox_recipients(db, mailbox)
@@ -617,9 +640,7 @@ def _notify_new_email(db: Session, mailbox: str, email_msg) -> None:
                 entity_id=email_msg.id,
                 # Deep-link straight to the conversation (Ф7.3 needs this too);
                 # "/email" made the user hunt for the letter they were pinged about.
-                action_url=(
-                    f"/email/{email_msg.thread_id}" if email_msg.thread_id else "/email"
-                ),
+                action_url=(f"/email/{email_msg.thread_id}" if email_msg.thread_id else "/email"),
                 private_preview=is_personal,
             )
     except Exception as e:  # never block ingestion on notification errors
@@ -663,7 +684,7 @@ def _find_or_create_thread(
             thread = db.get(EmailThread, parent.thread_id)
             if thread:
                 thread.message_count += 1
-                thread.last_message_at = datetime.now(timezone.utc)
+                thread.last_message_at = datetime.now(UTC)
             return parent.thread_id
 
     # Try subject matching (strip Re:/Fwd:)
@@ -680,7 +701,7 @@ def _find_or_create_thread(
         ).scalar_one_or_none()
         if existing_thread:
             existing_thread.message_count += 1
-            existing_thread.last_message_at = datetime.now(timezone.utc)
+            existing_thread.last_message_at = datetime.now(UTC)
             return existing_thread.id
 
     # Create new thread
@@ -688,7 +709,7 @@ def _find_or_create_thread(
         subject=clean_subject or subject,
         mailbox=mailbox,
         message_count=1,
-        last_message_at=datetime.now(timezone.utc),
+        last_message_at=datetime.now(UTC),
     )
     db.add(thread)
     db.flush()
@@ -700,8 +721,9 @@ def _mailbox_owner_sub(db: Session, mailbox: str) -> str | None:
     from app.db.models import MailboxConfig
 
     row = db.execute(
-        select(MailboxConfig.mailbox_type, MailboxConfig.owner_sub)
-        .where(MailboxConfig.name == mailbox)
+        select(MailboxConfig.mailbox_type, MailboxConfig.owner_sub).where(
+            MailboxConfig.name == mailbox
+        )
     ).first()
     return row[1] if row and row[0] == "personal" else None
 
@@ -742,6 +764,7 @@ def _store_attachment(
     db.add(email_att)
     try:
         from app.storage import upload_file as _upload_att
+
         _upload_att(att.content, storage_path, att.content_type)
     except Exception as e:  # noqa: BLE001
         # Ф1.5: do NOT leave storage_path pointing at bytes that were never
@@ -758,12 +781,18 @@ def _store_attachment(
     # de-duplicated into a shared document (that would hand a colleague's file to
     # everyone), and a shared document must not be narrowed to one owner. Only
     # documents with the same ownership are reused.
-    existing = db.execute(
-        select(Document).where(
-            Document.file_hash == file_hash,
-            Document.owner_sub.is_(None) if owner_sub is None else Document.owner_sub == owner_sub,
+    existing = (
+        db.execute(
+            select(Document).where(
+                Document.file_hash == file_hash,
+                Document.owner_sub.is_(None)
+                if owner_sub is None
+                else Document.owner_sub == owner_sub,
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if existing:
         logger.info("attachment_duplicate", filename=att.filename, hash=file_hash)
         email_att.document_id = existing.id
@@ -843,9 +872,7 @@ def _is_extension_allowed(db: Session, filename: str) -> bool:
     if not extension:
         return False
     row = db.execute(
-        select(FileExtensionAllowlist).where(
-            FileExtensionAllowlist.extension == extension
-        )
+        select(FileExtensionAllowlist).where(FileExtensionAllowlist.extension == extension)
     ).scalar_one_or_none()
     if row is not None:
         return bool(row.is_allowed)
@@ -871,6 +898,7 @@ def store_document(
     # Upload to MinIO
     try:
         from app.storage import upload_file
+
         upload_file(content, storage_path, mime_type)
     except Exception as e:
         logger.warning("minio_upload_failed", error=str(e))
@@ -989,7 +1017,7 @@ def _notify_untriaged_after_delay(self, mailbox: str, message_ids: list[str]) ->
                 )
             ).first()
             if triaged:
-                continue          # the agent already told them what it found
+                continue  # the agent already told them what it found
             msg = db.get(EmailMessage, msg_id)
             if msg is None:
                 continue
@@ -1018,8 +1046,9 @@ async def _notify_new_email_async(db, mailbox: str, email_msg) -> None:
     subject = (email_msg.subject or "(без темы)").strip()
     row = (
         await db.execute(
-            _select(MailboxConfig.assigned_role, MailboxConfig.mailbox_type,
-                    MailboxConfig.owner_sub).where(MailboxConfig.name == mailbox)
+            _select(
+                MailboxConfig.assigned_role, MailboxConfig.mailbox_type, MailboxConfig.owner_sub
+            ).where(MailboxConfig.name == mailbox)
         )
     ).first()
     if row is None:
@@ -1029,15 +1058,23 @@ async def _notify_new_email_async(db, mailbox: str, email_msg) -> None:
         subs = [owner_sub] if owner_sub else []
     elif role and role != "agent_ingress":
         subs = list(
-            (await db.execute(
-                _select(User.sub).where(User.role == role, User.is_active == True)  # noqa: E712
-            )).scalars().all()
+            (
+                await db.execute(
+                    _select(User.sub).where(User.role == role, User.is_active == True)  # noqa: E712
+                )
+            )
+            .scalars()
+            .all()
         )
     else:
         subs = list(
-            (await db.execute(
-                _select(User.sub).where(User.role == "admin", User.is_active == True)  # noqa: E712
-            )).scalars().all()
+            (
+                await db.execute(
+                    _select(User.sub).where(User.role == "admin", User.is_active == True)  # noqa: E712
+                )
+            )
+            .scalars()
+            .all()
         )
 
     for sub in subs:
@@ -1049,8 +1086,6 @@ async def _notify_new_email_async(db, mailbox: str, email_msg) -> None:
             body=f"{sender}: {subject}"[:480],
             entity_type="email",
             entity_id=email_msg.id,
-            action_url=(
-                f"/email/{email_msg.thread_id}" if email_msg.thread_id else "/email"
-            ),
+            action_url=(f"/email/{email_msg.thread_id}" if email_msg.thread_id else "/email"),
             private_preview=(mailbox_type == "personal"),
         )

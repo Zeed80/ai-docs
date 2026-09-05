@@ -13,7 +13,6 @@ Marks: @pytest.mark.live (needs at least one local provider + Redis).
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 import httpx
@@ -27,6 +26,7 @@ pytestmark = pytest.mark.live
 # ---------------------------------------------------------------------------
 # Provider availability probes
 # ---------------------------------------------------------------------------
+
 
 def _http_ok(url: str, path: str) -> bool:
     try:
@@ -64,6 +64,7 @@ AVAILABLE = [name for name, up in PROVIDERS.items() if up()]
 # ---------------------------------------------------------------------------
 # Status / GPU / allocations (provider-agnostic)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_status_endpoint_reports_providers():
@@ -106,6 +107,7 @@ async def test_list_local_models(provider):
 # Routing CRUD (needs Redis) — full source-of-truth round trip
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_routing_crud_roundtrip():
     if not _redis_up():
@@ -136,8 +138,11 @@ async def test_confidential_routing_cannot_be_set_cloud():
     if not cloud:
         pytest.skip("no cloud model in catalog")
     routing = tr.TaskRouting(
-        task="invoice_ocr", models=[cloud], profile="anti_hallucination",
-        local_only=False, allow_cloud=True,
+        task="invoice_ocr",
+        models=[cloud],
+        profile="anti_hallucination",
+        local_only=False,
+        allow_cloud=True,
     )
     with pytest.raises(ValueError):
         tr.save_task_routing(AITask.INVOICE_OCR, routing)
@@ -149,21 +154,26 @@ async def test_confidential_routing_cannot_be_set_cloud():
 # Presets + telemetry (need Redis)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_apply_preset_and_reset():
     if not _redis_up():
         pytest.skip("Redis unavailable")
-    from app.ai import presets, task_routing as tr
+    from app.ai import presets
+    from app.ai import task_routing as tr
 
-    before = {t.value: tr.get_routing_for(t).model_dump() for t in AITask}
+    # Снимок делался и не использовался, а finally сбрасывал маршрутизацию к
+    # значениям по умолчанию. Redis здесь общий с работающим стендом, поэтому
+    # «восстановление» на деле стирало назначения моделей у всех задач.
+    before = {t: tr.get_routing_for(t) for t in AITask}
     try:
         result = presets.apply_preset("rtx3090_balanced")
         assert result["applied"]
         # engineering_reasoning primary should now match the preset
         assert tr.get_routing_for(AITask.ENGINEERING_REASONING).models[0] == "qwen3_5_9b_ollama"
     finally:
-        for t in AITask:
-            tr.reset_task_routing(t)
+        for task, routing in before.items():
+            tr.save_task_routing(task, routing)
     # confidential tasks stay local regardless
     assert tr.get_routing_for(AITask.INVOICE_OCR).local_only is True
 
@@ -175,8 +185,13 @@ async def test_telemetry_records_real_calls():
     from app.ai import telemetry
 
     telemetry.record_call(
-        task="classification", model="gemma4_e4b_ollama", provider="ollama",
-        latency_ms=42, ok=True, input_tokens=7, output_tokens=3,
+        task="classification",
+        model="gemma4_e4b_ollama",
+        provider="ollama",
+        latency_ms=42,
+        ok=True,
+        input_tokens=7,
+        output_tokens=3,
     )
     summary = telemetry.get_summary()
     assert summary["totals"]["calls"] >= 1
@@ -186,6 +201,7 @@ async def test_telemetry_records_real_calls():
 # ---------------------------------------------------------------------------
 # Real generation through AIRouter on each available local provider
 # ---------------------------------------------------------------------------
+
 
 def _installed_ollama_models() -> list[str]:
     url = os.environ.get("OLLAMA_URL", "http://host-gateway:11434")
@@ -211,7 +227,12 @@ async def test_ollama_real_generation_through_router():
     resp = await ai_router.run(
         AIRequest(
             task=AITask.CLASSIFICATION,
-            messages=[ChatMessage(role="user", content="Ответь одним словом: счёт или письмо? Текст: 'Счёт на оплату №5'.")],
+            messages=[
+                ChatMessage(
+                    role="user",
+                    content="Ответь одним словом: счёт или письмо? Текст: 'Счёт на оплату №5'.",
+                )
+            ],
             confidential=True,
         )
     )
@@ -274,8 +295,8 @@ async def test_provider_chat_adapter_real(provider):
 async def test_benchmark_endpoint_ollama():
     if "ollama" not in AVAILABLE:
         pytest.skip("Ollama not available")
-    from app.api.local_models_api import BenchmarkRequest, benchmark_model
     from app.ai import task_routing as tr
+    from app.api.local_models_api import BenchmarkRequest, benchmark_model
 
     primary = tr.get_routing_for(AITask.CLASSIFICATION).primary
     if not primary or not primary.endswith("_ollama"):
@@ -288,6 +309,7 @@ async def test_benchmark_endpoint_ollama():
 # ---------------------------------------------------------------------------
 # Provider matrix marker — documents what ran
 # ---------------------------------------------------------------------------
+
 
 def test_report_available_providers():
     print(f"\n  Available local providers: {AVAILABLE or 'none'}")

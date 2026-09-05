@@ -7,8 +7,6 @@ __init__. Модель, подтянутая через /refresh-models или �
 «назначил и ничего не изменилось», без единого сообщения.
 """
 
-import pytest
-
 from app.ai.router import AIRouter
 
 
@@ -88,9 +86,7 @@ def test_model_pins_survive_a_node_rename(monkeypatch):
     from app.api import providers_api
 
     store = {"qwen3_8_27b": "gpu-old", "embedder": "cpu-node"}
-    monkeypatch.setattr(
-        "app.ai.model_registry._load_preferred_instances", lambda: dict(store)
-    )
+    monkeypatch.setattr("app.ai.model_registry._load_preferred_instances", lambda: dict(store))
     monkeypatch.setattr(
         "app.ai.model_registry.set_preferred_instance",
         lambda key, name: store.__setitem__(key, name),
@@ -115,10 +111,7 @@ def test_pin_display_falls_back_to_the_raw_value(monkeypatch):
         "app.ai.provider_registry._redis_get_instances",
         lambda: [{"id": "11111111-1111-1111-1111-111111111111", "name": "gpu-node"}],
     )
-    assert (
-        providers_api._pin_display_name("11111111-1111-1111-1111-111111111111")
-        == "gpu-node"
-    )
+    assert providers_api._pin_display_name("11111111-1111-1111-1111-111111111111") == "gpu-node"
     assert providers_api._pin_display_name("старое-имя-узла") == "старое-имя-узла"
     assert providers_api._pin_display_name(None) is None
 
@@ -143,10 +136,9 @@ def test_resolver_takes_the_address_from_the_registry_only(monkeypatch):
         ),
     )
     for provider in ("anthropic", "openrouter", "groq", "cohere", "ollama"):
-        assert (
-            model_resolver._provider_base_url(provider)
-            == "https://registry-decides.example"
-        ), provider
+        assert model_resolver._provider_base_url(provider) == "https://registry-decides.example", (
+            provider
+        )
         assert model_resolver._provider_api_key(provider) == "key-from-registry"
 
 

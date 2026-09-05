@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -12,7 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import ScenarioTrace
-
 
 # ── Model tests ───────────────────────────────────────────────────────────────
 
@@ -29,7 +27,7 @@ async def test_scenario_trace_model_insert_and_retrieve(db_session: AsyncSession
             {"step_id": "s1", "skill": "email.list", "status": "ok", "duration_ms": 10},
         ],
         duration_ms=120,
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
         triggered_by="user:123",
     )
     db_session.add(trace)
@@ -56,7 +54,7 @@ async def test_scenario_trace_model_error_state(db_session: AsyncSession):
         step_traces=[],
         error="Step extract_surfaces: timeout",
         duration_ms=31000,
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
     )
     db_session.add(trace)
     await db_session.flush()
@@ -81,8 +79,8 @@ async def test_scenario_trace_model_timeout_state(db_session: AsyncSession):
         step_traces=[],
         error="Scenario timed out after 300s",
         duration_ms=300_000,
-        started_at=datetime.now(timezone.utc),
-        finished_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
     )
     db_session.add(trace)
     await db_session.flush()
@@ -137,7 +135,7 @@ async def test_scenario_runner_collects_step_traces(monkeypatch):
         return FakeTask()
 
     with patch("asyncio.create_task", side_effect=mock_create_task):
-        result = await runner_module.scenario_runner.run(
+        await runner_module.scenario_runner.run(
             "email_triage", trigger={"test": True}, triggered_by="test_runner"
         )
 
@@ -296,7 +294,7 @@ async def test_traces_endpoint_returns_list(client: AsyncClient, db_session: Asy
         steps_done=2,
         step_traces=[],
         duration_ms=50,
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
     )
     db_session.add(trace)
     await db_session.flush()
@@ -311,14 +309,16 @@ async def test_traces_endpoint_returns_list(client: AsyncClient, db_session: Asy
 @pytest.mark.asyncio
 async def test_traces_endpoint_filter_by_name(client: AsyncClient, db_session: AsyncSession):
     for name in ("alpha_scenario", "beta_scenario", "alpha_scenario"):
-        db_session.add(ScenarioTrace(
-            scenario_name=name,
-            status="ok",
-            steps_total=1,
-            steps_done=1,
-            step_traces=[],
-            started_at=datetime.now(timezone.utc),
-        ))
+        db_session.add(
+            ScenarioTrace(
+                scenario_name=name,
+                status="ok",
+                steps_total=1,
+                steps_done=1,
+                step_traces=[],
+                started_at=datetime.now(UTC),
+            )
+        )
     await db_session.flush()
 
     resp = await client.get("/api/scenarios/traces?scenario_name=alpha_scenario")
@@ -331,14 +331,16 @@ async def test_traces_endpoint_filter_by_name(client: AsyncClient, db_session: A
 @pytest.mark.asyncio
 async def test_traces_endpoint_limit_parameter(client: AsyncClient, db_session: AsyncSession):
     for i in range(5):
-        db_session.add(ScenarioTrace(
-            scenario_name=f"limit_test_{i}",
-            status="ok",
-            steps_total=1,
-            steps_done=1,
-            step_traces=[],
-            started_at=datetime.now(timezone.utc),
-        ))
+        db_session.add(
+            ScenarioTrace(
+                scenario_name=f"limit_test_{i}",
+                status="ok",
+                steps_total=1,
+                steps_done=1,
+                step_traces=[],
+                started_at=datetime.now(UTC),
+            )
+        )
     await db_session.flush()
 
     resp = await client.get("/api/scenarios/traces?limit=2")
@@ -364,8 +366,8 @@ async def test_traces_endpoint_response_fields(client: AsyncClient, db_session: 
         step_traces=[{"step_id": "s0", "status": "error"}],
         error="oops",
         duration_ms=999,
-        started_at=datetime.now(timezone.utc),
-        finished_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
         triggered_by="user:99",
     )
     db_session.add(trace)
@@ -392,23 +394,28 @@ async def test_traces_endpoint_response_fields(client: AsyncClient, db_session: 
 async def test_traces_endpoint_newest_first(client: AsyncClient, db_session: AsyncSession):
     from datetime import timedelta
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for i, name in enumerate(["oldest", "middle", "newest"]):
-        db_session.add(ScenarioTrace(
-            scenario_name=name,
-            status="ok",
-            steps_total=0,
-            steps_done=0,
-            step_traces=[],
-            started_at=now + timedelta(seconds=i),
-        ))
+        db_session.add(
+            ScenarioTrace(
+                scenario_name=name,
+                status="ok",
+                steps_total=0,
+                steps_done=0,
+                step_traces=[],
+                started_at=now + timedelta(seconds=i),
+            )
+        )
     await db_session.flush()
 
-    resp = await client.get(
-        "/api/scenarios/traces?scenario_name=oldest&limit=3"
-    )
+    resp = await client.get("/api/scenarios/traces?scenario_name=oldest&limit=3")
+    assert resp.status_code == 200
     resp2 = await client.get("/api/scenarios/traces?limit=200")
     assert resp2.status_code == 200
     all_traces = resp2.json()
-    names = [t["scenario_name"] for t in all_traces if t["scenario_name"] in ("oldest", "middle", "newest")]
+    names = [
+        t["scenario_name"]
+        for t in all_traces
+        if t["scenario_name"] in ("oldest", "middle", "newest")
+    ]
     assert names.index("newest") < names.index("middle") < names.index("oldest")

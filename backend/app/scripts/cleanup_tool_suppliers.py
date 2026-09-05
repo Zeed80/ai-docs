@@ -28,9 +28,7 @@ PLACEHOLDER = re.compile(r"\$\{|\}")
 
 def normalize_name(name: str) -> str:
     lowered = name.lower().replace("ё", "е")
-    lowered = re.sub(
-        r"\b(ооо|оао|зао|ао|ип|пао|тд|торговый дом|llc|ltd|gmbh)\b", " ", lowered
-    )
+    lowered = re.sub(r"\b(ооо|оао|зао|ао|ип|пао|тд|торговый дом|llc|ltd|gmbh)\b", " ", lowered)
     return re.sub(r"[^a-zа-я0-9]+", "", lowered)
 
 
@@ -47,12 +45,16 @@ async def run(apply: bool) -> dict:
         for supplier in suppliers:
             if PLACEHOLDER.search(supplier.name or ""):
                 entries = (
-                    await db.execute(
-                        select(ToolCatalogEntry).where(
-                            ToolCatalogEntry.supplier_id == supplier.id
+                    (
+                        await db.execute(
+                            select(ToolCatalogEntry).where(
+                                ToolCatalogEntry.supplier_id == supplier.id
+                            )
                         )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 report["deleted"].append(
                     {"id": str(supplier.id), "name": supplier.name, "entries": len(entries)}
                 )
@@ -96,12 +98,14 @@ async def run(apply: bool) -> dict:
                 survivors[key] = supplier
                 continue
             moved = (
-                await db.execute(
-                    select(ToolCatalogEntry).where(
-                        ToolCatalogEntry.supplier_id == supplier.id
+                (
+                    await db.execute(
+                        select(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id == supplier.id)
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             report["merged"].append(
                 {
                     "name": supplier.name,

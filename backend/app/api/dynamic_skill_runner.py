@@ -62,6 +62,7 @@ async def run_generated_skill(
     # Check cache first (read-only skills only)
     try:
         from app.ai.skill_cache import get_cached
+
         cached = await get_cached(skill_name, args)
         if cached is not None:
             logger.debug("generated_skill_cache_hit", skill=skill_name)
@@ -72,6 +73,7 @@ async def run_generated_skill(
     try:
         # Shadow routing for A/B testing (skill evolver)
         from app.ai.skill_evolver import maybe_route_to_shadow, record_shadow_outcome
+
         shadow_name = await maybe_route_to_shadow(skill_name, args)
         if shadow_name:
             try:
@@ -101,6 +103,7 @@ async def run_generated_skill(
     # Cache successful read results
     try:
         from app.ai.skill_cache import set_cached
+
         await set_cached(skill_name, args, result)
     except Exception:
         pass
@@ -108,9 +111,8 @@ async def run_generated_skill(
     # Record outcome for skill evolver
     try:
         from app.ai.skill_evolver import record_shadow_outcome
-        await record_shadow_outcome(
-            skill_name, is_v2=False, success=result.get("status") == "ok"
-        )
+
+        await record_shadow_outcome(skill_name, is_v2=False, success=result.get("status") == "ok")
     except Exception:
         pass
 
@@ -121,6 +123,7 @@ async def run_generated_skill(
 async def skill_evolution_audit(limit: int = 50) -> dict[str, Any]:
     """Return recent skill evolution audit log."""
     from app.ai.skill_evolver import get_evolution_audit
+
     entries = await get_evolution_audit(limit=limit)
     return {"entries": entries, "count": len(entries)}
 
@@ -132,6 +135,7 @@ async def trigger_evolution(
 ) -> dict[str, Any]:
     """Manually trigger evolution for a specific skill."""
     from app.ai.skill_evolver import evolve_skill
+
     deployed = await evolve_skill(skill_name)
     return {"skill": skill_name, "shadow_deployed": deployed}
 
@@ -140,6 +144,7 @@ async def trigger_evolution(
 async def skill_cache_stats() -> dict[str, Any]:
     """Return skill result cache statistics."""
     from app.ai.skill_cache import get_cache_stats
+
     return await get_cache_stats()
 
 

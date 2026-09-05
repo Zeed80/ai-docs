@@ -28,74 +28,97 @@ SEND = {"action": "send", "draft_id": "fe1aa152-0000-4000-8000-000000000001"}
 
 
 def test_yes_after_a_shown_draft_is_the_approval():
-    s = _session([
-        {"role": "user", "content": "Отправь zeed@yandex.ru письмо"},
-        {"role": "assistant", "content": PROPOSAL},
-        {"role": "user", "content": "да"},
-    ])
+    s = _session(
+        [
+            {"role": "user", "content": "Отправь zeed@yandex.ru письмо"},
+            {"role": "assistant", "content": PROPOSAL},
+            {"role": "user", "content": "да"},
+        ]
+    )
     assert s._confirms_pending_send("email", SEND) is True
 
 
 def test_other_affirmatives_work_too():
     for word in ("Да", "ок", "давай", "подтверждаю", "отправляй", "yes", "confirm"):
-        s = _session([
-            {"role": "assistant", "content": PROPOSAL},
-            {"role": "user", "content": word},
-        ])
+        s = _session(
+            [
+                {"role": "assistant", "content": PROPOSAL},
+                {"role": "user", "content": word},
+            ]
+        )
         assert s._confirms_pending_send("email", SEND) is True, word
 
 
 def test_a_yes_without_a_shown_draft_is_not_an_approval():
     """Иначе «да» из обсуждения чего угодно отправляло бы письмо."""
-    s = _session([
-        {"role": "assistant", "content": "Нашла 12 счетов. Показать таблицу?"},
-        {"role": "user", "content": "да"},
-    ])
+    s = _session(
+        [
+            {"role": "assistant", "content": "Нашла 12 счетов. Показать таблицу?"},
+            {"role": "user", "content": "да"},
+        ]
+    )
     assert s._confirms_pending_send("email", SEND) is False
 
 
 def test_negation_inside_a_short_answer_is_a_refusal():
     for text in ("да, но не отправляй", "нет", "пока нет", "стоп", "подожди"):
-        s = _session([
-            {"role": "assistant", "content": PROPOSAL},
-            {"role": "user", "content": text},
-        ])
+        s = _session(
+            [
+                {"role": "assistant", "content": PROPOSAL},
+                {"role": "user", "content": text},
+            ]
+        )
         assert s._confirms_pending_send("email", SEND) is False, text
 
 
 def test_a_long_message_is_not_a_bare_confirmation():
     """Развёрнутая реплика — это новая задача, а не ответ «да»."""
-    s = _session([
-        {"role": "assistant", "content": PROPOSAL},
-        {"role": "user", "content": (
-            "да, и заодно добавь в письмо просьбу прислать сроки поставки "
-            "и напиши второму поставщику тоже"
-        )},
-    ])
+    s = _session(
+        [
+            {"role": "assistant", "content": PROPOSAL},
+            {
+                "role": "user",
+                "content": (
+                    "да, и заодно добавь в письмо просьбу прислать сроки поставки "
+                    "и напиши второму поставщику тоже"
+                ),
+            },
+        ]
+    )
     assert s._confirms_pending_send("email", SEND) is False
 
 
 def test_recipient_must_match_what_was_shown():
     """Подтверждали письмо одному адресату — уйти оно должно ему же."""
-    s = _session([
-        {"role": "assistant", "content": PROPOSAL},
-        {"role": "user", "content": "да"},
-    ])
-    other = {"action": "send", "body": json.dumps(
-        {"to_addresses": ["someone-else@example.com"], "subject": "Тема"})}
+    s = _session(
+        [
+            {"role": "assistant", "content": PROPOSAL},
+            {"role": "user", "content": "да"},
+        ]
+    )
+    other = {
+        "action": "send",
+        "body": json.dumps({"to_addresses": ["someone-else@example.com"], "subject": "Тема"}),
+    }
     assert s._confirms_pending_send("email", other) is False
 
-    same = {"action": "send", "body": json.dumps(
-        {"to_addresses": ["zeed@yandex.ru"], "subject": "Запрос каталога концевых фрез"})}
+    same = {
+        "action": "send",
+        "body": json.dumps(
+            {"to_addresses": ["zeed@yandex.ru"], "subject": "Запрос каталога концевых фрез"}
+        ),
+    }
     assert s._confirms_pending_send("email", same) is True
 
 
 def test_only_the_email_send_gate_is_covered():
     """Согласие на письмо не открывает другие внешние действия."""
-    s = _session([
-        {"role": "assistant", "content": PROPOSAL},
-        {"role": "user", "content": "да"},
-    ])
+    s = _session(
+        [
+            {"role": "assistant", "content": PROPOSAL},
+            {"role": "user", "content": "да"},
+        ]
+    )
     assert s._confirms_pending_send("invoices", {"action": "approve"}) is False
     assert s._confirms_pending_send("email", {"action": "delete"}) is False
 
@@ -103,11 +126,13 @@ def test_only_the_email_send_gate_is_covered():
 def test_confirmation_belongs_to_the_proposal_that_preceded_it():
     """Предложение ищется ДО ответа человека: подтвердить можно только уже
     показанное, а не то, что агент напишет следом."""
-    s = _session([
-        {"role": "assistant", "content": PROPOSAL},
-        {"role": "user", "content": "да"},
-        {"role": "assistant", "content": "Уточните, пожалуйста, адрес."},
-    ])
+    s = _session(
+        [
+            {"role": "assistant", "content": PROPOSAL},
+            {"role": "user", "content": "да"},
+            {"role": "assistant", "content": "Уточните, пожалуйста, адрес."},
+        ]
+    )
     assert s._confirms_pending_send("email", SEND) is True
 
 

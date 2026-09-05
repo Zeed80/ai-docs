@@ -26,6 +26,7 @@ def _redis():
     """Return sync Redis client or None on error."""
     try:
         from app.utils.redis_client import get_sync_redis
+
         return get_sync_redis()
     except Exception:
         return None

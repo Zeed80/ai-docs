@@ -53,7 +53,9 @@ async def test_issues_without_norm_ref_are_untouched(db_session):
 @pytest.mark.asyncio
 async def test_already_resolved_issues_are_not_requeried(db_session):
     issue = ValidationIssueIR(
-        code="ESKD_LINE_WEIGHT", message_ru="...", norm_ref="ГОСТ 2.303-68",
+        code="ESKD_LINE_WEIGHT",
+        message_ru="...",
+        norm_ref="ГОСТ 2.303-68",
         norm_clause_text="already resolved",
     )
     out = await resolve_norm_citations([issue], db_session)
@@ -86,6 +88,8 @@ async def test_multi_dash_standard_number_matches_the_correct_document_only(db_s
     db_session.add_all([correct, wrong])
     await db_session.flush()
 
-    issue = ValidationIssueIR(code="ESKD_LINE_WEIGHT", message_ru="...", norm_ref="ГОСТ Р 50-123-2018")
+    issue = ValidationIssueIR(
+        code="ESKD_LINE_WEIGHT", message_ru="...", norm_ref="ГОСТ Р 50-123-2018"
+    )
     out = await resolve_norm_citations([issue], db_session)
     assert out[0].norm_clause_text == "ГОСТ Р 50-123-2018 — Correct"

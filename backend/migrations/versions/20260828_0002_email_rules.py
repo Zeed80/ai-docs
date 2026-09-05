@@ -6,16 +6,17 @@ Revision ID: 20260828_0002
 Revises: 20260828_0001
 Create Date: 2026-08-28
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 revision: str = "20260828_0002"
-down_revision: Union[str, None] = "20260828_0001"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260828_0001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -32,8 +33,18 @@ def upgrade() -> None:
         sa.Column("actions", sa.JSON(), nullable=False),
         sa.Column("run_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("last_run_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_email_rules_mailbox", "email_rules", ["mailbox"])
@@ -45,7 +56,9 @@ def upgrade() -> None:
         sa.Column("rule_id", PG_UUID(as_uuid=True), nullable=False),
         sa.Column("message_id", PG_UUID(as_uuid=True), nullable=True),
         sa.Column("actions_applied", sa.JSON(), nullable=False),
-        sa.Column("at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+        ),
         sa.ForeignKeyConstraint(["rule_id"], ["email_rules.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["message_id"], ["email_messages.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),

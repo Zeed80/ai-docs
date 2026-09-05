@@ -104,9 +104,9 @@ class DrawingGraphRelation(BaseModel):
     target_entity_ids: list[str] = Field(min_length=1)
     parameters: dict[str, float | int | str | bool] = Field(default_factory=dict)
     confidence: float = Field(ge=0.0, le=1.0)
-    assurance: Literal[
-        "observed", "inferred", "constraint_validated", "human_approved"
-    ] = "inferred"
+    assurance: Literal["observed", "inferred", "constraint_validated", "human_approved"] = (
+        "inferred"
+    )
     evidence: list[str] = Field(default_factory=list)
 
 
@@ -114,9 +114,7 @@ class EngineeringDrawingGraph(BaseModel):
     """Complete coordinate and semantic description of one source sheet."""
 
     schema_version: Literal[1] = 1
-    graph_status: Literal["reader_output", "verified", "human_reviewed"] = (
-        "reader_output"
-    )
+    graph_status: Literal["reader_output", "verified", "human_reviewed"] = "reader_output"
     source: DrawingGraphSource
     scale_mm_per_px: float | None = Field(default=None, gt=0)
     scale_source: Literal["manual", "calibration", "dpi", "sheet_format"] | None = None
@@ -129,7 +127,7 @@ class EngineeringDrawingGraph(BaseModel):
     reader_manifest: dict = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_graph_integrity(self) -> "EngineeringDrawingGraph":
+    def _validate_graph_integrity(self) -> EngineeringDrawingGraph:
         entity_ids = [entity.id for entity in self.entities]
         view_ids = [view.id for view in self.views]
         evidence_ids = [item.id for item in self.evidence]
@@ -167,19 +165,19 @@ class EngineeringDrawingGraph(BaseModel):
             if entity.origin != "human" and not entity.evidence:
                 raise ValueError(f"entity {entity.id} has no source evidence")
             if self.graph_status == "reader_output" and entity.assurance not in (
-                "observed", "inferred"
+                "observed",
+                "inferred",
             ):
                 raise ValueError("reader output cannot self-assign validated assurance")
         for relation in self.relations:
             refs = {relation.source_entity_id, *relation.target_entity_ids}
             missing = sorted(refs - known_entities)
             if missing:
-                raise ValueError(
-                    f"relation {relation.id} references missing entities: {missing}"
-                )
+                raise ValueError(f"relation {relation.id} references missing entities: {missing}")
             self._validate_evidence_refs(relation.id, relation.evidence, known_evidence)
             if self.graph_status == "reader_output" and relation.assurance not in (
-                "observed", "inferred"
+                "observed",
+                "inferred",
             ):
                 raise ValueError("reader relation cannot self-assign validated assurance")
 
@@ -193,9 +191,7 @@ class EngineeringDrawingGraph(BaseModel):
         }
         missing_dimensions = sorted(dimension_ids - related_dimensions)
         if missing_dimensions:
-            raise ValueError(
-                f"dimensions have no geometry relations: {missing_dimensions}"
-            )
+            raise ValueError(f"dimensions have no geometry relations: {missing_dimensions}")
         if self.scale_mm_per_px is not None and self.scale_source is None:
             raise ValueError("known graph scale requires scale_source")
         return self
@@ -208,9 +204,7 @@ class EngineeringDrawingGraph(BaseModel):
             raise ValueError(f"{owner} has an out-of-sheet source region")
 
     @staticmethod
-    def _validate_evidence_refs(
-        owner: str, refs: list[str], known_evidence: set[str]
-    ) -> None:
+    def _validate_evidence_refs(owner: str, refs: list[str], known_evidence: set[str]) -> None:
         missing = sorted(set(refs) - known_evidence)
         if missing:
             raise ValueError(f"{owner} references missing evidence: {missing}")
@@ -315,11 +309,7 @@ class DrawingGraphLayout(BaseModel):
         unresolved = value.get("unresolved_regions")
         if not isinstance(unresolved, list):
             return value
-        cleaned = [
-            item
-            for item in unresolved
-            if not (isinstance(item, str) and not item.strip())
-        ]
+        cleaned = [item for item in unresolved if not (isinstance(item, str) and not item.strip())]
         if cleaned == unresolved:
             return value
         normalized = dict(value)
@@ -327,7 +317,7 @@ class DrawingGraphLayout(BaseModel):
         return normalized
 
     @model_validator(mode="after")
-    def _layout_has_unique_empty_views(self) -> "DrawingGraphLayout":
+    def _layout_has_unique_empty_views(self) -> DrawingGraphLayout:
         ids = [view.id for view in self.views]
         if len(ids) != len(set(ids)):
             raise ValueError("layout view ids must be unique")
@@ -353,7 +343,7 @@ class DrawingGraphFragment(BaseModel):
     unresolved_regions: list[UnresolvedRegion] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _reject_repeated_observations(self) -> "DrawingGraphFragment":
+    def _reject_repeated_observations(self) -> DrawingGraphFragment:
         regions = [
             (item.region.x0, item.region.y0, item.region.x1, item.region.y1)
             for item in self.evidence
@@ -381,14 +371,12 @@ class DrawingGraphFragmentWire(BaseModel):
     source_region: SourceRegion
     ownership_region: SourceRegion
     evidence: list[DrawingGraphEvidence] = Field(default_factory=list, max_length=64)
-    entities: list[DrawingGraphFragmentEntity | Entity] = Field(
-        default_factory=list, max_length=64
-    )
+    entities: list[DrawingGraphFragmentEntity | Entity] = Field(default_factory=list, max_length=64)
     relations: list[DrawingGraphRelation] = Field(default_factory=list)
     unresolved_regions: list[UnresolvedRegion] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _reject_repeated_observations(self) -> "DrawingGraphFragmentWire":
+    def _reject_repeated_observations(self) -> DrawingGraphFragmentWire:
         regions = [
             (item.region.x0, item.region.y0, item.region.x1, item.region.y1)
             for item in self.evidence
@@ -421,12 +409,8 @@ class VlmEvidenceCheck(BaseModel):
 
 
 class VlmGraphEvidenceReport(BaseModel):
-    contract: Literal["vlm-graph-evidence-verifier-v1"] = (
-        "vlm-graph-evidence-verifier-v1"
-    )
-    task: Literal["cad_drawing_graph_evidence_verify"] = (
-        "cad_drawing_graph_evidence_verify"
-    )
+    contract: Literal["vlm-graph-evidence-verifier-v1"] = "vlm-graph-evidence-verifier-v1"
+    task: Literal["cad_drawing_graph_evidence_verify"] = "cad_drawing_graph_evidence_verify"
     classic_ocr_used: Literal[False] = False
     reader_model: str | None = None
     verifier_models: list[str] = Field(default_factory=list)
@@ -445,9 +429,7 @@ def _measured_dimension_value(
     dimension: DimensionEntity, target: Entity, scale: float
 ) -> float | None:
     if dimension.kind == "linear" and isinstance(target, Segment):
-        return math.hypot(
-            target.p2.x - target.p1.x, target.p2.y - target.p1.y
-        ) * scale
+        return math.hypot(target.p2.x - target.p1.x, target.p2.y - target.p1.y) * scale
     if dimension.kind == "diameter" and isinstance(target, Circle):
         return 2.0 * target.radius * scale
     if dimension.kind == "radial" and isinstance(target, (Circle, Arc)):
@@ -465,63 +447,70 @@ def verify_drawing_graph(
 ) -> DrawingGraphVerification:
     """Independently check completeness and dimension-to-geometry consistency."""
     issues: list[DrawingGraphVerificationIssue] = []
-    active_unresolved = [
-        region.id for region in graph.unresolved_regions if not region.resolved
-    ]
+    active_unresolved = [region.id for region in graph.unresolved_regions if not region.resolved]
     if active_unresolved:
-        issues.append(DrawingGraphVerificationIssue(
-            code="GRAPH_UNRESOLVED",
-            severity="error",
-            message=f"Unresolved source regions: {len(active_unresolved)}",
-        ))
+        issues.append(
+            DrawingGraphVerificationIssue(
+                code="GRAPH_UNRESOLVED",
+                severity="error",
+                message=f"Unresolved source regions: {len(active_unresolved)}",
+            )
+        )
     if graph.scale_mm_per_px is None:
-        issues.append(DrawingGraphVerificationIssue(
-            code="GRAPH_SCALE_UNKNOWN",
-            severity="error",
-            message="Metric scale is required to verify drawing dimensions",
-        ))
+        issues.append(
+            DrawingGraphVerificationIssue(
+                code="GRAPH_SCALE_UNKNOWN",
+                severity="error",
+                message="Metric scale is required to verify drawing dimensions",
+            )
+        )
     if pixel_recall is None or pixel_precision is None:
-        issues.append(DrawingGraphVerificationIssue(
-            code="GRAPH_PIXEL_CHECK_MISSING",
-            severity="error",
-            message="Independent source-pixel verification has not run",
-        ))
+        issues.append(
+            DrawingGraphVerificationIssue(
+                code="GRAPH_PIXEL_CHECK_MISSING",
+                severity="error",
+                message="Independent source-pixel verification has not run",
+            )
+        )
     elif pixel_recall < 0.995 or pixel_precision < 0.995:
-        issues.append(DrawingGraphVerificationIssue(
-            code="GRAPH_PIXEL_GATE_FAILED",
-            severity="error",
-            message=(
-                f"Pixel gate failed: recall={pixel_recall:.4f}, "
-                f"precision={pixel_precision:.4f}"
-            ),
-        ))
+        issues.append(
+            DrawingGraphVerificationIssue(
+                code="GRAPH_PIXEL_GATE_FAILED",
+                severity="error",
+                message=(
+                    f"Pixel gate failed: recall={pixel_recall:.4f}, precision={pixel_precision:.4f}"
+                ),
+            )
+        )
     if require_vlm_evidence and vlm_evidence is None:
-        issues.append(DrawingGraphVerificationIssue(
-            code="GRAPH_VLM_EVIDENCE_MISSING",
-            severity="error",
-            message="Independent crop-level VLM evidence verification has not run",
-        ))
+        issues.append(
+            DrawingGraphVerificationIssue(
+                code="GRAPH_VLM_EVIDENCE_MISSING",
+                severity="error",
+                message="Independent crop-level VLM evidence verification has not run",
+            )
+        )
     elif vlm_evidence is not None and vlm_evidence.blocking:
-        failed_ids = [
-            check.entity_id for check in vlm_evidence.checks if not check.exact_match
-        ]
-        issues.append(DrawingGraphVerificationIssue(
-            code=(
-                "GRAPH_VLM_VERIFIER_NOT_INDEPENDENT"
-                if not vlm_evidence.independent
-                else "GRAPH_VLM_EVIDENCE_MISMATCH"
-            ),
-            severity="error",
-            message=(
-                "Crop-level VLM verification is not independent from the reader"
-                if not vlm_evidence.independent
-                else (
-                    "Crop-level VLM verification failed for "
-                    f"{len(failed_ids)} text/symbol entities"
-                )
-            ),
-            entity_ids=failed_ids,
-        ))
+        failed_ids = [check.entity_id for check in vlm_evidence.checks if not check.exact_match]
+        issues.append(
+            DrawingGraphVerificationIssue(
+                code=(
+                    "GRAPH_VLM_VERIFIER_NOT_INDEPENDENT"
+                    if not vlm_evidence.independent
+                    else "GRAPH_VLM_EVIDENCE_MISMATCH"
+                ),
+                severity="error",
+                message=(
+                    "Crop-level VLM verification is not independent from the reader"
+                    if not vlm_evidence.independent
+                    else (
+                        "Crop-level VLM verification failed for "
+                        f"{len(failed_ids)} text/symbol entities"
+                    )
+                ),
+                entity_ids=failed_ids,
+            )
+        )
 
     entities = {entity.id: entity for entity in graph.entities}
     dimension_relations = {
@@ -538,45 +527,53 @@ def verify_drawing_graph(
     dimensions_consistent = 0
     for entity in graph.entities:
         if isinstance(entity, AnnotationEntity) and entity.id not in annotation_relations:
-            issues.append(DrawingGraphVerificationIssue(
-                code="GRAPH_ANNOTATION_TARGET_MISSING",
-                severity="error",
-                message=f"Annotation {entity.id} is not linked to geometry",
-                entity_ids=[entity.id],
-            ))
+            issues.append(
+                DrawingGraphVerificationIssue(
+                    code="GRAPH_ANNOTATION_TARGET_MISSING",
+                    severity="error",
+                    message=f"Annotation {entity.id} is not linked to geometry",
+                    entity_ids=[entity.id],
+                )
+            )
         if not isinstance(entity, DimensionEntity):
             continue
         relation = dimension_relations[entity.id]
         target = entities[relation.target_entity_ids[0]]
         if graph.scale_mm_per_px is None or entity.value_mm is None:
-            issues.append(DrawingGraphVerificationIssue(
-                code="GRAPH_DIMENSION_VALUE_MISSING",
-                severity="error",
-                message=f"Dimension {entity.id} has no verifiable metric value",
-                entity_ids=[entity.id, target.id],
-            ))
+            issues.append(
+                DrawingGraphVerificationIssue(
+                    code="GRAPH_DIMENSION_VALUE_MISSING",
+                    severity="error",
+                    message=f"Dimension {entity.id} has no verifiable metric value",
+                    entity_ids=[entity.id, target.id],
+                )
+            )
             continue
         measured = _measured_dimension_value(entity, target, graph.scale_mm_per_px)
         if measured is None:
-            issues.append(DrawingGraphVerificationIssue(
-                code="GRAPH_DIMENSION_TARGET_UNSUPPORTED",
-                severity="error",
-                message=f"Dimension {entity.id} target cannot be measured",
-                entity_ids=[entity.id, target.id],
-            ))
+            issues.append(
+                DrawingGraphVerificationIssue(
+                    code="GRAPH_DIMENSION_TARGET_UNSUPPORTED",
+                    severity="error",
+                    message=f"Dimension {entity.id} target cannot be measured",
+                    entity_ids=[entity.id, target.id],
+                )
+            )
             continue
         dimensions_checked += 1
         allowed = max(0.02, abs(entity.value_mm) * 0.005)
         if abs(measured - entity.value_mm) > allowed:
-            issues.append(DrawingGraphVerificationIssue(
-                code="GRAPH_DIMENSION_MISMATCH",
-                severity="error",
-                message=(
-                    f"Dimension {entity.id}: stated={entity.value_mm:g} mm, "
-                    f"geometry={measured:g} mm"
-                ),
-                entity_ids=[entity.id, target.id],
-            ))
+            issues.append(
+                DrawingGraphVerificationIssue(
+                    code="GRAPH_DIMENSION_MISMATCH",
+                    severity="error",
+                    message=(
+                        f"Dimension {entity.id}: stated={entity.value_mm:g} mm, "
+                        f"geometry={measured:g} mm"
+                    ),
+                    entity_ids=[entity.id, target.id],
+                )
+            )
         else:
             dimensions_consistent += 1
 
@@ -584,15 +581,13 @@ def verify_drawing_graph(
         graph.entities
     )
     relation_evidence_rate = (
-        sum(bool(relation.evidence) for relation in graph.relations)
-        / len(graph.relations)
+        sum(bool(relation.evidence) for relation in graph.relations) / len(graph.relations)
         if graph.relations
         else 1.0
     )
     blocking = any(issue.severity == "error" for issue in issues)
     exact_assurance = all(
-        entity.assurance in ("constraint_validated", "human_approved")
-        for entity in graph.entities
+        entity.assurance in ("constraint_validated", "human_approved") for entity in graph.entities
     ) and all(
         relation.assurance in ("constraint_validated", "human_approved")
         for relation in graph.relations
@@ -867,9 +862,7 @@ def build_drawing_graph_tiles(
     xs = _tile_origins(image.width, tile_size, overlap)
     ys = _tile_origins(image.height, tile_size, overlap)
     if len(xs) * len(ys) > max_tiles:
-        raise ValueError(
-            f"sheet requires {len(xs) * len(ys)} tiles, limit is {max_tiles}"
-        )
+        raise ValueError(f"sheet requires {len(xs) * len(ys)} tiles, limit is {max_tiles}")
     x_ownership = _ownership_bounds(xs, image.width, tile_size)
     y_ownership = _ownership_bounds(ys, image.height, tile_size)
     tiles: list[DrawingGraphTile] = []
@@ -879,17 +872,19 @@ def build_drawing_graph_tiles(
             y1 = min(y + tile_size, image.height)
             buffer = io.BytesIO()
             image.crop((x, y, x1, y1)).save(buffer, format="PNG")
-            tiles.append(DrawingGraphTile(
-                tile_id=f"tile-{row:02d}-{column:02d}",
-                image_bytes=buffer.getvalue(),
-                source_region=SourceRegion(x0=x, y0=y, x1=x1, y1=y1),
-                ownership_region=SourceRegion(
-                    x0=x_ownership[column][0],
-                    y0=y_ownership[row][0],
-                    x1=x_ownership[column][1],
-                    y1=y_ownership[row][1],
-                ),
-            ))
+            tiles.append(
+                DrawingGraphTile(
+                    tile_id=f"tile-{row:02d}-{column:02d}",
+                    image_bytes=buffer.getvalue(),
+                    source_region=SourceRegion(x0=x, y0=y, x1=x1, y1=y1),
+                    ownership_region=SourceRegion(
+                        x0=x_ownership[column][0],
+                        y0=y_ownership[row][0],
+                        x1=x_ownership[column][1],
+                        y1=y_ownership[row][1],
+                    ),
+                )
+            )
     return tiles
 
 
@@ -934,9 +929,7 @@ def _normalize_fragment_entity_wrappers(
         anchor = _entity_anchor(entity)
         candidates = [view for view in views if _inside(view.region, anchor)]
         if not candidates:
-            raise ValueError(
-                f"flat fragment entity {entity.id} is outside every layout view"
-            )
+            raise ValueError(f"flat fragment entity {entity.id} is outside every layout view")
         # Nested section/detail regions are more specific than the enclosing
         # main view.  Area ordering is stable and needs no model inference.
         view = min(
@@ -947,15 +940,15 @@ def _normalize_fragment_entity_wrappers(
                 candidate.id,
             ),
         )
-        observations.append({
-            "view_id": view.id,
-            "entity": entity.model_dump(mode="json"),
-        })
+        observations.append(
+            {
+                "view_id": view.id,
+                "entity": entity.model_dump(mode="json"),
+            }
+        )
     normalized["entities"] = observations
     evidence = [dict(item) for item in (payload.get("evidence") or [])]
-    known_evidence = {
-        str(item.get("id")) for item in evidence if isinstance(item, dict)
-    }
+    known_evidence = {str(item.get("id")) for item in evidence if isinstance(item, dict)}
     for observation in observations:
         entity = entity_adapter.validate_python(observation["entity"])
         for evidence_id in entity.evidence:
@@ -969,15 +962,17 @@ def _normalize_fragment_entity_wrappers(
             raw_text = None
             if isinstance(entity, (TextEntity, DimensionEntity, AnnotationEntity)):
                 raw_text = entity.text
-            evidence.append({
-                "id": evidence_id,
-                "kind": "pixel_support",
-                "region": entity.source_region.model_dump(mode="json"),
-                "image_index": 0,
-                "raw_text": raw_text,
-                "model_key": "fragment-vlm-derived",
-                "confidence": entity.confidence,
-            })
+            evidence.append(
+                {
+                    "id": evidence_id,
+                    "kind": "pixel_support",
+                    "region": entity.source_region.model_dump(mode="json"),
+                    "image_index": 0,
+                    "raw_text": raw_text,
+                    "model_key": "fragment-vlm-derived",
+                    "confidence": entity.confidence,
+                }
+            )
             known_evidence.add(evidence_id)
     normalized["evidence"] = evidence
     return normalized
@@ -1037,9 +1032,7 @@ def assemble_drawing_graph_fragments(
                     f"fragment {fragment.tile_id} references unknown view {observation.view_id}"
                 )
             if not _inside(fragment.ownership_region, _entity_anchor(entity)):
-                raise ValueError(
-                    f"entity {entity.id} anchor lies outside tile ownership region"
-                )
+                raise ValueError(f"entity {entity.id} anchor lies outside tile ownership region")
             seen_ids.add(entity.id)
             entities.append(entity.model_copy(deep=True))
             views[observation.view_id].entity_ids.append(entity.id)
@@ -1089,9 +1082,7 @@ async def verify_graph_evidence_with_vlm(
     checks: list[VlmEvidenceCheck] = []
     verifier_models: list[str] = []
     reader_model = str(graph.reader_manifest.get("model") or "") or None
-    reader_models = {
-        str(model) for model in (graph.reader_manifest.get("models") or []) if model
-    }
+    reader_models = {str(model) for model in (graph.reader_manifest.get("models") or []) if model}
     if reader_model and not reader_models:
         reader_models.add(reader_model)
     for entity in textual[:max_checks]:
@@ -1118,16 +1109,18 @@ async def verify_graph_evidence_with_vlm(
         )
         request = AIRequest(
             task=AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY,
-            messages=[ChatMessage(
-                role="user",
-                content=(
-                    _VLM_EVIDENCE_PROMPT
-                    + "\nТИП ПРОВЕРКИ: "
-                    + entity.type
-                    + "\nПОЛЯ: "
-                    + ", ".join(expected)
-                ),
-            )],
+            messages=[
+                ChatMessage(
+                    role="user",
+                    content=(
+                        _VLM_EVIDENCE_PROMPT
+                        + "\nТИП ПРОВЕРКИ: "
+                        + entity.type
+                        + "\nПОЛЯ: "
+                        + ", ".join(expected)
+                    ),
+                )
+            ],
             images=[base64.b64encode(buffer.getvalue()).decode()],
             confidential=True,
             allow_cloud=False,
@@ -1151,15 +1144,21 @@ async def verify_graph_evidence_with_vlm(
             check.observed = {
                 key: value
                 for key, value in observed.items()
-                if key in {
-                    "visible", "entity_type", "text", "value_mm",
-                    "tolerance", "value", "symbol", "confidence",
+                if key
+                in {
+                    "visible",
+                    "entity_type",
+                    "text",
+                    "value_mm",
+                    "tolerance",
+                    "value",
+                    "symbol",
+                    "confidence",
                 }
             }
-            check.exact_match = (
-                observed.get("entity_type") == entity.type
-                and _vlm_observation_matches(expected, observed)
-            )
+            check.exact_match = observed.get(
+                "entity_type"
+            ) == entity.type and _vlm_observation_matches(expected, observed)
             if model not in verifier_models:
                 verifier_models.append(model)
         except Exception as exc:  # noqa: BLE001
@@ -1169,8 +1168,7 @@ async def verify_graph_evidence_with_vlm(
     complete = len(textual) <= max_checks and len(checks) == len(textual)
     complete = complete and exact_checks == len(textual)
     independent = not textual or (
-        bool(verifier_models)
-        and all(model not in reader_models for model in verifier_models)
+        bool(verifier_models) and all(model not in reader_models for model in verifier_models)
     )
     return VlmGraphEvidenceReport(
         reader_model=reader_model,
@@ -1205,10 +1203,12 @@ async def read_drawing_graph_attempt(
     except Exception as exc:  # noqa: BLE001
         return DrawingGraphReadAttempt(
             raw_sha256=hashlib.sha256(b"").hexdigest(),
-            validation_errors=[{
-                "type": "source_image_invalid",
-                "msg": str(exc)[:500],
-            }],
+            validation_errors=[
+                {
+                    "type": "source_image_invalid",
+                    "msg": str(exc)[:500],
+                }
+            ],
         )
     if router is None:
         from app.ai.router import ai_router
@@ -1217,15 +1217,17 @@ async def read_drawing_graph_attempt(
     images, tile_descriptions, _coverage = _spec_images(image)
     request = AIRequest(
         task=AITask.CAD_DRAWING_GRAPH_READ,
-        messages=[ChatMessage(
-            role="user",
-            content=(
-                _DRAWING_GRAPH_PROMPT
-                + "\nКАРТА ИЗОБРАЖЕНИЙ:\n"
-                + "\n".join(tile_descriptions)
-                + f"\nРАЗМЕР ПОЛНОГО ЛИСТА: {image.width}×{image.height}px"
-            ),
-        )],
+        messages=[
+            ChatMessage(
+                role="user",
+                content=(
+                    _DRAWING_GRAPH_PROMPT
+                    + "\nКАРТА ИЗОБРАЖЕНИЙ:\n"
+                    + "\n".join(tile_descriptions)
+                    + f"\nРАЗМЕР ПОЛНОГО ЛИСТА: {image.width}×{image.height}px"
+                ),
+            )
+        ],
         images=[base64.b64encode(value).decode() for value in images],
         confidential=confidential,
         allow_cloud=False,
@@ -1237,10 +1239,12 @@ async def read_drawing_graph_attempt(
     except Exception as exc:  # noqa: BLE001
         return DrawingGraphReadAttempt(
             raw_sha256=hashlib.sha256(b"").hexdigest(),
-            validation_errors=[{
-                "type": "reader_call_failed",
-                "msg": str(exc)[:500],
-            }],
+            validation_errors=[
+                {
+                    "type": "reader_call_failed",
+                    "msg": str(exc)[:500],
+                }
+            ],
         )
     raw = response.text or ""
     raw_sha256 = hashlib.sha256(raw.encode()).hexdigest()
@@ -1255,10 +1259,12 @@ async def read_drawing_graph_attempt(
         return DrawingGraphReadAttempt(
             raw_text=raw,
             raw_sha256=raw_sha256,
-            validation_errors=[{
-                "type": "reader_json_invalid",
-                "msg": "Reader output does not contain one valid JSON object",
-            }],
+            validation_errors=[
+                {
+                    "type": "reader_json_invalid",
+                    "msg": "Reader output does not contain one valid JSON object",
+                }
+            ],
             reader_manifest=reader_manifest,
         )
     payload["schema_version"] = 1
@@ -1284,13 +1290,9 @@ async def read_drawing_graph_attempt(
         if hasattr(exc, "json"):
             import json
 
-            validation_errors = json.loads(
-                exc.json(include_url=False, include_input=False)
-            )
+            validation_errors = json.loads(exc.json(include_url=False, include_input=False))
         else:
-            validation_errors = [
-                {"type": "graph_validation_failed", "msg": str(exc)[:1000]}
-            ]
+            validation_errors = [{"type": "graph_validation_failed", "msg": str(exc)[:1000]}]
         return DrawingGraphReadAttempt(
             raw_text=raw,
             raw_sha256=raw_sha256,
@@ -1354,14 +1356,16 @@ async def read_drawing_graph_staged_attempt(
     overview.save(overview_buffer, format="PNG")
     layout_request = AIRequest(
         task=AITask.CAD_DRAWING_GRAPH_LAYOUT,
-        messages=[ChatMessage(
-            role="user",
-            content=(
-                _LAYOUT_PROMPT
-                + f"\nПОЛНЫЙ ЛИСТ: {image.width}x{image.height}px. "
-                + f"OVERVIEW: {overview.width}x{overview.height}px."
-            ),
-        )],
+        messages=[
+            ChatMessage(
+                role="user",
+                content=(
+                    _LAYOUT_PROMPT
+                    + f"\nПОЛНЫЙ ЛИСТ: {image.width}x{image.height}px. "
+                    + f"OVERVIEW: {overview.width}x{overview.height}px."
+                ),
+            )
+        ],
         images=[base64.b64encode(overview_buffer.getvalue()).decode()],
         confidential=confidential,
         allow_cloud=False,
@@ -1378,22 +1382,26 @@ async def read_drawing_graph_staged_attempt(
             raise ValueError("layout output does not contain valid JSON")
         layout = DrawingGraphLayout.model_validate(parsed)
         reader_models.append(response.model)
-        stage_attempts.append({
-            "stage": "layout",
-            "task": AITask.CAD_DRAWING_GRAPH_LAYOUT.value,
-            "model": response.model,
-            "provider": response.provider.value,
-            "raw_sha256": hashlib.sha256(layout_raw.encode()).hexdigest(),
-            "parsed_payload": parsed,
-            "validation_errors": [],
-        })
+        stage_attempts.append(
+            {
+                "stage": "layout",
+                "task": AITask.CAD_DRAWING_GRAPH_LAYOUT.value,
+                "model": response.model,
+                "provider": response.provider.value,
+                "raw_sha256": hashlib.sha256(layout_raw.encode()).hexdigest(),
+                "parsed_payload": parsed,
+                "validation_errors": [],
+            }
+        )
     except Exception as exc:  # noqa: BLE001
         errors = _validation_errors(exc, stage="layout")
-        stage_attempts.append({
-            "stage": "layout",
-            "raw_sha256": hashlib.sha256(layout_raw.encode()).hexdigest(),
-            "validation_errors": errors,
-        })
+        stage_attempts.append(
+            {
+                "stage": "layout",
+                "raw_sha256": hashlib.sha256(layout_raw.encode()).hexdigest(),
+                "validation_errors": errors,
+            }
+        )
         combined = "\n\n--- stage ---\n\n".join(raw_parts)
         return DrawingGraphReadAttempt(
             raw_text=combined,
@@ -1451,9 +1459,11 @@ async def read_drawing_graph_staged_attempt(
             fragment_raw = ""
             response = None
             try:
-                candidate_request = request.model_copy(
-                    update={"preferred_model": candidate}
-                ) if candidate else request
+                candidate_request = (
+                    request.model_copy(update={"preferred_model": candidate})
+                    if candidate
+                    else request
+                )
                 response = await router.run(candidate_request)
                 fragment_raw = response.text or ""
                 raw_parts.append(fragment_raw)
@@ -1471,40 +1481,46 @@ async def read_drawing_graph_staged_attempt(
                 fragment = DrawingGraphFragment.model_validate(parsed)
                 for evidence in fragment.evidence:
                     if not (
-                        tile.source_region.x0 <= evidence.region.x0 < evidence.region.x1 <= tile.source_region.x1
-                        and tile.source_region.y0 <= evidence.region.y0 < evidence.region.y1 <= tile.source_region.y1
+                        tile.source_region.x0
+                        <= evidence.region.x0
+                        < evidence.region.x1
+                        <= tile.source_region.x1
+                        and tile.source_region.y0
+                        <= evidence.region.y0
+                        < evidence.region.y1
+                        <= tile.source_region.y1
                     ):
-                        raise ValueError(
-                            f"evidence {evidence.id} lies outside tile source region"
-                        )
+                        raise ValueError(f"evidence {evidence.id} lies outside tile source region")
                 if response.model not in reader_models:
                     reader_models.append(response.model)
-                stage_attempts.append({
-                    "stage": "fragment",
-                    "tile_id": tile.tile_id,
-                    "task": AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ.value,
-                    "requested_model": candidate,
-                    "model": response.model,
-                    "provider": response.provider.value,
-                    "raw_sha256": hashlib.sha256(fragment_raw.encode()).hexdigest(),
-                    "parsed_payload": parsed,
-                    "validation_errors": [],
-                })
+                stage_attempts.append(
+                    {
+                        "stage": "fragment",
+                        "tile_id": tile.tile_id,
+                        "task": AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ.value,
+                        "requested_model": candidate,
+                        "model": response.model,
+                        "provider": response.provider.value,
+                        "raw_sha256": hashlib.sha256(fragment_raw.encode()).hexdigest(),
+                        "parsed_payload": parsed,
+                        "validation_errors": [],
+                    }
+                )
                 break
             except Exception as exc:  # noqa: BLE001
                 errors = _validation_errors(exc, stage=f"fragment:{tile.tile_id}")
-                stage_attempts.append({
-                    "stage": "fragment",
-                    "tile_id": tile.tile_id,
-                    "task": AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ.value,
-                    "requested_model": candidate,
-                    "model": getattr(response, "model", None),
-                    "provider": getattr(
-                        getattr(response, "provider", None), "value", None
-                    ),
-                    "raw_sha256": hashlib.sha256(fragment_raw.encode()).hexdigest(),
-                    "validation_errors": errors,
-                })
+                stage_attempts.append(
+                    {
+                        "stage": "fragment",
+                        "tile_id": tile.tile_id,
+                        "task": AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ.value,
+                        "requested_model": candidate,
+                        "model": getattr(response, "model", None),
+                        "provider": getattr(getattr(response, "provider", None), "value", None),
+                        "raw_sha256": hashlib.sha256(fragment_raw.encode()).hexdigest(),
+                        "validation_errors": errors,
+                    }
+                )
         if fragment is None:
             combined = "\n\n--- stage ---\n\n".join(raw_parts)
             return DrawingGraphReadAttempt(

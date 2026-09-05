@@ -1,18 +1,17 @@
 """Celery task: send email via SMTP."""
+
 from __future__ import annotations
 
 import smtplib
 import ssl
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from email.header import Header
 from email.mime.application import MIMEApplication
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr, formatdate, getaddresses, make_msgid
-from email.header import Header
-
-import re
 
 import structlog
 
@@ -35,19 +34,17 @@ def send_email_draft(self, draft_id: str) -> dict:
     from app.tasks.async_runner import run_async
 
     async def _run() -> dict:
-        from app.db.session import _get_session_factory
-        from app.db.models import DraftAction, MailboxConfig
-        from app.config import settings
         from app.audit.service import log_action
+        from app.config import settings
+        from app.db.models import DraftAction, MailboxConfig
+        from app.db.session import _get_session_factory
         from app.utils.crypto import decrypt_password
 
         async with _get_session_factory()() as db:
             # Row lock: serialises concurrent send tasks for the same draft so a
             # double-dispatch cannot send the email twice.
             result = await db.execute(
-                select(DraftAction)
-                .where(DraftAction.id == uuid.UUID(draft_id))
-                .with_for_update()
+                select(DraftAction).where(DraftAction.id == uuid.UUID(draft_id)).with_for_update()
             )
             draft = result.scalar_one_or_none()
             if not draft:
@@ -110,7 +107,8 @@ def send_email_draft(self, draft_id: str) -> dict:
                     data["mailbox"] = mailbox_name
                     logger.info(
                         "email_default_mailbox_resolved",
-                        draft_id=draft_id, mailbox=mailbox_name,
+                        draft_id=draft_id,
+                        mailbox=mailbox_name,
                     )
             if mailbox_name:
                 mb = (
@@ -123,6 +121,7 @@ def send_email_draft(self, draft_id: str) -> dict:
                 ).scalar_one_or_none()
                 if mb and mb.smtp_host and mb.smtp_user and mb.auth_method == "oauth2":
                     from app.domain import oauth_mail
+
                     smtp_host = mb.smtp_host
                     smtp_port = mb.smtp_port or 587
                     smtp_user = mb.smtp_user
@@ -132,7 +131,12 @@ def send_email_draft(self, draft_id: str) -> dict:
                     try:
                         oauth_access_token = await oauth_mail.get_valid_access_token(db, mb)
                     except Exception as exc:
-                        logger.error("mailbox_oauth_token_failed", draft_id=draft_id, mailbox=mailbox_name, error=str(exc))
+                        logger.error(
+                            "mailbox_oauth_token_failed",
+                            draft_id=draft_id,
+                            mailbox=mailbox_name,
+                            error=str(exc),
+                        )
                         raise self.retry(exc=exc)
                 elif mb and mb.smtp_host and mb.smtp_user and mb.smtp_password_encrypted:
                     smtp_host = mb.smtp_host
@@ -145,7 +149,8 @@ def send_email_draft(self, draft_id: str) -> dict:
                 elif mb:
                     logger.warning(
                         "mailbox_smtp_not_configured_falling_back",
-                        draft_id=draft_id, mailbox=mailbox_name,
+                        draft_id=draft_id,
+                        mailbox=mailbox_name,
                     )
 
             if not smtp_host:
@@ -167,7 +172,9 @@ def send_email_draft(self, draft_id: str) -> dict:
 
                     email_sent_total.labels(outcome="error").inc()
                     logger.error(
-                        "smtp_not_configured", draft_id=draft_id, mailbox=mailbox_name,
+                        "smtp_not_configured",
+                        draft_id=draft_id,
+                        mailbox=mailbox_name,
                     )
                     from sqlalchemy.orm.attributes import flag_modified as _fm_smtp
 
@@ -179,9 +186,7 @@ def send_email_draft(self, draft_id: str) -> dict:
                     draft.draft_data = data
                     _fm_smtp(draft, "draft_data")
                     await db.commit()
-                    await _notify_send_failure(
-                        db, draft, to_addresses, subject, data["error"]
-                    )
+                    await _notify_send_failure(db, draft, to_addresses, subject, data["error"])
                     return {
                         "status": "error",
                         "reason": "smtp_not_configured",
@@ -191,7 +196,7 @@ def send_email_draft(self, draft_id: str) -> dict:
                 logger.warning("smtp_not_configured", draft_id=draft_id, mailbox=mailbox_name)
                 # Dev/demo: no SMTP anywhere — record the attempt honestly.
                 draft.executed = True
-                draft.executed_at = datetime.now(timezone.utc)
+                draft.executed_at = datetime.now(UTC)
                 data["status"] = "sent_mock"
                 draft.draft_data = data
                 await db.commit()
@@ -199,7 +204,7 @@ def send_email_draft(self, draft_id: str) -> dict:
 
             # Threading headers so the reply threads in the recipient's client.
             from app.db.models import EmailAttachment, EmailMessage
-            from app.domain.email_thread import resolve_threading_headers, record_outbound_message
+            from app.domain.email_thread import record_outbound_message, resolve_threading_headers
 
             parent = None
             raw_parent = data.get("in_reply_to_message_id")
@@ -217,12 +222,16 @@ def send_email_draft(self, draft_id: str) -> dict:
             att_ids = data.get("attachment_ids") or []
             if att_ids:
                 att_rows = (
-                    await db.execute(
-                        select(EmailAttachment).where(
-                            EmailAttachment.id.in_([uuid.UUID(str(a)) for a in att_ids])
+                    (
+                        await db.execute(
+                            select(EmailAttachment).where(
+                                EmailAttachment.id.in_([uuid.UUID(str(a)) for a in att_ids])
+                            )
                         )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
 
                 # Defence in depth (Ф0.1). The API already refuses to put an
                 # attachment the author cannot reach into a draft; re-check here
@@ -255,18 +264,24 @@ def send_email_draft(self, draft_id: str) -> dict:
                 # company default says so on its own row; NULL = inherit.
                 from app.db.models import MailboxConfig as _MBC
 
-                box_limit = (await db.execute(
-                    select(_MBC.max_attachment_mb).where(_MBC.name == mailbox_name)
-                )).scalar_one_or_none()
-                limit_mb = box_limit if box_limit is not None else (
-                    (cfg_row.max_attachment_mb if cfg_row else 25) or 25
+                box_limit = (
+                    await db.execute(
+                        select(_MBC.max_attachment_mb).where(_MBC.name == mailbox_name)
+                    )
+                ).scalar_one_or_none()
+                limit_mb = (
+                    box_limit
+                    if box_limit is not None
+                    else ((cfg_row.max_attachment_mb if cfg_row else 25) or 25)
                 )
                 max_total = limit_mb * 1024 * 1024
                 total_size = sum(int(a.size or 0) for a in att_rows)
                 if total_size > max_total:
                     logger.error(
-                        "email_attachments_too_large", draft_id=draft_id,
-                        total=total_size, limit=max_total,
+                        "email_attachments_too_large",
+                        draft_id=draft_id,
+                        total=total_size,
+                        limit=max_total,
                     )
                     data["status"] = "error"
                     data["error"] = (
@@ -275,34 +290,39 @@ def send_email_draft(self, draft_id: str) -> dict:
                     )
                     draft.draft_data = data
                     from sqlalchemy.orm.attributes import flag_modified as _fm1
+
                     _fm1(draft, "draft_data")
                     await db.commit()
                     return {"status": "error", "reason": "attachments_too_large"}
 
                 if foreign:
                     logger.error(
-                        "email_attachment_not_owned", draft_id=draft_id,
-                        mailbox=mailbox_name, filenames=foreign,
+                        "email_attachment_not_owned",
+                        draft_id=draft_id,
+                        mailbox=mailbox_name,
+                        filenames=foreign,
                     )
                     data["status"] = "error"
                     data["error"] = f"Вложение недоступно: {', '.join(foreign)}"
                     draft.draft_data = data
                     from sqlalchemy.orm.attributes import flag_modified as _fm0
+
                     _fm0(draft, "draft_data")
                     await db.commit()
                     return {"status": "error", "reason": "attachment_not_owned"}
 
             try:
-                from app.storage import download_file
-
                 # Ф5.2 — картинка, вставленная в тело письма, должна прийти
                 # получателю картинкой, а не ссылкой на наш сервер: ссылка
                 # снаружи не открывается, а у получателя в письме дыра.
                 # Разделяем по признаку: на что ссылается тело — то inline
                 # (multipart/related, cid:), остальное — обычные вложения.
                 from app.domain.email_inline import (
-                    cid_for, rewrite_to_cid, split_inline,
+                    cid_for,
+                    rewrite_to_cid,
+                    split_inline,
                 )
+                from app.storage import download_file
 
                 inline_rows, file_rows = split_inline(body_html, list(att_rows))
                 cid_by_id = {str(a.id): cid_for(a.id) for a in inline_rows}
@@ -324,15 +344,14 @@ def send_email_draft(self, draft_id: str) -> dict:
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
                                 "email_inline_download_failed",
-                                name=a.filename, error=str(exc),
+                                name=a.filename,
+                                error=str(exc),
                             )
                             continue
                         subtype = (a.content_type or "image/png").split("/")[-1]
                         part = MIMEImage(payload_bytes, _subtype=subtype)
                         part.add_header("Content-ID", f"<{cid_by_id[str(a.id)]}>")
-                        part.add_header(
-                            "Content-Disposition", "inline", filename=a.filename
-                        )
+                        part.add_header("Content-Disposition", "inline", filename=a.filename)
                         related.attach(part)
                     body_part = related
 
@@ -344,7 +363,9 @@ def send_email_draft(self, draft_id: str) -> dict:
                         try:
                             payload_bytes = download_file(a.storage_path)
                         except Exception as exc:  # noqa: BLE001
-                            logger.warning("email_attachment_download_failed", name=a.filename, error=str(exc))
+                            logger.warning(
+                                "email_attachment_download_failed", name=a.filename, error=str(exc)
+                            )
                             continue
                         part = MIMEApplication(payload_bytes, _subtype="octet-stream")
                         part.add_header("Content-Disposition", "attachment", filename=a.filename)
@@ -353,7 +374,9 @@ def send_email_draft(self, draft_id: str) -> dict:
                     msg = body_part
 
                 msg["Subject"] = Header(subject, "utf-8")
-                msg["From"] = formataddr((str(Header(from_name, "utf-8")) if from_name else "", from_address))
+                msg["From"] = formataddr(
+                    (str(Header(from_name, "utf-8")) if from_name else "", from_address)
+                )
                 msg["To"] = ", ".join(to_addresses)
                 if cc_addresses:
                     msg["Cc"] = ", ".join(cc_addresses)
@@ -368,6 +391,7 @@ def send_email_draft(self, draft_id: str) -> dict:
                 def _authenticate(server: smtplib.SMTP) -> None:
                     if oauth_access_token:
                         from app.domain.oauth_mail import xoauth2_base64
+
                         code, resp = server.docmd(
                             "AUTH", "XOAUTH2 " + xoauth2_base64(smtp_user, oauth_access_token)
                         )
@@ -376,7 +400,9 @@ def send_email_draft(self, draft_id: str) -> dict:
                     elif smtp_user:
                         server.login(smtp_user, smtp_password)
 
-                recipients = list(to_addresses) + list(cc_addresses) + _bare(data.get("bcc_addresses") or [])
+                recipients = (
+                    list(to_addresses) + list(cc_addresses) + _bare(data.get("bcc_addresses") or [])
+                )
                 context = ssl.create_default_context()
                 # Without a timeout a silent relay pins this worker forever.
                 timeout = settings.smtp_timeout_seconds
@@ -394,11 +420,12 @@ def send_email_draft(self, draft_id: str) -> dict:
                         server.sendmail(from_address, recipients, msg.as_string())
 
                 draft.executed = True
-                draft.executed_at = datetime.now(timezone.utc)
+                draft.executed_at = datetime.now(UTC)
                 data["status"] = "sent"
                 data["smtp_message_id"] = smtp_message_id
                 draft.draft_data = data
                 from sqlalchemy.orm.attributes import flag_modified as _fm
+
                 _fm(draft, "draft_data")
 
                 # Commit "this went out" BEFORE any side effect. Everything
@@ -417,12 +444,16 @@ def send_email_draft(self, draft_id: str) -> dict:
                 appended_uid = None
                 try:
                     appended_uid = await _append_to_sent(
-                        db, mailbox_name, msg.as_bytes(),
+                        db,
+                        mailbox_name,
+                        msg.as_bytes(),
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "email_append_to_sent_failed",
-                        draft_id=draft_id, mailbox=mailbox_name, error=str(exc),
+                        draft_id=draft_id,
+                        mailbox=mailbox_name,
+                        error=str(exc),
                     )
                     await db.rollback()
                     data["sent_folder_error"] = str(exc)[:300]
@@ -447,9 +478,7 @@ def send_email_draft(self, draft_id: str) -> dict:
                     # into our own Sent view. Previously a warning and nothing
                     # else, so the message was invisible to its author forever.
                     # Flag it on the draft and tell them, instead of pretending.
-                    logger.error(
-                        "email_outbound_record_failed", draft_id=draft_id, error=str(exc)
-                    )
+                    logger.error("email_outbound_record_failed", draft_id=draft_id, error=str(exc))
                     await db.rollback()
                     data["outbound_record_error"] = str(exc)[:300]
                     draft = await db.get(DraftAction, uuid.UUID(draft_id))
@@ -457,7 +486,10 @@ def send_email_draft(self, draft_id: str) -> dict:
                         draft.draft_data = data
                         _fm(draft, "draft_data")
                     await _notify_send_failure(
-                        db, draft, to_addresses, subject,
+                        db,
+                        draft,
+                        to_addresses,
+                        subject,
                         "письмо отправлено, но не попало в «Отправленные» — "
                         f"сообщите администратору: {exc}",
                     )
@@ -465,8 +497,14 @@ def send_email_draft(self, draft_id: str) -> dict:
                 try:
                     from app.core.chat_bus import chat_bus
 
-                    await chat_bus.publish({"type": "email.sent", "mailbox": mailbox_name,
-                                            "to": to_addresses, "subject": subject})
+                    await chat_bus.publish(
+                        {
+                            "type": "email.sent",
+                            "mailbox": mailbox_name,
+                            "to": to_addresses,
+                            "subject": subject,
+                        }
+                    )
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -502,8 +540,7 @@ def send_email_draft(self, draft_id: str) -> dict:
                     from app.core.metrics import email_sent_total
 
                     email_sent_total.labels(outcome="error").inc()
-                    return {"status": "error", "reason": "smtp_failed",
-                            "detail": str(exc)[:200]}
+                    return {"status": "error", "reason": "smtp_failed", "detail": str(exc)[:200]}
                 raise self.retry(exc=exc)
 
     return run_async(_run())
@@ -565,9 +602,7 @@ async def _append_to_sent(db, mailbox_name: str | None, raw: bytes) -> int | Non
         return None
 
     config = (
-        await db.execute(
-            _select(MailboxConfig).where(MailboxConfig.name == mailbox_name)
-        )
+        await db.execute(_select(MailboxConfig).where(MailboxConfig.name == mailbox_name))
     ).scalar_one_or_none()
     if config is None or not config.imap_host:
         return None

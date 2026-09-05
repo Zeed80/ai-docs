@@ -19,58 +19,60 @@ from app.services.engineering_model_graph import evaluate_build_admission, verif
 
 
 def _model(*, material: str | None = "Concrete C30/37") -> ConstructionModel:
-    return ConstructionModel.model_validate({
-        "site_name": "Test site",
-        "building_name": "Test building",
-        "storeys": [{"id": "level-1", "name": "Level 1", "elevation_mm": 0}],
-        "elements": [
-            {
-                "id": "wall-1",
-                "kind": "wall",
-                "name": "External wall",
-                "storey_id": "level-1",
-                "material": material,
-                "load_bearing": True,
-                "box": {
-                    "x_mm": 0,
-                    "y_mm": 0,
-                    "z_mm": 0,
-                    "width_mm": 5000,
-                    "depth_mm": 200,
-                    "height_mm": 3000,
+    return ConstructionModel.model_validate(
+        {
+            "site_name": "Test site",
+            "building_name": "Test building",
+            "storeys": [{"id": "level-1", "name": "Level 1", "elevation_mm": 0}],
+            "elements": [
+                {
+                    "id": "wall-1",
+                    "kind": "wall",
+                    "name": "External wall",
+                    "storey_id": "level-1",
+                    "material": material,
+                    "load_bearing": True,
+                    "box": {
+                        "x_mm": 0,
+                        "y_mm": 0,
+                        "z_mm": 0,
+                        "width_mm": 5000,
+                        "depth_mm": 200,
+                        "height_mm": 3000,
+                    },
                 },
-            },
-            {
-                "id": "opening-1",
-                "kind": "opening",
-                "name": "Door opening",
-                "storey_id": "level-1",
-                "host_id": "wall-1",
-                "box": {
-                    "x_mm": 1000,
-                    "y_mm": 0,
-                    "z_mm": 0,
-                    "width_mm": 900,
-                    "depth_mm": 200,
-                    "height_mm": 2100,
+                {
+                    "id": "opening-1",
+                    "kind": "opening",
+                    "name": "Door opening",
+                    "storey_id": "level-1",
+                    "host_id": "wall-1",
+                    "box": {
+                        "x_mm": 1000,
+                        "y_mm": 0,
+                        "z_mm": 0,
+                        "width_mm": 900,
+                        "depth_mm": 200,
+                        "height_mm": 2100,
+                    },
                 },
-            },
-            {
-                "id": "space-1",
-                "kind": "space",
-                "name": "Room 101",
-                "storey_id": "level-1",
-                "box": {
-                    "x_mm": 200,
-                    "y_mm": 200,
-                    "z_mm": 0,
-                    "width_mm": 4600,
-                    "depth_mm": 4000,
-                    "height_mm": 3000,
+                {
+                    "id": "space-1",
+                    "kind": "space",
+                    "name": "Room 101",
+                    "storey_id": "level-1",
+                    "box": {
+                        "x_mm": 200,
+                        "y_mm": 200,
+                        "z_mm": 0,
+                        "width_mm": 4600,
+                        "depth_mm": 4000,
+                        "height_mm": 3000,
+                    },
                 },
-            },
-        ],
-    })
+            ],
+        }
+    )
 
 
 def test_construction_graph_projects_spatial_hierarchy_and_opening_host():
@@ -105,16 +107,18 @@ def test_construction_graph_projects_spatial_hierarchy_and_opening_host():
             producer="system",
             pass_id="construction-build:r1",
             idempotency_key="construction-build:test",
-            add_assertions=[Assertion(
-                id="assertion:construction-ifc-reopen:test",
-                subject_id="product:building",
-                predicate="construction.ifc_reopen_valid",
-                value=ExactValue(kind="exact", value=True),
-                origin="derived",
-                assurance="constraint_validated",
-                confidence=1.0,
-                supersedes_assertion_id=reopen.id,
-            )],
+            add_assertions=[
+                Assertion(
+                    id="assertion:construction-ifc-reopen:test",
+                    subject_id="product:building",
+                    predicate="construction.ifc_reopen_valid",
+                    value=ExactValue(kind="exact", value=True),
+                    origin="derived",
+                    assurance="constraint_validated",
+                    confidence=1.0,
+                    supersedes_assertion_id=reopen.id,
+                )
+            ],
             supersede_assertion_ids=[reopen.id],
         ),
     )
@@ -147,9 +151,10 @@ def test_deterministic_construction_sheets_cover_plan_section_and_elements():
     state, issues = verify_graph(patched)
     assert "required_2d_artifacts_missing" not in state.issue_codes
     assert not [item for item in issues if item["severity"] == "error"]
-    assert "assertion:construction:required-sheets" not in compile_build_plan(
-        patched, "production"
-    ).critical_assumption_ids
+    assert (
+        "assertion:construction:required-sheets"
+        not in compile_build_plan(patched, "production").critical_assumption_ids
+    )
 
 
 def test_tampered_construction_sheets_cannot_be_admitted():
@@ -176,8 +181,7 @@ def test_construction_release_keeps_unapproved_source_values_critical():
     production = compile_build_plan(graph, "production")
     assert production.production_export_allowed is False
     assert any(
-        assertion.id in production.critical_assumption_ids
-        and assertion.origin == "human"
+        assertion.id in production.critical_assumption_ids and assertion.origin == "human"
         for assertion in graph.assertions
     )
 
@@ -202,11 +206,13 @@ def test_domain_verifier_rejects_construction_element_without_storey():
     payload["canonical_sha256"] = ""
     # Select by the opening assertion rather than relying on a fixture hash.
     opening_id = next(
-        item["subject_id"] for item in payload["assertions"]
+        item["subject_id"]
+        for item in payload["assertions"]
         if item["predicate"] == "element.kind" and item["value"]["value"] == "opening"
     )
     payload["edges"] = [
-        edge for edge in payload["edges"]
+        edge
+        for edge in payload["edges"]
         if not (edge["type"] == "located_in" and edge["source_id"] == opening_id)
     ]
     broken = type(graph).model_validate(payload).sealed()
@@ -226,16 +232,16 @@ def test_construction_material_gap_blocks_production():
 
     production = compile_build_plan(graph, "production")
     missing = next(
-        assertion
-        for assertion in graph.assertions
-        if assertion.predicate == "element.material"
+        assertion for assertion in graph.assertions if assertion.predicate == "element.material"
     )
     assert missing.value.kind == "unknown"
     assert missing.id in production.critical_assumption_ids
 
     pending = {
-        item.id for item in graph.assertions
-        if item.predicate in {
+        item.id
+        for item in graph.assertions
+        if item.predicate
+        in {
             "construction.ifc_reopen_valid",
             "construction.required_sheets_complete",
         }
@@ -247,15 +253,9 @@ def test_construction_material_gap_blocks_production():
         pending_output_assertion_ids=pending,
     )
     assert admission.allowed is False
-    blocker = next(
-        item for item in admission.blockers
-        if item.assertion_id == missing.id
-    )
+    blocker = next(item for item in admission.blockers if item.assertion_id == missing.id)
     assert blocker.code == "critical_parameter_unknown"
-    question = next(
-        item for item in admission.questions
-        if item.assertion_id == missing.id
-    )
+    question = next(item for item in admission.questions if item.assertion_id == missing.id)
     assert question.predicate == "element.material"
     assert question.reason == "construction material is missing"
 
@@ -271,9 +271,5 @@ def test_construction_generator_rejects_wrong_domain():
     report = evaluate_build_admission(graph, "production", "assembly_step")
 
     assert report.allowed is False
-    assert "generator_profile_incompatible" in {
-        item.code for item in report.blockers
-    }
-    assert "generator_target_incompatible" in {
-        item.code for item in report.blockers
-    }
+    assert "generator_profile_incompatible" in {item.code for item in report.blockers}
+    assert "generator_target_incompatible" in {item.code for item in report.blockers}

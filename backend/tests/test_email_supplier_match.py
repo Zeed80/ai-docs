@@ -7,7 +7,7 @@ was not consulted anywhere in the system.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import create_engine, delete
@@ -37,8 +37,17 @@ def _cleanup_since(engine, started):
     from sqlalchemy import select as _select
 
     from app.db.models import (
-        AnomalyCard, Document, DocumentExtraction, DocumentLink, EmailAttachment,
-        EmailMessage, EmailThread, Invoice, MailboxConfig, Party, QuarantineEntry,
+        AnomalyCard,
+        Document,
+        DocumentExtraction,
+        DocumentLink,
+        EmailAttachment,
+        EmailMessage,
+        EmailThread,
+        Invoice,
+        MailboxConfig,
+        Party,
+        QuarantineEntry,
     )
 
     with Session(engine) as db:
@@ -54,9 +63,7 @@ def _cleanup_since(engine, started):
         # runs eagerly and leaves AnomalyCard rows behind — they leaked into
         # test_spec_tables::test_anomalies_source.
         invoice_ids = _select(Invoice.id).where(Invoice.document_id.in_(doc_ids))
-        db.execute(delete(AnomalyCard).where(
-            AnomalyCard.entity_id.in_(invoice_ids)
-        ))
+        db.execute(delete(AnomalyCard).where(AnomalyCard.entity_id.in_(invoice_ids)))
         db.execute(delete(AnomalyCard).where(AnomalyCard.created_at >= started))
         db.execute(delete(Invoice).where(Invoice.document_id.in_(doc_ids)))
         db.execute(delete(DocumentExtraction).where(DocumentExtraction.document_id.in_(doc_ids)))
@@ -85,7 +92,7 @@ def sync_db(test_engine, monkeypatch):
     monkeypatch.setattr(sync_module, "sync_session", lambda: Session(engine))
     monkeypatch.setattr("app.tasks.extraction._get_sync_session", lambda: Session(engine))
 
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     try:
         with Session(engine) as db:
             yield db
@@ -97,29 +104,44 @@ def sync_db(test_engine, monkeypatch):
 def _emailed_invoice(db, sender: str, *, supplier_data: dict | None = None):
     thread = EmailThread(subject="Счёт", mailbox="procurement", message_count=1)
     msg = EmailMessage(
-        thread=thread, mailbox="procurement", subject="Счёт",
-        from_address=sender, to_addresses=["procurement@example.com"],
-        received_at=datetime.now(timezone.utc),
+        thread=thread,
+        mailbox="procurement",
+        subject="Счёт",
+        from_address=sender,
+        to_addresses=["procurement@example.com"],
+        received_at=datetime.now(UTC),
         message_id_header=f"<{uuid.uuid4()}@example.com>",
     )
     db.add_all([thread, msg])
     db.flush()
 
     doc = Document(
-        file_name="Счёт.pdf", file_hash=uuid.uuid4().hex, mime_type="application/pdf",
-        file_size=10, storage_path="documents/x", source_channel="email",
-        source_email_id=msg.id, status=DocumentStatus.approved,
+        file_name="Счёт.pdf",
+        file_hash=uuid.uuid4().hex,
+        mime_type="application/pdf",
+        file_size=10,
+        storage_path="documents/x",
+        source_channel="email",
+        source_email_id=msg.id,
+        status=DocumentStatus.approved,
     )
     db.add(doc)
     db.flush()
-    db.add(DocumentExtraction(
-        document_id=doc.id, model_name="test",
-        structured_data={"supplier": supplier_data or {}},
-    ))
-    db.add(Invoice(
-        document_id=doc.id, invoice_number="УТ-1", status=InvoiceStatus.approved,
-        total_amount=1000,
-    ))
+    db.add(
+        DocumentExtraction(
+            document_id=doc.id,
+            model_name="test",
+            structured_data={"supplier": supplier_data or {}},
+        )
+    )
+    db.add(
+        Invoice(
+            document_id=doc.id,
+            invoice_number="УТ-1",
+            status=InvoiceStatus.approved,
+            total_amount=1000,
+        )
+    )
     db.commit()
     return doc
 
@@ -127,8 +149,7 @@ def _emailed_invoice(db, sender: str, *, supplier_data: dict | None = None):
 def test_supplier_is_found_by_the_sender_address(sync_db):
     from app.tasks.extraction import auto_supplier_task
 
-    party = Party(name="ООО Ромекс", role=PartyRole.supplier,
-                  contact_email="sales@romex.example")
+    party = Party(name="ООО Ромекс", role=PartyRole.supplier, contact_email="sales@romex.example")
     sync_db.add(party)
     sync_db.commit()
     party_id = party.id
@@ -141,17 +162,14 @@ def test_supplier_is_found_by_the_sender_address(sync_db):
     assert result["party_id"] == str(party_id)
     assert result["matched_by"] == "email_sender_exact"
 
-    inv = sync_db.execute(
-        Invoice.__table__.select().where(Invoice.document_id == doc.id)
-    ).first()
+    inv = sync_db.execute(Invoice.__table__.select().where(Invoice.document_id == doc.id)).first()
     assert inv.supplier_id == party_id
 
 
 def test_a_unique_sender_domain_also_identifies_the_supplier(sync_db):
     from app.tasks.extraction import auto_supplier_task
 
-    party = Party(name="ООО Ромекс", role=PartyRole.supplier,
-                  contact_email="info@romex.example")
+    party = Party(name="ООО Ромекс", role=PartyRole.supplier, contact_email="info@romex.example")
     sync_db.add(party)
     sync_db.commit()
     party_id = party.id
@@ -167,10 +185,12 @@ def test_a_shared_domain_never_binds_an_invoice_to_a_random_supplier(sync_db):
     attach an invoice to the wrong company."""
     from app.tasks.extraction import auto_supplier_task
 
-    sync_db.add_all([
-        Party(name="ООО Первый", role=PartyRole.supplier, contact_email="a@mail.ru"),
-        Party(name="ООО Второй", role=PartyRole.supplier, contact_email="b@mail.ru"),
-    ])
+    sync_db.add_all(
+        [
+            Party(name="ООО Первый", role=PartyRole.supplier, contact_email="a@mail.ru"),
+            Party(name="ООО Второй", role=PartyRole.supplier, contact_email="b@mail.ru"),
+        ]
+    )
     sync_db.commit()
 
     doc = _emailed_invoice(sync_db, "c@mail.ru", supplier_data={})
@@ -184,14 +204,16 @@ def test_document_inn_still_wins_over_the_envelope(sync_db):
     from app.tasks.extraction import auto_supplier_task
 
     real = Party(name="ООО Ромекс", role=PartyRole.supplier, inn="7701234567")
-    forwarder = Party(name="ООО Посредник", role=PartyRole.supplier,
-                      contact_email="buh@middleman.example")
+    forwarder = Party(
+        name="ООО Посредник", role=PartyRole.supplier, contact_email="buh@middleman.example"
+    )
     sync_db.add_all([real, forwarder])
     sync_db.commit()
     real_id = real.id
 
     doc = _emailed_invoice(
-        sync_db, "buh@middleman.example",
+        sync_db,
+        "buh@middleman.example",
         supplier_data={"name": "ООО Ромекс", "inn": "7701234567"},
     )
     result = auto_supplier_task.apply(args=[str(doc.id)]).get()
@@ -206,30 +228,55 @@ async def test_invoice_reports_the_letter_it_came_from(client, db_session):
     """`Document.source_email_id` existed and was returned by no endpoint, so
     the invoice screen could not say "пришёл письмом от X"."""
     from app.db.models import (
-        Document as D, DocumentStatus as DS, EmailMessage as EM,
-        EmailThread as ET, Invoice as I, InvoiceStatus as IS,
+        Document as D,
+    )
+    from app.db.models import (
+        DocumentStatus as DS,
+    )
+    from app.db.models import (
+        EmailMessage as EM,
+    )
+    from app.db.models import (
+        EmailThread as ET,
+    )
+    from app.db.models import (
+        Invoice as I,
+    )
+    from app.db.models import (
+        InvoiceStatus as IS,
     )
 
     thread = ET(subject="Счёт от Ромекс", mailbox="procurement", message_count=1)
     msg = EM(
-        thread=thread, mailbox="procurement", subject="Счёт от Ромекс",
-        from_address="sales@romex.example", to_addresses=["procurement@example.com"],
-        received_at=datetime.now(timezone.utc),
+        thread=thread,
+        mailbox="procurement",
+        subject="Счёт от Ромекс",
+        from_address="sales@romex.example",
+        to_addresses=["procurement@example.com"],
+        received_at=datetime.now(UTC),
         message_id_header=f"<{uuid.uuid4()}@romex.example>",
         headers_meta={"auth": {"spf": "pass", "dkim": "pass"}},
     )
     db_session.add_all([thread, msg])
     await db_session.flush()
     doc = D(
-        file_name="Счёт.pdf", file_hash=uuid.uuid4().hex, mime_type="application/pdf",
-        file_size=10, storage_path="documents/x", source_channel="email",
-        source_email_id=msg.id, status=DS.approved,
+        file_name="Счёт.pdf",
+        file_hash=uuid.uuid4().hex,
+        mime_type="application/pdf",
+        file_size=10,
+        storage_path="documents/x",
+        source_channel="email",
+        source_email_id=msg.id,
+        status=DS.approved,
     )
     db_session.add(doc)
     await db_session.flush()
     inv = I(
-        document_id=doc.id, invoice_number="УТ-2562", status=IS.approved,
-        total_amount=240000, metadata_={"supplier_matched_by": "email_sender_exact"},
+        document_id=doc.id,
+        invoice_number="УТ-2562",
+        status=IS.approved,
+        total_amount=240000,
+        metadata_={"supplier_matched_by": "email_sender_exact"},
     )
     db_session.add(inv)
     await db_session.commit()
@@ -246,35 +293,72 @@ async def test_invoice_reports_the_letter_it_came_from(client, db_session):
 
 async def test_thread_shows_what_was_created_from_it(client, db_session):
     from app.db.models import (
-        Document as D, DocumentStatus as DS, EmailMessage as EM,
-        EmailThread as ET, Invoice as I, InvoiceStatus as IS, MailboxConfig as MC,
+        Document as D,
+    )
+    from app.db.models import (
+        DocumentStatus as DS,
+    )
+    from app.db.models import (
+        EmailMessage as EM,
+    )
+    from app.db.models import (
+        EmailThread as ET,
+    )
+    from app.db.models import (
+        Invoice as I,
+    )
+    from app.db.models import (
+        InvoiceStatus as IS,
+    )
+    from app.db.models import (
+        MailboxConfig as MC,
     )
 
-    db_session.add(MC(
-        name="procurement", display_name="Закупки", imap_host="m.example.com",
-        imap_port=993, imap_user="procurement", imap_password_encrypted="x",
-        imap_ssl=True, is_active=True,
-    ))
+    db_session.add(
+        MC(
+            name="procurement",
+            display_name="Закупки",
+            imap_host="m.example.com",
+            imap_port=993,
+            imap_user="procurement",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            is_active=True,
+        )
+    )
     thread = ET(subject="Счёт", mailbox="procurement", message_count=1)
     msg = EM(
-        thread=thread, mailbox="procurement", subject="Счёт",
-        from_address="sales@romex.example", to_addresses=["procurement@example.com"],
-        received_at=datetime.now(timezone.utc),
+        thread=thread,
+        mailbox="procurement",
+        subject="Счёт",
+        from_address="sales@romex.example",
+        to_addresses=["procurement@example.com"],
+        received_at=datetime.now(UTC),
         message_id_header=f"<{uuid.uuid4()}@romex.example>",
     )
     db_session.add_all([thread, msg])
     await db_session.flush()
     doc = D(
-        file_name="Счёт.pdf", file_hash=uuid.uuid4().hex, mime_type="application/pdf",
-        file_size=10, storage_path="documents/x", source_channel="email",
-        source_email_id=msg.id, status=DS.needs_review,
+        file_name="Счёт.pdf",
+        file_hash=uuid.uuid4().hex,
+        mime_type="application/pdf",
+        file_size=10,
+        storage_path="documents/x",
+        source_channel="email",
+        source_email_id=msg.id,
+        status=DS.needs_review,
     )
     db_session.add(doc)
     await db_session.flush()
-    db_session.add(I(
-        document_id=doc.id, invoice_number="УТ-2562", status=IS.needs_review,
-        total_amount=240000, metadata_={"supplier_matched_by": "email_sender_domain"},
-    ))
+    db_session.add(
+        I(
+            document_id=doc.id,
+            invoice_number="УТ-2562",
+            status=IS.needs_review,
+            total_amount=240000,
+            metadata_={"supplier_matched_by": "email_sender_domain"},
+        )
+    )
     await db_session.commit()
 
     resp = await client.get(f"/api/email/threads/{thread.id}")
@@ -288,23 +372,45 @@ async def test_thread_shows_what_was_created_from_it(client, db_session):
 
 async def test_unknown_authentication_is_not_reported_as_pass(client, db_session):
     from app.db.models import (
-        Document as D, DocumentStatus as DS, EmailMessage as EM,
-        EmailThread as ET, Invoice as I, InvoiceStatus as IS,
+        Document as D,
+    )
+    from app.db.models import (
+        DocumentStatus as DS,
+    )
+    from app.db.models import (
+        EmailMessage as EM,
+    )
+    from app.db.models import (
+        EmailThread as ET,
+    )
+    from app.db.models import (
+        Invoice as I,
+    )
+    from app.db.models import (
+        InvoiceStatus as IS,
     )
 
     thread = ET(subject="Без заголовков", mailbox="procurement", message_count=1)
     msg = EM(
-        thread=thread, mailbox="procurement", subject="Без заголовков",
-        from_address="x@y.example", to_addresses=["procurement@example.com"],
-        received_at=datetime.now(timezone.utc),
+        thread=thread,
+        mailbox="procurement",
+        subject="Без заголовков",
+        from_address="x@y.example",
+        to_addresses=["procurement@example.com"],
+        received_at=datetime.now(UTC),
         message_id_header=f"<{uuid.uuid4()}@y.example>",
     )
     db_session.add_all([thread, msg])
     await db_session.flush()
     doc = D(
-        file_name="a.pdf", file_hash=uuid.uuid4().hex, mime_type="application/pdf",
-        file_size=1, storage_path="documents/y", source_channel="email",
-        source_email_id=msg.id, status=DS.approved,
+        file_name="a.pdf",
+        file_hash=uuid.uuid4().hex,
+        mime_type="application/pdf",
+        file_size=1,
+        storage_path="documents/y",
+        source_channel="email",
+        source_email_id=msg.id,
+        status=DS.approved,
     )
     db_session.add(doc)
     await db_session.flush()

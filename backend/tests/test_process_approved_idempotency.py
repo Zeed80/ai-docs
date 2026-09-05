@@ -37,8 +37,11 @@ async def test_reapproval_detaches_receipts_and_succeeds(db_session):
     # ── Seed: document → invoice → line, plus a warehouse receipt + line that
     #    reference the invoice/line, plus a payment schedule. ──────────────────
     doc = Document(
-        file_name="inv.pdf", file_hash=uuid.uuid4().hex, file_size=1,
-        mime_type="application/pdf", storage_path="x/y",
+        file_name="inv.pdf",
+        file_hash=uuid.uuid4().hex,
+        file_size=1,
+        mime_type="application/pdf",
+        storage_path="x/y",
     )
     db_session.add(doc)
     await db_session.flush()
@@ -56,27 +59,43 @@ async def test_reapproval_detaches_receipts_and_succeeds(db_session):
     await db_session.flush()
 
     rline = WarehouseReceiptLine(
-        receipt_id=receipt.id, invoice_line_id=line.id,
-        description="Болт", quantity_expected=10.0, quantity_received=0.0, unit="шт",
+        receipt_id=receipt.id,
+        invoice_line_id=line.id,
+        description="Болт",
+        quantity_expected=10.0,
+        quantity_received=0.0,
+        unit="шт",
     )
     db_session.add(rline)
-    db_session.add(PaymentSchedule(
-        invoice_id=invoice.id, due_date=dt.datetime(2026, 1, 1), amount=100.0,
-    ))
+    db_session.add(
+        PaymentSchedule(
+            invoice_id=invoice.id,
+            due_date=dt.datetime(2026, 1, 1),
+            amount=100.0,
+        )
+    )
     await db_session.flush()
 
     # ── The fix's sequence: detach nullable refs, delete derived schedules,
     #    then delete the invoice + its lines. Must NOT raise an FK violation. ──
     line_ids = (
-        await db_session.execute(select(InvoiceLine.id).where(InvoiceLine.invoice_id == invoice.id))
-    ).scalars().all()
+        (
+            await db_session.execute(
+                select(InvoiceLine.id).where(InvoiceLine.invoice_id == invoice.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     await db_session.execute(
         sa_update(WarehouseReceiptLine)
         .where(WarehouseReceiptLine.invoice_line_id.in_(line_ids))
         .values(invoice_line_id=None)
     )
     await db_session.execute(
-        sa_update(WarehouseReceipt).where(WarehouseReceipt.invoice_id == invoice.id).values(invoice_id=None)
+        sa_update(WarehouseReceipt)
+        .where(WarehouseReceipt.invoice_id == invoice.id)
+        .values(invoice_id=None)
     )
     await db_session.execute(
         sa_delete(PaymentSchedule).where(PaymentSchedule.invoice_id == invoice.id)
@@ -92,7 +111,9 @@ async def test_reapproval_detaches_receipts_and_succeeds(db_session):
     assert (await db_session.get(Invoice, invoice.id)) is None
     ps_count = (
         await db_session.execute(
-            select(func.count()).select_from(PaymentSchedule).where(PaymentSchedule.invoice_id == invoice.id)
+            select(func.count())
+            .select_from(PaymentSchedule)
+            .where(PaymentSchedule.invoice_id == invoice.id)
         )
     ).scalar()
     assert ps_count == 0

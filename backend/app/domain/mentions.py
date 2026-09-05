@@ -3,6 +3,7 @@
 Single source of truth for turning `@username` tokens in free text into user `sub`s,
 reused by comments and room messages so the matching rules stay consistent.
 """
+
 from __future__ import annotations
 
 import re
@@ -33,12 +34,16 @@ async def resolve_mentioned_subs(
         return set()
 
     rows = (
-        await db.execute(
-            select(User.sub).where(
-                or_(User.preferred_username.in_(tokens), User.sub.in_(tokens))
+        (
+            await db.execute(
+                select(User.sub).where(
+                    or_(User.preferred_username.in_(tokens), User.sub.in_(tokens))
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     subs = set(rows)
     subs.discard(exclude_sub)

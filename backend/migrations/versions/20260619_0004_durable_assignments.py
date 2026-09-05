@@ -29,8 +29,18 @@ def upgrade() -> None:
             sa.Column("id", sa.Uuid(), nullable=False),
             sa.Column("task", sa.String(80), nullable=False),
             sa.Column("routing", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint("task", name="uq_task_routing_overrides_task"),
         )
@@ -41,8 +51,18 @@ def upgrade() -> None:
             sa.Column("id", sa.Uuid(), nullable=False),
             sa.Column("singleton_key", sa.String(50), nullable=False, server_default="default"),
             sa.Column("config", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint("singleton_key", name="uq_agent_config_store_singleton"),
         )

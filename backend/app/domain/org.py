@@ -4,6 +4,7 @@ Reused by the visibility layer (app/domain/access.py) and approval auto-routing
 (app/api/approvals.py). All functions are read-only and tolerant of missing data
 (unset department/manager) so they are safe to call for any user.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -19,9 +20,7 @@ async def get_user(db: AsyncSession, sub: str) -> User | None:
     return result.scalar_one_or_none()
 
 
-async def get_department_descendants(
-    db: AsyncSession, department_id: uuid.UUID
-) -> set[uuid.UUID]:
+async def get_department_descendants(db: AsyncSession, department_id: uuid.UUID) -> set[uuid.UUID]:
     """Return department_id and all departments below it in the tree (inclusive).
 
     Walks the parent_id edges in memory — department trees are small. Cycle-safe.
@@ -77,9 +76,7 @@ async def is_manager_of(
     return report_sub in await get_subordinate_subs(db, manager_sub, recursive=recursive)
 
 
-async def get_department_manager_sub(
-    db: AsyncSession, department_id: uuid.UUID
-) -> str | None:
+async def get_department_manager_sub(db: AsyncSession, department_id: uuid.UUID) -> str | None:
     """Best-effort: the `sub` of a manager-role user in the given department.
 
     Used to auto-route approvals. Returns the first active manager/admin found.

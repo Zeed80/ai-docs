@@ -39,10 +39,17 @@ def test_slot_out_reports_effective_policy_and_flags(monkeypatch):
     monkeypatch.setattr(p, "_cloud_allowed_slots", lambda: {"cad_spec_read"})
     registry = p._registry()
     out = p._build_slot_out(
-        "cad_spec_read", "Оцифровка", "Чтение чертежа", "hint",
-        True, None, registry, current_model=None, cloud_slots={"cad_spec_read"},
+        "cad_spec_read",
+        "Оцифровка",
+        "Чтение чертежа",
+        "hint",
+        True,
+        None,
+        registry,
+        current_model=None,
+        cloud_slots={"cad_spec_read"},
     )
-    assert out.local_only is False       # effective: opened
+    assert out.local_only is False  # effective: opened
     assert out.cloud_optionable is True  # base is confidential
     assert out.cloud_allowed is True
 

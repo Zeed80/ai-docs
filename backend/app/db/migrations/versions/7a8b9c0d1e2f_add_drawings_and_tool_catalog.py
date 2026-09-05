@@ -4,50 +4,91 @@ Revision ID: 7a8b9c0d1e2f
 Revises: c3d4e5f6a7b8
 Create Date: 2026-05-03 10:00:00.000000
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-
 revision: str = "7a8b9c0d1e2f"
-down_revision: Union[str, None] = "c3d4e5f6a7b8"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "c3d4e5f6a7b8"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
     # Enums
     drawing_status = sa.Enum(
-        "uploaded", "analyzing", "analyzed", "needs_review", "approved", "failed",
+        "uploaded",
+        "analyzing",
+        "analyzed",
+        "needs_review",
+        "approved",
+        "failed",
         name="drawingstatus",
     )
     drawing_feature_type = sa.Enum(
-        "hole", "pocket", "surface", "boss", "groove", "thread",
-        "chamfer", "radius", "slot", "contour", "other",
+        "hole",
+        "pocket",
+        "surface",
+        "boss",
+        "groove",
+        "thread",
+        "chamfer",
+        "radius",
+        "slot",
+        "contour",
+        "other",
         name="drawingfeaturetype",
     )
     feature_primitive_type = sa.Enum(
-        "circle", "arc", "rectangle", "polyline", "line", "spline", "ellipse",
+        "circle",
+        "arc",
+        "rectangle",
+        "polyline",
+        "line",
+        "spline",
+        "ellipse",
         name="featureprimitivetype",
     )
     feature_dim_type = sa.Enum(
-        "linear", "angular", "diameter", "radius", "depth", "arc_length",
+        "linear",
+        "angular",
+        "diameter",
+        "radius",
+        "depth",
+        "arc_length",
         name="featuredimtype",
     )
     roughness_type = sa.Enum(
-        "Ra", "Rz", "Rmax", "Rq",
+        "Ra",
+        "Rz",
+        "Rmax",
+        "Rq",
         name="roughnesstype",
     )
     tool_type_enum = sa.Enum(
-        "drill", "endmill", "insert", "holder", "tap", "reamer", "boring_bar",
-        "thread_mill", "grinder", "turning_tool", "milling_cutter",
-        "countersink", "counterbore", "other",
+        "drill",
+        "endmill",
+        "insert",
+        "holder",
+        "tap",
+        "reamer",
+        "boring_bar",
+        "thread_mill",
+        "grinder",
+        "turning_tool",
+        "milling_cutter",
+        "countersink",
+        "counterbore",
+        "other",
         name="tooltypeenum",
     )
     tool_source_enum = sa.Enum(
-        "warehouse", "catalog", "manual",
+        "warehouse",
+        "catalog",
+        "manual",
         name="toolsourceenum",
     )
 
@@ -55,8 +96,15 @@ def upgrade() -> None:
     op.create_table(
         "tool_suppliers",
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True
+        ),
         sa.Column("name", sa.String(length=500), nullable=False),
         sa.Column("website", sa.String(length=500), nullable=True),
         sa.Column("country", sa.String(length=100), nullable=True),
@@ -73,8 +121,15 @@ def upgrade() -> None:
     op.create_table(
         "tool_catalog_entries",
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True
+        ),
         sa.Column("supplier_id", PG_UUID(as_uuid=True), nullable=True),
         sa.Column("part_number", sa.String(length=200), nullable=True),
         sa.Column("tool_type", tool_type_enum, nullable=False),
@@ -102,14 +157,23 @@ def upgrade() -> None:
     op.create_index("ix_tool_catalog_entries_name", "tool_catalog_entries", ["name"])
     op.create_index("ix_tool_catalog_entries_diameter_mm", "tool_catalog_entries", ["diameter_mm"])
     op.create_index("ix_tool_catalog_entries_is_active", "tool_catalog_entries", ["is_active"])
-    op.create_index("ix_tool_catalog_entries_embedding_id", "tool_catalog_entries", ["embedding_id"])
+    op.create_index(
+        "ix_tool_catalog_entries_embedding_id", "tool_catalog_entries", ["embedding_id"]
+    )
 
     # ── drawings ──────────────────────────────────────────────────────────────
     op.create_table(
         "drawings",
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True
+        ),
         sa.Column("document_id", PG_UUID(as_uuid=True), nullable=True),
         sa.Column("drawing_number", sa.String(length=200), nullable=True),
         sa.Column("revision", sa.String(length=50), nullable=True),
@@ -136,8 +200,15 @@ def upgrade() -> None:
     op.create_table(
         "drawing_features",
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True
+        ),
         sa.Column("drawing_id", PG_UUID(as_uuid=True), nullable=False),
         sa.Column("feature_type", drawing_feature_type, nullable=False),
         sa.Column("name", sa.String(length=300), nullable=False),
@@ -160,8 +231,15 @@ def upgrade() -> None:
     op.create_table(
         "feature_contours",
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True
+        ),
         sa.Column("feature_id", PG_UUID(as_uuid=True), nullable=False),
         sa.Column("primitive_type", feature_primitive_type, nullable=False),
         sa.Column("params", sa.JSON(), nullable=False),
@@ -179,8 +257,15 @@ def upgrade() -> None:
     op.create_table(
         "feature_dimensions",
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True
+        ),
         sa.Column("feature_id", PG_UUID(as_uuid=True), nullable=False),
         sa.Column("dim_type", feature_dim_type, nullable=False),
         sa.Column("nominal", sa.Float(), nullable=False),
@@ -200,14 +285,23 @@ def upgrade() -> None:
     op.create_table(
         "feature_surfaces",
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True
+        ),
         sa.Column("feature_id", PG_UUID(as_uuid=True), nullable=False),
         sa.Column("roughness_type", roughness_type, nullable=False, server_default="Ra"),
         sa.Column("value", sa.Float(), nullable=False),
         sa.Column("direction", sa.String(length=50), nullable=True),
         sa.Column("lay_symbol", sa.String(length=10), nullable=True),
-        sa.Column("machining_required", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "machining_required", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
         sa.Column("annotation_position", sa.JSON(), nullable=True),
         sa.ForeignKeyConstraint(["feature_id"], ["drawing_features.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -218,8 +312,15 @@ def upgrade() -> None:
     op.create_table(
         "feature_gdt",
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True
+        ),
         sa.Column("feature_id", PG_UUID(as_uuid=True), nullable=False),
         sa.Column("symbol", sa.String(length=50), nullable=False),
         sa.Column("tolerance_value", sa.Float(), nullable=False),
@@ -236,8 +337,15 @@ def upgrade() -> None:
     op.create_table(
         "feature_tool_bindings",
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True
+        ),
         sa.Column("feature_id", PG_UUID(as_uuid=True), nullable=False),
         sa.Column("tool_source", tool_source_enum, nullable=False),
         sa.Column("warehouse_item_id", PG_UUID(as_uuid=True), nullable=True),
@@ -253,8 +361,12 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_feature_tool_bindings_feature_id", "feature_tool_bindings", ["feature_id"])
-    op.create_index("ix_feature_tool_bindings_warehouse_item_id", "feature_tool_bindings", ["warehouse_item_id"])
-    op.create_index("ix_feature_tool_bindings_catalog_entry_id", "feature_tool_bindings", ["catalog_entry_id"])
+    op.create_index(
+        "ix_feature_tool_bindings_warehouse_item_id", "feature_tool_bindings", ["warehouse_item_id"]
+    )
+    op.create_index(
+        "ix_feature_tool_bindings_catalog_entry_id", "feature_tool_bindings", ["catalog_entry_id"]
+    )
 
 
 def downgrade() -> None:
@@ -269,7 +381,12 @@ def downgrade() -> None:
     op.drop_table("tool_suppliers")
 
     for enum_name in [
-        "drawingstatus", "drawingfeaturetype", "featureprimitivetype",
-        "featuredimtype", "roughnesstype", "tooltypeenum", "toolsourceenum",
+        "drawingstatus",
+        "drawingfeaturetype",
+        "featureprimitivetype",
+        "featuredimtype",
+        "roughnesstype",
+        "tooltypeenum",
+        "toolsourceenum",
     ]:
         sa.Enum(name=enum_name).drop(op.get_bind(), checkfirst=True)

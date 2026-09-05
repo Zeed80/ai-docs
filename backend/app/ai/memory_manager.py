@@ -73,7 +73,9 @@ class MemoryManager:
         seen: set[str] = set()
         deduped: list[dict] = []
         for hit in hits:
-            key = str(hit.get("canonical_key") or f"{hit.get('title','')}\x00{hit.get('source','')}")
+            key = str(
+                hit.get("canonical_key") or f"{hit.get('title', '')}\x00{hit.get('source', '')}"
+            )
             if key not in seen:
                 seen.add(key)
                 deduped.append(hit)

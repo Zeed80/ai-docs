@@ -8,8 +8,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
 from app.db.models import AgentAction
+from app.db.session import get_db
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -77,6 +77,7 @@ async def list_agent_actions(
     q = q.order_by(AgentAction.created_at.asc())
 
     from sqlalchemy import func
+
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     items = (await db.execute(q.offset(offset).limit(limit))).scalars().all()
     return AgentActionListResponse(items=list(items), total=total)
@@ -88,6 +89,7 @@ async def get_agent_action(
     db: AsyncSession = Depends(get_db),
 ):
     from fastapi import HTTPException
+
     result = await db.execute(select(AgentAction).where(AgentAction.id == action_id))
     action = result.scalar_one_or_none()
     if not action:

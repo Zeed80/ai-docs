@@ -2,17 +2,31 @@
 invoice.validate, invoice.approve, invoice.reject, invoice.update"""
 
 import uuid
+from typing import TYPE_CHECKING
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from sqlalchemy import delete as sa_delete
+from app.audit.service import add_timeline_event, log_action
+from app.auth.jwt import get_current_user, require_role
+from app.auth.models import UserInfo, UserRole
+from app.db.models import (
+    Document,
+    InventoryItem,
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    Party,
+    WarehouseReceipt,
+    WarehouseReceiptLine,
+)
 from app.db.session import get_db
-from app.db.models import Document, Invoice, InvoiceLine, InvoiceStatus, Party, WarehouseReceipt, WarehouseReceiptLine, InventoryItem
+from app.domain.access import visibility_filter
 from app.domain.invoices import (
     InvoiceApproveRequest,
     InvoiceDeleteRequest,
@@ -22,17 +36,11 @@ from app.domain.invoices import (
     InvoiceListResponse,
     InvoiceOut,
     InvoiceRejectRequest,
-    InvoiceValidationResponse,
     InvoiceValidationError,
+    InvoiceValidationResponse,
     PriceCheckResponse,
     PriceComparison,
 )
-from app.audit.service import log_action, add_timeline_event
-from app.auth.jwt import get_current_user, require_role
-from app.auth.models import UserInfo, UserRole
-from app.domain.access import visibility_filter
-
-from typing import TYPE_CHECKING
 
 # Только для аннотаций: имена стоят в строковых типах, поэтому в рантайме
 # не вычисляются — но без импорта их не видят ни type checker, ни IDE, и
@@ -72,8 +80,10 @@ async def list_invoices(
     # (owner_sub/department_id). Invoices without a document (legacy/unowned) stay
     # visible to all — the outer join yields NULL columns, caught by the legacy clause.
     clause = await visibility_filter(
-        db, current_user,
-        owner_col=Document.owner_sub, department_col=Document.department_id,
+        db,
+        current_user,
+        owner_col=Document.owner_sub,
+        department_col=Document.department_id,
     )
     if clause is not None:
         query = query.outerjoin(Document, Invoice.document_id == Document.id).where(clause)
@@ -90,12 +100,14 @@ async def list_invoices(
         query = query.where(Invoice.total_amount <= amount_max)
     if date_from:
         from datetime import datetime
+
         try:
             query = query.where(Invoice.invoice_date >= datetime.fromisoformat(date_from))
         except ValueError:
             pass
     if date_to:
         from datetime import datetime
+
         try:
             query = query.where(Invoice.invoice_date <= datetime.fromisoformat(date_to))
         except ValueError:
@@ -152,20 +164,18 @@ async def _email_source_for_document(db: AsyncSession, document_id) -> "EmailSou
     if document_id is None:
         return None
     source_email_id = (
-        await db.execute(
-            select(Document.source_email_id).where(Document.id == document_id)
-        )
+        await db.execute(select(Document.source_email_id).where(Document.id == document_id))
     ).scalar_one_or_none()
     if source_email_id is None:
         return None
     msg = await db.get(EmailMessage, source_email_id)
     if msg is None:
         return None
-    auth = ((msg.headers_meta or {}).get("auth") or {})
+    auth = (msg.headers_meta or {}).get("auth") or {}
     verdicts = [auth.get("spf"), auth.get("dkim")]
     spf_dkim_ok: bool | None
     if not any(verdicts):
-        spf_dkim_ok = None            # headers absent → unknown, never "pass"
+        spf_dkim_ok = None  # headers absent → unknown, never "pass"
     else:
         spf_dkim_ok = all(v in (None, "pass") for v in verdicts)
     return EmailSourceOut(
@@ -220,9 +230,7 @@ async def validate_invoice(
 ):
     """Skill: invoice.validate — Run arithmetic and format validation on invoice."""
     result = await db.execute(
-        select(Invoice)
-        .where(Invoice.id == invoice_id)
-        .options(selectinload(Invoice.lines))
+        select(Invoice).where(Invoice.id == invoice_id).options(selectinload(Invoice.lines))
     )
     invoice = result.scalar_one_or_none()
     if not invoice:
@@ -282,9 +290,7 @@ async def update_invoice(
 ):
     """Skill: invoice.update — Update invoice fields after human review."""
     result = await db.execute(
-        select(Invoice)
-        .where(Invoice.id == invoice_id)
-        .options(selectinload(Invoice.lines))
+        select(Invoice).where(Invoice.id == invoice_id).options(selectinload(Invoice.lines))
     )
     invoice = result.scalar_one_or_none()
     if not invoice:
@@ -327,9 +333,7 @@ async def update_invoice_line(
     the line amount is recomputed (quantity × unit_price) to keep totals honest.
     """
     result = await db.execute(
-        select(InvoiceLine).where(
-            InvoiceLine.id == line_id, InvoiceLine.invoice_id == invoice_id
-        )
+        select(InvoiceLine).where(InvoiceLine.id == line_id, InvoiceLine.invoice_id == invoice_id)
     )
     line = result.scalar_one_or_none()
     if not line:
@@ -371,9 +375,7 @@ async def approve_invoice(
 ):
     """Skill: invoice.approve — Approve invoice (approval gate)."""
     result = await db.execute(
-        select(Invoice)
-        .where(Invoice.id == invoice_id)
-        .options(selectinload(Invoice.lines))
+        select(Invoice).where(Invoice.id == invoice_id).options(selectinload(Invoice.lines))
     )
     invoice = result.scalar_one_or_none()
     if not invoice:
@@ -388,7 +390,8 @@ async def approve_invoice(
     invoice.status = InvoiceStatus.approved
 
     # Record price history for each line with a canonical_item_id
-    from app.db.models import PriceHistoryEntry, CanonicalItem
+    from app.db.models import PriceHistoryEntry
+
     for line in invoice.lines:
         if line.unit_price is not None and line.canonical_item_id:
             entry = PriceHistoryEntry(
@@ -405,6 +408,7 @@ async def approve_invoice(
     # Update supplier profile stats
     if invoice.supplier_id:
         from app.db.models import SupplierProfile
+
         profile_result = await db.execute(
             select(SupplierProfile).where(SupplierProfile.party_id == invoice.supplier_id)
         )
@@ -435,6 +439,7 @@ async def approve_invoice(
     logger.info("invoice_approved", invoice_id=str(invoice_id))
     try:
         from app.core.metrics import invoices_approved_total
+
         invoices_approved_total.inc()
     except Exception:
         pass
@@ -453,9 +458,7 @@ async def reject_invoice(
 ):
     """Skill: invoice.reject — Reject invoice (approval gate)."""
     result = await db.execute(
-        select(Invoice)
-        .where(Invoice.id == invoice_id)
-        .options(selectinload(Invoice.lines))
+        select(Invoice).where(Invoice.id == invoice_id).options(selectinload(Invoice.lines))
     )
     invoice = result.scalar_one_or_none()
     if not invoice:
@@ -487,6 +490,7 @@ async def reject_invoice(
     await db.refresh(invoice)
     try:
         from app.core.metrics import invoices_rejected_total
+
         invoices_rejected_total.inc()
     except Exception:
         pass
@@ -503,9 +507,7 @@ async def price_check(
 ):
     """Skill: invoice.compare_prices — Compare line prices with previous invoices from same supplier."""
     result = await db.execute(
-        select(Invoice)
-        .where(Invoice.id == invoice_id)
-        .options(selectinload(Invoice.lines))
+        select(Invoice).where(Invoice.id == invoice_id).options(selectinload(Invoice.lines))
     )
     invoice = result.scalar_one_or_none()
     if not invoice:
@@ -513,9 +515,7 @@ async def price_check(
 
     supplier_name = None
     if invoice.supplier_id:
-        party_result = await db.execute(
-            select(Party).where(Party.id == invoice.supplier_id)
-        )
+        party_result = await db.execute(select(Party).where(Party.id == invoice.supplier_id))
         party = party_result.scalar_one_or_none()
         if party:
             supplier_name = party.name
@@ -556,9 +556,7 @@ async def price_check(
 
             change_pct = None
             if prev_price and line.unit_price and prev_price > 0:
-                change_pct = round(
-                    ((line.unit_price - prev_price) / prev_price) * 100, 1
-                )
+                change_pct = round(((line.unit_price - prev_price) / prev_price) * 100, 1)
 
             comparisons.append(
                 PriceComparison(
@@ -641,15 +639,19 @@ async def catalog_price_check(
         )
 
     entries = (
-        await db.execute(
-            select(ToolCatalogEntry)
-            .join(ToolSupplier, ToolCatalogEntry.supplier_id == ToolSupplier.id)
-            .where(
-                ToolSupplier.main_supplier_id == invoice.supplier_id,
-                ToolCatalogEntry.is_active.is_(True),
+        (
+            await db.execute(
+                select(ToolCatalogEntry)
+                .join(ToolSupplier, ToolCatalogEntry.supplier_id == ToolSupplier.id)
+                .where(
+                    ToolSupplier.main_supplier_id == invoice.supplier_id,
+                    ToolCatalogEntry.is_active.is_(True),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     if not entries:
         return CatalogPriceCheckResponse(
@@ -752,6 +754,7 @@ async def delete_invoice(
     # Graph cleanup
     try:
         from app.domain.drawing_graph import delete_invoice_graph
+
         await delete_invoice_graph(invoice_id, db)
     except Exception:
         pass
@@ -776,7 +779,12 @@ async def bulk_delete_invoices(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: invoice.bulk_delete — Bulk delete invoices by ids list, filter, or all."""
-    if not payload.delete_all and not payload.ids and not payload.status and not payload.supplier_id:
+    if (
+        not payload.delete_all
+        and not payload.ids
+        and not payload.status
+        and not payload.supplier_id
+    ):
         raise HTTPException(
             status_code=400,
             detail="Specify ids, a filter (status/supplier_id), or set delete_all=true",
@@ -802,6 +810,7 @@ async def bulk_delete_invoices(
     # Graph cleanup for all deleted invoices
     try:
         from app.domain.drawing_graph import delete_invoice_graph
+
         for inv_id in ids:
             await delete_invoice_graph(inv_id, db)
     except Exception:
@@ -820,6 +829,7 @@ async def bulk_delete_invoices(
 
 
 # ── invoice.bulk_approve / bulk_reject ───────────────────────────────────────
+
 
 class BulkStatusRequest(BaseModel):
     ids: list[uuid.UUID]
@@ -894,6 +904,7 @@ async def receive_invoice(
 ):
     """Skill: invoice.receive — Create warehouse receipt from this invoice's lines."""
     from sqlalchemy import func as sqlfunc
+
     invoice = await db.execute(
         select(Invoice).where(Invoice.id == invoice_id).options(selectinload(Invoice.lines))
     )
@@ -918,9 +929,9 @@ async def receive_invoice(
     for il in invoice.lines:
         inv_item_id = None
         if il.sku:
-            existing = (await db.execute(
-                select(InventoryItem).where(InventoryItem.sku == il.sku)
-            )).scalar_one_or_none()
+            existing = (
+                await db.execute(select(InventoryItem).where(InventoryItem.sku == il.sku))
+            ).scalar_one_or_none()
             inv_item_id = existing.id if existing else None
 
         line = WarehouseReceiptLine(
@@ -934,7 +945,12 @@ async def receive_invoice(
         )
         db.add(line)
 
-    await log_action(db, action="warehouse.create_receipt", entity_type="warehouse_receipt",
-                     entity_id=receipt.id, details={"invoice_id": str(invoice.id)})
+    await log_action(
+        db,
+        action="warehouse.create_receipt",
+        entity_type="warehouse_receipt",
+        entity_id=receipt.id,
+        details={"invoice_id": str(invoice.id)},
+    )
     await db.commit()
     return {"receipt_id": str(receipt.id), "receipt_number": receipt_number}

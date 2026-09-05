@@ -93,18 +93,26 @@ async def list_queue(
         except ValueError:
             raise HTTPException(400, f"Неизвестный тип задачи: {kind}") from None
     rows = (
-        await db.execute(
-            q.order_by(
-                StudioJob.status.in_(
-                    [StudioJobStatus.queued, StudioJobStatus.waiting_resource, StudioJobStatus.running]
-                ).desc(),
-                StudioJob.priority.desc(),
-                StudioJob.created_at.asc(),
+        (
+            await db.execute(
+                q.order_by(
+                    StudioJob.status.in_(
+                        [
+                            StudioJobStatus.queued,
+                            StudioJobStatus.waiting_resource,
+                            StudioJobStatus.running,
+                        ]
+                    ).desc(),
+                    StudioJob.priority.desc(),
+                    StudioJob.created_at.asc(),
+                )
+                .limit(min(limit, 300))
+                .offset(max(offset, 0))
             )
-            .limit(min(limit, 300))
-            .offset(max(offset, 0))
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return {"items": [await studio_queue.job_out(db, row) for row in rows]}
 
 
@@ -226,7 +234,10 @@ async def cancel_job(
 
     from app.tasks.celery_app import celery_app
 
-    if job.celery_task_id and job.status in {StudioJobStatus.queued, StudioJobStatus.waiting_resource}:
+    if job.celery_task_id and job.status in {
+        StudioJobStatus.queued,
+        StudioJobStatus.waiting_resource,
+    }:
         try:
             celery_app.control.revoke(job.celery_task_id)
         except Exception as exc:  # noqa: BLE001
@@ -243,7 +254,11 @@ async def cancel_job(
             try:
                 await ComfyUIClient.from_registry().interrupt()
             except Exception as exc:  # noqa: BLE001
-                logger.warning("studio_queue_comfyui_interrupt_failed", job_id=str(job.id), error=str(exc)[:160])
+                logger.warning(
+                    "studio_queue_comfyui_interrupt_failed",
+                    job_id=str(job.id),
+                    error=str(exc)[:160],
+                )
         await studio_queue.mark_job_cancelled(db, job, error="Задача отменена пользователем.")
 
     elif job.lora_run_id:
@@ -254,16 +269,22 @@ async def cancel_job(
         if run:
             if run.status == LoraRunStatus.queued:
                 run.status = LoraRunStatus.cancelled
-                await studio_queue.mark_job_cancelled(db, job, error="Задача отменена пользователем.")
+                await studio_queue.mark_job_cancelled(
+                    db, job, error="Задача отменена пользователем."
+                )
             elif run.status == LoraRunStatus.running:
                 run.status = LoraRunStatus.stopping
                 await studio_queue.mark_job_cancel_requested(db, job)
                 try:
                     gpu_lock.request_stop(str(run.id))
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("studio_queue_lora_stop_failed", job_id=str(job.id), error=str(exc)[:160])
+                    logger.warning(
+                        "studio_queue_lora_stop_failed", job_id=str(job.id), error=str(exc)[:160]
+                    )
             else:
-                await studio_queue.mark_job_cancelled(db, job, error="Задача отменена пользователем.")
+                await studio_queue.mark_job_cancelled(
+                    db, job, error="Задача отменена пользователем."
+                )
         else:
             await studio_queue.mark_job_cancelled(db, job, error="Связанный LoRA-запуск не найден.")
 
@@ -298,7 +319,9 @@ async def retry_job(
         if gen:
             gen.status = ImageGenStatus.queued
             gen.error = None
-        task = celery_app.send_task("image_generation.run_image_generation", args=[str(job.generation_id)], queue="studio")
+        task = celery_app.send_task(
+            "image_generation.run_image_generation", args=[str(job.generation_id)], queue="studio"
+        )
         job.celery_task_id = task.id
         if gen:
             gen.celery_task_id = task.id

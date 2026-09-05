@@ -5,23 +5,34 @@ Revises: a1b2c3d4e5f6, a3b4c5d6e7f8
 Create Date: 2026-05-03 00:00:00.000000
 """
 
-from typing import Sequence, Tuple, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c3d4e5f6a7b8"
-down_revision: Union[Tuple[str, ...], str, None] = ("a1b2c3d4e5f6", "a3b4c5d6e7f8")
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: tuple[str, ...] | str | None = ("a1b2c3d4e5f6", "a3b4c5d6e7f8")
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
     op.create_table(
         "mailbox_configs",
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), onupdate=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            onupdate=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("name", sa.String(100), nullable=False),
         sa.Column("display_name", sa.String(200), nullable=True),
         sa.Column("imap_host", sa.String(500), nullable=False),
@@ -51,14 +62,35 @@ def upgrade() -> None:
     op.create_table(
         "email_templates",
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), onupdate=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            onupdate=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("name", sa.String(200), nullable=False),
         sa.Column("slug", sa.String(100), nullable=False),
-        sa.Column("category", sa.Enum(
-            "payment", "inquiry", "confirmation", "reminder", "request", "custom",
-            name="emailtemplatecategory",
-        ), nullable=False, server_default="custom"),
+        sa.Column(
+            "category",
+            sa.Enum(
+                "payment",
+                "inquiry",
+                "confirmation",
+                "reminder",
+                "request",
+                "custom",
+                name="emailtemplatecategory",
+            ),
+            nullable=False,
+            server_default="custom",
+        ),
         sa.Column("language", sa.String(10), nullable=False, server_default="ru"),
         sa.Column("subject", sa.String(500), nullable=False),
         sa.Column("body_html", sa.Text(), nullable=False),

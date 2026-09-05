@@ -9,8 +9,8 @@ import json
 import pathlib
 import sys
 import unicodedata
-from typing import Any, Iterable
-
+from collections.abc import Iterable
+from typing import Any
 
 SUPPORTED_SCHEMA = "nist-pmi-truth/1.0"
 
@@ -158,9 +158,7 @@ def evaluate(reference: list[dict[str, Any]], candidate: list[dict[str, Any]]) -
     geometry = _association_metrics(
         reference, candidate_by_id, "geometry_linked", "topology_targets"
     )
-    drawing = _association_metrics(
-        reference, candidate_by_id, "drawing_located", "drawing_regions"
-    )
+    drawing = _association_metrics(reference, candidate_by_id, "drawing_located", "drawing_regions")
 
     verified_claims = [
         record

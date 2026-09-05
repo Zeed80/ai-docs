@@ -25,6 +25,7 @@ class _FakeRedis:
 
 # ── is_correction ──────────────────────────────────────────────────────────────
 
+
 def test_is_correction_detects_corrective_phrasing():
     assert corrections.is_correction("нет, группируй по дате")
     assert corrections.is_correction("это не то, я просил среднюю цену")
@@ -39,6 +40,7 @@ def test_is_correction_false_for_new_request():
 
 
 # ── correction → ops (deterministic parse) ─────────────────────────────────────
+
 
 def test_correction_to_ops_grouping():
     ops = corrections.correction_to_ops("invoice_items", "группируй по дате")
@@ -57,6 +59,7 @@ def test_correction_to_ops_empty_for_noise():
 
 
 # ── record + replay roundtrip (offline: Redis exact path, vector helpers no-op) ──
+
 
 async def _no_upsert(*a, **k):
     return None
@@ -107,10 +110,12 @@ async def test_vector_replay_generalises_to_similar_request(monkeypatch):
     monkeypatch.setattr(corrections, "_vector_search", fake_search)
 
     await corrections.record_correction(
-        "выведи все фрезы по поставщику", "invoice_items", "нет, группируй по дате")
+        "выведи все фрезы по поставщику", "invoice_items", "нет, группируй по дате"
+    )
     # Different phrasing, same intent → exact miss, vector hit.
     replay = await corrections.learned_ops_for(
-        "покажи фрезы в разрезе поставщиков", "invoice_items")
+        "покажи фрезы в разрезе поставщиков", "invoice_items"
+    )
     assert any(o.op == "set_group_by" and o.field == "invoice_date" for o in replay)
 
 

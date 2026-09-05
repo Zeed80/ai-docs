@@ -44,19 +44,21 @@ PARALLEL_SAFE_PREFIXES: tuple[str, ...] = (
 )
 
 # Skills that must NEVER run in parallel (write/approval-gated).
-NEVER_PARALLEL: frozenset[str] = frozenset({
-    "invoice__approve",
-    "invoice__reject",
-    "invoice__update",
-    "email__send",
-    "email__draft",
-    "anomaly__resolve",
-    "table__apply_diff",
-    "approval__respond",
-    "document__delete",
-    "supplier__merge",
-    "supplier__delete",
-})
+NEVER_PARALLEL: frozenset[str] = frozenset(
+    {
+        "invoice__approve",
+        "invoice__reject",
+        "invoice__update",
+        "email__send",
+        "email__draft",
+        "anomaly__resolve",
+        "table__apply_diff",
+        "approval__respond",
+        "document__delete",
+        "supplier__merge",
+        "supplier__delete",
+    }
+)
 
 
 def _is_parallel_safe(tool_name: str) -> bool:
@@ -69,7 +71,4 @@ def should_parallelize(tool_calls: list[dict]) -> bool:
     """Return True when all tool calls in the batch are read-only and >= 2."""
     if len(tool_calls) < 2:
         return False
-    return all(
-        _is_parallel_safe(tc.get("function", {}).get("name", ""))
-        for tc in tool_calls
-    )
+    return all(_is_parallel_safe(tc.get("function", {}).get("name", "")) for tc in tool_calls)

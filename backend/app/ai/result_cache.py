@@ -19,6 +19,7 @@ _DEFAULT_TTL = 15  # seconds — counts drift slowly; a few seconds of staleness
 def _redis():
     try:
         from app.utils.redis_client import get_sync_redis
+
         return get_sync_redis()
     except Exception:
         return None

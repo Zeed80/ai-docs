@@ -30,21 +30,37 @@ def upgrade() -> None:
     if "mailbox_configs" in tables:
         columns = {c["name"] for c in insp.get_columns("mailbox_configs")}
         if "owner_sub" not in columns:
-            op.add_column("mailbox_configs", sa.Column("owner_sub", sa.String(length=255), nullable=True))
+            op.add_column(
+                "mailbox_configs", sa.Column("owner_sub", sa.String(length=255), nullable=True)
+            )
             op.create_index("ix_mailbox_configs_owner_sub", "mailbox_configs", ["owner_sub"])
         if "mailbox_type" not in columns:
             op.add_column(
                 "mailbox_configs",
-                sa.Column("mailbox_type", sa.String(length=20), nullable=False, server_default="shared"),
+                sa.Column(
+                    "mailbox_type", sa.String(length=20), nullable=False, server_default="shared"
+                ),
             )
 
     if "mail_server_config" not in tables:
         op.create_table(
             "mail_server_config",
             sa.Column("id", GUID(), primary_key=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("singleton_key", sa.String(length=50), nullable=False, server_default="default"),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "singleton_key", sa.String(length=50), nullable=False, server_default="default"
+            ),
             sa.Column("api_url", sa.String(length=500)),
             sa.Column("api_key_encrypted", sa.Text()),
             sa.Column("mail_domain", sa.String(length=255)),
@@ -55,7 +71,9 @@ def upgrade() -> None:
             sa.Column("smtp_port", sa.Integer(), nullable=False, server_default="465"),
             sa.Column("updated_by", sa.String(length=100)),
         )
-        op.create_unique_constraint("uq_mail_server_config_singleton", "mail_server_config", ["singleton_key"])
+        op.create_unique_constraint(
+            "uq_mail_server_config_singleton", "mail_server_config", ["singleton_key"]
+        )
 
 
 def downgrade() -> None:

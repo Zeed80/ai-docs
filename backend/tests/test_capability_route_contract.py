@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import re
 
-import pytest
-
 from app.ai.capability_manifest import load_capability_manifest
 from app.api.capability_router import _DISPATCH
 from app.main import app
@@ -63,9 +61,8 @@ def _accepted_fields(method: str, path_tpl: str) -> set[str] | None:
         for param in dependant.body_params:
             # FastAPI's ModelField exposes the request model through
             # field_info.annotation (older builds used .type_).
-            model = (
-                getattr(getattr(param, "field_info", None), "annotation", None)
-                or getattr(param, "type_", None)
+            model = getattr(getattr(param, "field_info", None), "annotation", None) or getattr(
+                param, "type_", None
             )
             if hasattr(model, "model_fields"):
                 fields |= set(model.model_fields)
@@ -92,11 +89,14 @@ def test_every_declared_parameter_is_accepted_by_some_endpoint():
     manifest = load_capability_manifest()
     orphans: list[str] = []
     for capability, actions in _DISPATCH.items():
-        declared = set(
-            (getattr(manifest.by_name.get(capability), "parameters", {}) or {}).get(
-                "properties", {}
+        declared = (
+            set(
+                (getattr(manifest.by_name.get(capability), "parameters", {}) or {}).get(
+                    "properties", {}
+                )
             )
-        ) - _ENVELOPE_PARAMS
+            - _ENVELOPE_PARAMS
+        )
         if not declared:
             continue
         accepted: set[str] = set()
@@ -111,8 +111,7 @@ def test_every_declared_parameter_is_accepted_by_some_endpoint():
         for name in sorted(declared - accepted):
             orphans.append(f"{capability}.{name}")
     assert not orphans, (
-        "capability parameters no endpoint accepts (they vanish silently):\n"
-        + "\n".join(orphans)
+        "capability parameters no endpoint accepts (they vanish silently):\n" + "\n".join(orphans)
     )
 
 

@@ -3,22 +3,23 @@
 All DB access is mocked; we patch the source of _get_session_factory
 (app.db.session._get_session_factory) since tasks import it locally.
 """
+
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _make_invoice(due_days: int, inv_id=None, number="ТТН-001"):
     inv = MagicMock()
     inv.id = inv_id or uuid.uuid4()
     inv.invoice_number = number
-    inv.due_date = datetime.now(timezone.utc) + timedelta(days=due_days)
+    inv.due_date = datetime.now(UTC) + timedelta(days=due_days)
     inv.created_by = "user1"
     return inv
 
@@ -32,7 +33,7 @@ def _make_approval(hours_old: int, action_type="invoice.approve", assigned="user
     appr.entity_id = uuid.uuid4()
     appr.assigned_to = assigned
     appr.requested_by = "sveta"
-    appr.created_at = datetime.now(timezone.utc) - timedelta(hours=hours_old)
+    appr.created_at = datetime.now(UTC) - timedelta(hours=hours_old)
     return appr
 
 
@@ -40,7 +41,7 @@ def _make_anomaly(hours_old: int):
     a = MagicMock()
     a.id = uuid.uuid4()
     a.title = "Дублирующийся счёт"
-    a.created_at = datetime.now(timezone.utc) - timedelta(hours=hours_old)
+    a.created_at = datetime.now(UTC) - timedelta(hours=hours_old)
     return a
 
 
@@ -50,7 +51,7 @@ def _make_reminder(user_id="user1", mins_overdue: int = 5):
     r.user_id = user_id
     r.entity_type = "invoice"
     r.entity_id = uuid.uuid4()
-    r.remind_at = datetime.now(timezone.utc) - timedelta(minutes=mins_overdue)
+    r.remind_at = datetime.now(UTC) - timedelta(minutes=mins_overdue)
     r.message = "Счёт ТТН-001 — срок оплаты 25.05.2026"
     r.is_sent = False
     r.sent_at = None
@@ -108,6 +109,7 @@ _NOT_THROTTLED = []
 
 # ── check_due_dates ────────────────────────────────────────────────────────────
 
+
 class TestCheckDueDates:
     @pytest.mark.asyncio
     async def test_creates_reminder_for_approaching_invoice(self):
@@ -120,7 +122,7 @@ class TestCheckDueDates:
         create_notif = AsyncMock()
         mock_notif_obj = MagicMock()
         mock_notif_obj.id = uuid.uuid4()
-        mock_notif_obj.created_at = datetime.now(timezone.utc)
+        mock_notif_obj.created_at = datetime.now(UTC)
         create_notif.return_value = mock_notif_obj
 
         with (
@@ -154,6 +156,7 @@ class TestCheckDueDates:
 
 # ── check_stale_approvals ─────────────────────────────────────────────────────
 
+
 class TestCheckStaleApprovals:
     @pytest.mark.asyncio
     async def test_notifies_assignee_for_stale_approval(self):
@@ -166,13 +169,17 @@ class TestCheckStaleApprovals:
         create_notif = AsyncMock()
         mock_notif_obj = MagicMock()
         mock_notif_obj.id = uuid.uuid4()
-        mock_notif_obj.created_at = datetime.now(timezone.utc)
+        mock_notif_obj.created_at = datetime.now(UTC)
         create_notif.return_value = mock_notif_obj
 
         with (
             patch("app.db.session._get_session_factory", return_value=lambda: mock_db),
             patch("app.tasks.proactive._get_notifier", new_callable=AsyncMock, return_value=None),
-            patch("app.tasks.proactive._llm_enrich", new_callable=AsyncMock, return_value="Требует подтверждения"),
+            patch(
+                "app.tasks.proactive._llm_enrich",
+                new_callable=AsyncMock,
+                return_value="Требует подтверждения",
+            ),
             patch("app.services.notifications.create_notification", create_notif),
         ):
             res = await _check_stale_approvals()
@@ -194,7 +201,11 @@ class TestCheckStaleApprovals:
         with (
             patch("app.db.session._get_session_factory", return_value=lambda: mock_db),
             patch("app.tasks.proactive._get_notifier", new_callable=AsyncMock, return_value=None),
-            patch("app.tasks.proactive._llm_enrich", new_callable=AsyncMock, return_value="Требует подтверждения"),
+            patch(
+                "app.tasks.proactive._llm_enrich",
+                new_callable=AsyncMock,
+                return_value="Требует подтверждения",
+            ),
             patch("app.services.notifications.create_notification", create_notif),
         ):
             await _check_stale_approvals()
@@ -215,6 +226,7 @@ class TestCheckStaleApprovals:
 
 # ── alert_critical_anomalies ──────────────────────────────────────────────────
 
+
 class TestAlertCriticalAnomalies:
     @pytest.mark.asyncio
     async def test_broadcasts_and_pushes_telegram(self):
@@ -230,8 +242,16 @@ class TestAlertCriticalAnomalies:
 
         with (
             patch("app.db.session._get_session_factory", return_value=lambda: mock_db),
-            patch("app.tasks.proactive._llm_enrich", new_callable=AsyncMock, return_value="Аномалия требует внимания"),
-            patch("app.tasks.proactive._get_notifier", new_callable=AsyncMock, return_value=mock_notifier),
+            patch(
+                "app.tasks.proactive._llm_enrich",
+                new_callable=AsyncMock,
+                return_value="Аномалия требует внимания",
+            ),
+            patch(
+                "app.tasks.proactive._get_notifier",
+                new_callable=AsyncMock,
+                return_value=mock_notifier,
+            ),
             patch("app.core.chat_bus.chat_bus.publish", bus_publish),
         ):
             res = await _alert_critical_anomalies()
@@ -254,6 +274,7 @@ class TestAlertCriticalAnomalies:
 
 # ── dispatch_due_reminders ────────────────────────────────────────────────────
 
+
 class TestDispatchDueReminders:
     @pytest.mark.asyncio
     async def test_creates_notification_for_known_user(self):
@@ -266,7 +287,7 @@ class TestDispatchDueReminders:
         create_notif = AsyncMock()
         mock_notif_obj = MagicMock()
         mock_notif_obj.id = uuid.uuid4()
-        mock_notif_obj.created_at = datetime.now(timezone.utc)
+        mock_notif_obj.created_at = datetime.now(UTC)
         create_notif.return_value = mock_notif_obj
 
         with (
@@ -307,6 +328,7 @@ class TestDispatchDueReminders:
 
 # ── _llm_enrich fallback ──────────────────────────────────────────────────────
 
+
 class TestLlmEnrich:
     @pytest.mark.asyncio
     async def test_returns_fallback_on_error(self):
@@ -321,6 +343,7 @@ class TestLlmEnrich:
 
 
 # ── Duplicate alerts run against the schema that actually exists ──────────────
+
 
 @pytest.mark.asyncio
 async def test_duplicate_alert_reads_the_live_schema(db_session):
@@ -345,15 +368,20 @@ async def test_duplicate_alert_reads_the_live_schema(db_session):
     from app.tasks import proactive
 
     document = Document(
-        file_name="dup.pdf", file_hash="duphash", file_size=10,
-        mime_type="application/pdf", storage_path="d/dup.pdf",
+        file_name="dup.pdf",
+        file_hash="duphash",
+        file_size=10,
+        mime_type="application/pdf",
+        storage_path="d/dup.pdf",
         status=DocumentStatus.approved,
     )
     db_session.add(document)
     await db_session.flush()
 
     invoice = Invoice(
-        document_id=document.id, invoice_number="СЧ-77", total_amount=1500.0,
+        document_id=document.id,
+        invoice_number="СЧ-77",
+        total_amount=1500.0,
         currency="RUB",
     )
     db_session.add(invoice)
@@ -378,18 +406,20 @@ async def test_duplicate_alert_reads_the_live_schema(db_session):
         async def publish(self, payload):
             published.append(payload)
 
-    factory = MagicMock(return_value=_ctx(db_session))
-    with patch("app.db.session._get_session_factory", return_value=factory), \
-         patch("app.core.chat_bus.chat_bus", _Bus()), \
-         patch("app.tasks.proactive._get_notifier", AsyncMock(return_value=None)), \
-         patch("app.utils.redis_client.get_sync_redis", side_effect=RuntimeError):
+    factory = MagicMock(return_value=FakeSessionContext(db_session))
+    with (
+        patch("app.db.session._get_session_factory", return_value=factory),
+        patch("app.core.chat_bus.chat_bus", _Bus()),
+        patch("app.tasks.proactive._get_notifier", AsyncMock(return_value=None)),
+        patch("app.utils.redis_client.get_sync_redis", side_effect=RuntimeError),
+    ):
         result = await proactive._alert_duplicate_invoices()
 
     assert result["alerted"] == 1, result
     assert published and "СЧ-77" in published[0]["content"]
 
 
-class _ctx:
+class FakeSessionContext:
     """Hand the task the test's own session instead of opening its own."""
 
     def __init__(self, session):

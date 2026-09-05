@@ -65,7 +65,7 @@ def _export_workspace_xlsx(
     header_font = Font(bold=True, color="FFFFFF")
     link_font = Font(color="0563C1", underline="single")
     numeric_alignment = Alignment(horizontal="right", vertical="top", wrap_text=True)
-    money_format = '# ##0,00'
+    money_format = "# ##0,00"
 
     for col_idx, column in enumerate(columns, start=1):
         cell = ws.cell(row=1, column=col_idx, value=str(column.get("header") or column.get("key")))
@@ -90,7 +90,7 @@ def _export_workspace_xlsx(
                 cell.number_format = money_format
                 cell.alignment = numeric_alignment
             elif col_type == "number":
-                cell.number_format = '# ##0,####'
+                cell.number_format = "# ##0,####"
                 cell.alignment = numeric_alignment
         ws.row_dimensions[row_idx].height = _row_height(row, columns)
 
@@ -136,14 +136,16 @@ def _export_workspace_csv(
     writer = csv.writer(buf, delimiter=";", lineterminator="\n")
     writer.writerow([str(column.get("header") or column.get("key") or "") for column in columns])
     for row in rows:
-        writer.writerow([
-            _workspace_display_value(
-                row.get(str(column.get("key") or "")),
-                str(column.get("key") or ""),
-                str(column.get("type") or "text"),
-            )
-            for column in columns
-        ])
+        writer.writerow(
+            [
+                _workspace_display_value(
+                    row.get(str(column.get("key") or "")),
+                    str(column.get("key") or ""),
+                    str(column.get("type") or "text"),
+                )
+                for column in columns
+            ]
+        )
     output = io.BytesIO(buf.getvalue().encode("utf-8-sig"))
     filename = f"{_safe_filename(title)}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
     return StreamingResponse(
@@ -211,8 +213,7 @@ def _safe_filename(title: str) -> str:
 
 def _content_disposition(filename: str) -> str:
     ascii_filename = "".join(
-        ch if ch.isascii() and (ch.isalnum() or ch in "._-") else "_"
-        for ch in filename
+        ch if ch.isascii() and (ch.isalnum() or ch in "._-") else "_" for ch in filename
     ).strip("_")
     ascii_filename = ascii_filename or "workspace_export"
     return f"attachment; filename={ascii_filename}; filename*=UTF-8''{quote(filename)}"

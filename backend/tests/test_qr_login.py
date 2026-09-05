@@ -7,7 +7,6 @@ import pytest
 from app.auth import jwt as jwtmod
 from app.db.models import User
 
-
 # ── Fake Redis (decode_responses=True semantics) ──────────────────────────────
 
 
@@ -68,6 +67,7 @@ def fake_redis(monkeypatch):
 @pytest.fixture
 def no_user_checks(monkeypatch):
     """Skip DB/redis-backed active + role lookups in local-session verification."""
+
     async def _noop_active(sub):
         return None
 
@@ -84,8 +84,13 @@ def no_user_checks(monkeypatch):
 @pytest.mark.asyncio
 async def test_mint_and_verify_local_session(fake_redis, no_user_checks):
     token = jwtmod.mint_local_session(
-        sub="u-1", email="u1@example.com", name="User One",
-        preferred_username="u1", groups=["users"], ttl_seconds=600, session_epoch=0,
+        sub="u-1",
+        email="u1@example.com",
+        name="User One",
+        preferred_username="u1",
+        groups=["users"],
+        ttl_seconds=600,
+        session_epoch=0,
     )
     info = await jwtmod._verify_token(token)
     assert info.sub == "u-1"
@@ -105,6 +110,7 @@ async def test_local_session_rejected_when_epoch_bumped(fake_redis, no_user_chec
 async def test_local_session_rejected_when_jti_denylisted(fake_redis, no_user_checks):
     token = jwtmod.mint_local_session(sub="u-3", ttl_seconds=600, session_epoch=0)
     from jose import jwt as _jose
+
     jti = _jose.get_unverified_claims(token)["jti"]
     await jwtmod.revoke_session_jti(jti)
     with pytest.raises(Exception):
@@ -145,8 +151,14 @@ async def test_qr_redeem_sets_cookie(client, fake_redis, no_user_checks):
 @pytest.mark.asyncio
 async def test_admin_login_qr_creates_token(client, db_session, fake_redis):
     db_session.add(
-        User(sub="u-6", email="u6@example.com", name="Six",
-             preferred_username="six", role="viewer", is_active=True)
+        User(
+            sub="u-6",
+            email="u6@example.com",
+            name="Six",
+            preferred_username="six",
+            role="viewer",
+            is_active=True,
+        )
     )
     await db_session.flush()
 
@@ -168,8 +180,14 @@ async def test_admin_login_qr_unknown_user_404(client, fake_redis):
 @pytest.mark.asyncio
 async def test_admin_revoke_sessions(client, db_session, fake_redis):
     db_session.add(
-        User(sub="u-7", email="u7@example.com", name="Seven",
-             preferred_username="seven", role="viewer", is_active=True)
+        User(
+            sub="u-7",
+            email="u7@example.com",
+            name="Seven",
+            preferred_username="seven",
+            role="viewer",
+            is_active=True,
+        )
     )
     await db_session.flush()
     resp = await client.post("/api/admin/users/u-7/revoke-sessions")

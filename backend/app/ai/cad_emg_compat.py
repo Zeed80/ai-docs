@@ -55,84 +55,123 @@ def drawing_graph_as_observations(
         GraphNode(id="sheet:0", type="Sheet", name=drawing.sheet.format or "Sheet 1"),
     ]
     edges = [
-        GraphEdge(id="contains:root-sheet", type="contains", source_id="document-set:root", target_id="sheet:0")
+        GraphEdge(
+            id="contains:root-sheet",
+            type="contains",
+            source_id="document-set:root",
+            target_id="sheet:0",
+        )
     ]
     for view in drawing.views:
         nodes.append(GraphNode(id=f"view:{view.id}", type="View", name=view.label or view.kind))
-        edges.append(GraphEdge(
-            id=f"contains:sheet:{view.id}", type="contains", source_id="sheet:0", target_id=f"view:{view.id}"
-        ))
+        edges.append(
+            GraphEdge(
+                id=f"contains:sheet:{view.id}",
+                type="contains",
+                source_id="sheet:0",
+                target_id=f"view:{view.id}",
+            )
+        )
     evidence = []
     for item in drawing.evidence:
         region_id = f"region:{item.id}"
         nodes.append(GraphNode(id=region_id, type="SourceRegion", name=item.kind))
-        edges.append(GraphEdge(
-            id=f"located:{region_id}", type="located_in", source_id=region_id, target_id="sheet:0"
-        ))
-        evidence.append(Evidence(
-            id=f"evidence:{item.id}",
-            kind="text" if item.kind == "ocr" else "raster_region",
-            source_id=source_id,
-            source_region_id=region_id,
-            payload={
-                "bbox": item.region.model_dump(mode="json"),
-                "raw_text": item.raw_text,
-                "legacy_kind": item.kind,
-                "confidence": item.confidence,
-            },
-        ))
+        edges.append(
+            GraphEdge(
+                id=f"located:{region_id}",
+                type="located_in",
+                source_id=region_id,
+                target_id="sheet:0",
+            )
+        )
+        evidence.append(
+            Evidence(
+                id=f"evidence:{item.id}",
+                kind="text" if item.kind == "ocr" else "raster_region",
+                source_id=source_id,
+                source_region_id=region_id,
+                payload={
+                    "bbox": item.region.model_dump(mode="json"),
+                    "raw_text": item.raw_text,
+                    "legacy_kind": item.kind,
+                    "confidence": item.confidence,
+                },
+            )
+        )
     evidence_ids = {item.id: f"evidence:{item.id}" for item in drawing.evidence}
     assertions = []
-    entity_view = {
-        entity_id: view.id for view in drawing.views for entity_id in view.entity_ids
-    }
+    entity_view = {entity_id: view.id for view in drawing.views for entity_id in view.entity_ids}
     for entity in drawing.entities:
         node_id = f"geometry:{entity.id}"
         nodes.append(GraphNode(id=node_id, type="Geometry", name=entity.type))
         if entity.id in entity_view:
-            edges.append(GraphEdge(
-                id=f"represented:{entity.id}", type="represented_by",
-                source_id=node_id, target_id=f"view:{entity_view[entity.id]}",
-            ))
+            edges.append(
+                GraphEdge(
+                    id=f"represented:{entity.id}",
+                    type="represented_by",
+                    source_id=node_id,
+                    target_id=f"view:{entity_view[entity.id]}",
+                )
+            )
         refs = [evidence_ids[item] for item in entity.evidence if item in evidence_ids]
-        assertions.append(Assertion(
-            id=f"assertion:geometry:{entity.id}",
-            subject_id=node_id,
-            predicate=PREDICATE.OBSERVATION_CADIR_ENTITY_JSON,
-            value=ExactValue(
-                kind="exact",
-                value=json.dumps(entity.model_dump(mode="json"), sort_keys=True, separators=(",", ":")),
-            ),
-            coordinate_system=f"view:{entity_view[entity.id]}" if entity.id in entity_view else None,
-            origin="human" if entity.origin == "human" else "observed",
-            assurance={
-                "inferred": "proposed",
-                "observed": "observed",
-                "constraint_validated": "constraint_validated",
-                "human_approved": "human_approved",
-            }.get(entity.assurance, "proposed"),
-            evidence_ids=refs,
-            confidence=entity.confidence,
-        ))
+        assertions.append(
+            Assertion(
+                id=f"assertion:geometry:{entity.id}",
+                subject_id=node_id,
+                predicate=PREDICATE.OBSERVATION_CADIR_ENTITY_JSON,
+                value=ExactValue(
+                    kind="exact",
+                    value=json.dumps(
+                        entity.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+                    ),
+                ),
+                coordinate_system=f"view:{entity_view[entity.id]}"
+                if entity.id in entity_view
+                else None,
+                origin="human" if entity.origin == "human" else "observed",
+                assurance={
+                    "inferred": "proposed",
+                    "observed": "observed",
+                    "constraint_validated": "constraint_validated",
+                    "human_approved": "human_approved",
+                }.get(entity.assurance, "proposed"),
+                evidence_ids=refs,
+                confidence=entity.confidence,
+            )
+        )
     if drawing.scale_mm_per_px is not None:
-        assertions.append(Assertion(
-            id="assertion:sheet-scale", subject_id="sheet:0", predicate=PREDICATE.SCALE_MM_PER_PX,
-            value=ExactValue(kind="exact", value=drawing.scale_mm_per_px), unit="mm",
-            origin="observed", assurance="observed", confidence=0.8,
-        ))
+        assertions.append(
+            Assertion(
+                id="assertion:sheet-scale",
+                subject_id="sheet:0",
+                predicate=PREDICATE.SCALE_MM_PER_PX,
+                value=ExactValue(kind="exact", value=drawing.scale_mm_per_px),
+                unit="mm",
+                origin="observed",
+                assurance="observed",
+                confidence=0.8,
+            )
+        )
     graph = EngineeringModelGraph(
         graph_id=graph_id,
         profile=profile,
-        sources=[GraphSource(id=source_id, sha256=drawing.source.sha256, media_type=drawing.source.kind)],
+        sources=[
+            GraphSource(id=source_id, sha256=drawing.source.sha256, media_type=drawing.source.kind)
+        ],
         nodes=nodes,
         edges=edges,
         assertions=assertions,
         evidence=evidence,
-        reader_manifest=ReaderManifest(**{
-            key: value for key, value in drawing.reader_manifest.items()
-            if key in ReaderManifest.model_fields
-        }),
-        build_targets=[BuildTarget(id="preview", kind="preview_brep", root_node_ids=["document-set:root"])],
+        reader_manifest=ReaderManifest(
+            **{
+                key: value
+                for key, value in drawing.reader_manifest.items()
+                if key in ReaderManifest.model_fields
+            }
+        ),
+        build_targets=[
+            BuildTarget(id="preview", kind="preview_brep", root_node_ids=["document-set:root"])
+        ],
     )
     return graph.sealed()
 
@@ -145,9 +184,10 @@ def legacy_spec_as_low_assurance(
     source_uri: str | None = None,
 ) -> EngineeringModelGraph:
     payload = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
-    digest = source_sha256 or hashlib.sha256(
-        json.dumps(payload, sort_keys=True, default=str).encode()
-    ).hexdigest()
+    digest = (
+        source_sha256
+        or hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+    )
     assertions: list[Assertion] = []
     whole_sheet_evidence_id = "evidence:whole-sheet" if source_uri else None
     provenance = payload.get("value_provenance") or {}
@@ -159,12 +199,14 @@ def legacy_spec_as_low_assurance(
             name="Legacy EngineeringDrawingSpec",
         ),
     ]
-    edges = [GraphEdge(
-        id="contains:legacy-product",
-        type="contains",
-        source_id="document-set:root",
-        target_id="product:legacy-spec",
-    )]
+    edges = [
+        GraphEdge(
+            id="contains:legacy-product",
+            type="contains",
+            source_id="document-set:root",
+            target_id="product:legacy-spec",
+        )
+    ]
     evidence: list[Evidence] = []
 
     def provenance_key(path: str) -> str:
@@ -177,7 +219,8 @@ def legacy_spec_as_low_assurance(
         if not isinstance(item, dict):
             return []
         candidates = [
-            value for value in item.get("evidence") or []
+            value
+            for value in item.get("evidence") or []
             if isinstance(value, dict)
             and isinstance(value.get("source_bbox"), (list, tuple))
             and len(value["source_bbox"]) == 4
@@ -194,32 +237,38 @@ def legacy_spec_as_low_assurance(
         suffix = f"{len(evidence):04d}"
         region_id = f"region:legacy-spec:{suffix}"
         evidence_id = f"evidence:legacy-spec:{suffix}"
-        nodes.append(GraphNode(
-            id=region_id,
-            type="SourceRegion",
-            name=f"Observed region for {path}",
-        ))
-        edges.append(GraphEdge(
-            id=f"located:{region_id}",
-            type="located_in",
-            source_id=region_id,
-            target_id="document-set:root",
-        ))
-        evidence.append(Evidence(
-            id=evidence_id,
-            kind="raster_region",
-            source_id="source:legacy-spec",
-            source_region_id=region_id,
-            payload={
-                "bbox": {"x0": x0, "y0": y0, "x1": x1, "y1": y1},
-                "fallback": False,
-                "raw_text": raw.get("raw_text"),
-                "image_index": raw.get("image_index"),
-                "reader_pass": raw.get("pass"),
-                "provenance_path": provenance_key(path),
-            },
-            sha256=digest,
-        ))
+        nodes.append(
+            GraphNode(
+                id=region_id,
+                type="SourceRegion",
+                name=f"Observed region for {path}",
+            )
+        )
+        edges.append(
+            GraphEdge(
+                id=f"located:{region_id}",
+                type="located_in",
+                source_id=region_id,
+                target_id="document-set:root",
+            )
+        )
+        evidence.append(
+            Evidence(
+                id=evidence_id,
+                kind="raster_region",
+                source_id="source:legacy-spec",
+                source_region_id=region_id,
+                payload={
+                    "bbox": {"x0": x0, "y0": y0, "x1": x1, "y1": y1},
+                    "fallback": False,
+                    "raw_text": raw.get("raw_text"),
+                    "image_index": raw.get("image_index"),
+                    "reader_pass": raw.get("pass"),
+                    "provenance_path": provenance_key(path),
+                },
+                sha256=digest,
+            )
+        )
         return [evidence_id]
 
     def collect(value: Any, path: str) -> None:
@@ -232,68 +281,80 @@ def legacy_spec_as_low_assurance(
             for index, item in enumerate(value):
                 collect(item, f"{path}[{index}]")
         elif isinstance(value, (str, int, float, bool)):
-            assertions.append(Assertion(
-                id=f"assertion:legacy-spec:{len(assertions)}",
-                subject_id="product:legacy-spec",
-                predicate=path,
-                value=ExactValue(kind="exact", value=value),
-                origin="derived",
-                assurance="proposed",
-                evidence_ids=localized_evidence(path),
-                confidence=0.25,
-            ))
+            assertions.append(
+                Assertion(
+                    id=f"assertion:legacy-spec:{len(assertions)}",
+                    subject_id="product:legacy-spec",
+                    predicate=path,
+                    value=ExactValue(kind="exact", value=value),
+                    origin="derived",
+                    assurance="proposed",
+                    evidence_ids=localized_evidence(path),
+                    confidence=0.25,
+                )
+            )
         elif value is None:
-            assertions.append(Assertion(
-                id=f"assertion:legacy-spec:{len(assertions)}",
-                subject_id="product:legacy-spec",
-                predicate=path,
-                value=UnknownValue(kind="unknown", reason="missing in legacy spec"),
-                origin="derived",
-                assurance="proposed",
-                evidence_ids=(
-                    [whole_sheet_evidence_id] if whole_sheet_evidence_id else []
-                ),
-                impacts=["base_topology"],
-            ))
+            assertions.append(
+                Assertion(
+                    id=f"assertion:legacy-spec:{len(assertions)}",
+                    subject_id="product:legacy-spec",
+                    predicate=path,
+                    value=UnknownValue(kind="unknown", reason="missing in legacy spec"),
+                    origin="derived",
+                    assurance="proposed",
+                    evidence_ids=([whole_sheet_evidence_id] if whole_sheet_evidence_id else []),
+                    impacts=["base_topology"],
+                )
+            )
 
     collect(payload, "")
     if source_uri:
-        nodes.append(GraphNode(
-            id="region:whole-sheet",
-            type="SourceRegion",
-            name="Normalized whole sheet fallback",
-        ))
-        edges.append(GraphEdge(
-            id="located:whole-sheet",
-            type="located_in",
-            source_id="region:whole-sheet",
-            target_id="document-set:root",
-        ))
-        evidence.append(Evidence(
-            id="evidence:whole-sheet",
-            kind="raster_region",
-            source_id="source:legacy-spec",
-            source_region_id="region:whole-sheet",
-            payload={
-                "bbox_normalized": [0.0, 0.0, 1.0, 1.0],
-                "fallback": True,
-            },
-            sha256=digest,
-        ))
+        nodes.append(
+            GraphNode(
+                id="region:whole-sheet",
+                type="SourceRegion",
+                name="Normalized whole sheet fallback",
+            )
+        )
+        edges.append(
+            GraphEdge(
+                id="located:whole-sheet",
+                type="located_in",
+                source_id="region:whole-sheet",
+                target_id="document-set:root",
+            )
+        )
+        evidence.append(
+            Evidence(
+                id="evidence:whole-sheet",
+                kind="raster_region",
+                source_id="source:legacy-spec",
+                source_region_id="region:whole-sheet",
+                payload={
+                    "bbox_normalized": [0.0, 0.0, 1.0, 1.0],
+                    "fallback": True,
+                },
+                sha256=digest,
+            )
+        )
     return EngineeringModelGraph(
         graph_id=graph_id,
         profile="mechanical",
-        sources=[GraphSource(
-            id="source:legacy-spec",
-            uri=source_uri,
-            sha256=digest,
-            media_type="image/png" if source_uri else "application/json",
-        )],
+        sources=[
+            GraphSource(
+                id="source:legacy-spec",
+                uri=source_uri,
+                sha256=digest,
+                media_type="image/png" if source_uri else "application/json",
+            )
+        ],
         nodes=nodes,
         edges=edges,
         assertions=assertions,
         evidence=evidence,
-        build_targets=[BuildTarget(id="preview", kind="preview_brep", root_node_ids=["product:legacy-spec"])],
+        build_targets=[
+            BuildTarget(id="preview", kind="preview_brep", root_node_ids=["product:legacy-spec"])
+        ],
     ).sealed()
 
 
@@ -318,9 +379,7 @@ def feature_tree_from_graph(
     missing = []
     allowed_kinds = set(Feature3D.model_fields["kind"].annotation.__args__)
     for operation_id in plan.operation_node_ids:
-        values = {
-            item.predicate: item for item in assertions_by_subject.get(operation_id, [])
-        }
+        values = {item.predicate: item for item in assertions_by_subject.get(operation_id, [])}
         kind_assertion = values.get(PREDICATE.OPERATION_KIND)
         if not kind_assertion or kind_assertion.value.kind != "exact":
             missing.append(f"{operation_id}: operation.kind")
@@ -338,19 +397,25 @@ def feature_tree_from_graph(
             params[name] = assertion.value.value
             provenance[name] = ParamProvenance(
                 origin={
-                    "observed": "measured", "human": "stated", "standard": "standard",
-                    "assumed": "guessed", "derived": "propagated", "traced": "measured",
+                    "observed": "measured",
+                    "human": "stated",
+                    "standard": "standard",
+                    "assumed": "guessed",
+                    "derived": "propagated",
+                    "traced": "measured",
                 }[assertion.origin],
                 detail=f"EMG {assertion.id} ({assertion.assurance})",
             )
-        features.append(Feature3D(
-            kind=kind,
-            source_entity_ids=[],
-            source_feature_ids=sorted(realized_features.get(operation_id, [])),
-            params=params,
-            param_provenance=provenance,
-            confidence=min((item.confidence for item in values.values()), default=0.0),
-        ))
+        features.append(
+            Feature3D(
+                kind=kind,
+                source_entity_ids=[],
+                source_feature_ids=sorted(realized_features.get(operation_id, [])),
+                params=params,
+                param_provenance=provenance,
+                confidence=min((item.confidence for item in values.values()), default=0.0),
+            )
+        )
     # The human-readable notes the reader/builder actually wrote (e.g. A2's
     # "0:outer:4: длина ступени Ø29.5 не указана — построено с
     # предположением..."), persisted verbatim as build.unresolved.<n> on
@@ -379,22 +444,42 @@ def feature_tree_from_graph(
 # not a build parameter; taper/thread are their own nested objects, left for
 # a follow-up once they need their own Feature/Parameter nodes.
 _FEATURE_PARAM_FIELDS = (
-    "diameter_mm", "length_mm", "width_mm", "depth_mm", "size_mm", "angle_deg",
-    "radius_mm", "root_diameter_mm", "axial_position_mm", "axial_start_mm",
-    "at_z_mm", "at_diameter_mm", "rotation_deg", "count",
-    "bolt_circle_diameter_mm", "hole_diameter_mm", "start_angle_deg",
-    "internal", "through",
+    "diameter_mm",
+    "length_mm",
+    "width_mm",
+    "depth_mm",
+    "size_mm",
+    "angle_deg",
+    "radius_mm",
+    "root_diameter_mm",
+    "axial_position_mm",
+    "axial_start_mm",
+    "at_z_mm",
+    "at_diameter_mm",
+    "rotation_deg",
+    "count",
+    "bolt_circle_diameter_mm",
+    "hole_diameter_mm",
+    "start_angle_deg",
+    "internal",
+    "through",
 )
 
 # feature.kind value per spec list name — the spec's own vocabulary, not a
 # new taxonomy invented here.
 _FEATURE_LIST_KIND = {
-    "chamfers": "chamfer", "fillets": "fillet", "grooves": "groove",
-    "keyways": "keyway", "cross_holes": "cross_hole",
+    "chamfers": "chamfer",
+    "fillets": "fillet",
+    "grooves": "groove",
+    "keyways": "keyway",
+    "cross_holes": "cross_hole",
     "axial_holes": "axial_hole_pattern",
     "circular_hole_patterns": "circular_hole_pattern",
-    "outer": "section_outer", "bore": "section_bore",
-    "holes": "hole", "hole_patterns": "hole_pattern", "slots": "slot",
+    "outer": "section_outer",
+    "bore": "section_bore",
+    "holes": "hole",
+    "hole_patterns": "hole_pattern",
+    "slots": "slot",
 }
 
 
@@ -462,60 +547,65 @@ def _emit_native_feature(
     # one per feature today); refine once it does, rather than inventing a
     # more precise-looking number now.
     confidence = 0.6 if item.get("evidence") else 0.3
-    assertions.append(Assertion(
-        id=f"assertion:{node_id}:kind",
-        subject_id=node_id,
-        predicate=PREDICATE.FEATURE_KIND,
-        value=ExactValue(kind="exact", value=kind),
-        origin="observed",
-        assurance="proposed",
-        confidence=confidence,
-        evidence_ids=list(evidence_ids),
-        impacts=["base_topology"],
-    ))
-    location = item.get("location")
-    if isinstance(location, str) and location:
-        assertions.append(Assertion(
-            id=f"assertion:{node_id}:location",
+    assertions.append(
+        Assertion(
+            id=f"assertion:{node_id}:kind",
             subject_id=node_id,
-            predicate=PREDICATE.FEATURE_LOCATION,
-            value=ExactValue(kind="exact", value=location),
+            predicate=PREDICATE.FEATURE_KIND,
+            value=ExactValue(kind="exact", value=kind),
             origin="observed",
             assurance="proposed",
             confidence=confidence,
             evidence_ids=list(evidence_ids),
             impacts=["base_topology"],
-        ))
+        )
+    )
+    location = item.get("location")
+    if isinstance(location, str) and location:
+        assertions.append(
+            Assertion(
+                id=f"assertion:{node_id}:location",
+                subject_id=node_id,
+                predicate=PREDICATE.FEATURE_LOCATION,
+                value=ExactValue(kind="exact", value=location),
+                origin="observed",
+                assurance="proposed",
+                confidence=confidence,
+                evidence_ids=list(evidence_ids),
+                impacts=["base_topology"],
+            )
+        )
     for field in _FEATURE_PARAM_FIELDS:
         value = item.get(field)
         if value is None:
             continue
-        assertions.append(Assertion(
-            id=f"assertion:{node_id}:param:{field}",
-            subject_id=node_id,
-            predicate=f"{FEATURE_PARAM_PREFIX}{field}",
-            value=ExactValue(kind="exact", value=value),
-            unit=(
-                "mm" if field.endswith("_mm")
-                else "deg" if field.endswith("_deg") else None
-            ),
-            origin="observed",
-            assurance="proposed",
-            confidence=confidence,
-            evidence_ids=list(evidence_ids),
-            impacts=["base_topology"],
-        ))
+        assertions.append(
+            Assertion(
+                id=f"assertion:{node_id}:param:{field}",
+                subject_id=node_id,
+                predicate=f"{FEATURE_PARAM_PREFIX}{field}",
+                value=ExactValue(kind="exact", value=value),
+                unit=("mm" if field.endswith("_mm") else "deg" if field.endswith("_deg") else None),
+                origin="observed",
+                assurance="proposed",
+                confidence=confidence,
+                evidence_ids=list(evidence_ids),
+                impacts=["base_topology"],
+            )
+        )
     # Fail-closed by construction: the ONLY source for this edge is a view's
     # own features_shown explicitly naming this feature id. No proximity, no
     # body-membership heuristic — see native_feature_graph_additions.
     for view_id, shown in features_shown_by_view.items():
         if feature_id in shown:
-            edges.append(GraphEdge(
-                id=f"shown:{node_id}:{view_id}",
-                type="represented_by",
-                source_id=node_id,
-                target_id=f"view:{view_id}",
-            ))
+            edges.append(
+                GraphEdge(
+                    id=f"shown:{node_id}:{view_id}",
+                    type="represented_by",
+                    source_id=node_id,
+                    target_id=f"view:{view_id}",
+                )
+            )
 
 
 def native_feature_graph_additions(
@@ -541,10 +631,14 @@ def native_feature_graph_additions(
     this pipeline's whole design refuses to make.
     """
     nodes: list[GraphNode] = [GraphNode(id="sheet:0", type="Sheet", name="Sheet 1")]
-    edges: list[GraphEdge] = [GraphEdge(
-        id="contains:root-sheet", type="contains",
-        source_id="document-set:root", target_id="sheet:0",
-    )]
+    edges: list[GraphEdge] = [
+        GraphEdge(
+            id="contains:root-sheet",
+            type="contains",
+            source_id="document-set:root",
+            target_id="sheet:0",
+        )
+    ]
     assertions: list[Assertion] = []
     evidence_ids = ["evidence:whole-sheet"] if source_uri else []
 
@@ -558,14 +652,21 @@ def native_feature_graph_additions(
             continue
         seen_view_ids.add(view_id)
         node_id = f"view:{view_id}"
-        nodes.append(GraphNode(
-            id=node_id, type="View",
-            name=str(view.get("label") or view.get("kind") or view_id),
-        ))
-        edges.append(GraphEdge(
-            id=f"contains:sheet:{view_id}", type="contains",
-            source_id="sheet:0", target_id=node_id,
-        ))
+        nodes.append(
+            GraphNode(
+                id=node_id,
+                type="View",
+                name=str(view.get("label") or view.get("kind") or view_id),
+            )
+        )
+        edges.append(
+            GraphEdge(
+                id=f"contains:sheet:{view_id}",
+                type="contains",
+                source_id="sheet:0",
+                target_id=node_id,
+            )
+        )
         features_shown_by_view[view_id] = [
             str(item) for item in (view.get("features_shown") or []) if item
         ]
@@ -583,7 +684,10 @@ def native_feature_graph_additions(
         for list_name in (*_BODY_FEATURE_FIELDS, *_BODY_SECTION_FIELDS):
             for item in body.get(list_name) or []:
                 _emit_native_feature(
-                    item, list_name, nodes=nodes, edges=edges,
+                    item,
+                    list_name,
+                    nodes=nodes,
+                    edges=edges,
                     assertions=assertions,
                     features_shown_by_view=features_shown_by_view,
                     evidence_ids=evidence_ids,
@@ -593,7 +697,10 @@ def native_feature_graph_additions(
             for list_name in _PROFILE_FEATURE_FIELDS:
                 for item in profile.get(list_name) or []:
                     _emit_native_feature(
-                        item, list_name, nodes=nodes, edges=edges,
+                        item,
+                        list_name,
+                        nodes=nodes,
+                        edges=edges,
                         assertions=assertions,
                         features_shown_by_view=features_shown_by_view,
                         evidence_ids=evidence_ids,
@@ -631,7 +738,8 @@ def spec_feature_tree_as_graph(
     # above. See native_feature_graph_additions for the fail-closed contract
     # on represented_by edges.
     native_nodes, native_edges, native_assertions = native_feature_graph_additions(
-        spec_payload, source_uri=source_uri,
+        spec_payload,
+        source_uri=source_uri,
     )
     nodes.extend(native_nodes)
     edges.extend(native_edges)
@@ -641,32 +749,36 @@ def spec_feature_tree_as_graph(
     # never anything the native builder itself did not already create.
     known_feature_ids = {item.id for item in native_nodes if item.type == "Feature"}
     title_block = spec_payload.get("title_block")
-    material_designation = (
-        title_block.get("material") if isinstance(title_block, dict) else None
-    )
+    material_designation = title_block.get("material") if isinstance(title_block, dict) else None
     if isinstance(material_designation, str) and material_designation.strip():
-        nodes.append(GraphNode(
-            id="material:primary",
-            type="Material",
-            name=material_designation.strip(),
-        ))
-        edges.append(GraphEdge(
-            id="applies:material:primary",
-            type="applies_to",
-            source_id="material:primary",
-            target_id="product:legacy-spec",
-        ))
+        nodes.append(
+            GraphNode(
+                id="material:primary",
+                type="Material",
+                name=material_designation.strip(),
+            )
+        )
+        edges.append(
+            GraphEdge(
+                id="applies:material:primary",
+                type="applies_to",
+                source_id="material:primary",
+                target_id="product:legacy-spec",
+            )
+        )
         material_assertion_id = "assertion:material:designation"
-        assertions.append(Assertion(
-            id=material_assertion_id,
-            subject_id="material:primary",
-            predicate=PREDICATE.MATERIAL_DESIGNATION,
-            value=ExactValue(kind="exact", value=material_designation.strip()),
-            origin="derived",
-            assurance="proposed",
-            confidence=0.25,
-            impacts=["material_quantity", "manufacturing_safety"],
-        ))
+        assertions.append(
+            Assertion(
+                id=material_assertion_id,
+                subject_id="material:primary",
+                predicate=PREDICATE.MATERIAL_DESIGNATION,
+                value=ExactValue(kind="exact", value=material_designation.strip()),
+                origin="derived",
+                assurance="proposed",
+                confidence=0.25,
+                impacts=["material_quantity", "manufacturing_safety"],
+            )
+        )
         operation_assertion_ids.append(material_assertion_id)
     provenance_origin = {
         "measured": "observed",
@@ -686,52 +798,62 @@ def spec_feature_tree_as_graph(
     }
     for index, feature in enumerate(candidate.features):
         operation_id = f"operation:{index}"
-        nodes.append(GraphNode(
-            id=operation_id,
-            type="BuildOperation",
-            name=f"{index + 1}. {feature.kind}",
-        ))
-        edges.append(GraphEdge(
-            id=f"depends:{operation_id}",
-            type="depends_on",
-            source_id=operation_id,
-            target_id="product:legacy-spec",
-        ))
+        nodes.append(
+            GraphNode(
+                id=operation_id,
+                type="BuildOperation",
+                name=f"{index + 1}. {feature.kind}",
+            )
+        )
+        edges.append(
+            GraphEdge(
+                id=f"depends:{operation_id}",
+                type="depends_on",
+                source_id=operation_id,
+                target_id="product:legacy-spec",
+            )
+        )
         for feature_id in dict.fromkeys(feature.source_feature_ids):
             target_id = f"feature:{feature_id}"
             if target_id not in known_feature_ids:
                 continue
-            edges.append(GraphEdge(
-                id=f"realizes:{operation_id}:{feature_id}",
-                type="realizes",
-                source_id=operation_id,
-                target_id=target_id,
-            ))
+            edges.append(
+                GraphEdge(
+                    id=f"realizes:{operation_id}:{feature_id}",
+                    type="realizes",
+                    source_id=operation_id,
+                    target_id=target_id,
+                )
+            )
         kind_id = f"assertion:{operation_id}:kind"
-        assertions.append(Assertion(
-            id=kind_id,
-            subject_id=operation_id,
-            predicate=PREDICATE.OPERATION_KIND,
-            value=ExactValue(kind="exact", value=feature.kind),
-            origin="derived",
-            assurance="proposed",
-            confidence=feature.confidence,
-            impacts=["base_topology"],
-            hypothesis_id="hypothesis:legacy-reader",
-        ))
+        assertions.append(
+            Assertion(
+                id=kind_id,
+                subject_id=operation_id,
+                predicate=PREDICATE.OPERATION_KIND,
+                value=ExactValue(kind="exact", value=feature.kind),
+                origin="derived",
+                assurance="proposed",
+                confidence=feature.confidence,
+                impacts=["base_topology"],
+                hypothesis_id="hypothesis:legacy-reader",
+            )
+        )
         operation_assertion_ids.append(kind_id)
         sequence_id = f"assertion:{operation_id}:sequence"
-        assertions.append(Assertion(
-            id=sequence_id,
-            subject_id=operation_id,
-            predicate=PREDICATE.OPERATION_SEQUENCE,
-            value=ExactValue(kind="exact", value=index),
-            origin="derived",
-            assurance="proposed",
-            confidence=1.0,
-            impacts=["base_topology"],
-            hypothesis_id="hypothesis:legacy-reader",
-        ))
+        assertions.append(
+            Assertion(
+                id=sequence_id,
+                subject_id=operation_id,
+                predicate=PREDICATE.OPERATION_SEQUENCE,
+                value=ExactValue(kind="exact", value=index),
+                origin="derived",
+                assurance="proposed",
+                confidence=1.0,
+                impacts=["base_topology"],
+                hypothesis_id="hypothesis:legacy-reader",
+            )
+        )
         operation_assertion_ids.append(sequence_id)
         for name, value in sorted(feature.params.items()):
             if value is None:
@@ -741,32 +863,36 @@ def spec_feature_tree_as_graph(
                 provenance.origin if provenance else "guessed", "assumed"
             )
             assertion_id = f"assertion:{operation_id}:param:{name}"
-            assertions.append(Assertion(
-                id=assertion_id,
-                subject_id=operation_id,
-                predicate=f"{OPERATION_PARAM_PREFIX}{name}",
-                value=ExactValue(kind="exact", value=value),
-                unit="mm" if name.endswith("_mm") else None,
-                origin=origin,
-                assurance="observed" if origin in {"observed", "standard"} else "proposed",
-                confidence=feature.confidence,
-                impacts=["base_topology"],
-                hypothesis_id="hypothesis:legacy-reader",
-            ))
+            assertions.append(
+                Assertion(
+                    id=assertion_id,
+                    subject_id=operation_id,
+                    predicate=f"{OPERATION_PARAM_PREFIX}{name}",
+                    value=ExactValue(kind="exact", value=value),
+                    unit="mm" if name.endswith("_mm") else None,
+                    origin=origin,
+                    assurance="observed" if origin in {"observed", "standard"} else "proposed",
+                    confidence=feature.confidence,
+                    impacts=["base_topology"],
+                    hypothesis_id="hypothesis:legacy-reader",
+                )
+            )
             operation_assertion_ids.append(assertion_id)
     for index, item in enumerate(candidate.missing_data):
         assertion_id = f"assertion:unresolved:{index}"
-        assertions.append(Assertion(
-            id=assertion_id,
-            subject_id="product:legacy-spec",
-            predicate=f"{BUILD_UNRESOLVED_PREFIX}{index}",
-            value=UnknownValue(kind="unknown", reason=str(item)),
-            origin="derived",
-            assurance="proposed",
-            evidence_ids=["evidence:whole-sheet"] if source_uri else [],
-            impacts=["base_topology"],
-            hypothesis_id="hypothesis:legacy-reader",
-        ))
+        assertions.append(
+            Assertion(
+                id=assertion_id,
+                subject_id="product:legacy-spec",
+                predicate=f"{BUILD_UNRESOLVED_PREFIX}{index}",
+                value=UnknownValue(kind="unknown", reason=str(item)),
+                origin="derived",
+                assurance="proposed",
+                evidence_ids=["evidence:whole-sheet"] if source_uri else [],
+                impacts=["base_topology"],
+                hypothesis_id="hypothesis:legacy-reader",
+            )
+        )
         operation_assertion_ids.append(assertion_id)
     requirement = Requirement(
         id="requirement:production-geometry",
@@ -781,21 +907,23 @@ def spec_feature_tree_as_graph(
             "nodes": nodes,
             "edges": edges,
             "assertions": assertions,
-            "hypothesis_options": [HypothesisOption(
-                id="hypothesis:legacy-reader",
-                assertion_ids=operation_assertion_ids,
-                hard_constraints_satisfied=not candidate.missing_data,
-                evidence_coverage=max(0.0, min(1.0, candidate.score)),
-                cross_view_consistency=max(0.0, min(1.0, candidate.score)),
-                assumption_count=sum(
-                    1 for item in assertions if item.origin == "assumed"
-                ),
-            )],
-            "hypothesis_sets": [HypothesisSet(
-                id="hypothesis-set:build",
-                option_ids=["hypothesis:legacy-reader"],
-                selected_option_id="hypothesis:legacy-reader",
-            )],
+            "hypothesis_options": [
+                HypothesisOption(
+                    id="hypothesis:legacy-reader",
+                    assertion_ids=operation_assertion_ids,
+                    hard_constraints_satisfied=not candidate.missing_data,
+                    evidence_coverage=max(0.0, min(1.0, candidate.score)),
+                    cross_view_consistency=max(0.0, min(1.0, candidate.score)),
+                    assumption_count=sum(1 for item in assertions if item.origin == "assumed"),
+                )
+            ],
+            "hypothesis_sets": [
+                HypothesisSet(
+                    id="hypothesis-set:build",
+                    option_ids=["hypothesis:legacy-reader"],
+                    selected_option_id="hypothesis:legacy-reader",
+                )
+            ],
             "requirements": [requirement],
             "build_targets": [
                 BuildTarget(
@@ -888,49 +1016,65 @@ def feature_tree_revision_patch(
 
     collect(payload, "")
     for index, (path, value) in enumerate(flattened):
-        old_id = next((
-            item.id for item in graph.assertions
-            if item.state == "active"
-            and item.subject_id == "product:legacy-spec"
-            and item.predicate == path
-        ), None)
-        assertion_id = f"assertion:{prefix}:spec:{index}"
-        add_assertions.append(Assertion(
-            id=assertion_id,
-            subject_id="product:legacy-spec",
-            predicate=path,
-            value=(
-                UnknownValue(kind="unknown", reason="missing in corrected spec")
-                if value is None
-                else ExactValue(kind="exact", value=value)
+        old_id = next(
+            (
+                item.id
+                for item in graph.assertions
+                if item.state == "active"
+                and item.subject_id == "product:legacy-spec"
+                and item.predicate == path
             ),
-            origin="human" if producer == "human" else "derived",
-            assurance="human_approved" if producer == "human" else "proposed",
-            confidence=1.0 if producer == "human" else 0.5,
-            hypothesis_id=hypothesis_id,
-            supersedes_assertion_id=old_id,
-        ))
+            None,
+        )
+        assertion_id = f"assertion:{prefix}:spec:{index}"
+        add_assertions.append(
+            Assertion(
+                id=assertion_id,
+                subject_id="product:legacy-spec",
+                predicate=path,
+                value=(
+                    UnknownValue(kind="unknown", reason="missing in corrected spec")
+                    if value is None
+                    else ExactValue(kind="exact", value=value)
+                ),
+                origin="human" if producer == "human" else "derived",
+                assurance="human_approved" if producer == "human" else "proposed",
+                confidence=1.0 if producer == "human" else 0.5,
+                hypothesis_id=hypothesis_id,
+                supersedes_assertion_id=old_id,
+            )
+        )
         assertion_ids.append(assertion_id)
 
     for index, feature in enumerate(candidate.features):
         operation_id = f"operation:{prefix}:{index:04d}"
-        add_nodes.append(GraphNode(
-            id=operation_id, type="BuildOperation", name=f"{index + 1}. {feature.kind}",
-        ))
-        add_edges.append(GraphEdge(
-            id=f"depends:{operation_id}", type="depends_on",
-            source_id=operation_id, target_id="product:legacy-spec",
-        ))
+        add_nodes.append(
+            GraphNode(
+                id=operation_id,
+                type="BuildOperation",
+                name=f"{index + 1}. {feature.kind}",
+            )
+        )
+        add_edges.append(
+            GraphEdge(
+                id=f"depends:{operation_id}",
+                type="depends_on",
+                source_id=operation_id,
+                target_id="product:legacy-spec",
+            )
+        )
         for feature_id in dict.fromkeys(feature.source_feature_ids):
             target_id = f"feature:{feature_id}"
             if target_id not in known_feature_ids:
                 continue
-            add_edges.append(GraphEdge(
-                id=f"realizes:{operation_id}:{feature_id}",
-                type="realizes",
-                source_id=operation_id,
-                target_id=target_id,
-            ))
+            add_edges.append(
+                GraphEdge(
+                    id=f"realizes:{operation_id}:{feature_id}",
+                    type="realizes",
+                    source_id=operation_id,
+                    target_id=target_id,
+                )
+            )
         entries = [
             ("kind", feature.kind),
             ("sequence", index),
@@ -940,47 +1084,53 @@ def feature_tree_revision_patch(
             if value is None:
                 continue
             predicate = (
-                PREDICATE.OPERATION_KIND if name == "kind"
-                else PREDICATE.OPERATION_SEQUENCE if name == "sequence"
+                PREDICATE.OPERATION_KIND
+                if name == "kind"
+                else PREDICATE.OPERATION_SEQUENCE
+                if name == "sequence"
                 else f"{OPERATION_PARAM_PREFIX}{name}"
             )
             previous_operation_id = (
-                active_operation_ids[index]
-                if index < len(active_operation_ids) else None
+                active_operation_ids[index] if index < len(active_operation_ids) else None
             )
-            old_id = next((
-                item.id for item in graph.assertions
-                if item.state == "active"
-                and item.subject_id == previous_operation_id
-                and item.predicate == predicate
-            ), None)
+            old_id = next(
+                (
+                    item.id
+                    for item in graph.assertions
+                    if item.state == "active"
+                    and item.subject_id == previous_operation_id
+                    and item.predicate == predicate
+                ),
+                None,
+            )
             assertion_id = f"assertion:{operation_id}:{name}"
             provenance = (
-                feature.param_provenance.get(name)
-                if name not in {"kind", "sequence"} else None
+                feature.param_provenance.get(name) if name not in {"kind", "sequence"} else None
             )
             origin = (
-                "derived" if name in {"kind", "sequence"} else provenance_origin.get(
+                "derived"
+                if name in {"kind", "sequence"}
+                else provenance_origin.get(
                     provenance.origin if provenance else "guessed", "assumed"
                 )
             )
-            add_assertions.append(Assertion(
-                id=assertion_id,
-                subject_id=operation_id,
-                predicate=predicate,
-                value=ExactValue(kind="exact", value=value),
-                unit="mm" if name.endswith("_mm") else None,
-                origin=origin,
-                # Correcting the source spec approves those source values, not
-                # every downstream operation inferred from them.
-                assurance=(
-                    "observed" if origin in {"observed", "standard"} else "proposed"
-                ),
-                confidence=feature.confidence,
-                impacts=["base_topology"],
-                hypothesis_id=hypothesis_id,
-                supersedes_assertion_id=old_id,
-            ))
+            add_assertions.append(
+                Assertion(
+                    id=assertion_id,
+                    subject_id=operation_id,
+                    predicate=predicate,
+                    value=ExactValue(kind="exact", value=value),
+                    unit="mm" if name.endswith("_mm") else None,
+                    origin=origin,
+                    # Correcting the source spec approves those source values, not
+                    # every downstream operation inferred from them.
+                    assurance=("observed" if origin in {"observed", "standard"} else "proposed"),
+                    confidence=feature.confidence,
+                    impacts=["base_topology"],
+                    hypothesis_id=hypothesis_id,
+                    supersedes_assertion_id=old_id,
+                )
+            )
             assertion_ids.append(assertion_id)
 
     # A2: candidate.missing_data (e.g. "0:outer:4: длина ступени Ø29.5 не
@@ -995,26 +1145,29 @@ def feature_tree_revision_patch(
     # not perfectly reconcile, but a stale note surviving one extra revision
     # is a display nuisance, not a build-safety gap.
     old_unresolved_ids = sorted(
-        item.id for item in graph.assertions
+        item.id
+        for item in graph.assertions
         if item.state == "active"
         and item.subject_id == "product:legacy-spec"
         and item.predicate.startswith(BUILD_UNRESOLVED_PREFIX)
     )
     for index, item in enumerate(candidate.missing_data):
         assertion_id = f"assertion:{prefix}:unresolved:{index}"
-        add_assertions.append(Assertion(
-            id=assertion_id,
-            subject_id="product:legacy-spec",
-            predicate=f"{BUILD_UNRESOLVED_PREFIX}{index}",
-            value=UnknownValue(kind="unknown", reason=str(item)),
-            origin="derived",
-            assurance="proposed",
-            confidence=0.5,
-            hypothesis_id=hypothesis_id,
-            supersedes_assertion_id=(
-                old_unresolved_ids[index] if index < len(old_unresolved_ids) else None
-            ),
-        ))
+        add_assertions.append(
+            Assertion(
+                id=assertion_id,
+                subject_id="product:legacy-spec",
+                predicate=f"{BUILD_UNRESOLVED_PREFIX}{index}",
+                value=UnknownValue(kind="unknown", reason=str(item)),
+                origin="derived",
+                assurance="proposed",
+                confidence=0.5,
+                hypothesis_id=hypothesis_id,
+                supersedes_assertion_id=(
+                    old_unresolved_ids[index] if index < len(old_unresolved_ids) else None
+                ),
+            )
+        )
         assertion_ids.append(assertion_id)
 
     replaced = {
@@ -1024,43 +1177,50 @@ def feature_tree_revision_patch(
     }
     active_operation_set = set(active_operation_ids)
     removed = [
-        item for item in graph.assertions
+        item
+        for item in graph.assertions
         if item.state == "active"
         and item.subject_id in active_operation_set
         and item.id not in replaced
     ]
     for index, old in enumerate(removed):
         assertion_id = f"assertion:{prefix}:removed:{index}"
-        add_assertions.append(Assertion(
-            id=assertion_id,
-            subject_id="product:legacy-spec",
-            predicate=f"{BUILD_REMOVED_ASSERTION_PREFIX}{index}",
-            value=ExactValue(kind="exact", value=old.id),
-            origin="human" if producer == "human" else "derived",
-            assurance="human_approved" if producer == "human" else "proposed",
-            confidence=1.0 if producer == "human" else 0.5,
-            hypothesis_id=hypothesis_id,
-            supersedes_assertion_id=old.id,
-        ))
+        add_assertions.append(
+            Assertion(
+                id=assertion_id,
+                subject_id="product:legacy-spec",
+                predicate=f"{BUILD_REMOVED_ASSERTION_PREFIX}{index}",
+                value=ExactValue(kind="exact", value=old.id),
+                origin="human" if producer == "human" else "derived",
+                assurance="human_approved" if producer == "human" else "proposed",
+                confidence=1.0 if producer == "human" else 0.5,
+                hypothesis_id=hypothesis_id,
+                supersedes_assertion_id=old.id,
+            )
+        )
         assertion_ids.append(assertion_id)
         replaced.add(old.id)
     superseded = sorted(replaced)
     decision_evidence: list[Evidence] = []
     if producer == "human" and decision_note:
         decision_id = f"evidence:human:{prefix}:{digest[:16]}"
-        decision_evidence.append(Evidence(
-            id=decision_id,
-            kind="human_decision",
-            payload={
-                "actor_sub": actor_sub,
-                "note": decision_note,
-                "pass_id": pass_id,
-            },
-        ))
+        decision_evidence.append(
+            Evidence(
+                id=decision_id,
+                kind="human_decision",
+                payload={
+                    "actor_sub": actor_sub,
+                    "note": decision_note,
+                    "pass_id": pass_id,
+                },
+            )
+        )
         add_assertions = [
-            assertion.model_copy(update={
-                "evidence_ids": [*assertion.evidence_ids, decision_id],
-            })
+            assertion.model_copy(
+                update={
+                    "evidence_ids": [*assertion.evidence_ids, decision_id],
+                }
+            )
             for assertion in add_assertions
         ]
 
@@ -1075,18 +1235,22 @@ def feature_tree_revision_patch(
         add_edges=add_edges,
         add_assertions=add_assertions,
         add_evidence=decision_evidence,
-        add_hypothesis_options=[HypothesisOption(
-            id=hypothesis_id,
-            assertion_ids=assertion_ids,
-            hard_constraints_satisfied=not candidate.missing_data,
-            evidence_coverage=max(0.0, min(1.0, candidate.score)),
-            cross_view_consistency=max(0.0, min(1.0, candidate.score)),
-            assumption_count=sum(1 for item in add_assertions if item.origin == "assumed"),
-        )],
-        add_hypothesis_sets=[HypothesisSet(
-            id=f"hypothesis-set:{prefix}",
-            option_ids=[hypothesis_id],
-            selected_option_id=hypothesis_id,
-        )],
+        add_hypothesis_options=[
+            HypothesisOption(
+                id=hypothesis_id,
+                assertion_ids=assertion_ids,
+                hard_constraints_satisfied=not candidate.missing_data,
+                evidence_coverage=max(0.0, min(1.0, candidate.score)),
+                cross_view_consistency=max(0.0, min(1.0, candidate.score)),
+                assumption_count=sum(1 for item in add_assertions if item.origin == "assumed"),
+            )
+        ],
+        add_hypothesis_sets=[
+            HypothesisSet(
+                id=f"hypothesis-set:{prefix}",
+                option_ids=[hypothesis_id],
+                selected_option_id=hypothesis_id,
+            )
+        ],
         supersede_assertion_ids=superseded,
     )

@@ -30,9 +30,7 @@ def main() -> int:
     candidate = feature_tree_from_spec(json.loads(args.spec.read_text()))
     if candidate is None:
         raise ValueError("mechanical spec did not compile to a feature tree")
-    runtime = _run_mechanical(
-        args.case_id, candidate.model_dump(mode="json")
-    )
+    runtime = _run_mechanical(args.case_id, candidate.model_dump(mode="json"))
     report = mechanical_live_stage_report(args.case_id, runtime)
     report["runtime"] = runtime
     rendered = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)

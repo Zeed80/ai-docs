@@ -111,9 +111,7 @@ def _descriptor(shape: Any) -> dict[str, Any]:
         "surface_area": float(shape.Area),
         "bbox": [float(bounds.XLength), float(bounds.YLength), float(bounds.ZLength)],
         "center": [float(bounds.Center.x), float(bounds.Center.y), float(bounds.Center.z)],
-        "diagonal": math.sqrt(
-            bounds.XLength ** 2 + bounds.YLength ** 2 + bounds.ZLength ** 2
-        ),
+        "diagonal": math.sqrt(bounds.XLength**2 + bounds.YLength**2 + bounds.ZLength**2),
     }
 
 
@@ -183,20 +181,18 @@ def evaluate_pair(reference_path: pathlib.Path, candidate_path: pathlib.Path) ->
         trial = _orient_and_center(candidate, orientation, reference_descriptor)
         trial_descriptor = _descriptor(trial)
         bbox_errors = [
-            _relative_error(
-                trial_descriptor["bbox"][axis], reference_descriptor["bbox"][axis]
-            )
+            _relative_error(trial_descriptor["bbox"][axis], reference_descriptor["bbox"][axis])
             for axis in range(3)
         ]
-        orientation_trials.append({
-            "orientation": orientation,
-            "shape": trial,
-            "descriptor": trial_descriptor,
-            "bbox_max_relative_error": max(bbox_errors),
-            "volume_iou": _volume_iou(
-                reference, trial, reference_descriptor["volume"]
-            ),
-        })
+        orientation_trials.append(
+            {
+                "orientation": orientation,
+                "shape": trial,
+                "descriptor": trial_descriptor,
+                "bbox_max_relative_error": max(bbox_errors),
+                "volume_iou": _volume_iou(reference, trial, reference_descriptor["volume"]),
+            }
+        )
     best_trial = max(
         orientation_trials,
         key=lambda item: (
@@ -216,10 +212,9 @@ def evaluate_pair(reference_path: pathlib.Path, candidate_path: pathlib.Path) ->
 
     diagonal = max(reference_descriptor["diagonal"], 1e-9)
     deflection = diagonal / 200
-    distances = (
-        _directed_surface_distances(reference, aligned_candidate, deflection)
-        + _directed_surface_distances(aligned_candidate, reference, deflection)
-    )
+    distances = _directed_surface_distances(
+        reference, aligned_candidate, deflection
+    ) + _directed_surface_distances(aligned_candidate, reference, deflection)
     surface_max = max(distances, default=math.inf)
     surface_mean = sum(distances) / len(distances) if distances else math.inf
     topology_fields = ("solid_count", "shell_count", "face_count", "edge_count", "vertex_count")
@@ -236,7 +231,8 @@ def evaluate_pair(reference_path: pathlib.Path, candidate_path: pathlib.Path) ->
         "topology_score": sum(
             _count_score(aligned_descriptor[field], reference_descriptor[field])
             for field in topology_fields
-        ) / len(topology_fields),
+        )
+        / len(topology_fields),
         "bounding_box_relative_errors": bbox_errors,
         "bounding_box_max_relative_error": max(bbox_errors),
         "volume_relative_error": _relative_error(

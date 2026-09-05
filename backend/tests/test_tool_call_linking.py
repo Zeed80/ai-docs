@@ -17,7 +17,10 @@ def test_anthropic_links_results_by_id_when_out_of_order():
             "content": "",
             "tool_calls": [
                 {"id": "call_A", "function": {"name": "invoices", "arguments": {"action": "list"}}},
-                {"id": "call_B", "function": {"name": "documents", "arguments": {"action": "list"}}},
+                {
+                    "id": "call_B",
+                    "function": {"name": "documents", "arguments": {"action": "list"}},
+                },
             ],
         },
         {"role": "tool", "tool_call_id": "call_B", "content": '{"docs": 7}'},

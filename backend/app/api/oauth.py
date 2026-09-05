@@ -6,6 +6,7 @@ on this backend, which finishes the token exchange and hands a tiny result
 back to the opener window via postMessage before closing itself. See
 app/domain/oauth_mail.py for the token-exchange mechanics.
 """
+
 from __future__ import annotations
 
 import json
@@ -21,8 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.acting import get_effective_user
 from app.auth.models import UserInfo, UserRole
-from app.db.models import MailboxConfig, OAuthAppConfig
 from app.config import settings
+from app.db.models import MailboxConfig, OAuthAppConfig
 from app.db.session import get_db
 from app.domain import oauth_mail
 from app.utils.crypto import encrypt_password
@@ -105,7 +106,12 @@ async def start_oauth(
     await r.setex(
         _START_KEY.format(state=state),
         _TTL,
-        json.dumps({"provider": payload.provider, "mailbox_id": str(payload.mailbox_id) if payload.mailbox_id else None}),
+        json.dumps(
+            {
+                "provider": payload.provider,
+                "mailbox_id": str(payload.mailbox_id) if payload.mailbox_id else None,
+            }
+        ),
     )
 
     url = oauth_mail.build_authorize_url(
@@ -152,31 +158,41 @@ async def oauth_callback(
         logger.info("oauth_mail_denied", provider=provider, error=error)
         return _popup_page({"type": "oauth_error", "detail": f"Доступ не предоставлен ({error})"})
     if not code or not state:
-        return _popup_page({"type": "oauth_error", "detail": "Отсутствует code/state в ответе провайдера"})
+        return _popup_page(
+            {"type": "oauth_error", "detail": "Отсутствует code/state в ответе провайдера"}
+        )
 
     r = get_async_redis()
     key = _START_KEY.format(state=state)
     raw = await r.get(key)
     await r.delete(key)
     if not raw:
-        return _popup_page({"type": "oauth_error", "detail": "Сессия подключения истекла, попробуйте снова"})
+        return _popup_page(
+            {"type": "oauth_error", "detail": "Сессия подключения истекла, попробуйте снова"}
+        )
 
     started = json.loads(raw)
     if started["provider"] != provider:
-        return _popup_page({"type": "oauth_error", "detail": "Провайдер не совпадает с началом сессии"})
+        return _popup_page(
+            {"type": "oauth_error", "detail": "Провайдер не совпадает с началом сессии"}
+        )
 
     try:
         app_cfg = await _app_config(db, provider)
         from app.ai.secret_box import decrypt as decrypt_client_secret
 
         result = await oauth_mail.exchange_code(
-            provider, app_cfg.client_id,
+            provider,
+            app_cfg.client_id,
             decrypt_client_secret(app_cfg.client_secret_encrypted or ""),
-            app_cfg.redirect_uri, code,
+            app_cfg.redirect_uri,
+            code,
         )
     except Exception as exc:  # noqa: BLE001 — surfaced to the popup, not raised to the browser as a 500
         logger.error("oauth_mail_exchange_failed", provider=provider, error=str(exc))
-        return _popup_page({"type": "oauth_error", "detail": f"Не удалось обменять код на токен: {exc}"})
+        return _popup_page(
+            {"type": "oauth_error", "detail": f"Не удалось обменять код на токен: {exc}"}
+        )
 
     mailbox_id = started.get("mailbox_id")
     if mailbox_id:
@@ -184,10 +200,12 @@ async def oauth_callback(
         if not mb:
             return _popup_page({"type": "oauth_error", "detail": "Почтовый ящик уже удалён"})
         if not result.refresh_token and not mb.oauth_refresh_token_encrypted:
-            return _popup_page({
-                "type": "oauth_error",
-                "detail": "Провайдер не выдал refresh-токен. Отзовите доступ приложению в настройках аккаунта и подключите заново.",
-            })
+            return _popup_page(
+                {
+                    "type": "oauth_error",
+                    "detail": "Провайдер не выдал refresh-токен. Отзовите доступ приложению в настройках аккаунта и подключите заново.",
+                }
+            )
         mb.auth_method = "oauth2"
         mb.oauth_provider = provider
         if result.refresh_token:
@@ -206,22 +224,26 @@ async def oauth_callback(
         return _popup_page({"type": "oauth_complete", "mailbox_id": mailbox_id})
 
     if not result.refresh_token:
-        return _popup_page({
-            "type": "oauth_error",
-            "detail": "Провайдер не выдал refresh-токен, попробуйте подключить ещё раз",
-        })
+        return _popup_page(
+            {
+                "type": "oauth_error",
+                "detail": "Провайдер не выдал refresh-токен, попробуйте подключить ещё раз",
+            }
+        )
 
     await r.setex(
         _RESULT_KEY.format(state=state),
         _TTL,
-        json.dumps({
-            "provider": provider,
-            "email": result.email,
-            "refresh_token_encrypted": encrypt_password(result.refresh_token),
-            "access_token_encrypted": encrypt_password(result.access_token),
-            "expires_at": result.expires_at.isoformat(),
-            "scope": result.scope,
-        }),
+        json.dumps(
+            {
+                "provider": provider,
+                "email": result.email,
+                "refresh_token_encrypted": encrypt_password(result.refresh_token),
+                "access_token_encrypted": encrypt_password(result.access_token),
+                "expires_at": result.expires_at.isoformat(),
+                "scope": result.scope,
+            }
+        ),
     )
     logger.info("oauth_mail_pending", provider=provider, session=state[:8])
     return _popup_page({"type": "oauth_complete", "session": state})

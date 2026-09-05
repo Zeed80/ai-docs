@@ -110,7 +110,7 @@ async def test_blank_sheet_with_frame_adds_editable_stamp_entities(client, fake_
 
     dxf = fake_storage[gen["params"]["dxf_path"]]
     assert b"LINE" in dxf
-    assert "12345".encode() in dxf
+    assert b"12345" in dxf
 
 
 @pytest.mark.asyncio
@@ -129,13 +129,20 @@ async def test_patch_ir_add_update_delete_cycle(client, fake_storage):
 
     add = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "segment",
-            "p1": {"x": 100, "y": 100},
-            "p2": {"x": 500, "y": 100},
-            "line_class": "contour",
-            "width_class": "main",
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "segment",
+                        "p1": {"x": 100, "y": 100},
+                        "p2": {"x": 500, "y": 100},
+                        "line_class": "contour",
+                        "width_class": "main",
+                    },
+                }
+            ]
+        },
     )
     assert add.status_code == 200
     body = add.json()
@@ -146,16 +153,27 @@ async def test_patch_ir_add_update_delete_cycle(client, fake_storage):
     assert body["ir"]["entities"][0]["origin"] == "human"
 
     # DXF was re-rendered for the new revision and contains our line.
-    dxf = fake_storage[body["summary"] and (await client.get(f"/api/image-gen/{gen_id}")).json()["params"]["dxf_path"]]
+    dxf = fake_storage[
+        body["summary"]
+        and (await client.get(f"/api/image-gen/{gen_id}")).json()["params"]["dxf_path"]
+    ]
     assert b"LINE" in dxf
 
     upd = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "update", "entity_id": entity_id, "entity": {
-            "type": "segment",
-            "p1": {"x": 100, "y": 100},
-            "p2": {"x": 500, "y": 300},
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "update",
+                    "entity_id": entity_id,
+                    "entity": {
+                        "type": "segment",
+                        "p1": {"x": 100, "y": 100},
+                        "p2": {"x": 500, "y": 300},
+                    },
+                }
+            ]
+        },
     )
     assert upd.status_code == 200
     assert upd.json()["revision"] == 2
@@ -206,27 +224,35 @@ async def test_patch_ir_set_sheet_format_rejects_unknown(client, fake_storage):
 async def test_patch_ir_set_title_block_fills_stamp(client, fake_storage):
     # C3: filling the основная надпись stores structured fields, renders the
     # stamp labels, and clears the "title block incomplete" ЕСКД finding.
-    gen = (await client.post(
-        "/api/image-gen/blank-sheet", json={"format": "A4", "with_frame": True}
-    )).json()
+    gen = (
+        await client.post("/api/image-gen/blank-sheet", json={"format": "A4", "with_frame": True})
+    ).json()
     gen_id = gen["id"]
 
     resp = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "set_title_block", "title_block": {
-            "designation": "АБВГ.301256.001",
-            "name": "Вал ведущий",
-            "material": "Сталь 45 ГОСТ 1050",
-            "scale": "1:2",
-            "mass_kg": 3.4,
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "set_title_block",
+                    "title_block": {
+                        "designation": "АБВГ.301256.001",
+                        "name": "Вал ведущий",
+                        "material": "Сталь 45 ГОСТ 1050",
+                        "scale": "1:2",
+                        "mass_kg": 3.4,
+                    },
+                }
+            ]
+        },
     )
     assert resp.status_code == 200
     body = resp.json()
     ir = body["ir"]
     assert ir["sheet"]["title_block"]["fields"]["designation"] == "АБВГ.301256.001"
     labels = [
-        e for e in ir["entities"]
+        e
+        for e in ir["entities"]
         if e["type"] == "text" and "title_block_text" in (e.get("evidence") or [])
     ]
     assert any(e["text"] == "Вал ведущий" for e in labels)
@@ -245,27 +271,49 @@ async def test_patch_ir_add_annotation_and_export(client, fake_storage):
     gen_id = gen["id"]
     resp = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "annotation", "kind": "roughness", "value": "3.2",
-            "position": {"x": 100, "y": 100}, "line_class": "dim", "width_class": "thin",
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "annotation",
+                        "kind": "roughness",
+                        "value": "3.2",
+                        "position": {"x": 100, "y": 100},
+                        "line_class": "dim",
+                        "width_class": "thin",
+                    },
+                }
+            ]
+        },
     )
     assert resp.status_code == 200
     ir = resp.json()["ir"]
     ann = [e for e in ir["entities"] if e["type"] == "annotation"]
     assert len(ann) == 1 and ann[0]["kind"] == "roughness"
     dxf = fake_storage[(await client.get(f"/api/image-gen/{gen_id}")).json()["params"]["dxf_path"]]
-    assert "Ra 3.2".encode() in dxf
+    assert b"Ra 3.2" in dxf
 
 
 async def test_patch_ir_add_invalid_annotation_flags_validation(client, fake_storage):
     gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
     resp = await client.patch(
         f"/api/image-gen/{gen['id']}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "annotation", "kind": "roughness", "value": "3.0",  # off-series
-            "position": {"x": 100, "y": 100}, "line_class": "dim", "width_class": "thin",
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "annotation",
+                        "kind": "roughness",
+                        "value": "3.0",  # off-series
+                        "position": {"x": 100, "y": 100},
+                        "line_class": "dim",
+                        "width_class": "thin",
+                    },
+                }
+            ]
+        },
     )
     assert resp.status_code == 200
     codes = {i["code"] for i in resp.json()["ir"]["validation"]["issues"]}
@@ -286,10 +334,20 @@ async def test_release_manifest_requires_two_independent_signatures(
     gen_id = gen["id"]
     await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "segment", "p1": {"x": 100, "y": 100}, "p2": {"x": 500, "y": 100},
-            "line_class": "contour", "width_class": "main",
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "segment",
+                        "p1": {"x": 100, "y": 100},
+                        "p2": {"x": 500, "y": 100},
+                        "line_class": "contour",
+                        "width_class": "main",
+                    },
+                }
+            ]
+        },
     )
     blocked = await client.get(f"/api/image-gen/{gen_id}/release-manifest")
     assert blocked.status_code == 409
@@ -310,10 +368,20 @@ async def test_release_manifest_requires_two_independent_signatures(
 async def _add_segment(client, gen_id, p1, p2):
     resp = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "segment", "p1": p1, "p2": p2,
-            "line_class": "contour", "width_class": "main",
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "segment",
+                        "p1": p1,
+                        "p2": p2,
+                        "line_class": "contour",
+                        "width_class": "main",
+                    },
+                }
+            ]
+        },
     )
     return resp.json()["ir"]["entities"][-1]["id"]
 
@@ -359,10 +427,16 @@ async def test_patch_ir_mirror_reflects_across_line(client, fake_storage):
 
     resp = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{
-            "op": "mirror", "entity_id": eid,
-            "mirror_p1": {"x": 0, "y": 0}, "mirror_p2": {"x": 0, "y": 1},
-        }]},
+        json={
+            "ops": [
+                {
+                    "op": "mirror",
+                    "entity_id": eid,
+                    "mirror_p1": {"x": 0, "y": 0},
+                    "mirror_p2": {"x": 0, "y": 1},
+                }
+            ]
+        },
     )
     assert resp.status_code == 200
     entity = resp.json()["ir"]["entities"][0]
@@ -422,9 +496,18 @@ async def test_patch_ir_fillet_rejects_non_segment_entities(client, fake_storage
     e1 = await _add_segment(client, gen_id, {"x": 0, "y": 0}, {"x": 100, "y": 0})
     circ = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "circle", "center": {"x": 50, "y": 50}, "radius": 10,
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "circle",
+                        "center": {"x": 50, "y": 50},
+                        "radius": 10,
+                    },
+                }
+            ]
+        },
     )
     e2 = circ.json()["ir"]["entities"][-1]["id"]
 
@@ -476,16 +559,23 @@ async def test_patch_ir_add_dimension_renders_native_dxf_dimension(client, fake_
 
     add = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "dimension",
-            "kind": "diameter",
-            "p1": {"x": 100, "y": 100},
-            "p2": {"x": 300, "y": 100},
-            "text": "40",
-            "value_mm": 40.0,
-            "line_class": "dim",
-            "width_class": "thin",
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "dimension",
+                        "kind": "diameter",
+                        "p1": {"x": 100, "y": 100},
+                        "p2": {"x": 300, "y": 100},
+                        "text": "40",
+                        "value_mm": 40.0,
+                        "line_class": "dim",
+                        "width_class": "thin",
+                    },
+                }
+            ]
+        },
     )
     assert add.status_code == 200
     body = add.json()
@@ -509,20 +599,40 @@ async def test_ir_revert_restores_earlier_revision_as_new_one(client, fake_stora
 
     add1 = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "segment", "p1": {"x": 0, "y": 0}, "p2": {"x": 10, "y": 0},
-            "line_class": "contour", "width_class": "main",
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "segment",
+                        "p1": {"x": 0, "y": 0},
+                        "p2": {"x": 10, "y": 0},
+                        "line_class": "contour",
+                        "width_class": "main",
+                    },
+                }
+            ]
+        },
     )
     assert add1.json()["revision"] == 1
     assert len(add1.json()["ir"]["entities"]) == 1
 
     add2 = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "segment", "p1": {"x": 0, "y": 20}, "p2": {"x": 10, "y": 20},
-            "line_class": "contour", "width_class": "main",
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "segment",
+                        "p1": {"x": 0, "y": 20},
+                        "p2": {"x": 10, "y": 20},
+                        "line_class": "contour",
+                        "width_class": "main",
+                    },
+                }
+            ]
+        },
     )
     assert add2.json()["revision"] == 2
     assert len(add2.json()["ir"]["entities"]) == 2
@@ -615,13 +725,21 @@ async def test_patch_ir_batch_failure_saves_no_partial_revision(client, fake_sto
 
     resp = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [
-            {"op": "add", "entity": {
-                "type": "segment", "p1": {"x": 0, "y": 0}, "p2": {"x": 10, "y": 0},
-                "line_class": "contour", "width_class": "main",
-            }},
-            {"op": "confirm", "entity_id": "does-not-exist"},
-        ]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "segment",
+                        "p1": {"x": 0, "y": 0},
+                        "p2": {"x": 10, "y": 0},
+                        "line_class": "contour",
+                        "width_class": "main",
+                    },
+                },
+                {"op": "confirm", "entity_id": "does-not-exist"},
+            ]
+        },
     )
     assert resp.status_code == 404
 
@@ -659,9 +777,18 @@ async def test_accept_vectorize_gate_and_validation(client, fake_storage, db_ses
 
     edited = await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "segment", "p1": {"x": 10, "y": 10}, "p2": {"x": 50, "y": 10},
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "segment",
+                        "p1": {"x": 10, "y": 10},
+                        "p2": {"x": 50, "y": 10},
+                    },
+                }
+            ]
+        },
     )
     assert edited.status_code == 200
     refreshed = await client.get(f"/api/image-gen/{gen_id}")
@@ -697,7 +824,9 @@ async def test_promote_to_drawing_requires_acceptance_first(client, fake_storage
 
 
 @pytest.mark.asyncio
-async def test_promote_to_drawing_creates_drawing_with_hole_features(client, fake_storage, db_session):
+async def test_promote_to_drawing_creates_drawing_with_hole_features(
+    client, fake_storage, db_session
+):
     """Ф6.2 end-to-end: blank sheet -> draw a circle via PATCH -> accept ->
     promote -> a real Drawing with a hole DrawingFeature exists in the DB."""
     import uuid as _uuid
@@ -710,10 +839,20 @@ async def test_promote_to_drawing_creates_drawing_with_hole_features(client, fak
     gen_id = gen["id"]
     await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "circle", "center": {"x": 200, "y": 300}, "radius": 30,
-            "line_class": "contour", "width_class": "main",
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "circle",
+                        "center": {"x": 200, "y": 300},
+                        "radius": 30,
+                        "line_class": "contour",
+                        "width_class": "main",
+                    },
+                }
+            ]
+        },
     )
     await _mark_full_check_current(db_session, gen_id)
     await client.post(f"/api/image-gen/{gen_id}/accept-vectorize")
@@ -727,16 +866,20 @@ async def test_promote_to_drawing_creates_drawing_with_hole_features(client, fak
     assert drawing is not None
     assert drawing.metadata_["source_generation_id"] == gen_id
     features = (
-        await db_session.execute(sa.select(DrawingFeature).where(DrawingFeature.drawing_id == drawing.id))
-    ).scalars().all()
+        (
+            await db_session.execute(
+                sa.select(DrawingFeature).where(DrawingFeature.drawing_id == drawing.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert len(features) == 1
     assert features[0].feature_type == "hole"
 
 
 @pytest.mark.asyncio
 async def test_accept_vectorize_blocked_by_validation_errors(client, fake_storage, db_session):
-    import uuid as _uuid
-
     from app.db.models import ImageGeneration, ImageGenStatus
 
     gen = ImageGeneration(
@@ -760,7 +903,9 @@ async def test_full_check_merges_llm_issues_into_a_new_revision(client, fake_sto
 
     async def _fake_llm_review(png_bytes, **kwargs):
         return [
-            ValidationIssueIR(code="NORMCONTROL_LLM", severity="warn", message_ru="нет базы", level=6),
+            ValidationIssueIR(
+                code="NORMCONTROL_LLM", severity="warn", message_ru="нет базы", level=6
+            ),
         ]
 
     monkeypatch.setattr("app.ai.cad_validate.run_llm_review_levels", _fake_llm_review)
@@ -770,10 +915,20 @@ async def test_full_check_merges_llm_issues_into_a_new_revision(client, fake_sto
     # blank-sheet has no scale issue (scale is known), but add a segment so there's SOME level-1..5 signal to preserve.
     await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "segment", "p1": {"x": 0, "y": 0}, "p2": {"x": 1, "y": 1},  # tiny -> GEOM_DEGENERATE
-            "line_class": "contour", "width_class": "main",
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "segment",
+                        "p1": {"x": 0, "y": 0},
+                        "p2": {"x": 1, "y": 1},  # tiny -> GEOM_DEGENERATE
+                        "line_class": "contour",
+                        "width_class": "main",
+                    },
+                }
+            ]
+        },
     )
 
     resp = await client.post(f"/api/image-gen/{gen_id}/ir/full-check")
@@ -802,9 +957,7 @@ async def test_spec_full_check_compares_source_with_generated_render(
         return []
 
     monkeypatch.setattr("app.ai.cad_validate.run_llm_review_levels", _paired_review)
-    gen_out = (await client.post(
-        "/api/image-gen/blank-sheet", json={"format": "A4"}
-    )).json()
+    gen_out = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
     gen = await db_session.get(ImageGeneration, uuid.UUID(gen_out["id"]))
     assert gen is not None and gen.result_path
     fake_storage["source/spec.png"] = b"source-png"
@@ -857,9 +1010,7 @@ async def test_accept_vectorize_refuses_a_solid_with_an_unconfirmed_guess(
         return []
 
     monkeypatch.setattr("app.ai.cad_validate.run_llm_review_levels", _paired_review)
-    gen_out = (await client.post(
-        "/api/image-gen/blank-sheet", json={"format": "A4"}
-    )).json()
+    gen_out = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
     gen = await db_session.get(ImageGeneration, uuid.UUID(gen_out["id"]))
     assert gen is not None and gen.result_path
     fake_storage["source/spec.png"] = b"source-png"
@@ -887,16 +1038,12 @@ async def test_accept_vectorize_refuses_a_solid_with_an_unconfirmed_guess(
 
 
 @pytest.mark.asyncio
-async def test_spec_full_check_refuses_to_run_without_source(
-    client, fake_storage, db_session
-):
+async def test_spec_full_check_refuses_to_run_without_source(client, fake_storage, db_session):
     import uuid
 
     from app.db.models import ImageGeneration
 
-    gen_out = (await client.post(
-        "/api/image-gen/blank-sheet", json={"format": "A4"}
-    )).json()
+    gen_out = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
     gen = await db_session.get(ImageGeneration, uuid.UUID(gen_out["id"]))
     assert gen is not None
     gen.params = {**(gen.params or {}), "vectorize_method": "spec"}
@@ -929,18 +1076,14 @@ async def test_full_check_is_fail_closed_when_local_model_is_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_accept_vectorize_rejects_unresolved_source_regions(
-    client, fake_storage, db_session
-):
+async def test_accept_vectorize_rejects_unresolved_source_regions(client, fake_storage, db_session):
     import uuid
 
     from app.ai.cad_ir.schema import SourceRegion, UnresolvedRegion
     from app.db.models import ImageGeneration
     from app.services import cad_ir_store
 
-    gen_out = (await client.post(
-        "/api/image-gen/blank-sheet", json={"format": "A4"}
-    )).json()
+    gen_out = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
     gen = await db_session.get(ImageGeneration, uuid.UUID(gen_out["id"]))
     revision = await cad_ir_store.latest_revision(db_session, gen.id)
     ir = cad_ir_store.load_ir(revision)
@@ -973,9 +1116,7 @@ async def test_spec_accept_requires_current_paired_source_comparison(
 
     from app.db.models import ImageGeneration
 
-    gen_out = (await client.post(
-        "/api/image-gen/blank-sheet", json={"format": "A4"}
-    )).json()
+    gen_out = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
     gen = await db_session.get(ImageGeneration, uuid.UUID(gen_out["id"]))
     assert gen is not None
     gen.params = {
@@ -1000,14 +1141,20 @@ async def test_spec_accept_requires_current_paired_source_comparison(
 
 
 @pytest.mark.asyncio
-async def test_full_check_replaces_stale_llm_issues_not_accumulates(client, fake_storage, monkeypatch):
+async def test_full_check_replaces_stale_llm_issues_not_accumulates(
+    client, fake_storage, monkeypatch
+):
     from app.ai.cad_ir.schema import ValidationIssueIR
 
     calls = {"n": 0}
 
     async def _fake_llm_review(png_bytes, **kwargs):
         calls["n"] += 1
-        return [ValidationIssueIR(code="VLM_CRITIC", severity="info", message_ru=f"проверка {calls['n']}", level=7)]
+        return [
+            ValidationIssueIR(
+                code="VLM_CRITIC", severity="info", message_ru=f"проверка {calls['n']}", level=7
+            )
+        ]
 
     monkeypatch.setattr("app.ai.cad_validate.run_llm_review_levels", _fake_llm_review)
 
@@ -1016,7 +1163,9 @@ async def test_full_check_replaces_stale_llm_issues_not_accumulates(client, fake
 
     await client.post(f"/api/image-gen/{gen_id}/ir/full-check")
     resp2 = await client.post(f"/api/image-gen/{gen_id}/ir/full-check")
-    critic_issues = [i for i in resp2.json()["ir"]["validation"]["issues"] if i["code"] == "VLM_CRITIC"]
+    critic_issues = [
+        i for i in resp2.json()["ir"]["validation"]["issues"] if i["code"] == "VLM_CRITIC"
+    ]
     assert len(critic_issues) == 1  # not 2 — the stale one from the first call was replaced
 
 
@@ -1041,14 +1190,26 @@ async def test_full_check_resolves_norm_citations_against_ingested_corpus(
     gen_id = gen["id"]
     await client.patch(
         f"/api/image-gen/{gen_id}/ir",
-        json={"ops": [{"op": "add", "entity": {
-            "type": "segment", "p1": {"x": 0, "y": 0}, "p2": {"x": 100, "y": 0},
-            "line_class": "axis", "width_class": "main",  # -> ESKD_LINE_WEIGHT
-        }}]},
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "entity": {
+                        "type": "segment",
+                        "p1": {"x": 0, "y": 0},
+                        "p2": {"x": 100, "y": 0},
+                        "line_class": "axis",
+                        "width_class": "main",  # -> ESKD_LINE_WEIGHT
+                    },
+                }
+            ]
+        },
     )
 
     resp = await client.post(f"/api/image-gen/{gen_id}/ir/full-check")
-    issue = next(i for i in resp.json()["ir"]["validation"]["issues"] if i["code"] == "ESKD_LINE_WEIGHT")
+    issue = next(
+        i for i in resp.json()["ir"]["validation"]["issues"] if i["code"] == "ESKD_LINE_WEIGHT"
+    )
     assert issue["norm_clause_text"] == "ГОСТ 2.303-68 — Линии"
 
 

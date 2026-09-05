@@ -1,7 +1,7 @@
 """Tests for new technology API endpoints (Epic 7)."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -18,8 +18,8 @@ from app.db.models import (
     SurfaceMachiningSpec,
 )
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 async def analyzed_drawing(db_session: AsyncSession):
@@ -32,13 +32,11 @@ async def analyzed_drawing(db_session: AsyncSession):
     db_session.add(d)
     await db_session.flush()
 
-    for i, ftype in enumerate(
-        [DrawingFeatureType.hole, DrawingFeatureType.surface]
-    ):
+    for i, ftype in enumerate([DrawingFeatureType.hole, DrawingFeatureType.surface]):
         feat = DrawingFeature(
             drawing_id=d.id,
             feature_type=ftype,
-            name=f"Элемент {i+1}",
+            name=f"Элемент {i + 1}",
             confidence=0.9,
             ai_raw={"nominal_mm": 30.0 + i * 10, "roughness_ra": 1.6},
         )
@@ -91,6 +89,7 @@ async def plan_with_operations(db_session: AsyncSession, process_plan):
 
 # ── POST generate-from-drawing ─────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_generate_tp_from_drawing_creates_plan(
     client: AsyncClient, analyzed_drawing: Drawing
@@ -126,6 +125,7 @@ async def test_generate_tp_missing_drawing_id(client: AsyncClient):
 
 # ── POST analyze-surfaces ─────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_analyze_surfaces_returns_specs(
     client: AsyncClient, plan_with_operations: ManufacturingProcessPlan, analyzed_drawing: Drawing
@@ -147,13 +147,27 @@ async def test_analyze_surfaces_returns_specs(
         ),
         patch(
             "app.api.technology.save_surface_specs",
-            return_value=[MagicMock(id=uuid.uuid4(), surface_type="hole", machining_method="boring",
-                                    machining_stage="finish", nominal_mm=30.0, roughness_ra=1.6,
-                                    fit_system=None, confidence=0.9)],
+            return_value=[
+                MagicMock(
+                    id=uuid.uuid4(),
+                    surface_type="hole",
+                    machining_method="boring",
+                    machining_stage="finish",
+                    nominal_mm=30.0,
+                    roughness_ra=1.6,
+                    fit_system=None,
+                    confidence=0.9,
+                )
+            ],
         ),
         patch(
             "app.api.technology.recommend_blank",
-            return_value={"blank_type": "прокат", "utilization_factor": 0.75, "confidence": 0.8, "reasoning": "test"},
+            return_value={
+                "blank_type": "прокат",
+                "utilization_factor": 0.75,
+                "confidence": 0.8,
+                "reasoning": "test",
+            },
         ),
     ):
         resp = await client.post(
@@ -168,6 +182,7 @@ async def test_analyze_surfaces_returns_specs(
 
 
 # ── POST normcontrol ──────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_normcontrol_returns_checks(
@@ -199,6 +214,7 @@ async def test_normcontrol_status_is_passed_or_failed(
 
 
 # ── POST normcontrol resolve ───────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_normcontrol_resolve_check(
@@ -232,13 +248,12 @@ async def test_normcontrol_resolve_check(
 
 # ── GET surface-specs ─────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_surface_specs_list_empty(
     client: AsyncClient, process_plan: ManufacturingProcessPlan
 ):
-    resp = await client.get(
-        f"/api/technology/process-plans/{process_plan.id}/surface-specs"
-    )
+    resp = await client.get(f"/api/technology/process-plans/{process_plan.id}/surface-specs")
     assert resp.status_code == 200
     data = resp.json()
     assert "items" in data
@@ -264,9 +279,7 @@ async def test_surface_specs_list_returns_items(
     db_session.add(spec)
     await db_session.commit()
 
-    resp = await client.get(
-        f"/api/technology/process-plans/{process_plan.id}/surface-specs"
-    )
+    resp = await client.get(f"/api/technology/process-plans/{process_plan.id}/surface-specs")
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 1
@@ -274,6 +287,7 @@ async def test_surface_specs_list_returns_items(
 
 
 # ── POST approve gate ─────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_approve_blocked_when_normcontrol_failed(

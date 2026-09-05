@@ -18,7 +18,6 @@ from app.api.computer_use import _host_allowed
 from app.domain.work_orders import claim_ready_step, create_single_step_plan, create_work_order
 from app.tasks.work_orders import ApprovalRequiredError, execute_claimed_step
 
-
 # ── _host_allowed wildcard ────────────────────────────────────────────────
 
 
@@ -47,7 +46,9 @@ class TestHostAllowedWildcard:
 
 @pytest.mark.asyncio
 async def test_web_discover_requires_a_grant(client: AsyncClient):
-    created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})
+    created = await client.post(
+        "/api/work-orders", json={"objective": "Найди каталоги поставщиков"}
+    )
     assert created.status_code == 201
     order_id = created.json()["id"]
 
@@ -60,11 +61,18 @@ async def test_web_discover_requires_a_grant(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_web_discover_fetches_only_allowed_hosts_and_skips_the_rest(client: AsyncClient):
-    created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})
+    created = await client.post(
+        "/api/work-orders", json={"objective": "Найди каталоги поставщиков"}
+    )
     order_id = created.json()["id"]
     granted = await client.post(
         f"/api/work-orders/{order_id}/computer-grants",
-        json={"actions": ["browser_fetch"], "allowed_hosts": ["acme.example"], "max_actions": 10, "reason": "test"},
+        json={
+            "actions": ["browser_fetch"],
+            "allowed_hosts": ["acme.example"],
+            "max_actions": 10,
+            "reason": "test",
+        },
     )
     assert granted.status_code == 201, granted.text
 
@@ -79,8 +87,13 @@ async def test_web_discover_fetches_only_allowed_hosts_and_skips_the_rest(client
         ],
     )
     fetch_response = WebFetchResponse(
-        url="https://acme.example/catalog", final_url="https://acme.example/catalog",
-        status=200, title="ACME Catalog", text="каталог инструмента", truncated=False, diagnostics=[],
+        url="https://acme.example/catalog",
+        final_url="https://acme.example/catalog",
+        status=200,
+        title="ACME Catalog",
+        text="каталог инструмента",
+        truncated=False,
+        diagnostics=[],
     )
 
     with (
@@ -104,22 +117,34 @@ async def test_web_discover_fetches_only_allowed_hosts_and_skips_the_rest(client
 
 @pytest.mark.asyncio
 async def test_web_discover_wildcard_grant_fetches_any_host(client: AsyncClient):
-    created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})
+    created = await client.post(
+        "/api/work-orders", json={"objective": "Найди каталоги поставщиков"}
+    )
     order_id = created.json()["id"]
     granted = await client.post(
         f"/api/work-orders/{order_id}/computer-grants",
-        json={"actions": ["browser_fetch"], "allowed_hosts": ["*"], "max_actions": 10, "reason": "exploratory"},
+        json={
+            "actions": ["browser_fetch"],
+            "allowed_hosts": ["*"],
+            "max_actions": 10,
+            "reason": "exploratory",
+        },
     )
     assert granted.status_code == 201, granted.text
 
     from app.api.web_search import WebFetchResponse, WebSearchResponse
 
     search_response = WebSearchResponse(
-        query="q", provider="searxng",
+        query="q",
+        provider="searxng",
         results=[_mock_search_result_pydantic("https://never-seen-before.example/x", "s")],
     )
     fetch_response = WebFetchResponse(
-        url="https://never-seen-before.example/x", status=200, title="T", text="body", diagnostics=[],
+        url="https://never-seen-before.example/x",
+        status=200,
+        title="T",
+        text="body",
+        diagnostics=[],
     )
 
     with (
@@ -147,22 +172,33 @@ async def test_web_discover_success_drafts_a_connector_for_the_domain(
     from app.api.web_search import WebFetchResponse, WebSearchResponse
     from app.db.models import SourceConnector
 
-    created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})
+    created = await client.post(
+        "/api/work-orders", json={"objective": "Найди каталоги поставщиков"}
+    )
     order_id = created.json()["id"]
     granted = await client.post(
         f"/api/work-orders/{order_id}/computer-grants",
-        json={"actions": ["browser_fetch"], "allowed_hosts": ["*"], "max_actions": 5, "reason": "test"},
+        json={
+            "actions": ["browser_fetch"],
+            "allowed_hosts": ["*"],
+            "max_actions": 5,
+            "reason": "test",
+        },
     )
     assert granted.status_code == 201
 
     search_response = WebSearchResponse(
-        query="q", provider="searxng",
+        query="q",
+        provider="searxng",
         results=[_mock_search_result_pydantic("https://haltec.ru/catalog", "s")],
     )
     fetch_response = WebFetchResponse(
-        url="https://haltec.ru/catalog", status=200, title="Haltec",
+        url="https://haltec.ru/catalog",
+        status=200,
+        title="Haltec",
         text="каталог режущего инструмента " * 10,  # well over the usefulness floor
-        truncated=False, diagnostics=[],
+        truncated=False,
+        diagnostics=[],
     )
     with (
         patch("app.api.web_search.execute_web_search", new=AsyncMock(return_value=search_response)),
@@ -194,20 +230,32 @@ async def test_web_discover_short_content_does_not_draft_a_connector(
     from app.api.web_search import WebFetchResponse, WebSearchResponse
     from app.db.models import SourceConnector
 
-    created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})
+    created = await client.post(
+        "/api/work-orders", json={"objective": "Найди каталоги поставщиков"}
+    )
     order_id = created.json()["id"]
     granted = await client.post(
         f"/api/work-orders/{order_id}/computer-grants",
-        json={"actions": ["browser_fetch"], "allowed_hosts": ["*"], "max_actions": 5, "reason": "test"},
+        json={
+            "actions": ["browser_fetch"],
+            "allowed_hosts": ["*"],
+            "max_actions": 5,
+            "reason": "test",
+        },
     )
     assert granted.status_code == 201
 
     search_response = WebSearchResponse(
-        query="q", provider="searxng",
+        query="q",
+        provider="searxng",
         results=[_mock_search_result_pydantic("https://thin.example/x", "s")],
     )
     fetch_response = WebFetchResponse(
-        url="https://thin.example/x", status=200, title="T", text="каталог", diagnostics=[],
+        url="https://thin.example/x",
+        status=200,
+        title="T",
+        text="каталог",
+        diagnostics=[],
     )
     with (
         patch("app.api.web_search.execute_web_search", new=AsyncMock(return_value=search_response)),
@@ -234,21 +282,33 @@ async def test_web_discover_failure_updates_an_existing_connector(
     from app.api.web_search import WebFetchResponse, WebSearchResponse
     from app.db.models import SourceConnector
 
-    created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})
+    created = await client.post(
+        "/api/work-orders", json={"objective": "Найди каталоги поставщиков"}
+    )
     order_id = created.json()["id"]
     granted = await client.post(
         f"/api/work-orders/{order_id}/computer-grants",
-        json={"actions": ["browser_fetch"], "allowed_hosts": ["*"], "max_actions": 5, "reason": "test"},
+        json={
+            "actions": ["browser_fetch"],
+            "allowed_hosts": ["*"],
+            "max_actions": 5,
+            "reason": "test",
+        },
     )
     assert granted.status_code == 201
 
     search_response = WebSearchResponse(
-        query="q", provider="searxng",
+        query="q",
+        provider="searxng",
         results=[_mock_search_result_pydantic("https://betar.ru/catalog", "s")],
     )
     fetch_response = WebFetchResponse(
-        url="https://betar.ru/catalog", status=200, title="Betar",
-        text="каталог фрез и свёрл " * 10, truncated=False, diagnostics=[],
+        url="https://betar.ru/catalog",
+        status=200,
+        title="Betar",
+        text="каталог фрез и свёрл " * 10,
+        truncated=False,
+        diagnostics=[],
     )
     with (
         patch("app.api.web_search.execute_web_search", new=AsyncMock(return_value=search_response)),
@@ -262,11 +322,14 @@ async def test_web_discover_failure_updates_an_existing_connector(
 
     # Second call to the same domain fails outright.
     search_response_2 = WebSearchResponse(
-        query="q", provider="searxng",
+        query="q",
+        provider="searxng",
         results=[_mock_search_result_pydantic("https://betar.ru/other-page", "s")],
     )
     with (
-        patch("app.api.web_search.execute_web_search", new=AsyncMock(return_value=search_response_2)),
+        patch(
+            "app.api.web_search.execute_web_search", new=AsyncMock(return_value=search_response_2)
+        ),
         patch("app.api.web_search.fetch_page", new=AsyncMock(side_effect=RuntimeError("timeout"))),
     ):
         second = await client.post(
@@ -287,18 +350,26 @@ async def test_web_discover_failure_updates_an_existing_connector(
 
 @pytest.mark.asyncio
 async def test_web_discover_stops_fetching_once_budget_exhausted(client: AsyncClient):
-    created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})
+    created = await client.post(
+        "/api/work-orders", json={"objective": "Найди каталоги поставщиков"}
+    )
     order_id = created.json()["id"]
     granted = await client.post(
         f"/api/work-orders/{order_id}/computer-grants",
-        json={"actions": ["browser_fetch"], "allowed_hosts": ["*"], "max_actions": 1, "reason": "tight budget"},
+        json={
+            "actions": ["browser_fetch"],
+            "allowed_hosts": ["*"],
+            "max_actions": 1,
+            "reason": "tight budget",
+        },
     )
     assert granted.status_code == 201, granted.text
 
     from app.api.web_search import WebFetchResponse, WebSearchResponse
 
     search_response = WebSearchResponse(
-        query="q", provider="searxng",
+        query="q",
+        provider="searxng",
         results=[
             _mock_search_result_pydantic("https://a.example/1", "a"),
             _mock_search_result_pydantic("https://b.example/2", "b"),
@@ -326,15 +397,25 @@ async def test_web_discover_stops_fetching_once_budget_exhausted(client: AsyncCl
 
 @pytest.mark.asyncio
 async def test_web_discover_search_error_does_not_fail_the_whole_call(client: AsyncClient):
-    created = await client.post("/api/work-orders", json={"objective": "Найди каталоги поставщиков"})
+    created = await client.post(
+        "/api/work-orders", json={"objective": "Найди каталоги поставщиков"}
+    )
     order_id = created.json()["id"]
     granted = await client.post(
         f"/api/work-orders/{order_id}/computer-grants",
-        json={"actions": ["browser_fetch"], "allowed_hosts": ["*"], "max_actions": 5, "reason": "test"},
+        json={
+            "actions": ["browser_fetch"],
+            "allowed_hosts": ["*"],
+            "max_actions": 5,
+            "reason": "test",
+        },
     )
     assert granted.status_code == 201
 
-    with patch("app.api.web_search.execute_web_search", new=AsyncMock(side_effect=RuntimeError("searx down"))):
+    with patch(
+        "app.api.web_search.execute_web_search",
+        new=AsyncMock(side_effect=RuntimeError("searx down")),
+    ):
         resp = await client.post(
             "/api/computer-use/web-discover",
             json={"work_order_id": order_id, "queries": ["q1"]},
@@ -446,12 +527,12 @@ async def test_non_computer_use_approval_required_does_not_send_the_grant_notifi
         "app.tasks.work_orders._execute_step_kind",
         new=AsyncMock(side_effect=ApprovalRequiredError("invoices", "approve", {})),
     ):
-        await execute_claimed_step(step_id, attempt_id, schedule_verification=False, session_factory=factory)
+        await execute_claimed_step(
+            step_id, attempt_id, schedule_verification=False, session_factory=factory
+        )
 
     async with factory() as db:
         notif = (
-            await db.execute(
-                select(Notification).where(Notification.entity_id == order_id)
-            )
+            await db.execute(select(Notification).where(Notification.entity_id == order_id))
         ).scalar_one_or_none()
         assert notif is None

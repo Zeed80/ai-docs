@@ -62,19 +62,25 @@ def test_diameter_matches_circle_in_orthogonal_view():
     # Front view labels Ø40; top view shows a circle of radius 20px at
     # scale 1.0 mm/px → Ø40. They correspond.
     front = ViewGeometry(label="Спереди", projection="front", scale=1.0, diameters_mm=[40.0])
-    top = ViewGeometry(label="Сверху", projection="top", scale=1.0,
-                       circles=[ViewCircle(cx=50, cy=50, r=20)])
+    top = ViewGeometry(
+        label="Сверху", projection="top", scale=1.0, circles=[ViewCircle(cx=50, cy=50, r=20)]
+    )
     graph = build_correspondence_graph([front, top])
     assert "diameter" in _kinds(graph)
 
 
 def test_diameter_match_names_the_two_feature_ids():
     front = ViewGeometry(
-        label="Спереди", projection="front", scale=1.0,
-        diameters_mm=[40.0], diameter_feature_ids=["0:cross_holes:0"],
+        label="Спереди",
+        projection="front",
+        scale=1.0,
+        diameters_mm=[40.0],
+        diameter_feature_ids=["0:cross_holes:0"],
     )
     top = ViewGeometry(
-        label="Сверху", projection="top", scale=1.0,
+        label="Сверху",
+        projection="top",
+        scale=1.0,
         circles=[ViewCircle(cx=50, cy=50, r=20, feature_id="0:cross_holes:0")],
     )
     graph = build_correspondence_graph([front, top])
@@ -87,8 +93,9 @@ def test_diameter_match_without_ids_leaves_feature_ids_none():
     # Same match as above, but neither side carries a feature id — the CV/
     # raster-only path this module also serves (multiview_reconstruct.py).
     front = ViewGeometry(label="Спереди", projection="front", scale=1.0, diameters_mm=[40.0])
-    top = ViewGeometry(label="Сверху", projection="top", scale=1.0,
-                       circles=[ViewCircle(cx=50, cy=50, r=20)])
+    top = ViewGeometry(
+        label="Сверху", projection="top", scale=1.0, circles=[ViewCircle(cx=50, cy=50, r=20)]
+    )
     graph = build_correspondence_graph([front, top])
     diameter_edges = [c for c in graph.correspondences if c.kind == "diameter"]
     assert diameter_edges
@@ -97,30 +104,40 @@ def test_diameter_match_without_ids_leaves_feature_ids_none():
 
 def test_diameter_mismatch_no_correspondence():
     front = ViewGeometry(label="Спереди", projection="front", scale=1.0, diameters_mm=[40.0])
-    top = ViewGeometry(label="Сверху", projection="top", scale=1.0,
-                       circles=[ViewCircle(cx=50, cy=50, r=5)])  # Ø10, not Ø40
+    top = ViewGeometry(
+        label="Сверху", projection="top", scale=1.0, circles=[ViewCircle(cx=50, cy=50, r=5)]
+    )  # Ø10, not Ø40
     graph = build_correspondence_graph([front, top])
     assert "diameter" not in _kinds(graph)
 
 
 def test_hidden_contour_matches_visible_circle():
     side = ViewGeometry(label="Сбоку", projection="side", has_hidden=True)
-    front = ViewGeometry(label="Спереди", projection="front",
-                         circles=[ViewCircle(cx=10, cy=10, r=5)])
+    front = ViewGeometry(
+        label="Спереди", projection="front", circles=[ViewCircle(cx=10, cy=10, r=5)]
+    )
     graph = build_correspondence_graph([side, front])
     assert "hidden_visible" in _kinds(graph)
 
 
 def test_confirmed_view_pairs_collects_confirming_edges():
-    front = ViewGeometry(label="Спереди", projection="front", scale=1.0,
-                         diameters_mm=[40.0], bbox=(0, 0, 100, 60))
-    top = ViewGeometry(label="Сверху", projection="top", scale=1.0,
-                       circles=[ViewCircle(cx=50, cy=50, r=20)], bbox=(0, 80, 100, 140))
+    front = ViewGeometry(
+        label="Спереди", projection="front", scale=1.0, diameters_mm=[40.0], bbox=(0, 0, 100, 60)
+    )
+    top = ViewGeometry(
+        label="Сверху",
+        projection="top",
+        scale=1.0,
+        circles=[ViewCircle(cx=50, cy=50, r=20)],
+        bbox=(0, 80, 100, 140),
+    )
     graph = build_correspondence_graph([front, top])
     assert tuple(sorted(("Спереди", "Сверху"))) in graph.confirmed_view_pairs
     # scale edges do not count as a confirming pair
-    scale_only = build_correspondence_graph([
-        ViewGeometry(label="X", projection="front", scale=0.5),
-        ViewGeometry(label="Y", projection="isometric", scale=0.5),
-    ])
+    scale_only = build_correspondence_graph(
+        [
+            ViewGeometry(label="X", projection="front", scale=0.5),
+            ViewGeometry(label="Y", projection="isometric", scale=0.5),
+        ]
+    )
     assert scale_only.confirmed_view_pairs == set()

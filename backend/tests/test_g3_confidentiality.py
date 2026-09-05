@@ -37,8 +37,10 @@ async def test_router_blocks_cloud_for_confidential():
     from app.ai.router import AIRequest
 
     request = AIRequest(
-        task="engineering_reasoning", prompt="секретный чертёж",
-        confidential=True, allow_cloud=True,
+        task="engineering_reasoning",
+        prompt="секретный чертёж",
+        confidential=True,
+        allow_cloud=True,
     )
     # the effective policy collapses allow_cloud under confidentiality
     assert request.confidential is True
@@ -102,7 +104,10 @@ async def test_audit_writer_persists_agent_tool_call(db_session):
     await db_session.commit()
     row = (
         await db_session.execute(
-            select(AuditLog).where(AuditLog.action == "agent.tool_call").order_by(AuditLog.timestamp.desc()).limit(1)
+            select(AuditLog)
+            .where(AuditLog.action == "agent.tool_call")
+            .order_by(AuditLog.timestamp.desc())
+            .limit(1)
         )
     ).scalar_one()
     assert row.details["reason"] == "тест"

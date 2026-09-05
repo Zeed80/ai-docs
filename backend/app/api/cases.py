@@ -12,7 +12,6 @@ from sqlalchemy.orm import selectinload
 from app.audit.service import log_action
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo
-from app.domain.access import apply_visibility
 from app.db.models import (
     Approval,
     ApprovalStatus,
@@ -64,7 +63,11 @@ class AddDocumentRequest(BaseModel):
 
 
 async def _get_case(db: AsyncSession, case_id: uuid.UUID) -> WorkCase:
-    case = await db.get(WorkCase, case_id, options=[selectinload(WorkCase.documents).selectinload(CaseDocument.document)])
+    case = await db.get(
+        WorkCase,
+        case_id,
+        options=[selectinload(WorkCase.documents).selectinload(CaseDocument.document)],
+    )
     if not case:
         raise HTTPException(404, detail="Case not found")
     return case
@@ -94,15 +97,21 @@ async def _build_timeline(db: AsyncSession, case_id: uuid.UUID) -> list[dict]:
 
 
 async def _build_approval_gates(db: AsyncSession, case_id: uuid.UUID) -> list[dict]:
-    stmt = select(Approval).where(
-        Approval.entity_type == "case",
-        Approval.entity_id == case_id,
-    ).order_by(Approval.created_at.desc())
+    stmt = (
+        select(Approval)
+        .where(
+            Approval.entity_type == "case",
+            Approval.entity_id == case_id,
+        )
+        .order_by(Approval.created_at.desc())
+    )
     rows = (await db.execute(stmt)).scalars().all()
     return [
         {
             "id": str(r.id),
-            "action_type": r.action_type.value if hasattr(r.action_type, "value") else str(r.action_type),
+            "action_type": r.action_type.value
+            if hasattr(r.action_type, "value")
+            else str(r.action_type),
             "status": r.status.value if hasattr(r.status, "value") else str(r.status),
             "requested_by": r.requested_by,
             "context": r.context or {},
@@ -143,16 +152,24 @@ async def create_case(
     # Creator is the owning member.
     db.add(CaseMember(case_id=case.id, user_sub=actor, role="owner", added_by=actor))
 
-    db.add(AuditTimelineEvent(
+    db.add(
+        AuditTimelineEvent(
+            entity_type="case",
+            entity_id=case.id,
+            event_type="case_created",
+            actor=actor,
+            summary=f"Кейс создан: {body.title}",
+            details={"customer": body.customer},
+        )
+    )
+    await log_action(
+        db,
+        action="case.create",
         entity_type="case",
         entity_id=case.id,
-        event_type="case_created",
-        actor=actor,
-        summary=f"Кейс создан: {body.title}",
-        details={"customer": body.customer},
-    ))
-    await log_action(db, action="case.create", entity_type="case", entity_id=case.id,
-                     user_id=actor, details={"title": body.title})
+        user_id=actor,
+        details={"title": body.title},
+    )
     await db.commit()
     await db.refresh(case)
 
@@ -180,8 +197,10 @@ async def list_cases(
     from app.domain.access import visibility_filter
 
     clause = await visibility_filter(
-        db, current_user,
-        owner_col=WorkCase.created_by, department_col=WorkCase.department_id,
+        db,
+        current_user,
+        owner_col=WorkCase.created_by,
+        department_col=WorkCase.department_id,
     )
     if clause is not None:
         member_cases = select(CaseMember.case_id).where(CaseMember.user_sub == current_user.sub)
@@ -204,7 +223,9 @@ async def get_case(case_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> Ca
         {
             "id": str(cd.document.id),
             "file_name": cd.document.file_name,
-            "status": cd.document.status.value if hasattr(cd.document.status, "value") else str(cd.document.status),
+            "status": cd.document.status.value
+            if hasattr(cd.document.status, "value")
+            else str(cd.document.status),
             "doc_type": cd.document.doc_type,
             "added_at": cd.added_at.isoformat(),
         }
@@ -252,18 +273,33 @@ async def add_document(
     db.add(cd)
 
     doc_status = doc.status.value if hasattr(doc.status, "value") else str(doc.status)
-    event_type = f"document_{doc_status}" if doc_status in ("suspicious", "quarantined") else "document_added"
-    db.add(AuditTimelineEvent(
-        entity_type="case",
-        entity_id=case_id,
-        event_type=event_type,
-        actor=actor,
-        summary=f"Документ добавлен: {doc.file_name}",
-        details={"document_id": str(body.document_id), "file_name": doc.file_name, "status": doc_status},
-    ))
+    event_type = (
+        f"document_{doc_status}"
+        if doc_status in ("suspicious", "quarantined")
+        else "document_added"
+    )
+    db.add(
+        AuditTimelineEvent(
+            entity_type="case",
+            entity_id=case_id,
+            event_type=event_type,
+            actor=actor,
+            summary=f"Документ добавлен: {doc.file_name}",
+            details={
+                "document_id": str(body.document_id),
+                "file_name": doc.file_name,
+                "status": doc_status,
+            },
+        )
+    )
     await db.commit()
 
-    return {"ok": True, "case_id": str(case_id), "document_id": str(body.document_id), "event_type": event_type}
+    return {
+        "ok": True,
+        "case_id": str(case_id),
+        "document_id": str(body.document_id),
+        "event_type": event_type,
+    }
 
 
 @router.get("/{case_id}/documents")
@@ -274,7 +310,9 @@ async def list_case_documents(case_id: uuid.UUID, db: AsyncSession = Depends(get
         {
             "id": str(cd.document.id),
             "file_name": cd.document.file_name,
-            "status": cd.document.status.value if hasattr(cd.document.status, "value") else str(cd.document.status),
+            "status": cd.document.status.value
+            if hasattr(cd.document.status, "value")
+            else str(cd.document.status),
             "doc_type": cd.document.doc_type,
             "mime_type": cd.document.mime_type,
             "added_at": cd.added_at.isoformat(),
@@ -303,6 +341,7 @@ async def decide_case_approval(
 ) -> dict:
     """Approve or reject a case approval gate. Requires manager or admin role."""
     from app.auth.models import UserRole
+
     if UserRole.admin not in current_user.roles and UserRole.manager not in current_user.roles:
         raise HTTPException(status_code=403, detail="Requires manager or admin role")
 
@@ -322,16 +361,24 @@ async def decide_case_approval(
     approval.decision_comment = comment
 
     event_type = "approval_gate_approved" if approved else "approval_gate_rejected"
-    db.add(AuditTimelineEvent(
+    db.add(
+        AuditTimelineEvent(
+            entity_type="case",
+            entity_id=case_id,
+            event_type=event_type,
+            actor=actor,
+            summary=f"Решение по approval: {'одобрено' if approved else 'отклонено'}",
+            details={"approval_id": str(approval_id), "comment": comment},
+        )
+    )
+    await log_action(
+        db,
+        action="case.approval_decide",
         entity_type="case",
         entity_id=case_id,
-        event_type=event_type,
-        actor=actor,
-        summary=f"Решение по approval: {'одобрено' if approved else 'отклонено'}",
-        details={"approval_id": str(approval_id), "comment": comment},
-    ))
-    await log_action(db, action="case.approval_decide", entity_type="case", entity_id=case_id,
-                     user_id=actor, details={"approval_id": str(approval_id), "approved": approved})
+        user_id=actor,
+        details={"approval_id": str(approval_id), "approved": approved},
+    )
     await db.commit()
     return {"ok": True, "status": approval.status.value, "event_type": event_type}
 
@@ -385,8 +432,8 @@ async def list_case_members(
 ) -> list[CaseMemberOut]:
     await _get_case(db, case_id)
     rows = (
-        await db.execute(select(CaseMember).where(CaseMember.case_id == case_id))
-    ).scalars().all()
+        (await db.execute(select(CaseMember).where(CaseMember.case_id == case_id))).scalars().all()
+    )
     return [CaseMemberOut.model_validate(m) for m in rows]
 
 
@@ -417,21 +464,29 @@ async def add_case_member(
         )
         db.add(member)
 
-    db.add(AuditTimelineEvent(
-        entity_type="case", entity_id=case_id, event_type="member_added",
-        actor=current_user.sub,
-        summary=f"Участник добавлен: {body.user_sub} ({body.role})",
-    ))
+    db.add(
+        AuditTimelineEvent(
+            entity_type="case",
+            entity_id=case_id,
+            event_type="member_added",
+            actor=current_user.sub,
+            summary=f"Участник добавлен: {body.user_sub} ({body.role})",
+        )
+    )
     # Notify the added collaborator.
     from app.db.models import NotificationType
     from app.services.notifications import create_notification
 
     if body.user_sub != current_user.sub:
         await create_notification(
-            db=db, user_sub=body.user_sub, type=NotificationType.system,
+            db=db,
+            user_sub=body.user_sub,
+            type=NotificationType.system,
             title="Вас добавили в кейс",
             body=case.title,
-            entity_type="case", entity_id=case_id, action_url=f"/cases/{case_id}",
+            entity_type="case",
+            entity_id=case_id,
+            action_url=f"/cases/{case_id}",
         )
     await db.commit()
     await db.refresh(member)
@@ -447,16 +502,19 @@ async def remove_case_member(
 ) -> None:
     member = (
         await db.execute(
-            select(CaseMember).where(
-                CaseMember.case_id == case_id, CaseMember.user_sub == user_sub
-            )
+            select(CaseMember).where(CaseMember.case_id == case_id, CaseMember.user_sub == user_sub)
         )
     ).scalar_one_or_none()
     if member is None:
         raise HTTPException(404, detail="Member not found")
     await db.delete(member)
-    db.add(AuditTimelineEvent(
-        entity_type="case", entity_id=case_id, event_type="member_removed",
-        actor=current_user.sub, summary=f"Участник удалён: {user_sub}",
-    ))
+    db.add(
+        AuditTimelineEvent(
+            entity_type="case",
+            entity_id=case_id,
+            event_type="member_removed",
+            actor=current_user.sub,
+            summary=f"Участник удалён: {user_sub}",
+        )
+    )
     await db.commit()

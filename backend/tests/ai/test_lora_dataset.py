@@ -47,8 +47,9 @@ def test_build_pair_rejects_aspect_mismatch(tmp_path: pathlib.Path):
     Image.fromarray(_drawing(600, 450)).save(target)
     Image.fromarray(_drawing(600, 320)).save(control)  # squashed layout
 
-    reason = core.build_pair(target, control, "чертёж", tmp_path / "images",
-                             tmp_path / "control", "pair0")
+    reason = core.build_pair(
+        target, control, "чертёж", tmp_path / "images", tmp_path / "control", "pair0"
+    )
     assert reason and "aspect" in reason
 
 
@@ -60,8 +61,9 @@ def test_build_pair_accepts_good_pair_and_writes_prompt(tmp_path: pathlib.Path):
     Image.fromarray(_drawing()).save(target)
     Image.fromarray(_drawing()).save(control)
 
-    reason = core.build_pair(target, control, "фасад здания", tmp_path / "images",
-                             tmp_path / "control", "pair0")
+    reason = core.build_pair(
+        target, control, "фасад здания", tmp_path / "images", tmp_path / "control", "pair0"
+    )
     assert reason is None
     prompt = (tmp_path / "images" / "pair0.txt").read_text(encoding="utf-8")
     assert "фасад здания" in prompt and "clean black and white" in prompt
@@ -151,7 +153,7 @@ def test_wrap_in_eskd_sheet(tmp_path: pathlib.Path):
     assert ((img[:, : int(w * 0.1)] < 128).sum(axis=0)).max() > h * 0.5  # левая
     assert ((img[: int(h * 0.1), :] < 128).sum(axis=1)).max() > w * 0.5  # верхняя
     # Штамп: плотность линий в правом нижнем углу.
-    corner = img[int(h * 0.85):, int(w * 0.55):]
+    corner = img[int(h * 0.85) :, int(w * 0.55) :]
     assert (corner < 128).mean() > 0.005
 
 

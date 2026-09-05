@@ -7,7 +7,12 @@ from app.ai.cad_validate import validate_ir
 
 
 def _ir(*entities):
-    return CadIR(source=SourceInfo(image_width=100, image_height=100, kind="blank"), scale=1, scale_source="manual", entities=list(entities))
+    return CadIR(
+        source=SourceInfo(image_width=100, image_height=100, kind="blank"),
+        scale=1,
+        scale_source="manual",
+        entities=list(entities),
+    )
 
 
 def test_dof_of_single_horizontal_segment():
@@ -48,10 +53,23 @@ def test_satisfied_constraints_leave_no_constraint_errors():
     second = Segment(id="b", p1=Point(x=10, y=0), p2=Point(x=10, y=10))
     ir = _ir(first, second)
     ir.constraints = [
-        GeometricConstraint(kind="coincident", refs=[SketchPointRef(entity_id="a", point="p2"), SketchPointRef(entity_id="b", point="p1")]),
+        GeometricConstraint(
+            kind="coincident",
+            refs=[
+                SketchPointRef(entity_id="a", point="p2"),
+                SketchPointRef(entity_id="b", point="p1"),
+            ],
+        ),
         GeometricConstraint(kind="horizontal", entity_ids=["a"]),
         GeometricConstraint(kind="vertical", entity_ids=["b"]),
-        GeometricConstraint(kind="distance", refs=[SketchPointRef(entity_id="a", point="p1"), SketchPointRef(entity_id="a", point="p2")], parameter="width"),
+        GeometricConstraint(
+            kind="distance",
+            refs=[
+                SketchPointRef(entity_id="a", point="p1"),
+                SketchPointRef(entity_id="a", point="p2"),
+            ],
+            parameter="width",
+        ),
     ]
     ir.parameters = [CadParameter(name="width", value=10)]
     report = validate_ir(ir)

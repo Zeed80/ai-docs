@@ -3,7 +3,9 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
-pytestmark = pytest.mark.skip(reason="/api/agent/tools and /api/agent/scenarios endpoints not yet implemented")
+pytestmark = pytest.mark.skip(
+    reason="/api/agent/tools and /api/agent/scenarios endpoints not yet implemented"
+)
 
 
 @pytest.mark.asyncio
@@ -17,7 +19,9 @@ async def test_agent_tools_are_allowlisted(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_smart_ingest_denies_unknown_tools_and_enforces_step_limit(client: AsyncClient) -> None:
+async def test_smart_ingest_denies_unknown_tools_and_enforces_step_limit(
+    client: AsyncClient,
+) -> None:
     case_response = await client.post("/api/cases", json={"title": "Agent ingest"})
     case = case_response.json()
     response = await client.post(
@@ -52,7 +56,9 @@ async def test_smart_ingest_denies_unknown_tools_and_enforces_step_limit(client:
 
 
 @pytest.mark.asyncio
-async def test_agent_scenario_creates_approval_gate_for_external_actions(client: AsyncClient) -> None:
+async def test_agent_scenario_creates_approval_gate_for_external_actions(
+    client: AsyncClient,
+) -> None:
     case_response = await client.post("/api/cases", json={"title": "Agent approval"})
     case = case_response.json()
     response = await client.post(

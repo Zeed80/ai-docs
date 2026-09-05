@@ -14,35 +14,35 @@ try:
     import openpyxl
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-    from openpyxl.utils import get_column_letter
+    from openpyxl.utils import get_column_letter  # noqa: F401 — проба доступности
 
     _HAS_OPENPYXL = True
 except ImportError:
     _HAS_OPENPYXL = False
 
 # Row type codes per ГОСТ 3.1118
-_ROW_M = "М"   # материал / заготовка
-_ROW_O = "О"   # операция
-_ROW_B = "Б"   # оснастка
-_ROW_T = "Т"   # режущий инструмент / режимы
+_ROW_M = "М"  # материал / заготовка
+_ROW_O = "О"  # операция
+_ROW_B = "Б"  # оснастка
+_ROW_T = "Т"  # режущий инструмент / режимы
 
 # GOST MK column widths (approximate, columns A-U based on ГОСТ 3.1118)
 _MK_COL_WIDTHS: list[tuple[str, float]] = [
-    ("A", 4),   # Тип строки
-    ("B", 6),   # Цех
-    ("C", 6),   # Уч.
-    ("D", 6),   # РМ
-    ("E", 8),   # Опер.
+    ("A", 4),  # Тип строки
+    ("B", 6),  # Цех
+    ("C", 6),  # Уч.
+    ("D", 6),  # РМ
+    ("E", 8),  # Опер.
     ("F", 35),  # Наименование операции / материала
-    ("G", 8),   # Оборудование (код)
+    ("G", 8),  # Оборудование (код)
     ("H", 16),  # Оборудование (модель)
-    ("I", 8),   # СМ
-    ("J", 6),   # Проф.
-    ("K", 6),   # Разряд
-    ("L", 6),   # Кол-во
-    ("M", 8),   # Тпз, мин
-    ("N", 8),   # Тшт, мин
-    ("O", 8),   # Тшт-к, мин
+    ("I", 8),  # СМ
+    ("J", 6),  # Проф.
+    ("K", 6),  # Разряд
+    ("L", 6),  # Кол-во
+    ("M", 8),  # Тпз, мин
+    ("N", 8),  # Тшт, мин
+    ("O", 8),  # Тшт-к, мин
 ]
 
 _THIN = None  # filled after openpyxl import
@@ -62,7 +62,9 @@ def _init_styles():
     _OP_FILL = PatternFill("solid", fgColor="F2F2F2")
 
 
-def _cell(ws, row: int, col: int, value: Any = "", bold: bool = False, fill=None, wrap: bool = False):
+def _cell(
+    ws, row: int, col: int, value: Any = "", bold: bool = False, fill=None, wrap: bool = False
+):
     c = ws.cell(row=row, column=col, value=value)
     if _THIN:
         c.border = _THIN
@@ -126,9 +128,23 @@ class GostFormRenderer:
         row += 1
 
         # ── Column header row ─────────────────────────────────────────────
-        mk_headers = ["Тип", "Цех", "Уч", "РМ", "Опер.", "Наименование операции",
-                      "Оборуд.\n(код)", "Оборудование\n(модель)", "СМ", "Проф.", "Разр.",
-                      "Кол.", "Тпз\nмин", "Тшт\nмин", "Тшт-к\nмин"]
+        mk_headers = [
+            "Тип",
+            "Цех",
+            "Уч",
+            "РМ",
+            "Опер.",
+            "Наименование операции",
+            "Оборуд.\n(код)",
+            "Оборудование\n(модель)",
+            "СМ",
+            "Проф.",
+            "Разр.",
+            "Кол.",
+            "Тпз\nмин",
+            "Тшт\nмин",
+            "Тшт-к\nмин",
+        ]
         for col_idx, header in enumerate(mk_headers, start=1):
             _cell(ws, row, col_idx, header, bold=True, fill=_HEADER_FILL, wrap=True)
         ws.row_dimensions[row].height = 30
@@ -148,17 +164,17 @@ class GostFormRenderer:
 
             row_vals = [
                 _ROW_O,
-                "",   # цех
-                "",   # участок
-                "",   # рабочее место
+                "",  # цех
+                "",  # участок
+                "",  # рабочее место
                 f"{op.sequence_no:03d}",
                 op.name,
                 machine_code,
                 machine_model,
-                "",   # СМ
-                "",   # профессия
-                "",   # разряд
-                "",   # кол-во рабочих
+                "",  # СМ
+                "",  # профессия
+                "",  # разряд
+                "",  # кол-во рабочих
                 op.tpz_minutes or op.setup_minutes or "",
                 op.tsht_minutes or op.labor_minutes or "",
                 op.tsht_k_minutes or "",
@@ -177,8 +193,7 @@ class GostFormRenderer:
             if op.tooling_list:
                 _cell(ws, row, 1, _ROW_B)
                 tooling_str = "; ".join(
-                    f"{t.get('name', '')} {t.get('code', '')}"
-                    for t in (op.tooling_list or [])[:6]
+                    f"{t.get('name', '')} {t.get('code', '')}" for t in (op.tooling_list or [])[:6]
                 )
                 ws.merge_cells(f"B{row}:O{row}")
                 _cell(ws, row, 2, tooling_str, wrap=True)
@@ -240,19 +255,23 @@ class GostFormRenderer:
 
         row = 1
         ws.merge_cells(f"A{row}:H{row}")
-        ws.cell(row=row, column=1, value="ОПЕРАЦИОННАЯ КАРТА МЕХАНИЧЕСКОЙ ОБРАБОТКИ").font = Font(bold=True, size=10)
+        ws.cell(row=row, column=1, value="ОПЕРАЦИОННАЯ КАРТА МЕХАНИЧЕСКОЙ ОБРАБОТКИ").font = Font(
+            bold=True, size=10
+        )
         ws.cell(row=row, column=1).alignment = Alignment(horizontal="center")
         row += 1
 
         ws.merge_cells(f"A{row}:D{row}")
-        ws.cell(row=row, column=1, value=f"ГОСТ 3.1404  Форма 2").font = Font(size=8, italic=True)
+        ws.cell(row=row, column=1, value="ГОСТ 3.1404  Форма 2").font = Font(size=8, italic=True)
         row += 1
 
         info_rows = [
             (f"Изделие: {plan.product_name}", f"Обозначение: {plan.product_code or ''}"),
             (f"Материал: {plan.material or '—'}", f"Заготовка: {plan.blank_type or '—'}"),
-            (f"Операция {operation.sequence_no:03d}: {operation.name}",
-             f"Код: {operation.operation_code or operation.gost_operation_code or '—'}"),
+            (
+                f"Операция {operation.sequence_no:03d}: {operation.name}",
+                f"Код: {operation.operation_code or operation.gost_operation_code or '—'}",
+            ),
         ]
         for left, right in info_rows:
             ws.merge_cells(f"A{row}:D{row}")
@@ -270,7 +289,19 @@ class GostFormRenderer:
         row += 2
 
         # Transitions header
-        for col, header in enumerate(["№", "Код перехода", "Содержание перехода", "Т1 Режущий", "Т2 Вспом.", "Т3 Измер.", "То, мин", "Тв, мин"], start=1):
+        for col, header in enumerate(
+            [
+                "№",
+                "Код перехода",
+                "Содержание перехода",
+                "Т1 Режущий",
+                "Т2 Вспом.",
+                "Т3 Измер.",
+                "То, мин",
+                "Тв, мин",
+            ],
+            start=1,
+        ):
             c = ws.cell(row=row, column=col, value=header)
             c.font = Font(bold=True, size=8)
             c.fill = _HEADER_FILL
@@ -288,7 +319,9 @@ class GostFormRenderer:
             trans = trans.strip()
             if not trans:
                 continue
-            for col, val in enumerate([i, "", trans, "", "", "", to_per_step, tv_per_step], start=1):
+            for col, val in enumerate(
+                [i, "", trans, "", "", "", to_per_step, tv_per_step], start=1
+            ):
                 c = ws.cell(row=row, column=col, value=val)
                 c.font = Font(size=8)
                 c.border = _THIN
@@ -374,8 +407,16 @@ class GostFormRenderer:
                 new_ws.row_dimensions[row_dim_key].height = row_dim.height
 
         if "ОК" in forms:
-            machining_types = {"turning", "milling", "drilling", "grinding", "boring",
-                               "reaming", "honing", "broaching"}
+            machining_types = {
+                "turning",
+                "milling",
+                "drilling",
+                "grinding",
+                "boring",
+                "reaming",
+                "honing",
+                "broaching",
+            }
             for op in sorted(operations, key=lambda o: o.sequence_no):
                 if op.operation_type not in machining_types:
                     continue

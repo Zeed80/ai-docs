@@ -41,6 +41,8 @@ def _agent_headers() -> dict:
         headers["X-Acting-User"] = actor
     return headers
 
+
+from app.ai import route_table
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.agent_loop import AgentSession, execute_skill, extract_list_count
 from app.ai.audit import (
@@ -48,12 +50,23 @@ from app.ai.audit import (
     RETRYABLE,
     AuditCode,
     AuditIssue,
+)
+from app.ai.audit import (
     blocking as _blocking_issues,
+)
+from app.ai.audit import (
     codes as _issue_codes,
+)
+from app.ai.audit import (
     has_code as _has_code,
+)
+from app.ai.audit import (
     messages as _issue_messages,
+)
+from app.ai.audit import (
     retryable as _issues_retryable,
 )
+from app.ai.corrections import is_correction, learned_ops_for, record_correction
 from app.ai.degradation import log_degraded
 from app.ai.flow_awareness import format_flow_summary_human, get_flow_snapshot
 from app.ai.model_tier import (
@@ -65,7 +78,6 @@ from app.ai.model_tier import (
     score_complexity,
     should_use_cod,
 )
-from app.ai.corrections import is_correction, learned_ops_for, record_correction
 from app.ai.orchestrator_memory import (
     TurnFeedback,
     build_tool_preference_hint,
@@ -73,7 +85,6 @@ from app.ai.orchestrator_memory import (
     record_turn_feedback,
 )
 from app.ai.policy_engine import check_tool_execution
-from app.ai import route_table
 from app.ai.router import ai_router
 from app.ai.schemas import AIRequest, AITask, ChatMessage
 from app.domain.workspace import get_workspace_block, list_workspace_blocks, upsert_workspace_block
@@ -92,7 +103,7 @@ def invalidate_canvas_map_cache() -> None:
     route_table.invalidate_cache()
 
 
-def _response_budget_for(tier: "Tier", plan: "OrchestratorPlan") -> int:
+def _response_budget_for(tier: Tier, plan: OrchestratorPlan) -> int:
     """Per-turn response token budget from task complexity and output shape.
 
     Short chat answers stay cheap (fast on local models); reports/tables/documents
@@ -131,6 +142,7 @@ def _load_role_prompt(role: str) -> str:
     in gateway.yml) — the executor then runs with the base system prompt only.
     """
     from app.ai.gateway_config import gateway_config
+
     try:
         path = gateway_config.role_prompt_path(role)
         if not path or not path.exists():
@@ -145,6 +157,7 @@ def _load_role_prompt(role: str) -> str:
     except Exception as exc:
         log_degraded("orchestrator.role_prompt", exc, role=role)
         return ""
+
 
 # Specialist workers the secretary front-agent can dispatch to. Each role is
 # declared in gateway.yml (prompt + capability allowlist). The secretary itself
@@ -188,9 +201,7 @@ def _orchestrator_system() -> str:
 
     The persona name is the configured agent name (settings → default «Света»).
     """
-    base = _ORCHESTRATOR_SYSTEM_BASE.format(
-        agent_name=get_builtin_agent_config().agent_name
-    )
+    base = _ORCHESTRATOR_SYSTEM_BASE.format(agent_name=get_builtin_agent_config().agent_name)
     sections = route_table.prompt_sections()
     if sections:
         return f"{base}\n{sections}\n"
@@ -410,9 +421,7 @@ class AgentOrchestrator:
                 # Degraded mode: the LLM router gave no usable decision. Fall
                 # back to the heuristic planner so obvious table/workspace turns
                 # still reach the desktop instead of a blind chat answer.
-                await self._run_heuristic_degraded(
-                    content, config, turn_started_at, reasoning_mode
-                )
+                await self._run_heuristic_degraded(content, config, turn_started_at, reasoning_mode)
                 return
             await self._dispatch_decision(
                 content, decision, config, turn_started_at, reasoning_mode
@@ -471,28 +480,38 @@ class AgentOrchestrator:
                     audit = await self._audit_turn(plan, config)
                     await self._publish_audit(audit)
                     _record_feedback_async(
-                        content=content, plan=plan, trace=self._trace, audit=audit,
-                        retries=0, duration_ms=int((time.time() - turn_started_at) * 1000),
+                        content=content,
+                        plan=plan,
+                        trace=self._trace,
+                        audit=audit,
+                        retries=0,
+                        duration_ms=int((time.time() - turn_started_at) * 1000),
                     )
                     duration_ms = int((time.time() - turn_started_at) * 1000)
                     logger.info(
                         "agent_turn_complete",
-                        intent=plan.intent, reasoning_mode=reasoning_mode,
+                        intent=plan.intent,
+                        reasoning_mode=reasoning_mode,
                         plan_source="proactive_workspace",
                         tools_called=self._trace.tool_calls,
                         tool_count=len(self._trace.tool_calls),
                         parallel_used=self._trace.parallel_used,
                         errors=self._trace.errors,
                         workspace_required=plan.workspace.required,
-                        audit_passed=audit.passed, audit_issues=audit.issue_codes,
-                        retries=0, llm_calls=0, aux_llm_calls=self._aux_llm_calls,
+                        audit_passed=audit.passed,
+                        audit_issues=audit.issue_codes,
+                        retries=0,
+                        llm_calls=0,
+                        aux_llm_calls=self._aux_llm_calls,
                         duration_ms=duration_ms,
                     )
                     try:
                         from app.core.metrics import (
-                            agent_turns_total, agent_turn_duration_seconds,
                             agent_tool_calls_total,
+                            agent_turn_duration_seconds,
+                            agent_turns_total,
                         )
+
                         agent_turns_total.labels(
                             outcome="success" if audit.passed else "audit_failed"
                         ).inc()
@@ -512,13 +531,11 @@ class AgentOrchestrator:
         recipe_hint = ""
         if route_table.is_workspace_request(content) or tier >= Tier.SMALL:
             from app.ai import recipes as recipes_module
+
             recipe_hit = await recipes_module.find_recipe(content)
             if recipe_hit is not None:
                 recipe, score, margin = recipe_hit
-                if (
-                    score >= recipes_module.REPLAY_SCORE
-                    and recipe.status == "active"
-                ):
+                if score >= recipes_module.REPLAY_SCORE and recipe.status == "active":
                     slots = recipes_module.resolve_slots(recipe.param_slots, content)
                     # Component 2 — precision gate: ambiguity + intent-drift guard.
                     gate_ok, gate_reason = recipes_module.replay_gate_ok(
@@ -532,7 +549,9 @@ class AgentOrchestrator:
                     elif not gate_ok:
                         logger.info(
                             "recipe_replay_gated",
-                            recipe=str(recipe.id), reason=gate_reason, score=score,
+                            recipe=str(recipe.id),
+                            reason=gate_reason,
+                            score=score,
                         )
                 if score >= recipes_module.HINT_SCORE:
                     steps_text = " → ".join(
@@ -583,7 +602,7 @@ class AgentOrchestrator:
     async def _run_planned_turn(
         self,
         content: str,
-        plan: "OrchestratorPlan",
+        plan: OrchestratorPlan,
         config: BuiltinAgentConfig,
         turn_started_at: float,
         reasoning_mode: str,
@@ -611,8 +630,7 @@ class AgentOrchestrator:
         # historically-reliable tool is tried first (deterministic link from the
         # feedback memory to routing).
         if plan.worker.recommended_skills:
-            plan.worker.recommended_skills = rank_skills_by_success(
-                plan.worker.recommended_skills)
+            plan.worker.recommended_skills = rank_skills_by_success(plan.worker.recommended_skills)
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
 
@@ -633,9 +651,9 @@ class AgentOrchestrator:
         # whatever the router/planner explicitly recommended for THIS turn, so a
         # tool chosen by meaning is never hidden by a role allowlist chosen by job.
         self._executor.set_active_role(plan.worker.role)
-        self._executor.set_recommended_capabilities({
-            skill.split(".", 1)[0] for skill in plan.worker.recommended_skills
-        })
+        self._executor.set_recommended_capabilities(
+            {skill.split(".", 1)[0] for skill in plan.worker.recommended_skills}
+        )
         # Structured-data turns (spec_table) must not touch slow RAG tools — the
         # 35B worker otherwise "searches" for line items in documents (minutes).
         # Hard-hide them so it has no choice but to build the table from SQL.
@@ -643,8 +661,7 @@ class AgentOrchestrator:
         # worker otherwise "searches" for line items in documents (minutes). This
         # now keys off the router's grounding too, not just the spec-table canvas.
         structured_only = (
-            plan.workspace.canvas_id == "agent:spec-table"
-            or self._turn_grounding == "structured"
+            plan.workspace.canvas_id == "agent:spec-table" or self._turn_grounding == "structured"
         )
         if structured_only:
             self._executor.set_excluded_tools({"memory", "search", "documents"})
@@ -668,10 +685,7 @@ class AgentOrchestrator:
         # whenever a spec-table was actually published this turn — not only when the
         # PLAN's canvas was agent:spec-table (the worker often publishes there while
         # the plan guessed another canvas, which previously skipped reconcile).
-        if (
-            plan.workspace.canvas_id == "agent:spec-table"
-            or bool(self._trace.workspace_events)
-        ):
+        if plan.workspace.canvas_id == "agent:spec-table" or bool(self._trace.workspace_events):
             await self._reconcile_spec_table(content, config)
         audit = await self._audit_turn(plan, config)
         # Snapshot before any retry mutates `audit` — the reflection loop
@@ -684,12 +698,14 @@ class AgentOrchestrator:
             and self._can_retry_with_executor(plan, audit)
         ):
             retry_count += 1
-            await self._outer_send({
-                "type": "audit.retry_started",
-                "content": "Аудит: инструмент/вывод не соответствуют задаче, запускаю исправление.",
-                "audit": audit.model_dump(mode="json"),
-                "issue_codes": audit.issue_codes,
-            })
+            await self._outer_send(
+                {
+                    "type": "audit.retry_started",
+                    "content": "Аудит: инструмент/вывод не соответствуют задаче, запускаю исправление.",
+                    "audit": audit.model_dump(mode="json"),
+                    "issue_codes": audit.issue_codes,
+                }
+            )
             self._trace = _TurnTrace()
             self._workspace_before = _workspace_updated_at_snapshot()
             self._llm_calls += 1
@@ -757,7 +773,12 @@ class AgentOrchestrator:
             duration_ms=duration_ms,
         )
         try:
-            from app.core.metrics import agent_turns_total, agent_turn_duration_seconds, agent_tool_calls_total
+            from app.core.metrics import (
+                agent_tool_calls_total,
+                agent_turn_duration_seconds,
+                agent_turns_total,
+            )
+
             outcome = "success" if audit.passed else "audit_failed"
             agent_turns_total.labels(outcome=outcome).inc()
             agent_turn_duration_seconds.observe(duration_ms / 1000)
@@ -776,8 +797,8 @@ class AgentOrchestrator:
         content: str,
         config: BuiltinAgentConfig,
         turn_started_at: float,
-        decision: "TurnDecision",
-    ) -> "bool | str":
+        decision: TurnDecision,
+    ) -> bool | str:
         """Recipe replay/hint for the router path.
 
         Returns ``True`` if a recipe was replayed deterministically (turn done),
@@ -795,28 +816,25 @@ class AgentOrchestrator:
             slots = recipes_module.resolve_slots(
                 recipe.param_slots, content, extra_entities=decision.entities
             )
-            gate_ok, gate_reason = recipes_module.replay_gate_ok(
-                recipe, score, margin, content
-            )
+            gate_ok, gate_reason = recipes_module.replay_gate_ok(recipe, score, margin, content)
             # Channel-drift guard: don't replay a workspace recipe on a chat turn.
             rec_channel = getattr(recipe, "output_channel", None)
             router_confident = decision.confidence >= float(config.turn_router_min_confidence)
             if rec_channel and rec_channel != decision.output_channel and router_confident:
                 gate_ok, gate_reason = False, "channel_drift"
             if slots is not None and gate_ok:
-                if await self._replay_recipe(
-                    recipe, slots, content, config, turn_started_at
-                ):
+                if await self._replay_recipe(recipe, slots, content, config, turn_started_at):
                     return True
             elif not gate_ok:
                 logger.info(
                     "recipe_replay_gated",
-                    recipe=str(recipe.id), reason=gate_reason, score=score,
+                    recipe=str(recipe.id),
+                    reason=gate_reason,
+                    score=score,
                 )
         if score >= recipes_module.HINT_SCORE:
             steps_text = " → ".join(
-                f"{s.get('capability')}.{s.get('action') or 'call'}"
-                for s in (recipe.steps or [])
+                f"{s.get('capability')}.{s.get('action') or 'call'}" for s in (recipe.steps or [])
             )
             return (
                 f"Похожая задача уже решалась успешно шагами: {steps_text}. "
@@ -824,9 +842,7 @@ class AgentOrchestrator:
             )
         return ""
 
-    async def _decide_turn(
-        self, content: str, config: BuiltinAgentConfig
-    ) -> "TurnDecision":
+    async def _decide_turn(self, content: str, config: BuiltinAgentConfig) -> TurnDecision:
         """Route the turn via the LLM router (two-tier: fast → orchestrator model).
 
         Never falls back to keyword heuristics — on low confidence / failure it
@@ -836,9 +852,7 @@ class AgentOrchestrator:
 
         has_open_spec = _latest_spec_block() is not None
         fast = _registry_model_name(config.fast_model)
-        big = _registry_model_name(
-            config.orchestrator_model or config.worker_model or config.model
-        )
+        big = _registry_model_name(config.orchestrator_model or config.worker_model or config.model)
         min_conf = float(config.turn_router_min_confidence)
         # The router gets its own budget: sharing the planner's 8s default meant
         # a 27B model in the fast slot timed out on every single turn and the
@@ -894,10 +908,16 @@ class AgentOrchestrator:
         # degrade to the heuristic planner.
         if decision is not None and turn_router._looks_defaulted(decision):
             from app.domain.table_spec import is_spec_table_request
+
             if is_spec_table_request(content):
-                decision = decision.model_copy(update={
-                    "intent": "analytical_table", "output_channel": "workspace",
-                    "grounding": "structured", "confidence": 0.5})
+                decision = decision.model_copy(
+                    update={
+                        "intent": "analytical_table",
+                        "output_channel": "workspace",
+                        "grounding": "structured",
+                        "confidence": 0.5,
+                    }
+                )
                 source = "rescued_table"
                 logger.info("router_defaulted_rescued_table", content=content[:80])
             else:
@@ -922,9 +942,12 @@ class AgentOrchestrator:
         logger.info(
             "turn_router_decision",
             duration_ms=routing_ms,
-            intent=decision.intent, role=decision.role,
-            channel=decision.output_channel, grounding=decision.grounding,
-            confidence=decision.confidence, source=source,
+            intent=decision.intent,
+            role=decision.role,
+            channel=decision.output_channel,
+            grounding=decision.grounding,
+            confidence=decision.confidence,
+            source=source,
             recommended=[(r.capability, r.action) for r in decision.recommended],
         )
         return decision
@@ -965,7 +988,7 @@ class AgentOrchestrator:
     async def _dispatch_decision(
         self,
         content: str,
-        decision: "TurnDecision",
+        decision: TurnDecision,
         config: BuiltinAgentConfig,
         turn_started_at: float,
         reasoning_mode: str,
@@ -983,6 +1006,7 @@ class AgentOrchestrator:
         # RAG tools downstream (structured_only gate).
         if self._turn_grounding != "structured":
             from app.domain.table_spec import is_spec_table_request
+
             if is_spec_table_request(content):
                 self._turn_grounding = "structured"
                 logger.info("grounding_forced_structured", content=content[:80])
@@ -1006,9 +1030,13 @@ class AgentOrchestrator:
             # table_edit). Build a fresh analytical table instead of running a
             # confused "edit" plan that targets the wrong source.
             if _latest_spec_block() is None:
-                decision = decision.model_copy(update={
-                    "intent": "analytical_table", "output_channel": "workspace",
-                    "grounding": "structured"})
+                decision = decision.model_copy(
+                    update={
+                        "intent": "analytical_table",
+                        "output_channel": "workspace",
+                        "grounding": "structured",
+                    }
+                )
                 self._turn_grounding = "structured"
                 logger.info("table_edit_without_table_downgraded", content=content[:80])
 
@@ -1016,7 +1044,11 @@ class AgentOrchestrator:
         # tool-shaped intent instead of a keyword workspace check.
         recipe_hint = ""
         if decision.intent in (
-            "analytical_table", "document_op", "specialist", "answer_self", "count",
+            "analytical_table",
+            "document_op",
+            "specialist",
+            "answer_self",
+            "count",
         ):
             recipe_hint = await self._try_recipe_for_turn(
                 content, config, turn_started_at, decision
@@ -1051,19 +1083,23 @@ class AgentOrchestrator:
         if not snapshot:
             return False
 
-        await self._outer_send({
-            "type": "orchestrator.status",
-            "content": "Секретарь: отвечаю по состоянию документооборота.",
-            "plan_source": "direct",
-            "degraded": False,
-        })
+        await self._outer_send(
+            {
+                "type": "orchestrator.status",
+                "content": "Секретарь: отвечаю по состоянию документооборота.",
+                "plan_source": "direct",
+                "degraded": False,
+            }
+        )
         # UI continuity: the frontend renders worker.assigned as a status line.
-        await self._outer_send({
-            "type": "worker.assigned",
-            "content": "Исполнитель: secretary (прямой ответ, без LLM).",
-            "role": "secretary",
-            "skills": [],
-        })
+        await self._outer_send(
+            {
+                "type": "worker.assigned",
+                "content": "Исполнитель: secretary (прямой ответ, без LLM).",
+                "role": "secretary",
+                "skills": [],
+            }
+        )
         answer = format_flow_summary_human(snapshot)
         await self._outer_send({"type": "text", "content": answer})
         # Keep dialogue history and episodic memory coherent.
@@ -1087,6 +1123,7 @@ class AgentOrchestrator:
         )
         try:
             from app.core.metrics import agent_turn_duration_seconds, agent_turns_total
+
             agent_turns_total.labels(outcome="success").inc()
             agent_turn_duration_seconds.observe(duration_ms / 1000)
         except Exception:
@@ -1123,6 +1160,7 @@ class AgentOrchestrator:
             return False  # capability not exposed / registry mode → defer to LLM
 
         from app.ai.result_cache import cache_get, cache_set
+
         cache_key = f"{intent.capability}:{intent.action}:{intent.search_term or ''}"
         answer = cache_get(cache_key)
         if answer is None:
@@ -1136,18 +1174,22 @@ class AgentOrchestrator:
                 answer = f"Всего {intent.entity_label}: {total}."
             cache_set(cache_key, answer)
 
-        await self._outer_send({
-            "type": "orchestrator.status",
-            "content": "Секретарь: считаю напрямую из данных.",
-            "plan_source": "direct",
-            "degraded": False,
-        })
-        await self._outer_send({
-            "type": "worker.assigned",
-            "content": "Исполнитель: secretary (прямой ответ, без LLM).",
-            "role": "secretary",
-            "skills": [],
-        })
+        await self._outer_send(
+            {
+                "type": "orchestrator.status",
+                "content": "Секретарь: считаю напрямую из данных.",
+                "plan_source": "direct",
+                "degraded": False,
+            }
+        )
+        await self._outer_send(
+            {
+                "type": "worker.assigned",
+                "content": "Исполнитель: secretary (прямой ответ, без LLM).",
+                "role": "secretary",
+                "skills": [],
+            }
+        )
         await self._outer_send({"type": "text", "content": answer})
         try:
             self._executor.record_external_turn(content, answer)
@@ -1169,6 +1211,7 @@ class AgentOrchestrator:
         )
         try:
             from app.core.metrics import agent_turn_duration_seconds, agent_turns_total
+
             agent_turns_total.labels(outcome="success").inc()
             agent_turn_duration_seconds.observe(duration_ms / 1000)
         except Exception:
@@ -1191,7 +1234,8 @@ class AgentOrchestrator:
         from app.domain.table_spec import TableSpec, parse_patch_command
 
         blocks = [
-            b for b in list_workspace_blocks()
+            b
+            for b in list_workspace_blocks()
             if isinstance(b, dict) and isinstance(b.get("spec"), dict)
         ]
         if not blocks:
@@ -1218,12 +1262,14 @@ class AgentOrchestrator:
             "canvas_id": canvas_id,
             "ops": [op.model_dump(mode="json", exclude_none=True) for op in parsed.ops],
         }
-        await self._outer_send({
-            "type": "orchestrator.status",
-            "content": "Секретарь: правка таблицы распознана — применяю мгновенно (без LLM).",
-            "plan_source": "table_patch",
-            "degraded": False,
-        })
+        await self._outer_send(
+            {
+                "type": "orchestrator.status",
+                "content": "Секретарь: правка таблицы распознана — применяю мгновенно (без LLM).",
+                "plan_source": "table_patch",
+                "degraded": False,
+            }
+        )
         ok = await self._execute_workspace_spec(
             {"tool": "workspace__spec_table_patch", "path": tool_spec["path"], "args": args},
             config,
@@ -1261,6 +1307,7 @@ class AgentOrchestrator:
         )
         try:
             from app.core.metrics import agent_turn_duration_seconds, agent_turns_total
+
             agent_turns_total.labels(outcome="success").inc()
             agent_turn_duration_seconds.observe(duration_ms / 1000)
         except Exception:
@@ -1291,12 +1338,12 @@ class AgentOrchestrator:
             sheet_id = str((block or {}).get("sheet_id") or "")
         if not sheet_id:
             return False
-        block = get_workspace_block(f"sheet:{sheet_id}") or get_workspace_block(str(surface.get("id") or ""))
+        block = get_workspace_block(f"sheet:{sheet_id}") or get_workspace_block(
+            str(surface.get("id") or "")
+        )
         columns = block.get("columns") if isinstance(block, dict) else None
         column_keys = [
-            str(c.get("key"))
-            for c in columns or []
-            if isinstance(c, dict) and c.get("key")
+            str(c.get("key")) for c in columns or [] if isinstance(c, dict) and c.get("key")
         ]
         parsed = _parse_sheet_edit_command(content, column_keys)
         if parsed is None:
@@ -1313,7 +1360,10 @@ class AgentOrchestrator:
         approval_gates: set[str] = set(config.approval_gates or [])
         args = {"action": action, "sheet_id": sheet_id, **body}
         policy = check_tool_execution(
-            skill_name=tool_name, args=args, config=config, approval_gates=approval_gates,
+            skill_name=tool_name,
+            args=args,
+            config=config,
+            approval_gates=approval_gates,
         )
         if not policy.allowed or tool_name in approval_gates:
             reason = (
@@ -1321,30 +1371,36 @@ class AgentOrchestrator:
                 if tool_name in approval_gates
                 else policy.reason
             )
-            await self._outer_send({
-                "type": "orchestrator.direct_tool_blocked",
-                "content": (
-                    f"Оркестратор: инструмент {tool_name!r} заблокирован политикой — {reason}. "
-                    "Требуется явное подтверждение через интерфейс."
-                ),
-                "tool": tool_name,
-                "reason": reason,
-                "risk_level": policy.risk_level,
-            })
+            await self._outer_send(
+                {
+                    "type": "orchestrator.direct_tool_blocked",
+                    "content": (
+                        f"Оркестратор: инструмент {tool_name!r} заблокирован политикой — {reason}. "
+                        "Требуется явное подтверждение через интерфейс."
+                    ),
+                    "tool": tool_name,
+                    "reason": reason,
+                    "risk_level": policy.risk_level,
+                }
+            )
             return False
 
         self._workspace_before = _workspace_updated_at_snapshot()
-        await self._outer_send({
-            "type": "orchestrator.status",
-            "content": "Секретарь: правка листа распознана — применяю к активной таблице.",
-            "plan_source": "sheet_patch",
-            "degraded": False,
-        })
-        await self._record_orchestrator_tool_event({
-            "type": "tool_call",
-            "tool": "sheets",
-            "args": args,
-        })
+        await self._outer_send(
+            {
+                "type": "orchestrator.status",
+                "content": "Секретарь: правка листа распознана — применяю к активной таблице.",
+                "plan_source": "sheet_patch",
+                "degraded": False,
+            }
+        )
+        await self._record_orchestrator_tool_event(
+            {
+                "type": "tool_call",
+                "tool": "sheets",
+                "args": args,
+            }
+        )
         try:
             async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
                 resp = await client.post(
@@ -1357,17 +1413,21 @@ class AgentOrchestrator:
             log_degraded("orchestrator.sheet_patch", exc)
             return False
         if resp.status_code >= 400:
-            await self._record_orchestrator_tool_event({
+            await self._record_orchestrator_tool_event(
+                {
+                    "type": "tool_result",
+                    "tool": "sheets",
+                    "result": {"error": result.get("detail") or f"HTTP {resp.status_code}"},
+                }
+            )
+            return False
+        await self._record_orchestrator_tool_event(
+            {
                 "type": "tool_result",
                 "tool": "sheets",
-                "result": {"error": result.get("detail") or f"HTTP {resp.status_code}"},
-            })
-            return False
-        await self._record_orchestrator_tool_event({
-            "type": "tool_result",
-            "tool": "sheets",
-            "result": result,
-        })
+                "result": result,
+            }
+        )
         await self._outer_send({"type": "text", "content": label})
         try:
             self._executor.record_external_turn(content, label)
@@ -1417,6 +1477,7 @@ class AgentOrchestrator:
         # invoice_items and republish before the normal grouping/sort reconcile.
         try:
             from app.db.session import _get_session_factory
+
             async with _get_session_factory()() as _db:
                 corrected = await correct_category_error(_db, spec, content)
             if corrected is not None:
@@ -1427,23 +1488,39 @@ class AgentOrchestrator:
                 approval_gates: set[str] = set(config.approval_gates or [])
                 args = {"canvas_id": canvas_id, "spec": corrected.model_dump(mode="json")}
                 policy = check_tool_execution(
-                    skill_name=tool_name, args=args, config=config, approval_gates=approval_gates,
+                    skill_name=tool_name,
+                    args=args,
+                    config=config,
+                    approval_gates=approval_gates,
                 )
                 if not policy.allowed or tool_name in approval_gates:
                     logger.warning(
                         "orchestrator.category_correction_blocked",
-                        canvas=canvas_id, reason=policy.reason,
+                        canvas=canvas_id,
+                        reason=policy.reason,
                     )
                 else:
-                    async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+                    async with httpx.AsyncClient(
+                        timeout=float(config.backend_timeout_seconds)
+                    ) as client:
                         resp = await client.post(
                             f"{config.backend_url.rstrip('/')}/api/workspace/agent/spec-table",
-                            json=args, headers=_agent_headers())
+                            json=args,
+                            headers=_agent_headers(),
+                        )
                     if resp.status_code < 400 and (resp.json() or {}).get("status") == "published":
                         spec = corrected
-                        await self._outer_send({"type": "text", "content":
-                            "Поправил: искал товар в позициях счетов, а не в названиях поставщиков."})
-                        logger.info("category_error_corrected", canvas=canvas_id, term=str(corrected.filters))
+                        await self._outer_send(
+                            {
+                                "type": "text",
+                                "content": "Поправил: искал товар в позициях счетов, а не в названиях поставщиков.",
+                            }
+                        )
+                        logger.info(
+                            "category_error_corrected",
+                            canvas=canvas_id,
+                            term=str(corrected.filters),
+                        )
         except Exception as exc:
             log_degraded("orchestrator.category_correction", exc)
 
@@ -1471,11 +1548,16 @@ class AgentOrchestrator:
         tool_name = "workspace__spec_table_patch"
         approval_gates: set[str] = set(config.approval_gates or [])
         policy = check_tool_execution(
-            skill_name=tool_name, args=args, config=config, approval_gates=approval_gates,
+            skill_name=tool_name,
+            args=args,
+            config=config,
+            approval_gates=approval_gates,
         )
         if not policy.allowed or tool_name in approval_gates:
             logger.warning(
-                "orchestrator.spec_reconcile_blocked", canvas=canvas_id, reason=policy.reason,
+                "orchestrator.spec_reconcile_blocked",
+                canvas=canvas_id,
+                reason=policy.reason,
             )
             return
         try:
@@ -1490,17 +1572,23 @@ class AgentOrchestrator:
             log_degraded("orchestrator.spec_reconcile", exc)
             return
         if resp.status_code < 400 and result.get("status") == "published":
-            await self._record_orchestrator_tool_event({
-                "type": "tool_result", "tool": "workspace", "result": result,
-            })
+            await self._record_orchestrator_tool_event(
+                {
+                    "type": "tool_result",
+                    "tool": "workspace",
+                    "result": result,
+                }
+            )
             logger.info("spec_table_reconciled", canvas=canvas_id, notes=notes)
             # Adaptive-by-risk (cheap action): surface what was inferred from the
             # request so the user sees the assumptions and can correct them.
             if notes:
-                await self._outer_send({
-                    "type": "text",
-                    "content": "Уточнил по запросу: " + "; ".join(notes) + ".",
-                })
+                await self._outer_send(
+                    {
+                        "type": "text",
+                        "content": "Уточнил по запросу: " + "; ".join(notes) + ".",
+                    }
+                )
 
     async def _replay_recipe(
         self,
@@ -1521,13 +1609,10 @@ class AgentOrchestrator:
         # human-confirmed replays, ASK before running the learned shortcut. This
         # is the human-in-the-loop guard exactly where misfire risk is highest
         # (a similar-but-different request). After trust is earned, runs silently.
-        needs_confirmation = (
-            (recipe.confirmed_replays or 0) < recipes_module._TRUST_AFTER_CONFIRMED
-        )
+        needs_confirmation = (recipe.confirmed_replays or 0) < recipes_module._TRUST_AFTER_CONFIRMED
         if needs_confirmation:
             steps_text = " → ".join(
-                f"{s.get('capability')}.{s.get('action') or 'call'}"
-                for s in (recipe.steps or [])
+                f"{s.get('capability')}.{s.get('action') or 'call'}" for s in (recipe.steps or [])
             )
             prompt = (
                 f"Задача похожа на ранее выученную «{recipe.name}».\n"
@@ -1538,41 +1623,45 @@ class AgentOrchestrator:
                 prompt, {"recipe_id": str(recipe.id), "recipe_name": recipe.name}
             )
             if not approved:
-                await self._outer_send({
-                    "type": "orchestrator.status",
-                    "content": "Секретарь: разбираю запрос обычным путём.",
-                    "plan_source": "recipe_declined",
-                    "degraded": False,
-                })
+                await self._outer_send(
+                    {
+                        "type": "orchestrator.status",
+                        "content": "Секретарь: разбираю запрос обычным путём.",
+                        "plan_source": "recipe_declined",
+                        "degraded": False,
+                    }
+                )
                 return False
 
         self._workspace_before = _workspace_updated_at_snapshot()
-        await self._outer_send({
-            "type": "orchestrator.status",
-            "content": f"Секретарь: задача знакома — выполняю выученный рецепт «{recipe.name}».",
-            "plan_source": "recipe",
-            "degraded": False,
-            "recipe_id": str(recipe.id),
-        })
-        await self._outer_send({
-            "type": "worker.assigned",
-            "content": f"Исполнитель: {recipe.role} (replay рецепта, без LLM-планирования).",
-            "role": recipe.role,
-            "skills": [
-                f"{s.get('capability')}" for s in (recipe.steps or [])
-            ][:5],
-        })
-
-        ok = await recipes_module.replay(
-            recipe, slots, config, on_event=self._send_from_executor
-        )
-        if not ok:
-            await self._outer_send({
+        await self._outer_send(
+            {
                 "type": "orchestrator.status",
-                "content": "Секретарь: рецепт не сработал, решаю задачу обычным путём.",
-                "plan_source": "recipe_fallback",
-                "degraded": True,
-            })
+                "content": f"Секретарь: задача знакома — выполняю выученный рецепт «{recipe.name}».",
+                "plan_source": "recipe",
+                "degraded": False,
+                "recipe_id": str(recipe.id),
+            }
+        )
+        await self._outer_send(
+            {
+                "type": "worker.assigned",
+                "content": f"Исполнитель: {recipe.role} (replay рецепта, без LLM-планирования).",
+                "role": recipe.role,
+                "skills": [f"{s.get('capability')}" for s in (recipe.steps or [])][:5],
+            }
+        )
+
+        ok = await recipes_module.replay(recipe, slots, config, on_event=self._send_from_executor)
+        if not ok:
+            await self._outer_send(
+                {
+                    "type": "orchestrator.status",
+                    "content": "Секретарь: рецепт не сработал, решаю задачу обычным путём.",
+                    "plan_source": "recipe_fallback",
+                    "degraded": True,
+                }
+            )
             return False
 
         # Component 3 — deterministic post-check: a recipe that "ran" but produced
@@ -1585,7 +1674,8 @@ class AgentOrchestrator:
         )
         workspace_changed = bool(self._trace.workspace_events) and await self._verify_workspace(
             OrchestratorPlan(
-                goal=content, intent="recipe_replay",
+                goal=content,
+                intent="recipe_replay",
                 worker=WorkerAssignment(role=recipe.role, task=content),
                 workspace=WorkspaceOutputSpec(required=True),
             )
@@ -1593,12 +1683,14 @@ class AgentOrchestrator:
         if not produced_message and not workspace_changed:
             await recipes_module.record_outcome(recipe.id, success=False)
             logger.info("recipe_replay_empty_result", recipe=str(recipe.id))
-            await self._outer_send({
-                "type": "orchestrator.status",
-                "content": "Секретарь: рецепт дал пустой результат, решаю задачу обычным путём.",
-                "plan_source": "recipe_fallback",
-                "degraded": True,
-            })
+            await self._outer_send(
+                {
+                    "type": "orchestrator.status",
+                    "content": "Секретарь: рецепт дал пустой результат, решаю задачу обычным путём.",
+                    "plan_source": "recipe_fallback",
+                    "degraded": True,
+                }
+            )
             return False
 
         # Component 4 — replay succeeded with a real result: build trust so the
@@ -1639,6 +1731,7 @@ class AgentOrchestrator:
         )
         try:
             from app.core.metrics import agent_turn_duration_seconds, agent_turns_total
+
             agent_turns_total.labels(outcome="success").inc()
             agent_turn_duration_seconds.observe(duration_ms / 1000)
         except Exception:
@@ -1656,13 +1749,16 @@ class AgentOrchestrator:
             return
         try:
             from app.ai import recipes as _recipes_pen
+
             await _recipes_pen.record_outcome(self._last_recipe_id, success=False)
             logger.info("recipe_penalised_by_correction", recipe=self._last_recipe_id)
         except Exception as exc:
             log_degraded("orchestrator.recipe_penalty", exc)
         self._last_recipe_id = ""
 
-    def _maybe_record_recipe(self, content: str, plan: OrchestratorPlan, audit: AuditReport) -> None:
+    def _maybe_record_recipe(
+        self, content: str, plan: OrchestratorPlan, audit: AuditReport
+    ) -> None:
         """Schedule recording of a successful turn as a draft recipe.
 
         Criteria: mechanical audit passed, no explicit semantic failure,
@@ -1676,6 +1772,7 @@ class AgentOrchestrator:
         # gate inside record_candidate is the real safety check (rejects chains
         # with runtime data-flow regardless of length).
         from app.ai import recipes as _recipes
+
         if not (_recipes._MIN_STEPS <= len(seq) <= _recipes._MAX_STEPS):
             return
         # Only plain capability-dispatcher calls compose into recipes.
@@ -1692,10 +1789,7 @@ class AgentOrchestrator:
         # Per-step results (same order as the calls) so data-flow args can become
         # {{step.N.path}} references — enables recording chains where a later step
         # consumes an earlier step's output.
-        step_results = [
-            r.get("result") for r in self._trace.tool_results
-            if isinstance(r, dict)
-        ]
+        step_results = [r.get("result") for r in self._trace.tool_results if isinstance(r, dict)]
         from app.ai import recipes as recipes_module
 
         async def _record() -> None:
@@ -1745,19 +1839,21 @@ class AgentOrchestrator:
             return
         still_present = {issue.code for issue in final_audit.issues}
         fixed_codes = {
-            issue.code for issue in original_issues
+            issue.code
+            for issue in original_issues
             if issue.code in RETRYABLE and issue.code not in still_present
         }
         lessons = [
-            (code, _REFLECTION_LESSONS[code]) for code in fixed_codes
-            if code in _REFLECTION_LESSONS
+            (code, _REFLECTION_LESSONS[code]) for code in fixed_codes if code in _REFLECTION_LESSONS
         ]
         if not lessons:
             return
 
         async def _reflect() -> None:
             try:
-                async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+                async with httpx.AsyncClient(
+                    timeout=float(config.backend_timeout_seconds)
+                ) as client:
                     for code, lesson in lessons:
                         await client.post(
                             f"{config.backend_url.rstrip('/')}/api/technology/learning-rules/reflect",
@@ -1812,9 +1908,7 @@ class AgentOrchestrator:
                         confidential=False,
                         allow_cloud=True,
                         preferred_model=_registry_model_name(
-                            config.orchestrator_model
-                            or config.worker_model
-                            or config.model
+                            config.orchestrator_model or config.worker_model or config.model
                         ),
                         # A slow, thinking-capable planning model (raised
                         # orchestrator_plan_timeout_seconds above) is a
@@ -1838,7 +1932,7 @@ class AgentOrchestrator:
                     filters=plan.workspace.filters,
                 )
                 return plan
-        except asyncio.TimeoutError:
+        except TimeoutError:
             fallback_reason = "timeout"
             logger.warning(
                 "orchestrator_plan_model_timeout",
@@ -1857,14 +1951,13 @@ class AgentOrchestrator:
         self._plan_source = "heuristic"
         try:
             from app.core.metrics import orchestrator_plan_fallback_total
+
             orchestrator_plan_fallback_total.labels(reason=fallback_reason).inc()
         except Exception:
             pass
         return heuristic_plan
 
-    async def _background_refine_plan(
-        self, content: str, config: BuiltinAgentConfig
-    ) -> None:
+    async def _background_refine_plan(self, content: str, config: BuiltinAgentConfig) -> None:
         """Run LLM orchestrator plan in background — result logged for future use."""
         try:
             plan = await self._plan_turn_with_model(content, config)
@@ -1893,6 +1986,7 @@ class AgentOrchestrator:
             if isinstance(raw_args, str):
                 try:
                     import json as _json
+
                     raw_args = _json.loads(raw_args)
                 except Exception:
                     raw_args = {}
@@ -1902,10 +1996,12 @@ class AgentOrchestrator:
             self._trace.tool_results.append(data)
             result = data.get("result")
             if isinstance(result, dict) and result.get("canvas_id"):
-                self._trace.workspace_events.append({
-                    "type": "workspace.updated",
-                    "canvas_id": result.get("canvas_id"),
-                })
+                self._trace.workspace_events.append(
+                    {
+                        "type": "workspace.updated",
+                        "canvas_id": result.get("canvas_id"),
+                    }
+                )
         elif msg_type == "error":
             self._trace.errors.append(str(data.get("content") or ""))
         elif msg_type == "tools.parallel":
@@ -1913,9 +2009,7 @@ class AgentOrchestrator:
             return  # internal observability marker — don't forward to the client
         await self._outer_send(data)
 
-    def _derive_action_chips(
-        self, plan: OrchestratorPlan, content: str
-    ) -> list[dict]:
+    def _derive_action_chips(self, plan: OrchestratorPlan, content: str) -> list[dict]:
         """Return contextual action chips based on the completed turn's plan."""
         return route_table.chips_for(
             plan.intent, content, workspace_required=plan.workspace.required
@@ -1993,9 +2087,17 @@ class AgentOrchestrator:
         # Digitize request ("оцифруй чертёж", "переведи в DXF") wins over the
         # techdraw check: such a phrase often also contains precision markers
         # (ГОСТ/размеры) but means scan→CAD, not rendering a new part.
-        if matched_route and matched_route.get("intent") == "image_studio" and _is_vectorize_request(text):
+        if (
+            matched_route
+            and matched_route.get("intent") == "image_studio"
+            and _is_vectorize_request(text)
+        ):
             skills = ["image_studio.generate", "image_studio.get_ir"]
-        elif matched_route and matched_route.get("intent") == "image_studio" and _is_techdraw_request(text):
+        elif (
+            matched_route
+            and matched_route.get("intent") == "image_studio"
+            and _is_techdraw_request(text)
+        ):
             skills = ["image_studio.techdraw", "image_studio.prompt_help"]
         if not skills:
             if supplier_name:
@@ -2043,29 +2145,35 @@ class AgentOrchestrator:
             if not degraded
             else f"Оркестратор (упрощённый режим): назначаю роль {plan.worker.role}."
         )
-        await self._outer_send({
-            "type": "orchestrator.status",
-            "content": status_text,
-            "plan": plan.model_dump(mode="json"),
-            "plan_source": self._plan_source,
-            "degraded": degraded,
-        })
-        await self._outer_send({
-            "type": "worker.assigned",
-            "content": (
-                "Исполнитель: "
-                f"{plan.worker.role}; рекомендованные инструменты: "
-                f"{', '.join(plan.worker.recommended_skills[:5])}."
-            ),
-            "role": plan.worker.role,
-            "skills": plan.worker.recommended_skills,
-        })
+        await self._outer_send(
+            {
+                "type": "orchestrator.status",
+                "content": status_text,
+                "plan": plan.model_dump(mode="json"),
+                "plan_source": self._plan_source,
+                "degraded": degraded,
+            }
+        )
+        await self._outer_send(
+            {
+                "type": "worker.assigned",
+                "content": (
+                    "Исполнитель: "
+                    f"{plan.worker.role}; рекомендованные инструменты: "
+                    f"{', '.join(plan.worker.recommended_skills[:5])}."
+                ),
+                "role": plan.worker.role,
+                "skills": plan.worker.recommended_skills,
+            }
+        )
         if plan.workspace.required:
-            await self._outer_send({
-                "type": "workspace.publish_started",
-                "content": "Рабочий стол: готовлю rich-вывод и проверю публикацию.",
-                "canvas_id": plan.workspace.canvas_id,
-            })
+            await self._outer_send(
+                {
+                    "type": "workspace.publish_started",
+                    "content": "Рабочий стол: готовлю rich-вывод и проверю публикацию.",
+                    "canvas_id": plan.workspace.canvas_id,
+                }
+            )
 
     async def _audit_turn(
         self,
@@ -2095,15 +2203,19 @@ class AgentOrchestrator:
                 # was already fully answered in the chat text.
                 workspace_verified = True
             elif not workspace_verified:
-                issues.append(AuditIssue(
-                    code=AuditCode.WORKSPACE_NOT_PUBLISHED,
-                    message="Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.",
-                ))
+                issues.append(
+                    AuditIssue(
+                        code=AuditCode.WORKSPACE_NOT_PUBLISHED,
+                        message="Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.",
+                    )
+                )
             if _looks_like_chat_table(self._trace.final_text):
-                issues.append(AuditIssue(
-                    code=AuditCode.CHAT_TABLE_LEAK,
-                    message="Табличный результат попал в чат вместо Рабочего стола.",
-                ))
+                issues.append(
+                    AuditIssue(
+                        code=AuditCode.CHAT_TABLE_LEAK,
+                        message="Табличный результат попал в чат вместо Рабочего стола.",
+                    )
+                )
             expected_canvas = plan.workspace.canvas_id
             published_canvas_ids = {
                 str(canvas_id)
@@ -2119,18 +2231,20 @@ class AgentOrchestrator:
                 # publication to another canvas is a fine answer — re-publishing
                 # the «правильный» блок duplicates the table the user already
                 # sees. Recorded for the learning loop only.
-                issues.append(AuditIssue(
-                    code=AuditCode.WRONG_CANVAS,
-                    severity="advisory",
-                    message=(
-                        "Опубликован другой workspace-блок: план предлагал "
-                        f"{expected_canvas}, опубликовано {sorted(published_canvas_ids)}."
-                    ),
-                    context={
-                        "expected": expected_canvas,
-                        "published": sorted(published_canvas_ids),
-                    },
-                ))
+                issues.append(
+                    AuditIssue(
+                        code=AuditCode.WRONG_CANVAS,
+                        severity="advisory",
+                        message=(
+                            "Опубликован другой workspace-блок: план предлагал "
+                            f"{expected_canvas}, опубликовано {sorted(published_canvas_ids)}."
+                        ),
+                        context={
+                            "expected": expected_canvas,
+                            "published": sorted(published_canvas_ids),
+                        },
+                    )
+                )
 
         expected_from_canvas = _expected_workspace_skill_for_canvas(plan.workspace.canvas_id)
         expected_workspace_skills = (
@@ -2153,50 +2267,50 @@ class AgentOrchestrator:
             # Advisory: the plan is a hint, not ground truth — a semantically
             # equivalent tool choice must not fail the turn by itself. The
             # workspace/filter checks above catch actually-wrong results.
-            issues.append(AuditIssue(
-                code=AuditCode.TOOL_OFF_PLAN,
-                severity="advisory",
-                message=(
-                    "Исполнитель выбрал инструмент вне плана: "
-                    f"ожидались {sorted(expected_workspace_skills)}, "
-                    f"использованы {sorted(used_workspace_skills)}."
-                ),
-                context={
-                    "expected": sorted(expected_workspace_skills),
-                    "used": sorted(used_workspace_skills),
-                },
-            ))
+            issues.append(
+                AuditIssue(
+                    code=AuditCode.TOOL_OFF_PLAN,
+                    severity="advisory",
+                    message=(
+                        "Исполнитель выбрал инструмент вне плана: "
+                        f"ожидались {sorted(expected_workspace_skills)}, "
+                        f"использованы {sorted(used_workspace_skills)}."
+                    ),
+                    context={
+                        "expected": sorted(expected_workspace_skills),
+                        "used": sorted(used_workspace_skills),
+                    },
+                )
+            )
 
         # Broad tool-selection sanity (advisory): the worker used tools but none
         # of the recommended capabilities. The plan is a hint, so this never
         # blocks — it feeds the learning loop and surfaces a soft warning.
         recommended_caps = {
-            s.split(".", 1)[0].split("__", 1)[0]
-            for s in plan.worker.recommended_skills
-            if s
+            s.split(".", 1)[0].split("__", 1)[0] for s in plan.worker.recommended_skills if s
         }
-        used_caps = {
-            t.split("__", 1)[0] for t in self._trace.tool_calls if t
-        }
+        used_caps = {t.split("__", 1)[0] for t in self._trace.tool_calls if t}
         if (
             recommended_caps
             and used_caps
             and not (recommended_caps & used_caps)
             and not used_workspace_skills  # workspace divergence already reported above
         ):
-            issues.append(AuditIssue(
-                code=AuditCode.TOOL_OFF_PLAN,
-                severity="advisory",
-                message=(
-                    "Использованы инструменты вне рекомендаций оркестратора: "
-                    f"рекомендованы {sorted(recommended_caps)}, "
-                    f"использованы {sorted(used_caps)}."
-                ),
-                context={
-                    "recommended": sorted(recommended_caps),
-                    "used": sorted(used_caps),
-                },
-            ))
+            issues.append(
+                AuditIssue(
+                    code=AuditCode.TOOL_OFF_PLAN,
+                    severity="advisory",
+                    message=(
+                        "Использованы инструменты вне рекомендаций оркестратора: "
+                        f"рекомендованы {sorted(recommended_caps)}, "
+                        f"использованы {sorted(used_caps)}."
+                    ),
+                    context={
+                        "recommended": sorted(recommended_caps),
+                        "used": sorted(used_caps),
+                    },
+                )
+            )
 
         # ── Does the published table deliver what its title promises? ──────────
         # A hand-built block can claim any number: live, the agent published 3
@@ -2216,15 +2330,17 @@ class AgentOrchestrator:
             claimed = _claimed_total_in_title(title)
             shown = result_payload.get("shown")
             if claimed and isinstance(shown, int) and shown and claimed > shown:
-                issues.append(AuditIssue(
-                    code=AuditCode.TOTAL_OVERSTATED,
-                    message=(
-                        f"Заголовок обещает {claimed}, а опубликовано {shown} строк. "
-                        "Опубликуй полные данные (spec_table отдаёт весь набор из SQL) "
-                        "или назови в заголовке фактическое количество."
-                    ),
-                    context={"claimed": claimed, "shown": shown, "title": title[:200]},
-                ))
+                issues.append(
+                    AuditIssue(
+                        code=AuditCode.TOTAL_OVERSTATED,
+                        message=(
+                            f"Заголовок обещает {claimed}, а опубликовано {shown} строк. "
+                            "Опубликуй полные данные (spec_table отдаёт весь набор из SQL) "
+                            "или назови в заголовке фактическое количество."
+                        ),
+                        context={"claimed": claimed, "shown": shown, "title": title[:200]},
+                    )
+                )
                 break
 
         # ── Requested action actually performed? ───────────────────────────────
@@ -2236,10 +2352,7 @@ class AgentOrchestrator:
         # Table/report intents are excluded: "обнови таблицу", "отсортируй" are
         # action verbs whose action IS the publication, so requiring a
         # state-changing call there would fail every legitimate table turn.
-        if (
-            has_action_intent(self._turn_content)
-            and plan.intent not in _REPORTING_INTENTS
-        ):
+        if has_action_intent(self._turn_content) and plan.intent not in _REPORTING_INTENTS:
             performed = [
                 tool
                 for tool, args in self._trace.tool_call_seq
@@ -2248,15 +2361,17 @@ class AgentOrchestrator:
             if performed:
                 self._turn_action_done = True
             if not performed and not self._turn_action_done:
-                issues.append(AuditIssue(
-                    code=AuditCode.ACTION_NOT_PERFORMED,
-                    message=(
-                        "Пользователь просил выполнить действие, но ни один "
-                        "изменяющий инструмент не был вызван — выполнено только "
-                        "чтение/публикация отчёта."
-                    ),
-                    context={"tools_used": sorted(set(self._trace.tool_calls))},
-                ))
+                issues.append(
+                    AuditIssue(
+                        code=AuditCode.ACTION_NOT_PERFORMED,
+                        message=(
+                            "Пользователь просил выполнить действие, но ни один "
+                            "изменяющий инструмент не был вызван — выполнено только "
+                            "чтение/публикация отчёта."
+                        ),
+                        context={"tools_used": sorted(set(self._trace.tool_calls))},
+                    )
+                )
 
         # ── Filter compliance check ────────────────────────────────────────────
         # Only enforce filter compliance when:
@@ -2277,9 +2392,7 @@ class AgentOrchestrator:
                     last_match = item
             if last_match is not None:
                 result = last_match["result"]
-                matched_tool_args = (
-                    self._trace.tool_call_args.get(last_match.get("tool", "")) or {}
-                )
+                matched_tool_args = self._trace.tool_call_args.get(last_match.get("tool", "")) or {}
                 result_filters: dict[str, Any] = result.get("filters") or {}
                 published_spec = result.get("spec") or matched_tool_args.get("spec")
                 nested_args = (
@@ -2308,44 +2421,53 @@ class AgentOrchestrator:
                     if _entity_named_in_title(fv, published_title):
                         continue  # hand-built block, entity named in its title
                     if actual is None and result_filters.get(fk) is None:
-                        issues.append(AuditIssue(
-                            code=AuditCode.FILTER_MISSING,
-                            message=(
-                                f"фильтр не применён: исполнитель не передал {fk}={fv!r} "
-                                "в инструмент. Повтори вызов с правильными аргументами."
-                            ),
-                            context={"filter": fk, "expected": str(fv)},
-                        ))
-                    elif actual is not None and str(actual).strip().lower() != str(fv).strip().lower():
-                        issues.append(AuditIssue(
-                            code=AuditCode.FILTER_MISMATCH,
-                            message=(
-                                f"неверный фильтр: ожидалось {fk}={fv!r}, "
-                                f"передано {fk}={actual!r}. Повтори с правильным значением."
-                            ),
-                            context={
-                                "filter": fk,
-                                "expected": str(fv),
-                                "actual": str(actual),
-                                "source": "args",
-                            },
-                        ))
+                        issues.append(
+                            AuditIssue(
+                                code=AuditCode.FILTER_MISSING,
+                                message=(
+                                    f"фильтр не применён: исполнитель не передал {fk}={fv!r} "
+                                    "в инструмент. Повтори вызов с правильными аргументами."
+                                ),
+                                context={"filter": fk, "expected": str(fv)},
+                            )
+                        )
+                    elif (
+                        actual is not None
+                        and str(actual).strip().lower() != str(fv).strip().lower()
+                    ):
+                        issues.append(
+                            AuditIssue(
+                                code=AuditCode.FILTER_MISMATCH,
+                                message=(
+                                    f"неверный фильтр: ожидалось {fk}={fv!r}, "
+                                    f"передано {fk}={actual!r}. Повтори с правильным значением."
+                                ),
+                                context={
+                                    "filter": fk,
+                                    "expected": str(fv),
+                                    "actual": str(actual),
+                                    "source": "args",
+                                },
+                            )
+                        )
                     # Cross-check reported filters in the result
                     rf = result_filters.get(fk)
                     if rf is not None and str(rf).strip().lower() != str(fv).strip().lower():
-                        issues.append(AuditIssue(
-                            code=AuditCode.FILTER_MISMATCH,
-                            message=(
-                                f"Рабочий стол показывает {fk}={rf!r} вместо {fv!r}: "
-                                "показаны данные от другого запроса. Требуется перезапрос."
-                            ),
-                            context={
-                                "filter": fk,
-                                "expected": str(fv),
-                                "actual": str(rf),
-                                "source": "result",
-                            },
-                        ))
+                        issues.append(
+                            AuditIssue(
+                                code=AuditCode.FILTER_MISMATCH,
+                                message=(
+                                    f"Рабочий стол показывает {fk}={rf!r} вместо {fv!r}: "
+                                    "показаны данные от другого запроса. Требуется перезапрос."
+                                ),
+                                context={
+                                    "filter": fk,
+                                    "expected": str(fv),
+                                    "actual": str(rf),
+                                    "source": "result",
+                                },
+                            )
+                        )
 
         for item in self._trace.tool_results:
             result = item.get("result")
@@ -2358,11 +2480,15 @@ class AgentOrchestrator:
                 and str(result.get("error") or "").startswith("Unknown skill")
             )
             if is_unknown:
-                issues.append(AuditIssue(
-                    code=AuditCode.UNKNOWN_SKILL,
-                    message=str(result.get("error") or result.get("message") or "unknown skill"),
-                    context={"tool": str(item.get("tool") or "")},
-                ))
+                issues.append(
+                    AuditIssue(
+                        code=AuditCode.UNKNOWN_SKILL,
+                        message=str(
+                            result.get("error") or result.get("message") or "unknown skill"
+                        ),
+                        context={"tool": str(item.get("tool") or "")},
+                    )
+                )
 
         # ── Answer-quality checks — apply to ALL turns, including text-only ─────
         # (Previously a text turn had no blocking check at all → a hallucinated
@@ -2371,10 +2497,12 @@ class AgentOrchestrator:
         has_workspace = bool(self._trace.workspace_events)
         if not final_text and not has_workspace:
             # Empty turn — no text and nothing on the desktop — is always wrong.
-            issues.append(AuditIssue(
-                code=AuditCode.EMPTY_ANSWER,
-                message="Ход завершился без ответа: нет текста и нет вывода на Рабочий стол.",
-            ))
+            issues.append(
+                AuditIssue(
+                    code=AuditCode.EMPTY_ANSWER,
+                    message="Ход завершился без ответа: нет текста и нет вывода на Рабочий стол.",
+                )
+            )
         # Ungrounded factual answer: a data-shaped intent answered from the
         # model's parametric memory with no tool call. Advisory for now (promote
         # to blocking by metrics) so legitimate conceptual replies aren't punished.
@@ -2383,14 +2511,16 @@ class AgentOrchestrator:
             and not self._trace.tool_calls
             and len(final_text) > 80
         ):
-            issues.append(AuditIssue(
-                code=AuditCode.UNGROUNDED_ANSWER,
-                severity="advisory",
-                message=(
-                    "Фактический ответ дан без вызова инструментов — "
-                    "возможен ответ из памяти модели без проверки данных проекта."
-                ),
-            ))
+            issues.append(
+                AuditIssue(
+                    code=AuditCode.UNGROUNDED_ANSWER,
+                    severity="advisory",
+                    message=(
+                        "Фактический ответ дан без вызова инструментов — "
+                        "возможен ответ из памяти модели без проверки данных проекта."
+                    ),
+                )
+            )
         # Tool errors (recovered or not) — advisory signal for the learning loop.
         for item in self._trace.tool_results:
             result = item.get("result")
@@ -2400,12 +2530,14 @@ class AgentOrchestrator:
             if (ec and ec not in ("unknown_skill", "unknown_capability")) or (
                 result.get("error") and "error_code" not in result
             ):
-                issues.append(AuditIssue(
-                    code=AuditCode.TOOL_ERROR,
-                    severity="advisory",
-                    message=str(result.get("error") or result.get("message") or "tool error"),
-                    context={"tool": str(item.get("tool") or "")},
-                ))
+                issues.append(
+                    AuditIssue(
+                        code=AuditCode.TOOL_ERROR,
+                        severity="advisory",
+                        message=str(result.get("error") or result.get("message") or "tool error"),
+                        context={"tool": str(item.get("tool") or "")},
+                    )
+                )
                 break
 
         # ── Intent-match on the published artifact ─────────────────────────────
@@ -2417,15 +2549,17 @@ class AgentOrchestrator:
         if plan.workspace.required and plan.intent in _LISTING_INTENTS:
             published = _last_published_table(self._trace)
             if published is not None and published.get("total") == 0:
-                issues.append(AuditIssue(
-                    code=AuditCode.INTENT_MISMATCH,
-                    message=(
-                        "На Рабочий стол опубликована ПУСТАЯ таблица — по запросу "
-                        "ничего не найдено. Проверь источник и фильтры (условия "
-                        "могут пересекаться как И вместо ИЛИ) или уточни запрос."
-                    ),
-                    context={"total": 0, "spec": published.get("spec")},
-                ))
+                issues.append(
+                    AuditIssue(
+                        code=AuditCode.INTENT_MISMATCH,
+                        message=(
+                            "На Рабочий стол опубликована ПУСТАЯ таблица — по запросу "
+                            "ничего не найдено. Проверь источник и фильтры (условия "
+                            "могут пересекаться как И вместо ИЛИ) или уточни запрос."
+                        ),
+                        context={"total": 0, "spec": published.get("spec")},
+                    )
+                )
 
         return AuditReport(
             passed=not _blocking_issues(issues),
@@ -2466,19 +2600,19 @@ class AgentOrchestrator:
         spec = (pub or {}).get("spec") or {}
         filters = spec.get("filters") or []
         src = spec.get("source") or "данные"
-        await self._outer_send({
-            "type": "text",
-            "content": (
-                f"По запросу «{content[:120]}» в источнике «{src}» ничего не нашлось "
-                f"(фильтры: {filters or 'без фильтров'}). Я не стал публиковать пустую "
-                "таблицу как ответ. Уточните условие (период, поставщика, формулировку) "
-                "— и я перестрою."
-            ),
-        })
+        await self._outer_send(
+            {
+                "type": "text",
+                "content": (
+                    f"По запросу «{content[:120]}» в источнике «{src}» ничего не нашлось "
+                    f"(фильтры: {filters or 'без фильтров'}). Я не стал публиковать пустую "
+                    "таблицу как ответ. Уточните условие (период, поставщика, формулировку) "
+                    "— и я перестрою."
+                ),
+            }
+        )
 
-    async def _explain_action_not_performed(
-        self, plan: OrchestratorPlan, content: str
-    ) -> None:
+    async def _explain_action_not_performed(self, plan: OrchestratorPlan, content: str) -> None:
         """Honest close-out for an action turn that produced only reads.
 
         Names what was actually done, states plainly that the requested action
@@ -2487,16 +2621,18 @@ class AgentOrchestrator:
         """
         used = sorted({t.split("__", 1)[0] for t in self._trace.tool_calls if t})
         used_text = ", ".join(used) if used else "ничего"
-        await self._outer_send({
-            "type": "text",
-            "content": (
-                f"Действие по запросу «{content[:120]}» я не выполнила — "
-                f"использовала только просмотр данных ({used_text}). "
-                "Чтобы довести до конца, уточните, пожалуйста, одно: "
-                "к какому именно объекту (поставщик, счёт, документ) и "
-                "с каким источником (ссылка, файл) нужно выполнить действие?"
-            ),
-        })
+        await self._outer_send(
+            {
+                "type": "text",
+                "content": (
+                    f"Действие по запросу «{content[:120]}» я не выполнила — "
+                    f"использовала только просмотр данных ({used_text}). "
+                    "Чтобы довести до конца, уточните, пожалуйста, одно: "
+                    "к какому именно объекту (поставщик, счёт, документ) и "
+                    "с каким источником (ссылка, файл) нужно выполнить действие?"
+                ),
+            }
+        )
 
     async def _run_semantic_audit(
         self,
@@ -2530,8 +2666,7 @@ class AgentOrchestrator:
 
         # Deterministic short-circuit: every tool call errored → clear failure.
         results = [
-            r.get("result") for r in self._trace.tool_results
-            if isinstance(r.get("result"), dict)
+            r.get("result") for r in self._trace.tool_results if isinstance(r.get("result"), dict)
         ]
         if results and all(str(r.get("error") or "") for r in results):
             audit.semantic_passed = False
@@ -2573,9 +2708,7 @@ class AgentOrchestrator:
                         # router still blocks confidential content from cloud.
                         allow_cloud=bool(config.auditor_allow_cloud),
                         preferred_model=_registry_model_name(
-                            config.auditor_model
-                            or config.worker_model
-                            or config.model
+                            config.auditor_model or config.worker_model or config.model
                         ),
                     )
                 ),
@@ -2586,6 +2719,7 @@ class AgentOrchestrator:
             return  # infra failure → verdict stays None (unknown)
 
         from app.ai.structured_output import parse_json_output
+
         parsed = parse_json_output(getattr(response, "text", "") or "", default={})
         if not isinstance(parsed, dict) or "ok" not in parsed:
             return  # unparseable verdict → stays None (unknown)
@@ -2631,7 +2765,7 @@ class AgentOrchestrator:
                         AIRequest(
                             task=AITask.EMAIL_DRAFTING,
                             messages=messages,
-                            confidential=True,   # generative answers may cite data → stay local
+                            confidential=True,  # generative answers may cite data → stay local
                             allow_cloud=False,
                             preferred_model=_registry_model_name(
                                 config.worker_model or config.model
@@ -2647,6 +2781,7 @@ class AgentOrchestrator:
 
         try:
             from app.ai.self_refine import revise_with_issues
+
             revised = await revise_with_issues(
                 original, plan.goal, [audit.semantic_reason], _generate
             )
@@ -2654,26 +2789,30 @@ class AgentOrchestrator:
             log_degraded("orchestrator.self_refine", exc)
             return
         if revised and revised.strip() and revised.strip() != original.strip():
-            await self._outer_send({
-                "type": "answer.revised",
-                "content": revised.strip(),
-                "reason": audit.semantic_reason,
-            })
+            await self._outer_send(
+                {
+                    "type": "answer.revised",
+                    "content": revised.strip(),
+                    "reason": audit.semantic_reason,
+                }
+            )
             # The revised answer is now the effective final text.
             self._trace.text_chunks = [revised.strip()]
 
     async def _emit_semantic_audit(self, audit: AuditReport) -> None:
-        await self._outer_send({
-            "type": "audit.semantic",
-            "content": (
-                "Аудит качества: ответ может не полностью соответствовать запросу — "
-                f"{audit.semantic_reason}"
-                if not audit.semantic_passed
-                else "Аудит качества: ответ соответствует запросу."
-            ),
-            "semantic_passed": audit.semantic_passed,
-            "semantic_reason": audit.semantic_reason,
-        })
+        await self._outer_send(
+            {
+                "type": "audit.semantic",
+                "content": (
+                    "Аудит качества: ответ может не полностью соответствовать запросу — "
+                    f"{audit.semantic_reason}"
+                    if not audit.semantic_passed
+                    else "Аудит качества: ответ соответствует запросу."
+                ),
+                "semantic_passed": audit.semantic_passed,
+                "semantic_reason": audit.semantic_reason,
+            }
+        )
 
     async def _verify_workspace(self, plan: OrchestratorPlan) -> bool:
         for event in self._trace.workspace_events:
@@ -2710,25 +2849,31 @@ class AgentOrchestrator:
 
     async def _publish_audit(self, audit: AuditReport) -> None:
         if audit.workspace_verified:
-            await self._outer_send({
-                "type": "workspace.publish_verified",
-                "content": "Рабочий стол: публикация подтверждена.",
-                "audit": audit.model_dump(mode="json"),
-            })
+            await self._outer_send(
+                {
+                    "type": "workspace.publish_verified",
+                    "content": "Рабочий стол: публикация подтверждена.",
+                    "audit": audit.model_dump(mode="json"),
+                }
+            )
         if audit.passed:
-            await self._outer_send({
-                "type": "audit.passed",
-                "content": "Аудит: результат проверен, канал вывода корректный.",
-                "audit": audit.model_dump(mode="json"),
-                "issue_codes": audit.issue_codes,
-            })
+            await self._outer_send(
+                {
+                    "type": "audit.passed",
+                    "content": "Аудит: результат проверен, канал вывода корректный.",
+                    "audit": audit.model_dump(mode="json"),
+                    "issue_codes": audit.issue_codes,
+                }
+            )
         else:
-            await self._outer_send({
-                "type": "audit.failed",
-                "content": "Аудит: требуется исправление результата.",
-                "audit": audit.model_dump(mode="json"),
-                "issue_codes": audit.issue_codes,
-            })
+            await self._outer_send(
+                {
+                    "type": "audit.failed",
+                    "content": "Аудит: требуется исправление результата.",
+                    "audit": audit.model_dump(mode="json"),
+                    "issue_codes": audit.issue_codes,
+                }
+            )
 
     def _should_report_capability_gap(
         self,
@@ -2772,7 +2917,9 @@ class AgentOrchestrator:
         # Never overwrite a canvas the agent already published to in this turn:
         # the "repair" then destroys the real answer (live: a report of attached
         # supplier catalogs was replaced by a generic invoice-items table).
-        target_canvas = str((spec.get("args") or {}).get("canvas_id") or plan.workspace.canvas_id or "")
+        target_canvas = str(
+            (spec.get("args") or {}).get("canvas_id") or plan.workspace.canvas_id or ""
+        )
         published_now = {
             str(canvas_id)
             for canvas_id in (_event_canvas_id(event) for event in self._trace.workspace_events)
@@ -2782,7 +2929,8 @@ class AgentOrchestrator:
             logger.info("workspace_repair_skipped_already_published", canvas_id=target_canvas)
             return False
         return await self._execute_workspace_spec(
-            spec, config,
+            spec,
+            config,
             announce=(
                 "Оркестратор: исполнитель выбрал не тот инструмент, "
                 "запускаю правильный workspace tool напрямую."
@@ -2793,15 +2941,17 @@ class AgentOrchestrator:
     # can run them deterministically (0 worker-LLM) the moment the plan resolves
     # the canvas. spec-table is intentionally excluded: it needs the LLM to
     # choose columns. invoice-pivot etc. carry sensible defaults.
-    _PROACTIVE_SAFE_CANVASES = frozenset({
-        "agent:invoices",
-        "agent:suppliers",
-        "agent:documents",
-        "agent:invoice-pivot",
-        "agent:invoice-items",
-        "agent:invoice-items-by-supplier",
-        "agent:invoice-items-grouped",
-    })
+    _PROACTIVE_SAFE_CANVASES = frozenset(
+        {
+            "agent:invoices",
+            "agent:suppliers",
+            "agent:documents",
+            "agent:invoice-pivot",
+            "agent:invoice-items",
+            "agent:invoice-items-by-supplier",
+            "agent:invoice-items-grouped",
+        }
+    )
 
     async def _try_proactive_workspace_execution(
         self,
@@ -2824,7 +2974,8 @@ class AgentOrchestrator:
         if not spec:
             return False
         return await self._execute_workspace_spec(
-            spec, config,
+            spec,
+            config,
             announce="Готовлю результат на Рабочем столе…",
         )
 
@@ -2855,31 +3006,37 @@ class AgentOrchestrator:
                 if tool_name in approval_gates
                 else policy.reason
             )
-            await self._outer_send({
-                "type": "orchestrator.direct_tool_blocked",
-                "content": (
-                    f"Оркестратор: инструмент {tool_name!r} заблокирован политикой — {reason}. "
-                    "Требуется явное подтверждение через интерфейс."
-                ),
-                "tool": tool_name,
-                "reason": reason,
-                "risk_level": policy.risk_level,
-            })
+            await self._outer_send(
+                {
+                    "type": "orchestrator.direct_tool_blocked",
+                    "content": (
+                        f"Оркестратор: инструмент {tool_name!r} заблокирован политикой — {reason}. "
+                        "Требуется явное подтверждение через интерфейс."
+                    ),
+                    "tool": tool_name,
+                    "reason": reason,
+                    "risk_level": policy.risk_level,
+                }
+            )
             return False
 
         self._trace = _TurnTrace()
         self._workspace_before = _workspace_updated_at_snapshot()
-        await self._outer_send({
-            "type": "orchestrator.direct_tool_started",
-            "content": announce,
-            "tool": tool_name,
-            "args": spec["args"],
-        })
-        await self._record_orchestrator_tool_event({
-            "type": "tool_call",
-            "tool": tool_name,
-            "args": spec["args"],
-        })
+        await self._outer_send(
+            {
+                "type": "orchestrator.direct_tool_started",
+                "content": announce,
+                "tool": tool_name,
+                "args": spec["args"],
+            }
+        )
+        await self._record_orchestrator_tool_event(
+            {
+                "type": "tool_call",
+                "tool": tool_name,
+                "args": spec["args"],
+            }
+        )
         try:
             async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
                 resp = await client.post(
@@ -2888,35 +3045,43 @@ class AgentOrchestrator:
                     headers=_agent_headers(),
                 )
             if resp.status_code >= 400:
-                await self._record_orchestrator_tool_event({
-                    "type": "tool_result",
-                    "tool": tool_name,
-                    "result": {
-                        "error": f"HTTP {resp.status_code}",
-                        "detail": resp.text[:300],
-                    },
-                })
+                await self._record_orchestrator_tool_event(
+                    {
+                        "type": "tool_result",
+                        "tool": tool_name,
+                        "result": {
+                            "error": f"HTTP {resp.status_code}",
+                            "detail": resp.text[:300],
+                        },
+                    }
+                )
                 return False
             result = resp.json()
         except Exception as exc:
-            await self._record_orchestrator_tool_event({
-                "type": "tool_result",
-                "tool": tool_name,
-                "result": {"error": str(exc)},
-            })
+            await self._record_orchestrator_tool_event(
+                {
+                    "type": "tool_result",
+                    "tool": tool_name,
+                    "result": {"error": str(exc)},
+                }
+            )
             return False
 
-        await self._record_orchestrator_tool_event({
-            "type": "tool_result",
-            "tool": tool_name,
-            "result": result,
-        })
+        await self._record_orchestrator_tool_event(
+            {
+                "type": "tool_result",
+                "tool": tool_name,
+                "result": result,
+            }
+        )
         message = str(result.get("message") or "") if isinstance(result, dict) else ""
         if message:
-            await self._record_orchestrator_tool_event({
-                "type": "text",
-                "content": message,
-            })
+            await self._record_orchestrator_tool_event(
+                {
+                    "type": "text",
+                    "content": message,
+                }
+            )
         # Stashed for callers that need the raw result after a successful direct
         # call (e.g. table-patch correction learning) without a second round trip.
         self._last_direct_tool_result = result if isinstance(result, dict) else {}
@@ -2935,28 +3100,28 @@ class AgentOrchestrator:
             missing_capability=plan.workspace.description or plan.intent,
             reason="; ".join(audit.issue_messages) or "Недостаточно существующих инструментов.",
             suggested_artifact="workspace_template" if plan.workspace.required else "tool",
-            builder_model=(
-                config.builder_model
-                or config.orchestrator_model
-                or config.model
-            ),
+            builder_model=(config.builder_model or config.orchestrator_model or config.model),
         )
-        await self._outer_send({
-            "type": "capability_gap.detected",
-            "content": (
-                "Оркестратор: обнаружил недостающую исполнимую возможность. "
-                "Передаю задачу builder-модели и готовлю новый tool/skill draft."
-            ),
-            "gap": gap.model_dump(mode="json"),
-        })
+        await self._outer_send(
+            {
+                "type": "capability_gap.detected",
+                "content": (
+                    "Оркестратор: обнаружил недостающую исполнимую возможность. "
+                    "Передаю задачу builder-модели и готовлю новый tool/skill draft."
+                ),
+                "gap": gap.model_dump(mode="json"),
+            }
+        )
         draft = await self._build_capability_draft(gap, plan, config)
         proposal_id = await self._persist_capability_proposal(gap, draft, plan, audit, config)
-        await self._outer_send({
-            "type": "capability_gap.builder_draft",
-            "content": "Builder: подготовил проект недостающего инструмента и skill-записи.",
-            "draft": draft.model_dump(mode="json"),
-            "proposal_id": proposal_id,
-        })
+        await self._outer_send(
+            {
+                "type": "capability_gap.builder_draft",
+                "content": "Builder: подготовил проект недостающего инструмента и skill-записи.",
+                "draft": draft.model_dump(mode="json"),
+                "proposal_id": proposal_id,
+            }
+        )
 
         # Draft real code for the proposal package; activation stays behind
         # the human-approval flow.
@@ -2972,10 +3137,12 @@ class AgentOrchestrator:
                 "source": "orchestrator.capability_builder",
             },
         )
-        await self._outer_send({
-            "type": "workspace.updated",
-            "canvas_id": "agent:capability-builder-draft",
-        })
+        await self._outer_send(
+            {
+                "type": "workspace.updated",
+                "canvas_id": "agent:capability-builder-draft",
+            }
+        )
 
     async def _build_capability_draft(
         self,
@@ -3056,10 +3223,15 @@ class AgentOrchestrator:
                 return None
             data = resp.json()
             proposal_id = data.get("id")
-            if proposal_id and config.safe_auto_apply_enabled and data.get("risk_level") in {
-                "low",
-                "medium",
-            }:
+            if (
+                proposal_id
+                and config.safe_auto_apply_enabled
+                and data.get("risk_level")
+                in {
+                    "low",
+                    "medium",
+                }
+            ):
                 await self._sandbox_capability_proposal(str(proposal_id), config)
             return str(proposal_id) if proposal_id else None
         except Exception as exc:
@@ -3102,10 +3274,12 @@ class AgentOrchestrator:
             f"Запрошенный артефакт: {gap.suggested_artifact}."
         )
         skill_name = str(draft.tool_name or "").replace(".", "_") or None
-        await self._outer_send({
-            "type": "capability_gap.building",
-            "content": "AgentDeveloper: пишу код нового скилла...",
-        })
+        await self._outer_send(
+            {
+                "type": "capability_gap.building",
+                "content": "AgentDeveloper: пишу код нового скилла...",
+            }
+        )
         try:
             result = await build_capability(
                 gap_description=gap_text,
@@ -3113,33 +3287,39 @@ class AgentOrchestrator:
                 context_skills=list(plan.worker.recommended_skills),
             )
             if result.ok:
-                await self._outer_send({
-                    "type": "capability_gap.built",
-                    "content": (
-                        f"AgentDeveloper: черновик скилла **{result.skill_name}** готов. "
-                        "Он станет доступен после проверки и подтверждения человеком "
-                        "(предложение уже в очереди согласования)."
-                    ),
-                    "skill_name": result.skill_name,
-                    "skill_path": result.skill_path,
-                })
+                await self._outer_send(
+                    {
+                        "type": "capability_gap.built",
+                        "content": (
+                            f"AgentDeveloper: черновик скилла **{result.skill_name}** готов. "
+                            "Он станет доступен после проверки и подтверждения человеком "
+                            "(предложение уже в очереди согласования)."
+                        ),
+                        "skill_name": result.skill_name,
+                        "skill_path": result.skill_path,
+                    }
+                )
                 logger.info(
                     "capability_builder_success",
                     skill=result.skill_name,
                     path=result.skill_path,
                 )
             else:
-                await self._outer_send({
-                    "type": "capability_gap.build_failed",
-                    "content": f"AgentDeveloper: не удалось создать скилл: {'; '.join(result.errors)}",
-                    "errors": result.errors,
-                })
+                await self._outer_send(
+                    {
+                        "type": "capability_gap.build_failed",
+                        "content": f"AgentDeveloper: не удалось создать скилл: {'; '.join(result.errors)}",
+                        "errors": result.errors,
+                    }
+                )
         except Exception as exc:
             logger.error("capability_builder_invoke_failed", error=str(exc))
-            await self._outer_send({
-                "type": "capability_gap.build_failed",
-                "content": f"AgentDeveloper: ошибка при создании скилла: {exc}",
-            })
+            await self._outer_send(
+                {
+                    "type": "capability_gap.build_failed",
+                    "content": f"AgentDeveloper: ошибка при создании скилла: {exc}",
+                }
+            )
 
 
 # Keyword heuristics are delegated to the declarative table in
@@ -3186,9 +3366,10 @@ def _build_orchestrator_prompt(
     # Conversation context
     if history:
         recent = history[-6:]
-        parts.append("## Контекст диалога\n" + "\n".join(
-            f"{m.get('role','?')}: {str(m.get('content',''))[:200]}" for m in recent
-        ))
+        parts.append(
+            "## Контекст диалога\n"
+            + "\n".join(f"{m.get('role', '?')}: {str(m.get('content', ''))[:200]}" for m in recent)
+        )
 
     # Available skills grouped by domain
     if skill_context:
@@ -3221,12 +3402,14 @@ def _build_orchestrator_prompt(
     return "\n\n".join(parts)
 
 
-def _invalidate_skill_hints_if_changed(registry_path: "Path") -> None:
+def _invalidate_skill_hints_if_changed(registry_path: Path) -> None:
     """Flush orchestrator:skill:* Redis keys when registry file hash changes."""
     try:
         import hashlib
+
         current_hash = hashlib.md5(registry_path.read_bytes()).hexdigest()
         from app.ai.orchestrator_memory import _redis
+
         r = _redis()
         if r is None:
             return
@@ -3251,11 +3434,13 @@ def _build_skill_registry_context(user_text: str) -> str:
     """Return skills grouped by domain, with top relevant ones highlighted."""
     try:
         from app.ai.gateway_config import gateway_config as _gw_cfg
+
         registry_path = _gw_cfg.registry_path
         if not registry_path.exists():
             return ""
         _invalidate_skill_hints_if_changed(registry_path)
         import yaml as _yaml
+
         data = _yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
         skills: list[dict] = data.get("tools") or data.get("skills") or []
 
@@ -3285,6 +3470,7 @@ def _build_skill_registry_context(user_text: str) -> str:
 
         # Remaining skills grouped by category (names only)
         from collections import defaultdict
+
         by_cat: dict[str, list[str]] = defaultdict(list)
         for s in skills:
             if s["name"] not in top12_names:
@@ -3292,8 +3478,11 @@ def _build_skill_registry_context(user_text: str) -> str:
                 by_cat[cat].append(s["name"])
 
         # Generated skills always shown fully
-        generated = [s for s in skills if s.get("category") == "agent_generated"
-                     and s["name"] not in top12_names]
+        generated = [
+            s
+            for s in skills
+            if s.get("category") == "agent_generated" and s["name"] not in top12_names
+        ]
         if generated:
             lines.append("\n### Созданные агентом")
             for s in generated:
@@ -3604,7 +3793,7 @@ def _build_worker_hint(plan: OrchestratorPlan) -> str:
                 "Данные счетов и позиций УЖЕ структурированы в БД. Реши задачу ОДНИМ "
                 "вызовом workspace.spec_table: выбери источник, колонки, фильтр (по "
                 "наименованию товара), сортировку (по цене/сумме/дате) и при «объедини/"
-                "сгруппируй по X» — group_by:[\"X\"] (например group_by:[\"supplier_name\"]). "
+                'сгруппируй по X» — group_by:["X"] (например group_by:["supplier_name"]). '
                 "Несколько видов товаров («фрезы и резцы») → отдельный contains-фильтр на "
                 "поле наименования для каждого (они объединяются по ИЛИ). "
                 "КАТЕГОРИЧЕСКИ НЕ вызывай memory, search, documents — там этих данных нет."
@@ -3673,6 +3862,7 @@ def _gated_skill_markers() -> tuple[str, ...]:
     A1 / ``_workspace_tool_spec_for_plan``: ``skill.replace(".", "__")``).
     """
     from app.ai.gateway_config import gateway_config as _gw_cfg
+
     markers: list[str] = []
     for gate in _gw_cfg.approval_gates:
         markers.append(gate)
@@ -3724,14 +3914,28 @@ _REFLECTION_LESSONS: dict[AuditCode, str] = {
 }
 
 # Vague references that signal the gated action's target is unclear.
-_VAGUE_REFS = ("ему", "им", "ей", "его", "её", "это", "этот", "этому", "тому",
-               "туда", "там", "тем", "той")
+_VAGUE_REFS = (
+    "ему",
+    "им",
+    "ей",
+    "его",
+    "её",
+    "это",
+    "этот",
+    "этому",
+    "тому",
+    "туда",
+    "там",
+    "тем",
+    "той",
+)
 
 
 def _has_concrete_target(text: str) -> bool:
     """True when a gated request names a concrete target (number, quote, org,
     or a mid-sentence proper noun) rather than relying on context."""
     import re as _re
+
     if _re.search(r"\d", text):
         return True
     if any(q in text for q in ('"', "«", "»", "'")):
@@ -3769,7 +3973,7 @@ def needs_clarification(content: str, plan: OrchestratorPlan) -> str | None:
 _LISTING_INTENTS = frozenset({"analytical_table", "invoice_list", "table_edit"})
 
 
-def _last_published_table(trace: "_TurnTrace") -> dict[str, Any] | None:
+def _last_published_table(trace: _TurnTrace) -> dict[str, Any] | None:
     """Latest spec-table publish result in the trace (what the user actually sees)."""
     out: dict[str, Any] | None = None
     for item in trace.tool_results:
@@ -3845,23 +4049,24 @@ def _format_capability_draft_markdown(
     *,
     proposal_id: str | None = None,
 ) -> str:
-    return "\n\n".join([
-        f"# {draft.title}",
-        f"Proposal ID: `{proposal_id}`" if proposal_id else "Proposal: not persisted",
-        f"Tool: `{draft.tool_name}`",
-        f"Endpoint: `{draft.method} {draft.endpoint_path}`",
-        "## Skill registry entry\n"
-        f"```json\n{json.dumps(draft.skill_registry_entry, ensure_ascii=False, indent=2)}\n```",
-        "## Request schema\n"
-        f"```json\n{json.dumps(draft.request_schema, ensure_ascii=False, indent=2)}\n```",
-        "## Response schema\n"
-        f"```json\n{json.dumps(draft.response_schema, ensure_ascii=False, indent=2)}\n```",
-        "## Implementation plan\n"
-        + "\n".join(f"- {item}" for item in draft.implementation_plan),
-        "## Validation plan\n"
-        + "\n".join(f"- {item}" for item in draft.validation_plan),
-        f"## Notes\n{draft.notes}",
-    ])
+    return "\n\n".join(
+        [
+            f"# {draft.title}",
+            f"Proposal ID: `{proposal_id}`" if proposal_id else "Proposal: not persisted",
+            f"Tool: `{draft.tool_name}`",
+            f"Endpoint: `{draft.method} {draft.endpoint_path}`",
+            "## Skill registry entry\n"
+            f"```json\n{json.dumps(draft.skill_registry_entry, ensure_ascii=False, indent=2)}\n```",
+            "## Request schema\n"
+            f"```json\n{json.dumps(draft.request_schema, ensure_ascii=False, indent=2)}\n```",
+            "## Response schema\n"
+            f"```json\n{json.dumps(draft.response_schema, ensure_ascii=False, indent=2)}\n```",
+            "## Implementation plan\n"
+            + "\n".join(f"- {item}" for item in draft.implementation_plan),
+            "## Validation plan\n" + "\n".join(f"- {item}" for item in draft.validation_plan),
+            f"## Notes\n{draft.notes}",
+        ]
+    )
 
 
 def _latest_workspace_table_id() -> str | None:
@@ -3874,7 +4079,8 @@ def _latest_workspace_table_id() -> str | None:
 def _latest_spec_block() -> dict | None:
     """Latest workspace block backed by a spec (an editable spec table), or None."""
     blocks = [
-        b for b in list_workspace_blocks()
+        b
+        for b in list_workspace_blocks()
         if isinstance(b, dict) and isinstance(b.get("spec"), dict)
     ]
     if not blocks:
@@ -3922,7 +4128,7 @@ def _resolve_workspace_canvas(content: str) -> tuple[str | None, dict[str, str]]
     return canvas_id, filters
 
 
-def _decision_to_plan(decision: "TurnDecision", content: str) -> "OrchestratorPlan":
+def _decision_to_plan(decision: TurnDecision, content: str) -> OrchestratorPlan:
     """Map a typed TurnDecision onto the OrchestratorPlan the worker tail expects.
 
     Keeps the downstream (hint, audit, recipe) contract unchanged so the router
@@ -3938,8 +4144,7 @@ def _decision_to_plan(decision: "TurnDecision", content: str) -> "OrchestratorPl
         # which surface. Unmatched requests still fall back to agent:spec-table.
         canvas_id, workspace_filters = _resolve_workspace_canvas(content)
     recommended_skills = [
-        f"{r.capability}.{r.action}" if r.action else r.capability
-        for r in decision.recommended
+        f"{r.capability}.{r.action}" if r.action else r.capability for r in decision.recommended
     ]
     return OrchestratorPlan(
         goal=decision.goal or content[:200],
@@ -3962,9 +4167,9 @@ def _decision_to_plan(decision: "TurnDecision", content: str) -> "OrchestratorPl
 def _record_feedback_async(
     *,
     content: str,
-    plan: "OrchestratorPlan",
-    trace: "_TurnTrace",
-    audit: "AuditReport",
+    plan: OrchestratorPlan,
+    trace: _TurnTrace,
+    audit: AuditReport,
     retries: int,
     duration_ms: int,
 ) -> None:
@@ -3972,10 +4177,7 @@ def _record_feedback_async(
     import asyncio
 
     # Sanitise tool names: trace stores them as "skill__name" format
-    skills_used = [
-        t.replace("__", ".") for t in trace.tool_calls
-        if not t.startswith("_")
-    ]
+    skills_used = [t.replace("__", ".") for t in trace.tool_calls if not t.startswith("_")]
 
     # Per-step verdicts from tool results: an errored call is a fail for that
     # skill, a clean call is a success — independent of the whole-turn outcome.
@@ -4028,20 +4230,56 @@ def _event_canvas_id(event: dict[str, Any]) -> str | None:
 _REPORTING_CAPABILITIES = frozenset({"workspace", "sheets", "search", "memory", "analytics"})
 
 # Turn intents whose whole point is a view: the "action" is the publication.
-_REPORTING_INTENTS = frozenset({
-    "analytical_table", "table_edit", "count", "flow_status", "smalltalk",
-    "answer_self", "invoice_list", "invoice_items_analytics", "table_build",
-})
+_REPORTING_INTENTS = frozenset(
+    {
+        "analytical_table",
+        "table_edit",
+        "count",
+        "flow_status",
+        "smalltalk",
+        "answer_self",
+        "invoice_list",
+        "invoice_items_analytics",
+        "table_build",
+    }
+)
 
 # Read-only action prefixes shared by every capability (list/get/search/…).
 _READ_ONLY_ACTION_PREFIXES = (
-    "list", "get", "search", "query", "find", "read", "browse", "web", "research",
-    "explain", "status", "verify", "catalog", "similar", "neighborhood", "path",
-    "resolve", "suggest", "check", "upcoming", "today", "history", "compare",
+    "list",
+    "get",
+    "search",
+    "query",
+    "find",
+    "read",
+    "browse",
+    "web",
+    "research",
+    "explain",
+    "status",
+    "verify",
+    "catalog",
+    "similar",
+    "neighborhood",
+    "path",
+    "resolve",
+    "suggest",
+    "check",
+    "upcoming",
+    "today",
+    "history",
+    "compare",
     # discover_* only searches and reads pages — finding a catalog is not
     # attaching it, and the audit must keep telling those two apart.
-    "discover", "ingest_status",
-    "preview", "stats", "summary", "summarize", "risk_", "extract", "classify",
+    "discover",
+    "ingest_status",
+    "preview",
+    "stats",
+    "summary",
+    "summarize",
+    "risk_",
+    "extract",
+    "classify",
 )
 
 

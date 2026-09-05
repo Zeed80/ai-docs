@@ -26,16 +26,18 @@ def _member(graph_id: str, profile: str, kind: str, path: str, content: bytes):
         graph_id=graph_id,
         profile=profile,
         nodes=[GraphNode(id="artifact", type="Artifact")],
-        assertions=[Assertion(
-            id="assertion:sha",
-            subject_id="artifact",
-            predicate="artifact.sha256",
-            value=ExactValue(kind="exact", value=hashlib.sha256(content).hexdigest()),
-            origin="derived",
-            assurance="constraint_validated",
-            evidence_ids=[evidence.id],
-            confidence=1.0,
-        )],
+        assertions=[
+            Assertion(
+                id="assertion:sha",
+                subject_id="artifact",
+                predicate="artifact.sha256",
+                value=ExactValue(kind="exact", value=hashlib.sha256(content).hexdigest()),
+                origin="derived",
+                assurance="constraint_validated",
+                evidence_ids=[evidence.id],
+                confidence=1.0,
+            )
+        ],
         evidence=[evidence],
         build_targets=[BuildTarget(id="production", kind=kind, root_node_ids=["artifact"])],
     ).sealed()

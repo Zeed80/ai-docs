@@ -24,7 +24,7 @@ _VLLM_MODELS_DIR = Path(os.environ.get("VLLM_MODELS_DIR", "/vllm-models"))
 _LLAMACPP_MODELS_DIR = Path(os.environ.get("LLAMACPP_MODELS_DIR", "/llamacpp-models"))
 _DOCKER_SOCK = "/var/run/docker.sock"
 _REDIS_KEY_CONFIG = "vllm_config"
-_REDIS_KEY_TOKENS = "vllm_tokens"   # shares token storage with llamacpp
+_REDIS_KEY_TOKENS = "vllm_tokens"  # shares token storage with llamacpp
 
 # Active downloads keyed by download_id
 _downloads: dict[str, dict] = {}
@@ -34,9 +34,11 @@ _downloads: dict[str, dict] = {}
 # Redis helpers
 # ---------------------------------------------------------------------------
 
+
 def _redis_get(key: str) -> dict | None:
     try:
         from app.utils.redis_client import get_sync_redis
+
         raw = get_sync_redis().get(key)
         return json.loads(raw) if raw else None
     except Exception:
@@ -46,6 +48,7 @@ def _redis_get(key: str) -> dict | None:
 def _redis_set(key: str, value: dict) -> None:
     try:
         from app.utils.redis_client import get_sync_redis
+
         get_sync_redis().set(key, json.dumps(value, ensure_ascii=False))
     except Exception as exc:
         logger.warning("vllm_manager_redis_write_failed", key=key, error=str(exc))
@@ -70,12 +73,13 @@ def save_vllm_config(cfg: dict) -> None:
 
 
 def load_tokens() -> dict:
-    return _redis_get("llamacpp_tokens") or {}   # shared token store
+    return _redis_get("llamacpp_tokens") or {}  # shared token store
 
 
 # ---------------------------------------------------------------------------
 # Model file helpers
 # ---------------------------------------------------------------------------
+
 
 def _human_size(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
@@ -113,15 +117,17 @@ def list_local_models() -> list[dict]:
             for f in entry.rglob("*.safetensors"):
                 formats.add(_detect_format(f.name))
             fmt = next(iter(formats), "safetensors")
-            models.append({
-                "name": entry.name,
-                "path": str(entry),
-                "size_bytes": total,
-                "size_human": _human_size(total),
-                "format": fmt,
-                "source": "vllm",
-                "active": str(entry) == active or entry.name in active,
-            })
+            models.append(
+                {
+                    "name": entry.name,
+                    "path": str(entry),
+                    "size_bytes": total,
+                    "size_human": _human_size(total),
+                    "format": fmt,
+                    "source": "vllm",
+                    "active": str(entry) == active or entry.name in active,
+                }
+            )
 
     # Shared GGUF models from llama.cpp volume (vLLM ≥0.6 GGUF support)
     if _LLAMACPP_MODELS_DIR.exists():
@@ -129,16 +135,18 @@ def list_local_models() -> list[dict]:
             if f.name.startswith("mmproj"):
                 continue  # skip vision projector files
             size = f.stat().st_size
-            models.append({
-                "name": f.name,
-                "path": str(f),
-                "size_bytes": size,
-                "size_human": _human_size(size),
-                "format": "gguf",
-                "source": "llamacpp-shared",
-                "active": str(f) == active or f.name in active,
-                "note": "Shared from llama.cpp — requires vLLM ≥0.6 and --quantization gguf",
-            })
+            models.append(
+                {
+                    "name": f.name,
+                    "path": str(f),
+                    "size_bytes": size,
+                    "size_human": _human_size(size),
+                    "format": "gguf",
+                    "source": "llamacpp-shared",
+                    "active": str(f) == active or f.name in active,
+                    "note": "Shared from llama.cpp — requires vLLM ≥0.6 and --quantization gguf",
+                }
+            )
 
     return models
 
@@ -146,6 +154,7 @@ def list_local_models() -> list[dict]:
 # ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------
+
 
 async def get_vllm_status() -> dict:
     cfg = load_vllm_config()
@@ -182,6 +191,7 @@ async def get_vllm_status() -> dict:
 # Docker container restart
 # ---------------------------------------------------------------------------
 
+
 async def _docker_find_container(service_name: str) -> str | None:
     if not Path(_DOCKER_SOCK).exists():
         return None
@@ -195,9 +205,7 @@ async def _docker_find_container(service_name: str) -> str | None:
             # between activations, and Docker's default /containers/json lists
             # only running containers. Without it activate could not restart a
             # stopped vllm-server — it would report the service as "not found".
-            r = await client.get(
-                "/containers/json", params={"filters": filters, "all": "true"}
-            )
+            r = await client.get("/containers/json", params={"filters": filters, "all": "true"})
             if r.status_code == 200:
                 containers = r.json()
                 if containers:
@@ -330,7 +338,9 @@ async def activate_model(model_path: str) -> dict:
     return {
         "status": "ok" if healthy else "timeout",
         "model": model_path,
-        "message": "vLLM restarted and healthy." if healthy else "vLLM restart timed out — check logs.",
+        "message": "vLLM restarted and healthy."
+        if healthy
+        else "vLLM restart timed out — check logs.",
     }
 
 
@@ -359,7 +369,9 @@ def _normalize_image_ref(ref: str) -> str:
 
 async def _docker_get_json(path: str) -> dict:
     transport = httpx.AsyncHTTPTransport(uds=_DOCKER_SOCK)
-    async with httpx.AsyncClient(transport=transport, base_url="http://localhost", timeout=30.0) as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://localhost", timeout=30.0
+    ) as client:
         r = await client.get(path)
         r.raise_for_status()
         return r.json()
@@ -393,7 +405,9 @@ async def pull_image(image_ref: str) -> None:
     """Pull an image via the Docker Engine API, draining the progress stream."""
     repo, _, tag = image_ref.rpartition(":")
     transport = httpx.AsyncHTTPTransport(uds=_DOCKER_SOCK)
-    async with httpx.AsyncClient(transport=transport, base_url="http://localhost", timeout=None) as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://localhost", timeout=None
+    ) as client:
         async with client.stream(
             "POST", "/images/create", params={"fromImage": repo, "tag": tag}
         ) as resp:
@@ -457,7 +471,9 @@ async def recreate_with_image(image_ref: str, *, start: bool = True) -> dict:
     name, create_body = _build_recreate_body(info, image_ref, cid)
 
     transport = httpx.AsyncHTTPTransport(uds=_DOCKER_SOCK)
-    async with httpx.AsyncClient(transport=transport, base_url="http://localhost", timeout=120.0) as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://localhost", timeout=120.0
+    ) as client:
         await client.post(f"/containers/{cid}/stop", params={"t": "10"})
         rm = await client.delete(f"/containers/{cid}", params={"force": "true"})
         if rm.status_code >= 400:
@@ -548,17 +564,19 @@ async def search_hf_models(query: str, limit: int = 10) -> list[dict]:
 
     results = []
     for m in raw:
-        results.append({
-            "repo_id": m.get("id", ""),
-            "author": m.get("author", ""),
-            "model_name": m.get("id", "").split("/")[-1],
-            "downloads": m.get("downloads", 0),
-            "likes": m.get("likes", 0),
-            "tags": m.get("tags", []),
-            "gated": m.get("gated", False),
-            "library": m.get("library_name", ""),
-            "source": "huggingface",
-        })
+        results.append(
+            {
+                "repo_id": m.get("id", ""),
+                "author": m.get("author", ""),
+                "model_name": m.get("id", "").split("/")[-1],
+                "downloads": m.get("downloads", 0),
+                "likes": m.get("likes", 0),
+                "tags": m.get("tags", []),
+                "gated": m.get("gated", False),
+                "library": m.get("library_name", ""),
+                "source": "huggingface",
+            }
+        )
     return results
 
 
@@ -581,13 +599,15 @@ async def list_hf_files(repo_id: str) -> list[dict]:
             continue
         fmt = _classify_vllm_file(fn)
         size = sf.get("size", 0) or 0
-        files.append({
-            "filename": fn,
-            "size_bytes": size,
-            "size_human": _human_size(size),
-            "format": fmt,
-            "download_url": f"https://huggingface.co/{repo_id}/resolve/main/{fn}",
-        })
+        files.append(
+            {
+                "filename": fn,
+                "size_bytes": size,
+                "size_human": _human_size(size),
+                "format": fmt,
+                "download_url": f"https://huggingface.co/{repo_id}/resolve/main/{fn}",
+            }
+        )
     return files
 
 
@@ -605,14 +625,16 @@ async def search_ms_models(query: str, limit: int = 10) -> list[dict]:
 
     results = []
     for m in raw.get("Data", {}).get("Models", []):
-        results.append({
-            "repo_id": m.get("Path", ""),
-            "name": m.get("Name", ""),
-            "downloads": m.get("Downloads", 0),
-            "stars": m.get("Stars", 0),
-            "tags": m.get("Tags", []),
-            "source": "modelscope",
-        })
+        results.append(
+            {
+                "repo_id": m.get("Path", ""),
+                "name": m.get("Name", ""),
+                "downloads": m.get("Downloads", 0),
+                "stars": m.get("Stars", 0),
+                "tags": m.get("Tags", []),
+                "source": "modelscope",
+            }
+        )
     return results
 
 
@@ -620,8 +642,10 @@ async def search_ms_models(query: str, limit: int = 10) -> list[dict]:
 # Download
 # ---------------------------------------------------------------------------
 
+
 def _download_id() -> str:
     import uuid
+
     return uuid.uuid4().hex[:12]
 
 
@@ -634,7 +658,9 @@ async def _stream_download(
     dest.parent.mkdir(parents=True, exist_ok=True)
     _downloads[download_id].update({"status": "downloading", "error": None})
     try:
-        async with httpx.AsyncClient(timeout=None, follow_redirects=True, headers=headers) as client:
+        async with httpx.AsyncClient(
+            timeout=None, follow_redirects=True, headers=headers
+        ) as client:
             async with client.stream("GET", url) as resp:
                 resp.raise_for_status()
                 total = int(resp.headers.get("content-length", 0))
@@ -646,7 +672,9 @@ async def _stream_download(
                         received += len(chunk)
                         _downloads[download_id]["progress_bytes"] = received
                         if total:
-                            _downloads[download_id]["progress_pct"] = round(received / total * 100, 1)
+                            _downloads[download_id]["progress_pct"] = round(
+                                received / total * 100, 1
+                            )
         _downloads[download_id]["status"] = "completed"
     except Exception as exc:
         _downloads[download_id].update({"status": "error", "error": str(exc)})

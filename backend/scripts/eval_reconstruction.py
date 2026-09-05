@@ -52,7 +52,6 @@ def _diff_image(ink_bool, drawn, covered_grown, ink_grown):
 
 def _tile_report(ink_bool, missed, invented):
     """Per-tile recall, so the loss has an address instead of an average."""
-    import numpy as np
 
     h, w = ink_bool.shape[:2]
     rows = []
@@ -81,9 +80,9 @@ def run(image: pathlib.Path, out: pathlib.Path) -> int:
     import cv2
     import numpy as np
 
+    from app.ai.cad_ir.png_render import rasterize_entities
     from app.ai.cad_recognize.cv import CvRecognizer
     from app.ai.cad_recognize.topology import consolidate_entities
-    from app.ai.cad_ir.png_render import rasterize_entities
     from app.ai.drawing_vectorize import _coverage_dilate_px
     from app.tasks.cad_trace import _binarize
 
@@ -132,7 +131,9 @@ def run(image: pathlib.Path, out: pathlib.Path) -> int:
     )
 
     print(f"{image.name}: {w}x{h}, сущностей {len(entities)}")
-    print(f"  recall    {recall:.4f}  — не воспроизведено {int(missed.sum())} из {ink_total} px чернил")
+    print(
+        f"  recall    {recall:.4f}  — не воспроизведено {int(missed.sum())} из {ink_total} px чернил"
+    )
     print(f"  precision {precision:.4f}  — дорисовано лишнего {int(invented.sum())} px")
     _print_tiles(tiles)
     print(f"\nкартинка расхождений: {diff_path}")

@@ -39,8 +39,14 @@ def test_graph_headers_are_always_present_and_values_only_when_read() -> None:
     assert {"Масштаб", "Масса", "Лист", "Листов", "Разраб."} <= captions
 
     filled = frame_and_title_block_entities(
-        297, 210, 4.0, name="Вал", designation="АБВГ.001", company="Завод",
-        material="Сталь 45", scale="1:2",
+        297,
+        210,
+        4.0,
+        name="Вал",
+        designation="АБВГ.001",
+        company="Завод",
+        material="Сталь 45",
+        scale="1:2",
     )
     texts = {e.text for e in filled if isinstance(e, TextEntity)}
     assert {"Вал", "АБВГ.001", "Завод", "Сталь 45", "1:2"} <= texts

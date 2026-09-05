@@ -11,12 +11,12 @@ Each task:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
-from app.tasks.celery_app import celery_app
 from app.tasks.async_runner import run_async
+from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
 
@@ -64,11 +64,15 @@ def alert_duplicate_invoices() -> dict:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-
 async def _get_notifier():
     """Return a TelegramNotifier if Telegram notifications are configured, else None."""
     try:
-        from app.api.telegram import get_bot_token, get_notifications_chat_id, get_notifications_enabled
+        from app.api.telegram import (
+            get_bot_token,
+            get_notifications_chat_id,
+            get_notifications_enabled,
+        )
+
         if not get_notifications_enabled():
             return None
         token = get_bot_token()
@@ -76,6 +80,7 @@ async def _get_notifier():
         if not (token and chat_id):
             return None
         from app.integrations.telegram_notifier import TelegramNotifier
+
         return TelegramNotifier(token=token, chat_id=chat_id)
     except Exception:
         return None
@@ -134,15 +139,15 @@ async def _llm_enrich(context: str, fallback: str) -> str:
 
 
 async def _check_due_dates() -> dict:
-    from sqlalchemy import select, and_
+    from sqlalchemy import and_, select
 
-    from app.db.models import Invoice, InvoiceStatus, Notification, NotificationType, Reminder
+    from app.db.models import Invoice, InvoiceStatus, NotificationType, Reminder
     from app.db.session import _get_session_factory
     from app.domain.proactive_feedback import is_snoozed, should_throttle_proactive_task
     from app.services.notifications import create_notification
 
     _TASK_NAME = "proactive.check_due_dates"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     window_end = now + timedelta(days=3)
     created = 0
 
@@ -233,25 +238,27 @@ async def _check_due_dates() -> dict:
 
 
 async def _alert_critical_anomalies() -> dict:
-    from sqlalchemy import select, and_
+    from sqlalchemy import and_, select
 
+    from app.core.chat_bus import chat_bus
     from app.db.models import AnomalyCard, AnomalySeverity, AnomalyStatus
     from app.db.session import _get_session_factory
-    from app.core.chat_bus import chat_bus
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stale_threshold = now - timedelta(hours=1)
     alerted = 0
 
     async with _get_session_factory()() as db:
         result = await db.execute(
-            select(AnomalyCard).where(
+            select(AnomalyCard)
+            .where(
                 and_(
                     AnomalyCard.status == AnomalyStatus.open,
                     AnomalyCard.severity == AnomalySeverity.critical,
                     AnomalyCard.created_at <= stale_threshold,
                 )
-            ).limit(10)
+            )
+            .limit(10)
         )
         anomalies = result.scalars().all()
 
@@ -263,15 +270,17 @@ async def _alert_critical_anomalies() -> dict:
                     fallback=fallback,
                 )
                 # Broadcast to all connected web clients (no specific user)
-                await chat_bus.publish({
-                    "type": "notification",
-                    "level": "critical",
-                    "title": "Критическая аномалия",
-                    "body": body,
-                    "entity_type": "anomaly",
-                    "entity_id": str(anomaly.id),
-                    "action_url": f"/anomalies/{anomaly.id}",
-                })
+                await chat_bus.publish(
+                    {
+                        "type": "notification",
+                        "level": "critical",
+                        "title": "Критическая аномалия",
+                        "body": body,
+                        "entity_type": "anomaly",
+                        "entity_id": str(anomaly.id),
+                        "action_url": f"/anomalies/{anomaly.id}",
+                    }
+                )
                 await _tg_notify_anomaly(anomaly.title, str(anomaly.id))
                 alerted += 1
             except Exception as exc:
@@ -286,15 +295,15 @@ async def _alert_critical_anomalies() -> dict:
 
 
 async def _dispatch_due_reminders() -> dict:
-    from sqlalchemy import select, and_
+    from sqlalchemy import and_, select
 
-    from app.db.models import Notification, NotificationType, Reminder
+    from app.db.models import NotificationType, Reminder
     from app.db.session import _get_session_factory
     from app.domain.proactive_feedback import is_snoozed, should_throttle_proactive_task
     from app.services.notifications import create_notification
 
     _TASK_NAME = "proactive.dispatch_due_reminders"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     dispatched = 0
 
     async with _get_session_factory()() as db:
@@ -303,12 +312,14 @@ async def _dispatch_due_reminders() -> dict:
             return {"dispatched": 0, "throttled": True}
 
         result = await db.execute(
-            select(Reminder).where(
+            select(Reminder)
+            .where(
                 and_(
                     Reminder.is_sent == False,  # noqa: E712
                     Reminder.remind_at <= now,
                 )
-            ).limit(50)
+            )
+            .limit(50)
         )
         reminders = result.scalars().all()
 
@@ -339,21 +350,25 @@ async def _dispatch_due_reminders() -> dict:
                         entity_id=reminder.entity_id,
                         action_url=(
                             f"/{reminder.entity_type}s/{reminder.entity_id}"
-                            if reminder.entity_type else None
+                            if reminder.entity_type
+                            else None
                         ),
                         source_task=_TASK_NAME,
                     )
                 else:
                     # No specific user — broadcast to web clients
                     from app.core.chat_bus import chat_bus
-                    await chat_bus.publish({
-                        "type": "notification",
-                        "level": "info",
-                        "title": "Напоминание",
-                        "body": reminder.message,
-                        "entity_type": reminder.entity_type,
-                        "entity_id": str(reminder.entity_id),
-                    })
+
+                    await chat_bus.publish(
+                        {
+                            "type": "notification",
+                            "level": "info",
+                            "title": "Напоминание",
+                            "body": reminder.message,
+                            "entity_type": reminder.entity_type,
+                            "entity_id": str(reminder.entity_id),
+                        }
+                    )
 
                 if not snoozed:
                     notifier = await _get_notifier()
@@ -383,7 +398,7 @@ async def _dispatch_due_reminders() -> dict:
 
 async def _check_stale_approvals() -> dict:
     """Notify assignees about pending approvals older than STALE_HOURS hours."""
-    from sqlalchemy import select, and_
+    from sqlalchemy import and_, select
 
     from app.db.models import Approval, ApprovalStatus, NotificationType
     from app.db.session import _get_session_factory
@@ -392,7 +407,7 @@ async def _check_stale_approvals() -> dict:
 
     _TASK_NAME = "proactive.check_stale_approvals"
     STALE_HOURS = 24
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stale_threshold = now - timedelta(hours=STALE_HOURS)
     alerted = 0
 
@@ -402,18 +417,22 @@ async def _check_stale_approvals() -> dict:
             return {"alerted": 0, "throttled": True}
 
         result = await db.execute(
-            select(Approval).where(
+            select(Approval)
+            .where(
                 and_(
                     Approval.status == ApprovalStatus.pending,
                     Approval.created_at <= stale_threshold,
                 )
-            ).limit(20)
+            )
+            .limit(20)
         )
         approvals = result.scalars().all()
 
         for appr in approvals:
             try:
-                hours_pending = int((now - appr.created_at.replace(tzinfo=timezone.utc)).total_seconds() / 3600)
+                hours_pending = int(
+                    (now - appr.created_at.replace(tzinfo=UTC)).total_seconds() / 3600
+                )
                 entity_label = f"{appr.entity_type} {str(appr.entity_id)[:8]}"
                 fallback = (
                     f"Запрос на подтверждение ({appr.action_type.value}) "
@@ -471,6 +490,7 @@ async def _check_stale_approvals() -> dict:
 
 
 # ── Morning briefing (secretary daily digest) ─────────────────────────────────
+
 
 def _format_briefing(stats: dict, *, opener: str | None = None) -> str:
     """Render a prioritised daily digest from flow stats. Pure — unit-tested.
@@ -536,11 +556,13 @@ async def _gather_briefing_stats() -> dict:
     )
     from app.db.session import _get_session_factory
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     soon = now + timedelta(days=3)
 
     async def _count(db, stmt) -> int:
-        return int((await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0)
+        return int(
+            (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
+        )
 
     async with _get_session_factory()() as db:
         pending_approvals = await _count(
@@ -556,7 +578,8 @@ async def _gather_briefing_stats() -> dict:
             db, select(QuarantineEntry).where(QuarantineEntry.decision.is_(None))
         )
         unread = await _count(
-            db, select(EmailMessage).where(EmailMessage.is_inbound == True)  # noqa: E712
+            db,
+            select(EmailMessage).where(EmailMessage.is_inbound == True),  # noqa: E712
         )
         overdue_payments = await _count(
             db,
@@ -611,11 +634,14 @@ async def _build_morning_briefing() -> dict:
     # In-app push (mirrors to WS + Telegram chats subscribed to the bus).
     try:
         from app.core.chat_bus import chat_bus
-        await chat_bus.publish({
-            "type": "proactive.briefing",
-            "content": message,
-            "stats": stats,
-        })
+
+        await chat_bus.publish(
+            {
+                "type": "proactive.briefing",
+                "content": message,
+                "stats": stats,
+            }
+        )
     except Exception as exc:
         logger.warning("morning_briefing_bus_failed", error=str(exc))
 
@@ -675,11 +701,12 @@ async def _alert_duplicate_invoices(window_days: int = 2) -> dict:
 
     try:
         from app.utils.redis_client import get_sync_redis
+
         redis = get_sync_redis()
     except Exception:
         redis = None
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     window_start = now - timedelta(days=window_days)
     alerted = 0
 
@@ -719,12 +746,15 @@ async def _alert_duplicate_invoices(window_days: int = 2) -> dict:
             )
             try:
                 from app.core.chat_bus import chat_bus
-                await chat_bus.publish({
-                    "type": "proactive.duplicate_invoice",
-                    "content": message,
-                    "invoice_id": str(inv.id),
-                    "action_url": f"/invoices/{inv.id}",
-                })
+
+                await chat_bus.publish(
+                    {
+                        "type": "proactive.duplicate_invoice",
+                        "content": message,
+                        "invoice_id": str(inv.id),
+                        "action_url": f"/invoices/{inv.id}",
+                    }
+                )
             except Exception as exc:
                 logger.warning("dup_alert_bus_failed", invoice_id=str(inv.id), error=str(exc))
 

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -65,9 +66,7 @@ def _lesson_summary(
             }
         )
     if order.plan_revision > 1:
-        lessons.append(
-            {"kind": "replanning", "plan_revisions": order.plan_revision}
-        )
+        lessons.append({"kind": "replanning", "plan_revisions": order.plan_revision})
     summary = (order.result_summary or "").strip()
     if not summary:
         summary = f"Поручение «{order.objective[:300]}» выполнено и проверено."
@@ -177,9 +176,8 @@ async def process_work_learning(
             await db.flush()
         if learning.status == "recorded":
             return True
-        if (
-            learning.status == "processing"
-            and learning.updated_at > _utcnow() - timedelta(minutes=5)
+        if learning.status == "processing" and learning.updated_at > _utcnow() - timedelta(
+            minutes=5
         ):
             return False
         learning.status = "processing"
@@ -285,9 +283,7 @@ async def process_work_learning(
                             "subject_key": subject_key,
                             "lessons": lessons,
                             "provenance": provenance,
-                            "conflicts_with": (
-                                str(previous.id) if previous is not None else None
-                            ),
+                            "conflicts_with": (str(previous.id) if previous is not None else None),
                         },
                     )
                     db.add(fact)
@@ -352,7 +348,9 @@ async def process_work_learning(
                 actor="work-learning",
                 payload={
                     "memory_fact_id": str(learning.memory_fact_id),
-                    "recipe_skill_id": str(learning.recipe_skill_id) if learning.recipe_skill_id else None,
+                    "recipe_skill_id": str(learning.recipe_skill_id)
+                    if learning.recipe_skill_id
+                    else None,
                     "recipe_recorded": bool(recorded),
                 },
             )
@@ -377,9 +375,7 @@ async def process_work_learning(
         return False
 
 
-async def reset_work_learning(
-    db: AsyncSession, work_order_id: uuid.UUID
-) -> WorkLearning | None:
+async def reset_work_learning(db: AsyncSession, work_order_id: uuid.UUID) -> WorkLearning | None:
     learning = (
         await db.execute(
             select(WorkLearning)

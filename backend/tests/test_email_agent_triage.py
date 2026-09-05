@@ -10,9 +10,8 @@ worse than no panel.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-import pytest
 import pytest_asyncio
 
 from app.db.models import (
@@ -29,7 +28,6 @@ from app.domain.email_triage import (
     label_for,
     plan_actions,
 )
-
 
 # ── classification is defensive about what the model returns ───────────────
 
@@ -56,7 +54,9 @@ def test_every_category_has_a_human_label():
 
 def test_classify_mode_does_nothing_but_label():
     perform, propose = plan_actions(
-        TriageOutcome(category="invoice"), has_attachments=True, mode="classify",
+        TriageOutcome(category="invoice"),
+        has_attachments=True,
+        mode="classify",
     )
     assert [a["type"] for a in perform] == ["label"]
     assert propose == []
@@ -64,9 +64,11 @@ def test_classify_mode_does_nothing_but_label():
 
 def test_document_request_only_proposes_a_reply_never_sends():
     perform, propose = plan_actions(
-        TriageOutcome(category="document_request",
-                      entities={"requested_documents": ["акт сверки"]}),
-        has_attachments=False, mode="full",
+        TriageOutcome(
+            category="document_request", entities={"requested_documents": ["акт сверки"]}
+        ),
+        has_attachments=False,
+        mode="full",
     )
     kinds = {a["type"] for a in perform} | {a["type"] for a in propose}
     assert "draft_reply" in {a["type"] for a in propose}
@@ -76,7 +78,9 @@ def test_document_request_only_proposes_a_reply_never_sends():
 
 def test_invoice_without_attachment_asks_instead_of_pretending():
     perform, propose = plan_actions(
-        TriageOutcome(category="invoice"), has_attachments=False, mode="full",
+        TriageOutcome(category="invoice"),
+        has_attachments=False,
+        mode="full",
     )
     assert [a["type"] for a in perform] == ["label"]
     assert propose[0]["type"] == "ask_for_attachment"
@@ -84,7 +88,9 @@ def test_invoice_without_attachment_asks_instead_of_pretending():
 
 def test_newsletter_is_labelled_and_left_alone():
     perform, propose = plan_actions(
-        TriageOutcome(category="newsletter"), has_attachments=False, mode="full",
+        TriageOutcome(category="newsletter"),
+        has_attachments=False,
+        mode="full",
     )
     assert [a["type"] for a in perform] == ["label"]
     assert propose == []
@@ -95,20 +101,32 @@ def test_newsletter_is_labelled_and_left_alone():
 
 @pytest_asyncio.fixture
 async def letter(db_session):
-    db_session.add(MailboxConfig(
-        name="procurement", display_name="Закупки", imap_host="m.example.com",
-        imap_port=993, imap_user="procurement", imap_password_encrypted="x",
-        imap_ssl=True, is_active=True, assigned_role="buyer",
-        agent_triage_mode="full",
-    ))
-    db_session.add(User(sub="buyer-1", email="b@example.com", name="Закупщик",
-                        role="buyer", is_active=True))
+    db_session.add(
+        MailboxConfig(
+            name="procurement",
+            display_name="Закупки",
+            imap_host="m.example.com",
+            imap_port=993,
+            imap_user="procurement",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            is_active=True,
+            assigned_role="buyer",
+            agent_triage_mode="full",
+        )
+    )
+    db_session.add(
+        User(sub="buyer-1", email="b@example.com", name="Закупщик", role="buyer", is_active=True)
+    )
     thread = EmailThread(subject="Счёт", mailbox="procurement", message_count=1)
     msg = EmailMessage(
-        thread=thread, mailbox="procurement", subject="Счёт на оплату",
-        from_address="sales@romex.example", to_addresses=["procurement@example.com"],
+        thread=thread,
+        mailbox="procurement",
+        subject="Счёт на оплату",
+        from_address="sales@romex.example",
+        to_addresses=["procurement@example.com"],
         body_text="Добрый день! Направляем счёт на оплату.",
-        received_at=datetime.now(timezone.utc),
+        received_at=datetime.now(UTC),
         message_id_header=f"<{uuid.uuid4()}@romex.example>",
     )
     db_session.add_all([thread, msg])
@@ -119,14 +137,20 @@ async def letter(db_session):
 async def test_thread_view_explains_what_the_agent_did(client, db_session, letter):
     """The panel renders from a stored row: performed and proposed stay apart,
     so it cannot claim work that never happened."""
-    db_session.add(EmailTriageResult(
-        message_id=letter.id, mailbox="procurement", category="invoice",
-        confidence=0.93, summary="Поставщик прислал счёт на оплату",
-        entities={"supplier_name": "ООО Ромекс"},
-        performed=[{"type": "label", "category": "invoice", "label": "Счёт на оплату"}],
-        proposed=[{"type": "ask_for_attachment", "hint": "Запросить вложение?"}],
-        model_name="ollama/qwen3.5:9b", status="done",
-    ))
+    db_session.add(
+        EmailTriageResult(
+            message_id=letter.id,
+            mailbox="procurement",
+            category="invoice",
+            confidence=0.93,
+            summary="Поставщик прислал счёт на оплату",
+            entities={"supplier_name": "ООО Ромекс"},
+            performed=[{"type": "label", "category": "invoice", "label": "Счёт на оплату"}],
+            proposed=[{"type": "ask_for_attachment", "hint": "Запросить вложение?"}],
+            model_name="ollama/qwen3.5:9b",
+            status="done",
+        )
+    )
     await db_session.commit()
 
     resp = await client.get(f"/api/email/threads/{letter.thread_id}")
@@ -145,37 +169,53 @@ async def test_correcting_the_category_is_recorded_as_a_lesson(client, db_sessio
 
     from app.db.models import MemoryFact
 
-    db_session.add(EmailTriageResult(
-        message_id=letter.id, mailbox="procurement", category="newsletter",
-        confidence=0.6, summary="Рассылка", model_name="ollama/qwen3.5:9b",
-    ))
+    db_session.add(
+        EmailTriageResult(
+            message_id=letter.id,
+            mailbox="procurement",
+            category="newsletter",
+            confidence=0.6,
+            summary="Рассылка",
+            model_name="ollama/qwen3.5:9b",
+        )
+    )
     await db_session.commit()
 
     resp = await client.post(
-        f"/api/email/messages/{letter.id}/triage/correct", json={"category": "invoice"},
+        f"/api/email/messages/{letter.id}/triage/correct",
+        json={"category": "invoice"},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["category"] == "invoice"
     assert resp.json()["corrected_category"] == "invoice"
 
     facts = (
-        await db_session.execute(
-            select(MemoryFact).where(MemoryFact.source == "email_triage_correction")
+        (
+            await db_session.execute(
+                select(MemoryFact).where(MemoryFact.source == "email_triage_correction")
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(facts) == 1
     assert facts[0].metadata_["model_category"] == "newsletter"
     assert facts[0].metadata_["human_category"] == "invoice"
 
 
 async def test_unknown_correction_category_is_refused(client, db_session, letter):
-    db_session.add(EmailTriageResult(
-        message_id=letter.id, mailbox="procurement", category="other",
-    ))
+    db_session.add(
+        EmailTriageResult(
+            message_id=letter.id,
+            mailbox="procurement",
+            category="other",
+        )
+    )
     await db_session.commit()
 
     resp = await client.post(
-        f"/api/email/messages/{letter.id}/triage/correct", json={"category": "выдумка"},
+        f"/api/email/messages/{letter.id}/triage/correct",
+        json={"category": "выдумка"},
     )
     assert resp.status_code == 422
 
@@ -198,16 +238,28 @@ def test_triage_is_skipped_for_a_mailbox_with_the_mode_off(test_engine):
     ids: dict = {}
     try:
         with Session(engine) as db:
-            db.add(MailboxConfig(
-                name="quiet-box", display_name="Тихий", imap_host="m.example.com",
-                imap_port=993, imap_user="quiet-box", imap_password_encrypted="x",
-                imap_ssl=True, is_active=True, agent_triage_mode="off",
-            ))
+            db.add(
+                MailboxConfig(
+                    name="quiet-box",
+                    display_name="Тихий",
+                    imap_host="m.example.com",
+                    imap_port=993,
+                    imap_user="quiet-box",
+                    imap_password_encrypted="x",
+                    imap_ssl=True,
+                    is_active=True,
+                    agent_triage_mode="off",
+                )
+            )
             thread = EmailThread(subject="Письмо", mailbox="quiet-box", message_count=1)
             msg = EmailMessage(
-                thread=thread, mailbox="quiet-box", subject="Письмо",
-                from_address="x@y.example", to_addresses=["quiet-box@example.com"],
-                body_text="текст", received_at=datetime.now(timezone.utc),
+                thread=thread,
+                mailbox="quiet-box",
+                subject="Письмо",
+                from_address="x@y.example",
+                to_addresses=["quiet-box@example.com"],
+                body_text="текст",
+                received_at=datetime.now(UTC),
                 message_id_header=f"<{uuid.uuid4()}@y.example>",
             )
             db.add_all([thread, msg])
@@ -220,13 +272,13 @@ def test_triage_is_skipped_for_a_mailbox_with_the_mode_off(test_engine):
 
         # And nothing was written about a mailbox the agent may not read.
         with Session(engine) as db:
-            assert db.query(EmailTriageResult).filter_by(
-                message_id=ids["msg"]).count() == 0
+            assert db.query(EmailTriageResult).filter_by(message_id=ids["msg"]).count() == 0
     finally:
         with Session(engine) as db:
             if ids:
-                db.execute(delete(EmailTriageResult).where(
-                    EmailTriageResult.message_id == ids["msg"]))
+                db.execute(
+                    delete(EmailTriageResult).where(EmailTriageResult.message_id == ids["msg"])
+                )
                 db.execute(delete(EmailMessage).where(EmailMessage.id == ids["msg"]))
                 db.execute(delete(EmailThread).where(EmailThread.id == ids["thread"]))
             db.execute(delete(MailboxConfig).where(MailboxConfig.name == "quiet-box"))
@@ -255,40 +307,57 @@ def test_untriaged_letters_are_still_announced(test_engine, monkeypatch):
 
     announced: list = []
     monkeypatch.setattr(
-        ingest, "_notify_new_email",
+        ingest,
+        "_notify_new_email",
         lambda db, mailbox, msg: announced.append(msg.id),
     )
 
     ids = {}
     try:
         with Session(engine) as db:
-            db.add(MailboxConfig(
-                name="quietbox", display_name="Q", imap_host="m.example.com",
-                imap_port=993, imap_user="quietbox", imap_password_encrypted="x",
-                imap_ssl=True, is_active=True,
-            ))
+            db.add(
+                MailboxConfig(
+                    name="quietbox",
+                    display_name="Q",
+                    imap_host="m.example.com",
+                    imap_port=993,
+                    imap_user="quietbox",
+                    imap_password_encrypted="x",
+                    imap_ssl=True,
+                    is_active=True,
+                )
+            )
             thread = EmailThread(subject="Тихое", mailbox="quietbox", message_count=2)
             triaged_msg = EmailMessage(
-                thread=thread, mailbox="quietbox", subject="Разобранное",
-                from_address="a@b.example", to_addresses=["quietbox@example.com"],
-                received_at=datetime.now(timezone.utc),
+                thread=thread,
+                mailbox="quietbox",
+                subject="Разобранное",
+                from_address="a@b.example",
+                to_addresses=["quietbox@example.com"],
+                received_at=datetime.now(UTC),
                 message_id_header=f"<{uuid.uuid4()}@b.example>",
             )
             silent_msg = EmailMessage(
-                thread=thread, mailbox="quietbox", subject="Пропущенное",
-                from_address="a@b.example", to_addresses=["quietbox@example.com"],
-                received_at=datetime.now(timezone.utc),
+                thread=thread,
+                mailbox="quietbox",
+                subject="Пропущенное",
+                from_address="a@b.example",
+                to_addresses=["quietbox@example.com"],
+                received_at=datetime.now(UTC),
                 message_id_header=f"<{uuid.uuid4()}@b.example>",
             )
             db.add_all([thread, triaged_msg, silent_msg])
             db.flush()
-            db.add(EmailTriageResult(
-                message_id=triaged_msg.id, mailbox="quietbox",
-                category="invoice", status="done",
-            ))
+            db.add(
+                EmailTriageResult(
+                    message_id=triaged_msg.id,
+                    mailbox="quietbox",
+                    category="invoice",
+                    status="done",
+                )
+            )
             db.commit()
-            ids = {"thread": thread.id, "triaged": triaged_msg.id,
-                   "silent": silent_msg.id}
+            ids = {"thread": thread.id, "triaged": triaged_msg.id, "silent": silent_msg.id}
 
         result = ingest._notify_untriaged_after_delay.apply(
             args=["quietbox", [str(ids["triaged"]), str(ids["silent"])]]
@@ -300,10 +369,14 @@ def test_untriaged_letters_are_still_announced(test_engine, monkeypatch):
     finally:
         with Session(engine) as db:
             if ids:
-                db.execute(delete(EmailTriageResult).where(
-                    EmailTriageResult.message_id.in_([ids["triaged"], ids["silent"]])))
-                db.execute(delete(EmailMessage).where(
-                    EmailMessage.id.in_([ids["triaged"], ids["silent"]])))
+                db.execute(
+                    delete(EmailTriageResult).where(
+                        EmailTriageResult.message_id.in_([ids["triaged"], ids["silent"]])
+                    )
+                )
+                db.execute(
+                    delete(EmailMessage).where(EmailMessage.id.in_([ids["triaged"], ids["silent"]]))
+                )
                 db.execute(delete(EmailThread).where(EmailThread.id == ids["thread"]))
             db.execute(delete(MailboxConfig).where(MailboxConfig.name == "quietbox"))
             db.commit()

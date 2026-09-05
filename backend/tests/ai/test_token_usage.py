@@ -17,7 +17,9 @@ from app.ai.agent_config import BuiltinAgentConfig
 
 def _config() -> BuiltinAgentConfig:
     return BuiltinAgentConfig(
-        model="mock", backend_url="http://backend", ollama_url="http://ollama",
+        model="mock",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
     )
 
 
@@ -69,9 +71,7 @@ async def test_call_ollama_streaming_captures_usage_from_final_chunk(monkeypatch
             "eval_count": 17,
         },
     ]
-    monkeypatch.setattr(
-        agent_loop.httpx, "AsyncClient", lambda *a, **k: FakeOllamaClient(lines)
-    )
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", lambda *a, **k: FakeOllamaClient(lines))
     tokens: list[str] = []
 
     async def on_token(t: str) -> None:
@@ -95,9 +95,7 @@ async def test_call_ollama_streaming_no_usage_key_when_ollama_omits_counts(monke
     proxy stripping fields) must not fabricate a {0, 0} usage entry that would
     look like "measured and confirmed zero" downstream."""
     lines = [{"message": {"role": "assistant", "content": "hi"}, "done": True}]
-    monkeypatch.setattr(
-        agent_loop.httpx, "AsyncClient", lambda *a, **k: FakeOllamaClient(lines)
-    )
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", lambda *a, **k: FakeOllamaClient(lines))
 
     async def on_token(t: str) -> None:
         pass

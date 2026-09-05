@@ -1,16 +1,20 @@
 """Comments API — threaded comments on any entity."""
+
 from __future__ import annotations
+
 import re
 import uuid
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo
-from app.db.session import get_db
 from app.db.models import Comment, User
+from app.db.session import get_db
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -65,9 +69,9 @@ async def _fire_mention_notifications(
     comment: Comment,
     author_sub: str,
 ) -> None:
-    from app.services.notifications import create_notification
     from app.db.models import NotificationType
     from app.domain.mentions import resolve_mentioned_subs
+    from app.services.notifications import create_notification
 
     mentioned_subs = await resolve_mentioned_subs(db, comment.body, exclude_sub=author_sub)
     action_url = f"/{comment.entity_type}s/{comment.entity_id}"

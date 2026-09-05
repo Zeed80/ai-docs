@@ -73,7 +73,9 @@ def _convert_dwg(dwg_path: pathlib.Path, tmp_dir: pathlib.Path) -> pathlib.Path 
     out = tmp_dir / (dwg_path.stem + ".dxf")
     subprocess.run(
         ["dwg2dxf", "-y", "-o", str(out), str(dwg_path)],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
     if not out.exists():
         return None
@@ -86,6 +88,7 @@ def _convert_dwg(dwg_path: pathlib.Path, tmp_dir: pathlib.Path) -> pathlib.Path 
 
 def _gt_counts(doc) -> dict[str, int]:
     counts: dict[str, int] = {}
+
     def visit(entity, depth: int = 0) -> None:
         mapped = _GT_TYPE_MAP.get(entity.dxftype())
         if mapped:
@@ -249,9 +252,14 @@ def _write_report(
             cv2.circle(vec, (int(e.center.x), int(e.center.y)), max(1, int(e.radius)), color, width)
         elif e.type == "arc":
             cv2.ellipse(
-                vec, (int(e.center.x), int(e.center.y)),
+                vec,
+                (int(e.center.x), int(e.center.y)),
                 (max(1, int(e.radius)), max(1, int(e.radius))),
-                0, e.start_angle, e.end_angle, color, width,
+                0,
+                e.start_angle,
+                e.end_angle,
+                color,
+                width,
             )
         elif e.type == "polyline":
             pts = np.array([[int(p.x), int(p.y)] for p in e.points], np.int32)
@@ -279,8 +287,7 @@ def _write_report(
     cv2.imwrite(str(report_dir / f"{stem}__diff.png"), diff)
 
     seg_lens = [
-        float(np.hypot(e.p2.x - e.p1.x, e.p2.y - e.p1.y))
-        for e in entities if e.type == "segment"
+        float(np.hypot(e.p2.x - e.p1.x, e.p2.y - e.p1.y)) for e in entities if e.type == "segment"
     ]
     short_cap = max(8.0, 0.01 * max(w, h))
     return {
@@ -308,11 +315,12 @@ def _write_html_index(report_dir: pathlib.Path, results: dict) -> None:
                 for kind in ("src", "vec", "diff")
             )
             metric = (
-                "<b>DECLINED</b>" if rec.get("declined")
+                "<b>DECLINED</b>"
+                if rec.get("declined")
                 else f"entities={rec.get('entities')} recall={rec.get('coverage_recall')} "
-                     f"precision={rec.get('coverage_precision')} "
-                     f"short_seg={rec.get('short_segments')}/{rec.get('segments')} "
-                     f"missed={rec.get('missed_ink_fraction')}"
+                f"precision={rec.get('coverage_precision')} "
+                f"short_seg={rec.get('short_segments')}/{rec.get('segments')} "
+                f"missed={rec.get('missed_ink_fraction')}"
             )
             rows.append(
                 f"<tr><td>{html.escape(name)}<br><small>{rec.get('recognizer_used', '')}"
@@ -323,8 +331,7 @@ def _write_html_index(report_dir: pathlib.Path, results: dict) -> None:
         "<style>img{max-width:420px;display:block}td{vertical-align:top;"
         "border-bottom:1px solid #ccc;padding:6px;font-family:sans-serif}</style>"
         "<table><tr><th>file</th><th>source ink</th><th>vector (by type)</th>"
-        "<th>diff (red=missed, orange=hallucinated)</th></tr>"
-        + "".join(rows) + "</table>",
+        "<th>diff (red=missed, orange=hallucinated)</th></tr>" + "".join(rows) + "</table>",
         encoding="utf-8",
     )
 
@@ -336,6 +343,7 @@ def _geometry_quality(entities) -> dict:
     noise, and how many endpoints float free instead of meeting other geometry.
     Lower is better for every rate; fragmentation 1.0 = already consolidated."""
     import math
+
     segs = [e for e in entities if e.type == "segment"]
     n = len(segs)
     if n == 0:
@@ -466,7 +474,8 @@ def _recognize(
                 thin_px=out.thin_px,
                 thick_px=out.thick_px,
             )
-            if out is not None else None
+            if out is not None
+            else None
         )
     else:  # arbitrate — the actual production decision path
         from app.ai.cad_recognize.technical_vectorizer import TechnicalVectorizerRecognizer
@@ -529,9 +538,17 @@ def _recognize(
         rec["legacy_claimed_exact"] = bool(score.ok)
         rec["false_exact"] = bool(score.ok and not entity_metrics["exact_sheet"])
     if report_dir is not None:
-        rec.update(_write_report(
-            report_dir, stem, ink, recognized_entities, out.keep_raster, out.thin_px, out.thick_px,
-        ))
+        rec.update(
+            _write_report(
+                report_dir,
+                stem,
+                ink,
+                recognized_entities,
+                out.keep_raster,
+                out.thin_px,
+                out.thick_px,
+            )
+        )
     return rec
 
 
@@ -549,18 +566,20 @@ def main() -> int:
         choices=["cv", "arbitrate"],
         default="cv",
         help="cv=raw CV baseline (no consolidate_entities — understates the "
-             "production path); arbitrate=production technical-vectorizer vs "
-             "CV decision, independently scored",
+        "production path); arbitrate=production technical-vectorizer vs "
+        "CV decision, independently scored",
     )
     parser.add_argument(
-        "--report-dir", default="",
+        "--report-dir",
+        default="",
         help="write per-file visual evidence (src/vec/diff PNG + index.html) here",
     )
     parser.add_argument(
-        "--check-baseline", default="",
+        "--check-baseline",
+        default="",
         help="compare the run summary against this baseline JSON and exit 1 on "
-             "a regression (recall/coverage-ok/dxf-reopen down, or fragmentation/"
-             "noise up beyond tolerance)",
+        "a regression (recall/coverage-ok/dxf-reopen down, or fragmentation/"
+        "noise up beyond tolerance)",
     )
     args = parser.parse_args()
     report_dir = pathlib.Path(args.report_dir) if args.report_dir else None
@@ -573,10 +592,19 @@ def main() -> int:
     dwg_files = [] if args.skip_dwg else sorted(root.glob("*.dwg"))
     if args.limit_dwg:
         dwg_files = dwg_files[: args.limit_dwg]
-    photos = [] if args.skip_photos else sorted([
-        *root.glob("*.jpg"), *root.glob("*.jpeg"), *root.glob("*.JPG"),
-        *root.glob("*.png"), *root.glob("*.PNG"),
-    ])
+    photos = (
+        []
+        if args.skip_photos
+        else sorted(
+            [
+                *root.glob("*.jpg"),
+                *root.glob("*.jpeg"),
+                *root.glob("*.JPG"),
+                *root.glob("*.png"),
+                *root.glob("*.PNG"),
+            ]
+        )
+    )
     if args.limit_photos:
         photos = photos[: args.limit_photos]
     if not dwg_files and not photos:
@@ -601,9 +629,7 @@ def main() -> int:
             "entity_tolerance": 0.0025,
         },
         "inputs": inputs,
-        "input_set_sha256": hashlib.sha256(
-            json.dumps(inputs, sort_keys=True).encode()
-        ).hexdigest(),
+        "input_set_sha256": hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest(),
     }
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = pathlib.Path(tmp)
@@ -643,8 +669,11 @@ def main() -> int:
                 print(f"  canonical GT failed: {str(exc)[:120]}", file=sys.stderr)
                 continue
             rec = _recognize(
-                png, enhance=False, recognizer=args.recognizer,
-                report_dir=report_dir, stem=_safe_stem(dwg.name),
+                png,
+                enhance=False,
+                recognizer=args.recognizer,
+                report_dir=report_dir,
+                stem=_safe_stem(dwg.name),
                 truth_ir=truth_ir,
             )
             from app.ai.cad_profile import choose_profile
@@ -664,50 +693,46 @@ def main() -> int:
             rec["ground_truth_complete"] = gt_complete
             rec["ground_truth_issues"] = gt_issues
             results["dwg"][dwg.name] = rec
-            print(f"  -> {rec.get('entities', 'declined')} entities, "
-                  f"recall={rec.get('coverage_recall')}, precision={rec.get('coverage_precision')}")
+            print(
+                f"  -> {rec.get('entities', 'declined')} entities, "
+                f"recall={rec.get('coverage_recall')}, precision={rec.get('coverage_precision')}"
+            )
 
     for photo in photos:
         print(f"[photo] {photo.name}")
         rec = _recognize(
-            photo.read_bytes(), enhance=True, recognizer=args.recognizer,
-            report_dir=report_dir, stem=_safe_stem(photo.name),
+            photo.read_bytes(),
+            enhance=True,
+            recognizer=args.recognizer,
+            report_dir=report_dir,
+            stem=_safe_stem(photo.name),
         )
         results["photos"][photo.name] = rec
-        print(f"  -> {rec.get('entities', 'declined')} entities, "
-              f"recall={rec.get('coverage_recall')}, precision={rec.get('coverage_precision')}")
+        print(
+            f"  -> {rec.get('entities', 'declined')} entities, "
+            f"recall={rec.get('coverage_recall')}, precision={rec.get('coverage_precision')}"
+        )
 
     # Aggregates
     def _entity_aggregates(records: list[dict]) -> dict:
         evaluated = [
-            r
-            for r in records
-            if r.get("entity_metrics") and r.get("ground_truth_complete", True)
+            r for r in records if r.get("entity_metrics") and r.get("ground_truth_complete", True)
         ]
         if not evaluated:
             return {}
         matched = sum(r["entity_metrics"]["micro"]["matched"] for r in evaluated)
-        false_positive = sum(
-            r["entity_metrics"]["micro"]["false_positive"] for r in evaluated
-        )
-        false_negative = sum(
-            r["entity_metrics"]["micro"]["false_negative"] for r in evaluated
-        )
+        false_positive = sum(r["entity_metrics"]["micro"]["false_positive"] for r in evaluated)
+        false_negative = sum(r["entity_metrics"]["micro"]["false_negative"] for r in evaluated)
         precision = matched / max(matched + false_positive, 1)
         recall = matched / max(matched + false_negative, 1)
         f1 = 2 * precision * recall / max(precision + recall, 1e-12)
         claims = [r for r in evaluated if r.get("legacy_claimed_exact")]
         per_type: dict[str, dict[str, int | float]] = {}
-        entity_types = sorted({
-            kind
-            for record in evaluated
-            for kind in record["entity_metrics"]["per_type"]
-        })
+        entity_types = sorted(
+            {kind for record in evaluated for kind in record["entity_metrics"]["per_type"]}
+        )
         for kind in entity_types:
-            rows = [
-                record["entity_metrics"]["per_type"].get(kind, {})
-                for record in evaluated
-            ]
+            rows = [record["entity_metrics"]["per_type"].get(kind, {}) for record in evaluated]
             tp = sum(int(row.get("matched", 0)) for row in rows)
             fp = sum(int(row.get("false_positive", 0)) for row in rows)
             fn = sum(int(row.get("false_negative", 0)) for row in rows)
@@ -738,8 +763,7 @@ def main() -> int:
             "ground_truth_excluded_files": sum(
                 1
                 for record in records
-                if record.get("entity_metrics")
-                and not record.get("ground_truth_complete", True)
+                if record.get("entity_metrics") and not record.get("ground_truth_complete", True)
             ),
             "entity_errors_by_type": per_type,
         }
@@ -750,6 +774,7 @@ def main() -> int:
         errors = sum(1 for r in section.values() if r.get("error"))
         if not oks:
             return {"files": len(section), "ok": 0, "declined": declined, "errors": errors}
+
         def _qmean(key: str) -> float:
             vals = [r["quality"][key] for r in oks if r.get("quality", {}).get(key) is not None]
             return round(sum(vals) / len(vals), 3) if vals else 0.0
@@ -777,20 +802,24 @@ def main() -> int:
             **_entity_aggregates(oks),
         }
 
-    profile_names = sorted({
-        record.get("profile", "auto")
-        for record in results["dwg"].values()
-        if record and not record.get("error")
-    })
+    profile_names = sorted(
+        {
+            record.get("profile", "auto")
+            for record in results["dwg"].values()
+            if record and not record.get("error")
+        }
+    )
     results["summary"] = {
         "dwg": _agg(results["dwg"]),
         "photos": _agg(results["photos"]),
         "profiles": {
-            profile: _agg({
-                name: record
-                for name, record in results["dwg"].items()
-                if record.get("profile", "auto") == profile
-            })
+            profile: _agg(
+                {
+                    name: record
+                    for name, record in results["dwg"].items()
+                    if record.get("profile", "auto") == profile
+                }
+            )
             for profile in profile_names
         },
     }

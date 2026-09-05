@@ -34,7 +34,7 @@ def test_source_split_is_group_stable() -> None:
 def test_qcad_assets_require_allowlisted_sidecar_license(tmp_path: Path) -> None:
     public_domain = tmp_path / "part.rdf"
     public_domain.write_text(
-        '<dcterms:license>http://creativecommons.org/publicdomain/mark/1.0/</dcterms:license>'
+        "<dcterms:license>http://creativecommons.org/publicdomain/mark/1.0/</dcterms:license>"
     )
     assert MODULE._rdf_license(public_domain) in MODULE.ALLOWED_RDF_LICENSES
 
@@ -75,12 +75,13 @@ def test_manifest_v2_truth_is_format_specific() -> None:
 
 
 def test_classes_keep_mechanical_and_construction_separate() -> None:
-    assert MODULE._drawing_class(
-        "mechanical", "Mechanical Parts/Fasteners/Bolts/a.step", "step"
-    ) == "standard_fastener"
-    assert MODULE._drawing_class(
-        "construction", "IFC 4.3/Structural/beam.ifc", "ifc"
-    ) == "structural"
+    assert (
+        MODULE._drawing_class("mechanical", "Mechanical Parts/Fasteners/Bolts/a.step", "step")
+        == "standard_fastener"
+    )
+    assert (
+        MODULE._drawing_class("construction", "IFC 4.3/Structural/beam.ifc", "ifc") == "structural"
+    )
 
 
 def test_buildingsmart_schema_variants_share_source_group() -> None:

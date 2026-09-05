@@ -47,13 +47,16 @@ def test_parse_line_response_malformed_returns_empty():
 
 def test_apply_line_hypotheses_sets_leading_and_geometric_alternatives():
     seg = Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0), line_class="contour", confidence=0.5)
-    apply_line_hypotheses(seg, {
-        "line_readings": [
-            {"line_class": "axis", "confidence": 0.65},
-            {"line_class": "hidden", "confidence": 0.35},
-        ],
-        "symbol": {"kind": "thread", "text": "M12", "confidence": 0.8},
-    })
+    apply_line_hypotheses(
+        seg,
+        {
+            "line_readings": [
+                {"line_class": "axis", "confidence": 0.65},
+                {"line_class": "hidden", "confidence": 0.35},
+            ],
+            "symbol": {"kind": "thread", "text": "M12", "confidence": 0.8},
+        },
+    )
     assert seg.line_class == "axis"
     assert seg.origin == "vlm"
     assert len(seg.alternatives) == 1
@@ -67,11 +70,15 @@ def test_apply_line_hypotheses_sets_leading_and_geometric_alternatives():
 def test_axis_through_circle_center_is_promoted():
     circle = Circle(center=Point(x=200, y=150), radius=50)
     axis = Segment(
-        p1=Point(x=140, y=150), p2=Point(x=260, y=150),  # passes exactly through center
-        line_class="axis", confidence=0.55,
-        alternatives=[__import__("app.ai.cad_ir.schema", fromlist=["Alternative"]).Alternative(
-            entity={"line_class": "hidden"}, p=0.45
-        )],
+        p1=Point(x=140, y=150),
+        p2=Point(x=260, y=150),  # passes exactly through center
+        line_class="axis",
+        confidence=0.55,
+        alternatives=[
+            __import__("app.ai.cad_ir.schema", fromlist=["Alternative"]).Alternative(
+                entity={"line_class": "hidden"}, p=0.45
+            )
+        ],
     )
     ir = _ir([circle, axis])
     resolve_line_hypotheses(ir)
@@ -82,7 +89,10 @@ def test_axis_reading_without_nearby_circle_stays_ambiguous():
     from app.ai.cad_ir.schema import Alternative
 
     seg = Segment(
-        p1=Point(x=10, y=10), p2=Point(x=100, y=10), line_class="axis", confidence=0.55,
+        p1=Point(x=10, y=10),
+        p2=Point(x=100, y=10),
+        line_class="axis",
+        confidence=0.55,
         alternatives=[Alternative(entity={"line_class": "hidden"}, p=0.45)],
     )
     ir = _ir([seg])  # no circle anywhere -> no geometric confirmation for "axis"
@@ -96,7 +106,9 @@ def test_entities_without_geometric_alternatives_are_skipped():
     seg = Segment(p1=Point(x=0, y=0), p2=Point(x=10, y=0))  # no alternatives at all
     ir = _ir([seg])
     resolve_line_hypotheses(ir)  # must not raise
-    assert seg.assurance == "constraint_validated" or seg.assurance == "inferred"  # untouched either way
+    assert (
+        seg.assurance == "constraint_validated" or seg.assurance == "inferred"
+    )  # untouched either way
     assert not any(r.entity_id == seg.id for r in ir.review)
 
 
@@ -105,7 +117,8 @@ def test_polyline_with_geometric_alternatives_handled():
 
     pln = Polyline(
         points=[Point(x=0, y=0), Point(x=10, y=0), Point(x=10, y=10)],
-        line_class="thin", confidence=0.9,
+        line_class="thin",
+        confidence=0.9,
         alternatives=[Alternative(entity={"line_class": "hatch"}, p=0.1)],
     )
     ir = _ir([pln])

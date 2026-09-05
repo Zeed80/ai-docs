@@ -16,7 +16,9 @@ class ManufacturingResourceCreate(BaseModel):
     location: str | None = None
     status: str = "active"
     notes: str | None = None
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
 
 
 class ManufacturingResourceOut(ManufacturingResourceCreate):
@@ -39,7 +41,9 @@ class ProcessPlanCreate(BaseModel):
     blank_type: str | None = None
     quality_requirements: str | None = None
     created_by: str = "sveta"
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
 
 
 class ProcessPlanDraftFromDocumentRequest(BaseModel):
@@ -81,7 +85,9 @@ class OperationCreate(BaseModel):
     setup_minutes: float | None = Field(None, ge=0)
     machine_minutes: float | None = Field(None, ge=0)
     labor_minutes: float | None = Field(None, ge=0)
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
 
 
 class OperationOut(OperationCreate):
@@ -102,7 +108,9 @@ class NormEstimateCreate(BaseModel):
     method: str = "manual"
     assumptions: list[str] | None = None
     created_by: str = "sveta"
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
 
 
 class NormEstimateApproveRequest(BaseModel):
@@ -135,7 +143,9 @@ class OperationTemplateCreate(BaseModel):
     default_safety_requirements: str | None = None
     parameters_schema: dict | None = None
     is_active: bool = True
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
 
 
 class OperationTemplateOut(OperationTemplateCreate):
@@ -188,7 +198,9 @@ class TechnologyCorrectionCreate(BaseModel):
     source_document_id: uuid.UUID | None = None
     process_plan_id: uuid.UUID | None = None
     operation_id: uuid.UUID | None = None
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
 
 
 class TechnologyCorrectionOut(TechnologyCorrectionCreate):
@@ -237,7 +249,9 @@ class LearningRuleCreate(BaseModel):
     occurrences: int = Field(0, ge=0)
     status: str = "proposed"
     suggested_by: str = "system"
-    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata"
+    )
 
 
 class LearningRuleActivateRequest(BaseModel):

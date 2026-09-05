@@ -107,9 +107,7 @@ def _best_match(requested: str, candidates: set[str]) -> str | None:
     return None
 
 
-def auto_resolve_models(
-    graph: dict, object_info: dict
-) -> tuple[dict, list[MissingModel]]:
+def auto_resolve_models(graph: dict, object_info: dict) -> tuple[dict, list[MissingModel]]:
     """Substitute installed model filenames into a graph; report unresolved ones.
 
     Returns the (mutated) graph and a list of MissingModel for loaders whose
@@ -136,14 +134,19 @@ def auto_resolve_models(
         if match:
             logger.info(
                 "comfyui_model_substituted",
-                node=node_id, category=category, requested=requested, used=match,
+                node=node_id,
+                category=category,
+                requested=requested,
+                used=match,
             )
             inputs[input_key] = match
         else:
             missing.append(
                 MissingModel(
-                    node=str(node_id), node_class=str(node_class),
-                    category=category, requested=requested,
+                    node=str(node_id),
+                    node_class=str(node_class),
+                    category=category,
+                    requested=requested,
                 )
             )
     return graph, missing

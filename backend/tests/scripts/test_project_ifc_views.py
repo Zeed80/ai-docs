@@ -10,9 +10,9 @@ from app.ai.ifc_reader import (
     _depth_visible,
     _drawing_edges,
     _edge_indices,
+    _round_point,
     _section_segments,
     _visible_edge_parts,
-    _round_point,
 )
 
 
@@ -32,10 +32,18 @@ def test_round_point_selects_projection_axes():
 
 def test_drawing_edges_remove_coplanar_triangle_diagonal():
     vertices = [
-        0, 0, 0,
-        1, 0, 0,
-        1, 1, 0,
-        0, 1, 0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0,
+        1,
+        0,
     ]
     edges = _drawing_edges(vertices, [0, 1, 2, 0, 2, 3], (0, 0, 1))
     assert set(edges) == {(0, 1), (1, 2), (2, 3), (0, 3)}
@@ -44,10 +52,18 @@ def test_drawing_edges_remove_coplanar_triangle_diagonal():
 
 def test_drawing_edges_keep_sharp_feature():
     vertices = [
-        0, 0, 0,
-        1, 0, 0,
-        0, 1, 0,
-        0, 0, 1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
     ]
     edges = _drawing_edges(vertices, [0, 1, 2, 0, 3, 1], (0, 1, 0))
     assert edges[(0, 1)] in {"feature", "silhouette"}
@@ -55,10 +71,18 @@ def test_drawing_edges_keep_sharp_feature():
 
 def test_section_segments_cut_vertical_faces_without_coplanar_diagonals():
     vertices = [
-        0, 0, 0,
-        1, 0, 0,
-        1, 0, 2,
-        0, 0, 2,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0,
+        2,
+        0,
+        0,
+        2,
     ]
     segments = _section_segments(vertices, [0, 1, 2, 0, 2, 3], 1.2)
     assert segments == [((0.0, 0.0, 1.2), (1.0, 0.0, 1.2))]

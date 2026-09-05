@@ -23,9 +23,7 @@ def upgrade() -> None:
     ).scalar()
     if not exists:
         try:
-            max_num = conn.execute(
-                text("SELECT COUNT(*) FROM warehouse_receipts")
-            ).scalar() or 0
+            max_num = conn.execute(text("SELECT COUNT(*) FROM warehouse_receipts")).scalar() or 0
         except Exception:
             max_num = 0
         start = max(max_num + 1, 1)

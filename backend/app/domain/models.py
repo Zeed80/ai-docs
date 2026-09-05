@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
@@ -17,7 +17,7 @@ def new_uuid() -> str:
 
 
 def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class CaseStatus(str, Enum):
@@ -123,9 +123,7 @@ class ManufacturingCase(Base):
     norm_estimates: Mapped[list[NormEstimate]] = relationship(
         back_populates="case", cascade="all, delete-orphan"
     )
-    quotes: Mapped[list[Quote]] = relationship(
-        back_populates="case", cascade="all, delete-orphan"
-    )
+    quotes: Mapped[list[Quote]] = relationship(back_populates="case", cascade="all, delete-orphan")
     invoices: Mapped[list[Invoice]] = relationship(
         back_populates="case", cascade="all, delete-orphan"
     )
@@ -462,7 +460,9 @@ class InvoiceLine(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
     invoice: Mapped[Invoice] = relationship(back_populates="lines")
-    price_history_entries: Mapped[list[PriceHistoryEntry]] = relationship(back_populates="invoice_line")
+    price_history_entries: Mapped[list[PriceHistoryEntry]] = relationship(
+        back_populates="invoice_line"
+    )
 
 
 class PriceHistoryEntry(Base):
@@ -471,7 +471,9 @@ class PriceHistoryEntry(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     supplier_id: Mapped[str | None] = mapped_column(ForeignKey("suppliers.id"), nullable=True)
     invoice_id: Mapped[str | None] = mapped_column(ForeignKey("invoices.id"), nullable=True)
-    invoice_line_id: Mapped[str | None] = mapped_column(ForeignKey("invoice_lines.id"), nullable=True)
+    invoice_line_id: Mapped[str | None] = mapped_column(
+        ForeignKey("invoice_lines.id"), nullable=True
+    )
     item_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     unit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     currency: Mapped[str] = mapped_column(String(16), default="RUB", nullable=False)
@@ -582,8 +584,12 @@ class TaskJob(Base):
     )
     case_id: Mapped[str | None] = mapped_column(ForeignKey("manufacturing_cases.id"), nullable=True)
     document_id: Mapped[str | None] = mapped_column(ForeignKey("documents.id"), nullable=True)
-    agent_action_id: Mapped[str | None] = mapped_column(ForeignKey("agent_actions.id"), nullable=True)
-    approval_gate_id: Mapped[str | None] = mapped_column(ForeignKey("approval_gates.id"), nullable=True)
+    agent_action_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_actions.id"), nullable=True
+    )
+    approval_gate_id: Mapped[str | None] = mapped_column(
+        ForeignKey("approval_gates.id"), nullable=True
+    )
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

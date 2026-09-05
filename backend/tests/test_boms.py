@@ -63,19 +63,22 @@ async def shelf_item(db_session):
 
 @pytest.mark.asyncio
 async def test_create_bom(client: AsyncClient):
-    resp = await client.post("/api/boms", json={
-        "product_name": "Тумба офисная",
-        "product_code": "TBL-001",
-        "version": "1.0",
-        "lines": [
-            {
-                "line_number": 1,
-                "description": "Панель ДСП",
-                "quantity": 2.0,
-                "unit": "шт",
-            }
-        ],
-    })
+    resp = await client.post(
+        "/api/boms",
+        json={
+            "product_name": "Тумба офисная",
+            "product_code": "TBL-001",
+            "version": "1.0",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "description": "Панель ДСП",
+                    "quantity": 2.0,
+                    "unit": "шт",
+                }
+            ],
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["product_name"] == "Тумба офисная"
@@ -118,10 +121,13 @@ async def test_get_bom_not_found(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_bom(client: AsyncClient, bom):
-    resp = await client.patch(f"/api/boms/{bom.id}", json={
-        "version": "1.1",
-        "notes": "Обновлённая версия",
-    })
+    resp = await client.patch(
+        f"/api/boms/{bom.id}",
+        json={
+            "version": "1.1",
+            "notes": "Обновлённая версия",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["version"] == "1.1"
@@ -133,12 +139,15 @@ async def test_update_bom(client: AsyncClient, bom):
 
 @pytest.mark.asyncio
 async def test_add_bom_line(client: AsyncClient, bom):
-    resp = await client.post(f"/api/boms/{bom.id}/lines", json={
-        "line_number": 1,
-        "description": "Болт М6",
-        "quantity": 8.0,
-        "unit": "шт",
-    })
+    resp = await client.post(
+        f"/api/boms/{bom.id}/lines",
+        json={
+            "line_number": 1,
+            "description": "Болт М6",
+            "quantity": 8.0,
+            "unit": "шт",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["description"] == "Болт М6"
@@ -198,20 +207,27 @@ async def test_e4_where_used_and_derive_mbom(client: AsyncClient, db_session):
     db_session.add(item)
     await db_session.commit()
 
-    created = await client.post("/api/boms", json={
-        "product_name": "Редуктор",
-        "version": "1.0",
-        "kind": "ebom",
-        "lines": [
-            {
-                "line_number": 1, "description": "Подшипник 6205", "quantity": 2,
-                "unit": "шт", "canonical_item_id": str(item.id),
-                "position": "5", "reference_designator": "П1",
-                "variant": "исп.01",
-                "substitutes": [{"description": "Подшипник 6205-2RS", "note": "закрытый"}],
-            },
-        ],
-    })
+    created = await client.post(
+        "/api/boms",
+        json={
+            "product_name": "Редуктор",
+            "version": "1.0",
+            "kind": "ebom",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "description": "Подшипник 6205",
+                    "quantity": 2,
+                    "unit": "шт",
+                    "canonical_item_id": str(item.id),
+                    "position": "5",
+                    "reference_designator": "П1",
+                    "variant": "исп.01",
+                    "substitutes": [{"description": "Подшипник 6205-2RS", "note": "закрытый"}],
+                },
+            ],
+        },
+    )
     assert created.status_code == 201
     ebom = created.json()
     assert ebom["kind"] == "ebom"

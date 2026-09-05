@@ -30,31 +30,35 @@ async def record_triage_correction(db, triage_row, message, *, corrected_by: str
         f"агент отнёс к категории «{label_for(triage_row.category)}», "
         f"человек исправил на «{label_for(triage_row.corrected_category)}»."
     )
-    db.add(MemoryFact(
-        scope=f"mailbox:{message.mailbox}"[:80],
-        kind="correction",
-        title=f"Категория письма от {sender}"[:500],
-        summary=content,
-        source="email_triage_correction",
-        confidence=1.0,
-        provenance={
-            "message_id": str(message.id),
-            "model_name": triage_row.model_name,
-            "corrected_by": corrected_by,
-        },
-        metadata_={
-            "from": sender,
-            "model_category": triage_row.category,
-            "human_category": triage_row.corrected_category,
-        },
-    ))
+    db.add(
+        MemoryFact(
+            scope=f"mailbox:{message.mailbox}"[:80],
+            kind="correction",
+            title=f"Категория письма от {sender}"[:500],
+            summary=content,
+            source="email_triage_correction",
+            confidence=1.0,
+            provenance={
+                "message_id": str(message.id),
+                "model_name": triage_row.model_name,
+                "corrected_by": corrected_by,
+            },
+            metadata_={
+                "from": sender,
+                "model_category": triage_row.category,
+                "human_category": triage_row.corrected_category,
+            },
+        )
+    )
     from app.core.metrics import email_triage_corrections_total
 
     email_triage_corrections_total.labels(
-        was=triage_row.category, now=triage_row.corrected_category,
+        was=triage_row.category,
+        now=triage_row.corrected_category,
     ).inc()
     logger.info(
         "email_triage_correction_recorded",
         message_id=str(message.id),
-        was=triage_row.category, now=triage_row.corrected_category,
+        was=triage_row.category,
+        now=triage_row.corrected_category,
     )

@@ -56,9 +56,7 @@ def text_search_rank(
         func.plainto_tsquery(pg_config, query),
     )
     # Combine FTS rank with trigram similarity for typo-tolerant ranking
-    trgm_rank = func.greatest(
-        *(func.similarity(cast(col, String), query) for col in columns)
-    )
+    trgm_rank = func.greatest(*(func.similarity(cast(col, String), query) for col in columns))
     return fts_rank + trgm_rank * 0.5
 
 

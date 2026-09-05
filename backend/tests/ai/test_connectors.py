@@ -26,6 +26,7 @@ async def connectors_db(test_engine, monkeypatch):
     factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
 
     import app.db.session as session_module
+
     monkeypatch.setattr(session_module, "_get_session_factory", lambda: factory)
 
     indexed: list[dict] = []
@@ -46,6 +47,7 @@ async def connectors_db(test_engine, monkeypatch):
 
     async with factory() as db:
         from sqlalchemy import delete
+
         await db.execute(delete(SourceConnector))
         await db.commit()
 
@@ -107,6 +109,7 @@ async def test_failure_on_unknown_domain_creates_nothing(connectors_db):
         await connectors.record_connector_failure(db, url="https://unknown-supplier.example/x")
     async with connectors_db["factory"]() as db:
         from sqlalchemy import func, select
+
         count = (await db.execute(select(func.count()).select_from(SourceConnector))).scalar_one()
     assert count == 0
 
@@ -279,14 +282,17 @@ async def test_find_connector_hints_skips_retired_and_uses_search_stub(connector
 def test_due_for_revalidation_none_and_future_and_past():
     class _C:
         revalidate_after = None
+
     assert connectors.due_for_revalidation(_C()) is False
 
     class _Future:
         revalidate_after = datetime.now(UTC) + timedelta(days=1)
+
     assert connectors.due_for_revalidation(_Future()) is False
 
     class _Past:
         revalidate_after = datetime.now(UTC) - timedelta(minutes=1)
+
     assert connectors.due_for_revalidation(_Past()) is True
 
 

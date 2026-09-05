@@ -40,7 +40,9 @@ def _redis_set_json(key: str, value: Any) -> None:
         logger.warning("model_runtime_redis_write_failed", key=key, error=str(exc))
 
 
-async def _upsert(db: AsyncSession, model, *, index_elements: list[str], values: dict[str, Any]) -> None:
+async def _upsert(
+    db: AsyncSession, model, *, index_elements: list[str], values: dict[str, Any]
+) -> None:
     """Idempotent INSERT … ON CONFLICT DO UPDATE — race-safe under concurrency.
 
     Avoids the select-then-insert race that violated the UNIQUE constraint when
@@ -61,14 +63,24 @@ async def hydrate_runtime_cache(db: AsyncSession) -> None:
     AFTER each durable write's commit (never from inside an uncommitted txn).
     """
     catalog_rows = (
-        await db.execute(select(ModelCatalogRuntimeEntry).order_by(ModelCatalogRuntimeEntry.model_key))
-    ).scalars().all()
+        (
+            await db.execute(
+                select(ModelCatalogRuntimeEntry).order_by(ModelCatalogRuntimeEntry.model_key)
+            )
+        )
+        .scalars()
+        .all()
+    )
     override_rows = (
-        await db.execute(select(ModelRuntimeOverride).order_by(ModelRuntimeOverride.model_key))
-    ).scalars().all()
+        (await db.execute(select(ModelRuntimeOverride).order_by(ModelRuntimeOverride.model_key)))
+        .scalars()
+        .all()
+    )
     routing_rows = (
-        await db.execute(select(TaskRoutingOverride).order_by(TaskRoutingOverride.task))
-    ).scalars().all()
+        (await db.execute(select(TaskRoutingOverride).order_by(TaskRoutingOverride.task)))
+        .scalars()
+        .all()
+    )
     agent_cfg = await db.scalar(
         select(AgentConfigStore).where(AgentConfigStore.singleton_key == _AGENT_CONFIG_SINGLETON)
     )
@@ -89,9 +101,7 @@ async def hydrate_runtime_cache(db: AsyncSession) -> None:
         if row.thinking_enabled is not None or row.thinking_levels is not None
     }
     preferred = {
-        row.model_key: row.preferred_instance
-        for row in override_rows
-        if row.preferred_instance
+        row.model_key: row.preferred_instance for row in override_rows if row.preferred_instance
     }
     _redis_set_json(CATALOG_OVERLAY_KEY, catalog)
     _redis_set_json(THINKING_OVERLAY_KEY, thinking)

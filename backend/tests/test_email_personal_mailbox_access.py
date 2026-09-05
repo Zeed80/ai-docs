@@ -7,7 +7,7 @@ behalf — must not see its threads/messages, while shared mailboxes
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
@@ -41,7 +41,7 @@ def _thread_with_message(mailbox: str, subject: str) -> tuple[EmailThread, Email
         from_address="someone@example.com",
         to_addresses=["x@example.com"],
         body_text="тело письма",
-        received_at=datetime.now(timezone.utc),
+        received_at=datetime.now(UTC),
         message_id_header=f"<{uuid.uuid4()}@example.com>",
     )
     return thread, message
@@ -50,11 +50,13 @@ def _thread_with_message(mailbox: str, subject: str) -> tuple[EmailThread, Email
 @pytest.fixture
 async def mailboxes(db_session):
     """A shared mailbox, the caller's own personal one, and a colleague's."""
-    db_session.add_all([
-        _mailbox("procurement", owner_sub=None, mailbox_type="shared"),
-        _mailbox("me@example.com", owner_sub="dev-user", mailbox_type="personal"),
-        _mailbox("colleague@example.com", owner_sub=OTHER_SUB, mailbox_type="personal"),
-    ])
+    db_session.add_all(
+        [
+            _mailbox("procurement", owner_sub=None, mailbox_type="shared"),
+            _mailbox("me@example.com", owner_sub="dev-user", mailbox_type="personal"),
+            _mailbox("colleague@example.com", owner_sub=OTHER_SUB, mailbox_type="personal"),
+        ]
+    )
     objects = []
     for box, subject in (
         ("procurement", "Общий счёт"),
@@ -68,20 +70,16 @@ async def mailboxes(db_session):
     return {obj.mailbox: obj for obj in objects if isinstance(obj, EmailThread)}
 
 
-async def test_thread_list_hides_other_users_personal_mailbox(
-    client: AsyncClient, mailboxes
-):
+async def test_thread_list_hides_other_users_personal_mailbox(client: AsyncClient, mailboxes):
     resp = await client.get("/api/email/threads?limit=100")
     assert resp.status_code == 200
     boxes = {t["mailbox"] for t in resp.json()["items"]}
-    assert "procurement" in boxes          # shared — unchanged
-    assert "me@example.com" in boxes       # own personal mailbox
+    assert "procurement" in boxes  # shared — unchanged
+    assert "me@example.com" in boxes  # own personal mailbox
     assert "colleague@example.com" not in boxes
 
 
-async def test_explicit_mailbox_filter_cannot_reach_a_colleague(
-    client: AsyncClient, mailboxes
-):
+async def test_explicit_mailbox_filter_cannot_reach_a_colleague(client: AsyncClient, mailboxes):
     resp = await client.get("/api/email/threads?mailbox=colleague@example.com")
     assert resp.status_code == 403
 
@@ -92,9 +90,7 @@ async def test_thread_and_message_detail_are_scoped(client: AsyncClient, mailbox
 
     msg = (
         await db_session.execute(
-            EmailMessage.__table__.select().where(
-                EmailMessage.mailbox == "colleague@example.com"
-            )
+            EmailMessage.__table__.select().where(EmailMessage.mailbox == "colleague@example.com")
         )
     ).first()
     assert (await client.get(f"/api/email/{msg.id}")).status_code == 404
@@ -114,8 +110,11 @@ async def test_headless_agent_sees_no_personal_mailbox(db_session, mailboxes):
     from app.domain.email_access import hidden_mailbox_names
 
     agent = UserInfo(
-        sub="agent-service", email="agent@internal", name="agent",
-        preferred_username="agent", roles=[UserRole.admin],
+        sub="agent-service",
+        email="agent@internal",
+        name="agent",
+        preferred_username="agent",
+        roles=[UserRole.admin],
     )
     hidden = await hidden_mailbox_names(db_session, agent)
     assert "colleague@example.com" in hidden

@@ -66,7 +66,9 @@ async def test_assign_user_org_fields(client: AsyncClient, db_session):
 
 @pytest.mark.asyncio
 async def test_assign_unknown_department_404(client: AsyncClient, db_session):
-    user = User(sub="local:emp2", email="e2@x", name="Emp2", preferred_username="emp2", role="buyer")
+    user = User(
+        sub="local:emp2", email="e2@x", name="Emp2", preferred_username="emp2", role="buyer"
+    )
     db_session.add(user)
     await db_session.commit()
     import uuid

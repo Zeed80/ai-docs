@@ -44,9 +44,7 @@ WORK_TRANSITIONS: dict[str, frozenset[str]] = {
     "received": frozenset({"scoping", "planning", "canceled", "blocked"}),
     "scoping": frozenset({"planning", "blocked", "canceled"}),
     "planning": frozenset({"ready", "blocked", "failed", "canceled"}),
-    "ready": frozenset(
-        {"running", "waiting_approval", "replanning", "blocked", "canceled"}
-    ),
+    "ready": frozenset({"running", "waiting_approval", "replanning", "blocked", "canceled"}),
     "running": frozenset(
         {
             "ready",
@@ -86,9 +84,7 @@ WORK_TRANSITIONS: dict[str, frozenset[str]] = {
 STEP_TRANSITIONS: dict[str, frozenset[str]] = {
     "pending": frozenset({"ready", "skipped", "canceled"}),
     "ready": frozenset({"running", "waiting_approval", "canceled"}),
-    "running": frozenset(
-        {"succeeded", "retry_wait", "waiting_approval", "failed", "canceled"}
-    ),
+    "running": frozenset({"succeeded", "retry_wait", "waiting_approval", "failed", "canceled"}),
     "retry_wait": frozenset({"ready", "failed", "canceled"}),
     "waiting_approval": frozenset({"ready", "failed", "canceled"}),
     "succeeded": frozenset(),
@@ -468,8 +464,7 @@ async def create_single_step_plan(
                 "action": action,
                 "input": input_data,
                 "depends_on": [],
-                "success_predicate": success_predicate
-                or {"type": "no_error_and_nonempty_output"},
+                "success_predicate": success_predicate or {"type": "no_error_and_nonempty_output"},
                 "max_attempts": max_attempts,
                 "timeout_seconds": timeout_seconds,
             }
@@ -541,8 +536,7 @@ async def create_work_plan(
         revision=revision,
         goal=work_order.objective,
         assumptions=assumptions or [],
-        verification_plan=verification_plan
-        or {"mode": "deterministic_then_independent"},
+        verification_plan=verification_plan or {"mode": "deterministic_then_independent"},
         created_by=actor,
     )
     db.add(plan)
@@ -562,8 +556,7 @@ async def create_work_plan(
             input_=dict(item.get("input") or {}),
             depends_on=depends_on,
             success_predicate=dict(
-                item.get("success_predicate")
-                or {"type": "no_error_and_nonempty_output"}
+                item.get("success_predicate") or {"type": "no_error_and_nonempty_output"}
             ),
             state="pending" if depends_on else "ready",
             risk_level=str(item.get("risk_level") or "low"),
@@ -688,9 +681,7 @@ async def enforce_budgets(db: AsyncSession, *, actor: str = "scheduler") -> int:
     # behaves differently between them.
     candidates = list(
         (
-            await db.execute(
-                select(WorkOrder).where(WorkOrder.status.in_(["ready", "running"]))
-            )
+            await db.execute(select(WorkOrder).where(WorkOrder.status.in_(["ready", "running"])))
         ).scalars()
     )
     blocked = 0
@@ -820,17 +811,13 @@ async def promote_waiting_parents(db: AsyncSession, *, actor: str = "scheduler")
     """
     candidates = list(
         (
-            await db.execute(
-                select(WorkOrder).where(WorkOrder.status == "waiting_external")
-            )
+            await db.execute(select(WorkOrder).where(WorkOrder.status == "waiting_external"))
         ).scalars()
     )
     promoted = 0
     for order in candidates:
         children = list(
-            (
-                await db.execute(select(WorkOrder).where(WorkOrder.parent_id == order.id))
-            ).scalars()
+            (await db.execute(select(WorkOrder).where(WorkOrder.parent_id == order.id))).scalars()
         )
         if not children:
             continue
@@ -991,8 +978,8 @@ async def complete_attempt(
     # (e.g. documents.summarize) is not tracked by this mechanism.
     tokens_used = output.get("tokens_used") if isinstance(output, dict) else None
     if isinstance(tokens_used, dict):
-        attempt.tokens_used = (
-            int(tokens_used.get("input_tokens") or 0) + int(tokens_used.get("output_tokens") or 0)
+        attempt.tokens_used = int(tokens_used.get("input_tokens") or 0) + int(
+            tokens_used.get("output_tokens") or 0
         )
     # Ф1.C: symmetric with tokens_used above — an executor that knows its own
     # USD cost (a cloud-provider call billed by the request, a paid web-search
@@ -1028,11 +1015,7 @@ async def promote_ready_dependents(
     """
     steps = list(
         (
-            await db.execute(
-                select(WorkStep)
-                .where(WorkStep.plan_id == plan_id)
-                .with_for_update()
-            )
+            await db.execute(select(WorkStep).where(WorkStep.plan_id == plan_id).with_for_update())
         ).scalars()
     )
     states = {step.step_key: step.state for step in steps}

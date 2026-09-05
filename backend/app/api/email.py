@@ -3,28 +3,19 @@ email.draft, email.style_match, email.risk_check, email.send, email.suggest_temp
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import String, cast, delete as sa_delete, select, func, or_, and_
+from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.audit.service import log_action
 from app.auth.acting import get_effective_user
 from app.auth.models import UserInfo
-from app.db.session import get_db
-from app.domain.email_counts import invalidate_mailbox_counts, mailbox_counts
-from app.domain.email_access import (
-    hidden_mailbox_names,
-    mailbox_filter,
-    draft_access_filter,
-    may_access_draft,
-    usable_attachment_ids,
-    may_read_mailbox,
-    may_write_mailbox,
-)
 from app.db.models import (
     DraftAction,
     EmailAttachment,
@@ -35,21 +26,23 @@ from app.db.models import (
     MailboxConfig,
     Party,
 )
+from app.db.session import get_db
 from app.domain.email import (
+    AgentComposeRequest,
     AttachmentProcessRequest,
     AttachmentProcessResponse,
+    AttachmentRecognitionResult,
     AttachmentRecognizeRequest,
     AttachmentRecognizeResponse,
-    AttachmentRecognitionResult,
-    AgentComposeRequest,
     BulkActionResult,
     BulkThreadAction,
     ComposeAssistRequest,
     ComposeAssistResponse,
     ComposeSendRequest,
+    DerivedInvoiceOut,
     EmailAttachmentOut,
-    EmailDraftCreate,
     EmailDraftAttachment,
+    EmailDraftCreate,
     EmailDraftOut,
     EmailDraftUpdate,
     EmailFetchRequest,
@@ -61,20 +54,27 @@ from app.domain.email import (
     EmailSearchRequest,
     EmailSearchResponse,
     EmailSendResult,
-    RiskCheckRequest,
+    EmailTemplate,
+    EmailThreadOut,
     RiskCheckResponse,
     RiskFlag,
     StyleAnalyzeRequest,
     StyleAnalyzeResponse,
     TemplateSuggestRequest,
     TemplateSuggestResponse,
-    EmailTemplate,
-    EmailThreadOut,
-    DerivedInvoiceOut,
     ThreadListResponse,
     TriageResultOut,
 )
-from app.audit.service import log_action, add_timeline_event
+from app.domain.email_access import (
+    draft_access_filter,
+    hidden_mailbox_names,
+    mailbox_filter,
+    may_access_draft,
+    may_read_mailbox,
+    may_write_mailbox,
+    usable_attachment_ids,
+)
+from app.domain.email_counts import invalidate_mailbox_counts, mailbox_counts
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -118,7 +118,7 @@ async def fetch_new_emails(
         from app.tasks.celery_app import celery_app
 
         async_result = AsyncResult(task.id, app=celery_app)
-        for _ in range(24):          # ~12 s: an IMAP poll is normally quicker
+        for _ in range(24):  # ~12 s: an IMAP poll is normally quicker
             if async_result.ready():
                 raw = async_result.result
                 result = raw if isinstance(raw, dict) else None
@@ -137,9 +137,7 @@ async def fetch_new_emails(
 
     by_mailbox = result.get("by_mailbox")
     if isinstance(by_mailbox, dict):
-        hidden = set(
-            await hidden_mailbox_names(db, user, for_agent=request_is_agent(request))
-        )
+        hidden = set(await hidden_mailbox_names(db, user, for_agent=request_is_agent(request)))
         fetched = sum(int(v or 0) for k, v in by_mailbox.items() if k not in hidden)
     else:
         fetched = int(result.get("total_emails") or 0)
@@ -313,9 +311,7 @@ async def search_emails(
 
     result = await db.execute(query.offset(offset).limit(page_size))
     messages = result.scalars().all()
-    next_cursor = (
-        str(offset + page_size) if offset + len(messages) < total else None
-    )
+    next_cursor = str(offset + page_size) if offset + len(messages) < total else None
     return EmailSearchResponse(results=messages, total=total, next_cursor=next_cursor)
 
 
@@ -355,8 +351,12 @@ async def list_email_mailboxes(
     hidden = set(await hidden_mailbox_names(db, user, for_agent=for_agent))
 
     cfgs = (
-        await db.execute(select(MailboxConfig).where(MailboxConfig.is_active == True))  # noqa: E712
-    ).scalars().all()
+        (
+            await db.execute(select(MailboxConfig).where(MailboxConfig.is_active == True))  # noqa: E712
+        )
+        .scalars()
+        .all()
+    )
     cfgs = [c for c in cfgs if c.name not in hidden]
     names = [c.name for c in cfgs]
 
@@ -423,7 +423,7 @@ def _thread_out(thread: EmailThread, *, with_messages: bool = False) -> EmailThr
         key=lambda m: m.received_at or m.sent_at or m.created_at,
     )
     inbound = [m for m in msgs if m.is_inbound]
-    sender = (inbound[-1].from_address if inbound else (msgs[-1].from_address if msgs else None))
+    sender = inbound[-1].from_address if inbound else (msgs[-1].from_address if msgs else None)
     # Собеседник: во «Входящих» это отправитель, в «Отправленных» и
     # «Черновиках» — получатель. Раньше список отправленных показывал нас
     # самих, потому что sender там всегда наш адрес.
@@ -448,14 +448,12 @@ def _thread_out(thread: EmailThread, *, with_messages: bool = False) -> EmailThr
         unread_count=thread.unread_count,
         sender=sender,
         counterparty=counterparty,
-        labels=[EmailLabelOut.model_validate(l) for l in (thread.labels or [])],
+        labels=[EmailLabelOut.model_validate(lb) for lb in (thread.labels or [])],
         messages=[EmailMessageOut.model_validate(m) for m in msgs] if with_messages else [],
     )
 
 
-async def _thread_label_counts(
-    db: AsyncSession, label_ids: list[uuid.UUID], *, scope=None
-) -> dict:
+async def _thread_label_counts(db: AsyncSession, label_ids: list[uuid.UUID], *, scope=None) -> dict:
     """Ф8 — counts must match what the person can actually open.
 
     Counting every thread carrying a label, including ones in a colleague's
@@ -517,12 +515,9 @@ async def list_threads(
     top while a person is paging.
     """
     for_agent = request_is_agent(request)
-    query = (
-        select(EmailThread)
-        .options(
-            selectinload(EmailThread.messages),
-            selectinload(EmailThread.labels),
-        )
+    query = select(EmailThread).options(
+        selectinload(EmailThread.messages),
+        selectinload(EmailThread.labels),
     )
     if mailbox:
         if not await may_read_mailbox(db, user, mailbox, for_agent=for_agent):
@@ -593,13 +588,17 @@ async def list_threads(
     # а увидеть это можно было, только открыв переписку.
     if items:
         drafts = (
-            await db.execute(
-                select(DraftAction.draft_data).where(
-                    DraftAction.action_type == "email.send",
-                    DraftAction.executed == False,  # noqa: E712
+            (
+                await db.execute(
+                    select(DraftAction.draft_data).where(
+                        DraftAction.action_type == "email.send",
+                        DraftAction.executed == False,  # noqa: E712
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         waiting = {
             str(d.get("thread_id"))
             for d in drafts
@@ -627,7 +626,9 @@ async def _attach_rule_logs(db: AsyncSession, thread_out: EmailThreadOut) -> Non
         return
     rows = (
         await db.execute(
-            select(EmailRuleLog.message_id, EmailRule.id, EmailRule.name, EmailRuleLog.actions_applied)
+            select(
+                EmailRuleLog.message_id, EmailRule.id, EmailRule.name, EmailRuleLog.actions_applied
+            )
             .join(EmailRule, EmailRule.id == EmailRuleLog.rule_id)
             .where(EmailRuleLog.message_id.in_(ids))
             .order_by(EmailRuleLog.at.desc())
@@ -635,11 +636,13 @@ async def _attach_rule_logs(db: AsyncSession, thread_out: EmailThreadOut) -> Non
     ).all()
     by_message: dict = {}
     for message_id, rule_id, name, actions in rows:
-        by_message.setdefault(message_id, []).append({
-            "rule_id": str(rule_id),
-            "name": name,
-            "actions": [str(a.get("type")) for a in (actions or []) if a.get("type")],
-        })
+        by_message.setdefault(message_id, []).append(
+            {
+                "rule_id": str(rule_id),
+                "name": name,
+                "actions": [str(a.get("type")) for a in (actions or []) if a.get("type")],
+            }
+        )
     for msg in thread_out.messages:
         msg.applied_rules = by_message.get(msg.id, [])
 
@@ -672,9 +675,13 @@ async def _attach_derived_invoices(db: AsyncSession, thread_out: EmailThreadOut)
                 invoice_id=invoice.id,
                 document_id=invoice.document_id,
                 invoice_number=invoice.invoice_number,
-                total_amount=float(invoice.total_amount) if invoice.total_amount is not None else None,
+                total_amount=float(invoice.total_amount)
+                if invoice.total_amount is not None
+                else None,
                 currency=invoice.currency,
-                status=invoice.status.value if hasattr(invoice.status, "value") else str(invoice.status),
+                status=invoice.status.value
+                if hasattr(invoice.status, "value")
+                else str(invoice.status),
                 supplier_name=supplier_name,
                 supplier_matched_by=(invoice.metadata_ or {}).get("supplier_matched_by"),
             )
@@ -687,12 +694,14 @@ async def _attach_derived_invoices(db: AsyncSession, thread_out: EmailThreadOut)
     from app.domain.email_triage import label_for
 
     triage_rows = (
-        await db.execute(
-            select(EmailTriageResult).where(
-                EmailTriageResult.message_id.in_(message_ids)
+        (
+            await db.execute(
+                select(EmailTriageResult).where(EmailTriageResult.message_id.in_(message_ids))
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     by_msg_triage = {t.message_id: t for t in triage_rows}
     for msg in thread_out.messages:
         row = by_msg_triage.get(msg.id)
@@ -745,9 +754,7 @@ async def update_email_preferences(
     """Skill: email.set_preferences — Update per-user mail reading preferences."""
     from app.db.models import User
 
-    row = (
-        await db.execute(select(User).where(User.sub == user.sub))
-    ).scalar_one_or_none()
+    row = (await db.execute(select(User).where(User.sub == user.sub))).scalar_one_or_none()
     if not row:
         raise HTTPException(404, "Пользователь не найден")
     # Reassign rather than mutate: SQLAlchemy does not track in-place changes
@@ -784,9 +791,7 @@ async def _mark_trusted_senders(db: AsyncSession, user: UserInfo, out) -> None:
             m.images_trusted = True
         return
 
-    senders = {
-        _bare_address(m.from_address).lower() for m in out.messages if m.from_address
-    }
+    senders = {_bare_address(m.from_address).lower() for m in out.messages if m.from_address}
     if not senders:
         return
     trusted = set(
@@ -801,7 +806,9 @@ async def _mark_trusted_senders(db: AsyncSession, user: UserInfo, out) -> None:
                     ),
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     for m in out.messages:
         if m.from_address and _bare_address(m.from_address).lower() in trusted:
@@ -849,12 +856,16 @@ async def bulk_thread_action(
     for_agent = request_is_agent(request)
     hidden = set(await hidden_mailbox_names(db, user, for_agent=for_agent))
     threads = (
-        await db.execute(
-            select(EmailThread)
-            .where(EmailThread.id.in_(payload.thread_ids))
-            .options(selectinload(EmailThread.messages))
+        (
+            await db.execute(
+                select(EmailThread)
+                .where(EmailThread.id.in_(payload.thread_ids))
+                .options(selectinload(EmailThread.messages))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     threads = [t for t in threads if t.mailbox not in hidden]
 
     actor = "sveta" if for_agent else "user"
@@ -874,12 +885,12 @@ async def bulk_thread_action(
             t.is_starred = payload.action == "star"
             for m in t.messages or []:
                 m.is_starred = t.is_starred
-                sync_ops.append(
-                    (m, "flagged" if t.is_starred else "unflagged", None)
-                )
+                sync_ops.append((m, "flagged" if t.is_starred else "unflagged", None))
         elif payload.action in ("archive", "trash", "spam", "inbox"):
-            t.folder = "archive" if payload.action == "archive" else (
-                "inbox" if payload.action == "inbox" else payload.action
+            t.folder = (
+                "archive"
+                if payload.action == "archive"
+                else ("inbox" if payload.action == "inbox" else payload.action)
             )
             for m in t.messages or []:
                 m.folder = t.folder
@@ -923,8 +934,9 @@ async def bulk_thread_action(
         from app.core.chat_bus import chat_bus
 
         for t in threads:
-            await chat_bus.publish({"type": "email.thread_updated", "thread_id": str(t.id),
-                                    "mailbox": t.mailbox})
+            await chat_bus.publish(
+                {"type": "email.thread_updated", "thread_id": str(t.id), "mailbox": t.mailbox}
+            )
     except Exception:  # noqa: BLE001
         pass
     logger.info("email_bulk_thread_action", action=payload.action, updated=updated, actor=actor)
@@ -969,7 +981,10 @@ async def correct_triage(
     row.corrected_category = payload.category
     row.corrected_by = user.sub
     await log_action(
-        db, action="email.triage_corrected", entity_type="email", entity_id=message_id,
+        db,
+        action="email.triage_corrected",
+        entity_type="email",
+        entity_id=message_id,
         details={"from": row.category, "to": payload.category, "by": user.sub},
     )
     await db.commit()
@@ -1017,9 +1032,9 @@ async def _queue_sync_ops(db: AsyncSession, ops: list[tuple]) -> None:
     if wanted_local:
         rows = (
             await db.execute(
-                select(MailboxFolder.mailbox, MailboxFolder.local_folder,
-                       MailboxFolder.remote_name)
-                .where(MailboxFolder.local_folder.in_(wanted_local))
+                select(
+                    MailboxFolder.mailbox, MailboxFolder.local_folder, MailboxFolder.remote_name
+                ).where(MailboxFolder.local_folder.in_(wanted_local))
             )
         ).all()
         for box, local, remote in rows:
@@ -1033,13 +1048,20 @@ async def _queue_sync_ops(db: AsyncSession, ops: list[tuple]) -> None:
                 # No server folder mapped for this — better to leave the letter
                 # where it is than to invent a destination.
                 logger.info(
-                    "email_move_not_mapped", mailbox=msg.mailbox, local_folder=extra,
+                    "email_move_not_mapped",
+                    mailbox=msg.mailbox,
+                    local_folder=extra,
                 )
                 continue
             payload = {"remote_folder": remote, "local_folder": extra}
-        db.add(EmailSyncOp(
-            message_id=msg.id, mailbox=msg.mailbox, op=op, payload=payload,
-        ))
+        db.add(
+            EmailSyncOp(
+                message_id=msg.id,
+                mailbox=msg.mailbox,
+                op=op,
+                payload=payload,
+            )
+        )
 
 
 # ── Labels ─────────────────────────────────────────────────────────────────
@@ -1054,12 +1076,12 @@ class AgentActivityItem(BaseModel):
     thread_id: uuid.UUID | None = None
     subject: str | None = None
     from_address: str | None = None
-    kind: str                      # "triage" | "rule"
-    source: str                    # имя правила или "agent"
+    kind: str  # "triage" | "rule"
+    source: str  # имя правила или "agent"
     category: str | None = None
     summary: str | None = None
     performed: list[dict] = []
-    undoable: list[str] = []       # какие действия можно откатить
+    undoable: list[str] = []  # какие действия можно откатить
 
 
 @router.get("/agent-activity", response_model=list[AgentActivityItem])
@@ -1088,7 +1110,7 @@ async def agent_activity(
             .join(EmailMessage, EmailMessage.id == EmailTriageResult.message_id)
             .where(
                 EmailTriageResult.status == "done",
-                *( [EmailMessage.mailbox == mailbox] if mailbox else [] ),
+                *([EmailMessage.mailbox == mailbox] if mailbox else []),
             )
             .order_by(EmailTriageResult.created_at.desc())
             .limit(limit)
@@ -1098,27 +1120,29 @@ async def agent_activity(
         if msg.mailbox in hidden:
             continue
         performed = list(row.performed or [])
-        out.append(AgentActivityItem(
-            id=row.id,
-            at=row.created_at,
-            message_id=msg.id,
-            thread_id=msg.thread_id,
-            subject=msg.subject,
-            from_address=msg.from_address,
-            kind="triage",
-            source="agent",
-            category=row.corrected_category or row.category,
-            summary=row.summary,
-            performed=performed,
-            undoable=[str(a.get("type")) for a in performed if a.get("type") == "label"],
-        ))
+        out.append(
+            AgentActivityItem(
+                id=row.id,
+                at=row.created_at,
+                message_id=msg.id,
+                thread_id=msg.thread_id,
+                subject=msg.subject,
+                from_address=msg.from_address,
+                kind="triage",
+                source="agent",
+                category=row.corrected_category or row.category,
+                summary=row.summary,
+                performed=performed,
+                undoable=[str(a.get("type")) for a in performed if a.get("type") == "label"],
+            )
+        )
 
     rule_rows = (
         await db.execute(
             select(EmailRuleLog, EmailMessage, EmailRule)
             .join(EmailMessage, EmailMessage.id == EmailRuleLog.message_id)
             .join(EmailRule, EmailRule.id == EmailRuleLog.rule_id)
-            .where(*( [EmailMessage.mailbox == mailbox] if mailbox else [] ))
+            .where(*([EmailMessage.mailbox == mailbox] if mailbox else []))
             .order_by(EmailRuleLog.at.desc())
             .limit(limit)
         )
@@ -1127,21 +1151,24 @@ async def agent_activity(
         if msg.mailbox in hidden:
             continue
         applied = list(log.actions_applied or [])
-        out.append(AgentActivityItem(
-            id=log.id,
-            at=log.at,
-            message_id=msg.id,
-            thread_id=msg.thread_id,
-            subject=msg.subject,
-            from_address=msg.from_address,
-            kind="rule",
-            source=rule.name,
-            performed=applied,
-            undoable=[
-                str(a.get("type")) for a in applied
-                if a.get("type") in ("add_label", "move", "assign_role")
-            ],
-        ))
+        out.append(
+            AgentActivityItem(
+                id=log.id,
+                at=log.at,
+                message_id=msg.id,
+                thread_id=msg.thread_id,
+                subject=msg.subject,
+                from_address=msg.from_address,
+                kind="rule",
+                source=rule.name,
+                performed=applied,
+                undoable=[
+                    str(a.get("type"))
+                    for a in applied
+                    if a.get("type") in ("add_label", "move", "assign_role")
+                ],
+            )
+        )
 
     out.sort(key=lambda i: i.at, reverse=True)
     return out[:limit]
@@ -1235,13 +1262,14 @@ async def setup_status(
     не по галочке «мастер пройден».
     """
     from app.db.models import (
-        EmailRule, EmailSignature, EmailTemplateDB, MailboxConfig,
+        EmailRule,
+        EmailSignature,
+        EmailTemplateDB,
+        MailboxConfig,
     )
 
     async def _has(model, *where) -> bool:
-        return (
-            await db.execute(select(model.id).where(*where).limit(1))
-        ).first() is not None
+        return (await db.execute(select(model.id).where(*where).limit(1))).first() is not None
 
     mailbox_ok = await _has(MailboxConfig, MailboxConfig.is_active == True)  # noqa: E712
     smtp_ok = await _has(
@@ -1251,45 +1279,61 @@ async def setup_status(
         MailboxConfig.smtp_host != "",
     )
     personal = (
-        await db.execute(
-            select(MailboxConfig.sweep_enabled).where(
-                MailboxConfig.mailbox_type == "personal",
-                MailboxConfig.owner_sub == user.sub,
+        (
+            await db.execute(
+                select(MailboxConfig.sweep_enabled).where(
+                    MailboxConfig.mailbox_type == "personal",
+                    MailboxConfig.owner_sub == user.sub,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     consent_done = not personal or any(bool(x) for x in personal)
 
     return [
         SetupStep(
-            key="mailbox", title="Подключить почтовый ящик",
+            key="mailbox",
+            title="Подключить почтовый ящик",
             hint="IMAP для чтения писем",
-            done=mailbox_ok, url="/settings?tab=email",
+            done=mailbox_ok,
+            url="/settings?tab=email",
         ),
         SetupStep(
-            key="smtp", title="Указать отправляющий аккаунт",
+            key="smtp",
+            title="Указать отправляющий аккаунт",
             hint="Без SMTP письма можно только читать",
-            done=smtp_ok, url="/settings?tab=email",
+            done=smtp_ok,
+            url="/settings?tab=email",
         ),
         SetupStep(
-            key="consent", title="Решить про личный ящик",
+            key="consent",
+            title="Решить про личный ящик",
             hint="Агент читает личную почту только с вашего согласия",
-            done=consent_done, url="/settings?tab=email",
+            done=consent_done,
+            url="/settings?tab=email",
         ),
         SetupStep(
-            key="rules", title="Создать правило разбора",
+            key="rules",
+            title="Создать правило разбора",
             hint="Метки и папки без участия модели — быстро и предсказуемо",
-            done=await _has(EmailRule), url="/settings?tab=email&sub=rules",
+            done=await _has(EmailRule),
+            url="/settings?tab=email&sub=rules",
         ),
         SetupStep(
-            key="templates", title="Завести шаблон письма",
+            key="templates",
+            title="Завести шаблон письма",
             hint="Запрос КП, напоминание об оплате — в один клик из композера",
-            done=await _has(EmailTemplateDB), url="/settings?tab=email&sub=templates",
+            done=await _has(EmailTemplateDB),
+            url="/settings?tab=email&sub=templates",
         ),
         SetupStep(
-            key="signature", title="Добавить подпись",
+            key="signature",
+            title="Добавить подпись",
             hint="Подставляется в письма автоматически",
-            done=await _has(EmailSignature), url="/settings?tab=email&sub=signatures",
+            done=await _has(EmailSignature),
+            url="/settings?tab=email&sub=signatures",
         ),
     ]
 
@@ -1301,18 +1345,22 @@ async def list_labels(
 ):
     """Skill: email.labels_list — List email labels visible to the caller."""
     rows = (
-        await db.execute(
-            select(EmailLabel).where(
-                or_(EmailLabel.owner_sub.is_(None), EmailLabel.owner_sub == user.sub)
-            ).order_by(EmailLabel.is_system.desc(), EmailLabel.name)
+        (
+            await db.execute(
+                select(EmailLabel)
+                .where(or_(EmailLabel.owner_sub.is_(None), EmailLabel.owner_sub == user.sub))
+                .order_by(EmailLabel.is_system.desc(), EmailLabel.name)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     scope = await mailbox_filter(db, user, mailbox_col=EmailThread.mailbox)
-    counts = await _thread_label_counts(db, [l.id for l in rows], scope=scope)
+    counts = await _thread_label_counts(db, [row.id for row in rows], scope=scope)
     out = []
-    for l in rows:
-        o = EmailLabelOut.model_validate(l)
-        o.thread_count = counts.get(l.id, 0)
+    for row in rows:
+        o = EmailLabelOut.model_validate(row)
+        o.thread_count = counts.get(row.id, 0)
         out.append(o)
     return out
 
@@ -1325,8 +1373,11 @@ async def create_label(
 ):
     """Skill: email.labels_create — Create an email label."""
     label = EmailLabel(
-        name=payload.name, color=payload.color, mailbox=payload.mailbox,
-        owner_sub=user.sub, is_system=False,
+        name=payload.name,
+        color=payload.color,
+        mailbox=payload.mailbox,
+        owner_sub=user.sub,
+        is_system=False,
     )
     db.add(label)
     await db.commit()
@@ -1423,7 +1474,10 @@ async def update_email_policy(
         setattr(row, k, v)
     await db.commit()
     await log_action(
-        db, action="email.policy_update", entity_type="email_policy", entity_id=row.id,
+        db,
+        action="email.policy_update",
+        entity_type="email_policy",
+        entity_id=row.id,
         details={**data, "by": user.sub},
     )
     logger.info("email_policy_updated", by=user.sub, **data)
@@ -1472,12 +1526,18 @@ async def list_signatures(
     from app.db.models import EmailSignature
 
     rows = (
-        await db.execute(
-            select(EmailSignature).where(
-                or_(EmailSignature.owner_sub.is_(None), EmailSignature.owner_sub == user.sub)
-            ).order_by(EmailSignature.is_default.desc(), EmailSignature.name)
+        (
+            await db.execute(
+                select(EmailSignature)
+                .where(
+                    or_(EmailSignature.owner_sub.is_(None), EmailSignature.owner_sub == user.sub)
+                )
+                .order_by(EmailSignature.is_default.desc(), EmailSignature.name)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -1498,22 +1558,30 @@ async def _resolve_signature(db: AsyncSession, user_sub: str | None, mailbox: st
 
     if mailbox:
         row = (
-            await db.execute(
-                select(EmailSignature)
-                .where(EmailSignature.mailbox == mailbox, EmailSignature.owner_sub.is_(None))
-                .order_by(EmailSignature.is_default.desc())
+            (
+                await db.execute(
+                    select(EmailSignature)
+                    .where(EmailSignature.mailbox == mailbox, EmailSignature.owner_sub.is_(None))
+                    .order_by(EmailSignature.is_default.desc())
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if row:
             return row
     if user_sub:
         row = (
-            await db.execute(
-                select(EmailSignature)
-                .where(EmailSignature.owner_sub == user_sub)
-                .order_by(EmailSignature.is_default.desc())
+            (
+                await db.execute(
+                    select(EmailSignature)
+                    .where(EmailSignature.owner_sub == user_sub)
+                    .order_by(EmailSignature.is_default.desc())
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if row:
             return row
     return None
@@ -1531,9 +1599,11 @@ async def create_signature(
     is_shared = (payload.shared or payload.mailbox) and UserRole.admin in (user.roles or [])
     owner = None if is_shared else user.sub
     sig = EmailSignature(
-        name=payload.name, body_html=payload.body_html,
+        name=payload.name,
+        body_html=payload.body_html,
         mailbox=payload.mailbox if is_shared else None,
-        owner_sub=owner, is_default=payload.is_default,
+        owner_sub=owner,
+        is_default=payload.is_default,
     )
     if payload.is_default:
         await _clear_default_signatures(db, owner, sig.mailbox)
@@ -1556,7 +1626,9 @@ async def update_signature(
     sig = await db.get(EmailSignature, sig_id)
     if not sig:
         raise HTTPException(404, "Signature not found")
-    if sig.owner_sub not in (None, user.sub) or (sig.owner_sub is None and UserRole.admin not in (user.roles or [])):
+    if sig.owner_sub not in (None, user.sub) or (
+        sig.owner_sub is None and UserRole.admin not in (user.roles or [])
+    ):
         raise HTTPException(403, "Нет прав на эту подпись")
     data = payload.model_dump(exclude_none=True)
     if data.get("is_default"):
@@ -1580,7 +1652,9 @@ async def delete_signature(
     sig = await db.get(EmailSignature, sig_id)
     if not sig:
         raise HTTPException(404, "Signature not found")
-    if sig.owner_sub not in (None, user.sub) or (sig.owner_sub is None and UserRole.admin not in (user.roles or [])):
+    if sig.owner_sub not in (None, user.sub) or (
+        sig.owner_sub is None and UserRole.admin not in (user.roles or [])
+    ):
         raise HTTPException(403, "Нет прав на эту подпись")
     await db.delete(sig)
     await db.commit()
@@ -1590,7 +1664,11 @@ async def _clear_default_signatures(db: AsyncSession, owner_sub, mailbox):
     from app.db.models import EmailSignature
 
     q = select(EmailSignature).where(EmailSignature.is_default == True)  # noqa: E712
-    q = q.where(EmailSignature.owner_sub == owner_sub) if owner_sub else q.where(EmailSignature.owner_sub.is_(None))
+    q = (
+        q.where(EmailSignature.owner_sub == owner_sub)
+        if owner_sub
+        else q.where(EmailSignature.owner_sub.is_(None))
+    )
     if mailbox:
         q = q.where(EmailSignature.mailbox == mailbox)
     for row in (await db.execute(q)).scalars().all():
@@ -1810,9 +1888,7 @@ async def list_drafts(
     for d in drafts:
         ordered = [
             known[pid]
-            for pid in (
-                _uuid_or_none(a) for a in (d.draft_data or {}).get("attachment_ids") or []
-            )
+            for pid in (_uuid_or_none(a) for a in (d.draft_data or {}).get("attachment_ids") or [])
             if pid in known
         ]
         out.append(_draft_to_out(d, ordered))
@@ -1826,9 +1902,7 @@ async def get_draft(
     db: AsyncSession = Depends(get_db),
 ):
     """Get email draft."""
-    result = await db.execute(
-        select(DraftAction).where(DraftAction.id == draft_id)
-    )
+    result = await db.execute(select(DraftAction).where(DraftAction.id == draft_id))
     draft = result.scalar_one_or_none()
     if not draft or not await may_access_draft(db, user, draft.draft_data):
         raise HTTPException(404, "Draft not found")
@@ -1885,15 +1959,15 @@ async def _draft_attachments(db: AsyncSession, drafts: list[DraftAction]) -> dic
     rows = (
         await db.execute(
             select(
-                EmailAttachment.id, EmailAttachment.filename,
-                EmailAttachment.size, EmailAttachment.content_type,
+                EmailAttachment.id,
+                EmailAttachment.filename,
+                EmailAttachment.size,
+                EmailAttachment.content_type,
             ).where(EmailAttachment.id.in_(list(ids)))
         )
     ).all()
     return {
-        r[0]: EmailDraftAttachment(
-            id=r[0], filename=r[1], size=r[2], content_type=r[3]
-        )
+        r[0]: EmailDraftAttachment(id=r[0], filename=r[1], size=r[2], content_type=r[3])
         for r in rows
     }
 
@@ -1902,9 +1976,7 @@ async def _draft_out_with_attachments(db: AsyncSession, draft: DraftAction) -> E
     known = await _draft_attachments(db, [draft])
     ordered = [
         known[pid]
-        for pid in (
-            _uuid_or_none(a) for a in (draft.draft_data or {}).get("attachment_ids") or []
-        )
+        for pid in (_uuid_or_none(a) for a in (draft.draft_data or {}).get("attachment_ids") or [])
         if pid in known
     ]
     return _draft_to_out(draft, ordered)
@@ -1930,8 +2002,8 @@ def _resolve_send_delay(payload: ComposeSendRequest) -> int:
     if payload.send_at is not None:
         target = payload.send_at
         if target.tzinfo is None:
-            target = target.replace(tzinfo=timezone.utc)
-        seconds = int((target - datetime.now(timezone.utc)).total_seconds())
+            target = target.replace(tzinfo=UTC)
+        seconds = int((target - datetime.now(UTC)).total_seconds())
         return max(0, min(seconds, _MAX_SCHEDULE_SECONDS))
     if payload.delay_seconds is None:
         return 0
@@ -1946,8 +2018,9 @@ async def compose_and_send(
 ):
     """Send an email composed by a human. Not the agent gate — a person
     hitting Send is the authorisation. Personal mailboxes: owner only."""
-    from app.domain.email_send import create_reply_draft
     from sqlalchemy.orm.attributes import flag_modified
+
+    from app.domain.email_send import create_reply_draft
 
     if not await may_write_mailbox(db, user, payload.mailbox):
         raise HTTPException(403, "Нет доступа для отправки из этого ящика")
@@ -1975,7 +2048,9 @@ async def compose_and_send(
             body_text=payload.body_text,
             mailbox=payload.mailbox,
             attachment_ids=[str(a) for a in payload.attachment_ids],
-            in_reply_to_message_id=str(payload.in_reply_to_message_id) if payload.in_reply_to_message_id else None,
+            in_reply_to_message_id=str(payload.in_reply_to_message_id)
+            if payload.in_reply_to_message_id
+            else None,
             status="approved",
             sent_by="user",
         )
@@ -2021,25 +2096,30 @@ async def compose_and_send(
         d = dict(draft.draft_data or {})
         d["status"] = "risk_checked"
         d["risk_flags"] = [
-            {"code": f.code, "severity": f.severity, "message": f.message,
-             "can_override": f.can_override}
+            {
+                "code": f.code,
+                "severity": f.severity,
+                "message": f.message,
+                "can_override": f.can_override,
+            }
             for f in detected
         ]
         draft.draft_data = d
         flag_modified(draft, "draft_data")
         await db.commit()
         return EmailSendResult(
-            draft_id=draft.id, status="blocked",
+            draft_id=draft.id,
+            status="blocked",
             blocked_by=[{"code": f.code, "message": f.message} for f in blocking],
-            warnings=[
-                {"code": f.code, "message": f.message}
-                for f in detected if not f.blocking
-            ],
+            warnings=[{"code": f.code, "message": f.message} for f in detected if not f.blocking],
         )
 
     if acknowledged:
         await log_action(
-            db, action="email.risk_override", entity_type="email", entity_id=draft.id,
+            db,
+            action="email.risk_override",
+            entity_type="email",
+            entity_id=draft.id,
             details={"codes": sorted(acknowledged), "by": user.sub},
         )
 
@@ -2059,27 +2139,33 @@ async def compose_and_send(
     d["status"] = "queued"
     d["task_id"] = task.id
     d["risk_flags"] = [
-        {"code": f.code, "severity": f.severity, "message": f.message,
-         "can_override": f.can_override}
+        {
+            "code": f.code,
+            "severity": f.severity,
+            "message": f.message,
+            "can_override": f.can_override,
+        }
         for f in detected
     ]
     if delay > 0:
-        d["send_after"] = (
-            datetime.now(timezone.utc) + timedelta(seconds=delay)
-        ).isoformat()
+        d["send_after"] = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
     draft.draft_data = d
     flag_modified(draft, "draft_data")
     await db.commit()
 
     await log_action(
-        db, action="email.send", entity_type="email", entity_id=draft.id,
+        db,
+        action="email.send",
+        entity_type="email",
+        entity_id=draft.id,
         details={"to": payload.to_addresses, "subject": payload.subject, "by": user.sub},
     )
     try:
         from app.api.email_contacts import remember_recipients
 
         await remember_recipients(
-            db, owner_sub=user.sub,
+            db,
+            owner_sub=user.sub,
             addresses=list(payload.to_addresses) + list(payload.cc_addresses),
         )
         await db.commit()
@@ -2088,13 +2174,16 @@ async def compose_and_send(
         # nothing anywhere said why.
         logger.warning("email_remember_recipients_failed", error=str(exc))
     logger.info(
-        "email_user_send_queued", draft_id=str(draft.id), user=user.sub, delay=delay,
+        "email_user_send_queued",
+        draft_id=str(draft.id),
+        user=user.sub,
+        delay=delay,
     )
     return EmailSendResult(
-        task_id=task.id, draft_id=draft.id, status="queued",
-        warnings=[
-            {"code": f.code, "message": f.message} for f in detected if not f.blocking
-        ],
+        task_id=task.id,
+        draft_id=draft.id,
+        status="queued",
+        warnings=[{"code": f.code, "message": f.message} for f in detected if not f.blocking],
         undo_seconds=delay,
     )
 
@@ -2129,7 +2218,10 @@ async def cancel_send(
     draft.draft_data = data
     flag_modified(draft, "draft_data")
     await log_action(
-        db, action="email.send_cancelled", entity_type="email", entity_id=draft.id,
+        db,
+        action="email.send_cancelled",
+        entity_type="email",
+        entity_id=draft.id,
         details={"by": user.sub},
     )
     await db.commit()
@@ -2167,18 +2259,12 @@ async def analyze_style(
     query = select(EmailMessage).order_by(EmailMessage.received_at.desc())
 
     if payload.email_address:
-        query = query.where(
-            EmailMessage.from_address.ilike(f"%{payload.email_address}%")
-        )
+        query = query.where(EmailMessage.from_address.ilike(f"%{payload.email_address}%"))
     elif payload.supplier_id:
-        party_result = await db.execute(
-            select(Party).where(Party.id == payload.supplier_id)
-        )
+        party_result = await db.execute(select(Party).where(Party.id == payload.supplier_id))
         party = party_result.scalar_one_or_none()
         if party and party.contact_email:
-            query = query.where(
-                EmailMessage.from_address.ilike(f"%{party.contact_email}%")
-            )
+            query = query.where(EmailMessage.from_address.ilike(f"%{party.contact_email}%"))
 
     query = query.limit(payload.sample_count)
     result = await db.execute(query)
@@ -2186,7 +2272,9 @@ async def analyze_style(
 
     if not messages:
         return StyleAnalyzeResponse(
-            tone="neutral", language="ru", sample_count=0,
+            tone="neutral",
+            language="ru",
+            sample_count=0,
             recommendations=["Нет предыдущей переписки для анализа"],
         )
 
@@ -2213,7 +2301,9 @@ async def analyze_style(
     except Exception as e:
         logger.warning("style_analyze_failed", error=str(e))
         return StyleAnalyzeResponse(
-            tone="neutral", language="ru", sample_count=len(messages),
+            tone="neutral",
+            language="ru",
+            sample_count=len(messages),
             recommendations=["Автоанализ недоступен, используйте нейтральный тон"],
         )
 
@@ -2246,16 +2336,18 @@ async def compose_assist(
     """
     from app.tasks.email_compose_task import compose_assist_task
 
-    task = compose_assist_task.delay({
-        "subject": payload.subject,
-        "body": payload.body,
-        "instruction": payload.instruction,
-        "thread_id": str(payload.thread_id) if payload.thread_id else None,
-        "supplier_id": str(payload.supplier_id) if payload.supplier_id else None,
-        "invoice_id": str(payload.invoice_id) if payload.invoice_id else None,
-        "mailbox": payload.mailbox,
-        "acting_user_sub": user.sub,
-    })
+    task = compose_assist_task.delay(
+        {
+            "subject": payload.subject,
+            "body": payload.body,
+            "instruction": payload.instruction,
+            "thread_id": str(payload.thread_id) if payload.thread_id else None,
+            "supplier_id": str(payload.supplier_id) if payload.supplier_id else None,
+            "invoice_id": str(payload.invoice_id) if payload.invoice_id else None,
+            "mailbox": payload.mailbox,
+            "acting_user_sub": user.sub,
+        }
+    )
     return ComposeAssistStart(task_id=task.id)
 
 
@@ -2268,8 +2360,10 @@ async def compose_assist_poll(task_id: str):
 
     def _progress() -> list[str]:
         try:
-            from app.utils.redis_client import get_async_redis  # noqa: F401
-            from app.utils.redis_client import get_sync_redis
+            from app.utils.redis_client import (
+                get_async_redis,  # noqa: F401
+                get_sync_redis,
+            )
 
             return [
                 x.decode() if isinstance(x, bytes) else str(x)
@@ -2373,9 +2467,7 @@ async def risk_check(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.risk_check — Check email draft for risks before sending."""
-    result = await db.execute(
-        select(DraftAction).where(DraftAction.id == draft_id)
-    )
+    result = await db.execute(select(DraftAction).where(DraftAction.id == draft_id))
     draft = result.scalar_one_or_none()
     if not draft or not await may_access_draft(db, user, draft.draft_data):
         raise HTTPException(404, "Draft not found")
@@ -2401,7 +2493,9 @@ async def _run_risk_check(db: AsyncSession, draft) -> tuple[bool, list["RiskFlag
     detected = await evaluate_draft(db, data)
     flags: list[RiskFlag] = [
         RiskFlag(
-            code=f.code, severity=f.severity, message=f.message,
+            code=f.code,
+            severity=f.severity,
+            message=f.message,
             can_override=f.can_override,
         )
         for f in detected
@@ -2463,9 +2557,7 @@ async def send_email(
     endpoint had neither — any authenticated user could send any draft,
     including one composed inside a colleague's personal mailbox.
     """
-    result = await db.execute(
-        select(DraftAction).where(DraftAction.id == draft_id)
-    )
+    result = await db.execute(select(DraftAction).where(DraftAction.id == draft_id))
     draft = result.scalar_one_or_none()
     if not draft or not await may_access_draft(db, user, draft.draft_data):
         raise HTTPException(404, "Draft not found")
@@ -2560,7 +2652,8 @@ async def send_email(
         data = draft.draft_data or {}
         logger.info(
             "email_send_ran_risk_check_inline",
-            draft_id=str(draft_id), is_safe=is_safe,
+            draft_id=str(draft_id),
+            is_safe=is_safe,
             flags=[f.code for f in fresh_flags],
         )
 
@@ -2581,7 +2674,10 @@ async def send_email(
         # когда подтверждение действительно что-то сняло: иначе в журнале
         # копились бы «переопределения», ничего не переопределившие.
         await log_action(
-            db, action="email.risk_override", entity_type="email", entity_id=draft.id,
+            db,
+            action="email.risk_override",
+            entity_type="email",
+            entity_id=draft.id,
             details={"codes": suppressed, "by": user.sub, "path": "agent_send"},
         )
         await db.commit()
@@ -2605,11 +2701,13 @@ async def send_email(
     # Dispatch SMTP sending to Celery (non-blocking)
     try:
         from app.tasks.email_sender import send_email_draft
+
         task = send_email_draft.delay(str(draft_id))
         # Idempotency is enforced by the 400 above (draft.executed) and by the
         # task itself; do NOT pre-set executed here or the task returns
         # "already_sent" without sending anything.
         from sqlalchemy.orm.attributes import flag_modified
+
         draft.draft_data = {**(data), "status": "queued", "task_id": task.id}
         flag_modified(draft, "draft_data")
         await db.commit()
@@ -2736,9 +2834,7 @@ async def delete_thread(
     if not thread or not await may_read_mailbox(db, user, thread.mailbox):
         raise HTTPException(status_code=404, detail="Тред не найден")
 
-    result = await db.execute(
-        select(EmailMessage).where(EmailMessage.thread_id == thread_id)
-    )
+    result = await db.execute(select(EmailMessage).where(EmailMessage.thread_id == thread_id))
     messages = result.scalars().all()
     for msg in messages:
         await _delete_message_cascade(msg, db)
@@ -2786,21 +2882,27 @@ async def process_email_attachment(
     """
     from app.db.models import Document, DocumentLink
 
-    msg = (await db.execute(select(EmailMessage).where(EmailMessage.id == message_id))).scalar_one_or_none()
+    msg = (
+        await db.execute(select(EmailMessage).where(EmailMessage.id == message_id))
+    ).scalar_one_or_none()
     if msg is None:
         raise HTTPException(status_code=404, detail="Email message not found")
     if not await may_read_mailbox(db, current_user, msg.mailbox):
         raise HTTPException(status_code=404, detail="Email message not found")
 
     links = (
-        await db.execute(
-            select(DocumentLink).where(
-                DocumentLink.linked_entity_type == "email_message",
-                DocumentLink.linked_entity_id == message_id,
-                DocumentLink.link_type == "attachment",
+        (
+            await db.execute(
+                select(DocumentLink).where(
+                    DocumentLink.linked_entity_type == "email_message",
+                    DocumentLink.linked_entity_id == message_id,
+                    DocumentLink.link_type == "attachment",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     doc: Document | None = None
     for link in links:
         candidate = await db.get(Document, link.document_id)
@@ -2808,13 +2910,17 @@ async def process_email_attachment(
             doc = candidate
             break
     if doc is None:
-        raise HTTPException(status_code=404, detail=f"Attachment '{payload.filename}' not found on this message")
+        raise HTTPException(
+            status_code=404, detail=f"Attachment '{payload.filename}' not found on this message"
+        )
 
     if payload.target == "document":
         from app.tasks.extraction import process_document
 
         task = process_document.delay(str(doc.id), force=True)
-        logger.info("email_attachment_reprocess_document", document_id=str(doc.id), user=current_user.sub)
+        logger.info(
+            "email_attachment_reprocess_document", document_id=str(doc.id), user=current_user.sub
+        )
         return AttachmentProcessResponse(document_id=doc.id, target="document", task_id=task.id)
 
     if payload.target == "drawing":
@@ -2834,8 +2940,12 @@ async def process_email_attachment(
             document_id=doc.id,
             created_by=current_user.sub,
         )
-        logger.info("email_attachment_to_drawing", document_id=str(doc.id), drawing_id=str(drawing.id))
-        return AttachmentProcessResponse(document_id=doc.id, target="drawing", drawing_id=drawing.id, task_id=task_id)
+        logger.info(
+            "email_attachment_to_drawing", document_id=str(doc.id), drawing_id=str(drawing.id)
+        )
+        return AttachmentProcessResponse(
+            document_id=doc.id, target="drawing", drawing_id=drawing.id, task_id=task_id
+        )
 
     raise HTTPException(status_code=422, detail="target must be 'document' or 'drawing'")
 
@@ -2855,7 +2965,7 @@ def _content_disposition(kind: str, filename: str) -> str:
 
     ascii_name = (filename or "attachment").encode("ascii", "replace").decode("ascii")
     ascii_name = ascii_name.replace('"', "_").replace("\\", "_").replace("\r", "").replace("\n", "")
-    return f'{kind}; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename or "attachment")}'
+    return f"{kind}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename or 'attachment')}"
 
 
 # Types that a browser will happily execute in the origin that served them.
@@ -2863,13 +2973,22 @@ def _content_disposition(kind: str, filename: str) -> str:
 # the viewer's session cookie attached, so these are always downloaded, never
 # rendered — regardless of what the sender labelled them.
 _EXECUTABLE_ATTACHMENT_TYPES = {
-    "text/html", "application/xhtml+xml", "image/svg+xml",
-    "text/xml", "application/xml", "text/xsl", "application/mathml+xml",
+    "text/html",
+    "application/xhtml+xml",
+    "image/svg+xml",
+    "text/xml",
+    "application/xml",
+    "text/xsl",
+    "application/mathml+xml",
 }
 # The only types worth previewing in place; everything else is a download.
 _INLINE_SAFE_TYPES = {
     "application/pdf",
-    "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
     "text/plain",
 }
 
@@ -2894,13 +3013,17 @@ async def get_attachment_content(
     if not msg or not await may_read_mailbox(db, user, msg.mailbox):
         raise HTTPException(404, "Not found")
     att = (
-        await db.execute(
-            select(EmailAttachment).where(
-                EmailAttachment.message_id == message_id,
-                EmailAttachment.filename == filename,
+        (
+            await db.execute(
+                select(EmailAttachment).where(
+                    EmailAttachment.message_id == message_id,
+                    EmailAttachment.filename == filename,
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if not att or not att.storage_path:
         raise HTTPException(404, "Attachment not found")
     try:
@@ -2912,8 +3035,10 @@ async def get_attachment_content(
 
     declared = (att.content_type or "").split(";")[0].strip().lower()
     executable = declared in _EXECUTABLE_ATTACHMENT_TYPES
-    media_type = "application/octet-stream" if executable else (
-        att.content_type or "application/octet-stream"
+    media_type = (
+        "application/octet-stream"
+        if executable
+        else (att.content_type or "application/octet-stream")
     )
     inline_ok = disposition == "inline" and not executable and declared in _INLINE_SAFE_TYPES
     return StreamingResponse(
@@ -2951,14 +3076,18 @@ async def download_all_attachments(
     if not msg or not await may_read_mailbox(db, user, msg.mailbox):
         raise HTTPException(404, "Not found")
     rows = (
-        await db.execute(
-            select(EmailAttachment).where(
-                EmailAttachment.message_id == message_id,
-                EmailAttachment.is_inline == False,  # noqa: E712
-                EmailAttachment.storage_path.isnot(None),
+        (
+            await db.execute(
+                select(EmailAttachment).where(
+                    EmailAttachment.message_id == message_id,
+                    EmailAttachment.is_inline == False,  # noqa: E712
+                    EmailAttachment.storage_path.isnot(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not rows:
         raise HTTPException(404, "Вложений нет")
 
@@ -2975,7 +3104,8 @@ async def download_all_attachments(
                 # One unreachable object must not cost the user the other ten.
                 logger.warning(
                     "email_zip_attachment_missing",
-                    attachment_id=str(att.id), error=str(exc),
+                    attachment_id=str(att.id),
+                    error=str(exc),
                 )
                 missing.append(att.filename)
                 continue
@@ -2991,8 +3121,7 @@ async def download_all_attachments(
             # Silence here would look like the files never existed.
             zf.writestr(
                 "НЕ УДАЛОСЬ ПРОЧИТАТЬ.txt",
-                "Эти вложения не удалось получить из хранилища:\n"
-                + "\n".join(missing),
+                "Эти вложения не удалось получить из хранилища:\n" + "\n".join(missing),
             )
     if len(missing) == len(rows):
         raise HTTPException(502, "Ни одно вложение не удалось получить из хранилища")
@@ -3028,6 +3157,7 @@ async def download_message_eml(
     Keeping the true source is a storage decision, not a bug fix — see Ф8.
     """
     from email.message import EmailMessage as MimeMessage
+
     from fastapi.responses import Response
 
     msg = await db.get(EmailMessage, message_id)
@@ -3063,10 +3193,10 @@ async def download_message_eml(
         mime.add_alternative(msg.body_html, subtype="html")
 
     attachments = (
-        await db.execute(
-            select(EmailAttachment).where(EmailAttachment.message_id == message_id)
-        )
-    ).scalars().all()
+        (await db.execute(select(EmailAttachment).where(EmailAttachment.message_id == message_id)))
+        .scalars()
+        .all()
+    )
     for att in attachments:
         if not att.storage_path:
             continue
@@ -3114,13 +3244,17 @@ async def get_inline_part(
     if not msg or not await may_read_mailbox(db, user, msg.mailbox):
         raise HTTPException(404, "Not found")
     att = (
-        await db.execute(
-            select(EmailAttachment).where(
-                EmailAttachment.message_id == message_id,
-                EmailAttachment.content_id == content_id,
+        (
+            await db.execute(
+                select(EmailAttachment).where(
+                    EmailAttachment.message_id == message_id,
+                    EmailAttachment.content_id == content_id,
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if not att or not att.storage_path:
         raise HTTPException(404, "Inline part not found")
     declared = (att.content_type or "").split(";")[0].strip().lower()
@@ -3182,13 +3316,17 @@ async def recognize_attachment(
                     str(doc.doc_type) if doc.doc_type else None
                 )
                 art = (
-                    await db.execute(
-                        select(DocumentArtifact).where(
-                            DocumentArtifact.document_id == doc_id,
-                            DocumentArtifact.artifact_type.in_(("extracted_text", "ocr_text")),
+                    (
+                        await db.execute(
+                            select(DocumentArtifact).where(
+                                DocumentArtifact.document_id == doc_id,
+                                DocumentArtifact.artifact_type.in_(("extracted_text", "ocr_text")),
+                            )
                         )
                     )
-                ).scalars().first()
+                    .scalars()
+                    .first()
+                )
                 if art is not None:
                     try:
                         from app.storage import download_file
@@ -3245,9 +3383,7 @@ async def agent_reply_draft(
     thread = await db.get(EmailThread, thread_id)
     if not thread:
         raise HTTPException(404, "Thread not found")
-    if not await may_read_mailbox(
-        db, user, thread.mailbox, for_agent=request_is_agent(request)
-    ):
+    if not await may_read_mailbox(db, user, thread.mailbox, for_agent=request_is_agent(request)):
         raise HTTPException(404, "Thread not found")
     if not await may_write_mailbox(db, user, thread.mailbox):
         raise HTTPException(403, "Нет доступа для отправки из этого ящика")
@@ -3264,8 +3400,12 @@ async def agent_reply_draft(
     res = await generate_draft_body(
         db,
         intent=payload.intent,
-        context=ComposeContext(thread_id=thread_id, supplier_id=payload.supplier_id,
-                               invoice_id=payload.invoice_id, mailbox=thread.mailbox),
+        context=ComposeContext(
+            thread_id=thread_id,
+            supplier_id=payload.supplier_id,
+            invoice_id=payload.invoice_id,
+            mailbox=thread.mailbox,
+        ),
         tone_override=payload.tone,
         acting_user_sub=user.sub,
     )

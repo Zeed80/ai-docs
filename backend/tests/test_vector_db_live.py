@@ -31,11 +31,11 @@ def _services_up() -> bool:
 
 _DOCS = {
     "фреза.pdf": 'Счёт ООО "НВС Компани" ИНН 7707083893. Фреза концевая твердосплавная '
-                 "Ø10, сверло спиральное Ø5. Металлорежущий инструмент для станка.",
+    "Ø10, сверло спиральное Ø5. Металлорежущий инструмент для станка.",
     "графит.pdf": 'Счёт ООО "Графит-Гарант". Графитовый блок ЭГ-15, графитовые электроды. '
-                  "Углеродные материалы для электроэрозионной обработки.",
+    "Углеродные материалы для электроэрозионной обработки.",
     "подшипник.pdf": 'Счёт АО "Снабжение". Подшипник шариковый 6205, подшипник роликовый. '
-                     "Опорные узлы для валов и шпинделей.",
+    "Опорные узлы для валов и шпинделей.",
 }
 
 
@@ -57,8 +57,12 @@ def test_invoice_vector_indexing_and_semantic_search() -> None:
                 vec = await embed_text(text)
                 assert len(vec) == profile.dimension and any(vec)
                 upsert_document(
-                    str(uuid.uuid4()), vec, file_name=file_name, doc_type="invoice",
-                    status="approved", collection_name=temp,
+                    str(uuid.uuid4()),
+                    vec,
+                    file_name=file_name,
+                    doc_type="invoice",
+                    status="approved",
+                    collection_name=temp,
                 )
 
             def _search(qvec, limit):
@@ -68,7 +72,9 @@ def test_invoice_vector_indexing_and_semantic_search() -> None:
                     return client.search(collection_name=temp, query_vector=qvec, limit=limit)
 
             # Semantic match without shared exact words → cutting-tool invoice.
-            hits = _search(await embed_text("режущий инструмент для обработки металла на станке с ЧПУ"), 3)
+            hits = _search(
+                await embed_text("режущий инструмент для обработки металла на станке с ЧПУ"), 3
+            )
             assert hits[0].payload.get("file_name") == "фреза.pdf", [
                 (h.payload.get("file_name"), round(h.score, 3)) for h in hits
             ]

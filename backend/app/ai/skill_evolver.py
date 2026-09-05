@@ -12,14 +12,12 @@ Continuously monitors skill performance and automatically improves underperformi
 
 This creates a positive feedback loop where the system gets smarter over time.
 """
+
 from __future__ import annotations
 
-import asyncio
 import json
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from dataclasses import dataclass
 
 import structlog
 
@@ -27,12 +25,12 @@ logger = structlog.get_logger()
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-FAILURE_THRESHOLD = 0.25      # skills failing > 25% → evolve
-MIN_CALLS_TO_EVOLVE = 10      # need at least 10 calls for reliable stats
-SHADOW_TRAFFIC_PCT = 0.10     # route 10% to new version during A/B test
-MIN_AB_CALLS = 50             # minimum calls before declaring A/B winner
-WIN_MARGIN = 0.05             # v2 must beat v1 by 5pp to be promoted
-MAX_EVOLUTIONS_PER_RUN = 3    # don't evolve more than N skills per scheduled run
+FAILURE_THRESHOLD = 0.25  # skills failing > 25% → evolve
+MIN_CALLS_TO_EVOLVE = 10  # need at least 10 calls for reliable stats
+SHADOW_TRAFFIC_PCT = 0.10  # route 10% to new version during A/B test
+MIN_AB_CALLS = 50  # minimum calls before declaring A/B winner
+WIN_MARGIN = 0.05  # v2 must beat v1 by 5pp to be promoted
+MAX_EVOLUTIONS_PER_RUN = 3  # don't evolve more than N skills per scheduled run
 
 # ── A/B state (in-memory, backed by Redis) ────────────────────────────────────
 
@@ -43,7 +41,7 @@ _AUDIT_KEY = "skill_evolver:audit"
 @dataclass
 class ShadowConfig:
     skill_name: str
-    v2_name: str          # full path to v2 module
+    v2_name: str  # full path to v2 module
     started_at: float
     v1_calls: int = 0
     v1_success: int = 0
@@ -67,20 +65,23 @@ class ShadowConfig:
             "skill_name": self.skill_name,
             "v2_name": self.v2_name,
             "started_at": self.started_at,
-            "v1_calls": self.v1_calls, "v1_success": self.v1_success,
-            "v2_calls": self.v2_calls, "v2_success": self.v2_success,
+            "v1_calls": self.v1_calls,
+            "v1_success": self.v1_success,
+            "v2_calls": self.v2_calls,
+            "v2_success": self.v2_success,
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ShadowConfig":
+    def from_dict(cls, d: dict) -> ShadowConfig:
         return cls(**d)
 
 
 # ── Skill scanner ──────────────────────────────────────────────────────────────
 
+
 async def scan_underperforming_skills() -> list[str]:
     """Return skill names that are below the failure threshold."""
-    from app.ai.orchestrator_memory import get_skill_scores, _SKILL_KEY_PREFIX
+    from app.ai.orchestrator_memory import _SKILL_KEY_PREFIX
     from app.utils.redis_client import get_async_redis
 
     r = get_async_redis()
@@ -113,13 +114,15 @@ async def scan_underperforming_skills() -> list[str]:
 
 # ── Context builder for evolution ─────────────────────────────────────────────
 
+
 async def _build_evolution_context(skill_name: str) -> str:
     """Build rich context for CapabilityBuilder: include failures, original code."""
     parts: list[str] = [f"Улучши существующий навык: **{skill_name}**"]
 
     # Load original skill code
     try:
-        from app.ai.capability_builder import _sanitize_skill_filename, _GENERATED_ROOT
+        from app.ai.capability_builder import _GENERATED_ROOT, _sanitize_skill_filename
+
         safe = _sanitize_skill_filename(skill_name)
         skill_path = _GENERATED_ROOT / f"{safe}.py"
         if skill_path.exists():
@@ -130,15 +133,18 @@ async def _build_evolution_context(skill_name: str) -> str:
 
     # Load failure examples from Redis
     try:
-        from app.ai.orchestrator_memory import _SKILL_KEY_PREFIX, _INTENT_KEY_PREFIX
+        from app.ai.orchestrator_memory import _SKILL_KEY_PREFIX
         from app.utils.redis_client import get_async_redis
+
         r = get_async_redis()
 
         # Skill stats
         raw = await r.get(_SKILL_KEY_PREFIX + skill_name)
         if raw:
             stats = json.loads(raw)
-            failure_rate = stats.get("fail", 0) / max(1, stats.get("success", 0) + stats.get("fail", 0))
+            failure_rate = stats.get("fail", 0) / max(
+                1, stats.get("success", 0) + stats.get("fail", 0)
+            )
             parts.append(
                 f"\n## Статистика использования\n"
                 f"- Успехов: {stats.get('success', 0)}\n"
@@ -165,6 +171,7 @@ async def _build_evolution_context(skill_name: str) -> str:
 
 # ── Evolution orchestration ────────────────────────────────────────────────────
 
+
 async def evolve_skill(skill_name: str) -> bool:
     """Attempt to improve a skill. Returns True if a new version was deployed.
 
@@ -189,6 +196,7 @@ async def evolve_skill(skill_name: str) -> bool:
 
         # Generate improved version with CapabilityBuilder + self_refine
         from app.ai.capability_builder import build_capability
+
         v2_name = f"{skill_name}.v2.{int(time.time())}"
 
         result = await build_capability(
@@ -224,6 +232,7 @@ async def evolve_skill(skill_name: str) -> bool:
 
 # ── A/B decision ───────────────────────────────────────────────────────────────
 
+
 async def evaluate_shadow_results() -> None:
     """Check all active shadow deployments and promote or rollback."""
     configs = await _load_all_shadow_configs()
@@ -249,6 +258,7 @@ async def _promote_v2(config: ShadowConfig) -> None:
     )
     try:
         from app.ai.capability_builder import _GENERATED_ROOT, _sanitize_skill_filename
+
         v1_path = _GENERATED_ROOT / f"{_sanitize_skill_filename(config.skill_name)}.py"
         v2_path = _GENERATED_ROOT / f"{_sanitize_skill_filename(config.v2_name)}.py"
         if v2_path.exists():
@@ -276,6 +286,7 @@ async def _rollback_v2(config: ShadowConfig) -> None:
     )
     try:
         from app.ai.capability_builder import _GENERATED_ROOT, _sanitize_skill_filename
+
         v2_path = _GENERATED_ROOT / f"{_sanitize_skill_filename(config.v2_name)}.py"
         if v2_path.exists():
             v2_path.unlink()
@@ -292,12 +303,14 @@ async def _rollback_v2(config: ShadowConfig) -> None:
 
 # ── Shadow routing (call-time) ────────────────────────────────────────────────
 
+
 async def maybe_route_to_shadow(skill_name: str, args: dict) -> str | None:
     """Return shadow skill name if this call should be routed to v2, else None.
 
     Called by the skill dispatcher before executing a skill.
     """
     import random
+
     if random.random() > SHADOW_TRAFFIC_PCT:
         return None
 
@@ -326,9 +339,11 @@ async def record_shadow_outcome(skill_name: str, *, is_v2: bool, success: bool) 
 
 # ── Redis persistence ─────────────────────────────────────────────────────────
 
+
 async def _save_shadow_config(config: ShadowConfig) -> None:
     try:
         from app.utils.redis_client import get_async_redis
+
         key = _SHADOW_KEY_PREFIX + config.skill_name
         await get_async_redis().setex(key, 7 * 24 * 3600, json.dumps(config.to_dict()))
     except Exception:
@@ -338,6 +353,7 @@ async def _save_shadow_config(config: ShadowConfig) -> None:
 async def _load_shadow_config(skill_name: str) -> ShadowConfig | None:
     try:
         from app.utils.redis_client import get_async_redis
+
         raw = await get_async_redis().get(_SHADOW_KEY_PREFIX + skill_name)
         if raw:
             return ShadowConfig.from_dict(json.loads(raw))
@@ -349,6 +365,7 @@ async def _load_shadow_config(skill_name: str) -> ShadowConfig | None:
 async def _load_all_shadow_configs() -> list[ShadowConfig]:
     try:
         from app.utils.redis_client import get_async_redis
+
         r = get_async_redis()
         keys = await r.keys(f"{_SHADOW_KEY_PREFIX}*")
         configs = []
@@ -364,6 +381,7 @@ async def _load_all_shadow_configs() -> list[ShadowConfig]:
 async def _remove_shadow_config(skill_name: str) -> None:
     try:
         from app.utils.redis_client import get_async_redis
+
         await get_async_redis().delete(_SHADOW_KEY_PREFIX + skill_name)
     except Exception:
         pass
@@ -372,11 +390,16 @@ async def _remove_shadow_config(skill_name: str) -> None:
 async def _audit_log(action: str, skill: str, details: dict) -> None:
     try:
         from app.utils.redis_client import get_async_redis
+
         r = get_async_redis()
-        entry = json.dumps({
-            "ts": time.time(), "action": action,
-            "skill": skill, **details,
-        })
+        entry = json.dumps(
+            {
+                "ts": time.time(),
+                "action": action,
+                "skill": skill,
+                **details,
+            }
+        )
         await r.lpush(_AUDIT_KEY, entry)
         await r.ltrim(_AUDIT_KEY, 0, 999)  # keep last 1000 entries
     except Exception:
@@ -387,6 +410,7 @@ async def get_evolution_audit(limit: int = 50) -> list[dict]:
     """Return recent evolution audit log entries."""
     try:
         from app.utils.redis_client import get_async_redis
+
         raws = await get_async_redis().lrange(_AUDIT_KEY, 0, limit - 1)
         return [json.loads(r) for r in raws]
     except Exception:

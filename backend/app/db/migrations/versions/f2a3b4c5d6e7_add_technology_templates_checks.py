@@ -4,17 +4,17 @@ Revision ID: f2a3b4c5d6e7
 Revises: e1f2a3b4c5d6
 Create Date: 2026-04-28 00:00:00.000000
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-
 revision: str = "f2a3b4c5d6e7"
-down_revision: Union[str, None] = "e1f2a3b4c5d6"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "e1f2a3b4c5d6"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -32,12 +32,30 @@ def upgrade() -> None:
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_manufacturing_operation_templates_operation_type"), "manufacturing_operation_templates", ["operation_type"])
-    op.create_index(op.f("ix_manufacturing_operation_templates_name"), "manufacturing_operation_templates", ["name"])
+    op.create_index(
+        op.f("ix_manufacturing_operation_templates_operation_type"),
+        "manufacturing_operation_templates",
+        ["operation_type"],
+    )
+    op.create_index(
+        op.f("ix_manufacturing_operation_templates_name"),
+        "manufacturing_operation_templates",
+        ["name"],
+    )
 
     op.create_table(
         "manufacturing_check_results",
@@ -54,26 +72,70 @@ def upgrade() -> None:
         sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["operation_id"], ["manufacturing_operations.id"]),
         sa.ForeignKeyConstraint(["process_plan_id"], ["manufacturing_process_plans.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_manufacturing_check_results_process_plan_id"), "manufacturing_check_results", ["process_plan_id"])
-    op.create_index(op.f("ix_manufacturing_check_results_operation_id"), "manufacturing_check_results", ["operation_id"])
-    op.create_index(op.f("ix_manufacturing_check_results_check_code"), "manufacturing_check_results", ["check_code"])
-    op.create_index(op.f("ix_manufacturing_check_results_severity"), "manufacturing_check_results", ["severity"])
-    op.create_index(op.f("ix_manufacturing_check_results_status"), "manufacturing_check_results", ["status"])
+    op.create_index(
+        op.f("ix_manufacturing_check_results_process_plan_id"),
+        "manufacturing_check_results",
+        ["process_plan_id"],
+    )
+    op.create_index(
+        op.f("ix_manufacturing_check_results_operation_id"),
+        "manufacturing_check_results",
+        ["operation_id"],
+    )
+    op.create_index(
+        op.f("ix_manufacturing_check_results_check_code"),
+        "manufacturing_check_results",
+        ["check_code"],
+    )
+    op.create_index(
+        op.f("ix_manufacturing_check_results_severity"), "manufacturing_check_results", ["severity"]
+    )
+    op.create_index(
+        op.f("ix_manufacturing_check_results_status"), "manufacturing_check_results", ["status"]
+    )
 
 
 def downgrade() -> None:
-    op.drop_index(op.f("ix_manufacturing_check_results_status"), table_name="manufacturing_check_results")
-    op.drop_index(op.f("ix_manufacturing_check_results_severity"), table_name="manufacturing_check_results")
-    op.drop_index(op.f("ix_manufacturing_check_results_check_code"), table_name="manufacturing_check_results")
-    op.drop_index(op.f("ix_manufacturing_check_results_operation_id"), table_name="manufacturing_check_results")
-    op.drop_index(op.f("ix_manufacturing_check_results_process_plan_id"), table_name="manufacturing_check_results")
+    op.drop_index(
+        op.f("ix_manufacturing_check_results_status"), table_name="manufacturing_check_results"
+    )
+    op.drop_index(
+        op.f("ix_manufacturing_check_results_severity"), table_name="manufacturing_check_results"
+    )
+    op.drop_index(
+        op.f("ix_manufacturing_check_results_check_code"), table_name="manufacturing_check_results"
+    )
+    op.drop_index(
+        op.f("ix_manufacturing_check_results_operation_id"),
+        table_name="manufacturing_check_results",
+    )
+    op.drop_index(
+        op.f("ix_manufacturing_check_results_process_plan_id"),
+        table_name="manufacturing_check_results",
+    )
     op.drop_table("manufacturing_check_results")
-    op.drop_index(op.f("ix_manufacturing_operation_templates_name"), table_name="manufacturing_operation_templates")
-    op.drop_index(op.f("ix_manufacturing_operation_templates_operation_type"), table_name="manufacturing_operation_templates")
+    op.drop_index(
+        op.f("ix_manufacturing_operation_templates_name"),
+        table_name="manufacturing_operation_templates",
+    )
+    op.drop_index(
+        op.f("ix_manufacturing_operation_templates_operation_type"),
+        table_name="manufacturing_operation_templates",
+    )
     op.drop_table("manufacturing_operation_templates")

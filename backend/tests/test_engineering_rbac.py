@@ -16,8 +16,12 @@ def _user(*roles: UserRole) -> UserInfo:
     [
         (
             UserRole.engineer,  # конструктор: создаёт, но не утверждает
-            ["engineering.project_create", "engineering.revision_create",
-             "engineering.change_create", "engineering.analysis_run"],
+            [
+                "engineering.project_create",
+                "engineering.revision_create",
+                "engineering.change_create",
+                "engineering.analysis_run",
+            ],
             ["engineering.revision_approve"],
         ),
         (
@@ -28,8 +32,11 @@ def _user(*roles: UserRole) -> UserInfo:
         (
             UserRole.calculator,  # расчётчик: только расчёты
             ["engineering.analysis_run", "engineering.read"],
-            ["engineering.revision_create", "engineering.revision_approve",
-             "engineering.change_sign"],
+            [
+                "engineering.revision_create",
+                "engineering.revision_approve",
+                "engineering.change_sign",
+            ],
         ),
         (
             UserRole.manager,  # руководитель: утверждает и решает по изменениям

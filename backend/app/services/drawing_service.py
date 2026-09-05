@@ -1,22 +1,25 @@
 """Centralized drawing creation and analysis service."""
 
 from __future__ import annotations
+
 import uuid
-import structlog
 from typing import Any
+
+import structlog
 
 logger = structlog.get_logger()
 
-DRAWING_EXTENSIONS = frozenset({"dxf", "dwg", "pdf", "step", "stp", "iges",
-                                  "svg", "png", "jpg", "jpeg", "tiff", "bmp", "webp"})
+DRAWING_EXTENSIONS = frozenset(
+    {"dxf", "dwg", "pdf", "step", "stp", "iges", "svg", "png", "jpg", "jpeg", "tiff", "bmp", "webp"}
+)
 
 
 async def create_and_analyze_drawing(
     *,
     file_bytes: bytes,
     filename: str,
-    fmt: str,                         # file extension lower-cased
-    db,                               # AsyncSession
+    fmt: str,  # file extension lower-cased
+    db,  # AsyncSession
     document_id: uuid.UUID | None = None,
     drawing_number: str | None = None,
     is_confidential: bool = True,
@@ -61,31 +64,37 @@ async def create_and_analyze_drawing(
     task_id: str | None = None
     try:
         from app.tasks.drawing_analysis import analyze_drawing
+
         task = analyze_drawing.delay(
             str(drawing.id), None, allow_cloud, max_views, force_drawing_type
         )
         task_id = task.id
         drawing.celery_task_id = task_id
         await db.commit()
-        logger.info("drawing_analysis_enqueued",
-                    drawing_id=str(drawing.id), task_id=task_id, filename=filename)
+        logger.info(
+            "drawing_analysis_enqueued",
+            drawing_id=str(drawing.id),
+            task_id=task_id,
+            filename=filename,
+        )
     except Exception as exc:
-        logger.warning("drawing_analysis_enqueue_failed",
-                       drawing_id=str(drawing.id), error=str(exc))
+        logger.warning(
+            "drawing_analysis_enqueue_failed", drawing_id=str(drawing.id), error=str(exc)
+        )
 
     return drawing, task_id
 
 
-async def _upload_drawing_to_minio(
-    file_bytes: bytes, filename: str, drawing_id: str
-) -> str | None:
+async def _upload_drawing_to_minio(file_bytes: bytes, filename: str, drawing_id: str) -> str | None:
     """Upload file bytes to MinIO under drawings/{drawing_id}/{filename}.
     Returns storage_path or None on failure.
     """
     try:
-        from app.config import settings
-        from minio import Minio
         import io
+
+        from minio import Minio
+
+        from app.config import settings
 
         client = Minio(
             settings.minio_endpoint,

@@ -62,11 +62,13 @@ async def graph_pipeline_status() -> dict:
     return {
         "schema_version": "emg/1.0",
         "pipeline_enabled": settings.emg_pipeline_enabled,
-        "enabled_profiles": sorted({
-            item.strip().lower()
-            for item in settings.emg_pipeline_profiles.split(",")
-            if item.strip()
-        }),
+        "enabled_profiles": sorted(
+            {
+                item.strip().lower()
+                for item in settings.emg_pipeline_profiles.split(",")
+                if item.strip()
+            }
+        ),
         "legacy_views": "derived",
         "production_defaults": {
             "max_wall_seconds": 900,
@@ -109,11 +111,17 @@ async def create_graph(
 async def list_project_graphs(
     project_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 ) -> list[dict]:
-    rows = list((await db.execute(
-        select(EngineeringGraphRevision)
-        .where(EngineeringGraphRevision.engineering_project_id == project_id)
-        .order_by(EngineeringGraphRevision.graph_id, EngineeringGraphRevision.revision.desc())
-    )).scalars())
+    rows = list(
+        (
+            await db.execute(
+                select(EngineeringGraphRevision)
+                .where(EngineeringGraphRevision.engineering_project_id == project_id)
+                .order_by(
+                    EngineeringGraphRevision.graph_id, EngineeringGraphRevision.revision.desc()
+                )
+            )
+        ).scalars()
+    )
     latest: dict[str, EngineeringGraphRevision] = {}
     for row in rows:
         latest.setdefault(row.graph_id, row)
@@ -159,9 +167,7 @@ async def start_reader_run(
 
 
 @router.get("/revisions/{revision_id}")
-async def get_graph_revision(
-    revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def get_graph_revision(revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> dict:
     row = await db.get(EngineeringGraphRevision, revision_id)
     if not row:
         raise HTTPException(404, "Ревизия EngineeringModelGraph не найдена")
@@ -198,7 +204,8 @@ async def download_graph_artifact(
     }
     evidence = next(
         (
-            item for item in reversed(graph.evidence)
+            item
+            for item in reversed(graph.evidence)
             if item.id in evidence_ids
             and item.payload.get("artifact_path")
             and item.payload.get("report_path")
@@ -245,9 +252,10 @@ async def download_graph_artifact(
         media_type = "application/json"
     if not isinstance(expected_sha, str) or actual_sha != expected_sha:
         raise HTTPException(409, "Content-addressed artifact не прошёл SHA-256 проверку")
-    safe_name = "".join(
-        char if char.isalnum() or char in "-_." else "-" for char in artifact_id
-    )[:160] or "engineering-artifact"
+    safe_name = (
+        "".join(char if char.isalnum() or char in "-_." else "-" for char in artifact_id)[:160]
+        or "engineering-artifact"
+    )
     disposition = "inline" if media_type == "image/svg+xml" else "attachment"
     return Response(
         content=content,
@@ -270,9 +278,7 @@ async def apply_patch(
 ) -> dict:
     require_permission(user, "engineering.revision_create")
     try:
-        row, errors = await merge_and_persist_patch(
-            db, patch, expected_graph_id=graph_id
-        )
+        row, errors = await merge_and_persist_patch(db, patch, expected_graph_id=graph_id)
         await db.commit()
     except DuplicatePatchError as exc:
         await db.rollback()
@@ -291,45 +297,78 @@ async def apply_patch(
 
 @router.get("/graphs/{graph_id}/patches")
 async def list_patches(graph_id: str, db: AsyncSession = Depends(get_db)) -> list[dict]:
-    rows = list((await db.execute(
-        select(GraphPatchRecord)
-        .where(GraphPatchRecord.graph_id == graph_id)
-        .order_by(GraphPatchRecord.created_at.desc())
-    )).scalars())
-    return [{
-        "id": str(row.id), "patch_id": row.patch_id, "producer": row.producer,
-        "pass_id": row.pass_id, "accepted": row.accepted,
-        "payload": row.payload, "validation_errors": row.validation_errors,
-        "result_revision_id": str(row.result_revision_id) if row.result_revision_id else None,
-        "created_at": row.created_at,
-    } for row in rows]
+    rows = list(
+        (
+            await db.execute(
+                select(GraphPatchRecord)
+                .where(GraphPatchRecord.graph_id == graph_id)
+                .order_by(GraphPatchRecord.created_at.desc())
+            )
+        ).scalars()
+    )
+    return [
+        {
+            "id": str(row.id),
+            "patch_id": row.patch_id,
+            "producer": row.producer,
+            "pass_id": row.pass_id,
+            "accepted": row.accepted,
+            "payload": row.payload,
+            "validation_errors": row.validation_errors,
+            "result_revision_id": str(row.result_revision_id) if row.result_revision_id else None,
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
 
 
 @router.get("/revisions/{revision_id}/trace-proposals")
 async def list_trace_proposals(
     revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 ) -> list[dict]:
-    proposals = list((await db.execute(
-        select(TraceProposalRecord)
-        .where(TraceProposalRecord.graph_revision_id == revision_id)
-        .order_by(TraceProposalRecord.source_region_id, TraceProposalRecord.rank)
-    )).scalars())
+    proposals = list(
+        (
+            await db.execute(
+                select(TraceProposalRecord)
+                .where(TraceProposalRecord.graph_revision_id == revision_id)
+                .order_by(TraceProposalRecord.source_region_id, TraceProposalRecord.rank)
+            )
+        ).scalars()
+    )
     proposal_ids = [item.id for item in proposals]
-    visuals = list((await db.execute(
-        select(VisualVerificationRun).where(
-            VisualVerificationRun.trace_proposal_id.in_(proposal_ids)
+    visuals = (
+        list(
+            (
+                await db.execute(
+                    select(VisualVerificationRun).where(
+                        VisualVerificationRun.trace_proposal_id.in_(proposal_ids)
+                    )
+                )
+            ).scalars()
         )
-    )).scalars()) if proposal_ids else []
+        if proposal_ids
+        else []
+    )
     visual_by_proposal: dict[uuid.UUID, list[VisualVerificationRun]] = {}
     for visual in visuals:
         visual_by_proposal.setdefault(visual.trace_proposal_id, []).append(visual)
-    return [{
-        "id": str(item.id), "proposal_id": item.proposal_id,
-        "source_region_id": item.source_region_id, "assertion_id": item.assertion_id,
-        "rank": item.rank, "status": item.status, "score": item.score,
-        "payload": item.payload,
-        "visual_verifications": [run.result | {"raw_output": run.raw_output} for run in visual_by_proposal.get(item.id, [])],
-    } for item in proposals]
+    return [
+        {
+            "id": str(item.id),
+            "proposal_id": item.proposal_id,
+            "source_region_id": item.source_region_id,
+            "assertion_id": item.assertion_id,
+            "rank": item.rank,
+            "status": item.status,
+            "score": item.score,
+            "payload": item.payload,
+            "visual_verifications": [
+                run.result | {"raw_output": run.raw_output}
+                for run in visual_by_proposal.get(item.id, [])
+            ],
+        }
+        for item in proposals
+    ]
 
 
 @router.post("/revisions/{revision_id}/trace-proposals", status_code=status.HTTP_201_CREATED)
@@ -346,21 +385,31 @@ async def record_trace_proposal(
     graph = load_graph(row)
     regions = {item.id for item in graph.nodes if item.type == "SourceRegion"}
     if body.proposal.source_region_id not in regions:
-        raise HTTPException(422, "Трассировка разрешена только внутри зарегистрированного SourceRegion")
+        raise HTTPException(
+            422, "Трассировка разрешена только внутри зарегистрированного SourceRegion"
+        )
     assertion = next((item for item in graph.assertions if item.id == body.assertion_id), None)
     if not assertion:
         raise HTTPException(422, "Assertion не найден")
-    proposal_count = (await db.execute(
-        select(TraceProposalRecord).where(
-            TraceProposalRecord.graph_revision_id == revision_id,
-            TraceProposalRecord.source_region_id == body.proposal.source_region_id,
+    proposal_count = (
+        (
+            await db.execute(
+                select(TraceProposalRecord).where(
+                    TraceProposalRecord.graph_revision_id == revision_id,
+                    TraceProposalRecord.source_region_id == body.proposal.source_region_id,
+                )
+            )
         )
-    )).scalars().all()
+        .scalars()
+        .all()
+    )
     if len(proposal_count) >= 3:
         raise HTTPException(409, "Для SourceRegion уже проверены три trace proposal")
-    critical = set().union(*(
-        critical_assertion_ids(graph, target.id) for target in graph.build_targets
-    )) if graph.build_targets else set()
+    critical = (
+        set().union(*(critical_assertion_ids(graph, target.id) for target in graph.build_targets))
+        if graph.build_targets
+        else set()
+    )
     validated_conflict = assertion.assurance in {"constraint_validated", "human_approved"}
     admission = evaluate_trace_admission(
         body.proposal,
@@ -374,7 +423,9 @@ async def record_trace_proposal(
         source_region_id=body.proposal.source_region_id,
         assertion_id=body.assertion_id,
         rank=len(proposal_count) + 1,
-        status="accepted" if admission.accepted else (
+        status="accepted"
+        if admission.accepted
+        else (
             "critical_unresolved" if "critical_dependency" in admission.reason_codes else "rejected"
         ),
         payload=body.proposal.model_dump(mode="json"),
@@ -382,13 +433,15 @@ async def record_trace_proposal(
     )
     db.add(proposal_row)
     await db.flush()
-    db.add(VisualVerificationRun(
-        trace_proposal_id=proposal_row.id,
-        verifier_model=body.visual.verifier_model,
-        verdict=body.visual.verdict,
-        result=body.visual.model_dump(mode="json", exclude={"raw_output"}),
-        raw_output=body.visual.raw_output,
-    ))
+    db.add(
+        VisualVerificationRun(
+            trace_proposal_id=proposal_row.id,
+            verifier_model=body.visual.verifier_model,
+            verdict=body.visual.verdict,
+            result=body.visual.model_dump(mode="json", exclude={"raw_output"}),
+            raw_output=body.visual.raw_output,
+        )
+    )
     await db.commit()
     return {
         "id": str(proposal_row.id),
@@ -466,15 +519,12 @@ async def get_assertion_impact(
     if not row:
         raise HTTPException(404, "Ревизия EngineeringModelGraph не найдена")
     try:
-        return assertion_impact_report(
-            load_graph(row), assertion_id, target_id
-        ).model_dump(mode="json")
+        return assertion_impact_report(load_graph(row), assertion_id, target_id).model_dump(
+            mode="json"
+        )
     except KeyError as exc:
         missing = exc.args[0] if exc.args else None
-        detail = (
-            "Build target не найден" if missing == target_id
-            else "Assertion не найден"
-        )
+        detail = "Build target не найден" if missing == target_id else "Assertion не найден"
         raise HTTPException(404, detail) from exc
 
 
@@ -495,15 +545,15 @@ async def evaluate_trace(
     )
 
 
-def _revision_response(
-    row: EngineeringGraphRevision, *, graph: EngineeringModelGraph
-) -> dict:
+def _revision_response(row: EngineeringGraphRevision, *, graph: EngineeringModelGraph) -> dict:
     return {
         "id": str(row.id),
         "engineering_project_id": (
             str(row.engineering_project_id) if row.engineering_project_id else None
         ),
-        "engineering_revision_id": str(row.engineering_revision_id) if row.engineering_revision_id else None,
+        "engineering_revision_id": str(row.engineering_revision_id)
+        if row.engineering_revision_id
+        else None,
         "graph_id": row.graph_id,
         "revision": row.revision,
         "parent_revision": row.parent_revision,

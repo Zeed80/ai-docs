@@ -1,24 +1,22 @@
 """Quarantine API — review and release or delete suspicious files."""
 
 import uuid
-from datetime import datetime, timezone
-from functools import lru_cache
-from typing import Any
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
+from app.audit.service import add_timeline_event, log_action
 from app.db.models import (
     Document,
     DocumentStatus,
     FileExtensionAllowlist,
     QuarantineEntry,
 )
-from app.audit.service import log_action, add_timeline_event
+from app.db.session import get_db
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -83,11 +81,13 @@ async def list_quarantine(
 
 @router.get("/count")
 async def quarantine_count(db: AsyncSession = Depends(get_db)) -> dict:
-    total = (await db.execute(
-        select(func.count()).select_from(
-            select(QuarantineEntry).where(QuarantineEntry.decision.is_(None)).subquery()
+    total = (
+        await db.execute(
+            select(func.count()).select_from(
+                select(QuarantineEntry).where(QuarantineEntry.decision.is_(None)).subquery()
+            )
         )
-    )).scalar() or 0
+    ).scalar() or 0
     return {"count": total}
 
 
@@ -112,17 +112,21 @@ async def release_quarantine(
 
     entry.decision = "released"
     entry.reviewed_by = "user"
-    entry.reviewed_at = datetime.now(timezone.utc)
+    entry.reviewed_at = datetime.now(UTC)
 
     doc.status = DocumentStatus.ingested
 
     await log_action(
-        db, action="quarantine.release",
-        entity_type="document", entity_id=doc.id,
+        db,
+        action="quarantine.release",
+        entity_type="document",
+        entity_id=doc.id,
         details={"filename": entry.original_filename, "reason": entry.reason},
     )
     await add_timeline_event(
-        db, entity_type="document", entity_id=doc.id,
+        db,
+        entity_type="document",
+        entity_id=doc.id,
         event_type="quarantine_released",
         summary=f"Файл освобождён из карантина: {entry.original_filename}",
         actor="user",
@@ -132,6 +136,7 @@ async def release_quarantine(
     # Trigger extraction pipeline
     try:
         from app.tasks.extraction import process_document
+
         process_document.delay(str(doc.id))
     except Exception as e:
         logger.warning("extraction_queue_failed", doc_id=str(doc.id), error=str(e))
@@ -161,20 +166,23 @@ async def delete_quarantine(
     if doc:
         try:
             from app.storage import delete_file
+
             delete_file(doc.storage_path)
         except Exception as e:
             logger.warning("storage_delete_failed", error=str(e))
 
         doc.status = DocumentStatus.archived
         await log_action(
-            db, action="quarantine.delete",
-            entity_type="document", entity_id=doc.id,
+            db,
+            action="quarantine.delete",
+            entity_type="document",
+            entity_id=doc.id,
             details={"filename": entry.original_filename},
         )
 
     entry.decision = "deleted"
     entry.reviewed_by = "user"
-    entry.reviewed_at = datetime.now(timezone.utc)
+    entry.reviewed_at = datetime.now(UTC)
 
     await db.commit()
     await db.refresh(entry)

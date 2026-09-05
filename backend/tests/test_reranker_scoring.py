@@ -16,9 +16,13 @@ from app.ai.providers.ollama import (
 
 def _lp(*pairs: tuple[str, float]) -> list[dict]:
     """Build a one-token logprobs payload; the chosen token is the first pair."""
-    return [{"token": pairs[0][0], "logprob": pairs[0][1], "top_logprobs": [
-        {"token": tok, "logprob": lp} for tok, lp in pairs
-    ]}]
+    return [
+        {
+            "token": pairs[0][0],
+            "logprob": pairs[0][1],
+            "top_logprobs": [{"token": tok, "logprob": lp} for tok, lp in pairs],
+        }
+    ]
 
 
 def test_logprob_softmax_prefers_yes():
@@ -47,14 +51,16 @@ def test_logprob_only_yes_candidate():
 
 def test_logprob_camelcase_and_leading_space():
     # Tolerate alternate key casing and leading-space token text.
-    payload = [{
-        "token": " Yes",
-        "logProb": math.log(0.6),
-        "topLogprobs": [
-            {"token": " Yes", "logProb": math.log(0.6)},
-            {"token": " No", "logProb": math.log(0.4)},
-        ],
-    }]
+    payload = [
+        {
+            "token": " Yes",
+            "logProb": math.log(0.6),
+            "topLogprobs": [
+                {"token": " Yes", "logProb": math.log(0.6)},
+                {"token": " No", "logProb": math.log(0.4)},
+            ],
+        }
+    ]
     score = _score_from_logprobs(payload)
     assert score is not None and score > 0.5
 

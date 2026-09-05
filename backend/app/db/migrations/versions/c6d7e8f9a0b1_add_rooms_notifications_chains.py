@@ -4,17 +4,17 @@ Revision ID: c6d7e8f9a0b1
 Revises: b5c6d7e8f9a0
 Create Date: 2026-05-16 00:00:00.000000
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-
 revision: str = "c6d7e8f9a0b1"
-down_revision: Union[str, None] = "b5c6d7e8f9a0"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "b5c6d7e8f9a0"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -27,8 +27,18 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("created_by", sa.String(length=255), nullable=False),
         sa.Column("is_archived", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_rooms_type"), "rooms", ["type"])
@@ -40,7 +50,9 @@ def upgrade() -> None:
         sa.Column("user_sub", sa.String(length=255), nullable=False),
         sa.Column("role", sa.String(length=20), nullable=False, server_default="member"),
         sa.Column("last_read_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("joined_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "joined_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+        ),
         sa.ForeignKeyConstraint(["room_id"], ["rooms.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("room_id", "user_sub"),
     )
@@ -58,7 +70,12 @@ def upgrade() -> None:
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("is_edited", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("edited_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["room_id"], ["rooms.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["reply_to_id"], ["room_messages.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
@@ -78,12 +95,19 @@ def upgrade() -> None:
         sa.Column("document_id", PG_UUID(as_uuid=True), nullable=True),
         sa.Column("thumbnail_key", sa.String(length=1000), nullable=True),
         sa.Column("ingest_job_id", sa.String(length=200), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["message_id"], ["room_messages.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_room_message_attachments_message_id", "room_message_attachments", ["message_id"])
+    op.create_index(
+        "ix_room_message_attachments_message_id", "room_message_attachments", ["message_id"]
+    )
 
     # ── notifications ──────────────────────────────────────────────────────────
     op.create_table(
@@ -97,7 +121,12 @@ def upgrade() -> None:
         sa.Column("entity_id", PG_UUID(as_uuid=True), nullable=True),
         sa.Column("action_url", sa.String(length=500), nullable=True),
         sa.Column("is_read", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_notifications_user_sub", "notifications", ["user_sub"])
@@ -107,12 +136,15 @@ def upgrade() -> None:
     # ── approvals: add chain fields ────────────────────────────────────────────
     op.add_column("approvals", sa.Column("chain_order", sa.Integer(), nullable=True))
     op.add_column("approvals", sa.Column("chain_root_id", PG_UUID(as_uuid=True), nullable=True))
-    op.add_column("approvals", sa.Column("requires_all", sa.Boolean(), nullable=False, server_default="false"))
+    op.add_column(
+        "approvals", sa.Column("requires_all", sa.Boolean(), nullable=False, server_default="false")
+    )
 
     # ── handovers: add status field ────────────────────────────────────────────
-    op.add_column("handovers", sa.Column(
-        "status", sa.String(length=20), nullable=False, server_default="pending"
-    ))
+    op.add_column(
+        "handovers",
+        sa.Column("status", sa.String(length=20), nullable=False, server_default="pending"),
+    )
     op.create_index("ix_handovers_status", "handovers", ["status"])
 
 

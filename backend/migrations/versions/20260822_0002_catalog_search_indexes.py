@@ -13,21 +13,20 @@ Revision ID: 20260822_0002
 Revises: 20260822_0001
 Create Date: 2026-08-22
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "20260822_0002"
-down_revision: Union[str, None] = "20260822_0001"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260822_0001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # Byte-for-byte the expression app/db/text_search.py::immutable_fts_expression
 # generates for these columns — the planner uses the index only on an exact
 # match, and plain `||` is the immutable form PostgreSQL accepts in an index.
-_FTS_EXPRESSION = (
-    "to_tsvector('russian', (((coalesce(tool_catalog_entries.name, '') || ' ') || coalesce(tool_catalog_entries.part_number, '')) || ' ') || coalesce(tool_catalog_entries.description, ''))"
-)
+_FTS_EXPRESSION = "to_tsvector('russian', (((coalesce(tool_catalog_entries.name, '') || ' ') || coalesce(tool_catalog_entries.part_number, '')) || ' ') || coalesce(tool_catalog_entries.description, ''))"
 
 
 def upgrade() -> None:

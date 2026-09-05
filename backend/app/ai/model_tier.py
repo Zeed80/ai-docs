@@ -10,11 +10,11 @@ Complexity tiers:
 
 Confidential tasks are capped at the best available local model regardless of complexity.
 """
+
 from __future__ import annotations
 
 import re
 from enum import IntEnum
-from typing import Sequence
 
 import structlog
 
@@ -34,44 +34,127 @@ class Tier(IntEnum):
 
 # ── Keyword signals for complexity heuristic ──────────────────────────────────
 
-_HIGH_COMPLEXITY_SIGNALS = frozenset({
-    # Russian
-    "сравни", "проанализируй", "объясни почему", "построй план", "разработай",
-    "создай навык", "напиши код", "оптимизируй", "стратегия", "несколько шагов",
-    "подробно", "исследуй", "несколько документов", "цепочку", "итого по всем",
-    # English
-    "analyze", "compare", "explain why", "design", "create skill", "write code",
-    "optimize", "strategy", "multiple steps", "chain", "aggregate all",
-})
+_HIGH_COMPLEXITY_SIGNALS = frozenset(
+    {
+        # Russian
+        "сравни",
+        "проанализируй",
+        "объясни почему",
+        "построй план",
+        "разработай",
+        "создай навык",
+        "напиши код",
+        "оптимизируй",
+        "стратегия",
+        "несколько шагов",
+        "подробно",
+        "исследуй",
+        "несколько документов",
+        "цепочку",
+        "итого по всем",
+        # English
+        "analyze",
+        "compare",
+        "explain why",
+        "design",
+        "create skill",
+        "write code",
+        "optimize",
+        "strategy",
+        "multiple steps",
+        "chain",
+        "aggregate all",
+    }
+)
 
-_MEDIUM_COMPLEXITY_SIGNALS = frozenset({
-    # Russian
-    "таблица", "сводка", "сумма", "топ", "список всех", "отсортируй",
-    "сгруппируй", "найди аномалии", "подготовь отчёт", "отчёт",
-    # Analytical / exploratory queries that need LLM planning
-    "расскажи", "расскажи о", "популярн", "больше всего", "чаще всего",
-    "самые", "какие", "почему", "как так", "что значит", "разбери",
-    "объясни", "покажи динамику", "за период", "тенденц", "тренд",
-    "статистик", "аналитик", "по месяц", "по поставщик", "сгруппир",
-    "группировк", "номенклатур", "какая", "каких", "насколько",
-    # English
-    "table", "summary", "total", "top", "list all", "sort", "group",
-    "find anomalies", "prepare report", "report", "explain", "popular",
-    "most common", "trending", "analytics", "by month", "by supplier",
-    "breakdown", "distribution",
-})
+_MEDIUM_COMPLEXITY_SIGNALS = frozenset(
+    {
+        # Russian
+        "таблица",
+        "сводка",
+        "сумма",
+        "топ",
+        "список всех",
+        "отсортируй",
+        "сгруппируй",
+        "найди аномалии",
+        "подготовь отчёт",
+        "отчёт",
+        # Analytical / exploratory queries that need LLM planning
+        "расскажи",
+        "расскажи о",
+        "популярн",
+        "больше всего",
+        "чаще всего",
+        "самые",
+        "какие",
+        "почему",
+        "как так",
+        "что значит",
+        "разбери",
+        "объясни",
+        "покажи динамику",
+        "за период",
+        "тенденц",
+        "тренд",
+        "статистик",
+        "аналитик",
+        "по месяц",
+        "по поставщик",
+        "сгруппир",
+        "группировк",
+        "номенклатур",
+        "какая",
+        "каких",
+        "насколько",
+        # English
+        "table",
+        "summary",
+        "total",
+        "top",
+        "list all",
+        "sort",
+        "group",
+        "find anomalies",
+        "prepare report",
+        "report",
+        "explain",
+        "popular",
+        "most common",
+        "trending",
+        "analytics",
+        "by month",
+        "by supplier",
+        "breakdown",
+        "distribution",
+    }
+)
 
-_LOW_COMPLEXITY_SIGNALS = frozenset({
-    # Russian — только однозначно тривиальные навигационные запросы без фильтров
-    "статус", "когда", "кто", "последний", "один", "найди счёт", "проверь",
-    # English
-    "status", "when", "who", "last", "find invoice", "check",
-    # NOTE: "покажи", "выведи", "сколько" убраны:
-    #   "покажи"/"выведи" — могут вести к workspace-запросу
-    #   "сколько" — фильтрованные count-вопросы ("сколько ожидают утверждения?")
-    #   требуют API-вызова; оставлять на fast-path только чистые "сколько всего" через
-    #   secretary snapshot (flow_status_markers уже ловят их раньше)
-})
+_LOW_COMPLEXITY_SIGNALS = frozenset(
+    {
+        # Russian — только однозначно тривиальные навигационные запросы без фильтров
+        "статус",
+        "когда",
+        "кто",
+        "последний",
+        "один",
+        "найди счёт",
+        "проверь",
+        # English
+        "status",
+        "when",
+        "who",
+        "last",
+        "find invoice",
+        "check",
+        # NOTE: "покажи", "выведи", "сколько" убраны:
+        #   "покажи"/"выведи" — могут вести к workspace-запросу
+        #   "сколько" — фильтрованные count-вопросы ("сколько ожидают утверждения?")
+        #   требуют API-вызова; оставлять на fast-path только чистые "сколько всего" через
+        #   secretary snapshot (flow_status_markers уже ловят их раньше)
+    }
+)
+
 
 def has_high_complexity_signal(text: str) -> bool:
     """True when the text contains an explicit deep-reasoning marker.
@@ -90,22 +173,68 @@ def has_high_complexity_signal(text: str) -> bool:
 # approve, send…), not a table shown. Such turns must reach the worker even when
 # an entity resolves a workspace canvas — otherwise a proactive table silently
 # replaces the requested action.
-_ACTION_SIGNALS = frozenset({
-    "проверь", "проверить", "перепровер", "пересчита", "пересчёт", "пересчет",
-    "утверди", "утвердить", "одобри", "отклони", "отклонить", "отправь",
-    "отправить", "удали", "удалить", "оплати", "оплатить", "подтверди",
-    "подтвердить", "валидир", "исправь", "исправить", "обнови", "обновить",
-    "измени", "изменить", "согласуй", "согласовать", "заполни", "создай счёт",
-    "проведи", "разнеси", "верифицир",
-    # Ingest/attach verbs: "загрузи каталог", "прикрепи прайс к поставщику".
-    # Without these a request to PUT data somewhere resolved a supplier canvas
-    # and was answered with a table of what was already in the DB (live finding).
-    "загрузи", "загрузить", "прикрепи", "прикрепить", "привяжи", "привязать",
-    "импортируй", "импортировать", "скачай", "скачать", "добавь в каталог",
-    # English
-    "validate", "approve", "reject", "send", "delete", "pay", "confirm",
-    "verify", "fix", "update record",
-})
+_ACTION_SIGNALS = frozenset(
+    {
+        "проверь",
+        "проверить",
+        "перепровер",
+        "пересчита",
+        "пересчёт",
+        "пересчет",
+        "утверди",
+        "утвердить",
+        "одобри",
+        "отклони",
+        "отклонить",
+        "отправь",
+        "отправить",
+        "удали",
+        "удалить",
+        "оплати",
+        "оплатить",
+        "подтверди",
+        "подтвердить",
+        "валидир",
+        "исправь",
+        "исправить",
+        "обнови",
+        "обновить",
+        "измени",
+        "изменить",
+        "согласуй",
+        "согласовать",
+        "заполни",
+        "создай счёт",
+        "проведи",
+        "разнеси",
+        "верифицир",
+        # Ingest/attach verbs: "загрузи каталог", "прикрепи прайс к поставщику".
+        # Without these a request to PUT data somewhere resolved a supplier canvas
+        # and was answered with a table of what was already in the DB (live finding).
+        "загрузи",
+        "загрузить",
+        "прикрепи",
+        "прикрепить",
+        "привяжи",
+        "привязать",
+        "импортируй",
+        "импортировать",
+        "скачай",
+        "скачать",
+        "добавь в каталог",
+        # English
+        "validate",
+        "approve",
+        "reject",
+        "send",
+        "delete",
+        "pay",
+        "confirm",
+        "verify",
+        "fix",
+        "update record",
+    }
+)
 
 
 def has_action_intent(text: str) -> bool:
@@ -193,6 +322,7 @@ def aux_quality_budget(tier: Tier) -> int:
     literals match the pre-A4 hardcoded values.
     """
     from app.ai import route_table
+
     budgets = route_table.aux_quality_budgets()
     default = int(budgets.get("default", 1))
     if tier >= Tier.LARGE:
@@ -205,20 +335,20 @@ def aux_quality_budget(tier: Tier) -> int:
 # Ordered from cheapest/fastest to most capable.
 # Populated from settings at runtime so the user can override via ai_settings.
 _TIER_LOCAL_MODELS: dict[Tier, list[str]] = {
-    Tier.NANO:   ["gemma4:e4b"],
-    Tier.MICRO:  ["gemma4:e4b"],
-    Tier.SMALL:  ["gemma4:e4b", "gemma4:26b"],
+    Tier.NANO: ["gemma4:e4b"],
+    Tier.MICRO: ["gemma4:e4b"],
+    Tier.SMALL: ["gemma4:e4b", "gemma4:26b"],
     Tier.MEDIUM: ["gemma4:26b"],
-    Tier.LARGE:  ["gemma4:26b"],
+    Tier.LARGE: ["gemma4:26b"],
     Tier.EXPERT: ["gemma4:26b"],
 }
 
 _TIER_CLOUD_MODELS: dict[Tier, list[str]] = {
-    Tier.NANO:   ["claude-haiku-4-5"],
-    Tier.MICRO:  ["claude-haiku-4-5"],
-    Tier.SMALL:  ["claude-haiku-4-5"],
+    Tier.NANO: ["claude-haiku-4-5"],
+    Tier.MICRO: ["claude-haiku-4-5"],
+    Tier.SMALL: ["claude-haiku-4-5"],
     Tier.MEDIUM: ["claude-sonnet-4-6"],
-    Tier.LARGE:  ["claude-sonnet-4-6"],
+    Tier.LARGE: ["claude-sonnet-4-6"],
     Tier.EXPERT: ["claude-sonnet-4-6"],
 }
 

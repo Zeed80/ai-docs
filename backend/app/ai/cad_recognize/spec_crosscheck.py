@@ -84,8 +84,19 @@ def _stated_overall_length(spec: dict) -> float | None:
 # back with material="материал", scale="масштаб", name="наименование" — and the
 # pipeline went on to build a 3-metre shaft from the building's grid spacings.
 _STAMP_PLACEHOLDERS = {
-    "материал", "масштаб", "наименование", "масса", "обозначение", "лист",
-    "листов", "material", "scale", "name", "mass", "designation", "sheet",
+    "материал",
+    "масштаб",
+    "наименование",
+    "масса",
+    "обозначение",
+    "лист",
+    "листов",
+    "material",
+    "scale",
+    "name",
+    "mass",
+    "designation",
+    "sheet",
 }
 
 # A turned part this pipeline can plan work for. Anything past these is not a
@@ -103,19 +114,22 @@ def check_spec_plausibility(spec: dict) -> list[CrossCheckFinding]:
     findings: list[CrossCheckFinding] = []
     title = spec.get("title_block") or {}
     echoed = sorted(
-        field for field, value in title.items()
+        field
+        for field, value in title.items()
         if str(value or "").strip().lower() in _STAMP_PLACEHOLDERS
     )
     if echoed:
-        findings.append(CrossCheckFinding(
-            code="stamp_placeholders_read_as_values",
-            message=(
-                "в штампе вместо значений прочитаны названия полей ("
-                + ", ".join(echoed)
-                + ") — лист прочитан неверно целиком"
-            ),
-            details={"fields": echoed},
-        ))
+        findings.append(
+            CrossCheckFinding(
+                code="stamp_placeholders_read_as_values",
+                message=(
+                    "в штампе вместо значений прочитаны названия полей ("
+                    + ", ".join(echoed)
+                    + ") — лист прочитан неверно целиком"
+                ),
+                details={"fields": echoed},
+            )
+        )
 
     for index, body in enumerate([spec.get("main_view") or {}, *(spec.get("parts") or [])]):
         if not isinstance(body, dict):
@@ -124,24 +138,28 @@ def check_spec_plausibility(spec: dict) -> list[CrossCheckFinding]:
         diameters = [_num(s.get("diameter_mm")) for s in sections]
         biggest = max((d for d in diameters if d), default=0.0)
         if biggest > _MAX_TURNED_DIAMETER_MM:
-            findings.append(CrossCheckFinding(
-                code="implausible_turned_diameter",
-                message=(
-                    f"тело {index}: диаметр {biggest:g} мм не бывает у точёной "
-                    "детали — вероятно, прочитаны размеры не той сущности"
-                ),
-                details={"body": index, "diameter_mm": biggest},
-            ))
+            findings.append(
+                CrossCheckFinding(
+                    code="implausible_turned_diameter",
+                    message=(
+                        f"тело {index}: диаметр {biggest:g} мм не бывает у точёной "
+                        "детали — вероятно, прочитаны размеры не той сущности"
+                    ),
+                    details={"body": index, "diameter_mm": biggest},
+                )
+            )
         total = sum(v for v in (_num(s.get("length_mm")) for s in sections) if v)
         if total > _MAX_PART_LENGTH_MM:
-            findings.append(CrossCheckFinding(
-                code="implausible_part_length",
-                message=(
-                    f"тело {index}: суммарная длина {total:g} мм слишком велика "
-                    "для детали этого конвейера"
-                ),
-                details={"body": index, "length_mm": total},
-            ))
+            findings.append(
+                CrossCheckFinding(
+                    code="implausible_part_length",
+                    message=(
+                        f"тело {index}: суммарная длина {total:g} мм слишком велика "
+                        "для детали этого конвейера"
+                    ),
+                    details={"body": index, "length_mm": total},
+                )
+            )
     return findings
 
 
@@ -169,19 +187,23 @@ def check_spec_arithmetic(spec: dict) -> list[CrossCheckFinding]:
             rest = total - longest
             if longest >= rest * (1 - _SUM_TOLERANCE):
                 position = lengths.index(longest)
-                findings.append(CrossCheckFinding(
-                    code="section_longer_than_all_others",
-                    message=(
-                        f"тело {index}: ступень {position} длиной {longest:g} мм "
-                        f"длиннее всех остальных вместе ({rest:g} мм) — проверьте, "
-                        "не прочитан ли вместо неё габаритный размер"
-                    ),
-                    severity="warn",
-                    details={
-                        "body": index, "section": position,
-                        "value": longest, "others_total": rest,
-                    },
-                ))
+                findings.append(
+                    CrossCheckFinding(
+                        code="section_longer_than_all_others",
+                        message=(
+                            f"тело {index}: ступень {position} длиной {longest:g} мм "
+                            f"длиннее всех остальных вместе ({rest:g} мм) — проверьте, "
+                            "не прочитан ли вместо неё габаритный размер"
+                        ),
+                        severity="warn",
+                        details={
+                            "body": index,
+                            "section": position,
+                            "value": longest,
+                            "others_total": rest,
+                        },
+                    )
+                )
 
         # When the sheet also stated an overall length, the sum must match it.
         # Only when the sheet draws ONE body: the callouts are a single flat
@@ -190,38 +212,44 @@ def check_spec_arithmetic(spec: dict) -> list[CrossCheckFinding]:
         # sum against it says nothing about the others.
         overall = _stated_overall_length(spec) if len(bodies) == 1 else None
         if overall and total and total > overall * (1 + _SUM_TOLERANCE):
-            findings.append(CrossCheckFinding(
-                code="sections_exceed_stated_overall",
-                message=(
-                    f"тело {index}: сумма ступеней {total:g} мм больше "
-                    f"заявленного габарита {overall:g} мм"
-                ),
-                details={"body": index, "sum": total, "overall": overall},
-            ))
+            findings.append(
+                CrossCheckFinding(
+                    code="sections_exceed_stated_overall",
+                    message=(
+                        f"тело {index}: сумма ступеней {total:g} мм больше "
+                        f"заявленного габарита {overall:g} мм"
+                    ),
+                    details={"body": index, "sum": total, "overall": overall},
+                )
+            )
 
         bore = _sections(body, "bore")
         max_outer = max((d for d in diameters if d), default=None)
         for position, section in enumerate(bore):
             bore_diameter = _num(section.get("diameter_mm"))
             if bore_diameter and max_outer and bore_diameter >= max_outer:
-                findings.append(CrossCheckFinding(
-                    code="bore_not_inside_body",
-                    message=(
-                        f"тело {index}: расточка Ø{bore_diameter:g} не меньше "
-                        f"наибольшего наружного Ø{max_outer:g}"
-                    ),
-                    details={"body": index, "section": position},
-                ))
+                findings.append(
+                    CrossCheckFinding(
+                        code="bore_not_inside_body",
+                        message=(
+                            f"тело {index}: расточка Ø{bore_diameter:g} не меньше "
+                            f"наибольшего наружного Ø{max_outer:g}"
+                        ),
+                        details={"body": index, "section": position},
+                    )
+                )
         bore_total = sum(v for v in (_num(s.get("length_mm")) for s in bore) if v)
         if bore_total and total and bore_total > total * (1 + _SUM_TOLERANCE):
-            findings.append(CrossCheckFinding(
-                code="bore_longer_than_body",
-                message=(
-                    f"тело {index}: расточка длиной {bore_total:g} мм длиннее "
-                    f"детали ({total:g} мм)"
-                ),
-                details={"body": index},
-            ))
+            findings.append(
+                CrossCheckFinding(
+                    code="bore_longer_than_body",
+                    message=(
+                        f"тело {index}: расточка длиной {bore_total:g} мм длиннее "
+                        f"детали ({total:g} мм)"
+                    ),
+                    details={"body": index},
+                )
+            )
 
         profile = body.get("profile")
         if isinstance(profile, dict):
@@ -234,8 +262,8 @@ def _check_profile(profile: dict, body_index: int) -> list[CrossCheckFinding]:
     diameter = _num(profile.get("diameter_mm"))
     width = _num(profile.get("width_mm"))
     height = _num(profile.get("height_mm"))
-    half_width = (diameter / 2.0) if diameter else (
-        min(width, height) / 2.0 if width and height else None
+    half_width = (
+        (diameter / 2.0) if diameter else (min(width, height) / 2.0 if width and height else None)
     )
     if half_width is None:
         return findings
@@ -248,14 +276,16 @@ def _check_profile(profile: dict, body_index: int) -> list[CrossCheckFinding]:
         if x is None or y is None or not hole_diameter:
             continue
         if math.hypot(x, y) + hole_diameter / 2.0 > half_width * (1 + _SUM_TOLERANCE):
-            findings.append(CrossCheckFinding(
-                code="hole_outside_profile",
-                message=(
-                    f"тело {body_index}: отверстие Ø{hole_diameter:g} в точке "
-                    f"({x:g}, {y:g}) выходит за контур"
-                ),
-                details={"body": body_index, "hole": position},
-            ))
+            findings.append(
+                CrossCheckFinding(
+                    code="hole_outside_profile",
+                    message=(
+                        f"тело {body_index}: отверстие Ø{hole_diameter:g} в точке "
+                        f"({x:g}, {y:g}) выходит за контур"
+                    ),
+                    details={"body": body_index, "hole": position},
+                )
+            )
 
     for position, pattern in enumerate(profile.get("hole_patterns") or []):
         if not isinstance(pattern, dict):
@@ -265,14 +295,16 @@ def _check_profile(profile: dict, body_index: int) -> list[CrossCheckFinding]:
         if not pcd or not hole_diameter:
             continue
         if pcd / 2.0 + hole_diameter / 2.0 > half_width * (1 + _SUM_TOLERANCE):
-            findings.append(CrossCheckFinding(
-                code="bolt_circle_outside_profile",
-                message=(
-                    f"тело {body_index}: делительная окружность Ø{pcd:g} с "
-                    f"отверстиями Ø{hole_diameter:g} не помещается в контур"
-                ),
-                details={"body": body_index, "pattern": position},
-            ))
+            findings.append(
+                CrossCheckFinding(
+                    code="bolt_circle_outside_profile",
+                    message=(
+                        f"тело {body_index}: делительная окружность Ø{pcd:g} с "
+                        f"отверстиями Ø{hole_diameter:g} не помещается в контур"
+                    ),
+                    details={"body": body_index, "pattern": position},
+                )
+            )
     return findings
 
 
@@ -366,13 +398,16 @@ def spec_view_geometries(spec: dict) -> list[Any]:
         if not diameters:
             continue
         label = str(
-            view.get("view_id") or view.get("label")
-            or f"{view.get('kind', 'view')}:{position}"
+            view.get("view_id") or view.get("label") or f"{view.get('kind', 'view')}:{position}"
         )
-        views_out.append(ViewGeometry(
-            label=label, projection=str(view.get("kind") or ""),
-            diameters_mm=diameters, diameter_feature_ids=feature_ids,
-        ))
+        views_out.append(
+            ViewGeometry(
+                label=label,
+                projection=str(view.get("kind") or ""),
+                diameters_mm=diameters,
+                diameter_feature_ids=feature_ids,
+            )
+        )
     return views_out
 
 
@@ -407,9 +442,7 @@ def check_view_correspondence(spec: dict) -> dict[str, Any]:
     }
 
 
-def check_spec_against_raster(
-    spec: dict, circle_radii_px: list[float]
-) -> list[CrossCheckFinding]:
+def check_spec_against_raster(spec: dict, circle_radii_px: list[float]) -> list[CrossCheckFinding]:
     """Compare the spec's diameter RATIOS with the ones measured on the sheet.
 
     Scale-free on purpose: nobody has calibrated mm-per-pixel at this point, and
@@ -436,21 +469,23 @@ def check_spec_against_raster(
         return findings
     relative = abs(stated_ratio - measured_ratio) / measured_ratio
     if relative > _RATIO_TOLERANCE * 5:
-        findings.append(CrossCheckFinding(
-            code="circle_ratio_mismatch",
-            message=(
-                "пропорции окружностей не сходятся с чертежом: по прочитанному "
-                f"наибольший/наименьший = {stated_ratio:.2f}, по изображению "
-                f"= {measured_ratio:.2f}"
-            ),
-            severity="error",
-            details={
-                "stated_ratio": round(stated_ratio, 3),
-                "measured_ratio": round(measured_ratio, 3),
-                "stated_diameters_mm": stated[:6],
-                "measured_radii_px": measured[:6],
-            },
-        ))
+        findings.append(
+            CrossCheckFinding(
+                code="circle_ratio_mismatch",
+                message=(
+                    "пропорции окружностей не сходятся с чертежом: по прочитанному "
+                    f"наибольший/наименьший = {stated_ratio:.2f}, по изображению "
+                    f"= {measured_ratio:.2f}"
+                ),
+                severity="error",
+                details={
+                    "stated_ratio": round(stated_ratio, 3),
+                    "measured_ratio": round(measured_ratio, 3),
+                    "stated_diameters_mm": stated[:6],
+                    "measured_radii_px": measured[:6],
+                },
+            )
+        )
     return findings
 
 
@@ -469,8 +504,12 @@ def measure_dominant_circle_px(ink: Any) -> float | None:
     try:
         height, width = ink.shape[:2]
         circles = cv2.HoughCircles(
-            cv2.bitwise_not(ink), cv2.HOUGH_GRADIENT, dp=1.2,
-            minDist=max(width, height) // 20, param1=120, param2=90,
+            cv2.bitwise_not(ink),
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=max(width, height) // 20,
+            param1=120,
+            param2=90,
             minRadius=max(6, min(width, height) // 60),
             maxRadius=min(width, height) // 2,
         )
@@ -521,14 +560,16 @@ def check_outline_against_image(
         # A hole bigger than the outline is impossible; a hole below the
         # detector's own resolution cannot be confirmed and is left alone.
         if diameter >= outer:
-            findings.append(CrossCheckFinding(
-                code="hole_larger_than_measured_outline",
-                message=(
-                    f"отверстие Ø{diameter:g} не помещается в наружный контур "
-                    f"Ø{outer:g}, измеренный на изображении"
-                ),
-                details={"hole": position, "mm_per_px": round(mm_per_px, 4)},
-            ))
+            findings.append(
+                CrossCheckFinding(
+                    code="hole_larger_than_measured_outline",
+                    message=(
+                        f"отверстие Ø{diameter:g} не помещается в наружный контур "
+                        f"Ø{outer:g}, измеренный на изображении"
+                    ),
+                    details={"hole": position, "mm_per_px": round(mm_per_px, 4)},
+                )
+            )
     return findings
 
 
@@ -560,7 +601,10 @@ def detect_axial_hatching(ink: Any) -> dict[str, Any] | None:
     try:
         height, width = ink.shape[:2]
         lines = cv2.HoughLinesP(
-            ink, 1, np.pi / 180, threshold=25,
+            ink,
+            1,
+            np.pi / 180,
+            threshold=25,
             minLineLength=max(8, min(height, width) // 40),
             maxLineGap=4,
         )
@@ -611,31 +655,35 @@ def check_axial_hatching_against_bore(
         return findings
     bore = body.get("bore") or []
     if hatching and not bore:
-        findings.append(CrossCheckFinding(
-            code="axial_hatching_bore_mismatch",
-            message=(
-                "на чертеже обнаружена штриховка разреза, похожая на "
-                "полость, но bore[] пусто — деталь будет построена "
-                "сплошной. Проверьте разрез и, если полость есть, "
-                "добавьте секцию bore в редакторе спецификации."
-            ),
-            severity="error",
-            details=hatching,
-        ))
+        findings.append(
+            CrossCheckFinding(
+                code="axial_hatching_bore_mismatch",
+                message=(
+                    "на чертеже обнаружена штриховка разреза, похожая на "
+                    "полость, но bore[] пусто — деталь будет построена "
+                    "сплошной. Проверьте разрез и, если полость есть, "
+                    "добавьте секцию bore в редакторе спецификации."
+                ),
+                severity="error",
+                details=hatching,
+            )
+        )
     elif not hatching and bore:
         # A weaker signal on purpose: the detector's own false-negative
         # rate is unmeasured against a broad corpus (see its docstring) —
         # a real bore not being found here must not read as proof the bore
         # is wrong.
-        findings.append(CrossCheckFinding(
-            code="no_axial_hatching_for_stated_bore",
-            message=(
-                "bore[] заполнено, но штриховка разреза на изображении не "
-                "обнаружена детектором — это не доказательство ошибки, "
-                "детектор может просто не найти реальную штриховку"
-            ),
-            severity="warn",
-        ))
+        findings.append(
+            CrossCheckFinding(
+                code="no_axial_hatching_for_stated_bore",
+                message=(
+                    "bore[] заполнено, но штриховка разреза на изображении не "
+                    "обнаружена детектором — это не доказательство ошибки, "
+                    "детектор может просто не найти реальную штриховку"
+                ),
+                severity="warn",
+            )
+        )
     return findings
 
 
@@ -672,21 +720,23 @@ def cross_check_spec(spec: dict, ink: Any | None = None) -> dict[str, Any]:
         findings.extend(check_spec_against_raster(spec, measured))
         dominant = measure_dominant_circle_px(ink)
         findings.extend(check_outline_against_image(spec, dominant))
-        findings.extend(
-            check_axial_hatching_against_bore(spec, detect_axial_hatching(ink))
-        )
+        findings.extend(check_axial_hatching_against_bore(spec, detect_axial_hatching(ink)))
     stated_circles = len(_spec_circle_diameters(spec))
     raster_state = (
-        "not_attempted" if ink is None
-        else ("checked" if len(measured) >= 2 and stated_circles >= 2
-              else "insufficient_measurements")
+        "not_attempted"
+        if ink is None
+        else (
+            "checked" if len(measured) >= 2 and stated_circles >= 2 else "insufficient_measurements"
+        )
     )
     view_correspondence = check_view_correspondence(spec)
     return {
         "findings": [
             {
-                "code": f.code, "message": f.message,
-                "severity": f.severity, "details": f.details,
+                "code": f.code,
+                "message": f.message,
+                "severity": f.severity,
+                "details": f.details,
             }
             for f in findings
         ],

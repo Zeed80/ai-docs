@@ -23,10 +23,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import GUID
-
-from app.db.base import Base, TimestampMixin, UUIDPrimaryKey
-
+from app.db.base import GUID, Base, TimestampMixin, UUIDPrimaryKey
 
 # ── Enums ────────────────────────────────────────────────────────────────────
 
@@ -168,9 +165,7 @@ class Project(UUIDPrimaryKey, TimestampMixin, Base):
     workspace can filter and group by it (e.g. «счета по проекту X»)."""
 
     __tablename__ = "projects"
-    __table_args__ = (
-        UniqueConstraint("normalized_name", name="uq_projects_normalized_name"),
-    )
+    __table_args__ = (UniqueConstraint("normalized_name", name="uq_projects_normalized_name"),)
 
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     # Lowercased/trimmed name for case-insensitive dedup (get-or-create).
@@ -183,9 +178,7 @@ class SiteObject(UUIDPrimaryKey, TimestampMixin, Base):
     """Object/site within a project (building, unit, equipment line)."""
 
     __tablename__ = "site_objects"
-    __table_args__ = (
-        UniqueConstraint("normalized_name", name="uq_site_objects_normalized_name"),
-    )
+    __table_args__ = (UniqueConstraint("normalized_name", name="uq_site_objects_normalized_name"),)
 
     project_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("projects.id"), nullable=True, index=True
@@ -209,9 +202,7 @@ class EngineeringProject(UUIDPrimaryKey, TimestampMixin, Base):
     """
 
     __tablename__ = "engineering_projects"
-    __table_args__ = (
-        UniqueConstraint("code", name="uq_engineering_projects_code"),
-    )
+    __table_args__ = (UniqueConstraint("code", name="uq_engineering_projects_code"),)
 
     project_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("projects.id"), nullable=True, index=True
@@ -223,7 +214,9 @@ class EngineeringProject(UUIDPrimaryKey, TimestampMixin, Base):
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
 
     revisions: Mapped[list["EngineeringRevision"]] = relationship(
-        back_populates="project", cascade="all, delete-orphan", order_by="EngineeringRevision.revision"
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="EngineeringRevision.revision",
     )
 
 
@@ -232,7 +225,12 @@ class EngineeringRevision(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "engineering_revisions"
     __table_args__ = (
-        Index("ix_engineering_revisions_project_revision", "engineering_project_id", "revision", unique=True),
+        Index(
+            "ix_engineering_revisions_project_revision",
+            "engineering_project_id",
+            "revision",
+            unique=True,
+        ),
     )
 
     engineering_project_id: Mapped[uuid.UUID] = mapped_column(
@@ -263,7 +261,13 @@ class EngineeringProjection(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "engineering_projections"
     __table_args__ = (
         Index("ix_engineering_projection_target", "entity_type", "entity_id"),
-        UniqueConstraint("engineering_revision_id", "projection_type", "entity_type", "entity_id", name="uq_engineering_projection_target"),
+        UniqueConstraint(
+            "engineering_revision_id",
+            "projection_type",
+            "entity_type",
+            "entity_id",
+            name="uq_engineering_projection_target",
+        ),
     )
 
     engineering_revision_id: Mapped[uuid.UUID] = mapped_column(
@@ -303,7 +307,9 @@ class EngineeringGraphRevision(UUIDPrimaryKey, TimestampMixin, Base):
     canonical_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     profile: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     storage_path: Mapped[str] = mapped_column(String(1000), nullable=False)
-    comprehension_status: Mapped[str] = mapped_column(String(30), nullable=False, default="accumulating")
+    comprehension_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="accumulating"
+    )
     build_status: Mapped[str] = mapped_column(String(30), nullable=False, default="not_ready")
     release_status: Mapped[str] = mapped_column(String(30), nullable=False, default="blocked")
     reader_manifest: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
@@ -425,7 +431,9 @@ class EngineeringMaterial(UUIDPrimaryKey, TimestampMixin, Base):
     """Normalized material properties used by design, technology and CAE."""
 
     __tablename__ = "engineering_materials"
-    __table_args__ = (UniqueConstraint("designation", "standard", name="uq_engineering_material_designation"),)
+    __table_args__ = (
+        UniqueConstraint("designation", "standard", name="uq_engineering_material_designation"),
+    )
 
     designation: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
     standard: Mapped[str | None] = mapped_column(String(160))
@@ -442,7 +450,11 @@ class EngineeringMaterialAssignment(UUIDPrimaryKey, TimestampMixin, Base):
     """Material assignment to an IR part/body in one immutable revision."""
 
     __tablename__ = "engineering_material_assignments"
-    __table_args__ = (UniqueConstraint("engineering_revision_id", "object_key", name="uq_engineering_material_assignment"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "engineering_revision_id", "object_key", name="uq_engineering_material_assignment"
+        ),
+    )
 
     engineering_revision_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("engineering_revisions.id"), nullable=False, index=True
@@ -463,7 +475,9 @@ class EngineeringAssembly(UUIDPrimaryKey, TimestampMixin, Base):
     """Assembly definition owned by one Engineering IR revision."""
 
     __tablename__ = "engineering_assemblies"
-    __table_args__ = (UniqueConstraint("engineering_revision_id", "name", name="uq_engineering_assembly_name"),)
+    __table_args__ = (
+        UniqueConstraint("engineering_revision_id", "name", name="uq_engineering_assembly_name"),
+    )
 
     engineering_revision_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("engineering_revisions.id"), nullable=False, index=True
@@ -473,7 +487,9 @@ class EngineeringAssembly(UUIDPrimaryKey, TimestampMixin, Base):
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
 
     components: Mapped[list["EngineeringAssemblyComponent"]] = relationship(
-        back_populates="assembly", cascade="all, delete-orphan", order_by="EngineeringAssemblyComponent.sort_order"
+        back_populates="assembly",
+        cascade="all, delete-orphan",
+        order_by="EngineeringAssemblyComponent.sort_order",
     )
     mates: Mapped[list["EngineeringAssemblyMate"]] = relationship(
         back_populates="assembly", cascade="all, delete-orphan"
@@ -482,7 +498,11 @@ class EngineeringAssembly(UUIDPrimaryKey, TimestampMixin, Base):
 
 class EngineeringAssemblyComponent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "engineering_assembly_components"
-    __table_args__ = (UniqueConstraint("engineering_assembly_id", "instance_key", name="uq_engineering_component_instance"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "engineering_assembly_id", "instance_key", name="uq_engineering_component_instance"
+        ),
+    )
 
     engineering_assembly_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("engineering_assemblies.id"), nullable=False, index=True
@@ -564,7 +584,12 @@ class EngineeringAnalysisRun(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "engineering_analysis_runs"
     __table_args__ = (
-        Index("ix_engineering_analysis_runs_case_number", "analysis_case_id", "run_number", unique=True),
+        Index(
+            "ix_engineering_analysis_runs_case_number",
+            "analysis_case_id",
+            "run_number",
+            unique=True,
+        ),
     )
 
     analysis_case_id: Mapped[uuid.UUID] = mapped_column(
@@ -593,7 +618,12 @@ class EngineeringChangeRequest(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "engineering_change_requests"
     __table_args__ = (
-        Index("ix_engineering_change_requests_project_number", "engineering_project_id", "number", unique=True),
+        Index(
+            "ix_engineering_change_requests_project_number",
+            "engineering_project_id",
+            "number",
+            unique=True,
+        ),
     )
 
     engineering_project_id: Mapped[uuid.UUID] = mapped_column(
@@ -837,7 +867,9 @@ class MemoryEmbeddingRecord(UUIDPrimaryKey, TimestampMixin, Base):
     document_version_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("document_versions.id"), nullable=True, index=True
     )
-    collection_name: Mapped[str] = mapped_column(String(100), default="memory_chunks", nullable=False)
+    collection_name: Mapped[str] = mapped_column(
+        String(100), default="memory_chunks", nullable=False
+    )
     point_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     embedding_model: Mapped[str] = mapped_column(String(100), nullable=False)
     vector_size: Mapped[int | None] = mapped_column(Integer)
@@ -903,12 +935,8 @@ class Invoice(UUIDPrimaryKey, TimestampMixin, Base):
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     currency: Mapped[str] = mapped_column(String(3), default="RUB")
 
-    supplier_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("parties.id")
-    )
-    buyer_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("parties.id")
-    )
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("parties.id"))
+    buyer_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("parties.id"))
 
     subtotal: Mapped[float | None] = mapped_column(Float)
     tax_amount: Mapped[float | None] = mapped_column(Float)
@@ -935,9 +963,7 @@ class Invoice(UUIDPrimaryKey, TimestampMixin, Base):
 class InvoiceLine(UUIDPrimaryKey, Base):
     __tablename__ = "invoice_lines"
 
-    invoice_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("invoices.id"), nullable=False
-    )
+    invoice_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("invoices.id"), nullable=False)
     line_number: Mapped[int] = mapped_column(Integer, nullable=False)
     sku: Mapped[str | None] = mapped_column(String(200), index=True)
     description: Mapped[str | None] = mapped_column(Text)
@@ -1049,10 +1075,10 @@ class EmailThread(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "email_threads"
 
     subject: Mapped[str] = mapped_column(String(1000), nullable=False)
-    mailbox: Mapped[str] = mapped_column(String(100), nullable=False)  # procurement, accounting, general
-    party_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("parties.id")
-    )
+    mailbox: Mapped[str] = mapped_column(
+        String(100), nullable=False
+    )  # procurement, accounting, general
+    party_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("parties.id"))
     message_count: Mapped[int] = mapped_column(Integer, default=0)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -1077,9 +1103,7 @@ class EmailThread(UUIDPrimaryKey, TimestampMixin, Base):
 class EmailMessage(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "email_messages"
 
-    thread_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("email_threads.id")
-    )
+    thread_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("email_threads.id"))
     message_id_header: Mapped[str | None] = mapped_column(String(500), unique=True)
     in_reply_to: Mapped[str | None] = mapped_column(String(500))
     mailbox: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -1215,9 +1239,7 @@ class MailboxFolder(UUIDPrimaryKey, TimestampMixin, Base):
     """
 
     __tablename__ = "mailbox_folders"
-    __table_args__ = (
-        UniqueConstraint("mailbox", "remote_name", name="uq_mailbox_folder"),
-    )
+    __table_args__ = (UniqueConstraint("mailbox", "remote_name", name="uq_mailbox_folder"),)
 
     mailbox: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     remote_name: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -1257,9 +1279,7 @@ class EmailSyncOp(UUIDPrimaryKey, TimestampMixin, Base):
     # "seen" | "unseen" | "flagged" | "unflagged" | "move" | "delete"
     op: Mapped[str] = mapped_column(String(20), nullable=False)
     payload: Mapped[dict | None] = mapped_column(JSON)
-    state: Mapped[str] = mapped_column(
-        String(20), default="pending", nullable=False, index=True
-    )
+    state: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1284,8 +1304,11 @@ class EmailTriageResult(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "email_triage_results"
 
     message_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("email_messages.id", ondelete="CASCADE"),
-        nullable=False, index=True, unique=True,
+        GUID(),
+        ForeignKey("email_messages.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        unique=True,
     )
     mailbox: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
@@ -1399,9 +1422,13 @@ class EmailContact(UUIDPrimaryKey, TimestampMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text)
     tags: Mapped[list | None] = mapped_column(JSON)
     owner_sub: Mapped[str | None] = mapped_column(String(255), index=True)
-    party_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("parties.id", ondelete="SET NULL"))
+    party_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("parties.id", ondelete="SET NULL")
+    )
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    source: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)  # manual|auto|party
+    source: Mapped[str] = mapped_column(
+        String(20), default="manual", nullable=False
+    )  # manual|auto|party
     use_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Ф1.4 — «этому отправителю картинки показывать сразу». Блокировка по
@@ -1412,9 +1439,7 @@ class EmailContact(UUIDPrimaryKey, TimestampMixin, Base):
         Boolean, default=False, nullable=False, server_default="false"
     )
 
-    __table_args__ = (
-        UniqueConstraint("email", "owner_sub", name="uq_email_contact_email_owner"),
-    )
+    __table_args__ = (UniqueConstraint("email", "owner_sub", name="uq_email_contact_email_owner"),)
 
 
 class EmailSignature(UUIDPrimaryKey, TimestampMixin, Base):
@@ -1490,7 +1515,9 @@ class Approval(UUIDPrimaryKey, TimestampMixin, Base):
 
     # Approval chain support
     chain_order: Mapped[int | None] = mapped_column(Integer)
-    chain_root_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("approvals.id"), nullable=True)
+    chain_root_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("approvals.id"), nullable=True
+    )
     requires_all: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
@@ -1505,9 +1532,7 @@ class DraftAction(UUIDPrimaryKey, TimestampMixin, Base):
     entity_id: Mapped[uuid.UUID | None] = mapped_column(GUID())
 
     draft_data: Mapped[dict] = mapped_column(JSON, nullable=False)
-    approval_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("approvals.id")
-    )
+    approval_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("approvals.id"))
     executed: Mapped[bool] = mapped_column(Boolean, default=False)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -1544,9 +1569,7 @@ class Comment(UUIDPrimaryKey, TimestampMixin, Base):
     entity_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
     user_id: Mapped[str] = mapped_column(String(100), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
-    parent_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("comments.id")
-    )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("comments.id"))
 
 
 # ── Saved Views & Queries ───────────────────────────────────────────────────
@@ -1631,6 +1654,7 @@ class SavedQuery(UUIDPrimaryKey, TimestampMixin, Base):
 
 class AutoApprovalRule(UUIDPrimaryKey, TimestampMixin, Base):
     """Defines conditions under which an invoice/document is auto-approved."""
+
     __tablename__ = "auto_approval_rules"
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -1676,12 +1700,8 @@ class PriceHistoryEntry(UUIDPrimaryKey, Base):
     canonical_item_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("canonical_items.id"), nullable=False, index=True
     )
-    supplier_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("parties.id")
-    )
-    invoice_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("invoices.id")
-    )
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("parties.id"))
+    invoice_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("invoices.id"))
     invoice_line_id: Mapped[uuid.UUID | None] = mapped_column(GUID())
 
     price: Mapped[float] = mapped_column(Float, nullable=False)
@@ -1721,7 +1741,9 @@ class CollectionItem(UUIDPrimaryKey, TimestampMixin, Base):
     collection_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("collections.id"), nullable=False
     )
-    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)  # document, invoice, email, supplier
+    entity_type: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # document, invoice, email, supplier
     entity_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
     note: Mapped[str | None] = mapped_column(Text)
     added_by: Mapped[str] = mapped_column(String(100), default="user")
@@ -1905,9 +1927,7 @@ class WorkOrder(UUIDPrimaryKey, TimestampMixin, Base):
     """
 
     __tablename__ = "work_orders"
-    __table_args__ = (
-        Index("ix_work_orders_dispatch", "status", "priority", "created_at"),
-    )
+    __table_args__ = (Index("ix_work_orders_dispatch", "status", "priority", "created_at"),)
 
     owner_key: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(50), default="api", nullable=False, index=True)
@@ -2078,7 +2098,9 @@ class ComputerUseGrant(UUIDPrimaryKey, TimestampMixin, Base):
     """Short-lived least-privilege authority for brokered OS/browser actions."""
 
     __tablename__ = "computer_use_grants"
-    __table_args__ = (Index("ix_computer_use_grants_active", "work_order_id", "revoked_at", "expires_at"),)
+    __table_args__ = (
+        Index("ix_computer_use_grants_active", "work_order_id", "revoked_at", "expires_at"),
+    )
 
     work_order_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
@@ -2091,20 +2113,27 @@ class ComputerUseGrant(UUIDPrimaryKey, TimestampMixin, Base):
     allowed_commands: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     max_actions: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
     used_actions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class ComputerUseAction(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "computer_use_actions"
-    __table_args__ = (Index("ix_computer_use_actions_order_created", "work_order_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_computer_use_actions_order_created", "work_order_id", "created_at"),
+    )
 
     work_order_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
     )
     grant_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("computer_use_grants.id", ondelete="RESTRICT"), nullable=False, index=True
+        GUID(),
+        ForeignKey("computer_use_grants.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
     )
     step_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("work_steps.id", ondelete="SET NULL"), index=True
@@ -2123,7 +2152,9 @@ class ComputerUseAction(UUIDPrimaryKey, TimestampMixin, Base):
 
 class WorkAcceptanceCriterion(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "work_acceptance_criteria"
-    __table_args__ = (UniqueConstraint("work_order_id", "criterion_key", name="uq_work_criterion_key"),)
+    __table_args__ = (
+        UniqueConstraint("work_order_id", "criterion_key", name="uq_work_criterion_key"),
+    )
 
     work_order_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
@@ -2201,9 +2232,7 @@ class WorkLearning(UUIDPrimaryKey, TimestampMixin, Base):
     """Idempotent learning job derived from a verified WorkOrder trace."""
 
     __tablename__ = "work_learnings"
-    __table_args__ = (
-        Index("ix_work_learnings_process", "status", "created_at"),
-    )
+    __table_args__ = (Index("ix_work_learnings_process", "status", "created_at"),)
 
     work_order_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -2504,11 +2533,17 @@ class CalendarEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "calendar_events"
 
     title: Mapped[str] = mapped_column(String(500), nullable=False)
-    event_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    event_type: Mapped[str] = mapped_column(String(50), nullable=False)  # due_date, payment, delivery, meeting
+    event_date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # due_date, payment, delivery, meeting
     entity_type: Mapped[str | None] = mapped_column(String(50))
     entity_id: Mapped[uuid.UUID | None] = mapped_column(GUID())
-    source: Mapped[str] = mapped_column(String(50), default="extraction")  # extraction, manual, email
+    source: Mapped[str] = mapped_column(
+        String(50), default="extraction"
+    )  # extraction, manual, email
     user_id: Mapped[str | None] = mapped_column(String(100))
 
 
@@ -2552,15 +2587,9 @@ class InventoryItem(UUIDPrimaryKey, TimestampMixin, Base):
 class WarehouseReceipt(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "warehouse_receipts"
 
-    invoice_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("invoices.id")
-    )
-    document_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("documents.id")
-    )
-    supplier_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("parties.id")
-    )
+    invoice_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("invoices.id"))
+    document_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("documents.id"))
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("parties.id"))
     receipt_number: Mapped[str | None] = mapped_column(String(100), index=True)
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -2635,9 +2664,7 @@ class PurchaseRequest(UUIDPrimaryKey, TimestampMixin, Base):
     compare_session_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("compare_sessions.id")
     )
-    approval_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("approvals.id")
-    )
+    approval_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("approvals.id"))
 
 
 class SupplierContract(UUIDPrimaryKey, TimestampMixin, Base):
@@ -2646,9 +2673,7 @@ class SupplierContract(UUIDPrimaryKey, TimestampMixin, Base):
     supplier_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("parties.id"), nullable=False, index=True
     )
-    document_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("documents.id")
-    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("documents.id"))
     contract_number: Mapped[str | None] = mapped_column(String(100))
     start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     end_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -2673,9 +2698,7 @@ class PaymentSchedule(UUIDPrimaryKey, TimestampMixin, Base):
         GUID(), ForeignKey("invoices.id"), nullable=False, index=True
     )
     payment_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    due_date: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, index=True
-    )
+    due_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="RUB", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="scheduled", nullable=False)
@@ -2728,9 +2751,7 @@ class BOM(UUIDPrimaryKey, TimestampMixin, Base):
     source_bom_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("boms.id"), nullable=True
     )
-    document_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("documents.id")
-    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("documents.id"))
     engineering_revision_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("engineering_revisions.id"), nullable=True, index=True
     )
@@ -2738,7 +2759,9 @@ class BOM(UUIDPrimaryKey, TimestampMixin, Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
 
-    lines: Mapped[list["BOMLine"]] = relationship(back_populates="bom", order_by="BOMLine.line_number")
+    lines: Mapped[list["BOMLine"]] = relationship(
+        back_populates="bom", order_by="BOMLine.line_number"
+    )
 
 
 class BOMLine(UUIDPrimaryKey, Base):
@@ -2751,9 +2774,7 @@ class BOMLine(UUIDPrimaryKey, Base):
     canonical_item_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("canonical_items.id")
     )
-    norm_card_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("norm_cards.id")
-    )
+    norm_card_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("norm_cards.id"))
     description: Mapped[str] = mapped_column(Text, nullable=False)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     unit: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -2810,7 +2831,9 @@ class ManufacturingProcessPlan(UUIDPrimaryKey, TimestampMixin, Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
-    tp_type: Mapped[str] = mapped_column(String(50), default="единичный", nullable=False, index=True)
+    tp_type: Mapped[str] = mapped_column(
+        String(50), default="единичный", nullable=False, index=True
+    )
     drawing_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("drawings.id"), nullable=True, index=True
     )
@@ -2919,12 +2942,8 @@ class ManufacturingNormEstimate(UUIDPrimaryKey, TimestampMixin, Base):
     created_by: Mapped[str] = mapped_column(String(100), default="sveta", nullable=False)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
-    process_plan: Mapped["ManufacturingProcessPlan"] = relationship(
-        back_populates="norm_estimates"
-    )
-    operation: Mapped["ManufacturingOperation | None"] = relationship(
-        foreign_keys=[operation_id]
-    )
+    process_plan: Mapped["ManufacturingProcessPlan"] = relationship(back_populates="norm_estimates")
+    operation: Mapped["ManufacturingOperation | None"] = relationship(foreign_keys=[operation_id])
 
 
 class ManufacturingOperationTemplate(UUIDPrimaryKey, TimestampMixin, Base):
@@ -3063,9 +3082,7 @@ class SurfaceMachiningSpec(UUIDPrimaryKey, TimestampMixin, Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
-    process_plan: Mapped["ManufacturingProcessPlan"] = relationship(
-        back_populates="surface_specs"
-    )
+    process_plan: Mapped["ManufacturingProcessPlan"] = relationship(back_populates="surface_specs")
     operation: Mapped["ManufacturingOperation | None"] = relationship(
         "ManufacturingOperation", foreign_keys=[operation_id]
     )
@@ -3080,7 +3097,11 @@ class BlankSpec(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "blank_specs"
 
     process_plan_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("manufacturing_process_plans.id"), nullable=False, unique=True, index=True
+        GUID(),
+        ForeignKey("manufacturing_process_plans.id"),
+        nullable=False,
+        unique=True,
+        index=True,
     )
     blank_type: Mapped[str] = mapped_column(String(80), nullable=False)
     # прокат | поковка | штамповка | литье | сварная конструкция
@@ -3152,7 +3173,9 @@ class NormControlCheck(UUIDPrimaryKey, TimestampMixin, Base):
     recommendation: Mapped[str | None] = mapped_column(Text)
     auto_fixable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     evidence: Mapped[dict | None] = mapped_column(JSON)
-    created_by: Mapped[str] = mapped_column(String(100), default="normcontrol_agent", nullable=False)
+    created_by: Mapped[str] = mapped_column(
+        String(100), default="normcontrol_agent", nullable=False
+    )
     resolved_by: Mapped[str | None] = mapped_column(String(100))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -3170,7 +3193,9 @@ class NormControlCheck(UUIDPrimaryKey, TimestampMixin, Base):
 class NTDControlSettings(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "ntd_control_settings"
 
-    singleton_key: Mapped[str] = mapped_column(String(50), default="default", unique=True, nullable=False)
+    singleton_key: Mapped[str] = mapped_column(
+        String(50), default="default", unique=True, nullable=False
+    )
     mode: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)
     # manual, auto.
     updated_by: Mapped[str | None] = mapped_column(String(100))
@@ -3181,7 +3206,9 @@ class NormativeDocument(UUIDPrimaryKey, TimestampMixin, Base):
 
     code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
-    document_type: Mapped[str] = mapped_column(String(50), default="ГОСТ", nullable=False, index=True)
+    document_type: Mapped[str] = mapped_column(
+        String(50), default="ГОСТ", nullable=False, index=True
+    )
     status: Mapped[str] = mapped_column(String(30), default="active", nullable=False, index=True)
     current_version_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
     scope: Mapped[str | None] = mapped_column(Text)
@@ -3256,7 +3283,9 @@ class NormativeRequirement(UUIDPrimaryKey, TimestampMixin, Base):
         GUID(), ForeignKey("normative_clauses.id"), nullable=True, index=True
     )
     requirement_code: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    requirement_type: Mapped[str] = mapped_column(String(80), default="generic", nullable=False, index=True)
+    requirement_type: Mapped[str] = mapped_column(
+        String(80), default="generic", nullable=False, index=True
+    )
     applies_to: Mapped[list | None] = mapped_column(JSON)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     required_keywords: Mapped[list | None] = mapped_column(JSON)
@@ -3278,7 +3307,9 @@ class NTDCheckRun(UUIDPrimaryKey, TimestampMixin, Base):
     )
     status: Mapped[str] = mapped_column(String(30), default="completed", nullable=False, index=True)
     mode: Mapped[str] = mapped_column(String(20), default="manual", nullable=False, index=True)
-    triggered_by: Mapped[str] = mapped_column(String(20), default="manual", nullable=False, index=True)
+    triggered_by: Mapped[str] = mapped_column(
+        String(20), default="manual", nullable=False, index=True
+    )
     summary: Mapped[str | None] = mapped_column(Text)
     findings_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     findings_open: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -3512,9 +3543,7 @@ class FeatureDimension(UUIDPrimaryKey, TimestampMixin, Base):
     feature_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("drawing_features.id"), nullable=False, index=True
     )
-    dim_type: Mapped[FeatureDimType] = mapped_column(
-        Enum(FeatureDimType), nullable=False
-    )
+    dim_type: Mapped[FeatureDimType] = mapped_column(Enum(FeatureDimType), nullable=False)
     nominal: Mapped[float] = mapped_column(Float, nullable=False)
     upper_tol: Mapped[float | None] = mapped_column(Float)
     lower_tol: Mapped[float | None] = mapped_column(Float)
@@ -3587,9 +3616,7 @@ class ToolSupplier(UUIDPrimaryKey, TimestampMixin, Base):
     main_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("parties.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    main_supplier: Mapped["Party | None"] = relationship(
-        "Party", foreign_keys=[main_supplier_id]
-    )
+    main_supplier: Mapped["Party | None"] = relationship("Party", foreign_keys=[main_supplier_id])
 
     catalog_entries: Mapped[list["ToolCatalogEntry"]] = relationship(
         back_populates="supplier", cascade="all, delete-orphan"
@@ -3603,9 +3630,7 @@ class ToolCatalogEntry(UUIDPrimaryKey, TimestampMixin, Base):
         GUID(), ForeignKey("tool_suppliers.id"), nullable=True, index=True
     )
     part_number: Mapped[str | None] = mapped_column(String(200), index=True)
-    tool_type: Mapped[ToolTypeEnum] = mapped_column(
-        Enum(ToolTypeEnum), nullable=False, index=True
-    )
+    tool_type: Mapped[ToolTypeEnum] = mapped_column(Enum(ToolTypeEnum), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text)
     diameter_mm: Mapped[float | None] = mapped_column(Float, index=True)
@@ -3665,9 +3690,7 @@ class FeatureToolBinding(UUIDPrimaryKey, TimestampMixin, Base):
     feature_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("drawing_features.id"), nullable=False, unique=True, index=True
     )
-    tool_source: Mapped[ToolSourceEnum] = mapped_column(
-        Enum(ToolSourceEnum), nullable=False
-    )
+    tool_source: Mapped[ToolSourceEnum] = mapped_column(Enum(ToolSourceEnum), nullable=False)
     warehouse_item_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("inventory_items.id"), nullable=True, index=True
     )
@@ -3681,12 +3704,8 @@ class FeatureToolBinding(UUIDPrimaryKey, TimestampMixin, Base):
     bound_by: Mapped[str] = mapped_column(String(100), default="user", nullable=False)
 
     feature: Mapped["DrawingFeature"] = relationship(back_populates="tool_binding")
-    warehouse_item: Mapped["InventoryItem | None"] = relationship(
-        foreign_keys=[warehouse_item_id]
-    )
-    catalog_entry: Mapped["ToolCatalogEntry | None"] = relationship(
-        foreign_keys=[catalog_entry_id]
-    )
+    warehouse_item: Mapped["InventoryItem | None"] = relationship(foreign_keys=[warehouse_item_id])
+    catalog_entry: Mapped["ToolCatalogEntry | None"] = relationship(foreign_keys=[catalog_entry_id])
 
 
 class CatalogPage(UUIDPrimaryKey, TimestampMixin, Base):
@@ -3791,9 +3810,7 @@ class DrawingFeatureCorrection(UUIDPrimaryKey, TimestampMixin, Base):
     """User corrections for uncertain VLM feature predictions. Used for few-shot learning."""
 
     __tablename__ = "drawing_feature_corrections"
-    __table_args__ = (
-        Index("ix_dfc_drawing_type_corrected", "drawing_type", "corrected_type"),
-    )
+    __table_args__ = (Index("ix_dfc_drawing_type_corrected", "drawing_type", "corrected_type"),)
 
     drawing_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("drawings.id"), nullable=False, index=True
@@ -3870,9 +3887,7 @@ class MailboxConfig(UUIDPrimaryKey, TimestampMixin, Base):
     #   "classify" — understand and label, no side effects;
     #   "full"     — also prepare drafts, link invoices, notify the responsible.
     # Never sends anything: outbound stays behind the approval gate.
-    agent_triage_mode: Mapped[str] = mapped_column(
-        String(20), default="classify", nullable=False
-    )
+    agent_triage_mode: Mapped[str] = mapped_column(String(20), default="classify", nullable=False)
 
     # Ф9 — per-mailbox overrides of the global mail policy. NULL = inherit
     # MailServerConfig, so a mailbox that never had an opinion keeps behaving
@@ -3952,7 +3967,9 @@ class MailServerConfig(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "mail_server_config"
 
-    singleton_key: Mapped[str] = mapped_column(String(50), default="default", unique=True, nullable=False)
+    singleton_key: Mapped[str] = mapped_column(
+        String(50), default="default", unique=True, nullable=False
+    )
     api_url: Mapped[str | None] = mapped_column(String(500))
     api_key_encrypted: Mapped[str | None] = mapped_column(Text)
     mail_domain: Mapped[str | None] = mapped_column(String(255))
@@ -4011,9 +4028,7 @@ class UserNotificationPref(UUIDPrimaryKey, TimestampMixin, Base):
     """
 
     __tablename__ = "user_notification_prefs"
-    __table_args__ = (
-        UniqueConstraint("user_sub", "type", name="uq_user_notification_pref"),
-    )
+    __table_args__ = (UniqueConstraint("user_sub", "type", name="uq_user_notification_pref"),)
 
     user_sub: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -4135,9 +4150,9 @@ class ApiKey(UUIDPrimaryKey, TimestampMixin, Base):
 
 
 class RoomType(str, enum.Enum):
-    direct = "direct"    # 1-on-1 DM (auto-created on first interaction)
-    group  = "group"     # user-created group channel
-    system = "system"    # system notifications channel (read-only for members)
+    direct = "direct"  # 1-on-1 DM (auto-created on first interaction)
+    group = "group"  # user-created group channel
+    system = "system"  # system notifications channel (read-only for members)
 
 
 class Room(UUIDPrimaryKey, TimestampMixin, Base):
@@ -4151,8 +4166,12 @@ class Room(UUIDPrimaryKey, TimestampMixin, Base):
     created_by: Mapped[str] = mapped_column(String(255), nullable=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    members: Mapped[list["RoomMember"]] = relationship(back_populates="room", cascade="all, delete-orphan")
-    messages: Mapped[list["RoomMessage"]] = relationship(back_populates="room", cascade="all, delete-orphan")
+    members: Mapped[list["RoomMember"]] = relationship(
+        back_populates="room", cascade="all, delete-orphan"
+    )
+    messages: Mapped[list["RoomMessage"]] = relationship(
+        back_populates="room", cascade="all, delete-orphan"
+    )
 
 
 class RoomMember(Base):
@@ -4162,13 +4181,18 @@ class RoomMember(Base):
 
     room_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("rooms.id"), nullable=False)
     user_sub: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(String(20), nullable=False, default="member")  # owner | member
+    role: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="member"
+    )  # owner | member
     last_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
     room: Mapped["Room"] = relationship(back_populates="members")
 
     from sqlalchemy import PrimaryKeyConstraint
+
     __table_args__ = (PrimaryKeyConstraint("room_id", "user_sub"),)
 
 
@@ -4177,17 +4201,23 @@ class RoomMessage(UUIDPrimaryKey, Base):
 
     __tablename__ = "room_messages"
 
-    room_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("rooms.id"), nullable=False, index=True)
+    room_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("rooms.id"), nullable=False, index=True
+    )
     sender_sub: Mapped[str] = mapped_column(String(255), nullable=False)  # user sub or "sveta"
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
     content_type: Mapped[str] = mapped_column(String(20), nullable=False, default="text")
     # text | file | action | system
-    reply_to_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("room_messages.id"), nullable=True)
+    reply_to_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("room_messages.id"), nullable=True
+    )
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
     # For action messages: {entity_type, entity_id, action, approval_id, ...}
     is_edited: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
 
     room: Mapped["Room"] = relationship(back_populates="messages")
     attachments: Mapped[list["RoomMessageAttachment"]] = relationship(
@@ -4200,15 +4230,23 @@ class RoomMessageAttachment(UUIDPrimaryKey, Base):
 
     __tablename__ = "room_message_attachments"
 
-    message_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("room_messages.id"), nullable=False, index=True)
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("room_messages.id"), nullable=False, index=True
+    )
     file_name: Mapped[str] = mapped_column(String(500), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(1000), nullable=False)
-    document_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("documents.id"), nullable=True)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("documents.id"), nullable=True
+    )
     thumbnail_key: Mapped[str | None] = mapped_column(String(1000))
-    ingest_job_id: Mapped[str | None] = mapped_column(String(200))  # Celery task ID after OCR dispatch
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    ingest_job_id: Mapped[str | None] = mapped_column(
+        String(200)
+    )  # Celery task ID after OCR dispatch
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
     message: Mapped["RoomMessage"] = relationship(back_populates="attachments")
 
@@ -4218,14 +4256,14 @@ class RoomMessageAttachment(UUIDPrimaryKey, Base):
 
 class NotificationType(str, enum.Enum):
     approval_assigned = "approval_assigned"
-    approval_decided  = "approval_decided"
-    mention           = "mention"
-    document_ready    = "document_ready"
-    handover          = "handover"
-    comment_reply     = "comment_reply"
-    anomaly_detected  = "anomaly_detected"
-    email_received    = "email_received"
-    system            = "system"
+    approval_decided = "approval_decided"
+    mention = "mention"
+    document_ready = "document_ready"
+    handover = "handover"
+    comment_reply = "comment_reply"
+    anomaly_detected = "anomaly_detected"
+    email_received = "email_received"
+    system = "system"
 
 
 class Notification(UUIDPrimaryKey, Base):
@@ -4241,7 +4279,9 @@ class Notification(UUIDPrimaryKey, Base):
     entity_id: Mapped[uuid.UUID | None] = mapped_column(GUID())
     action_url: Mapped[str | None] = mapped_column(String(500))
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
     # Celery task name that created this notification (e.g.
     # "proactive.check_due_dates"), set only by the proactive beat tasks that
     # target a specific user. NULL for approvals/mentions/system notifications
@@ -4349,9 +4389,7 @@ class CaseMember(UUIDPrimaryKey, Base):
     """Membership of a user in a work case — enables multi-user collaboration."""
 
     __tablename__ = "case_members"
-    __table_args__ = (
-        UniqueConstraint("case_id", "user_sub", name="uq_case_member"),
-    )
+    __table_args__ = (UniqueConstraint("case_id", "user_sub", name="uq_case_member"),)
 
     case_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("work_cases.id"), nullable=False, index=True
@@ -4370,9 +4408,7 @@ class CaseDocument(UUIDPrimaryKey, Base):
     """Join table: WorkCase ↔ Document."""
 
     __tablename__ = "case_documents"
-    __table_args__ = (
-        UniqueConstraint("case_id", "document_id", name="uq_case_document"),
-    )
+    __table_args__ = (UniqueConstraint("case_id", "document_id", name="uq_case_document"),)
 
     case_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("work_cases.id"), nullable=False, index=True
@@ -4405,7 +4441,9 @@ class ScenarioTrace(UUIDPrimaryKey, Base):
     step_traces: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     error: Mapped[str | None] = mapped_column(Text)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     triggered_by: Mapped[str] = mapped_column(String(100), default="system", nullable=False)
 
@@ -4455,7 +4493,9 @@ class ModelCatalogRuntimeEntry(UUIDPrimaryKey, TimestampMixin, Base):
     provider_model: Mapped[str] = mapped_column(String(500), nullable=False)
     capability: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     source: Mapped[str] = mapped_column(String(50), nullable=False, default="discovered")
-    verification_status: Mapped[str] = mapped_column(String(40), nullable=False, default="discovered")
+    verification_status: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="discovered"
+    )
 
 
 class ModelRuntimeOverride(UUIDPrimaryKey, TimestampMixin, Base):
@@ -4480,7 +4520,9 @@ class ModelRuntimeOverride(UUIDPrimaryKey, TimestampMixin, Base):
     # wins over via setdefault).
     thinking_levels: Mapped[list | None] = mapped_column(JSON)
     preferred_instance: Mapped[str | None] = mapped_column(String(150))
-    verification_status: Mapped[str] = mapped_column(String(40), nullable=False, default="discovered")
+    verification_status: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="discovered"
+    )
     notes: Mapped[str | None] = mapped_column(Text)
 
 
@@ -4488,9 +4530,7 @@ class TaskRoutingOverride(UUIDPrimaryKey, TimestampMixin, Base):
     """Durable mirror of a per-task routing override (else Redis-only → resets)."""
 
     __tablename__ = "task_routing_overrides"
-    __table_args__ = (
-        UniqueConstraint("task", name="uq_task_routing_overrides_task"),
-    )
+    __table_args__ = (UniqueConstraint("task", name="uq_task_routing_overrides_task"),)
 
     task: Mapped[str] = mapped_column(String(80), nullable=False)
     routing: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
@@ -4500,9 +4540,7 @@ class AgentConfigStore(UUIDPrimaryKey, TimestampMixin, Base):
     """Durable mirror of the builtin agent config (orchestrator/worker/fast/…)."""
 
     __tablename__ = "agent_config_store"
-    __table_args__ = (
-        UniqueConstraint("singleton_key", name="uq_agent_config_store_singleton"),
-    )
+    __table_args__ = (UniqueConstraint("singleton_key", name="uq_agent_config_store_singleton"),)
 
     singleton_key: Mapped[str] = mapped_column(String(50), default="default", nullable=False)
     config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
@@ -4591,9 +4629,7 @@ class ImageGeneration(UUIDPrimaryKey, TimestampMixin, Base):
     """
 
     __tablename__ = "image_generations"
-    __table_args__ = (
-        Index("ix_image_generations_owner_status", "owner_sub", "status"),
-    )
+    __table_args__ = (Index("ix_image_generations_owner_status", "owner_sub", "status"),)
 
     owner_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     operation: Mapped[str] = mapped_column(String(60), nullable=False, default="edit")
@@ -4763,7 +4799,9 @@ class StudioJob(UUIDPrimaryKey, TimestampMixin, Base):
     progress: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     error: Mapped[str | None] = mapped_column(Text)
-    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    queued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

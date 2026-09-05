@@ -4,7 +4,7 @@ Skill: drawing.*
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 
 import structlog
@@ -21,8 +21,8 @@ from app.db.models import (
     FeatureContour,
     FeatureDimension,
     FeatureGDT,
-    FeatureToolBinding,
     FeatureSurface,
+    FeatureToolBinding,
     InventoryItem,
     ToolCatalogEntry,
     ToolSourceEnum,
@@ -33,7 +33,6 @@ from app.domain.drawings import (
     DrawingAnalysisRequest,
     DrawingBulkDeleteRequest,
     DrawingBulkDeleteResponse,
-    DrawingCreate,
     DrawingDeleteResult,
     DrawingFeatureCreate,
     DrawingFeatureOut,
@@ -46,7 +45,6 @@ from app.domain.drawings import (
     DrawingWithFeaturesOut,
     FeatureContourOut,
     FeatureCorrectionCreate,
-    FeatureCorrectionOut,
     FeatureToolBindingCreate,
     FeatureToolBindingOut,
     FeatureToolBindingUpdate,
@@ -77,10 +75,12 @@ async def upload_drawing(
     file: Annotated[UploadFile, File(description="DXF, DWG, PDF, STEP, IGES")],
     document_id: uuid.UUID | None = Query(None),
     drawing_number: str | None = Query(None),
-    is_confidential: bool = Query(True, description="Конфиденциальный документ — только локальные модели"),
+    is_confidential: bool = Query(
+        True, description="Конфиденциальный документ — только локальные модели"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> DrawingUploadResponse:
-    from app.services.drawing_service import create_and_analyze_drawing, DRAWING_EXTENSIONS
+    from app.services.drawing_service import create_and_analyze_drawing
 
     file_bytes = await file.read()
     filename = file.filename or "drawing"
@@ -116,10 +116,14 @@ async def list_drawings(
     status: DrawingStatus | None = Query(None),
     document_id: uuid.UUID | None = Query(None),
     drawing_number: str | None = Query(None),
-    drawing_type: str | None = Query(None, description="Filter by drawing type: detail|assembly|section|weld"),
+    drawing_type: str | None = Query(
+        None, description="Filter by drawing type: detail|assembly|section|weld"
+    ),
     part_class: str | None = Query(None, description="Filter by part class: shaft|housing|etc."),
     format: str | None = Query(None, description="Filter by file format: pdf|dxf|dwg|step|etc."),
-    analysis_error: bool | None = Query(None, description="If True, only drawings with analysis errors"),
+    analysis_error: bool | None = Query(
+        None, description="If True, only drawings with analysis errors"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> DrawingListResponse:
     q = select(Drawing)
@@ -168,9 +172,7 @@ async def get_drawing(
     result = await db.execute(
         select(Drawing)
         .where(Drawing.id == drawing_id)
-        .options(
-            selectinload(Drawing.features).options(*_FEATURE_LOAD_OPTIONS)
-        )
+        .options(selectinload(Drawing.features).options(*_FEATURE_LOAD_OPTIONS))
     )
     drawing = result.scalar_one_or_none()
     if not drawing:
@@ -179,21 +181,33 @@ async def get_drawing(
 
 
 @router.get("/{drawing_id}/reconstruction-candidates")
-async def reconstruction_candidates(drawing_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> dict:
+async def reconstruction_candidates(
+    drawing_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> dict:
     """Return transparent 3D hypotheses from all segmented views of a drawing."""
     from app.ai.multiview_reconstruct import reconstruct_from_views
     from app.db.models import DrawingViewSection
 
     result = await db.execute(
-        select(Drawing).where(Drawing.id == drawing_id).options(
-            selectinload(Drawing.features).selectinload(DrawingFeature.dimensions)
-        )
+        select(Drawing)
+        .where(Drawing.id == drawing_id)
+        .options(selectinload(Drawing.features).selectinload(DrawingFeature.dimensions))
     )
     drawing = result.scalar_one_or_none()
     if not drawing:
         raise HTTPException(404, "Чертёж не найден")
-    views = list((await db.execute(select(DrawingViewSection).where(DrawingViewSection.drawing_id == drawing_id))).scalars())
-    return {"candidates": [candidate.model_dump() for candidate in reconstruct_from_views(drawing.features, views)]}
+    views = list(
+        (
+            await db.execute(
+                select(DrawingViewSection).where(DrawingViewSection.drawing_id == drawing_id)
+            )
+        ).scalars()
+    )
+    return {
+        "candidates": [
+            candidate.model_dump() for candidate in reconstruct_from_views(drawing.features, views)
+        ]
+    }
 
 
 @router.patch(
@@ -238,8 +252,11 @@ async def bulk_delete_drawings(
         storage_path = (drawing.metadata_ or {}).get("storage_path")
 
         # Unlink dependent records before deletion (FK constraints are NO ACTION)
-        from sqlalchemy import update as sa_update, select as sa_select
-        from app.db.models import ManufacturingProcessPlan, SurfaceMachiningSpec, DrawingFeature
+        from sqlalchemy import select as sa_select
+        from sqlalchemy import update as sa_update
+
+        from app.db.models import DrawingFeature, ManufacturingProcessPlan, SurfaceMachiningSpec
+
         feat_result = await db.execute(
             sa_select(DrawingFeature.id).where(DrawingFeature.drawing_id == drawing_id)
         )
@@ -263,13 +280,17 @@ async def bulk_delete_drawings(
         # Graph cleanup
         try:
             from app.domain.drawing_graph import delete_drawing_graph
+
             await delete_drawing_graph(drawing_id, db)
         except Exception as exc:
-            logger.warning("bulk_delete_drawing_graph_failed", drawing_id=str(drawing_id), error=str(exc))
+            logger.warning(
+                "bulk_delete_drawing_graph_failed", drawing_id=str(drawing_id), error=str(exc)
+            )
 
         # Qdrant cleanup
         try:
             from app.vector.qdrant_store import delete_drawing as qdrant_delete
+
             qdrant_delete(str(drawing_id))
         except Exception:
             pass
@@ -306,8 +327,11 @@ async def delete_drawing(
     storage_path = (drawing.metadata_ or {}).get("storage_path")
 
     # Unlink dependent records before deleting (FK constraints are NO ACTION)
-    from sqlalchemy import update as sa_update, select as sa_select
-    from app.db.models import ManufacturingProcessPlan, SurfaceMachiningSpec, DrawingFeature
+    from sqlalchemy import select as sa_select
+    from sqlalchemy import update as sa_update
+
+    from app.db.models import DrawingFeature, ManufacturingProcessPlan, SurfaceMachiningSpec
+
     # 1. NULL out surface_machining_specs.drawing_feature_id (references drawing_features)
     drawing_feature_ids = await db.execute(
         sa_select(DrawingFeature.id).where(DrawingFeature.drawing_id == drawing_id)
@@ -333,6 +357,7 @@ async def delete_drawing(
     # Graph cleanup
     try:
         from app.domain.drawing_graph import delete_drawing_graph
+
         await delete_drawing_graph(drawing_id, db)
     except Exception as exc:
         logger.warning("delete_drawing_graph_failed", drawing_id=str(drawing_id), error=str(exc))
@@ -342,6 +367,7 @@ async def delete_drawing(
     # Qdrant cleanup
     try:
         from app.vector.qdrant_store import delete_drawing as qdrant_delete
+
         qdrant_delete(str(drawing_id))
     except Exception:
         pass
@@ -375,6 +401,7 @@ async def reanalyze_drawing(
     task_id = None
     try:
         from app.tasks.drawing_analysis import analyze_drawing
+
         task = analyze_drawing.delay(
             str(drawing_id),
             payload.model,
@@ -421,8 +448,9 @@ async def bulk_reanalyze_drawings(
             drawing.celery_task_id = task.id
             queued += 1
         except Exception as exc:
-            logger.warning("bulk_reanalyze_enqueue_failed",
-                           drawing_id=str(drawing_id), error=str(exc))
+            logger.warning(
+                "bulk_reanalyze_enqueue_failed", drawing_id=str(drawing_id), error=str(exc)
+            )
 
     await db.commit()
     logger.info("drawings_bulk_reanalyzed", queued=queued, not_found=len(not_found))
@@ -438,7 +466,8 @@ async def download_drawing_file(
     db: AsyncSession = Depends(get_db),
 ) -> __import__("fastapi").responses.Response:
     import mimetypes
-    from fastapi.responses import Response, StreamingResponse
+
+    from fastapi.responses import Response
 
     drawing = await db.get(Drawing, drawing_id)
     if not drawing:
@@ -461,7 +490,7 @@ async def download_drawing_file(
         content=file_bytes,
         media_type=mime_type,
         headers={
-            "Content-Disposition": f"attachment; filename=\"{drawing.filename}\"",
+            "Content-Disposition": f'attachment; filename="{drawing.filename}"',
         },
     )
 
@@ -476,7 +505,11 @@ async def set_drawing_status(
     status: DrawingStatus = __import__("fastapi").Body(..., embed=True),
     db: AsyncSession = Depends(get_db),
 ) -> DrawingOut:
-    _allowed_transitions = {DrawingStatus.needs_review, DrawingStatus.approved, DrawingStatus.uploaded}
+    _allowed_transitions = {
+        DrawingStatus.needs_review,
+        DrawingStatus.approved,
+        DrawingStatus.uploaded,
+    }
     if status not in _allowed_transitions:
         raise HTTPException(
             status_code=400,
@@ -501,8 +534,9 @@ async def get_drawing_views(
     drawing_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    from app.db.models import DrawingViewSection
     from sqlalchemy import select
+
+    from app.db.models import DrawingViewSection
 
     drawing = await db.get(Drawing, drawing_id)
     if not drawing:
@@ -541,8 +575,9 @@ async def get_assembly_bom(
     drawing_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    from app.db.models import DrawingAssemblyBOM
     from sqlalchemy import select
+
+    from app.db.models import DrawingAssemblyBOM
 
     drawing = await db.get(Drawing, drawing_id)
     if not drawing:
@@ -591,13 +626,12 @@ async def extract_assembly_bom_endpoint(
     task_id = None
     try:
         from app.tasks.drawing_analysis import extract_assembly_bom_task
+
         task = extract_assembly_bom_task.delay(str(drawing_id), allow_cloud)
         task_id = task.id
     except Exception as exc:
         logger.warning("assembly_bom_extract_enqueue_failed", error=str(exc))
-        raise HTTPException(
-            status_code=502, detail=f"Не удалось поставить задачу в очередь: {exc}"
-        )
+        raise HTTPException(status_code=502, detail=f"Не удалось поставить задачу в очередь: {exc}")
 
     return DrawingUploadResponse(
         drawing_id=drawing_id,
@@ -696,6 +730,7 @@ async def correct_drawing_feature(
     db.add(correction)
 
     from app.db.models import DrawingFeatureType
+
     try:
         feature.feature_type = DrawingFeatureType(payload.corrected_type)
     except ValueError:
@@ -703,7 +738,7 @@ async def correct_drawing_feature(
     if payload.corrected_name:
         feature.name = payload.corrected_name
     feature.confidence = 1.0
-    feature.reviewed_at = datetime.now(timezone.utc)
+    feature.reviewed_at = datetime.now(UTC)
     feature.reviewed_by = payload.corrected_by
 
     await db.commit()
@@ -776,6 +811,7 @@ async def get_drawing_thumbnail(
 
     try:
         import cairosvg  # type: ignore[import]
+
         png_bytes = cairosvg.svg2png(bytestring=svg_bytes, output_width=size, output_height=size)
     except ImportError:
         # cairosvg not installed — return SVG with image/svg+xml as fallback
@@ -821,6 +857,7 @@ async def get_features(
     )
     if feature_type:
         from app.db.models import DrawingFeatureType
+
         try:
             q = q.where(DrawingFeature.feature_type == DrawingFeatureType(feature_type))
         except ValueError:
@@ -952,7 +989,7 @@ async def review_feature(
     if not feature:
         raise HTTPException(status_code=404, detail="Элемент не найден")
 
-    feature.reviewed_at = datetime.now(tz=timezone.utc)
+    feature.reviewed_at = datetime.now(tz=UTC)
     feature.reviewed_by = payload.reviewed_by
     await db.commit()
 
@@ -1147,6 +1184,7 @@ async def bind_tool(
     if payload.catalog_entry_id:
         try:
             from app.domain.drawing_graph import link_feature_to_tool_graph
+
             await link_feature_to_tool_graph(feature_id, payload.catalog_entry_id, db)
             await db.commit()
         except Exception:
@@ -1210,8 +1248,10 @@ async def _upload_to_minio(
 ) -> str | None:
     try:
         import io as _io
-        from app.config import settings
+
         from minio import Minio
+
+        from app.config import settings
 
         client = Minio(
             settings.minio_endpoint,
@@ -1234,8 +1274,10 @@ async def _upload_to_minio(
 
 
 async def _delete_from_minio(path: str) -> None:
-    from app.config import settings
     from minio import Minio
+
+    from app.config import settings
+
     client = Minio(
         settings.minio_endpoint,
         access_key=settings.minio_access_key,
@@ -1246,8 +1288,9 @@ async def _delete_from_minio(path: str) -> None:
 
 
 async def _load_from_minio(path: str) -> bytes:
-    from app.config import settings
     from minio import Minio
+
+    from app.config import settings
 
     client = Minio(
         settings.minio_endpoint,

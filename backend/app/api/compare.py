@@ -2,7 +2,7 @@
 compare.summary"""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,8 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.audit.service import log_action
+from app.db.models import CompareSession, Invoice
 from app.db.session import get_db
-from app.db.models import CompareSession, Invoice, InvoiceLine
 from app.domain.compare import (
     AlignedItem,
     CompareAlignResponse,
@@ -20,7 +21,6 @@ from app.domain.compare import (
     CompareSessionOut,
     CompareSummaryResponse,
 )
-from app.audit.service import log_action
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -39,9 +39,7 @@ async def create_session(
         raise HTTPException(400, "At least 2 invoices required for comparison")
 
     # Validate invoices exist
-    result = await db.execute(
-        select(Invoice).where(Invoice.id.in_(payload.invoice_ids))
-    )
+    result = await db.execute(select(Invoice).where(Invoice.id.in_(payload.invoice_ids)))
     invoices = result.scalars().all()
     if len(invoices) != len(payload.invoice_ids):
         raise HTTPException(404, "Some invoices not found")
@@ -86,9 +84,7 @@ async def get_session(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: compare.get — Get a comparison session."""
-    result = await db.execute(
-        select(CompareSession).where(CompareSession.id == session_id)
-    )
+    result = await db.execute(select(CompareSession).where(CompareSession.id == session_id))
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(404, "Session not found")
@@ -104,9 +100,7 @@ async def align_items(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: compare.align — Align line items across invoices for comparison."""
-    result = await db.execute(
-        select(CompareSession).where(CompareSession.id == session_id)
-    )
+    result = await db.execute(select(CompareSession).where(CompareSession.id == session_id))
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(404, "Session not found")
@@ -144,10 +138,12 @@ async def align_items(
 
     aligned_items = []
     for canonical, items in alignment_map.items():
-        aligned_items.append(AlignedItem(
-            canonical_name=canonical,
-            items=items,
-        ))
+        aligned_items.append(
+            AlignedItem(
+                canonical_name=canonical,
+                items=items,
+            )
+        )
 
     # Save alignment to session
     session.alignment = {
@@ -187,9 +183,7 @@ async def decide(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: compare.decide — Choose a supplier (approval gate)."""
-    result = await db.execute(
-        select(CompareSession).where(CompareSession.id == session_id)
-    )
+    result = await db.execute(select(CompareSession).where(CompareSession.id == session_id))
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(404, "Session not found")
@@ -202,10 +196,12 @@ async def decide(
     }
     session.status = "decided"
     session.decided_by = "user"
-    session.decided_at = datetime.now(timezone.utc)
+    session.decided_at = datetime.now(UTC)
 
     await log_action(
-        db, action="compare.decide", entity_type="compare_session",
+        db,
+        action="compare.decide",
+        entity_type="compare_session",
         entity_id=session.id,
         details={
             "chosen_supplier_id": str(payload.chosen_supplier_id),
@@ -228,9 +224,7 @@ async def summary(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: compare.summary — Get comparison summary with recommendation."""
-    result = await db.execute(
-        select(CompareSession).where(CompareSession.id == session_id)
-    )
+    result = await db.execute(select(CompareSession).where(CompareSession.id == session_id))
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(404, "Session not found")
@@ -252,13 +246,15 @@ async def summary(
     suppliers_list = []
     for sup_id, total in supplier_totals.items():
         info = supplier_map.get(sup_id, {})
-        suppliers_list.append({
-            "supplier_id": sup_id,
-            "name": info.get("name", "Unknown"),
-            "invoice_number": info.get("invoice_number"),
-            "total": round(total, 2),
-            "invoice_total": info.get("total_amount"),
-        })
+        suppliers_list.append(
+            {
+                "supplier_id": sup_id,
+                "name": info.get("name", "Unknown"),
+                "invoice_number": info.get("invoice_number"),
+                "total": round(total, 2),
+                "invoice_total": info.get("total_amount"),
+            }
+        )
 
     # Sort by total ascending
     suppliers_list.sort(key=lambda s: s["total"])

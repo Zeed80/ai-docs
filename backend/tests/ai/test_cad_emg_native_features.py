@@ -59,9 +59,18 @@ def test_element_without_a_stable_id_produces_no_feature_node():
 
 
 def test_id_tagged_feature_gets_a_node_with_kind_location_and_params():
-    spec = {"main_view": {"chamfers": [{
-        "id": "0:chamfers:0", "size_mm": 1, "angle_deg": 45, "location": "left_end",
-    }]}}
+    spec = {
+        "main_view": {
+            "chamfers": [
+                {
+                    "id": "0:chamfers:0",
+                    "size_mm": 1,
+                    "angle_deg": 45,
+                    "location": "left_end",
+                }
+            ]
+        }
+    }
 
     nodes, edges, assertions = native_feature_graph_additions(spec)
 
@@ -76,11 +85,19 @@ def test_id_tagged_feature_gets_a_node_with_kind_location_and_params():
 
 
 def test_confidence_reflects_whether_the_feature_was_localized():
-    spec = {"main_view": {"cross_holes": [
-        {"id": "0:cross_holes:0", "diameter_mm": 9, "axial_position_mm": 10,
-         "evidence": [{"image_index": 0, "bbox": [1, 2, 3, 4]}]},
-        {"id": "0:cross_holes:1", "diameter_mm": 5, "axial_position_mm": 40},
-    ]}}
+    spec = {
+        "main_view": {
+            "cross_holes": [
+                {
+                    "id": "0:cross_holes:0",
+                    "diameter_mm": 9,
+                    "axial_position_mm": 10,
+                    "evidence": [{"image_index": 0, "bbox": [1, 2, 3, 4]}],
+                },
+                {"id": "0:cross_holes:1", "diameter_mm": 5, "axial_position_mm": 40},
+            ]
+        }
+    }
 
     _, _, assertions = native_feature_graph_additions(spec)
     by_subject = {}
@@ -93,12 +110,18 @@ def test_confidence_reflects_whether_the_feature_was_localized():
 
 def test_represented_by_only_from_explicit_features_shown():
     spec = {
-        "main_view": {"cross_holes": [
-            {"id": "0:cross_holes:0", "diameter_mm": 9, "axial_position_mm": 10},
-        ]},
+        "main_view": {
+            "cross_holes": [
+                {"id": "0:cross_holes:0", "diameter_mm": 9, "axial_position_mm": 10},
+            ]
+        },
         "views": [
-            {"kind": "front", "view_id": "front", "body_index": 0,
-             "features_shown": ["0:cross_holes:0"]},
+            {
+                "kind": "front",
+                "view_id": "front",
+                "body_index": 0,
+                "features_shown": ["0:cross_holes:0"],
+            },
             {"kind": "side", "view_id": "side", "body_index": 0, "features_shown": []},
         ],
     }
@@ -112,9 +135,13 @@ def test_represented_by_only_from_explicit_features_shown():
 
 
 def test_evidence_ids_carry_the_whole_sheet_reference_when_source_uri_given():
-    spec = {"main_view": {"chamfers": [
-        {"id": "0:chamfers:0", "size_mm": 1, "angle_deg": 45, "location": "left_end"},
-    ]}}
+    spec = {
+        "main_view": {
+            "chamfers": [
+                {"id": "0:chamfers:0", "size_mm": 1, "angle_deg": 45, "location": "left_end"},
+            ]
+        }
+    }
 
     with_source = native_feature_graph_additions(spec, source_uri="s3://bucket/sheet.png")[2]
     without_source = native_feature_graph_additions(spec)[2]
@@ -125,16 +152,25 @@ def test_evidence_ids_carry_the_whole_sheet_reference_when_source_uri_given():
 
 def test_sections_and_profile_holes_are_also_covered():
     spec = {
-        "parts": [{
-            "outer": [{"id": "1:outer:0", "diameter_mm": 20, "length_mm": 30}],
-            "profile": {
-                "shape": "rectangle", "width_mm": 50, "height_mm": 30, "thickness_mm": 10,
-                "holes": [{
-                    "id": "1:profile.holes:0", "center_x_mm": 5, "center_y_mm": 5,
-                    "diameter_mm": 6,
-                }],
-            },
-        }],
+        "parts": [
+            {
+                "outer": [{"id": "1:outer:0", "diameter_mm": 20, "length_mm": 30}],
+                "profile": {
+                    "shape": "rectangle",
+                    "width_mm": 50,
+                    "height_mm": 30,
+                    "thickness_mm": 10,
+                    "holes": [
+                        {
+                            "id": "1:profile.holes:0",
+                            "center_x_mm": 5,
+                            "center_y_mm": 5,
+                            "diameter_mm": 6,
+                        }
+                    ],
+                },
+            }
+        ],
     }
 
     nodes, _, assertions = native_feature_graph_additions(spec)

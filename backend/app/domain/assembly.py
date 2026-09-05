@@ -124,14 +124,16 @@ def analyze_assembly_dof(
     rank = min(removal, available_after_ground)
     overconstrained = removal > available_after_ground
     remaining = max(0, available_after_ground - rank)
-    fully_constrained = bool(keys) and not any((
-        remaining,
-        floating,
-        grouped,
-        invalid,
-        unsupported,
-        overconstrained,
-    ))
+    fully_constrained = bool(keys) and not any(
+        (
+            remaining,
+            floating,
+            grouped,
+            invalid,
+            unsupported,
+            overconstrained,
+        )
+    )
     return AssemblyDofReport(
         active_instances=keys,
         grounded_instances=grounded,

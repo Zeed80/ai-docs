@@ -2,17 +2,17 @@
 calendar.create_event, calendar.create_reminder, calendar.mark_sent"""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.acting import get_effective_user
 from app.auth.models import UserInfo
+from app.db.models import CalendarEvent, Document, Invoice, Reminder, SupplierProfile
 from app.db.session import get_db
-from app.db.models import CalendarEvent, Invoice, Reminder, SupplierProfile, Document
 from app.domain.calendar import (
     CalendarEventCreate,
     CalendarEventOut,
@@ -87,9 +87,7 @@ async def extract_dates(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: calendar.extract_dates — Extract dates from invoice and create events."""
-    result = await db.execute(
-        select(Invoice).where(Invoice.id == payload.invoice_id)
-    )
+    result = await db.execute(select(Invoice).where(Invoice.id == payload.invoice_id))
     invoice = result.scalar_one_or_none()
     if not invoice:
         raise HTTPException(404, "Invoice not found")
@@ -99,12 +97,17 @@ async def extract_dates(
 
     # Extract invoice_date
     if invoice.invoice_date:
-        extracted.append(ExtractedDate(
-            date=invoice.invoice_date if isinstance(invoice.invoice_date, datetime)
-            else datetime.combine(invoice.invoice_date, datetime.min.time()).replace(tzinfo=timezone.utc),
-            event_type="invoice_date",
-            source_field="invoice_date",
-        ))
+        extracted.append(
+            ExtractedDate(
+                date=invoice.invoice_date
+                if isinstance(invoice.invoice_date, datetime)
+                else datetime.combine(invoice.invoice_date, datetime.min.time()).replace(
+                    tzinfo=UTC
+                ),
+                event_type="invoice_date",
+                source_field="invoice_date",
+            )
+        )
 
     # Extract due_date from metadata
     meta = invoice.metadata_ or {}
@@ -112,12 +115,14 @@ async def extract_dates(
         try:
             due = datetime.fromisoformat(str(meta["due_date"]))
             if due.tzinfo is None:
-                due = due.replace(tzinfo=timezone.utc)
-            extracted.append(ExtractedDate(
-                date=due,
-                event_type="due_date",
-                source_field="metadata.due_date",
-            ))
+                due = due.replace(tzinfo=UTC)
+            extracted.append(
+                ExtractedDate(
+                    date=due,
+                    event_type="due_date",
+                    source_field="metadata.due_date",
+                )
+            )
         except (ValueError, TypeError):
             pass
 
@@ -125,12 +130,14 @@ async def extract_dates(
         try:
             delivery = datetime.fromisoformat(str(meta["delivery_date"]))
             if delivery.tzinfo is None:
-                delivery = delivery.replace(tzinfo=timezone.utc)
-            extracted.append(ExtractedDate(
-                date=delivery,
-                event_type="delivery",
-                source_field="metadata.delivery_date",
-            ))
+                delivery = delivery.replace(tzinfo=UTC)
+            extracted.append(
+                ExtractedDate(
+                    date=delivery,
+                    event_type="delivery",
+                    source_field="metadata.delivery_date",
+                )
+            )
         except (ValueError, TypeError):
             pass
 
@@ -138,12 +145,14 @@ async def extract_dates(
         try:
             payment = datetime.fromisoformat(str(meta["payment_date"]))
             if payment.tzinfo is None:
-                payment = payment.replace(tzinfo=timezone.utc)
-            extracted.append(ExtractedDate(
-                date=payment,
-                event_type="payment",
-                source_field="metadata.payment_date",
-            ))
+                payment = payment.replace(tzinfo=UTC)
+            extracted.append(
+                ExtractedDate(
+                    date=payment,
+                    event_type="payment",
+                    source_field="metadata.payment_date",
+                )
+            )
         except (ValueError, TypeError):
             pass
 
@@ -197,7 +206,7 @@ async def upcoming(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: calendar.upcoming — Get upcoming events and pending reminders."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     horizon = now + timedelta(days=days)
 
     events_result = await db.execute(
@@ -254,9 +263,7 @@ async def create_reminder(
     if payload.entity_type and payload.entity_id:
         model = _REMINDER_ENTITY_MODELS.get(payload.entity_type)
         if model is not None:
-            exists = await db.scalar(
-                select(model.id).where(model.id == payload.entity_id)
-            )
+            exists = await db.scalar(select(model.id).where(model.id == payload.entity_id))
             if exists is None:
                 raise HTTPException(
                     404,
@@ -322,6 +329,7 @@ async def generate_followup_draft(
     )
 
     from app.domain.email_send import create_reply_draft
+
     draft = await create_reply_draft(
         db,
         to_addresses=[],
@@ -350,9 +358,7 @@ async def mark_sent(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: calendar.mark_sent — Mark a reminder as sent."""
-    result = await db.execute(
-        select(Reminder).where(Reminder.id == reminder_id)
-    )
+    result = await db.execute(select(Reminder).where(Reminder.id == reminder_id))
     reminder = result.scalar_one_or_none()
     if not reminder:
         raise HTTPException(404, "Reminder not found")
@@ -360,7 +366,7 @@ async def mark_sent(
         raise HTTPException(400, "Already sent")
 
     reminder.is_sent = True
-    reminder.sent_at = datetime.now(timezone.utc)
+    reminder.sent_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(reminder)
     return reminder
@@ -377,7 +383,7 @@ async def export_ical(
     """Export upcoming calendar events as iCalendar (.ics) file."""
     from fastapi.responses import Response
 
-    cutoff = datetime.now(timezone.utc) + timedelta(days=days)
+    cutoff = datetime.now(UTC) + timedelta(days=days)
     result = await db.execute(
         select(CalendarEvent)
         .where(CalendarEvent.event_date <= cutoff)
@@ -387,7 +393,7 @@ async def export_ical(
     events = result.scalars().all()
 
     def fmt_dt(dt: datetime) -> str:
-        return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        return dt.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
 
     lines = [
         "BEGIN:VCALENDAR",
@@ -400,7 +406,7 @@ async def export_ical(
         uid = f"{e.id}@ai-workspace"
         dtstart = fmt_dt(e.event_date)
         dtend = fmt_dt(e.event_date + timedelta(hours=1))
-        dtstamp = fmt_dt(datetime.now(timezone.utc))
+        dtstamp = fmt_dt(datetime.now(UTC))
         summary = e.title.replace("\\", "\\\\").replace(",", "\\,").replace("\n", "\\n")
         lines += [
             "BEGIN:VEVENT",

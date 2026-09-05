@@ -8,15 +8,14 @@ router resolves per-call → per-task → per-model.
 import pytest
 
 from app.ai import task_routing as tr
-from app.ai.task_routing import TaskRouting
 from app.ai.schemas import AITask
+from app.ai.task_routing import TaskRouting
 from app.api.providers_api import (
-    _SLOT_THINKING_AGENT_FIELDS,
     _SLOT_THINKING_TASKS,
     _apply_slot_thinking,
     _registry,
-    _slot_thinking_state,
     _slot_supports_thinking,
+    _slot_thinking_state,
 )
 
 
@@ -85,7 +84,7 @@ def test_apply_slot_thinking_agent_field_tristate(monkeypatch):
     _apply_slot_thinking("agent_fast", True)
     assert captured["fast_disable_thinking"] is False  # reasoning ON → disable=False
     _apply_slot_thinking("agent_fast", None)
-    assert captured["fast_disable_thinking"] is None    # default
+    assert captured["fast_disable_thinking"] is None  # default
 
 
 def test_slot_thinking_state_reports_effective_source(routing_mem_store):
@@ -105,7 +104,7 @@ def test_slot_thinking_state_reports_effective_source(routing_mem_store):
 
 
 def test_slot_thinking_state_flags_unknown_disable_knob(routing_mem_store):
-    from app.ai.schemas import ModelCapability, ModelStatus, Modality, ProviderKind
+    from app.ai.schemas import Modality, ModelCapability, ModelStatus, ProviderKind
 
     registry = _registry()
     registry.models["lmstudio_thinker_test"] = ModelCapability(
@@ -139,9 +138,12 @@ async def test_router_resolves_per_task_thinking(routing_mem_store, monkeypatch)
     async def _fake_dispatch(provider, request, model):
         captured_thinking["value"] = request.thinking
         from app.ai.schemas import AIResponse
+
         return AIResponse(
-            text="ok", model=model.provider_model,
-            task=request.task, provider=model.provider.value,
+            text="ok",
+            model=model.provider_model,
+            task=request.task,
+            provider=model.provider.value,
         )
 
     monkeypatch.setattr(ai_router, "_dispatch", _fake_dispatch)
@@ -168,9 +170,7 @@ def test_reasoning_disable_params_covers_ollama():
     assert _reasoning_disable_params("llamacpp") == {
         "chat_template_kwargs": {"enable_thinking": False}
     }
-    assert _reasoning_disable_params("vllm") == {
-        "chat_template_kwargs": {"enable_thinking": False}
-    }
+    assert _reasoning_disable_params("vllm") == {"chat_template_kwargs": {"enable_thinking": False}}
 
     # Strict endpoints without a known knob stay empty (avoid 400s).
     assert _reasoning_disable_params("lmstudio") == {}

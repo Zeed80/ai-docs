@@ -141,18 +141,20 @@ def _detect_title_block(ink, frame: Box) -> Box | None:
 
     x0 = int(frame.x1 - frame.width * _STAMP_SEARCH_W)
     y0 = int(frame.y1 - frame.height * _STAMP_SEARCH_H)
-    region = ink[y0:frame.y1, x0:frame.x1]
+    region = ink[y0 : frame.y1, x0 : frame.x1]
     if region.size == 0 or float(region.mean()) < _STAMP_MIN_INK:
         return None
 
     region_h, region_w = region.shape[:2]
     # Rulings: runs of ink spanning most of the region in one direction.
     horizontal = cv2.morphologyEx(
-        region, cv2.MORPH_OPEN,
+        region,
+        cv2.MORPH_OPEN,
         cv2.getStructuringElement(cv2.MORPH_RECT, (max(8, region_w // 3), 1)),
     )
     vertical = cv2.morphologyEx(
-        region, cv2.MORPH_OPEN,
+        region,
+        cv2.MORPH_OPEN,
         cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(8, region_h // 3))),
     )
     rows = np.nonzero(horizontal.any(axis=1))[0]
@@ -203,8 +205,9 @@ def _text_row_blocks(image, region: Box) -> list[Box]:
         x, y, box_w, box_h, area = stats[index]
         if area < 400:
             continue
-        blocks.append(Box(region.x0 + x, region.y0 + y,
-                          region.x0 + x + box_w, region.y0 + y + box_h))
+        blocks.append(
+            Box(region.x0 + x, region.y0 + y, region.x0 + x + box_w, region.y0 + y + box_h)
+        )
     return blocks
 
 
@@ -219,15 +222,17 @@ def _stroke_density(ink, box: Box, min_run_px: int) -> float:
     """
     import cv2
 
-    region = ink[box.y0:box.y1, box.x0:box.x1]
+    region = ink[box.y0 : box.y1, box.x0 : box.x1]
     if region.size == 0:
         return 0.0
     horizontal = cv2.morphologyEx(
-        region, cv2.MORPH_OPEN,
+        region,
+        cv2.MORPH_OPEN,
         cv2.getStructuringElement(cv2.MORPH_RECT, (min_run_px, 1)),
     )
     vertical = cv2.morphologyEx(
-        region, cv2.MORPH_OPEN,
+        region,
+        cv2.MORPH_OPEN,
         cv2.getStructuringElement(cv2.MORPH_RECT, (1, min_run_px)),
     )
     return float(((horizontal | vertical) > 0).mean())
@@ -235,8 +240,7 @@ def _stroke_density(ink, box: Box, min_run_px: int) -> float:
 
 def _detect_notes_column(image, ink, frame: Box, title_block: Box | None) -> Box | None:
     """The technical-requirements block (ГОСТ 2.316): lettering, no geometry."""
-    search = Box(frame.x0, frame.y0, frame.x1,
-                 title_block.y0 if title_block else frame.y1)
+    search = Box(frame.x0, frame.y0, frame.x1, title_block.y0 if title_block else frame.y1)
     if search.height < frame.height * 0.1:
         return None
     min_run = max(40, int(min(frame.width, frame.height) * 0.06))
@@ -276,27 +280,25 @@ def _detect_notes_column(image, ink, frame: Box, title_block: Box | None) -> Box
 def _detect_views(ink, frame: Box, exclude: list[Box]) -> list[Box]:
     """Ink clusters left in the drawing area once the furniture is removed."""
     import cv2
-    import numpy as np
 
     work = ink.copy()
     work[: frame.y0, :] = 0
-    work[frame.y1:, :] = 0
+    work[frame.y1 :, :] = 0
     work[:, : frame.x0] = 0
-    work[:, frame.x1:] = 0
+    work[:, frame.x1 :] = 0
     # The frame's own rulings connect everything to everything.
     border = max(2, min(frame.width, frame.height) // 200)
-    work[frame.y0:frame.y0 + border, :] = 0
-    work[frame.y1 - border:frame.y1, :] = 0
-    work[:, frame.x0:frame.x0 + border] = 0
-    work[:, frame.x1 - border:frame.x1] = 0
+    work[frame.y0 : frame.y0 + border, :] = 0
+    work[frame.y1 - border : frame.y1, :] = 0
+    work[:, frame.x0 : frame.x0 + border] = 0
+    work[:, frame.x1 - border : frame.x1] = 0
     for box in exclude:
         if box is not None:
-            work[box.y0:box.y1, box.x0:box.x1] = 0
+            work[box.y0 : box.y1, box.x0 : box.x1] = 0
 
     grouped = cv2.dilate(
-        work, cv2.getStructuringElement(
-            cv2.MORPH_RECT, (_VIEW_MERGE_GAP_PX, _VIEW_MERGE_GAP_PX)
-        ),
+        work,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (_VIEW_MERGE_GAP_PX, _VIEW_MERGE_GAP_PX)),
     )
     count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(grouped, 8)
     sheet_area = float(frame.area) or 1.0
@@ -321,12 +323,18 @@ def detect_sheet_layout(image) -> SheetLayout:
     views_region = None
     if views:
         views_region = Box(
-            min(box.x0 for box in views), min(box.y0 for box in views),
-            max(box.x1 for box in views), max(box.y1 for box in views),
+            min(box.x0 for box in views),
+            min(box.y0 for box in views),
+            max(box.x1 for box in views),
+            max(box.y1 for box in views),
         )
     layout = SheetLayout(
-        width=width, height=height, frame=frame,
-        title_block=title_block, notes_column=notes_column, views=views,
+        width=width,
+        height=height,
+        frame=frame,
+        title_block=title_block,
+        notes_column=notes_column,
+        views=views,
         views_region=views_region,
     )
     logger.info(

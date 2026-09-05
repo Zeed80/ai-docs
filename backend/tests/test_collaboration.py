@@ -11,10 +11,12 @@ async def test_approval_auto_routes_to_department_manager(client: AsyncClient, d
     dept = Department(name="Procurement", code="proc")
     db_session.add(dept)
     await db_session.flush()
-    db_session.add_all([
-        User(sub="u:boss", email="boss@x", name="Boss", role="manager", department_id=dept.id),
-        User(sub="u:req", email="req@x", name="Req", role="buyer", department_id=dept.id),
-    ])
+    db_session.add_all(
+        [
+            User(sub="u:boss", email="boss@x", name="Boss", role="manager", department_id=dept.id),
+            User(sub="u:req", email="req@x", name="Req", role="buyer", department_id=dept.id),
+        ]
+    )
     await db_session.commit()
 
     resp = await client.post(

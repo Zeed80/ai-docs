@@ -46,9 +46,7 @@ def _build_artifact(case: dict[str, Any]) -> tuple[bytes, dict[str, Any], Any]:
     raise ValueError(f"{case['id']}: no deterministic 2D artifact adapter for {kind}")
 
 
-def _case_result(
-    case: dict[str, Any], fixture_root: Path
-) -> dict[str, Any]:
+def _case_result(case: dict[str, Any], fixture_root: Path) -> dict[str, Any]:
     graph = build_regression_graph(case, fixture_root)
     first_svg, first_report, patch_builder = _build_artifact(case)
     second_svg, second_report, _ = _build_artifact(case)
@@ -59,17 +57,11 @@ def _case_result(
         failures.append("2D artifact did not pass its independent reopen report")
     errors: list[str] = []
     production_export_allowed = False
-    remaining_critical = compile_build_plan(
-        graph, "production"
-    ).critical_assumption_ids
+    remaining_critical = compile_build_plan(graph, "production").critical_assumption_ids
     if first_report.get("valid"):
-        patched = apply_graph_patch(
-            graph, patch_builder(graph, svg=first_svg, report=first_report)
-        )
+        patched = apply_graph_patch(graph, patch_builder(graph, svg=first_svg, report=first_report))
         state, issues = verify_graph(patched)
-        errors = sorted(
-            item["code"] for item in issues if item["severity"] == "error"
-        )
+        errors = sorted(item["code"] for item in issues if item["severity"] == "error")
         if "required_2d_artifacts_missing" in state.issue_codes:
             failures.append("required 2D release gate remains unresolved")
         if errors:
@@ -86,18 +78,14 @@ def _case_result(
         "failures": failures,
         "artifact_sha256": first_report["artifact_sha256"],
         "report_sha256": first_report["canonical_report_sha256"],
-        "required_views_complete": bool(
-            first_report.get("required_views_complete")
-        ),
+        "required_views_complete": bool(first_report.get("required_views_complete")),
         "production_export_allowed": production_export_allowed,
         "remaining_critical_assumption_ids": remaining_critical,
         "verification_error_codes": errors,
     }
 
 
-def run_emg_artifact_regression(
-    manifest: dict[str, Any], *, fixture_root: Path
-) -> dict[str, Any]:
+def run_emg_artifact_regression(manifest: dict[str, Any], *, fixture_root: Path) -> dict[str, Any]:
     if manifest.get("schema_version") != "emg-regression/1.0":
         raise ValueError("unsupported EMG regression manifest schema")
     cases = [

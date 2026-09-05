@@ -1,7 +1,7 @@
 """Address book, signatures, auto-send policy, the sent-in-inbox fix."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
@@ -25,10 +25,20 @@ from app.db.models import (
 
 
 def _shared(name="procurement"):
-    return MailboxConfig(name=name, imap_host="h", imap_port=993, imap_user=name,
-                         imap_password_encrypted="x", imap_ssl=True, is_active=True,
-                         mailbox_type="shared", smtp_host="smtp.h", smtp_user=name,
-                         smtp_password_encrypted="x", smtp_from_address=f"{name}@company.ru")
+    return MailboxConfig(
+        name=name,
+        imap_host="h",
+        imap_port=993,
+        imap_user=name,
+        imap_password_encrypted="x",
+        imap_ssl=True,
+        is_active=True,
+        mailbox_type="shared",
+        smtp_host="smtp.h",
+        smtp_user=name,
+        smtp_password_encrypted="x",
+        smtp_from_address=f"{name}@company.ru",
+    )
 
 
 # ── Address book ──────────────────────────────────────────────────────────
@@ -36,14 +46,21 @@ def _shared(name="procurement"):
 
 async def test_contact_crud_and_autocomplete(client: AsyncClient, db_session):
     db_session.add(_shared())
-    db_session.add(Party(name="ООО Ромашка", role=PartyRole.supplier,
-                         contact_email="sales@romashka.ru"))
+    db_session.add(
+        Party(name="ООО Ромашка", role=PartyRole.supplier, contact_email="sales@romashka.ru")
+    )
     await db_session.commit()
 
-    r = await client.post("/api/email/contacts/book", json={
-        "email": "ivan@partner.ru", "name": "Иван Петров", "organization": "Партнёр ООО",
-        "is_favorite": True, "tags": ["ключевой"],
-    })
+    r = await client.post(
+        "/api/email/contacts/book",
+        json={
+            "email": "ivan@partner.ru",
+            "name": "Иван Петров",
+            "organization": "Партнёр ООО",
+            "is_favorite": True,
+            "tags": ["ключевой"],
+        },
+    )
     assert r.status_code == 201, r.text
     cid = r.json()["id"]
 
@@ -66,15 +83,25 @@ async def test_send_remembers_recipient_as_contact(client: AsyncClient, db_sessi
     db_session.add(_shared())
     await db_session.commit()
 
-    r = await client.post("/api/email/send", json={
-        "mailbox": "procurement", "to_addresses": ["new-guy@buyer.ru"],
-        "subject": "Привет", "body_html": "<p>hi</p>", "body_text": "hi",
-    })
+    r = await client.post(
+        "/api/email/send",
+        json={
+            "mailbox": "procurement",
+            "to_addresses": ["new-guy@buyer.ru"],
+            "subject": "Привет",
+            "body_html": "<p>hi</p>",
+            "body_text": "hi",
+        },
+    )
     assert r.status_code == 200, r.text
 
-    c = (await db_session.execute(
-        __import__("sqlalchemy").select(EmailContact).where(EmailContact.email == "new-guy@buyer.ru")
-    )).scalar_one_or_none()
+    c = (
+        await db_session.execute(
+            __import__("sqlalchemy")
+            .select(EmailContact)
+            .where(EmailContact.email == "new-guy@buyer.ru")
+        )
+    ).scalar_one_or_none()
     assert c is not None and c.source == "auto"
 
 
@@ -83,10 +110,20 @@ async def test_send_remembers_recipient_as_contact(client: AsyncClient, db_sessi
 
 async def test_signature_resolve_prefers_mailbox_then_user(client: AsyncClient, db_session):
     db_session.add(_shared())
-    db_session.add(EmailSignature(name="Личная", body_html="<p>-- Я</p>",
-                                  owner_sub="dev-user", is_default=True))
-    db_session.add(EmailSignature(name="Отдел", body_html="<p>-- Отдел закупок</p>",
-                                  owner_sub=None, mailbox="procurement", is_default=True))
+    db_session.add(
+        EmailSignature(
+            name="Личная", body_html="<p>-- Я</p>", owner_sub="dev-user", is_default=True
+        )
+    )
+    db_session.add(
+        EmailSignature(
+            name="Отдел",
+            body_html="<p>-- Отдел закупок</p>",
+            owner_sub=None,
+            mailbox="procurement",
+            is_default=True,
+        )
+    )
     await db_session.commit()
 
     r = await client.get("/api/email/signatures/resolve?mailbox=procurement")
@@ -106,16 +143,21 @@ async def test_composed_thread_goes_to_sent_not_inbox(db_session):
     from app.domain.email_thread import record_outbound_message
 
     await record_outbound_message(
-        db_session, mailbox="procurement",
-        draft_data={"to_addresses": ["x@y.ru"], "subject": "Новое письмо",
-                    "body_text": "текст"},
-        smtp_message_id="<m1@company.ru>", from_address="procurement@company.ru",
+        db_session,
+        mailbox="procurement",
+        draft_data={"to_addresses": ["x@y.ru"], "subject": "Новое письмо", "body_text": "текст"},
+        smtp_message_id="<m1@company.ru>",
+        from_address="procurement@company.ru",
     )
     await db_session.commit()
 
-    th = (await db_session.execute(
-        __import__("sqlalchemy").select(EmailThread).where(EmailThread.subject == "Новое письмо")
-    )).scalar_one()
+    th = (
+        await db_session.execute(
+            __import__("sqlalchemy")
+            .select(EmailThread)
+            .where(EmailThread.subject == "Новое письмо")
+        )
+    ).scalar_one()
     assert th.folder == "sent"
 
 
@@ -131,8 +173,16 @@ def sync_db(test_engine, monkeypatch):
     import app.db.sync_session as m
 
     monkeypatch.setattr(m, "sync_session", lambda: Session(engine))
-    tables = (EmailRuleLog, DraftAction, EmailRule, EmailTemplateDB, EmailMessage,
-              EmailThread, MailboxConfig, MailServerConfig)
+    tables = (
+        EmailRuleLog,
+        DraftAction,
+        EmailRule,
+        EmailTemplateDB,
+        EmailMessage,
+        EmailThread,
+        MailboxConfig,
+        MailServerConfig,
+    )
 
     def wipe():
         with Session(engine) as db:
@@ -153,44 +203,81 @@ def test_auto_send_blocked_unless_policy_enabled(sync_db):
 
     with Session(sync_db) as db:
         db.add(_shared())
-        tpl = EmailTemplateDB(name="A", slug=f"a-{uuid.uuid4().hex[:6]}", subject="Ответ",
-                              body_html="<p>ок</p>", body_text="ок", is_builtin=False)
+        tpl = EmailTemplateDB(
+            name="A",
+            slug=f"a-{uuid.uuid4().hex[:6]}",
+            subject="Ответ",
+            body_html="<p>ок</p>",
+            body_text="ок",
+            is_builtin=False,
+        )
         db.add(tpl)
-        th = EmailThread(subject="Вопрос", mailbox="procurement", message_count=1,
-                         last_message_at=datetime.now(timezone.utc))
+        th = EmailThread(
+            subject="Вопрос",
+            mailbox="procurement",
+            message_count=1,
+            last_message_at=datetime.now(UTC),
+        )
         db.add(th)
         db.flush()
-        msg = EmailMessage(thread_id=th.id, mailbox="procurement", from_address="c@b.ru",
-                           subject="Вопрос", body_text="?", is_inbound=True,
-                           received_at=datetime.now(timezone.utc),
-                           message_id_header=f"<{uuid.uuid4()}@b.ru>")
+        msg = EmailMessage(
+            thread_id=th.id,
+            mailbox="procurement",
+            from_address="c@b.ru",
+            subject="Вопрос",
+            body_text="?",
+            is_inbound=True,
+            received_at=datetime.now(UTC),
+            message_id_header=f"<{uuid.uuid4()}@b.ru>",
+        )
         db.add(msg)
-        db.add(EmailRule(name="auto", mailbox=None, owner_sub=None, is_active=True, priority=1,
-                         auto_send=True,
-                         conditions={"match": "all", "rules": [{"field": "subject", "op": "contains", "value": "вопрос"}]},
-                         actions=[{"type": "auto_reply_template", "template_id": str(tpl.id)}]))
+        db.add(
+            EmailRule(
+                name="auto",
+                mailbox=None,
+                owner_sub=None,
+                is_active=True,
+                priority=1,
+                auto_send=True,
+                conditions={
+                    "match": "all",
+                    "rules": [{"field": "subject", "op": "contains", "value": "вопрос"}],
+                },
+                actions=[{"type": "auto_reply_template", "template_id": str(tpl.id)}],
+            )
+        )
         db.commit()
 
         apply_rules(db, msg, "procurement")
         db.commit()
 
         d = db.query(DraftAction).one()
-        assert d.draft_data["status"] == "draft"   # policy off → draft, not sent
+        assert d.draft_data["status"] == "draft"  # policy off → draft, not sent
         assert d.executed is False
 
 
 async def test_autocomplete_keeps_display_name_from_history(client: AsyncClient, db_session):
     db_session.add(_shared())
-    th = EmailThread(subject="Переписка", mailbox="procurement", message_count=1,
-                     last_message_at=datetime.now(timezone.utc))
+    th = EmailThread(
+        subject="Переписка",
+        mailbox="procurement",
+        message_count=1,
+        last_message_at=datetime.now(UTC),
+    )
     db_session.add(th)
     await db_session.flush()
-    db_session.add(EmailMessage(
-        thread_id=th.id, mailbox="procurement",
-        from_address='"Пётр Смирнов" <petr@zavod.ru>', subject="Переписка",
-        body_text="t", is_inbound=True, received_at=datetime.now(timezone.utc),
-        message_id_header=f"<{uuid.uuid4()}@z.ru>",
-    ))
+    db_session.add(
+        EmailMessage(
+            thread_id=th.id,
+            mailbox="procurement",
+            from_address='"Пётр Смирнов" <petr@zavod.ru>',
+            subject="Переписка",
+            body_text="t",
+            is_inbound=True,
+            received_at=datetime.now(UTC),
+            message_id_header=f"<{uuid.uuid4()}@z.ru>",
+        )
+    )
     await db_session.commit()
 
     r = await client.get("/api/email/contacts?q=смирнов")
@@ -199,10 +286,21 @@ async def test_autocomplete_keeps_display_name_from_history(client: AsyncClient,
 
 
 async def test_autocomplete_empty_query_returns_favorites(client: AsyncClient, db_session):
-    db_session.add(EmailContact(email="fav@x.ru", name="Любимый", owner_sub="dev-user",
-                                is_favorite=True, source="manual", use_count=9))
-    db_session.add(EmailContact(email="rare@x.ru", name="Редкий", owner_sub="dev-user",
-                                source="manual", use_count=0))
+    db_session.add(
+        EmailContact(
+            email="fav@x.ru",
+            name="Любимый",
+            owner_sub="dev-user",
+            is_favorite=True,
+            source="manual",
+            use_count=9,
+        )
+    )
+    db_session.add(
+        EmailContact(
+            email="rare@x.ru", name="Редкий", owner_sub="dev-user", source="manual", use_count=0
+        )
+    )
     await db_session.commit()
 
     r = await client.get("/api/email/contacts")  # no q
@@ -211,9 +309,12 @@ async def test_autocomplete_empty_query_returns_favorites(client: AsyncClient, d
 
 
 async def test_contacts_csv_import_export(client: AsyncClient, db_session):
-    r = await client.post("/api/email/contacts/import", json={
-        "csv": "name,email,organization\nАнна,anna@buyer.ru,Байер ООО\n,bad-line,\n",
-    })
+    r = await client.post(
+        "/api/email/contacts/import",
+        json={
+            "csv": "name,email,organization\nАнна,anna@buyer.ru,Байер ООО\n,bad-line,\n",
+        },
+    )
     assert r.status_code == 200, r.text
     assert r.json()["added"] == 1 and r.json()["skipped"] == 1
 
@@ -228,40 +329,71 @@ async def test_all_attachments_download_as_one_archive(client, db_session, monke
     import io
     import uuid as _uuid
     import zipfile
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.db.models import (
-        EmailAttachment, EmailMessage, EmailThread, MailboxConfig,
+        EmailAttachment,
+        EmailMessage,
+        EmailThread,
+        MailboxConfig,
     )
 
-    db_session.add(MailboxConfig(
-        name="zipbox", imap_host="m.example.com", imap_port=993,
-        imap_user="zipbox", imap_password_encrypted="x", imap_ssl=True,
-        is_active=True,
-    ))
+    db_session.add(
+        MailboxConfig(
+            name="zipbox",
+            imap_host="m.example.com",
+            imap_port=993,
+            imap_user="zipbox",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            is_active=True,
+        )
+    )
     thread = EmailThread(subject="Спецификации", mailbox="zipbox", message_count=1)
     db_session.add(thread)
     await db_session.flush()
     msg = EmailMessage(
-        thread_id=thread.id, mailbox="zipbox", subject="Спецификации",
-        from_address="supplier@example.com", to_addresses=["zipbox@example.com"],
-        received_at=datetime.now(timezone.utc),
+        thread_id=thread.id,
+        mailbox="zipbox",
+        subject="Спецификации",
+        from_address="supplier@example.com",
+        to_addresses=["zipbox@example.com"],
+        received_at=datetime.now(UTC),
         message_id_header=f"<{_uuid.uuid4()}@example.com>",
-        has_attachments=True, attachment_count=3,
+        has_attachments=True,
+        attachment_count=3,
     )
     db_session.add(msg)
     await db_session.flush()
-    db_session.add_all([
-        EmailAttachment(message_id=msg.id, filename="спец-1.pdf",
-                        content_type="application/pdf", size=3,
-                        storage_path="s/1.pdf", sha256="a" * 64),
-        EmailAttachment(message_id=msg.id, filename="спец-1.pdf",
-                        content_type="application/pdf", size=3,
-                        storage_path="s/2.pdf", sha256="b" * 64),
-        EmailAttachment(message_id=msg.id, filename="logo.png",
-                        content_type="image/png", size=3, is_inline=True,
-                        storage_path="s/logo.png", sha256="c" * 64),
-    ])
+    db_session.add_all(
+        [
+            EmailAttachment(
+                message_id=msg.id,
+                filename="спец-1.pdf",
+                content_type="application/pdf",
+                size=3,
+                storage_path="s/1.pdf",
+                sha256="a" * 64,
+            ),
+            EmailAttachment(
+                message_id=msg.id,
+                filename="спец-1.pdf",
+                content_type="application/pdf",
+                size=3,
+                storage_path="s/2.pdf",
+                sha256="b" * 64,
+            ),
+            EmailAttachment(
+                message_id=msg.id,
+                filename="logo.png",
+                content_type="image/png",
+                size=3,
+                is_inline=True,
+                storage_path="s/logo.png",
+                sha256="c" * 64,
+            ),
+        ]
+    )
     await db_session.commit()
 
     import app.storage as storage

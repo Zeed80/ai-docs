@@ -76,6 +76,7 @@ def _redis_get_config() -> dict | None:
     """Read config from Redis (shared between backend and workers)."""
     try:
         from app.utils.redis_client import get_sync_redis
+
         raw = get_sync_redis().get(_REDIS_KEY)
         if raw:
             return json.loads(raw)
@@ -88,6 +89,7 @@ def _redis_set_config(cfg: dict) -> None:
     """Write config to Redis so all workers pick it up immediately."""
     try:
         from app.utils.redis_client import get_sync_redis
+
         get_sync_redis().set(_REDIS_KEY, json.dumps(cfg, ensure_ascii=False))
     except Exception as e:
         logger.warning("ai_config_redis_write_failed", error=str(e))
@@ -136,6 +138,7 @@ def _sync_ai_model_agent(model_name: str | None) -> None:
 
 # ── Models list ───────────────────────────────────────────────────────────────
 
+
 @router.get("/models")
 async def list_models() -> dict:
     ollama_url = settings.ollama_url
@@ -171,8 +174,7 @@ async def list_models() -> dict:
                             for m in ps_data.get("models", [])
                         ],
                         "has_gpu": any(
-                            m.get("size_vram", 0) > 0
-                            for m in ps_data.get("models", [])
+                            m.get("size_vram", 0) > 0 for m in ps_data.get("models", [])
                         ),
                     }
             except Exception:
@@ -192,6 +194,7 @@ async def list_models() -> dict:
 
 # ── Pull model (streaming progress) ──────────────────────────────────────────
 
+
 class PullRequest(BaseModel):
     name: str
 
@@ -199,6 +202,7 @@ class PullRequest(BaseModel):
 @router.post("/models/pull")
 async def pull_model(payload: PullRequest):
     """Pull a model from Ollama registry. Streams NDJSON progress."""
+
     async def _stream():
         try:
             async with httpx.AsyncClient(timeout=600) as client:
@@ -222,6 +226,7 @@ async def pull_model(payload: PullRequest):
 
 # ── Delete model ──────────────────────────────────────────────────────────────
 
+
 @router.delete("/models/{model_name:path}")
 async def delete_model(model_name: str) -> dict:
     try:
@@ -243,6 +248,7 @@ async def delete_model(model_name: str) -> dict:
 
 # ── Config CRUD ───────────────────────────────────────────────────────────────
 
+
 @router.get("/config")
 async def get_config() -> dict:
     return get_ai_config()
@@ -262,9 +268,7 @@ async def get_config_status() -> dict:
             resp.raise_for_status()
             installed_models = {item.get("name", "") for item in resp.json().get("models", [])}
             installed_model_aliases = {
-                model.removesuffix(":latest")
-                for model in installed_models
-                if model
+                model.removesuffix(":latest") for model in installed_models if model
             } | installed_models
             ollama_available = True
     except Exception as exc:
@@ -340,9 +344,7 @@ async def update_config(
     cfg.pop("verify_model_2", None)
     save_ai_config(cfg)
     if "model_agent" in update and update["model_agent"]:
-        update_builtin_agent_config(
-            BuiltinAgentConfigUpdate(model=str(update["model_agent"]))
-        )
+        update_builtin_agent_config(BuiltinAgentConfigUpdate(model=str(update["model_agent"])))
     if (
         payload.embedding_model
         and previous_embedding_model
@@ -359,6 +361,7 @@ async def update_config(
 
 
 # ── Built-in agent config ────────────────────────────────────────────────────
+
 
 @router.get("/agent-config", response_model=BuiltinAgentConfig)
 async def get_agent_config() -> BuiltinAgentConfig:
@@ -486,15 +489,17 @@ async def list_agent_skills() -> dict:
         skills = []
         for cap in load_capability_manifest().capabilities:
             gate_actions = cap.gate_actions
-            skills.append({
-                "name": cap.name,
-                "description": cap.description.strip()[:200],
-                "method": cap.method,
-                "path": cap.path or f"/api/agent/cap/{cap.name}",
-                "enabled": True,
-                "approval_required": bool(gate_actions),
-                "gate_actions": gate_actions,
-            })
+            skills.append(
+                {
+                    "name": cap.name,
+                    "description": cap.description.strip()[:200],
+                    "method": cap.method,
+                    "path": cap.path or f"/api/agent/cap/{cap.name}",
+                    "enabled": True,
+                    "approval_required": bool(gate_actions),
+                    "gate_actions": gate_actions,
+                }
+            )
         return {"skills": skills, "mode": "capabilities"}
 
     # Legacy registry mode: deduplicate by name
@@ -510,14 +515,16 @@ async def list_agent_skills() -> dict:
         if not name or name in seen:
             continue
         seen.add(name)
-        skills.append({
-            "name": name,
-            "description": skill.get("description", ""),
-            "method": skill.get("method", ""),
-            "path": skill.get("path", ""),
-            "enabled": name in exposed,
-            "approval_required": name in approval_gates,
-        })
+        skills.append(
+            {
+                "name": name,
+                "description": skill.get("description", ""),
+                "method": skill.get("method", ""),
+                "path": skill.get("path", ""),
+                "enabled": name in exposed,
+                "approval_required": name in approval_gates,
+            }
+        )
     return {"skills": skills, "mode": "registry"}
 
 
@@ -570,13 +577,9 @@ async def reindex_vector_stores(db: AsyncSession = Depends(get_db)) -> VectorRei
             MemoryEmbeddingRebuildRequest,
         )
 
-        await rebuild_active_memory_embeddings(
-            MemoryEmbeddingRebuildRequest(limit=5000), db
-        )
+        await rebuild_active_memory_embeddings(MemoryEmbeddingRebuildRequest(limit=5000), db)
         while True:
-            batch = await index_active_memory_embeddings(
-                MemoryEmbeddingIndexRequest(limit=500), db
-            )
+            batch = await index_active_memory_embeddings(MemoryEmbeddingIndexRequest(limit=500), db)
             if not batch.indexed:
                 break
             documents_indexed += batch.indexed
@@ -624,10 +627,7 @@ async def list_model_capabilities() -> dict:
     """List registry models with embedding/reranker capabilities."""
     registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
     return {
-        "models": [
-            model.model_dump(mode="json")
-            for model in registry.models.values()
-        ],
+        "models": [model.model_dump(mode="json") for model in registry.models.values()],
         "routes": {
             task.value: route.model_dump(mode="json")
             for task, route in registry.routes.items()

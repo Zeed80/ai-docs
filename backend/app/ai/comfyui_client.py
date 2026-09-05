@@ -91,10 +91,7 @@ def _looks_like_text_node(node: Any) -> bool:
         return False
     cls = str(node.get("class_type") or "").lower()
     inputs = _node_inputs(node)
-    return (
-        _looks_like_text_class(cls)
-        or any(k in inputs for k in _generic_text_input_names())
-    )
+    return _looks_like_text_class(cls) or any(k in inputs for k in _generic_text_input_names())
 
 
 def _looks_like_short_negative_prompt(text: str) -> bool:
@@ -169,7 +166,9 @@ def _preferred_text_inputs(node: Any) -> tuple[str, ...]:
         if name in inputs and not isinstance(inputs.get(name), (list, dict))
     )
     if existing:
-        return existing + tuple(name for name in _generic_text_input_names() if name not in existing)
+        return existing + tuple(
+            name for name in _generic_text_input_names() if name not in existing
+        )
     return _generic_text_input_names()
 
 
@@ -202,7 +201,8 @@ def _fallback_inject_text(
         return
     skip_ids = skip_ids or set()
     text_nodes = [
-        (node_id, node) for node_id, node in graph.items()
+        (node_id, node)
+        for node_id, node in graph.items()
         if _looks_like_text_node(node) and str(node_id) not in skip_ids
     ]
     if key == "negative":
@@ -211,7 +211,8 @@ def _fallback_inject_text(
             candidates = [text_nodes[1]]
     else:
         candidates = [
-            item for item in text_nodes
+            item
+            for item in text_nodes
             if str(item[0]) not in negative_node_ids and not _looks_negative_text_node(item[1])
         ]
         if not candidates and text_nodes:
@@ -404,31 +405,47 @@ def build_workflow(
     # ambiguous tie-break (e.g. "assume the 2nd text node is negative") —
     # otherwise a correctly-configured prompt target could be reclassified
     # as the negative node and get skipped by the replace pass below.
-    negative_node_ids = (_negative_text_node_ids(graph, inject_map) | explicit_negative_nodes) - explicit_prompt_nodes
+    negative_node_ids = (
+        _negative_text_node_ids(graph, inject_map) | explicit_negative_nodes
+    ) - explicit_prompt_nodes
     prompt_changed = _replace_text_nodes(
-        graph, "prompt", values.get("prompt"), negative_node_ids,
+        graph,
+        "prompt",
+        values.get("prompt"),
+        negative_node_ids,
         skip_ids=explicit_prompt_nodes | explicit_negative_nodes,
     )
     if prompt_changed == 0 and not explicit_prompt_nodes:
         _fallback_inject_text(
-            graph, "prompt", values.get("prompt"), negative_node_ids,
+            graph,
+            "prompt",
+            values.get("prompt"),
+            negative_node_ids,
             skip_ids=explicit_negative_nodes,
         )
     if values.get("negative") is not None:
         negative_changed = _replace_text_nodes(
-            graph, "negative", values.get("negative"), negative_node_ids,
+            graph,
+            "negative",
+            values.get("negative"),
+            negative_node_ids,
             skip_ids=explicit_negative_nodes,
         )
         if negative_changed == 0 and not explicit_negative_nodes:
             _fallback_inject_text(
-                graph, "negative", values.get("negative"), negative_node_ids,
+                graph,
+                "negative",
+                values.get("negative"),
+                negative_node_ids,
                 skip_ids=explicit_prompt_nodes,
             )
             if not negative_node_ids:
                 text_node_count = sum(1 for n in graph.values() if _looks_like_text_node(n))
                 logger.warning(
                     "comfyui_negative_prompt_no_target",
-                    reason="single_text_node" if text_node_count <= 1 else "no_negative_node_detected",
+                    reason="single_text_node"
+                    if text_node_count <= 1
+                    else "no_negative_node_detected",
                 )
     return graph
 
@@ -458,9 +475,7 @@ class ComfyUIClient:
     async def health(self) -> bool:
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(
-                    f"{self.base_url}/system_stats", headers=self._headers()
-                )
+                resp = await client.get(f"{self.base_url}/system_stats", headers=self._headers())
                 resp.raise_for_status()
             return True
         except Exception as exc:  # noqa: BLE001
@@ -515,7 +530,9 @@ class ComfyUIClient:
                     )
                 body = resp.json()
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
-            raise ComfyUITransientError(f"ComfyUI недоступен при постановке в очередь: {exc}") from exc
+            raise ComfyUITransientError(
+                f"ComfyUI недоступен при постановке в очередь: {exc}"
+            ) from exc
         prompt_id = body.get("prompt_id")
         if not prompt_id:
             raise ComfyUIError(f"ComfyUI не вернул prompt_id: {body}")
@@ -540,7 +557,7 @@ class ComfyUIClient:
         """Poll /history until the prompt finishes; returns produced images."""
         import asyncio
 
-        deadline = (timeout if timeout is not None else self.timeout)
+        deadline = timeout if timeout is not None else self.timeout
         elapsed = 0.0
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -551,7 +568,7 @@ class ComfyUIClient:
                     resp.raise_for_status()
                     hist = resp.json().get(prompt_id)
                     if hist:
-                        status = (hist.get("status") or {})
+                        status = hist.get("status") or {}
                         if status.get("status_str") == "error":
                             raise ComfyUIError(f"ComfyUI workflow error: {status}")
                         outputs = self._extract_outputs(hist.get("outputs") or {})
@@ -563,7 +580,9 @@ class ComfyUIClient:
                     await asyncio.sleep(poll_interval)
                     elapsed += poll_interval
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
-            raise ComfyUITransientError(f"ComfyUI недоступен во время ожидания результата: {exc}") from exc
+            raise ComfyUITransientError(
+                f"ComfyUI недоступен во время ожидания результата: {exc}"
+            ) from exc
         raise ComfyUIError(f"ComfyUI: превышено время ожидания ({deadline:.0f}s).")
 
     async def stream_progress(self, prompt_id: str, on_progress) -> None:
@@ -574,15 +593,19 @@ class ComfyUIClient:
         source of truth for completion. Binary preview frames are ignored."""
         import json as _json
 
-        ws_url = (self.base_url.replace("https://", "wss://", 1)
-                  .replace("http://", "ws://", 1)) + f"/ws?clientId={self.client_id}"
+        ws_url = (
+            self.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+        ) + f"/ws?clientId={self.client_id}"
         headers = self._headers()
         try:
             import websockets
 
             async with websockets.connect(
-                ws_url, additional_headers=headers or None, max_size=None,
-                open_timeout=10, ping_interval=None,
+                ws_url,
+                additional_headers=headers or None,
+                max_size=None,
+                open_timeout=10,
+                ping_interval=None,
             ) as ws:
                 async for raw in ws:
                     if isinstance(raw, (bytes, bytearray)):
@@ -596,13 +619,16 @@ class ComfyUIClient:
                     if data.get("prompt_id") and data.get("prompt_id") != prompt_id:
                         continue
                     if mtype == "progress":
-                        on_progress({"value": data.get("value"),
-                                     "max": data.get("max"),
-                                     "node": data.get("node")})
+                        on_progress(
+                            {
+                                "value": data.get("value"),
+                                "max": data.get("max"),
+                                "node": data.get("node"),
+                            }
+                        )
                     elif mtype == "executing" and data.get("node") is None:
                         return  # our prompt finished
-                    elif mtype in ("execution_success", "execution_error",
-                                   "execution_interrupted"):
+                    elif mtype in ("execution_success", "execution_error", "execution_interrupted"):
                         return
         except Exception as exc:  # noqa: BLE001
             logger.info("comfyui_ws_progress_unavailable", error=str(exc)[:120])
@@ -630,8 +656,6 @@ class ComfyUIClient:
             "type": output.type,
         }
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.get(
-                f"{self.base_url}/view", params=params, headers=self._headers()
-            )
+            resp = await client.get(f"{self.base_url}/view", params=params, headers=self._headers())
             resp.raise_for_status()
             return resp.content

@@ -74,10 +74,10 @@ def enhance_source_for_diffusion(image_bytes: bytes) -> bytes:
             arr = _rotate(arr, angle)
 
         lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
-        l, a, b = cv2.split(lab)
+        lightness, a, b = cv2.split(lab)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        l = clahe.apply(l)
-        arr = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2RGB)
+        lightness = clahe.apply(lightness)
+        arr = cv2.cvtColor(cv2.merge([lightness, a, b]), cv2.COLOR_LAB2RGB)
 
         buf = io.BytesIO()
         Image.fromarray(arr).save(buf, format="PNG")
@@ -241,8 +241,12 @@ def _dewarp_sheet(arr):
     )
     m = cv2.getPerspectiveTransform(ordered, target)
     warped = cv2.warpPerspective(
-        arr, m, (out_w, out_h), flags=cv2.INTER_CUBIC,
-        borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255),
+        arr,
+        m,
+        (out_w, out_h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(255, 255, 255),
     )
     logger.info("dewarp_applied", out_w=out_w, out_h=out_h, area_fraction=round(area / (w * h), 2))
     return warped
@@ -319,7 +323,9 @@ def _erase_binding_blocks(arr):
     out = arr.copy()
     pad = 3
     for x, y, cw, ch in blocks:
-        out[max(0, y - pad):min(zone_h, y + ch + pad), max(0, x - pad):min(w, x + cw + pad)] = 255
+        out[max(0, y - pad) : min(zone_h, y + ch + pad), max(0, x - pad) : min(w, x + cw + pad)] = (
+            255
+        )
     logger.info("binding_blocks_erased", blocks=len(blocks))
     return out
 
@@ -342,9 +348,7 @@ def _text_exclusion_boxes(image_bytes: bytes, w: int, h: int) -> list[tuple[int,
     try:
         from app.ai.text_preserve import detect_text_regions
 
-        text_boxes = [
-            (r.x, r.y, r.x + r.w, r.y + r.h) for r in detect_text_regions(image_bytes)
-        ]
+        text_boxes = [(r.x, r.y, r.x + r.w, r.y + r.h) for r in detect_text_regions(image_bytes)]
     except Exception as exc:  # noqa: BLE001 — nice-to-have guard, not required
         logger.debug("regularize_text_exclusion_unavailable", error=str(exc))
 
@@ -359,8 +363,12 @@ def _detect_skew_angle(arr) -> float:
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
     edges = cv2.Canny(gray, 50, 150, apertureSize=3)
     lines = cv2.HoughLinesP(
-        edges, rho=1, theta=np.pi / 180, threshold=100,
-        minLineLength=arr.shape[1] // 4, maxLineGap=20,
+        edges,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=100,
+        minLineLength=arr.shape[1] // 4,
+        maxLineGap=20,
     )
     if lines is None:
         return 0.0
@@ -383,8 +391,12 @@ def _rotate(arr, angle: float):
     h, w = arr.shape[:2]
     m = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
     return cv2.warpAffine(
-        arr, m, (w, h), flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255),
+        arr,
+        m,
+        (w, h),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(255, 255, 255),
     )
 
 
@@ -424,7 +436,9 @@ def _line_signature(x1: float, y1: float, x2: float, y2: float) -> tuple[float, 
 
 def _nearest_canonical_angle(angle_deg: float) -> float | None:
     for canon in _CANONICAL_ANGLES_DEG:
-        diff = min(abs(angle_deg - canon), abs(angle_deg - canon - 180), abs(angle_deg - canon + 180))
+        diff = min(
+            abs(angle_deg - canon), abs(angle_deg - canon - 180), abs(angle_deg - canon + 180)
+        )
         if diff <= _CANONICAL_TOLERANCE_DEG:
             return canon
     return None
@@ -478,7 +492,9 @@ def _in_any_box(x: float, y: float, boxes: list[tuple[int, int, int, int]], pad:
     return any(x0 - pad <= x <= x1 + pad and y0 - pad <= y <= y1 + pad for x0, y0, x1, y1 in boxes)
 
 
-def _snap_canonical_lines(ink, w: int, h: int, text_boxes: list[tuple[int, int, int, int]] | None = None):
+def _snap_canonical_lines(
+    ink, w: int, h: int, text_boxes: list[tuple[int, int, int, int]] | None = None
+):
     """Detect long straight-ish segments; for the ones already close to a
     canonical ЕСКД angle (0/45/90/135°), replace the local band with a
     mathematically straight, precisely-angled stroke of the same measured
@@ -502,8 +518,12 @@ def _snap_canonical_lines(ink, w: int, h: int, text_boxes: list[tuple[int, int, 
     min_len = max(20, int(diag * 0.03))
     max_gap = max(10, int(diag * 0.01))
     lines = cv2.HoughLinesP(
-        ink, rho=1, theta=np.pi / 360, threshold=30,
-        minLineLength=min_len, maxLineGap=4,
+        ink,
+        rho=1,
+        theta=np.pi / 360,
+        threshold=30,
+        minLineLength=min_len,
+        maxLineGap=4,
     )
     if lines is None:
         return ink
@@ -561,7 +581,11 @@ def _snap_canonical_lines(ink, w: int, h: int, text_boxes: list[tuple[int, int, 
                 # Leave that area exactly as the artifact-cleaned base had it.
                 continue
             cv2.line(
-                out, (int(round(p1[0])), int(round(p1[1]))), (int(round(p2[0])), int(round(p2[1]))),
-                color=255, thickness=thickness, lineType=cv2.LINE_AA,
+                out,
+                (int(round(p1[0])), int(round(p1[1]))),
+                (int(round(p2[0])), int(round(p2[1]))),
+                color=255,
+                thickness=thickness,
+                lineType=cv2.LINE_AA,
             )
     return out

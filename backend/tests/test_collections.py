@@ -11,8 +11,11 @@ from app.db.models import Document, DocumentStatus
 @pytest.fixture
 async def sample_doc(db_session):
     doc = Document(
-        file_name="coll-test.pdf", file_hash="coll_hash_1", file_size=100,
-        mime_type="application/pdf", storage_path="t/coll.pdf",
+        file_name="coll-test.pdf",
+        file_hash="coll_hash_1",
+        file_size=100,
+        mime_type="application/pdf",
+        storage_path="t/coll.pdf",
         status=DocumentStatus.approved,
     )
     db_session.add(doc)
@@ -23,10 +26,13 @@ async def sample_doc(db_session):
 @pytest.mark.asyncio
 async def test_collection_lifecycle(client: AsyncClient, sample_doc):
     # Create
-    resp = await client.post("/api/collections", json={
-        "name": "Закупка Q1",
-        "description": "Документы по закупке за Q1",
-    })
+    resp = await client.post(
+        "/api/collections",
+        json={
+            "name": "Закупка Q1",
+            "description": "Документы по закупке за Q1",
+        },
+    )
     assert resp.status_code == 200
     coll = resp.json()
     coll_id = coll["id"]
@@ -34,19 +40,25 @@ async def test_collection_lifecycle(client: AsyncClient, sample_doc):
     assert coll["is_closed"] is False
 
     # Add item
-    resp = await client.post(f"/api/collections/{coll_id}/items", json={
-        "entity_type": "document",
-        "entity_id": str(sample_doc.id),
-        "note": "Основной счёт",
-    })
+    resp = await client.post(
+        f"/api/collections/{coll_id}/items",
+        json={
+            "entity_type": "document",
+            "entity_id": str(sample_doc.id),
+            "note": "Основной счёт",
+        },
+    )
     assert resp.status_code == 200
     assert len(resp.json()["items"]) == 1
 
     # Duplicate add should fail
-    resp = await client.post(f"/api/collections/{coll_id}/items", json={
-        "entity_type": "document",
-        "entity_id": str(sample_doc.id),
-    })
+    resp = await client.post(
+        f"/api/collections/{coll_id}/items",
+        json={
+            "entity_type": "document",
+            "entity_id": str(sample_doc.id),
+        },
+    )
     assert resp.status_code == 400
 
     # Get
@@ -73,10 +85,13 @@ async def test_collection_lifecycle(client: AsyncClient, sample_doc):
     assert resp.json()["closure_summary"] is not None
 
     # Can't add to closed collection
-    resp = await client.post(f"/api/collections/{coll_id}/items", json={
-        "entity_type": "document",
-        "entity_id": str(uuid.uuid4()),
-    })
+    resp = await client.post(
+        f"/api/collections/{coll_id}/items",
+        json={
+            "entity_type": "document",
+            "entity_id": str(uuid.uuid4()),
+        },
+    )
     assert resp.status_code == 400
 
 

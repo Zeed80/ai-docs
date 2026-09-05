@@ -11,8 +11,12 @@ _NAMES_PLATE_RECT = ["Планка", "Пластина", "Крышка", "Пли
 _NAMES_PLATE_CIRCLE = ["Фланец", "Диск", "Кольцо опорное", "Крышка торцевая"]
 _NAMES_ASM = ["Узел натяжения", "Опора", "Кронштейн в сборе", "Ролик в сборе"]
 _MATERIALS = [
-    "Сталь 45 ГОСТ 1050-88", "Сталь 40Х ГОСТ 4543-71", "Сталь 20 ГОСТ 1050-88",
-    "Бр.АМц 9-2 ГОСТ 18175-78", "Д16Т ГОСТ 4784-97", "СЧ20 ГОСТ 1412-85",
+    "Сталь 45 ГОСТ 1050-88",
+    "Сталь 40Х ГОСТ 4543-71",
+    "Сталь 20 ГОСТ 1050-88",
+    "Бр.АМц 9-2 ГОСТ 18175-78",
+    "Д16Т ГОСТ 4784-97",
+    "СЧ20 ГОСТ 1412-85",
 ]
 _TOLS_SHAFT = ["", "h6", "h7", "k6", "js6", "f7"]
 _TOLS_HOLE = ["", "H7", "H8"]
@@ -44,8 +48,10 @@ def spec_caption(spec: dict) -> str:
         views = "главный вид с размерными линиями"
         if any(s.get("thread_end_view") for s in segs):
             views += " и вид с торца"
-        return (f"Чертёж детали «{name}»: ступенчатый вал из {len(segs)} ступеней{tail}. "
-                f"На листе {views}, рамка и основная надпись.")
+        return (
+            f"Чертёж детали «{name}»: ступенчатый вал из {len(segs)} ступеней{tail}. "
+            f"На листе {views}, рамка и основная надпись."
+        )
     if kind == "plate":
         holes = spec.get("holes", [])
         if spec.get("shape") == "circle":
@@ -58,12 +64,16 @@ def spec_caption(spec: dict) -> str:
             body = f"прямоугольная пластина «{name}»"
             if holes:
                 body += f" с {len(holes)} отверстиями"
-        return (f"Чертёж детали: {body}. Два вида (главный и сбоку) с размерными "
-                "линиями, рамка и основная надпись.")
+        return (
+            f"Чертёж детали: {body}. Два вида (главный и сбоку) с размерными "
+            "линиями, рамка и основная надпись."
+        )
     if kind == "assembly":
         n = len(spec.get("components", []))
-        return (f"Сборочный чертёж «{name}» из {n} позиций с номерами позиций "
-                "и спецификацией. Рамка и основная надпись.")
+        return (
+            f"Сборочный чертёж «{name}» из {n} позиций с номерами позиций "
+            "и спецификацией. Рамка и основная надпись."
+        )
     return f"Чертёж детали «{name}» с рамкой и основной надписью."
 
 
@@ -116,12 +126,14 @@ def _plate(rng: random.Random) -> dict:
         spec["width"] = float(rng.choice([60, 80, 100, 120, 160]))
         spec["height"] = float(rng.choice([40, 60, 80, 100]))
         for _ in range(rng.randint(0, 4)):
-            spec["holes"].append({
-                "x": rng.uniform(-0.35, 0.35) * spec["width"],
-                "y": rng.uniform(-0.35, 0.35) * spec["height"],
-                "diameter": float(rng.choice([6, 8, 10, 12])),
-                "tolerance": rng.choice(_TOLS_HOLE),
-            })
+            spec["holes"].append(
+                {
+                    "x": rng.uniform(-0.35, 0.35) * spec["width"],
+                    "y": rng.uniform(-0.35, 0.35) * spec["height"],
+                    "diameter": float(rng.choice([6, 8, 10, 12])),
+                    "tolerance": rng.choice(_TOLS_HOLE),
+                }
+            )
     else:
         spec["diameter"] = float(rng.choice([80, 100, 120, 160, 200]))
         if rng.random() < 0.7:
@@ -130,11 +142,14 @@ def _plate(rng: random.Random) -> dict:
             spec["bolt_hole_d"] = float(rng.choice([6, 9, 11, 13]))
             spec["bolt_hole_tol"] = rng.choice(_TOLS_HOLE)
         if rng.random() < 0.5:
-            spec["holes"].append({
-                "x": 0.0, "y": 0.0,
-                "diameter": spec["diameter"] * rng.uniform(0.2, 0.4),
-                "tolerance": "H7",
-            })
+            spec["holes"].append(
+                {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "diameter": spec["diameter"] * rng.uniform(0.2, 0.4),
+                    "tolerance": "H7",
+                }
+            )
     return spec
 
 
@@ -185,10 +200,11 @@ def mutate_spec(spec: dict, rng: random.Random) -> tuple[dict, str] | None:
         if holes and rng.random() < 0.5:
             removed = holes.pop(rng.randrange(len(holes)))
             return s, f"убери отверстие Ø{removed['diameter']:g}"
-        max_x = (s.get("width", s.get("diameter", 100)) * 0.3)
-        max_y = (s.get("height", s.get("diameter", 100)) * 0.3)
+        max_x = s.get("width", s.get("diameter", 100)) * 0.3
+        max_y = s.get("height", s.get("diameter", 100)) * 0.3
         hole = {
-            "x": rng.uniform(-max_x, max_x), "y": rng.uniform(-max_y, max_y),
+            "x": rng.uniform(-max_x, max_x),
+            "y": rng.uniform(-max_y, max_y),
             "diameter": float(rng.choice([6, 8, 10, 12])),
             "tolerance": rng.choice(_TOLS_HOLE),
         }
@@ -205,13 +221,15 @@ def _assembly(rng: random.Random) -> dict:
         child = _shaft(rng) if rng.random() < 0.5 else _plate(rng)
         child["title"]["show_frame"] = False
         parts.append({"ref": str(pos), "spec": child, "qty": rng.randint(1, 4)})
-        bom.append({
-            "pos": pos,
-            "designation": child["title"]["designation"],
-            "name": child["title"]["name"],
-            "qty": parts[-1]["qty"],
-            "material": child["title"]["material"],
-        })
+        bom.append(
+            {
+                "pos": pos,
+                "designation": child["title"]["designation"],
+                "name": child["title"]["name"],
+                "qty": parts[-1]["qty"],
+                "material": child["title"]["material"],
+            }
+        )
     title = _title(rng, _NAMES_ASM)
     title["material"] = ""
     return {"type": "assembly", "components": parts, "bom": bom, "title": title}

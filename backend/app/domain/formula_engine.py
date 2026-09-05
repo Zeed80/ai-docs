@@ -106,17 +106,49 @@ def _f_not(a):
 
 
 _FUNCTIONS = {
-    "SUM": _f_sum, "AVERAGE": _f_avg, "AVG": _f_avg, "MIN": _f_min, "MAX": _f_max,
-    "COUNT": _f_count, "ROUND": _f_round, "ABS": _f_abs, "IF": _f_if,
-    "AND": _f_and, "OR": _f_or, "NOT": _f_not,
+    "SUM": _f_sum,
+    "AVERAGE": _f_avg,
+    "AVG": _f_avg,
+    "MIN": _f_min,
+    "MAX": _f_max,
+    "COUNT": _f_count,
+    "ROUND": _f_round,
+    "ABS": _f_abs,
+    "IF": _f_if,
+    "AND": _f_and,
+    "OR": _f_or,
+    "NOT": _f_not,
 }
 
 _ALLOWED_NODES = (
-    ast.Expression, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
-    ast.Call, ast.Constant, ast.Name, ast.Load, ast.List, ast.Tuple,
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow, ast.USub, ast.UAdd,
-    ast.And, ast.Or, ast.Not,
-    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.BoolOp,
+    ast.Compare,
+    ast.Call,
+    ast.Constant,
+    ast.Name,
+    ast.Load,
+    ast.List,
+    ast.Tuple,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.Mod,
+    ast.Pow,
+    ast.USub,
+    ast.UAdd,
+    ast.And,
+    ast.Or,
+    ast.Not,
+    ast.Eq,
+    ast.NotEq,
+    ast.Lt,
+    ast.LtE,
+    ast.Gt,
+    ast.GtE,
 )
 
 
@@ -139,9 +171,7 @@ class FormulaEngine:
         self.letter_to_key = {
             _COL_LETTERS[i]: k for i, k in enumerate(self.col_keys) if i < 26 and k
         }
-        self.col_formula = {
-            c.get("key"): c.get("formula") for c in columns if c.get("formula")
-        }
+        self.col_formula = {c.get("key"): c.get("formula") for c in columns if c.get("formula")}
         self._memo: dict[tuple[str, int], Any] = {}
         self._in_progress: set[tuple[str, int]] = set()
 
@@ -193,8 +223,11 @@ class FormulaEngine:
         if key is None:
             return []
         lo, hi = sorted((int(ma.group(2)), int(mb.group(2))))
-        return [_to_number(self.value(key, n - 1)) for n in range(lo, hi + 1)
-                if 1 <= n <= len(self.rows)]
+        return [
+            _to_number(self.value(key, n - 1))
+            for n in range(lo, hi + 1)
+            if 1 <= n <= len(self.rows)
+        ]
 
     # ── compilation ─────────────────────────────────────────────────────────
 
@@ -213,7 +246,7 @@ class FormulaEngine:
 
         def _ident(m: re.Match) -> str:
             name = m.group(0)
-            nxt = body[m.end():m.end() + 1]
+            nxt = body[m.end() : m.end() + 1]
             if name in _FUNCTIONS or nxt == "(":
                 return name
             if name in self.key_set:

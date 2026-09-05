@@ -27,9 +27,7 @@ def _cap(**kw) -> ModelCapability:
 
 
 def test_a_loaded_local_model_that_fits_is_simply_ok():
-    verdict, reasons = _model_eligibility(
-        "ocr_fast", _cap(), is_loaded=True, slot_local_only=True
-    )
+    verdict, reasons = _model_eligibility("ocr_fast", _cap(), is_loaded=True, slot_local_only=True)
     assert verdict == "ok"
     assert reasons == []
 
@@ -59,9 +57,7 @@ def test_the_same_cloud_model_is_fine_once_the_slot_allows_cloud():
 
 def test_a_model_absent_from_every_node_is_fixable_not_forbidden():
     """Модель можно скачать — это помеха, а не запрет."""
-    verdict, reasons = _model_eligibility(
-        "ocr_fast", _cap(), is_loaded=False, slot_local_only=True
-    )
+    verdict, reasons = _model_eligibility("ocr_fast", _cap(), is_loaded=False, slot_local_only=True)
     assert verdict == "needs_action"
     assert reasons[0].code == "not_loaded"
     assert reasons[0].fix_action == "pull_model"

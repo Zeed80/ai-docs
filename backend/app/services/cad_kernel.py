@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import io
 import hashlib
+import io
 import json
 import zipfile
 from dataclasses import dataclass
@@ -82,7 +82,12 @@ def _decode_artifacts(content: bytes) -> CadKernelArtifacts:
     if not valid_solid:
         raise CadKernelError("OpenCascade не подтвердил валидный solid")
     return CadKernelArtifacts(
-        step=step, fcstd=fcstd, stl=stl, report=report, iges=iges, topology=topology,
+        step=step,
+        fcstd=fcstd,
+        stl=stl,
+        report=report,
+        iges=iges,
+        topology=topology,
     )
 
 
@@ -101,7 +106,9 @@ async def compile_candidate(
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as client:
-            response = await client.post(f"{settings.cad_kernel_url.rstrip('/')}/compile", json=payload)
+            response = await client.post(
+                f"{settings.cad_kernel_url.rstrip('/')}/compile", json=payload
+            )
     except httpx.HTTPError as exc:
         metrics.cad_kernel_compile_total.labels(status="error").inc()
         raise CadKernelUnavailable(f"cad-kernel недоступен: {exc}") from exc

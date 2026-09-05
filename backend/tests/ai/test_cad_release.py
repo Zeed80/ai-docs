@@ -21,7 +21,9 @@ def _ir():
         scale=0.5,
         scale_source="manual",
         entities=[
-            Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0), line_class="contour", width_class="main"),
+            Segment(
+                p1=Point(x=0, y=0), p2=Point(x=100, y=0), line_class="contour", width_class="main"
+            ),
             Circle(center=Point(x=50, y=50), radius=20, line_class="contour", width_class="main"),
             TextEntity(position=Point(x=10, y=10), text="Вал"),
             AnnotationEntity(position=Point(x=5, y=5), kind="roughness", value="3.2"),
@@ -92,7 +94,8 @@ def test_release_blocked_on_blocking_issue():
     # A degenerate segment is an error-severity (blocking) geometry issue.
     ir = CadIR(
         source=SourceInfo(image_width=400, image_height=300),
-        scale=0.5, scale_source="manual",
+        scale=0.5,
+        scale_source="manual",
         entities=[Segment(p1=Point(x=0, y=0), p2=Point(x=1, y=1))],
     )
     validate_ir(ir)
@@ -106,11 +109,17 @@ def test_manifest_flags_tampered_artifact():
     png, svg, dxf = _stored_hashes(ir)
     ir_sha = hashlib.sha256(ir.model_dump_json().encode()).hexdigest()
     m = build_release_manifest(
-        generation_id="gen-1", revision=0, ir=ir,
+        generation_id="gen-1",
+        revision=0,
+        ir=ir,
         stored_ir_sha256=ir_sha,
         stored_artifact_hashes={"png": png, "svg": svg, "dxf": "deadbeef"},  # tampered
-        accepted=True, accepted_by="u", accepted_at=None, accepted_revision=0,
-        approved_by="u", approved_at=None,
+        accepted=True,
+        accepted_by="u",
+        accepted_at=None,
+        accepted_revision=0,
+        approved_by="u",
+        approved_at=None,
     )
     assert m["artifacts"]["dxf"]["reproducible"] is False
     assert m["fully_reproducible"] is False

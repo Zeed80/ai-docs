@@ -91,7 +91,7 @@ class ConstructionModel(_StrictModel):
     elements: list[ConstructionElement] = Field(min_length=1, max_length=20_000)
 
     @model_validator(mode="after")
-    def validate_hierarchy(self) -> "ConstructionModel":
+    def validate_hierarchy(self) -> ConstructionModel:
         storey_ids = [item.id for item in self.storeys]
         element_ids = [item.id for item in self.elements]
         if len(storey_ids) != len(set(storey_ids)):
@@ -156,7 +156,9 @@ def construction_as_graph(
         GraphNode(id=site_id, type="Component", name=model.site_name),
     ]
     edges = [
-        GraphEdge(id="contains:building:site", type="contains", source_id=building_id, target_id=site_id)
+        GraphEdge(
+            id="contains:building:site", type="contains", source_id=building_id, target_id=site_id
+        )
     ]
     assertions: list[Assertion] = []
     required: list[str] = []
@@ -167,130 +169,150 @@ def construction_as_graph(
         node_id = _stable("component:storey", storey.id)
         storey_nodes[storey.id] = node_id
         nodes.append(GraphNode(id=node_id, type="Component", name=storey.name))
-        edges.append(GraphEdge(
-            id=_stable("contains:site", storey.id),
-            type="contains",
-            source_id=site_id,
-            target_id=node_id,
-        ))
+        edges.append(
+            GraphEdge(
+                id=_stable("contains:site", storey.id),
+                type="contains",
+                source_id=site_id,
+                target_id=node_id,
+            )
+        )
         assertion_id = _stable("assertion:spatial-level", storey.id)
-        assertions.append(Assertion(
-            id=assertion_id,
-            subject_id=node_id,
-            predicate=PREDICATE.SPATIAL_LEVEL,
-            value=ExactValue(kind="exact", value=storey.elevation_mm),
-            unit="mm",
-            coordinate_system=building_id,
-            origin="human",
-            assurance=source_assurance,
-            evidence_ids=[source_evidence.id],
-            confidence=1.0,
-            impacts=["envelope", "load_path"],
-        ))
+        assertions.append(
+            Assertion(
+                id=assertion_id,
+                subject_id=node_id,
+                predicate=PREDICATE.SPATIAL_LEVEL,
+                value=ExactValue(kind="exact", value=storey.elevation_mm),
+                unit="mm",
+                coordinate_system=building_id,
+                origin="human",
+                assurance=source_assurance,
+                evidence_ids=[source_evidence.id],
+                confidence=1.0,
+                impacts=["envelope", "load_path"],
+            )
+        )
         required.append(assertion_id)
 
     for element in model.elements:
         node_id = _stable("feature:construction", element.id)
         element_nodes[element.id] = node_id
         nodes.append(GraphNode(id=node_id, type="Feature", name=element.name))
-        edges.append(GraphEdge(
-            id=_stable("located:construction", element.id),
-            type="located_in",
-            source_id=node_id,
-            target_id=storey_nodes[element.storey_id],
-        ))
+        edges.append(
+            GraphEdge(
+                id=_stable("located:construction", element.id),
+                type="located_in",
+                source_id=node_id,
+                target_id=storey_nodes[element.storey_id],
+            )
+        )
         operation_id = _stable("operation:ifc", element.id)
-        nodes.append(GraphNode(id=operation_id, type="BuildOperation", name=f"Build {element.kind}"))
-        edges.append(GraphEdge(
-            id=_stable("depends:ifc", element.id),
-            type="depends_on",
-            source_id=operation_id,
-            target_id=node_id,
-        ))
+        nodes.append(
+            GraphNode(id=operation_id, type="BuildOperation", name=f"Build {element.kind}")
+        )
+        edges.append(
+            GraphEdge(
+                id=_stable("depends:ifc", element.id),
+                type="depends_on",
+                source_id=operation_id,
+                target_id=node_id,
+            )
+        )
         impact = "connection_opening" if element.kind == "opening" else "base_topology"
         for predicate, value, unit in (
             (PREDICATE.ELEMENT_KIND, element.kind, None),
             (PREDICATE.GEOMETRY_BOX, element.box.model_dump(mode="json"), "mm"),
         ):
             assertion_id = _stable(f"assertion:{predicate}", element.id)
-            assertions.append(Assertion(
-                id=assertion_id,
-                subject_id=node_id,
-                predicate=predicate,
-                value=ExactValue(kind="exact", value=value),
-                unit=unit,
-                coordinate_system=building_id if predicate == PREDICATE.GEOMETRY_BOX else None,
-                origin="human",
-                assurance=source_assurance,
-                evidence_ids=[source_evidence.id],
-                confidence=1.0,
-                impacts=[impact, "envelope"],
-            ))
+            assertions.append(
+                Assertion(
+                    id=assertion_id,
+                    subject_id=node_id,
+                    predicate=predicate,
+                    value=ExactValue(kind="exact", value=value),
+                    unit=unit,
+                    coordinate_system=building_id if predicate == PREDICATE.GEOMETRY_BOX else None,
+                    origin="human",
+                    assurance=source_assurance,
+                    evidence_ids=[source_evidence.id],
+                    confidence=1.0,
+                    impacts=[impact, "envelope"],
+                )
+            )
             required.append(assertion_id)
         if element.kind in {"wall", "slab", "column"}:
             assertion_id = _stable("assertion:element-material", element.id)
-            assertions.append(Assertion(
-                id=assertion_id,
-                subject_id=node_id,
-                predicate=PREDICATE.ELEMENT_MATERIAL,
-                value=(
-                    ExactValue(kind="exact", value=element.material)
-                    if element.material
-                    else UnknownValue(kind="unknown", reason="construction material is missing")
-                ),
-                origin="human",
-                assurance=source_assurance if element.material else "proposed",
-                evidence_ids=[source_evidence.id] if element.material else [],
-                confidence=1.0 if element.material else 0.0,
-                impacts=["structural_capacity", "material_quantity"],
-            ))
+            assertions.append(
+                Assertion(
+                    id=assertion_id,
+                    subject_id=node_id,
+                    predicate=PREDICATE.ELEMENT_MATERIAL,
+                    value=(
+                        ExactValue(kind="exact", value=element.material)
+                        if element.material
+                        else UnknownValue(kind="unknown", reason="construction material is missing")
+                    ),
+                    origin="human",
+                    assurance=source_assurance if element.material else "proposed",
+                    evidence_ids=[source_evidence.id] if element.material else [],
+                    confidence=1.0 if element.material else 0.0,
+                    impacts=["structural_capacity", "material_quantity"],
+                )
+            )
             required.append(assertion_id)
 
     for element in model.elements:
         if element.kind == "opening":
-            edges.append(GraphEdge(
-                id=_stable("opens-in", element.id),
-                type="opens_in",
-                source_id=element_nodes[element.id],
-                target_id=element_nodes[element.host_id],
-            ))
+            edges.append(
+                GraphEdge(
+                    id=_stable("opens-in", element.id),
+                    type="opens_in",
+                    source_id=element_nodes[element.id],
+                    target_id=element_nodes[element.host_id],
+                )
+            )
 
     contained_id = "assertion:construction:openings-contained"
     reopen_id = "assertion:construction:ifc-reopen"
     required_2d_id = "assertion:construction:required-sheets"
-    assertions.extend([
-        Assertion(
-            id=contained_id,
-            subject_id=building_id,
-            predicate=PREDICATE.CONSTRUCTION_OPENINGS_CONTAINED,
-            value=ExactValue(kind="exact", value=True),
-            origin="derived",
-            assurance="constraint_validated",
-            confidence=1.0,
-            impacts=["connection_opening", "operational_safety"],
-        ),
-        Assertion(
-            id=reopen_id,
-            subject_id=building_id,
-            predicate=PREDICATE.CONSTRUCTION_IFC_REOPEN_VALID,
-            value=UnknownValue(kind="unknown", reason="IFC builder has not reopened an artifact"),
-            origin="derived",
-            assurance="proposed",
-            impacts=["base_topology", "regulatory_check"],
-        ),
-        Assertion(
-            id=required_2d_id,
-            subject_id=building_id,
-            predicate=PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE,
-            value=UnknownValue(
-                kind="unknown",
-                reason="mandatory plans and sections have not been verified",
+    assertions.extend(
+        [
+            Assertion(
+                id=contained_id,
+                subject_id=building_id,
+                predicate=PREDICATE.CONSTRUCTION_OPENINGS_CONTAINED,
+                value=ExactValue(kind="exact", value=True),
+                origin="derived",
+                assurance="constraint_validated",
+                confidence=1.0,
+                impacts=["connection_opening", "operational_safety"],
             ),
-            origin="derived",
-            assurance="proposed",
-            impacts=["required_view", "required_section"],
-        ),
-    ])
+            Assertion(
+                id=reopen_id,
+                subject_id=building_id,
+                predicate=PREDICATE.CONSTRUCTION_IFC_REOPEN_VALID,
+                value=UnknownValue(
+                    kind="unknown", reason="IFC builder has not reopened an artifact"
+                ),
+                origin="derived",
+                assurance="proposed",
+                impacts=["base_topology", "regulatory_check"],
+            ),
+            Assertion(
+                id=required_2d_id,
+                subject_id=building_id,
+                predicate=PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE,
+                value=UnknownValue(
+                    kind="unknown",
+                    reason="mandatory plans and sections have not been verified",
+                ),
+                origin="derived",
+                assurance="proposed",
+                impacts=["required_view", "required_section"],
+            ),
+        ]
+    )
     required.extend([contained_id, reopen_id, required_2d_id])
     requirement = Requirement(
         id="requirement:construction-release",
@@ -313,7 +335,9 @@ def construction_as_graph(
         evidence=[source_evidence],
         requirements=[requirement, sheet_requirement],
         build_targets=[
-            BuildTarget(id="preview", kind="preview_ifc", root_node_ids=[building_id], critical_impacts=[]),
+            BuildTarget(
+                id="preview", kind="preview_ifc", root_node_ids=[building_id], critical_impacts=[]
+            ),
             BuildTarget(
                 id="production",
                 kind="production_ifc",
@@ -366,7 +390,7 @@ def build_construction_sheets_svg(model: ConstructionModel) -> tuple[bytes, dict
         views.append(
             f'<g data-view-panel="{html.escape(view_id)}">'
             f'<text x="{origin_x:.2f}" y="35">Plan — {html.escape(storey.name)}</text>'
-            f'{"".join(elements)}</g>'
+            f"{''.join(elements)}</g>"
         )
     section_origin = len(model.storeys) * panel_width + 50.0
     section_elements = []
@@ -384,18 +408,18 @@ def build_construction_sheets_svg(model: ConstructionModel) -> tuple[bytes, dict
         )
     views.append(
         f'<g data-view-panel="section"><text x="{section_origin:.2f}" y="35">Section</text>'
-        f'{"".join(section_elements)}</g>'
+        f"{''.join(section_elements)}</g>"
     )
     svg = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}">'
-        '<style>rect{fill:#dbeafe;stroke:#111;stroke-width:1.5}'
+        "<style>rect{fill:#dbeafe;stroke:#111;stroke-width:1.5}"
         'rect[data-element-kind="opening"]{fill:#fff;stroke:#dc2626;stroke-dasharray:5 3}'
         'rect[data-element-kind="space"]{fill:#dcfce7;fill-opacity:.5}'
-        'text{font:14px sans-serif;fill:#111}</style>'
+        "text{font:14px sans-serif;fill:#111}</style>"
         f'<text x="12" y="330">{html.escape(model.building_name)}</text>'
-        f'{"".join(views)}</svg>'
+        f"{''.join(views)}</svg>"
     ).encode()
     root = ElementTree.fromstring(svg)
     namespace = {"svg": "http://www.w3.org/2000/svg"}
@@ -408,9 +432,9 @@ def build_construction_sheets_svg(model: ConstructionModel) -> tuple[bytes, dict
         for item in root.findall(".//svg:rect[@data-element-id]", namespace)
     }
     expected_views = {"section", *(f"plan:{item.id}" for item in model.storeys)}
-    expected_occurrences = {
-        (f"plan:{item.storey_id}", item.id) for item in model.elements
-    } | {("section", item.id) for item in model.elements}
+    expected_occurrences = {(f"plan:{item.storey_id}", item.id) for item in model.elements} | {
+        ("section", item.id) for item in model.elements
+    }
     report = {
         "media_type": "image/svg+xml",
         "views": sorted(rendered_views),
@@ -419,9 +443,7 @@ def build_construction_sheets_svg(model: ConstructionModel) -> tuple[bytes, dict
         "storey_count": len(model.storeys),
         "required_views_complete": rendered_views == expected_views,
     }
-    report["valid"] = bool(
-        rendered_views == expected_views and occurrences == expected_occurrences
-    )
+    report["valid"] = bool(rendered_views == expected_views and occurrences == expected_occurrences)
     report["artifact_sha256"] = hashlib.sha256(svg).hexdigest()
     report["canonical_report_sha256"] = hashlib.sha256(
         json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
@@ -441,7 +463,8 @@ def construction_sheets_patch(
     ):
         raise ValueError("construction sheet report does not validate the supplied SVG")
     required = next(
-        item for item in graph.assertions
+        item
+        for item in graph.assertions
         if item.state == "active"
         and item.predicate == PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE
     )
@@ -474,12 +497,14 @@ def construction_sheets_patch(
                 target_id=operation_id,
             ),
         ],
-        add_evidence=[Evidence(
-            id=evidence_id,
-            kind="projection_comparison",
-            payload=report,
-            sha256=report["canonical_report_sha256"],
-        )],
+        add_evidence=[
+            Evidence(
+                id=evidence_id,
+                kind="projection_comparison",
+                payload=report,
+                sha256=report["canonical_report_sha256"],
+            )
+        ],
         add_assertions=[
             Assertion(
                 id=f"assertion:construction-sheets-media:{suffix}",
@@ -612,6 +637,7 @@ def compile_construction_ifc(model: ConstructionModel) -> tuple[bytes, dict]:
             ifcopenshell,
             f"construction:{index}:{root.is_a()}:{getattr(root, 'Name', '')}",
         )
+
     # IfcOpenShell relationship APIs collect members through sets.  Their
     # serialization order can change between calls (and therefore change the
     # artifact SHA) even though the building topology is identical.  Canonical
@@ -644,8 +670,7 @@ def compile_construction_ifc(model: ConstructionModel) -> tuple[bytes, dict]:
     reopened = ifcopenshell.file.from_string(ifc_bytes.decode())
     roots = reopened.by_type("IfcRoot")
     products_reopened = [
-        item for item in reopened.by_type("IfcProduct")
-        if getattr(item, "Representation", None)
+        item for item in reopened.by_type("IfcProduct") if getattr(item, "Representation", None)
     ]
     geometry_failures = []
     geometry_settings = ifcopenshell.geom.settings()
@@ -654,11 +679,13 @@ def compile_construction_ifc(model: ConstructionModel) -> tuple[bytes, dict]:
         try:
             ifcopenshell.geom.create_shape(geometry_settings, product)
         except Exception as exc:  # noqa: BLE001 - every failed product is reported
-            geometry_failures.append({
-                "ifc_class": product.is_a(),
-                "name": getattr(product, "Name", None),
-                "error": str(exc)[:300],
-            })
+            geometry_failures.append(
+                {
+                    "ifc_class": product.is_a(),
+                    "name": getattr(product, "Name", None),
+                    "error": str(exc)[:300],
+                }
+            )
     expected_counts = Counter(ifc_class[item.kind] for item in model.elements)
     actual_counts = Counter(item.is_a() for item in products_reopened)
     guids = [str(item.GlobalId) for item in roots if getattr(item, "GlobalId", None)]

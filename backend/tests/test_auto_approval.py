@@ -1,13 +1,18 @@
 """Tests for Auto-Approval Rules API."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
 
 from app.db.models import (
-    Document, DocumentStatus, Invoice, InvoiceStatus, Party, PartyRole,
+    Document,
+    DocumentStatus,
+    Invoice,
+    InvoiceStatus,
+    Party,
+    PartyRole,
     SupplierProfile,
 )
 
@@ -52,7 +57,7 @@ async def approved_invoice(db_session, supplier_with_profile):
         currency="RUB",
         total_amount=20000.0,
         status=InvoiceStatus.needs_review,
-        invoice_date=datetime.now(timezone.utc),
+        invoice_date=datetime.now(UTC),
         supplier_id=supplier_with_profile.id,
     )
     db_session.add(inv)
@@ -65,13 +70,16 @@ async def approved_invoice(db_session, supplier_with_profile):
 
 @pytest.mark.asyncio
 async def test_create_rule(client: AsyncClient):
-    resp = await client.post("/api/auto-approval-rules", json={
-        "name": "Небольшие счета до 50к",
-        "max_amount": 50000.0,
-        "currency": "RUB",
-        "min_trust_score": 0.85,
-        "doc_type": "invoice",
-    })
+    resp = await client.post(
+        "/api/auto-approval-rules",
+        json={
+            "name": "Небольшие счета до 50к",
+            "max_amount": 50000.0,
+            "currency": "RUB",
+            "min_trust_score": 0.85,
+            "doc_type": "invoice",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Небольшие счета до 50к"
@@ -81,9 +89,12 @@ async def test_create_rule(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_rule_minimal(client: AsyncClient):
-    resp = await client.post("/api/auto-approval-rules", json={
-        "name": "Минимальное правило",
-    })
+    resp = await client.post(
+        "/api/auto-approval-rules",
+        json={
+            "name": "Минимальное правило",
+        },
+    )
     assert resp.status_code == 201
     assert resp.json()["name"] == "Минимальное правило"
 
@@ -100,16 +111,22 @@ async def test_list_rules(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_rule(client: AsyncClient):
-    create_resp = await client.post("/api/auto-approval-rules", json={
-        "name": "Update-test",
-        "max_amount": 10000.0,
-    })
+    create_resp = await client.post(
+        "/api/auto-approval-rules",
+        json={
+            "name": "Update-test",
+            "max_amount": 10000.0,
+        },
+    )
     rule_id = create_resp.json()["id"]
 
-    resp = await client.patch(f"/api/auto-approval-rules/{rule_id}", json={
-        "max_amount": 25000.0,
-        "is_active": False,
-    })
+    resp = await client.patch(
+        f"/api/auto-approval-rules/{rule_id}",
+        json={
+            "max_amount": 25000.0,
+            "is_active": False,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["max_amount"] == 25000.0
@@ -118,9 +135,12 @@ async def test_update_rule(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_delete_rule(client: AsyncClient):
-    create_resp = await client.post("/api/auto-approval-rules", json={
-        "name": "Delete-test",
-    })
+    create_resp = await client.post(
+        "/api/auto-approval-rules",
+        json={
+            "name": "Delete-test",
+        },
+    )
     rule_id = create_resp.json()["id"]
 
     resp = await client.delete(f"/api/auto-approval-rules/{rule_id}")
@@ -135,16 +155,22 @@ async def test_check_invoice_matches_rule(
     client: AsyncClient, approved_invoice, supplier_with_profile
 ):
     # Create rule matching invoice: amount <= 50k, supplier with high trust
-    await client.post("/api/auto-approval-rules", json={
-        "name": "Высокодоверенный поставщик",
-        "supplier_id": str(supplier_with_profile.id),
-        "max_amount": 50000.0,
-        "min_trust_score": 0.8,
-    })
+    await client.post(
+        "/api/auto-approval-rules",
+        json={
+            "name": "Высокодоверенный поставщик",
+            "supplier_id": str(supplier_with_profile.id),
+            "max_amount": 50000.0,
+            "min_trust_score": 0.8,
+        },
+    )
 
-    resp = await client.post("/api/auto-approval-rules/check", json={
-        "invoice_id": str(approved_invoice.id),
-    })
+    resp = await client.post(
+        "/api/auto-approval-rules/check",
+        json={
+            "invoice_id": str(approved_invoice.id),
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "matched" in data
@@ -155,14 +181,20 @@ async def test_check_invoice_matches_rule(
 @pytest.mark.asyncio
 async def test_check_invoice_no_match(client: AsyncClient, approved_invoice):
     # Rule requires amount <= 5000, but invoice is 20000
-    await client.post("/api/auto-approval-rules", json={
-        "name": "Мелкие закупки",
-        "max_amount": 5000.0,
-    })
+    await client.post(
+        "/api/auto-approval-rules",
+        json={
+            "name": "Мелкие закупки",
+            "max_amount": 5000.0,
+        },
+    )
 
-    resp = await client.post("/api/auto-approval-rules/check", json={
-        "invoice_id": str(approved_invoice.id),
-    })
+    resp = await client.post(
+        "/api/auto-approval-rules/check",
+        json={
+            "invoice_id": str(approved_invoice.id),
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "matched" in data
@@ -172,7 +204,10 @@ async def test_check_invoice_no_match(client: AsyncClient, approved_invoice):
 
 @pytest.mark.asyncio
 async def test_check_invoice_not_found(client: AsyncClient):
-    resp = await client.post("/api/auto-approval-rules/check", json={
-        "invoice_id": str(uuid.uuid4()),
-    })
+    resp = await client.post(
+        "/api/auto-approval-rules/check",
+        json={
+            "invoice_id": str(uuid.uuid4()),
+        },
+    )
     assert resp.status_code == 404

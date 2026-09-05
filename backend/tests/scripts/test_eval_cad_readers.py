@@ -22,11 +22,13 @@ def test_reader_trace_keeps_fragment_and_whole_sheet_attempts_separate() -> None
     }
     whole = {"pass": 1, "mode": "whole_sheet", "spec": {}}
 
-    trace = reader_trace({
-        "reader_attempts": [whole],
-        "fragment_reader_attempts": [fragment],
-        "fragments": {"geometry": True},
-    })
+    trace = reader_trace(
+        {
+            "reader_attempts": [whole],
+            "fragment_reader_attempts": [fragment],
+            "fragments": {"geometry": True},
+        }
+    )
 
     assert trace["fragment_attempts"] == [fragment]
     assert trace["whole_sheet_attempts"] == [whole]
@@ -41,7 +43,7 @@ def test_candidate_router_pins_reader_but_preserves_ocr_assignment() -> None:
             self.task = task
             self.preferred_model = preferred_model
 
-        def model_copy(self, *, update: dict) -> "Request":
+        def model_copy(self, *, update: dict) -> Request:
             return Request(self.task, update.get("preferred_model"))
 
     class Router:
@@ -71,11 +73,7 @@ def test_reader_parameter_accuracy_is_one_to_one_and_micro_aggregated() -> None:
             ]
         }
     }
-    prediction = {
-        "main_view": {
-            "outer": [{"diameter_mm": 80, "length_mm": 40}]
-        }
-    }
+    prediction = {"main_view": {"outer": [{"diameter_mm": 80, "length_mm": 40}]}}
 
     score = score_parameters(prediction, reference)
 
@@ -87,40 +85,46 @@ def test_reader_parameter_accuracy_is_one_to_one_and_micro_aggregated() -> None:
 def test_reader_scores_external_and_internal_threads_on_their_carriers() -> None:
     reference = {
         "main_view": {
-            "outer": [{
-                "diameter_mm": 75,
-                "length_mm": 18,
-                "thread": {
-                    "nominal_diameter_mm": 75,
-                    "pitch_mm": 1.5,
+            "outer": [
+                {
+                    "diameter_mm": 75,
                     "length_mm": 18,
-                    "internal": False,
-                },
-            }],
-            "bore": [{
-                "diameter_mm": 55,
-                "length_mm": 25,
-                "thread": {
-                    "nominal_diameter_mm": 54.5,
-                    "pitch_mm": 2,
+                    "thread": {
+                        "nominal_diameter_mm": 75,
+                        "pitch_mm": 1.5,
+                        "length_mm": 18,
+                        "internal": False,
+                    },
+                }
+            ],
+            "bore": [
+                {
+                    "diameter_mm": 55,
                     "length_mm": 25,
-                    "internal": True,
-                },
-            }],
+                    "thread": {
+                        "nominal_diameter_mm": 54.5,
+                        "pitch_mm": 2,
+                        "length_mm": 25,
+                        "internal": True,
+                    },
+                }
+            ],
         }
     }
     prediction = {
         "main_view": {
-            "outer": [{
-                "diameter_mm": 75,
-                "length_mm": 18,
-                "thread": {
-                    "nominal_diameter_mm": 75,
-                    "pitch_mm": 1.5,
+            "outer": [
+                {
+                    "diameter_mm": 75,
                     "length_mm": 18,
-                    "internal": False,
-                },
-            }],
+                    "thread": {
+                        "nominal_diameter_mm": 75,
+                        "pitch_mm": 1.5,
+                        "length_mm": 18,
+                        "internal": False,
+                    },
+                }
+            ],
             # The right numeric thread on the wrong (external) carrier must not
             # satisfy the expected internal-thread groups.
             "bore": [{"diameter_mm": 55, "length_mm": 25}],
@@ -138,25 +142,29 @@ def test_reader_scores_external_and_internal_threads_on_their_carriers() -> None
 def test_reader_scores_blind_hole_depth_and_counterbore_as_parameters() -> None:
     reference = {
         "main_view": {
-            "cross_holes": [{
-                "diameter_mm": 10,
-                "depth_mm": 8.5,
-                "angle_deg": 0,
-                "through": False,
-                "counterbore_diameter_mm": 24,
-                "counterbore_depth_mm": 3,
-            }]
+            "cross_holes": [
+                {
+                    "diameter_mm": 10,
+                    "depth_mm": 8.5,
+                    "angle_deg": 0,
+                    "through": False,
+                    "counterbore_diameter_mm": 24,
+                    "counterbore_depth_mm": 3,
+                }
+            ]
         }
     }
     prediction = {
         "main_view": {
-            "cross_holes": [{
-                "diameter_mm": 10,
-                "depth_mm": 8.5,
-                "angle_deg": 0,
-                "through": True,
-                "counterbore_diameter_mm": 24,
-            }]
+            "cross_holes": [
+                {
+                    "diameter_mm": 10,
+                    "depth_mm": 8.5,
+                    "angle_deg": 0,
+                    "through": True,
+                    "counterbore_diameter_mm": 24,
+                }
+            ]
         }
     }
 
@@ -173,25 +181,37 @@ def test_reader_scores_blind_hole_depth_and_counterbore_as_parameters() -> None:
 
 
 def test_reader_scores_only_source_supported_axial_pattern_fields() -> None:
-    reference = {"main_view": {"axial_holes": [{
-        "count": 2,
-        "bolt_circle_diameter_mm": 65,
-        "from_face": "zmin",
-        "through": False,
-        "thread_depth_mm": 15,
-        "drill_depth_mm": 17,
-        "thread": {"nominal_diameter_mm": 8, "internal": True},
-    }]}}
-    prediction = {"main_view": {"axial_holes": [{
-        "count": 2,
-        "bolt_circle_diameter_mm": 65,
-        "from_face": "zmin",
-        "through": False,
-        "thread_depth_mm": 15,
-        "drill_depth_mm": 17,
-        "pilot_diameter_mm": None,
-        "thread": {"nominal_diameter_mm": 8, "internal": True},
-    }]}}
+    reference = {
+        "main_view": {
+            "axial_holes": [
+                {
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 65,
+                    "from_face": "zmin",
+                    "through": False,
+                    "thread_depth_mm": 15,
+                    "drill_depth_mm": 17,
+                    "thread": {"nominal_diameter_mm": 8, "internal": True},
+                }
+            ]
+        }
+    }
+    prediction = {
+        "main_view": {
+            "axial_holes": [
+                {
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 65,
+                    "from_face": "zmin",
+                    "through": False,
+                    "thread_depth_mm": 15,
+                    "drill_depth_mm": 17,
+                    "pilot_diameter_mm": None,
+                    "thread": {"nominal_diameter_mm": 8, "internal": True},
+                }
+            ]
+        }
+    }
 
     score = score_parameters(prediction, reference)
 
@@ -218,10 +238,7 @@ def test_shaft_detail_reference_has_corrected_independent_source_parameters() ->
     deliberately does not dimension per-step lengths or the keyway's own
     width, so score_parameters has fewer fields to hold it to — see the
     fixture's own _comment for why."""
-    fixture = (
-        pathlib.Path(__file__).parents[1]
-        / "fixtures" / "shaft_detail_reference_spec.json"
-    )
+    fixture = pathlib.Path(__file__).parents[1] / "fixtures" / "shaft_detail_reference_spec.json"
     reference = json.loads(fixture.read_text(encoding="utf-8"))
 
     score = score_parameters(reference, reference)
@@ -233,20 +250,24 @@ def test_shaft_detail_reference_has_corrected_independent_source_parameters() ->
 def test_reader_scores_taper_ratio_as_a_semantic_parameter() -> None:
     reference = {
         "main_view": {
-            "bore": [{
-                "diameter_mm": 56.55,
-                "length_mm": 78,
-                "taper": {"ratio": "7:24"},
-            }]
+            "bore": [
+                {
+                    "diameter_mm": 56.55,
+                    "length_mm": 78,
+                    "taper": {"ratio": "7:24"},
+                }
+            ]
         }
     }
     prediction = {
         "main_view": {
-            "bore": [{
-                "diameter_mm": 56.55,
-                "length_mm": 78,
-                "taper": {"ratio": "1:10"},
-            }]
+            "bore": [
+                {
+                    "diameter_mm": 56.55,
+                    "length_mm": 78,
+                    "taper": {"ratio": "1:10"},
+                }
+            ]
         }
     }
 
@@ -258,35 +279,41 @@ def test_reader_scores_taper_ratio_as_a_semantic_parameter() -> None:
 
 
 def test_reader_summary_exposes_false_success_claims() -> None:
-    summary = summarize_results([
-        {
-            "validates": True,
-            "parameters_matched": 9,
-            "parameters_total": 10,
-            "success_claimed": True,
-            "false_accept": True,
-        },
-        {
-            "validates": True,
-            "parameters_matched": 10,
-            "parameters_total": 10,
-            "success_claimed": True,
-            "false_accept": False,
-        },
-    ])
+    summary = summarize_results(
+        [
+            {
+                "validates": True,
+                "parameters_matched": 9,
+                "parameters_total": 10,
+                "success_claimed": True,
+                "false_accept": True,
+            },
+            {
+                "validates": True,
+                "parameters_matched": 10,
+                "parameters_total": 10,
+                "success_claimed": True,
+                "false_accept": False,
+            },
+        ]
+    )
 
     assert summary["parameter_accuracy"] == 0.95
     assert summary["false_accept_rate"] == 0.5
 
 
 def test_invalid_reader_answer_cannot_disappear_from_parameter_denominator() -> None:
-    summary = summarize_results([{
-        "validates": False,
-        "parameters_matched": 0,
-        "parameters_total": 31,
-        "success_claimed": False,
-        "false_accept": False,
-    }])
+    summary = summarize_results(
+        [
+            {
+                "validates": False,
+                "parameters_matched": 0,
+                "parameters_total": 31,
+                "success_claimed": False,
+                "false_accept": False,
+            }
+        ]
+    )
 
     assert summary["valid_specs"] == 0
     assert summary["parameters_total"] == 31

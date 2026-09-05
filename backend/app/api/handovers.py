@@ -1,4 +1,5 @@
 """Handovers API — document routing between users."""
+
 from __future__ import annotations
 
 import uuid
@@ -56,6 +57,7 @@ async def create_handover(
     await db.flush()
 
     from app.services.notifications import create_notification
+
     await create_notification(
         db=db,
         user_sub=payload.to_user,
@@ -95,9 +97,14 @@ async def inbox(
     items = result.scalars().all()
     return [
         HandoverOut(
-            id=h.id, entity_type=h.entity_type, entity_id=h.entity_id,
-            from_user=h.from_user, to_user=h.to_user, comment=h.comment,
-            status=h.status, created_at=h.created_at.isoformat(),
+            id=h.id,
+            entity_type=h.entity_type,
+            entity_id=h.entity_id,
+            from_user=h.from_user,
+            to_user=h.to_user,
+            comment=h.comment,
+            status=h.status,
+            created_at=h.created_at.isoformat(),
         )
         for h in items
     ]
@@ -117,9 +124,14 @@ async def outbox(
     items = result.scalars().all()
     return [
         HandoverOut(
-            id=h.id, entity_type=h.entity_type, entity_id=h.entity_id,
-            from_user=h.from_user, to_user=h.to_user, comment=h.comment,
-            status=h.status, created_at=h.created_at.isoformat(),
+            id=h.id,
+            entity_type=h.entity_type,
+            entity_id=h.entity_id,
+            from_user=h.from_user,
+            to_user=h.to_user,
+            comment=h.comment,
+            status=h.status,
+            created_at=h.created_at.isoformat(),
         )
         for h in items
     ]
@@ -170,6 +182,7 @@ async def forward_handover(
     await db.flush()
 
     from app.services.notifications import create_notification
+
     await create_notification(
         db=db,
         user_sub=payload.to_user,
@@ -184,9 +197,14 @@ async def forward_handover(
     await db.commit()
     await db.refresh(new_h)
     return HandoverOut(
-        id=new_h.id, entity_type=new_h.entity_type, entity_id=new_h.entity_id,
-        from_user=new_h.from_user, to_user=new_h.to_user, comment=new_h.comment,
-        status=new_h.status, created_at=new_h.created_at.isoformat(),
+        id=new_h.id,
+        entity_type=new_h.entity_type,
+        entity_id=new_h.entity_id,
+        from_user=new_h.from_user,
+        to_user=new_h.to_user,
+        comment=new_h.comment,
+        status=new_h.status,
+        created_at=new_h.created_at.isoformat(),
     )
 
 
@@ -200,6 +218,7 @@ async def return_handover(
     h.status = "returned"
 
     from app.services.notifications import create_notification
+
     await create_notification(
         db=db,
         user_sub=h.from_user,

@@ -187,7 +187,9 @@ async def test_drawing_analysis_creates_drawing_and_features(client: AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_customer_question_draft_requires_approval_and_is_audited(client: AsyncClient) -> None:
+async def test_customer_question_draft_requires_approval_and_is_audited(
+    client: AsyncClient,
+) -> None:
     case_response = await client.post("/api/cases", json={"title": "Shaft clarifications"})
     case = case_response.json()
     upload_response = await client.post(
@@ -218,7 +220,9 @@ async def test_customer_question_draft_requires_approval_and_is_audited(client: 
 
 
 @pytest.mark.asyncio
-async def test_invoice_extraction_creates_supplier_invoice_lines_and_audit(client: AsyncClient) -> None:
+async def test_invoice_extraction_creates_supplier_invoice_lines_and_audit(
+    client: AsyncClient,
+) -> None:
     case_response = await client.post("/api/cases", json={"title": "Invoice case"})
     case = case_response.json()
     upload_response = await client.post(

@@ -37,7 +37,9 @@ def _to_entity(prim: RawPrimitive) -> Entity | None:
             **common,
         )
     if prim.kind == "circle":
-        return Circle(center=Point(x=prim.center[0], y=prim.center[1]), radius=prim.radius, **common)
+        return Circle(
+            center=Point(x=prim.center[0], y=prim.center[1]), radius=prim.radius, **common
+        )
     if prim.kind == "arc":
         return Arc(
             center=Point(x=prim.center[0], y=prim.center[1]),
@@ -80,11 +82,14 @@ def _merge_cocircular_arcs(entities: list[Entity]) -> list[Entity]:
         if a.id in used:
             continue
         group = [a]
-        for b in arcs[i + 1:]:
+        for b in arcs[i + 1 :]:
             if b.id in used:
                 continue
             dc = ((a.center.x - b.center.x) ** 2 + (a.center.y - b.center.y) ** 2) ** 0.5
-            if dc <= _ARC_MERGE_CENTER_TOL_PX and abs(a.radius - b.radius) <= _ARC_MERGE_RADIUS_TOL * a.radius:
+            if (
+                dc <= _ARC_MERGE_CENTER_TOL_PX
+                and abs(a.radius - b.radius) <= _ARC_MERGE_RADIUS_TOL * a.radius
+            ):
                 group.append(b)
         span = sum(abs(g.end_angle - g.start_angle) for g in group)
         if len(group) >= 2 and span >= _FULL_CIRCLE_MIN_SPAN_DEG:
@@ -211,7 +216,11 @@ def _hatch_regions_from_solid(solid_mask) -> list[HatchRegion]:
                 if hole_points is not None:
                     holes.append(hole_points)
             child = hier[child][0]  # next sibling at the same (hole) depth
-        out.append(HatchRegion(boundary=boundary, holes=holes, pattern="ansi31", confidence=0.6, origin="cv"))
+        out.append(
+            HatchRegion(
+                boundary=boundary, holes=holes, pattern="ansi31", confidence=0.6, origin="cv"
+            )
+        )
     return out
 
 

@@ -140,6 +140,7 @@ class InvoiceFieldUpdate(BaseModel):
 
 class InvoiceDeleteRequest(BaseModel):
     """Bulk delete request — pass ids OR filters."""
+
     ids: list[uuid.UUID] | None = None
     status: InvoiceStatus | None = None
     supplier_id: uuid.UUID | None = None

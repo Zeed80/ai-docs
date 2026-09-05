@@ -1,12 +1,11 @@
 """Tests for Drawings API — CRUD, features, review."""
 
-import io
 import uuid
 
 import pytest
 from httpx import AsyncClient
 
-from app.db.models import Drawing, DrawingStatus, DrawingFeature, DrawingFeatureType
+from app.db.models import Drawing, DrawingFeature, DrawingFeatureType, DrawingStatus
 
 
 @pytest.fixture
@@ -100,10 +99,13 @@ async def test_get_drawing_not_found(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_drawing(client: AsyncClient, drawing):
-    resp = await client.patch(f"/api/drawings/{drawing.id}", json={
-        "drawing_number": "ЧТЖ-001-Р",
-        "revision": "А",
-    })
+    resp = await client.patch(
+        f"/api/drawings/{drawing.id}",
+        json={
+            "drawing_number": "ЧТЖ-001-Р",
+            "revision": "А",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["drawing_number"] == "ЧТЖ-001-Р"
@@ -115,12 +117,15 @@ async def test_update_drawing(client: AsyncClient, drawing):
 
 @pytest.mark.asyncio
 async def test_create_feature(client: AsyncClient, drawing):
-    resp = await client.post(f"/api/drawings/{drawing.id}/features", json={
-        "feature_type": "hole",
-        "name": "Центральное отверстие Ø20",
-        "description": "Посадочное место вала",
-        "confidence": 0.95,
-    })
+    resp = await client.post(
+        f"/api/drawings/{drawing.id}/features",
+        json={
+            "feature_type": "hole",
+            "name": "Центральное отверстие Ø20",
+            "description": "Посадочное место вала",
+            "confidence": 0.95,
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["feature_type"] == "hole"
@@ -173,9 +178,7 @@ async def test_delete_feature(client: AsyncClient, drawing_with_feature):
     drawing_resp = await client.get(f"/api/drawings/{drawing_with_feature.id}")
     feature_id = drawing_resp.json()["features"][0]["id"]
 
-    resp = await client.delete(
-        f"/api/drawings/{drawing_with_feature.id}/features/{feature_id}"
-    )
+    resp = await client.delete(f"/api/drawings/{drawing_with_feature.id}/features/{feature_id}")
     assert resp.status_code in (200, 204)
 
 
@@ -185,6 +188,7 @@ async def test_delete_feature(client: AsyncClient, drawing_with_feature):
 @pytest.mark.asyncio
 async def test_bulk_delete_drawings(client: AsyncClient, drawing):
     import json as _json
+
     resp = await client.request(
         "DELETE",
         "/api/drawings/bulk-delete",

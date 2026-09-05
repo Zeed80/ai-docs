@@ -6,7 +6,6 @@ from PIL import Image
 from app.ai.cad_recognize.axial_dimensions import localize_axial_dimensions
 from app.ai.cad_recognize.turned_features import localize_turned_features
 
-
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = ROOT / "test_vector_files" / "detal_126.png"
 
@@ -21,8 +20,26 @@ def test_real_spindle_localizes_both_keyway_outlines():
         image,
         axial,
         [
-            470, 270, 240, 150, 99, 85, 78, 50, 35, 26, 25, 20, 18,
-            15, 14, 12, 8, 5, 4, 3,
+            470,
+            270,
+            240,
+            150,
+            99,
+            85,
+            78,
+            50,
+            35,
+            26,
+            25,
+            20,
+            18,
+            15,
+            14,
+            12,
+            8,
+            5,
+            4,
+            3,
         ],
         profile_center_y_px=593,
         known_diameter_values=[102, 80, 72, 65, 56.55, 56, 55, 51, 50, 44, 24, 14, 10, 9],
@@ -52,21 +69,16 @@ def test_real_spindle_localizes_both_keyway_outlines():
         and set(item["supported_diameters_mm"]) == {9.0, 10.0}
         for item in radial
     )
-    labels = {
-        (item["value_mm"], item["side"])
-        for item in evidence["diameter_label_observations"]
-    }
+    labels = {(item["value_mm"], item["side"]) for item in evidence["diameter_label_observations"]}
     assert {(14.0, "top"), (24.0, "top"), (10.0, "top"), (9.0, "bottom")} <= labels
     assert any("несколько" in item for item in evidence["blockers"])
-    axial_pattern, = evidence["axial_hole_patterns"]
+    (axial_pattern,) = evidence["axial_hole_patterns"]
     assert axial_pattern["count"] == 2
     assert axial_pattern["view_outer_diameter_mm"] == 102.0
     assert axial_pattern["bolt_circle_diameter_mm"] == 80.0
     assert axial_pattern["measured_bolt_circle_diameter_mm"] == pytest.approx(81.669)
     assert axial_pattern["view_center_px"] == pytest.approx([2136.5, 592.5])
-    assert axial_pattern["hole_centers_px"] == [
-        [2136.5, 475.5], [2136.5, 712.5]
-    ]
+    assert axial_pattern["hole_centers_px"] == [[2136.5, 475.5], [2136.5, 712.5]]
 
 
 def test_monochrome_feature_detection_fails_closed():

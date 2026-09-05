@@ -20,7 +20,6 @@ from app.ai.capability_manifest import load_capability_manifest
 from app.ai.degradation import log_degraded
 from app.ai.gateway_config import gateway_config
 from app.ai.streaming_scrubber import StreamingContextScrubber
-from app.ai.thinking_params import REASONING_EFFORT_PROVIDERS as _REASONING_EFFORT_PROVIDERS
 from app.ai.thinking_params import thinking_request_params as _thinking_request_params
 from app.config import settings as _settings
 
@@ -91,8 +90,15 @@ _TOOL_RESULT_MIN_ITEMS = 3
 
 # Heavy fields that can be stripped from items to reduce size.
 _HEAVY_ITEM_FIELDS = {
-    "description", "notes", "raw_text", "content", "body",
-    "user_notes", "address", "comment", "history",
+    "description",
+    "notes",
+    "raw_text",
+    "content",
+    "body",
+    "user_notes",
+    "address",
+    "comment",
+    "history",
 }
 
 
@@ -120,7 +126,8 @@ def _trim_tool_result(content: str) -> str:
                     if strip_heavy:
                         sample = [
                             {k: v for k, v in item.items() if k not in _HEAVY_ITEM_FIELDS}
-                            if isinstance(item, dict) else item
+                            if isinstance(item, dict)
+                            else item
                             for item in sample
                         ]
                     candidate = {**meta, list_key: sample}
@@ -198,11 +205,26 @@ def _is_workspace_output_request(text: str) -> bool:
     return any(
         marker in t
         for marker in (
-            "таблиц", "полный список", "все списком", "выведи список",
-            "ссылк", "документ", "чертеж", "чертёж",
-            "график", "диаграм", "excel", "скача", "файл",
-            "столбец", "столбц", "колонк", "добавь поле", "убери поле",
-            "отсортируй", "сортировк",
+            "таблиц",
+            "полный список",
+            "все списком",
+            "выведи список",
+            "ссылк",
+            "документ",
+            "чертеж",
+            "чертёж",
+            "график",
+            "диаграм",
+            "excel",
+            "скача",
+            "файл",
+            "столбец",
+            "столбц",
+            "колонк",
+            "добавь поле",
+            "убери поле",
+            "отсортируй",
+            "сортировк",
         )
     )
 
@@ -255,11 +277,7 @@ def _get_agent_provider(
 
 def _is_builder_turn(messages: list[dict]) -> bool:
     latest_user = next(
-        (
-            str(m.get("content") or "")
-            for m in reversed(messages)
-            if m.get("role") == "user"
-        ),
+        (str(m.get("content") or "") for m in reversed(messages) if m.get("role") == "user"),
         "",
     ).lower()
     if not latest_user:
@@ -346,7 +364,9 @@ def _model_thinking_levels(model_name: str | None) -> list[str]:
 def _thinking_request_levels(cap) -> list[str]:
     from app.ai.thinking_params import effective_thinking_levels
 
-    return effective_thinking_levels(cap.thinking_supported, cap.provider.value, cap.thinking_levels)
+    return effective_thinking_levels(
+        cap.thinking_supported, cap.provider.value, cap.thinking_levels
+    )
 
 
 def _model_thinking_level_default(model_name: str | None) -> str | None:
@@ -418,6 +438,7 @@ def _thinking_level(
 
 # ── Registry loading ──────────────────────────────────────────────────────────
 
+
 def sanitize_name(name: str) -> str:
     """Replace dots with __ for OpenAI-compatible function names."""
     return name.replace(".", "__")
@@ -438,7 +459,8 @@ def _registry_mtime() -> float:
 
 # Global weak set of all active AgentSession instances for hot-reload signalling.
 import weakref as _weakref
-_ACTIVE_SESSIONS: "_weakref.WeakSet[AgentSession]" = _weakref.WeakSet()  # type: ignore[assignment]
+
+_ACTIVE_SESSIONS: _weakref.WeakSet[AgentSession] = _weakref.WeakSet()  # type: ignore[assignment]
 
 
 async def deliver_external_approval(db_id: str, approved: bool) -> bool:
@@ -461,7 +483,9 @@ async def deliver_external_approval(db_id: str, approved: bool) -> bool:
                 approved, approval_id=getattr(session, "_pending_approval_id", None)
             )
             logger.info(
-                "approval_delivered_out_of_band", db_id=db_id, approved=approved,
+                "approval_delivered_out_of_band",
+                db_id=db_id,
+                approved=approved,
             )
             return True
         except Exception as exc:  # noqa: BLE001
@@ -505,6 +529,7 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
     # "400 Unknown action" from guessed strings). Read live → drift-proof.
     try:
         from app.api.capability_router import capability_action_map
+
         action_enum = capability_action_map()
     except Exception as exc:
         log_degraded("agent_loop.action_enum", exc)
@@ -537,19 +562,21 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
         fn_name = sanitize_name(name)
         description = (cap.get("description") or name).strip()
 
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": fn_name,
-                # Keep the full curated description (actions + rules); 400 chars
-                "description": description[:1200],
-                "parameters": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": fn_name,
+                    # Keep the full curated description (actions + rules); 400 chars
+                    "description": description[:1200],
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                    },
                 },
-            },
-        })
+            }
+        )
         skill_entry = {
             "name": name,
             "method": cap.get("method", "POST"),
@@ -572,29 +599,29 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
                 fn_name = sanitize_name(gen_name)
                 if not gen_name or fn_name in skill_map:
                     continue
-                tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": fn_name,
-                        "description": str(entry.get("description") or gen_name)[:1500],
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "args": {
-                                    "type": "object",
-                                    "description": "Skill-specific arguments",
+                tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": fn_name,
+                            "description": str(entry.get("description") or gen_name)[:1500],
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "args": {
+                                        "type": "object",
+                                        "description": "Skill-specific arguments",
+                                    },
                                 },
+                                "required": [],
                             },
-                            "required": [],
                         },
-                    },
-                })
+                    }
+                )
                 skill_map[fn_name] = {
                     "name": gen_name,
                     "method": str(entry.get("method") or "POST"),
-                    "path": str(
-                        entry.get("path") or f"/api/agent/generated-skill/{gen_name}"
-                    ),
+                    "path": str(entry.get("path") or f"/api/agent/generated-skill/{gen_name}"),
                     "gate_actions": entry.get("gate_actions") or [],
                 }
         except Exception as exc:
@@ -654,10 +681,19 @@ def load_registry(
                 if r not in required:
                     required.append(r)
 
-        _type_map = {"string": "string", "str": "string", "int": "integer",
-                     "integer": "integer", "float": "number", "number": "number",
-                     "bool": "boolean", "boolean": "boolean", "object": "object",
-                     "array": "array", "list": "array"}
+        _type_map = {
+            "string": "string",
+            "str": "string",
+            "int": "integer",
+            "integer": "integer",
+            "float": "number",
+            "number": "number",
+            "bool": "boolean",
+            "boolean": "boolean",
+            "object": "object",
+            "array": "array",
+            "list": "array",
+        }
         for param in (skill.get("body_params") or []) + (skill.get("query_params") or []):
             if not isinstance(param, dict):
                 continue
@@ -675,18 +711,20 @@ def load_registry(
                 required.append(pname)
 
         fn_name = sanitize_name(skill["name"])
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": fn_name,
-                "description": skill.get("description", skill["name"])[:200],
-                "parameters": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": fn_name,
+                    "description": skill.get("description", skill["name"])[:200],
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                    },
                 },
-            },
-        })
+            }
+        )
         skill_map[fn_name] = skill
 
     return tools, skill_map
@@ -706,11 +744,27 @@ def _load_agent_skills(
 
 
 _RU_WEEKDAYS = (
-    "понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье",
+    "понедельник",
+    "вторник",
+    "среда",
+    "четверг",
+    "пятница",
+    "суббота",
+    "воскресенье",
 )
 _RU_MONTHS_GENITIVE = (
-    "января", "февраля", "марта", "апреля", "мая", "июня",
-    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
 )
 
 
@@ -776,6 +830,7 @@ def _load_system_prompt(config: BuiltinAgentConfig | None = None) -> str:
 
 
 # ── HTTP skill executor ───────────────────────────────────────────────────────
+
 
 async def execute_skill(
     skill: dict,
@@ -855,7 +910,7 @@ async def execute_skill(
                     return {"text": resp.text[:2000]}
             elif resp.status_code in {502, 503, 504} and attempt < max_retries - 1:
                 last_error = Exception(f"HTTP {resp.status_code}")
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2**attempt)
                 continue
             else:
                 # Surface structured dispatcher errors (error_code + available/
@@ -879,7 +934,7 @@ async def execute_skill(
                 error=str(e),
             )
             if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2**attempt)
         except Exception as e:
             return {"error": str(e)}
 
@@ -887,6 +942,7 @@ async def execute_skill(
 
 
 # ── Ollama client (streaming) ─────────────────────────────────────────────────
+
 
 def _merge_system_messages(system_prompt: str, messages: list[dict]) -> list[dict]:
     """Fold any inline ``system``-role entries into one leading system message.
@@ -900,7 +956,9 @@ def _merge_system_messages(system_prompt: str, messages: list[dict]) -> list[dic
     worker-dispatched turn. Mirrors the merge `_convert_messages_to_anthropic`
     already does for the Anthropic path.
     """
-    extra_system = [m.get("content", "") for m in messages if m.get("role") == "system" and m.get("content")]
+    extra_system = [
+        m.get("content", "") for m in messages if m.get("role") == "system" and m.get("content")
+    ]
     rest = [m for m in messages if m.get("role") != "system"]
     merged_prompt = "\n\n".join([system_prompt, *extra_system]) if extra_system else system_prompt
     return [{"role": "system", "content": merged_prompt}] + rest
@@ -949,9 +1007,7 @@ async def _call_ollama_streaming(
     scrubber = StreamingContextScrubber()
 
     async with httpx.AsyncClient(timeout=float(config.llm_timeout_seconds)) as client:
-        async with client.stream(
-            "POST", f"{ollama_url}/api/chat", json=payload
-        ) as resp:
+        async with client.stream("POST", f"{ollama_url}/api/chat", json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 if not line:
@@ -999,6 +1055,7 @@ async def _call_ollama_streaming(
 
 
 # ── OpenAI-compatible streaming (OpenRouter / DeepSeek) ──────────────────────
+
 
 def _openai_compatible_provider_config(
     provider: str,
@@ -1169,9 +1226,7 @@ async def _call_openai_streaming(
 
     payload: dict[str, Any] = {
         "model": model,
-        "messages": _normalize_openai_messages(
-            _merge_system_messages(system_prompt, messages)
-        ),
+        "messages": _normalize_openai_messages(_merge_system_messages(system_prompt, messages)),
         "stream": True,
         "temperature": config.temperature,
     }
@@ -1211,9 +1266,7 @@ async def _call_openai_streaming(
                 # Surface the provider's actual error body (e.g. "model requires a
                 # subscription", "unknown parameter") instead of a bare 4xx/5xx.
                 body = (await resp.aread()).decode("utf-8", "replace")[:500]
-                raise RuntimeError(
-                    f"{provider} ({model}) → HTTP {resp.status_code}: {body}"
-                )
+                raise RuntimeError(f"{provider} ({model}) → HTTP {resp.status_code}: {body}")
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data: "):
                     continue
@@ -1264,11 +1317,13 @@ async def _call_openai_streaming(
             args: Any = json.loads(tc["arguments"]) if tc["arguments"] else {}
         except json.JSONDecodeError:
             args = {}
-        normalized_tool_calls.append({
-            "type": "function",  # Required by llama.cpp when replaying tool-call history
-            "id": tc["id"],
-            "function": {"name": tc["name"], "arguments": args},
-        })
+        normalized_tool_calls.append(
+            {
+                "type": "function",  # Required by llama.cpp when replaying tool-call history
+                "id": tc["id"],
+                "function": {"name": tc["name"], "arguments": args},
+            }
+        )
 
     return {
         "role": "assistant",
@@ -1278,6 +1333,7 @@ async def _call_openai_streaming(
 
 
 # ── Anthropic streaming ───────────────────────────────────────────────────────
+
 
 def _convert_messages_to_anthropic(
     messages: list[dict],
@@ -1323,18 +1379,18 @@ def _convert_messages_to_anthropic(
                     name = fn.get("name", "unknown")
                     raw_args = fn.get("arguments", {})
                     args_dict = (
-                        raw_args
-                        if isinstance(raw_args, dict)
-                        else json.loads(raw_args or "{}")
+                        raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
                     )
                     tc_id = tc.get("id") or f"toolu_{name}_{i}"
                     pending_ids.append(tc_id)
-                    blocks.append({
-                        "type": "tool_use",
-                        "id": tc_id,
-                        "name": name,
-                        "input": args_dict,
-                    })
+                    blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc_id,
+                            "name": name,
+                            "input": args_dict,
+                        }
+                    )
                 result.append({"role": "assistant", "content": blocks})
             elif content:
                 result.append({"role": "assistant", "content": content})
@@ -1350,11 +1406,13 @@ def _convert_messages_to_anthropic(
                 tc_id = pending_ids.pop(0)
             else:
                 tc_id = msg_id or f"toolu_unknown_{len(pending_results)}"
-            pending_results.append({
-                "type": "tool_result",
-                "tool_use_id": tc_id,
-                "content": content,
-            })
+            pending_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tc_id,
+                    "content": content,
+                }
+            )
 
     _flush()
     return "\n\n".join(p for p in system_parts if p), result
@@ -1364,11 +1422,13 @@ def _convert_tools_to_anthropic(tools: list[dict]) -> list[dict]:
     result = []
     for t in tools:
         fn = t.get("function", {})
-        result.append({
-            "name": fn.get("name", ""),
-            "description": fn.get("description", ""),
-            "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
-        })
+        result.append(
+            {
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+            }
+        )
     return result
 
 
@@ -1391,11 +1451,13 @@ async def _call_anthropic_streaming(
 
     system_payload: Any = system_text
     if config.prompt_cache_enabled and system_text:
-        system_payload = [{
-            "type": "text",
-            "text": system_text,
-            "cache_control": {"type": "ephemeral"},
-        }]
+        system_payload = [
+            {
+                "type": "text",
+                "text": system_text,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
 
     payload: dict[str, Any] = {
         "model": model,
@@ -1475,10 +1537,12 @@ async def _call_anthropic_streaming(
             args_dict: Any = json.loads(tc["input_json"]) if tc["input_json"] else {}
         except json.JSONDecodeError:
             args_dict = {}
-        normalized_tool_calls.append({
-            "id": tc["id"],
-            "function": {"name": tc["name"], "arguments": args_dict},
-        })
+        normalized_tool_calls.append(
+            {
+                "id": tc["id"],
+                "function": {"name": tc["name"], "arguments": args_dict},
+            }
+        )
 
     return {
         "role": "assistant",
@@ -1489,38 +1553,41 @@ async def _call_anthropic_streaming(
 
 # ── Provider dispatcher ───────────────────────────────────────────────────────
 
-_OPENAI_COMPATIBLE_PROVIDERS = frozenset({
-    # local OpenAI-compatible servers
-    "vllm",
-    "lmstudio",
-    "openai_compatible",
-    "llamacpp",
-    # cloud OpenAI-compatible gateways (must match ProviderKind values)
-    "openrouter",
-    "deepseek",
-    "openai",
-    "gemini",
-    "ollama_cloud",
-    "moonshot",       # Kimi
-    "minimax",
-    "dashscope",      # Qwen (Alibaba)
-    "mistral",
-    "groq",
-    "together",
-    "fireworks",
-    "xai",
-    "cohere",
-    "perplexity",
-    "deepinfra",
-    "cerebras",
-    "sambanova",
-    "nebius",
-    "novita",
-    "hyperbolic",
-    # legacy aliases
-    "kimi",
-    "qwen",
-})
+_OPENAI_COMPATIBLE_PROVIDERS = frozenset(
+    {
+        # local OpenAI-compatible servers
+        "vllm",
+        "lmstudio",
+        "openai_compatible",
+        "llamacpp",
+        # cloud OpenAI-compatible gateways (must match ProviderKind values)
+        "openrouter",
+        "deepseek",
+        "openai",
+        "gemini",
+        "ollama_cloud",
+        "moonshot",  # Kimi
+        "minimax",
+        "dashscope",  # Qwen (Alibaba)
+        "mistral",
+        "groq",
+        "together",
+        "fireworks",
+        "xai",
+        "cohere",
+        "perplexity",
+        "deepinfra",
+        "cerebras",
+        "sambanova",
+        "nebius",
+        "novita",
+        "hyperbolic",
+        # legacy aliases
+        "kimi",
+        "qwen",
+    }
+)
+
 
 async def _call_provider_streaming(
     messages: list[dict],
@@ -1582,7 +1649,11 @@ async def _call_provider_streaming(
                     )
                 elif p == "anthropic":
                     return await _call_anthropic_streaming(
-                        messages, tools, system_prompt, config, on_token,
+                        messages,
+                        tools,
+                        system_prompt,
+                        config,
+                        on_token,
                         max_tokens=max_tokens,
                     )
                 else:
@@ -1695,7 +1766,9 @@ class AgentSession:
     def reload_skills(self) -> None:
         """Hot-reload skill map from registry — used by CapabilityBuilder after new skill creation."""
         exposed = set(self._config.exposed_skills)
-        self._tools, self._skill_map = _load_agent_skills(expose_filter=exposed if exposed else None)
+        self._tools, self._skill_map = _load_agent_skills(
+            expose_filter=exposed if exposed else None
+        )
         self._registry_mtime = _registry_mtime()
         logger.info(
             "agent_session_skills_reloaded",
@@ -1765,6 +1838,7 @@ class AgentSession:
             return
         try:
             from app.ai.mcp_client import load_mcp_tools
+
             mcp_tools, mcp_handlers = await load_mcp_tools(servers)
             self._tools.extend(mcp_tools)
             self._skill_map.update(mcp_handlers)
@@ -1772,29 +1846,39 @@ class AgentSession:
                 logger.info("mcp_tools_loaded", count=len(mcp_tools))
         except Exception as exc:
             logger.warning("mcp_init_failed", error=str(exc))
-            await self._send({
-                "type": "system_warning",
-                "code": "mcp_init_failed",
-                "message": f"MCP инструменты не загружены: {exc}. Инструменты MCP недоступны в этой сессии.",
-            })
+            await self._send(
+                {
+                    "type": "system_warning",
+                    "code": "mcp_init_failed",
+                    "message": f"MCP инструменты не загружены: {exc}. Инструменты MCP недоступны в этой сессии.",
+                }
+            )
 
     def _rebuild_runtime_components(self, config: BuiltinAgentConfig) -> None:
         """Rebuild tools/system/dependencies when runtime agent config changes."""
         self._config = config
         exposed = set(self._config.exposed_skills)
-        self._tools, self._skill_map = _load_agent_skills(expose_filter=exposed if exposed else None)
+        self._tools, self._skill_map = _load_agent_skills(
+            expose_filter=exposed if exposed else None
+        )
         self._system = _load_system_prompt(self._config)
         self._approval_gates = set(self._config.approval_gates)
         self._pending_approval_id: str | None = None
 
         from app.ai.context_compressor import ContextCompressor
-        self._compressor = ContextCompressor(
-            model=_get_agent_model(self._config),
-            threshold_percent=self._config.context_compression_threshold,
-            compression_model=self._config.compression_model,
-        ) if self._config.context_compression_enabled else None
+
+        self._compressor = (
+            ContextCompressor(
+                model=_get_agent_model(self._config),
+                threshold_percent=self._config.context_compression_threshold,
+                compression_model=self._config.compression_model,
+            )
+            if self._config.context_compression_enabled
+            else None
+        )
 
         from app.ai.memory_manager import MemoryManager
+
         self._memory_mgr = MemoryManager(
             base_url=self._config.backend_url,
             headers=internal_headers(),
@@ -1805,8 +1889,8 @@ class AgentSession:
     def _refresh_runtime_config(self) -> None:
         """Reload config and skill registry when either changes, without reconnect."""
         latest_config = get_builtin_agent_config()
-        config_changed = (
-            latest_config.model_dump(mode="json") != self._config.model_dump(mode="json")
+        config_changed = latest_config.model_dump(mode="json") != self._config.model_dump(
+            mode="json"
         )
         current_mtime = _registry_mtime()
         registry_changed = current_mtime != self._registry_mtime
@@ -1898,9 +1982,7 @@ class AgentSession:
         turn by construction. Reset each turn by the orchestrator; ``exclude``
         still wins (that gate is about cost, not scope).
         """
-        self._recommended_capabilities = {
-            str(n).strip() for n in (names or ()) if str(n).strip()
-        }
+        self._recommended_capabilities = {str(n).strip() for n in (names or ()) if str(n).strip()}
 
     def set_response_budget(self, max_tokens: int) -> None:
         """Set the per-turn max response tokens (clamped to a sane range)."""
@@ -1934,6 +2016,7 @@ class AgentSession:
         MCP tools and tools outside the capability registry pass through.
         A role with no declared allowlist sees the full set.
         """
+
         def _tool_name(tool: dict) -> str:
             fn = tool.get("function") if isinstance(tool.get("function"), dict) else tool
             return str(fn.get("name") or "")
@@ -1953,11 +2036,13 @@ class AgentSession:
         capability_names = set(_load_capabilities()[1].keys())
         visible = set(allowed) | self._CORE_CAPABILITIES | self._recommended_capabilities
 
-        return _apply_exclusions([
-            tool
-            for tool in self._tools
-            if _tool_name(tool) not in capability_names or _tool_name(tool) in visible
-        ])
+        return _apply_exclusions(
+            [
+                tool
+                for tool in self._tools
+                if _tool_name(tool) not in capability_names or _tool_name(tool) in visible
+            ]
+        )
 
     def _effective_system(self) -> str:
         """Base system prompt plus live date grounding plus the per-turn role
@@ -2015,12 +2100,14 @@ class AgentSession:
                 )
         except Exception as exc:
             log_degraded("agent_loop.canvas_publish", exc)
-        await self._send({
-            "type": "canvas",
-            "canvas_id": canvas_id,
-            "block": block,
-            "append": append,
-        })
+        await self._send(
+            {
+                "type": "canvas",
+                "canvas_id": canvas_id,
+                "block": block,
+                "append": append,
+            }
+        )
 
     async def on_approval(
         self,
@@ -2030,11 +2117,13 @@ class AgentSession:
         args_override: dict | None = None,
     ) -> None:
         if self._pending_approval_id and approval_id != self._pending_approval_id:
-            await self._send({
-                "type": "approval_ignored",
-                "approval_id": approval_id,
-                "message": "Approval decision does not match the active request.",
-            })
+            await self._send(
+                {
+                    "type": "approval_ignored",
+                    "approval_id": approval_id,
+                    "message": "Approval decision does not match the active request.",
+                }
+            )
             return
         # Человек поправил письмо прямо в карточке подтверждения: содержимое
         # изменилось, значит изменился и его отпечаток. Раньше единственным
@@ -2055,19 +2144,21 @@ class AgentSession:
         approval_id = str(uuid.uuid4())
         self._pending_approval_id = approval_id
         self._approval_future = asyncio.get_event_loop().create_future()
-        await self._send({
-            "type": "approval_request",
-            "tool": "recipe_replay",
-            "preview": prompt,
-            "approval_id": approval_id,
-            **(meta or {}),
-        })
+        await self._send(
+            {
+                "type": "approval_request",
+                "tool": "recipe_replay",
+                "preview": prompt,
+                "approval_id": approval_id,
+                **(meta or {}),
+            }
+        )
         try:
             return await asyncio.wait_for(
                 self._approval_future,
                 timeout=float(self._config.approval_timeout_seconds),
             )
-        except (asyncio.TimeoutError, TimeoutError):
+        except TimeoutError:
             self._approval_future = None
             return False
         finally:
@@ -2077,11 +2168,7 @@ class AgentSession:
         if not self._config.memory_enabled or not delivered_text:
             return
         latest_user = next(
-            (
-                m.get("content", "")
-                for m in reversed(self.messages)
-                if m.get("role") == "user"
-            ),
+            (m.get("content", "") for m in reversed(self.messages) if m.get("role") == "user"),
             "",
         )
         asyncio.create_task(
@@ -2098,8 +2185,13 @@ class AgentSession:
         """Append tool preference hint from rating history to the system message."""
         try:
             from app.ai.orchestrator_memory import build_tool_preference_hint
+
             last_user = next(
-                (str(m.get("content", "")) for m in reversed(self.messages) if m.get("role") == "user"),
+                (
+                    str(m.get("content", ""))
+                    for m in reversed(self.messages)
+                    if m.get("role") == "user"
+                ),
                 "",
             )
             if not last_user:
@@ -2141,8 +2233,11 @@ class AgentSession:
 
             user_text = _normalize_ru_yo(
                 next(
-                    (str(m.get("content") or "") for m in reversed(self.messages)
-                     if m.get("role") == "user"),
+                    (
+                        str(m.get("content") or "")
+                        for m in reversed(self.messages)
+                        if m.get("role") == "user"
+                    ),
                     "",
                 ).lower()
             )
@@ -2153,7 +2248,8 @@ class AgentSession:
                 meta = rule.get("metadata") or rule.get("metadata_") or {}
                 triggers = (
                     [str(t) for t in (meta.get("trigger_keywords") or [])]
-                    if isinstance(meta, dict) else []
+                    if isinstance(meta, dict)
+                    else []
                 )
                 if not triggers:
                     return True
@@ -2221,6 +2317,7 @@ class AgentSession:
             return False  # capability not exposed / registry mode → defer to LLM
 
         from app.ai.result_cache import cache_get, cache_set
+
         cache_key = f"{intent.capability}:{intent.action}:{intent.search_term or ''}"
 
         # Cache hit → instant answer, no backend round-trip.
@@ -2248,10 +2345,12 @@ class AgentSession:
     async def _run(self) -> None:
         try:
             if not self._config.enabled:
-                await self._send({
-                    "type": "error",
-                    "content": "Встроенный агент отключен в настройках.",
-                })
+                await self._send(
+                    {
+                        "type": "error",
+                        "content": "Встроенный агент отключен в настройках.",
+                    }
+                )
                 return
 
             # Deterministic fast-path: skip the LLM for high-confidence count questions.
@@ -2273,10 +2372,12 @@ class AgentSession:
                         session=self._session_id,
                         iteration=iteration,
                     )
-                    await self._send({
-                        "type": "status",
-                        "content": "Сжимаю контекст сессии…",
-                    })
+                    await self._send(
+                        {
+                            "type": "status",
+                            "content": "Сжимаю контекст сессии…",
+                        }
+                    )
                     self.messages = await self._compressor.compress(
                         self.messages,
                         self._call_for_compression,
@@ -2298,16 +2399,20 @@ class AgentSession:
                     if now - _last_thinking_ping[0] >= 15.0:
                         _last_thinking_ping[0] = now
                         try:
-                            await self._send({
-                                "type": "status",
-                                "content": "Модель думает…",
-                            })
+                            await self._send(
+                                {
+                                    "type": "status",
+                                    "content": "Модель думает…",
+                                }
+                            )
                         except Exception:
                             pass
 
-                model_override, provider_override, disable_thinking, thinking_level = _turn_model_overrides(
-                    self._config,
-                    self.messages,
+                model_override, provider_override, disable_thinking, thinking_level = (
+                    _turn_model_overrides(
+                        self._config,
+                        self.messages,
+                    )
                 )
                 # Tier-based override from the orchestrator (e.g. fast small model
                 # for simple turns) — applies to worker turns, not builder turns.
@@ -2331,13 +2436,15 @@ class AgentSession:
                 tool_calls = message.get("tool_calls") or []
                 full_text = "".join(accumulated_text)
 
-                asyncio.create_task(self._log_action(
-                    iteration=iteration,
-                    action_type="llm_call",
-                    content_text=full_text[:2000] if full_text else None,
-                    model_name=model_override or _get_agent_model(self._config),
-                    duration_ms=duration_ms,
-                ))
+                asyncio.create_task(
+                    self._log_action(
+                        iteration=iteration,
+                        action_type="llm_call",
+                        content_text=full_text[:2000] if full_text else None,
+                        model_name=model_override or _get_agent_model(self._config),
+                        duration_ms=duration_ms,
+                    )
+                )
 
                 if not tool_calls:
                     if not full_text.strip():
@@ -2349,24 +2456,28 @@ class AgentSession:
                             consecutive_empty=consecutive_empty_responses,
                         )
                         if consecutive_empty_responses >= 2:
-                            await self._send({
-                                "type": "error",
-                                "content": (
-                                    "Модель вернула пустой ответ после вызова инструмента. "
-                                    "Попробуйте повторить запрос или выбрать другую модель агента."
-                                ),
-                            })
+                            await self._send(
+                                {
+                                    "type": "error",
+                                    "content": (
+                                        "Модель вернула пустой ответ после вызова инструмента. "
+                                        "Попробуйте повторить запрос или выбрать другую модель агента."
+                                    ),
+                                }
+                            )
                             break
                         # Nudge the next iteration so model finishes with either
                         # the next tool call or a final textual answer.
-                        self.messages.append({
-                            "role": "system",
-                            "content": (
-                                "Продолжи выполнение задачи: используй уже полученные "
-                                "результаты инструментов и выдай следующий шаг "
-                                "или финальный ответ пользователю."
-                            ),
-                        })
+                        self.messages.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Продолжи выполнение задачи: используй уже полученные "
+                                    "результаты инструментов и выдай следующий шаг "
+                                    "или финальный ответ пользователю."
+                                ),
+                            }
+                        )
                         self._trim_history()
                         continue
                     consecutive_empty_responses = 0
@@ -2386,6 +2497,7 @@ class AgentSession:
                 await self._announce_plan(tool_calls, iteration)
 
                 from app.ai.tool_parallelism import should_parallelize
+
                 if should_parallelize(tool_calls):
                     results = await self._execute_tools_parallel(tool_calls, iteration)
                 else:
@@ -2413,11 +2525,13 @@ class AgentSession:
                 model=self._config.worker_model if self._config else None,
                 provider=_get_agent_provider(self._config) if self._config else None,
             )
-            asyncio.create_task(self._log_action(
-                iteration=self._iteration,
-                action_type="error",
-                error=str(e),
-            ))
+            asyncio.create_task(
+                self._log_action(
+                    iteration=self._iteration,
+                    action_type="error",
+                    error=str(e),
+                )
+            )
             try:
                 await self._send({"type": "error", "content": f"Ошибка агента: {e}"})
             except Exception:
@@ -2439,8 +2553,11 @@ class AgentSession:
         """
         if not text or not str(text).strip():
             return
-        if self.messages and self.messages[-1].get("role") == "assistant" \
-                and self.messages[-1].get("content") == text:
+        if (
+            self.messages
+            and self.messages[-1].get("role") == "assistant"
+            and self.messages[-1].get("content") == text
+        ):
             return
         self.messages.append({"role": "assistant", "content": text})
         self._trim_history()
@@ -2451,11 +2568,7 @@ class AgentSession:
             return ""
 
         latest_user = next(
-            (
-                str(m.get("content", ""))
-                for m in reversed(self.messages)
-                if m.get("role") == "user"
-            ),
+            (str(m.get("content", "")) for m in reversed(self.messages) if m.get("role") == "user"),
             "",
         )
         parsed_table = _parse_markdown_table(text)
@@ -2479,10 +2592,7 @@ class AgentSession:
         # (by intent), a substantial non-table result is still published there —
         # no dependency on keyword markers in the user's phrasing. The legacy
         # keyword gate remains for turns the orchestrator didn't classify.
-        publish_to_desktop = (
-            self._workspace_expected
-            or _is_workspace_output_request(latest_user)
-        )
+        publish_to_desktop = self._workspace_expected or _is_workspace_output_request(latest_user)
         if publish_to_desktop and len(text) > 200:
             await self._publish_canvas(
                 {"type": "markdown", "title": "Результат", "content": text},
@@ -2503,14 +2613,16 @@ class AgentSession:
         already gathered (instead of the turn ending silently). Falls back to a
         plain message if even that yields nothing — the turn must never go quiet.
         """
-        self.messages.append({
-            "role": "system",
-            "content": (
-                "Достигнут лимит шагов. Сформулируй краткий финальный ответ "
-                "пользователю на основе уже полученных результатов инструментов. "
-                "НЕ вызывай инструменты — только текст."
-            ),
-        })
+        self.messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Достигнут лимит шагов. Сформулируй краткий финальный ответ "
+                    "пользователю на основе уже полученных результатов инструментов. "
+                    "НЕ вызывай инструменты — только текст."
+                ),
+            }
+        )
         acc: list[str] = []
 
         async def _on_token(token: str) -> None:
@@ -2539,17 +2651,17 @@ class AgentSession:
             self._record_assistant_reply(text)
             self._remember_latest_turn(text)
         else:
-            await self._send({
-                "type": "text",
-                "content": (
-                    "Не удалось полностью завершить задачу за отведённое число шагов. "
-                    "Уточните запрос или разбейте его на части."
-                ),
-            })
+            await self._send(
+                {
+                    "type": "text",
+                    "content": (
+                        "Не удалось полностью завершить задачу за отведённое число шагов. "
+                        "Уточните запрос или разбейте его на части."
+                    ),
+                }
+            )
 
-    async def _execute_single_tool(
-        self, tc: dict, iteration: int
-    ) -> tuple[str, dict, str]:
+    async def _execute_single_tool(self, tc: dict, iteration: int) -> tuple[str, dict, str]:
         """Execute one tool call and return (fn_name, result, tool_call_id).
 
         Does NOT append to messages. The tool_call_id is threaded back so the
@@ -2577,12 +2689,14 @@ class AgentSession:
                 await self._send({"type": "tool_result", "tool": fn_name, "result": result})
                 return fn_name, result, tc_id
 
-        asyncio.create_task(self._log_action(
-            iteration=iteration,
-            action_type="tool_call",
-            tool_name=fn_name,
-            tool_args=args,
-        ))
+        asyncio.create_task(
+            self._log_action(
+                iteration=iteration,
+                action_type="tool_call",
+                tool_name=fn_name,
+                tool_args=args,
+            )
+        )
         await self._send({"type": "tool_call", "tool": fn_name, "args": args})
 
         skill = self._skill_map.get(fn_name)
@@ -2591,6 +2705,7 @@ class AgentSession:
         # Re-read approval_gates from latest config at every tool call (not cached from session start).
         from app.ai.agent_config import get_builtin_agent_config as _get_latest_config
         from app.ai.policy_engine import check_tool_execution
+
         current_gates = set((_get_latest_config()).approval_gates)
 
         # Capabilities mode: check gate_actions declared in capabilities.yml.
@@ -2613,17 +2728,19 @@ class AgentSession:
             config=self._config,
             approval_gates=current_gates,
         )
-        asyncio.create_task(self._log_action(
-            iteration=iteration,
-            action_type="policy_check",
-            tool_name=original_name,
-            tool_result={
-                "allowed": policy.allowed,
-                "risk_level": policy.risk_level,
-                "reason": policy.reason,
-                "required_approval": policy.required_approval,
-            },
-        ))
+        asyncio.create_task(
+            self._log_action(
+                iteration=iteration,
+                action_type="policy_check",
+                tool_name=original_name,
+                tool_result={
+                    "allowed": policy.allowed,
+                    "risk_level": policy.risk_level,
+                    "reason": policy.reason,
+                    "required_approval": policy.required_approval,
+                },
+            )
+        )
         if not policy.allowed:
             result = {
                 "status": "blocked",
@@ -2638,55 +2755,70 @@ class AgentSession:
         _authorized_by = None
         if original_name in current_gates:
             if self._explicit_send_authorized(original_name, args):
-                _authorized_by = ("user:explicit_instruction",
-                                  "Отправка по вашему прямому указанию.")
+                _authorized_by = (
+                    "user:explicit_instruction",
+                    "Отправка по вашему прямому указанию.",
+                )
             elif self._confirms_pending_send(original_name, args):
                 # Человек только что ответил «да» на показанный черновик.
-                _authorized_by = ("user:confirmed_proposal",
-                                  "Отправляю — вы подтвердили это письмо.")
+                _authorized_by = (
+                    "user:confirmed_proposal",
+                    "Отправляю — вы подтвердили это письмо.",
+                )
         if _authorized_by:
             # Согласие человека заменяет запрос подтверждения. Полностью
             # аудируется: в журнале видно, что именно послужило разрешением.
-            asyncio.create_task(self._log_action(
-                iteration=iteration,
-                action_type="approval_decision",
-                tool_name=original_name,
-                tool_args=args,
-                tool_result={"approved": True, "actor": _authorized_by[0]},
-            ))
-            await self._send({
-                "type": "approval_auto",
-                "tool": original_name,
-                "message": _authorized_by[1],
-            })
+            asyncio.create_task(
+                self._log_action(
+                    iteration=iteration,
+                    action_type="approval_decision",
+                    tool_name=original_name,
+                    tool_args=args,
+                    tool_result={"approved": True, "actor": _authorized_by[0]},
+                )
+            )
+            await self._send(
+                {
+                    "type": "approval_auto",
+                    "tool": original_name,
+                    "message": _authorized_by[1],
+                }
+            )
             self._granted_approvals.add(self._approval_key(original_name, args))
             approval_granted = True
-        elif original_name in current_gates and self._approval_key(
-            original_name, args
-        ) in self._granted_approvals:
+        elif (
+            original_name in current_gates
+            and self._approval_key(original_name, args) in self._granted_approvals
+        ):
             # Это же действие человек уже одобрил в этом ходе — повторный
             # запрос был бы вопросом о том, на что уже ответили.
-            asyncio.create_task(self._log_action(
-                iteration=iteration,
-                action_type="approval_decision",
-                tool_name=original_name,
-                tool_result={"approved": True, "actor": "user:already_approved_this_turn"},
-            ))
+            asyncio.create_task(
+                self._log_action(
+                    iteration=iteration,
+                    action_type="approval_decision",
+                    tool_name=original_name,
+                    tool_result={"approved": True, "actor": "user:already_approved_this_turn"},
+                )
+            )
             approval_granted = True
         elif original_name in current_gates:
-            asyncio.create_task(self._log_action(
-                iteration=iteration,
-                action_type="approval_request",
-                tool_name=original_name,
-                tool_args=args,
-            ))
+            asyncio.create_task(
+                self._log_action(
+                    iteration=iteration,
+                    action_type="approval_request",
+                    tool_name=original_name,
+                    tool_args=args,
+                )
+            )
             approved = await self._request_approval(original_name, args)
-            asyncio.create_task(self._log_action(
-                iteration=iteration,
-                action_type="approval_decision",
-                tool_name=original_name,
-                tool_result={"approved": approved},
-            ))
+            asyncio.create_task(
+                self._log_action(
+                    iteration=iteration,
+                    action_type="approval_decision",
+                    tool_name=original_name,
+                    tool_result={"approved": approved},
+                )
+            )
             if not approved:
                 result: dict = {"status": "rejected", "message": "Отклонено пользователем"}
                 await self._send({"type": "tool_result", "tool": fn_name, "result": result})
@@ -2717,12 +2849,14 @@ class AgentSession:
                 "hint": "Проверь имя скилла — используй двойное подчёркивание вместо точки (например invoice__list).",
             }
 
-        asyncio.create_task(self._log_action(
-            iteration=iteration,
-            action_type="tool_result",
-            tool_name=fn_name,
-            tool_result=result if len(str(result)) < 2000 else {"truncated": True},
-        ))
+        asyncio.create_task(
+            self._log_action(
+                iteration=iteration,
+                action_type="tool_result",
+                tool_name=fn_name,
+                tool_result=result if len(str(result)) < 2000 else {"truncated": True},
+            )
+        )
         await self._send({"type": "tool_result", "tool": fn_name, "result": result})
         return fn_name, result, tc_id
 
@@ -2734,6 +2868,7 @@ class AgentSession:
         payload, keeping the context window thin as the dataset grows.
         """
         from app.ai.turn_vault import make_vault_envelope, should_vault, vault_store
+
         content_json = json.dumps(result, ensure_ascii=False)
         if should_vault(content_json):
             try:
@@ -2761,7 +2896,7 @@ class AgentSession:
 
         steps: list[dict] = []
         for tc in tool_calls:
-            fn = (tc.get("function") or {})
+            fn = tc.get("function") or {}
             raw_name = str(fn.get("name") or "")
             skill = self._skill_map.get(raw_name)
             name = skill["name"] if skill else raw_name.replace("__", ".")
@@ -2769,11 +2904,13 @@ class AgentSession:
                 args = json.loads(fn.get("arguments") or "{}")
             except (json.JSONDecodeError, TypeError):
                 args = {}
-            steps.append({
-                "tool": name,
-                "text": describe_call(name, args),
-                "irreversible": is_irreversible(name, args),
-            })
+            steps.append(
+                {
+                    "tool": name,
+                    "text": describe_call(name, args),
+                    "irreversible": is_irreversible(name, args),
+                }
+            )
 
         if len(steps) < 2 and not any(s["irreversible"] for s in steps):
             return
@@ -2876,8 +3013,11 @@ class AgentSession:
             return False
 
         last_user = next(
-            (str(m.get("content") or "") for m in reversed(self.messages)
-             if m.get("role") == "user"),
+            (
+                str(m.get("content") or "")
+                for m in reversed(self.messages)
+                if m.get("role") == "user"
+            ),
             "",
         )
         if not last_user.strip() or len(last_user) > 64:
@@ -2954,7 +3094,8 @@ class AgentSession:
                     "to": payload.get("to_addresses") or args.get("to_addresses"),
                     "subject": payload.get("subject") or args.get("subject"),
                 },
-                ensure_ascii=False, sort_keys=True,
+                ensure_ascii=False,
+                sort_keys=True,
             )
         return f"{skill_name}:{args.get('action') or ''}:{ident}"
 
@@ -2983,8 +3124,11 @@ class AgentSession:
         if args.get("acknowledged_risks"):
             return False
         last_user = next(
-            (str(m.get("content") or "") for m in reversed(self.messages)
-             if m.get("role") == "user"),
+            (
+                str(m.get("content") or "")
+                for m in reversed(self.messages)
+                if m.get("role") == "user"
+            ),
             "",
         )
         if not last_user or not self._EXPLICIT_SEND_RE.search(last_user):
@@ -2994,9 +3138,8 @@ class AgentSession:
             return False
         if self._NEGATION_RE.search(last_user):
             return False
-        has_recipient = (
-            "@" in last_user
-            or any(w in low for w in ("поставщик", "клиент", "контрагент", "заказчик", "адрес"))
+        has_recipient = "@" in last_user or any(
+            w in low for w in ("поставщик", "клиент", "контрагент", "заказчик", "адрес")
         )
         return has_recipient and self._draft_shown_in_turn(args)
 
@@ -3018,8 +3161,9 @@ class AgentSession:
         subject = payload.get("subject") or args.get("subject")
         if recipients:
             return {
-                "to": [str(a) for a in (recipients if isinstance(recipients, list)
-                                        else [recipients])],
+                "to": [
+                    str(a) for a in (recipients if isinstance(recipients, list) else [recipients])
+                ],
                 "subject": str(subject or ""),
             }
 
@@ -3089,14 +3233,16 @@ class AgentSession:
         except Exception as exc:
             log_degraded("agent_loop.approval_create", exc, skill=skill_name)
         if _approval_action_type_for(skill_name, args) and not db_id:
-            await self._send({
-                "type": "approval_error",
-                "tool": skill_name,
-                "message": (
-                    "Durable approval record was not created; gated action "
-                    "is blocked fail-closed."
-                ),
-            })
+            await self._send(
+                {
+                    "type": "approval_error",
+                    "tool": skill_name,
+                    "message": (
+                        "Durable approval record was not created; gated action "
+                        "is blocked fail-closed."
+                    ),
+                }
+            )
             return False
 
         approved = False
@@ -3107,20 +3253,22 @@ class AgentSession:
         self._pending_db_id = db_id
         for attempt in range(1, max_attempts + 1):
             self._approval_future = asyncio.get_event_loop().create_future()
-            await self._send({
-                "type": "approval_request",
-                "tool": skill_name,
-                "args": args,
-                "preview": preview,
-                "card": card.as_dict(),
-                # Необратимое действие никогда не проходит по «подтвердить
-                # всё»: письмо, платёж и удаление решаются поимённо.
-                "irreversible": card.irreversible,
-                "approval_id": approval_id,
-                "db_id": db_id,
-                "attempt": attempt,
-                "max_attempts": max_attempts,
-            })
+            await self._send(
+                {
+                    "type": "approval_request",
+                    "tool": skill_name,
+                    "args": args,
+                    "preview": preview,
+                    "card": card.as_dict(),
+                    # Необратимое действие никогда не проходит по «подтвердить
+                    # всё»: письмо, платёж и удаление решаются поимённо.
+                    "irreversible": card.irreversible,
+                    "approval_id": approval_id,
+                    "db_id": db_id,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                }
+            )
             try:
                 approved = await asyncio.wait_for(
                     self._approval_future,
@@ -3130,25 +3278,29 @@ class AgentSession:
             except TimeoutError:
                 self._approval_future = None
                 if attempt < max_attempts:
-                    await self._send({
-                        "type": "approval_timeout",
-                        "tool": skill_name,
-                        "attempt": attempt,
-                        "message": (
-                            f"Запрос подтверждения для {skill_name!r} не получил ответа. "
-                            f"Повторный запрос ({attempt + 1}/{max_attempts})…"
-                        ),
-                    })
+                    await self._send(
+                        {
+                            "type": "approval_timeout",
+                            "tool": skill_name,
+                            "attempt": attempt,
+                            "message": (
+                                f"Запрос подтверждения для {skill_name!r} не получил ответа. "
+                                f"Повторный запрос ({attempt + 1}/{max_attempts})…"
+                            ),
+                        }
+                    )
                 else:
-                    await self._send({
-                        "type": "approval_timeout",
-                        "tool": skill_name,
-                        "attempt": attempt,
-                        "message": (
-                            f"Запрос подтверждения для {skill_name!r} истёк {max_attempts} раза. "
-                            "Действие отклонено автоматически."
-                        ),
-                    })
+                    await self._send(
+                        {
+                            "type": "approval_timeout",
+                            "tool": skill_name,
+                            "attempt": attempt,
+                            "message": (
+                                f"Запрос подтверждения для {skill_name!r} истёк {max_attempts} раза. "
+                                "Действие отклонено автоматически."
+                            ),
+                        }
+                    )
         self._approval_future = None
         self._pending_approval_id = None
         self._pending_db_id = None
@@ -3169,6 +3321,7 @@ class AgentSession:
         # ones with a stub. This is free (no LLM call) and prevents tool result
         # payloads from accumulating across turns.
         from app.ai.context_compressor import _prune_old_tool_results
+
         self.messages = _prune_old_tool_results(self.messages, keep_last=6)
 
     async def _append_memory_context(self) -> None:
@@ -3187,6 +3340,7 @@ class AgentSession:
         # Gate: skip RAG for pure workspace/flow queries answered from SQL.
         # Saves a vector search + reranker round-trip and keeps context clean.
         from app.ai import route_table
+
         if not route_table.needs_document_retrieval(latest_user):
             return
         try:
@@ -3194,23 +3348,27 @@ class AgentSession:
                 self._memory_mgr.prefetch(latest_user, session_id=self._session_id),
                 timeout=12.0,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             context = ""
         if not context:
             return
-        self.messages.append({
-            "role": "system",
-            "content": (
-                "Контекст из долговременной памяти проекта. Используй его как "
-                "справочный материал и проверяй через инструменты при критичных "
-                f"действиях.\n{context}"
-            ),
-        })
-        asyncio.create_task(self._log_action(
-            iteration=self._iteration,
-            action_type="memory_context",
-            content_text=context[:2000],
-        ))
+        self.messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Контекст из долговременной памяти проекта. Используй его как "
+                    "справочный материал и проверяй через инструменты при критичных "
+                    f"действиях.\n{context}"
+                ),
+            }
+        )
+        asyncio.create_task(
+            self._log_action(
+                iteration=self._iteration,
+                action_type="memory_context",
+                content_text=context[:2000],
+            )
+        )
         self._trim_history()
 
 
@@ -3252,7 +3410,7 @@ def _parse_markdown_table(
     if len(headers) < 2:
         return None
     rows: list[dict[str, Any]] = []
-    for line in lines[start + 2:]:
+    for line in lines[start + 2 :]:
         if "|" not in line:
             break
         cells = split_row(line)
@@ -3320,9 +3478,8 @@ _CAPABILITY_APPROVAL_ACTION_TYPE_MAP: dict[tuple[str, str], str] = {
 
 def _approval_action_type_for(skill_name: str, args: dict) -> str | None:
     action = str(args.get("action") or "")
-    return (
-        _APPROVAL_ACTION_TYPE_MAP.get(skill_name)
-        or _CAPABILITY_APPROVAL_ACTION_TYPE_MAP.get((skill_name, action))
+    return _APPROVAL_ACTION_TYPE_MAP.get(skill_name) or _CAPABILITY_APPROVAL_ACTION_TYPE_MAP.get(
+        (skill_name, action)
     )
 
 

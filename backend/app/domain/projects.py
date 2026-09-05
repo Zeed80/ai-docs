@@ -57,9 +57,7 @@ async def get_or_create_object(
             existing.project_id = project_id
             await db.flush()
         return existing.id
-    obj = SiteObject(
-        name=name.strip(), normalized_name=norm, code=code, project_id=project_id
-    )
+    obj = SiteObject(name=name.strip(), normalized_name=norm, code=code, project_id=project_id)
     db.add(obj)
     await db.flush()
     return obj.id

@@ -108,7 +108,9 @@ async def create_reply_draft(
             "supplier_id": str(supplier_id) if supplier_id else None,
             "context": context,
             "mailbox": mailbox_name,
-            "in_reply_to_message_id": str(in_reply_to_message_id) if in_reply_to_message_id else None,
+            "in_reply_to_message_id": str(in_reply_to_message_id)
+            if in_reply_to_message_id
+            else None,
             "forward_of_message_id": str(forward_of_message_id) if forward_of_message_id else None,
             "attachment_ids": [str(a) for a in (attachment_ids or [])],
             "status": status,
@@ -140,9 +142,7 @@ def resolve_default_mailbox_sync(db) -> str | None:
 
     from app.db.models import MailboxConfig
 
-    rows = db.execute(
-        _sel(MailboxConfig.name).where(*_default_mailbox_where())
-    ).scalars().all()
+    rows = db.execute(_sel(MailboxConfig.name).where(*_default_mailbox_where())).scalars().all()
     return rows[0] if len(rows) == 1 else None
 
 
@@ -164,6 +164,8 @@ async def resolve_default_mailbox(db) -> str | None:
     from app.db.models import MailboxConfig
 
     rows = (
-        await db.execute(_sel(MailboxConfig.name).where(*_default_mailbox_where()))
-    ).scalars().all()
+        (await db.execute(_sel(MailboxConfig.name).where(*_default_mailbox_where())))
+        .scalars()
+        .all()
+    )
     return rows[0] if len(rows) == 1 else None

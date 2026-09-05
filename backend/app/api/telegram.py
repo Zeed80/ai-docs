@@ -30,9 +30,11 @@ _KEY_ENABLED = "telegram:config:notifications_enabled"
 
 # ── Redis helpers ─────────────────────────────────────────────────────────────
 
+
 def _r_get(key: str) -> str:
     try:
         from app.utils.redis_client import get_sync_redis
+
         return get_sync_redis().get(key) or ""
     except Exception:
         return ""
@@ -41,6 +43,7 @@ def _r_get(key: str) -> str:
 def _r_set(key: str, value: str) -> None:
     try:
         from app.utils.redis_client import get_sync_redis
+
         get_sync_redis().set(key, value)
     except Exception:
         pass
@@ -48,11 +51,13 @@ def _r_set(key: str, value: str) -> None:
 
 # ── Public helpers (used by lifespan / notifier) ──────────────────────────────
 
+
 def get_bot_token() -> str:
     """Return the plaintext bot token (env var takes precedence)."""
     if settings.telegram_bot_token:
         return settings.telegram_bot_token
     from app.utils.secret_store import decrypt
+
     return decrypt(_r_get(_KEY_TOKEN))
 
 
@@ -61,6 +66,7 @@ def get_notifications_chat_id() -> str:
     if settings.telegram_notifications_chat_id:
         return settings.telegram_notifications_chat_id
     from app.utils.secret_store import decrypt
+
     return decrypt(_r_get(_KEY_CHAT_ID))
 
 
@@ -69,6 +75,7 @@ def get_allowed_users() -> set[int]:
     raw = settings.telegram_allowed_users
     if not raw:
         from app.utils.secret_store import decrypt
+
         raw = decrypt(_r_get(_KEY_ALLOWED))
     return {int(u.strip()) for u in raw.split(",") if u.strip().isdigit()}
 
@@ -81,6 +88,7 @@ def get_notifications_enabled() -> bool:
 
 
 # ── Runtime bot manager ───────────────────────────────────────────────────────
+
 
 class _BotManager:
     """Holds a single SvetaTelegramBot instance; supports hot start/stop."""
@@ -107,6 +115,7 @@ class _BotManager:
 
         try:
             from app.integrations.telegram_bot import SvetaTelegramBot
+
             bot = SvetaTelegramBot(token=token, allowed_user_ids=get_allowed_users())
             await bot.start_polling()
             self._bot = bot
@@ -124,6 +133,7 @@ class _BotManager:
         if self._bot is not None:
             try:
                 from app.integrations.telegram_bot import SvetaTelegramBot
+
                 if isinstance(self._bot, SvetaTelegramBot):
                     await self._bot.stop()
             except Exception:
@@ -147,6 +157,7 @@ bot_manager = _BotManager()
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
+
 
 class TelegramConfigUpdate(BaseModel):
     bot_token: str | None = None
@@ -179,6 +190,7 @@ class NotifyResponse(BaseModel):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+
 @router.get("/status", response_model=TelegramConfigView)
 async def telegram_status() -> TelegramConfigView:
     from app.utils.secret_store import decrypt, mask
@@ -210,7 +222,9 @@ async def update_telegram_config(body: TelegramConfigUpdate) -> TelegramConfigVi
         _r_set(_KEY_TOKEN, encrypt(body.bot_token) if body.bot_token else "")
 
     if body.notifications_chat_id is not None:
-        _r_set(_KEY_CHAT_ID, encrypt(body.notifications_chat_id) if body.notifications_chat_id else "")
+        _r_set(
+            _KEY_CHAT_ID, encrypt(body.notifications_chat_id) if body.notifications_chat_id else ""
+        )
 
     if body.allowed_users is not None:
         _r_set(_KEY_ALLOWED, encrypt(body.allowed_users) if body.allowed_users else "")
@@ -250,10 +264,13 @@ async def telegram_notify(req: NotifyRequest) -> NotifyResponse:
 
     chat_id = req.chat_id or get_notifications_chat_id()
     if not chat_id:
-        raise HTTPException(status_code=400, detail="chat_id not provided and no default configured")
+        raise HTTPException(
+            status_code=400, detail="chat_id not provided and no default configured"
+        )
 
     try:
         from app.integrations.telegram_notifier import TelegramNotifier
+
         notifier = TelegramNotifier(token=token, chat_id=chat_id)
         await notifier.notify_text(req.text)
         return NotifyResponse(ok=True)
@@ -273,6 +290,7 @@ async def telegram_test() -> NotifyResponse:
 
     try:
         from app.integrations.telegram_notifier import TelegramNotifier
+
         notifier = TelegramNotifier(token=token, chat_id=chat_id)
         await notifier.notify_text("Тест: Света на связи ✅")
         return NotifyResponse(ok=True)

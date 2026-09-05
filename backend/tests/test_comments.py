@@ -67,11 +67,14 @@ async def test_list_comments(client: AsyncClient, source_doc, existing_comment):
 
 @pytest.mark.asyncio
 async def test_create_comment(client: AsyncClient, source_doc):
-    resp = await client.post("/api/comments", json={
-        "entity_type": "document",
-        "entity_id": str(source_doc.id),
-        "text": "Проверьте раздел 3.2",
-    })
+    resp = await client.post(
+        "/api/comments",
+        json={
+            "entity_type": "document",
+            "entity_id": str(source_doc.id),
+            "text": "Проверьте раздел 3.2",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert "id" in data
@@ -82,12 +85,15 @@ async def test_create_comment(client: AsyncClient, source_doc):
 
 @pytest.mark.asyncio
 async def test_create_reply_comment(client: AsyncClient, source_doc, existing_comment):
-    resp = await client.post("/api/comments", json={
-        "entity_type": "document",
-        "entity_id": str(source_doc.id),
-        "text": "Согласен с замечанием",
-        "parent_id": str(existing_comment.id),
-    })
+    resp = await client.post(
+        "/api/comments",
+        json={
+            "entity_type": "document",
+            "entity_id": str(source_doc.id),
+            "text": "Согласен с замечанием",
+            "parent_id": str(existing_comment.id),
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["parent_id"] == str(existing_comment.id)
@@ -98,9 +104,12 @@ async def test_create_reply_comment(client: AsyncClient, source_doc, existing_co
 
 @pytest.mark.asyncio
 async def test_update_comment(client: AsyncClient, existing_comment):
-    resp = await client.patch(f"/api/comments/{existing_comment.id}", json={
-        "text": "Исправленный текст комментария",
-    })
+    resp = await client.patch(
+        f"/api/comments/{existing_comment.id}",
+        json={
+            "text": "Исправленный текст комментария",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     text_val = data.get("text") or data.get("body", "")
@@ -109,9 +118,12 @@ async def test_update_comment(client: AsyncClient, existing_comment):
 
 @pytest.mark.asyncio
 async def test_update_comment_not_found(client: AsyncClient):
-    resp = await client.patch(f"/api/comments/{uuid.uuid4()}", json={
-        "text": "Нет такого комментария",
-    })
+    resp = await client.patch(
+        f"/api/comments/{uuid.uuid4()}",
+        json={
+            "text": "Нет такого комментария",
+        },
+    )
     assert resp.status_code in (404, 403)
 
 
@@ -120,11 +132,14 @@ async def test_update_comment_not_found(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_delete_comment(client: AsyncClient, source_doc):
-    create_resp = await client.post("/api/comments", json={
-        "entity_type": "document",
-        "entity_id": str(source_doc.id),
-        "text": "Временный комментарий",
-    })
+    create_resp = await client.post(
+        "/api/comments",
+        json={
+            "entity_type": "document",
+            "entity_id": str(source_doc.id),
+            "text": "Временный комментарий",
+        },
+    )
     comment_id = create_resp.json()["id"]
 
     resp = await client.delete(f"/api/comments/{comment_id}")

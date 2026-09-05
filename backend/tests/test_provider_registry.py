@@ -19,7 +19,6 @@ from app.ai.schemas import (
     ProviderKind,
 )
 
-
 # ── secret_box ──────────────────────────────────────────────────────────────
 
 
@@ -64,8 +63,22 @@ def test_default_instance_local_and_cloud(no_redis):
 
 def test_select_instance_prefers_named_pin(monkeypatch):
     rows = [
-        {"id": "1", "kind": "ollama", "name": "node-a", "base_url": "http://a:11434", "enabled": True, "is_local": True},
-        {"id": "2", "kind": "ollama", "name": "node-b", "base_url": "http://b:11434", "enabled": True, "is_local": True},
+        {
+            "id": "1",
+            "kind": "ollama",
+            "name": "node-a",
+            "base_url": "http://a:11434",
+            "enabled": True,
+            "is_local": True,
+        },
+        {
+            "id": "2",
+            "kind": "ollama",
+            "name": "node-b",
+            "base_url": "http://b:11434",
+            "enabled": True,
+            "is_local": True,
+        },
     ]
     monkeypatch.setattr(pr, "_redis_get_instances", lambda: rows)
     pr._availability_cache.clear()
@@ -75,8 +88,22 @@ def test_select_instance_prefers_named_pin(monkeypatch):
 
 def test_select_instance_routes_to_node_hosting_model(monkeypatch):
     rows = [
-        {"id": "1", "kind": "ollama", "name": "node-a", "base_url": "http://a:11434", "enabled": True, "is_local": True},
-        {"id": "2", "kind": "ollama", "name": "node-b", "base_url": "http://b:11434", "enabled": True, "is_local": True},
+        {
+            "id": "1",
+            "kind": "ollama",
+            "name": "node-a",
+            "base_url": "http://a:11434",
+            "enabled": True,
+            "is_local": True,
+        },
+        {
+            "id": "2",
+            "kind": "ollama",
+            "name": "node-b",
+            "base_url": "http://b:11434",
+            "enabled": True,
+            "is_local": True,
+        },
     ]
     monkeypatch.setattr(pr, "_redis_get_instances", lambda: rows)
     pr._availability_cache.clear()
@@ -91,8 +118,22 @@ def test_select_instance_routes_to_node_hosting_model(monkeypatch):
 
 def test_select_instance_raises_when_model_known_missing(monkeypatch):
     rows = [
-        {"id": "1", "kind": "ollama", "name": "node-a", "base_url": "http://a:11434", "enabled": True, "is_local": True},
-        {"id": "2", "kind": "ollama", "name": "node-b", "base_url": "http://b:11434", "enabled": True, "is_local": True},
+        {
+            "id": "1",
+            "kind": "ollama",
+            "name": "node-a",
+            "base_url": "http://a:11434",
+            "enabled": True,
+            "is_local": True,
+        },
+        {
+            "id": "2",
+            "kind": "ollama",
+            "name": "node-b",
+            "base_url": "http://b:11434",
+            "enabled": True,
+            "is_local": True,
+        },
     ]
     monkeypatch.setattr(pr, "_redis_get_instances", lambda: rows)
     pr._availability_cache.clear()
@@ -104,7 +145,14 @@ def test_select_instance_raises_when_model_known_missing(monkeypatch):
 
 def test_disabled_instances_excluded(monkeypatch):
     rows = [
-        {"id": "1", "kind": "vllm", "name": "v-a", "base_url": "http://a:8000", "enabled": False, "is_local": True},
+        {
+            "id": "1",
+            "kind": "vllm",
+            "name": "v-a",
+            "base_url": "http://a:8000",
+            "enabled": False,
+            "is_local": True,
+        },
     ]
     monkeypatch.setattr(pr, "_redis_get_instances", lambda: rows)
     pr._availability_cache.clear()
@@ -149,8 +197,11 @@ def _route_to(monkeypatch, model_key, *, local_only=True, allow_cloud=False):
     from app.ai import task_routing as tr
 
     routing = tr.TaskRouting(
-        task=AITask.CLASSIFICATION.value, models=[model_key],
-        profile="balanced", local_only=local_only, allow_cloud=allow_cloud,
+        task=AITask.CLASSIFICATION.value,
+        models=[model_key],
+        profile="balanced",
+        local_only=local_only,
+        allow_cloud=allow_cloud,
     )
     monkeypatch.setattr(tr, "get_routing_for", lambda t, _r=routing: _r)
 
@@ -168,7 +219,9 @@ async def test_thinking_defaults_to_model_catalog(monkeypatch, router_with_stub)
 async def test_thinking_per_call_override_wins(monkeypatch, router_with_stub):
     r, stub = router_with_stub
     _route_to(monkeypatch, "gemma4_e4b_ollama")
-    await r.run(AIRequest(task=AITask.CLASSIFICATION, prompt="hi", confidential=True, thinking=True))
+    await r.run(
+        AIRequest(task=AITask.CLASSIFICATION, prompt="hi", confidential=True, thinking=True)
+    )
     assert stub.last_request.thinking is True
 
 
@@ -211,8 +264,11 @@ async def test_thinking_level_per_call_override_wins(monkeypatch, router_with_st
     _make_level_capable(r, "gemma4_e4b_ollama", default="high")
     await r.run(
         AIRequest(
-            task=AITask.CLASSIFICATION, prompt="hi", confidential=True,
-            thinking=True, thinking_level="low",
+            task=AITask.CLASSIFICATION,
+            prompt="hi",
+            confidential=True,
+            thinking=True,
+            thinking_level="low",
         )
     )
     assert stub.last_request.thinking_level == "low"
@@ -225,8 +281,11 @@ async def test_thinking_level_ignored_when_thinking_off(monkeypatch, router_with
     _make_level_capable(r, "gemma4_e4b_ollama", default="high")
     await r.run(
         AIRequest(
-            task=AITask.CLASSIFICATION, prompt="hi", confidential=True,
-            thinking=False, thinking_level="low",
+            task=AITask.CLASSIFICATION,
+            prompt="hi",
+            confidential=True,
+            thinking=False,
+            thinking_level="low",
         )
     )
     assert stub.last_request.thinking is False
@@ -243,8 +302,11 @@ async def test_thinking_level_clamped_to_supported(monkeypatch, router_with_stub
     _make_level_capable(r, "gemma4_e4b_ollama", default="low", levels=["low", "medium"])
     await r.run(
         AIRequest(
-            task=AITask.CLASSIFICATION, prompt="hi", confidential=True,
-            thinking=True, thinking_level="high",
+            task=AITask.CLASSIFICATION,
+            prompt="hi",
+            confidential=True,
+            thinking=True,
+            thinking_level="high",
         )
     )
     assert stub.last_request.thinking_level == "low"
@@ -252,7 +314,8 @@ async def test_thinking_level_clamped_to_supported(monkeypatch, router_with_stub
 
 @pytest.mark.asyncio
 async def test_thinking_level_auto_derived_for_anthropic_without_curation(
-    monkeypatch, router_with_stub,
+    monkeypatch,
+    router_with_stub,
 ):
     """claude_sonnet_anthropic's catalog entry has thinking_levels=[] (never
     manually curated) — the level must still appear automatically, because
@@ -267,8 +330,12 @@ async def test_thinking_level_auto_derived_for_anthropic_without_curation(
     _route_to(monkeypatch, "claude_sonnet_anthropic", local_only=False, allow_cloud=True)
     await r.run(
         AIRequest(
-            task=AITask.CLASSIFICATION, prompt="hi", confidential=False,
-            allow_cloud=True, thinking=True, thinking_level="high",
+            task=AITask.CLASSIFICATION,
+            prompt="hi",
+            confidential=False,
+            allow_cloud=True,
+            thinking=True,
+            thinking_level="high",
         )
     )
     assert stub.last_request.thinking_level == "high"

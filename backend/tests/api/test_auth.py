@@ -19,7 +19,9 @@ async def test_auth_me_uses_local_dev_bypass(client: AsyncClient, monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_auth_me_requires_bearer_when_local_bypass_is_disabled(client: AsyncClient, monkeypatch) -> None:
+async def test_auth_me_requires_bearer_when_local_bypass_is_disabled(
+    client: AsyncClient, monkeypatch
+) -> None:
     monkeypatch.setenv("AUTH_LOCAL_BYPASS", "false")
 
     response = await client.get("/api/auth/me")
@@ -29,7 +31,9 @@ async def test_auth_me_requires_bearer_when_local_bypass_is_disabled(client: Asy
 
 
 @pytest.mark.asyncio
-async def test_auth_permissions_returns_local_admin_permissions(client: AsyncClient, monkeypatch) -> None:
+async def test_auth_permissions_returns_local_admin_permissions(
+    client: AsyncClient, monkeypatch
+) -> None:
     monkeypatch.setenv("AUTH_LOCAL_BYPASS", "true")
 
     response = await client.get("/api/auth/permissions")

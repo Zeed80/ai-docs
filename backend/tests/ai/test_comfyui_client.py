@@ -39,9 +39,7 @@ def test_build_workflow_injects_only_present_keys():
 
 def test_build_workflow_skips_missing_node_gracefully():
     template = {"1": {"class_type": "X", "inputs": {}}}
-    graph = build_workflow(
-        template, {"prompt": {"node": "404", "input": "text"}}, {"prompt": "hi"}
-    )
+    graph = build_workflow(template, {"prompt": {"node": "404", "input": "text"}}, {"prompt": "hi"})
     assert graph == {"1": {"class_type": "X", "inputs": {}}}
 
 
@@ -404,9 +402,7 @@ def test_resolve_node_requires_base_url(monkeypatch):
     monkeypatch.setattr(
         comfyui_client.provider_registry,
         "select_instance",
-        lambda *a, **k: ResolvedProvider(
-            kind=ProviderKind.COMFYUI, base_url="", is_local=True
-        ),
+        lambda *a, **k: ResolvedProvider(kind=ProviderKind.COMFYUI, base_url="", is_local=True),
     )
     with pytest.raises(ComfyUIError):
         resolve_node()

@@ -72,20 +72,30 @@ def rasterize_entities(
                 canvas,
                 (int(round(entity.p1.x)), int(round(entity.p1.y))),
                 (int(round(entity.p2.x)), int(round(entity.p2.y))),
-                0, t, cv2.LINE_AA,
+                0,
+                t,
+                cv2.LINE_AA,
             )
         elif isinstance(entity, Circle):
             cv2.circle(
                 canvas,
                 (int(round(entity.center.x)), int(round(entity.center.y))),
-                int(round(entity.radius)), 0, t, cv2.LINE_AA,
+                int(round(entity.radius)),
+                0,
+                t,
+                cv2.LINE_AA,
             )
         elif isinstance(entity, Arc):
             cv2.ellipse(
                 canvas,
                 (int(round(entity.center.x)), int(round(entity.center.y))),
                 (int(round(entity.radius)), int(round(entity.radius))),
-                0.0, entity.start_angle, entity.end_angle, 0, t, cv2.LINE_AA,
+                0.0,
+                entity.start_angle,
+                entity.end_angle,
+                0,
+                t,
+                cv2.LINE_AA,
             )
         elif isinstance(entity, Polyline):
             arr = np.array(
@@ -98,20 +108,25 @@ def rasterize_entities(
             )
             cv2.polylines(canvas, [arr], True, 0, t, cv2.LINE_AA)
             for hole in entity.holes:
-                harr = np.array(
-                    [[int(round(p.x)), int(round(p.y))] for p in hole], dtype=np.int32
-                )
+                harr = np.array([[int(round(p.x)), int(round(p.y))] for p in hole], dtype=np.int32)
                 cv2.polylines(canvas, [harr], True, 0, t, cv2.LINE_AA)
-            _draw_hatch_lines(canvas, arr, [
-                np.array([[int(round(p.x)), int(round(p.y))] for p in hole], dtype=np.int32)
-                for hole in entity.holes
-            ], thin_px)
+            _draw_hatch_lines(
+                canvas,
+                arr,
+                [
+                    np.array([[int(round(p.x)), int(round(p.y))] for p in hole], dtype=np.int32)
+                    for hole in entity.holes
+                ],
+                thin_px,
+            )
         elif isinstance(entity, DimensionEntity):
             cv2.line(
                 canvas,
                 (int(round(entity.p1.x)), int(round(entity.p1.y))),
                 (int(round(entity.p2.x)), int(round(entity.p2.y))),
-                0, thin_px, cv2.LINE_AA,
+                0,
+                thin_px,
+                cv2.LINE_AA,
             )
         elif isinstance(entity, (TextEntity, AnnotationEntity)):
             continue  # annotations/text are not stroke geometry

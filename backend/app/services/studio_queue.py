@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, delete, func, or_, select
@@ -52,7 +52,7 @@ _CONTROL_FALLBACK: dict[str, Any] = {}
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _status_value(status: StudioJobStatus | str | None) -> str | None:
@@ -137,7 +137,9 @@ async def publish_queue_event(event: dict[str, Any]) -> None:
         from app.utils.redis_client import get_async_redis
 
         payload = {**event, "ts": utcnow().isoformat()}
-        await get_async_redis().publish(EVENT_REDIS_CHANNEL, json.dumps(payload, ensure_ascii=False, default=str))
+        await get_async_redis().publish(
+            EVENT_REDIS_CHANNEL, json.dumps(payload, ensure_ascii=False, default=str)
+        )
     except Exception:  # noqa: BLE001
         pass
 
@@ -167,12 +169,20 @@ async def ensure_can_enqueue(
 
     state = await get_control_state()
     if state.get("paused"):
-        raise HTTPException(503, state.get("reason") or "Очередь графической студии временно остановлена")
+        raise HTTPException(
+            503, state.get("reason") or "Очередь графической студии временно остановлена"
+        )
     if state.get("drain"):
-        raise HTTPException(503, state.get("reason") or "Очередь в drain mode: новые задачи временно не принимаются")
+        raise HTTPException(
+            503, state.get("reason") or "Очередь в drain mode: новые задачи временно не принимаются"
+        )
 
     role_values = {getattr(role, "value", str(role)) for role in (roles or [])}
-    per_user_limit = MAX_ACTIVE_PER_ADMIN if "admin" in role_values or "engineer" in role_values else MAX_ACTIVE_PER_USER
+    per_user_limit = (
+        MAX_ACTIVE_PER_ADMIN
+        if "admin" in role_values or "engineer" in role_values
+        else MAX_ACTIVE_PER_USER
+    )
     owner_active = await active_count(db, owner_sub=owner_sub, kind=kind)
     if owner_active >= per_user_limit:
         raise HTTPException(
@@ -207,12 +217,14 @@ async def create_image_job(
     )
     db.add(job)
     await db.flush()
-    await publish_queue_event({
-        "type": "job_created",
-        "job_id": str(job.id),
-        "kind": _kind_value(job.kind),
-        "owner_sub": job.owner_sub,
-    })
+    await publish_queue_event(
+        {
+            "type": "job_created",
+            "job_id": str(job.id),
+            "kind": _kind_value(job.kind),
+            "owner_sub": job.owner_sub,
+        }
+    )
     return job
 
 
@@ -235,12 +247,14 @@ async def create_lora_job(
     )
     db.add(job)
     await db.flush()
-    await publish_queue_event({
-        "type": "job_created",
-        "job_id": str(job.id),
-        "kind": _kind_value(job.kind),
-        "owner_sub": job.owner_sub,
-    })
+    await publish_queue_event(
+        {
+            "type": "job_created",
+            "job_id": str(job.id),
+            "kind": _kind_value(job.kind),
+            "owner_sub": job.owner_sub,
+        }
+    )
     return job
 
 
@@ -289,12 +303,14 @@ async def mark_job_waiting(
     meta = dict(job.meta or {})
     meta["waiting_reason"] = reason[:500]
     job.meta = meta
-    await publish_queue_event({
-        "type": "job_updated",
-        "job_id": str(job.id),
-        "status": _status_value(job.status),
-        "owner_sub": job.owner_sub,
-    })
+    await publish_queue_event(
+        {
+            "type": "job_updated",
+            "job_id": str(job.id),
+            "status": _status_value(job.status),
+            "owner_sub": job.owner_sub,
+        }
+    )
 
 
 async def mark_job_running(
@@ -310,12 +326,14 @@ async def mark_job_running(
     job.error = None
     if task_id:
         job.celery_task_id = task_id
-    await publish_queue_event({
-        "type": "job_updated",
-        "job_id": str(job.id),
-        "status": _status_value(job.status),
-        "owner_sub": job.owner_sub,
-    })
+    await publish_queue_event(
+        {
+            "type": "job_updated",
+            "job_id": str(job.id),
+            "status": _status_value(job.status),
+            "owner_sub": job.owner_sub,
+        }
+    )
 
 
 async def mark_job_done(db: AsyncSession, job: StudioJob | None) -> None:
@@ -324,12 +342,14 @@ async def mark_job_done(db: AsyncSession, job: StudioJob | None) -> None:
     job.status = StudioJobStatus.done
     job.finished_at = utcnow()
     job.error = None
-    await publish_queue_event({
-        "type": "job_updated",
-        "job_id": str(job.id),
-        "status": _status_value(job.status),
-        "owner_sub": job.owner_sub,
-    })
+    await publish_queue_event(
+        {
+            "type": "job_updated",
+            "job_id": str(job.id),
+            "status": _status_value(job.status),
+            "owner_sub": job.owner_sub,
+        }
+    )
 
 
 async def mark_job_failed(
@@ -347,12 +367,14 @@ async def mark_job_failed(
     meta["dead_letter_reason"] = job.error
     meta["failed_at"] = job.finished_at.isoformat()
     job.meta = meta
-    await publish_queue_event({
-        "type": "job_updated",
-        "job_id": str(job.id),
-        "status": _status_value(job.status),
-        "owner_sub": job.owner_sub,
-    })
+    await publish_queue_event(
+        {
+            "type": "job_updated",
+            "job_id": str(job.id),
+            "status": _status_value(job.status),
+            "owner_sub": job.owner_sub,
+        }
+    )
 
 
 async def mark_job_cancel_requested(db: AsyncSession, job: StudioJob | None) -> None:
@@ -360,12 +382,14 @@ async def mark_job_cancel_requested(db: AsyncSession, job: StudioJob | None) -> 
         return
     job.status = StudioJobStatus.cancel_requested
     job.cancel_requested_at = utcnow()
-    await publish_queue_event({
-        "type": "job_updated",
-        "job_id": str(job.id),
-        "status": _status_value(job.status),
-        "owner_sub": job.owner_sub,
-    })
+    await publish_queue_event(
+        {
+            "type": "job_updated",
+            "job_id": str(job.id),
+            "status": _status_value(job.status),
+            "owner_sub": job.owner_sub,
+        }
+    )
 
 
 async def mark_job_cancelled(
@@ -379,12 +403,14 @@ async def mark_job_cancelled(
     job.status = StudioJobStatus.cancelled
     job.finished_at = utcnow()
     job.error = error
-    await publish_queue_event({
-        "type": "job_updated",
-        "job_id": str(job.id),
-        "status": _status_value(job.status),
-        "owner_sub": job.owner_sub,
-    })
+    await publish_queue_event(
+        {
+            "type": "job_updated",
+            "job_id": str(job.id),
+            "status": _status_value(job.status),
+            "owner_sub": job.owner_sub,
+        }
+    )
 
 
 async def queue_position(db: AsyncSession, job: StudioJob) -> int | None:
@@ -492,12 +518,14 @@ async def retry_failed_job(db: AsyncSession, job: StudioJob) -> None:
     job.started_at = None
     job.finished_at = None
     job.error = None
-    await publish_queue_event({
-        "type": "job_updated",
-        "job_id": str(job.id),
-        "status": _status_value(job.status),
-        "owner_sub": job.owner_sub,
-    })
+    await publish_queue_event(
+        {
+            "type": "job_updated",
+            "job_id": str(job.id),
+            "status": _status_value(job.status),
+            "owner_sub": job.owner_sub,
+        }
+    )
 
 
 async def cleanup_terminal_jobs(db: AsyncSession) -> int:
@@ -535,8 +563,9 @@ async def bulk_cancel_pending(
 async def queue_stats(db: AsyncSession) -> dict[str, Any]:
     rows = (
         await db.execute(
-            select(StudioJob.resource, StudioJob.kind, StudioJob.status, func.count(StudioJob.id))
-            .group_by(StudioJob.resource, StudioJob.kind, StudioJob.status)
+            select(
+                StudioJob.resource, StudioJob.kind, StudioJob.status, func.count(StudioJob.id)
+            ).group_by(StudioJob.resource, StudioJob.kind, StudioJob.status)
         )
     ).all()
     by_resource: dict[str, dict[str, int]] = {}
@@ -635,6 +664,7 @@ async def job_out(db: AsyncSession, job: StudioJob) -> dict[str, Any]:
         "progress": linked_progress or None,
         "error": linked_error,
         "can_cancel": job.status in ACTIVE_STATUSES,
-        "can_retry": job.status == StudioJobStatus.failed and int((job.meta or {}).get("retry_attempts") or 0) < 3,
+        "can_retry": job.status == StudioJobStatus.failed
+        and int((job.meta or {}).get("retry_attempts") or 0) < 3,
         "meta": job.meta or {},
     }

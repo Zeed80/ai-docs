@@ -11,7 +11,9 @@ from app.ai.cad_ir.transform import SketchOpError
 def _ir(*entities):
     return CadIR(
         source=SourceInfo(image_width=400, image_height=300, kind="blank"),
-        scale=1, scale_source="manual", entities=list(entities),
+        scale=1,
+        scale_source="manual",
+        entities=list(entities),
     )
 
 

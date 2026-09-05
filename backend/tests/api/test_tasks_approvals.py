@@ -3,16 +3,20 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
-pytestmark = pytest.mark.skip(reason="/api/cases and /api/tasks/run-next endpoints not yet implemented")
+pytestmark = pytest.mark.skip(
+    reason="/api/cases and /api/tasks/run-next endpoints not yet implemented"
+)
 
 
 @pytest.mark.asyncio
 async def test_document_process_is_queued_and_run_next_executes(client: AsyncClient) -> None:
     case = (await client.post("/api/cases", json={"title": "Queued processing"})).json()
-    document = (await client.post(
-        f"/api/cases/{case['id']}/documents",
-        files={"file": ("invoice.txt", b"Invoice queued total 1000", "text/plain")},
-    )).json()
+    document = (
+        await client.post(
+            f"/api/cases/{case['id']}/documents",
+            files={"file": ("invoice.txt", b"Invoice queued total 1000", "text/plain")},
+        )
+    ).json()
 
     queued_response = await client.post(f"/api/documents/{document['id']}/process")
 

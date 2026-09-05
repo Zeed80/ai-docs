@@ -19,21 +19,24 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 try:
-    from telegram import (
-        Update,
+    from telegram import (  # noqa: F401 — Bot здесь только проба доступности
         Bot,
         InlineKeyboardButton,
         InlineKeyboardMarkup,
+        Update,
     )
+    from telegram.constants import ParseMode
     from telegram.ext import (
         Application,
-        CommandHandler,
         CallbackQueryHandler,
-        MessageHandler as TelegramMessageHandler,
+        CommandHandler,
         ContextTypes,
         filters,
     )
-    from telegram.constants import ParseMode
+    from telegram.ext import (
+        MessageHandler as TelegramMessageHandler,
+    )
+
     TELEGRAM_AVAILABLE = True
 except ImportError:
     TELEGRAM_AVAILABLE = False
@@ -43,11 +46,11 @@ except ImportError:
     filters = None  # type: ignore[assignment]
     ParseMode = None  # type: ignore[assignment]
 
-_MDV2_RE = re.compile(r'([_*\[\]()~`>#\+\-=|{}.!\\])')
+_MDV2_RE = re.compile(r"([_*\[\]()~`>#\+\-=|{}.!\\])")
 
 
 def _escape(text: str) -> str:
-    return _MDV2_RE.sub(r'\\\1', str(text))
+    return _MDV2_RE.sub(r"\\\1", str(text))
 
 
 class SvetaTelegramBot:
@@ -63,9 +66,7 @@ class SvetaTelegramBot:
         self._allowed = allowed_user_ids
         self._sessions: dict[int, Any] = {}  # user_id → AgentSession
         self._session_locks: dict[int, asyncio.Lock] = {}
-        self._app: Application = (
-            Application.builder().token(token).build()
-        )
+        self._app: Application = Application.builder().token(token).build()
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -74,15 +75,9 @@ class SvetaTelegramBot:
         app.add_handler(CommandHandler("reset", self._cmd_reset))
         app.add_handler(CallbackQueryHandler(self._handle_callback))
         if filters is not None:
-            app.add_handler(
-                TelegramMessageHandler(filters.VOICE, self._handle_voice)
-            )
-            app.add_handler(
-                TelegramMessageHandler(filters.Document.ALL, self._handle_document)
-            )
-            app.add_handler(
-                TelegramMessageHandler(filters.PHOTO, self._handle_photo)
-            )
+            app.add_handler(TelegramMessageHandler(filters.VOICE, self._handle_voice))
+            app.add_handler(TelegramMessageHandler(filters.Document.ALL, self._handle_document))
+            app.add_handler(TelegramMessageHandler(filters.PHOTO, self._handle_photo))
             app.add_handler(
                 TelegramMessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text)
             )
@@ -107,6 +102,7 @@ class SvetaTelegramBot:
                     await queue.put(event)
 
                 from app.ai.agent_loop import AgentSession
+
                 session = AgentSession(send=send_fn)
                 session._tg_queue = queue  # type: ignore[attr-defined]
                 self._sessions[user_id] = session
@@ -119,9 +115,7 @@ class SvetaTelegramBot:
 
     # ── Handlers ─────────────────────────────────────────────────────────────
 
-    async def _cmd_start(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
         if not self._is_allowed(user.id):
             await update.message.reply_text("Доступ запрещён.")
@@ -131,18 +125,14 @@ class SvetaTelegramBot:
             "Отправьте сообщение или используйте /reset для сброса сессии."
         )
 
-    async def _cmd_reset(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def _cmd_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
         if not self._is_allowed(user.id):
             return
         await self._reset_session(user.id)
         await update.message.reply_text("Сессия сброшена. Начинаем заново.")
 
-    async def _handle_text(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def _handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
         if not self._is_allowed(user.id):
             await update.message.reply_text("Доступ запрещён.")
@@ -151,9 +141,7 @@ class SvetaTelegramBot:
         text = update.message.text or ""
         await self._process_message(update, user.id, text)
 
-    async def _handle_voice(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def _handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
         if not self._is_allowed(user.id):
             return
@@ -162,8 +150,8 @@ class SvetaTelegramBot:
         try:
             voice = update.message.voice
             file = await context.bot.get_file(voice.file_id)
-            import tempfile
             import os
+            import tempfile
 
             with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
                 await file.download_to_drive(tmp.name)
@@ -198,7 +186,9 @@ class SvetaTelegramBot:
             AIRequest(
                 task=AITask.INVOICE_OCR,
                 messages=[
-                    ChatMessage(role="user", content="Transcribe the following audio to Russian text."),
+                    ChatMessage(
+                        role="user", content="Transcribe the following audio to Russian text."
+                    ),
                 ],
                 images=[b64],
                 confidential=True,
@@ -206,9 +196,7 @@ class SvetaTelegramBot:
         )
         return resp.text or ""
 
-    async def _handle_document(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def _handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
         if not self._is_allowed(user.id):
             await update.message.reply_text("Доступ запрещён.")
@@ -219,9 +207,7 @@ class SvetaTelegramBot:
         filename = doc.file_name or f"document_{doc.file_id}"
         await self._ingest_file(update, file, filename, doc.mime_type or "application/octet-stream")
 
-    async def _handle_photo(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def _handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
         if not self._is_allowed(user.id):
             await update.message.reply_text("Доступ запрещён.")
@@ -237,17 +223,20 @@ class SvetaTelegramBot:
         self, update: Update, tg_file: Any, filename: str, mime_type: str
     ) -> None:
         """Download a Telegram file and POST it to the ingest pipeline."""
-        import tempfile
         import os
+        import tempfile
 
         await update.message.reply_text(f"📥 Получен файл: {filename}\nОбрабатываю…")
         try:
-            with tempfile.NamedTemporaryFile(suffix=os.path.splitext(filename)[1] or ".bin", delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(
+                suffix=os.path.splitext(filename)[1] or ".bin", delete=False
+            ) as tmp:
                 await tg_file.download_to_drive(tmp.name)
                 tmp_path = tmp.name
 
             try:
                 import httpx
+
                 from app.config import settings
 
                 async with httpx.AsyncClient(timeout=120.0) as client:
@@ -275,13 +264,9 @@ class SvetaTelegramBot:
 
         except Exception as exc:
             logger.warning("telegram file ingest failed: %s", exc)
-            await update.message.reply_text(
-                f"⚠️ Не удалось обработать файл: {exc}"
-            )
+            await update.message.reply_text(f"⚠️ Не удалось обработать файл: {exc}")
 
-    async def _handle_callback(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def _handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
         await query.answer()
 
@@ -304,9 +289,7 @@ class SvetaTelegramBot:
 
     # ── Core dispatch ─────────────────────────────────────────────────────────
 
-    async def _process_message(
-        self, update: Update, user_id: int, text: str
-    ) -> None:
+    async def _process_message(self, update: Update, user_id: int, text: str) -> None:
         session = await self._get_session(user_id)
         queue: asyncio.Queue[dict] = session._tg_queue  # type: ignore[attr-defined]
 
@@ -320,6 +303,7 @@ class SvetaTelegramBot:
         # Mirror user message to all connected web chat clients
         try:
             from app.core.chat_bus import chat_bus
+
             await chat_bus.publish({"type": "tg_user", "content": text, "source": "telegram"})
         except Exception:
             pass
@@ -350,10 +334,11 @@ class SvetaTelegramBot:
 
         try:
             from app.core.chat_bus import chat_bus
+
             while not agent_task.done() or not queue.empty():
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=0.2)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
 
                 # Mirror every agent event to web chat in real time
@@ -368,18 +353,20 @@ class SvetaTelegramBot:
                     skill = event.get("skill", "")
                     desc = event.get("description", "Разрешить выполнение?")
                     approval_id = event.get("approval_id", "")
-                    keyboard = InlineKeyboardMarkup([
+                    keyboard = InlineKeyboardMarkup(
                         [
-                            InlineKeyboardButton(
-                                "✅ Подтвердить",
-                                callback_data=f"appr:approve:{approval_id}",
-                            ),
-                            InlineKeyboardButton(
-                                "❌ Отклонить",
-                                callback_data=f"appr:reject:{approval_id}",
-                            ),
+                            [
+                                InlineKeyboardButton(
+                                    "✅ Подтвердить",
+                                    callback_data=f"appr:approve:{approval_id}",
+                                ),
+                                InlineKeyboardButton(
+                                    "❌ Отклонить",
+                                    callback_data=f"appr:reject:{approval_id}",
+                                ),
+                            ]
                         ]
-                    ])
+                    )
                     await update.message.reply_text(
                         f"⏳ *Требуется подтверждение*\n"
                         f"Действие: `{_escape(skill)}`\n"

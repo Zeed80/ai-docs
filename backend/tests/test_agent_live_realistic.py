@@ -40,6 +40,7 @@ _TURN_TIMEOUT = int(os.environ.get("AGENT_TURN_TIMEOUT", "180"))
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 def _skip_if_not_live():
     if not _LIVE:
         pytest.skip("LIVE_STACK!=1 — needs the running stack")
@@ -93,7 +94,7 @@ class AgentTurnResult:
 
 
 @asynccontextmanager
-async def _agent_ws(session_id: str | None = None) -> AsyncIterator["_AgentWS"]:
+async def _agent_ws(session_id: str | None = None) -> AsyncIterator[_AgentWS]:
     """Async context manager: WS-соединение с агентом."""
     import websockets
 
@@ -125,7 +126,7 @@ class _AgentWS:
                 raise TimeoutError(f"Agent did not respond in {_TURN_TIMEOUT}s")
             try:
                 raw = await asyncio.wait_for(self._ws.recv(), timeout=min(remaining, 10.0))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             msg = json.loads(raw)
             # Capture session_id from first server message if not set
@@ -137,6 +138,7 @@ class _AgentWS:
 
 # ── fixture: Ollama доступен ──────────────────────────────────────────────────
 
+
 def _ollama_up() -> bool:
     ollama_url = os.environ.get("OLLAMA_URL", "http://host-gateway:11434")
     try:
@@ -146,6 +148,7 @@ def _ollama_up() -> bool:
 
 
 # ── Тест 1: Память — агент сохраняет ход и читает его в следующей сессии ──────
+
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _LIVE, reason="LIVE_STACK!=1")
@@ -170,23 +173,29 @@ async def test_memory_is_saved_after_turn():
 
     async with _http() as cli:
         # Прямой POST в память с агентским ключом (проверяем что auth работает)
-        resp = await cli.post("/api/memory/chat-turn", json={
-            "user_text": f"Запомни: {unique_marker}",
-            "assistant_text": "Запомнила, маркер сохранён.",
-            "scope": "session",
-            "session_id": session_id,
-        })
+        resp = await cli.post(
+            "/api/memory/chat-turn",
+            json={
+                "user_text": f"Запомни: {unique_marker}",
+                "assistant_text": "Запомнила, маркер сохранён.",
+                "scope": "session",
+                "session_id": session_id,
+            },
+        )
         assert resp.status_code == 200, f"chat-turn 403 или другая ошибка: {resp.text}"
         fact_id = resp.json()["id"]
 
         # Через поиск должны найти сохранённый факт (та же session-область,
         # что и sync_turn — иначе фильтр по scope его не увидит).
-        search = await cli.post("/api/memory/search", json={
-            "query": unique_marker,
-            "limit": 5,
-            "scope": "session",
-            "session_id": session_id,
-        })
+        search = await cli.post(
+            "/api/memory/search",
+            json={
+                "query": unique_marker,
+                "limit": 5,
+                "scope": "session",
+                "session_id": session_id,
+            },
+        )
         assert search.status_code == 200, search.text
         hits = search.json().get("hits", [])
         titles = [h.get("title", "") + h.get("summary", "") for h in hits]
@@ -199,6 +208,7 @@ async def test_memory_is_saved_after_turn():
 
 
 # ── Тест 2: Reranker не падает ────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _LIVE, reason="LIVE_STACK!=1")
@@ -235,6 +245,7 @@ async def test_reranker_does_not_crash():
 
 # ── Тест 3: Агент ОБЯЗАТЕЛЬНО вызывает инструменты ───────────────────────────
 
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _LIVE, reason="LIVE_STACK!=1")
 async def test_agent_calls_tool_for_data_question():
@@ -255,13 +266,18 @@ async def test_agent_calls_tool_for_data_question():
         f"Агент НЕ вызвал ни одного инструмента. Ответил из себя: {result.text[:300]}"
     )
     # Ожидаем вызов одного из: invoices, memory, search
-    data_tools = {"invoices", "memory__search", "search__hybrid", "search__nl",
-                  "invoice__list", "memory__search"}
+    data_tools = {
+        "invoices",
+        "memory__search",
+        "search__hybrid",
+        "search__nl",
+        "invoice__list",
+        "memory__search",
+    }
     called = set(result.tool_calls)
-    assert called & data_tools or any("invoic" in t or "memory" in t or "search" in t
-                                       for t in result.tool_calls), (
-        f"Агент вызвал инструменты {result.tool_calls}, но ни один не связан с данными"
-    )
+    assert called & data_tools or any(
+        "invoic" in t or "memory" in t or "search" in t for t in result.tool_calls
+    ), f"Агент вызвал инструменты {result.tool_calls}, но ни один не связан с данными"
 
 
 @pytest.mark.asyncio
@@ -282,6 +298,7 @@ async def test_agent_calls_memory_for_ambiguous_question():
 
 # ── Тест 4: Реалистичные бизнес-сценарии ─────────────────────────────────────
 
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _LIVE, reason="LIVE_STACK!=1")
 async def test_scenario_invoice_list():
@@ -295,17 +312,21 @@ async def test_scenario_invoice_list():
     assert result.error is None, f"Ошибка агента: {result.error}"
     # Инструмент может быть invoices/workspace/spec_table — все варианты корректны
     assert len(result.tool_calls) > 0, (
-        f"Агент не вызвал ни одного инструмента для 'покажи счета'. "
-        f"text={result.text[:300]}"
+        f"Агент не вызвал ни одного инструмента для 'покажи счета'. text={result.text[:300]}"
     )
     # В ответе или в tool_calls должна быть информация о счетах
     text_lower = result.text.lower()
-    has_invoice_tool = any("invoic" in t.lower() or "workspace" in t.lower()
-                           or "spec" in t.lower() or "table" in t.lower()
-                           for t in result.tool_calls)
-    has_invoice_text = any(kw in text_lower for kw in (
-        "счёт", "счет", "сч-", "инвойс", "не найдено", "пусто", "таблиц"
-    ))
+    has_invoice_tool = any(
+        "invoic" in t.lower()
+        or "workspace" in t.lower()
+        or "spec" in t.lower()
+        or "table" in t.lower()
+        for t in result.tool_calls
+    )
+    has_invoice_text = any(
+        kw in text_lower
+        for kw in ("счёт", "счет", "сч-", "инвойс", "не найдено", "пусто", "таблиц")
+    )
     assert has_invoice_tool or has_invoice_text, (
         f"Ответ не связан со счетами. tools={result.tool_calls}, text={result.text[:400]}"
     )
@@ -325,11 +346,12 @@ async def test_scenario_invoice_count():
     assert len(result.tool_calls) > 0, f"Нет вызовов инструментов: {result.text[:300]}"
     # Ответ должен содержать число (или явное «нет»)
     import re
+
     has_number = bool(re.search(r"\d+", result.text))
-    has_none = any(kw in result.text.lower() for kw in ("нет", "нуль", "ноль", "отсутствуют", "не найдено"))
-    assert has_number or has_none, (
-        f"Агент не дал конкретного числа: {result.text[:400]}"
+    has_none = any(
+        kw in result.text.lower() for kw in ("нет", "нуль", "ноль", "отсутствуют", "не найдено")
     )
+    assert has_number or has_none, f"Агент не дал конкретного числа: {result.text[:400]}"
 
 
 @pytest.mark.asyncio
@@ -346,8 +368,9 @@ async def test_scenario_supplier_query():
     assert len(result.tool_calls) > 0, (
         f"Агент не вызвал инструменты для вопроса о поставщиках: {result.text[:300]}"
     )
-    assert not any("нет данных" in result.text.lower() and len(result.tool_calls) == 0
-                   for _ in [1]), "Агент ответил 'нет данных' без вызова инструментов"
+    assert not any(
+        "нет данных" in result.text.lower() and len(result.tool_calls) == 0 for _ in [1]
+    ), "Агент ответил 'нет данных' без вызова инструментов"
 
 
 @pytest.mark.asyncio
@@ -396,13 +419,14 @@ async def test_scenario_document_search():
     assert len(result.tool_calls) > 0, (
         f"Агент не вызвал инструменты для поиска: {result.text[:300]}"
     )
-    assert any("search" in t.lower() or "doc" in t.lower() or "memory" in t.lower()
-               for t in result.tool_calls), (
-        f"Ожидали search/doc/memory, получили: {result.tool_calls}"
-    )
+    assert any(
+        "search" in t.lower() or "doc" in t.lower() or "memory" in t.lower()
+        for t in result.tool_calls
+    ), f"Ожидали search/doc/memory, получили: {result.tool_calls}"
 
 
 # ── Тест 5: Многоходовой сценарий с контекстом ───────────────────────────────
+
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _LIVE, reason="LIVE_STACK!=1")
@@ -429,12 +453,11 @@ async def test_scenario_multi_turn_context():
         r2 = await ws.send("Покажи подробнее первый из них")
         assert r2.error is None, f"Второй ход упал: {r2.error}"
         # Агент должен понять «первый» из контекста и вызвать tool (get/detail)
-        assert len(r2.tool_calls) > 0, (
-            f"Второй ход не вызвал инструментов. Ответ: {r2.text[:300]}"
-        )
+        assert len(r2.tool_calls) > 0, f"Второй ход не вызвал инструментов. Ответ: {r2.text[:300]}"
 
 
 # ── Тест 6: Агент НЕ делает внешних действий без подтверждения ───────────────
+
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _LIVE, reason="LIVE_STACK!=1")
@@ -455,13 +478,26 @@ async def test_gate_approval_required_for_invoice_approve():
     #    clarify gate в orchestrator.needs_clarification) — тоже корректный
     #    safety-исход: действие не выполнено, пока не уточнена цель.
     has_approval_gate = len(result.approval_requests) > 0
-    has_confirmation_text = any(kw in result.text.lower() for kw in (
-        "подтвердит", "уверен", "да/нет", "продолжить", "применить", "утвердить все",
-        "уточни", "внешнее", "важное действие", "к кому", "к чему",
-    ))
-    has_no_pending = any(kw in result.text.lower() for kw in (
-        "не найдено", "нет счет", "пусто", "отсутств", "список пуст"
-    ))
+    has_confirmation_text = any(
+        kw in result.text.lower()
+        for kw in (
+            "подтвердит",
+            "уверен",
+            "да/нет",
+            "продолжить",
+            "применить",
+            "утвердить все",
+            "уточни",
+            "внешнее",
+            "важное действие",
+            "к кому",
+            "к чему",
+        )
+    )
+    has_no_pending = any(
+        kw in result.text.lower()
+        for kw in ("не найдено", "нет счет", "пусто", "отсутств", "список пуст")
+    )
     assert has_approval_gate or has_confirmation_text or has_no_pending, (
         f"Агент выполнил утверждение без gate и без объяснения. "
         f"approval_requests={result.approval_requests}, text={result.text[:300]}"
@@ -469,6 +505,7 @@ async def test_gate_approval_required_for_invoice_approve():
 
 
 # ── Тест 7: Скорость — простой вопрос не должен занимать >60 сек ─────────────
+
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _LIVE, reason="LIVE_STACK!=1")
@@ -484,13 +521,12 @@ async def test_simple_question_performance():
 
     assert result.error is None, f"Ошибка: {result.error}"
     # APEX:Compact (35B) медленный — реалистичный порог для простого вопроса
-    assert elapsed < 180, (
-        f"Агент отвечал {elapsed:.0f}с на простой вопрос — слишком медленно"
-    )
+    assert elapsed < 180, f"Агент отвечал {elapsed:.0f}с на простой вопрос — слишком медленно"
     assert len(result.tool_calls) > 0, "Агент не вызвал инструментов"
 
 
 # ── Тест 8: Память после реального хода агента ───────────────────────────────
+
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _LIVE, reason="LIVE_STACK!=1")
@@ -514,11 +550,14 @@ async def test_memory_persisted_after_agent_turn():
         await asyncio.sleep(2)
 
         # В памяти должна появиться запись с текстом ответа
-        resp = await cli.post("/api/memory/search", json={
-            "query": "счета в системе",
-            "limit": 10,
-            "retrieval_mode": "sql",
-        })
+        resp = await cli.post(
+            "/api/memory/search",
+            json={
+                "query": "счета в системе",
+                "limit": 10,
+                "retrieval_mode": "sql",
+            },
+        )
         assert resp.status_code == 200, resp.text
         # Главное: не должно быть пустоты И особенно 403
         # (если был 403 — записей chat_turn не будет никогда)
@@ -528,6 +567,7 @@ async def test_memory_persisted_after_agent_turn():
 
 
 # ── Тест 9: Статус агентской системы ─────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _LIVE, reason="LIVE_STACK!=1")
@@ -544,6 +584,7 @@ async def test_agent_control_plane_status():
 
 # ── Тест 10: Reranker end-to-end через /api/memory/search ────────────────────
 
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _LIVE, reason="LIVE_STACK!=1")
 async def test_reranker_via_memory_search():
@@ -553,25 +594,34 @@ async def test_reranker_via_memory_search():
 
     async with _http() as cli:
         # Добавляем тестовые факты
-        f1 = await cli.post("/api/memory/chat-turn", json={
-            "user_text": "Сколько счетов от ООО Ромашка?",
-            "assistant_text": "Найдено 3 счёта от ООО Ромашка на общую сумму 150 000 руб.",
-            "scope": "project",
-        })
+        f1 = await cli.post(
+            "/api/memory/chat-turn",
+            json={
+                "user_text": "Сколько счетов от ООО Ромашка?",
+                "assistant_text": "Найдено 3 счёта от ООО Ромашка на общую сумму 150 000 руб.",
+                "scope": "project",
+            },
+        )
         assert f1.status_code == 200
-        f2 = await cli.post("/api/memory/chat-turn", json={
-            "user_text": "Покажи складские остатки фрез",
-            "assistant_text": "На складе 45 шт фрез Ø10 и 20 шт фрез Ø5.",
-            "scope": "project",
-        })
+        f2 = await cli.post(
+            "/api/memory/chat-turn",
+            json={
+                "user_text": "Покажи складские остатки фрез",
+                "assistant_text": "На складе 45 шт фрез Ø10 и 20 шт фрез Ø5.",
+                "scope": "project",
+            },
+        )
         assert f2.status_code == 200
 
         # Поиск с reranking (auto_hybrid включает reranker если настроен)
-        search = await cli.post("/api/memory/search", json={
-            "query": "счета поставщик",
-            "limit": 5,
-            "retrieval_mode": "auto_hybrid",
-        })
+        search = await cli.post(
+            "/api/memory/search",
+            json={
+                "query": "счета поставщик",
+                "limit": 5,
+                "retrieval_mode": "auto_hybrid",
+            },
+        )
         assert search.status_code == 200, f"Search упал: {search.text}"
         data = search.json()
         assert "hits" in data, f"Нет hits: {data}"

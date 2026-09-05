@@ -51,8 +51,7 @@ async def test_gated_action_blocks_when_durable_approval_is_missing(monkeypatch)
 
 def test_capability_approval_action_type_maps_broad_tool_names():
     assert (
-        agent_loop._approval_action_type_for("invoices", {"action": "approve"})
-        == "invoice.approve"
+        agent_loop._approval_action_type_for("invoices", {"action": "approve"}) == "invoice.approve"
     )
     assert (
         agent_loop._approval_action_type_for("analytics", {"action": "compare_decide"})

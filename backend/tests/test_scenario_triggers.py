@@ -8,9 +8,7 @@ every night — that had never run once. That is the most expensive kind of dead
 code, because it looks configured.
 """
 
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from app.ai.gateway_config import gateway_config
 from app.tasks.scenario_cron import dispatch_event, scenario_cron_dispatch
@@ -35,7 +33,7 @@ def test_every_declared_cron_is_parseable():
         assert expression and len(expression.split()) == 5, f"{name}: {expression!r}"
         # Must not raise, and must be decidable for a concrete minute.
         assert isinstance(
-            cron_matches(expression, datetime(2026, 8, 29, 9, 0, tzinfo=timezone.utc)),
+            cron_matches(expression, datetime(2026, 8, 29, 9, 0, tzinfo=UTC)),
             bool,
         )
 
@@ -45,8 +43,11 @@ def test_email_triage_no_longer_claims_a_schedule():
     Leaving the cron in place would poll IMAP a second time every 5 minutes."""
     assert "email_triage" not in _scheduled()
     trigger = next(
-        (s.get("trigger") for s in gateway_config.scenario_definitions
-         if s.get("name") == "email_triage"),
+        (
+            s.get("trigger")
+            for s in gateway_config.scenario_definitions
+            if s.get("name") == "email_triage"
+        ),
         None,
     )
     assert trigger == {"type": "manual"}
@@ -63,12 +64,12 @@ def test_daily_scenarios_fire_at_their_declared_minute(monkeypatch):
     class _FixedTime:
         @staticmethod
         def now(tz=None):
-            return datetime(2026, 8, 29, 9, 0, tzinfo=timezone.utc)
+            return datetime(2026, 8, 29, 9, 0, tzinfo=UTC)
 
     monkeypatch.setattr("app.tasks.scenario_cron.datetime", _FixedTime)
 
     result = scenario_cron_dispatch.apply().get()
-    assert "low_stock_alert" in result["dispatched"]      # cron: 0 9 * * *
+    assert "low_stock_alert" in result["dispatched"]  # cron: 0 9 * * *
     assert "memory_maintenance" not in result["dispatched"]  # cron: 30 2 * * *
     assert [name for name, _ in launched] == result["dispatched"]
 
@@ -79,7 +80,7 @@ def test_nothing_is_dispatched_on_an_ordinary_minute(monkeypatch):
     class _FixedTime:
         @staticmethod
         def now(tz=None):
-            return datetime(2026, 8, 29, 13, 47, tzinfo=timezone.utc)
+            return datetime(2026, 8, 29, 13, 47, tzinfo=UTC)
 
     monkeypatch.setattr("app.tasks.scenario_cron.datetime", _FixedTime)
     assert scenario_cron_dispatch.apply().get()["dispatched"] == []

@@ -4,17 +4,17 @@ Revision ID: c8e4f2a9b731
 Revises: 5c09365341d1
 Create Date: 2026-04-27 00:00:00.000000
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-
 revision: str = "c8e4f2a9b731"
-down_revision: Union[str, None] = "5c09365341d1"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "5c09365341d1"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -31,8 +31,18 @@ def upgrade() -> None:
         sa.Column("created_by", sa.String(length=50), nullable=False),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_knowledge_nodes_node_type"), "knowledge_nodes", ["node_type"])
@@ -52,8 +62,18 @@ def upgrade() -> None:
         sa.Column("embedding_id", sa.String(length=200), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -71,8 +91,18 @@ def upgrade() -> None:
         sa.Column("confidence", sa.Float(), nullable=False),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["chunk_id"], ["document_chunks.id"]),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
         sa.PrimaryKeyConstraint("id"),
@@ -93,19 +123,37 @@ def upgrade() -> None:
         sa.Column("created_by", sa.String(length=50), nullable=False),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["evidence_span_id"], ["evidence_spans.id"]),
         sa.ForeignKeyConstraint(["source_document_id"], ["documents.id"]),
         sa.ForeignKeyConstraint(["source_node_id"], ["knowledge_nodes.id"]),
         sa.ForeignKeyConstraint(["target_node_id"], ["knowledge_nodes.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_knowledge_edges_source_node_id"), "knowledge_edges", ["source_node_id"])
-    op.create_index(op.f("ix_knowledge_edges_target_node_id"), "knowledge_edges", ["target_node_id"])
+    op.create_index(
+        op.f("ix_knowledge_edges_source_node_id"), "knowledge_edges", ["source_node_id"]
+    )
+    op.create_index(
+        op.f("ix_knowledge_edges_target_node_id"), "knowledge_edges", ["target_node_id"]
+    )
     op.create_index(op.f("ix_knowledge_edges_edge_type"), "knowledge_edges", ["edge_type"])
-    op.create_index(op.f("ix_knowledge_edges_source_document_id"), "knowledge_edges", ["source_document_id"])
-    op.create_index(op.f("ix_knowledge_edges_evidence_span_id"), "knowledge_edges", ["evidence_span_id"])
+    op.create_index(
+        op.f("ix_knowledge_edges_source_document_id"), "knowledge_edges", ["source_document_id"]
+    )
+    op.create_index(
+        op.f("ix_knowledge_edges_evidence_span_id"), "knowledge_edges", ["evidence_span_id"]
+    )
 
     op.create_table(
         "entity_mentions",
@@ -121,8 +169,18 @@ def upgrade() -> None:
         sa.Column("evidence_span_id", PG_UUID(as_uuid=True), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["chunk_id"], ["document_chunks.id"]),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
         sa.ForeignKeyConstraint(["evidence_span_id"], ["evidence_spans.id"]),
@@ -134,7 +192,9 @@ def upgrade() -> None:
     op.create_index(op.f("ix_entity_mentions_node_id"), "entity_mentions", ["node_id"])
     op.create_index(op.f("ix_entity_mentions_mention_text"), "entity_mentions", ["mention_text"])
     op.create_index(op.f("ix_entity_mentions_entity_type"), "entity_mentions", ["entity_type"])
-    op.create_index(op.f("ix_entity_mentions_evidence_span_id"), "entity_mentions", ["evidence_span_id"])
+    op.create_index(
+        op.f("ix_entity_mentions_evidence_span_id"), "entity_mentions", ["evidence_span_id"]
+    )
 
 
 def downgrade() -> None:

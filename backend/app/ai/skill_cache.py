@@ -8,11 +8,11 @@ TTL varies by skill category (invoices: 5 min, reports: 60 min, catalogs: 24 h).
 
 Write-path skills (create/update/delete/approve) are NEVER cached.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
-import time
 from typing import Any
 
 import structlog
@@ -25,27 +25,42 @@ _DEFAULT_TTL = 300  # 5 min
 
 _CATEGORY_TTL: dict[str, int] = {
     # Fast-changing: invoices, approvals, anomalies
-    "invoices":     300,
-    "approvals":    120,
-    "anomalies":    180,
+    "invoices": 300,
+    "approvals": 120,
+    "anomalies": 180,
     # Medium: suppliers, warehouse
-    "suppliers":    1_800,
-    "warehouse":    900,
-    "documents":    600,
+    "suppliers": 1_800,
+    "warehouse": 900,
+    "documents": 600,
     # Slow: catalogs, normalization, static tables
-    "catalogs":     86_400,   # 24 h
-    "normalization": 3_600,   # 1 h
-    "reports":      3_600,
-    "tables":       600,
-    "workspace":    300,
+    "catalogs": 86_400,  # 24 h
+    "normalization": 3_600,  # 1 h
+    "reports": 3_600,
+    "tables": 600,
+    "workspace": 300,
 }
 
 # Prefixes that indicate write operations — never cache
-_WRITE_PREFIXES = frozenset({
-    "create", "update", "delete", "approve", "reject", "send",
-    "submit", "post", "patch", "put", "remove", "archive",
-    "export", "apply", "set", "assign",
-})
+_WRITE_PREFIXES = frozenset(
+    {
+        "create",
+        "update",
+        "delete",
+        "approve",
+        "reject",
+        "send",
+        "submit",
+        "post",
+        "patch",
+        "put",
+        "remove",
+        "archive",
+        "export",
+        "apply",
+        "set",
+        "assign",
+    }
+)
 
 
 def _is_cacheable(skill_name: str) -> bool:
@@ -73,12 +88,14 @@ def _cache_key(skill_name: str, args: dict[str, Any]) -> str:
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
+
 async def get_cached(skill_name: str, args: dict[str, Any]) -> dict | None:
     """Return cached result or None. Non-blocking — errors are swallowed."""
     if not _is_cacheable(skill_name):
         return None
     try:
         from app.utils.redis_client import get_async_redis
+
         key = _cache_key(skill_name, args)
         raw = await get_async_redis().get(key)
         if raw:
@@ -105,6 +122,7 @@ async def set_cached(
         return
     try:
         from app.utils.redis_client import get_async_redis
+
         key = _cache_key(skill_name, args)
         effective_ttl = ttl if ttl is not None else _ttl_for(skill_name)
         payload = json.dumps(result, ensure_ascii=False, default=str)
@@ -125,6 +143,7 @@ async def get_cache_stats() -> dict[str, Any]:
     """Return basic cache statistics for monitoring."""
     try:
         from app.utils.redis_client import get_async_redis
+
         r = get_async_redis()
         info = await r.info("stats")
         keys_count = len(await r.keys("skill_cache:*"))

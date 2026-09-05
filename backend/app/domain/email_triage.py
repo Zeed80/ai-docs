@@ -24,15 +24,15 @@ logger = structlog.get_logger()
 # Categories the rest of the system reacts to. Kept small on purpose: a
 # taxonomy nobody acts on is a taxonomy nobody maintains.
 CATEGORIES = (
-    "invoice",            # счёт на оплату
-    "quote",              # коммерческое предложение
-    "document_request",   # просят прислать документы
-    "payment_question",   # вопрос по оплате/сверке
-    "complaint",          # рекламация
-    "contract",           # договор/подписание
-    "notification",       # уведомление (банк, госуслуги, сервис)
-    "newsletter",         # рассылка
-    "personal",           # личное
+    "invoice",  # счёт на оплату
+    "quote",  # коммерческое предложение
+    "document_request",  # просят прислать документы
+    "payment_question",  # вопрос по оплате/сверке
+    "complaint",  # рекламация
+    "contract",  # договор/подписание
+    "notification",  # уведомление (банк, госуслуги, сервис)
+    "newsletter",  # рассылка
+    "personal",  # личное
     "other",
 )
 
@@ -134,12 +134,12 @@ def _coerce(raw: object) -> TriageOutcome:
     )
 
 
-async def classify_letter(*, sender: str, subject: str, body: str,
-                          attachments: list[str]) -> TriageOutcome:
+async def classify_letter(
+    *, sender: str, subject: str, body: str, attachments: list[str]
+) -> TriageOutcome:
     """Ask the configured model what this letter is."""
-    from app.ai.router import ai_router
-
     from app.ai.input_sanitizer import wrap_untrusted
+    from app.ai.router import ai_router
 
     # Тема и тело письма — текст постороннего человека. Размечаем его как
     # данные: без этого «Игнорируй предыдущие инструкции…» в теле письма было
@@ -157,7 +157,11 @@ async def classify_letter(*, sender: str, subject: str, body: str,
     from app.ai.ollama_client import generate_json
 
     raw = await generate_json(
-        prompt, model=model, provider=provider, system=TRIAGE_SYSTEM, temperature=0.1,
+        prompt,
+        model=model,
+        provider=provider,
+        system=TRIAGE_SYSTEM,
+        temperature=0.1,
     )
     outcome = _coerce(raw)
     outcome.model_name = f"{provider}/{model}"
@@ -167,8 +171,9 @@ async def classify_letter(*, sender: str, subject: str, body: str,
 # ── what to do with each category ──────────────────────────────────────────
 
 
-def plan_actions(outcome: TriageOutcome, *, has_attachments: bool,
-                 mode: str) -> tuple[list[dict], list[dict]]:
+def plan_actions(
+    outcome: TriageOutcome, *, has_attachments: bool, mode: str
+) -> tuple[list[dict], list[dict]]:
     """Split the reaction into (perform now, propose to a human).
 
     ``mode``:
@@ -191,19 +196,23 @@ def plan_actions(outcome: TriageOutcome, *, has_attachments: bool,
             perform.append({"type": "notify_responsible", "reason": "invoice"})
             perform.append({"type": "link_invoice"})
         else:
-            propose.append({
-                "type": "ask_for_attachment",
-                "hint": "В письме говорится о счёте, но вложения нет — запросить?",
-            })
+            propose.append(
+                {
+                    "type": "ask_for_attachment",
+                    "hint": "В письме говорится о счёте, но вложения нет — запросить?",
+                }
+            )
     elif outcome.category == "quote":
         perform.append({"type": "notify_responsible", "reason": "quote"})
         propose.append({"type": "compare_quote", "hint": "Добавить КП в сравнение"})
     elif outcome.category == "document_request":
-        propose.append({
-            "type": "draft_reply",
-            "hint": "Подготовить ответ с запрошенными документами",
-            "documents": (outcome.entities.get("requested_documents") or [])[:10],
-        })
+        propose.append(
+            {
+                "type": "draft_reply",
+                "hint": "Подготовить ответ с запрошенными документами",
+                "documents": (outcome.entities.get("requested_documents") or [])[:10],
+            }
+        )
     elif outcome.category in ("payment_question", "complaint", "contract"):
         perform.append({"type": "notify_responsible", "reason": outcome.category})
         propose.append({"type": "draft_reply", "hint": "Подготовить ответ"})

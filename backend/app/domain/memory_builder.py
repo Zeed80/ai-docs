@@ -8,8 +8,8 @@ LLM. AI-assisted linking can be added on top of these facts later.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -405,42 +405,60 @@ async def clear_document_memory_async(db: AsyncSession, document: Document) -> N
 
 
 def clear_document_memory_sync(db: Session, document: Document) -> None:
-    for item in db.execute(
-        select(GraphReviewItem).where(
-            GraphReviewItem.document_id == document.id,
-            GraphReviewItem.suggested_by == "system",
+    for item in (
+        db.execute(
+            select(GraphReviewItem).where(
+                GraphReviewItem.document_id == document.id,
+                GraphReviewItem.suggested_by == "system",
+            )
         )
-    ).scalars().all():
+        .scalars()
+        .all()
+    ):
         db.delete(item)
 
-    for mention in db.execute(
-        select(EntityMention).where(
-            EntityMention.document_id == document.id,
-            EntityMention.extraction_method == AUTO_METHOD,
+    for mention in (
+        db.execute(
+            select(EntityMention).where(
+                EntityMention.document_id == document.id,
+                EntityMention.extraction_method == AUTO_METHOD,
+            )
         )
-    ).scalars().all():
+        .scalars()
+        .all()
+    ):
         db.delete(mention)
 
-    for edge in db.execute(
-        select(KnowledgeEdge).where(
-            KnowledgeEdge.source_document_id == document.id,
-            KnowledgeEdge.created_by == "system",
-            KnowledgeEdge.edge_type.in_(GENERATED_EDGE_TYPES),
+    for edge in (
+        db.execute(
+            select(KnowledgeEdge).where(
+                KnowledgeEdge.source_document_id == document.id,
+                KnowledgeEdge.created_by == "system",
+                KnowledgeEdge.edge_type.in_(GENERATED_EDGE_TYPES),
+            )
         )
-    ).scalars().all():
+        .scalars()
+        .all()
+    ):
         db.delete(edge)
 
-    for evidence in db.execute(
-        select(EvidenceSpan).where(
-            EvidenceSpan.document_id == document.id,
-            EvidenceSpan.field_name == "auto_mentions",
+    for evidence in (
+        db.execute(
+            select(EvidenceSpan).where(
+                EvidenceSpan.document_id == document.id,
+                EvidenceSpan.field_name == "auto_mentions",
+            )
         )
-    ).scalars().all():
+        .scalars()
+        .all()
+    ):
         db.delete(evidence)
 
-    for chunk in db.execute(
-        select(DocumentChunk).where(DocumentChunk.document_id == document.id)
-    ).scalars().all():
+    for chunk in (
+        db.execute(select(DocumentChunk).where(DocumentChunk.document_id == document.id))
+        .scalars()
+        .all()
+    ):
         if (chunk.metadata_ or {}).get("method") == AUTO_METHOD:
             db.delete(chunk)
 
@@ -854,7 +872,9 @@ def _get_or_create_business_edge_sync(
     return edge
 
 
-async def _find_node_by_entity_async(db: AsyncSession, *, entity_type: str, entity_id) -> KnowledgeNode | None:
+async def _find_node_by_entity_async(
+    db: AsyncSession, *, entity_type: str, entity_id
+) -> KnowledgeNode | None:
     result = await db.execute(
         select(KnowledgeNode).where(
             KnowledgeNode.entity_type == entity_type,
@@ -1001,13 +1021,17 @@ def build_supplier_invoice_memory_sync(
         source_document_id=invoice.document_id,
     )
 
-    stale_edges = db.execute(
-        select(KnowledgeEdge).where(
-            KnowledgeEdge.target_node_id == invoice_node.id,
-            KnowledgeEdge.edge_type == "has_invoice",
-            KnowledgeEdge.source_node_id != supplier_node.id,
+    stale_edges = (
+        db.execute(
+            select(KnowledgeEdge).where(
+                KnowledgeEdge.target_node_id == invoice_node.id,
+                KnowledgeEdge.edge_type == "has_invoice",
+                KnowledgeEdge.source_node_id != supplier_node.id,
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for stale in stale_edges:
         db.delete(stale)
 

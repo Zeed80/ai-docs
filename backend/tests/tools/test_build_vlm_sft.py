@@ -18,7 +18,14 @@ SPEC.loader.exec_module(MODULE)
 
 def _ir():
     from app.ai.cad_ir.schema import (
-        Arc, CadIR, Circle, Point, Polyline, Segment, SourceInfo, TextEntity,
+        Arc,
+        CadIR,
+        Circle,
+        Point,
+        Polyline,
+        Segment,
+        SourceInfo,
+        TextEntity,
     )
 
     # 2000x1000 sheet -> isotropic scale = 1000/2000 = 0.5.
@@ -36,8 +43,8 @@ def _ir():
 
 def test_ir_to_dsl_normalizes_isotropically_and_drops_text():
     dsl = MODULE.ir_to_dsl(_ir())
-    assert dsl["lines"] == [[0, 0, 100, 50]]          # coords * 0.5
-    assert dsl["circles"] == [[200, 100, 40]]         # radius scaled too (isotropic)
+    assert dsl["lines"] == [[0, 0, 100, 50]]  # coords * 0.5
+    assert dsl["circles"] == [[200, 100, 40]]  # radius scaled too (isotropic)
     assert dsl["arcs"] == [[300, 100, 20, 0, 90]]
     assert dsl["polylines"] == [{"pts": [[0, 0], [50, 0], [50, 50]], "closed": 1}]
     assert "texts" not in dsl  # geometry-only DSL

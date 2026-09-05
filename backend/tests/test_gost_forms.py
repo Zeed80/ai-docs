@@ -13,9 +13,7 @@ try:
 except ImportError:
     _HAS_OPENPYXL = False
 
-pytestmark = pytest.mark.skipif(
-    not _HAS_OPENPYXL, reason="openpyxl not installed"
-)
+pytestmark = pytest.mark.skipif(not _HAS_OPENPYXL, reason="openpyxl not installed")
 
 from app.services.gost_forms import GostFormRenderer
 
@@ -82,6 +80,7 @@ def _make_operation(seq=5, op_type="turning", **kwargs):
 
 # ── МК ────────────────────────────────────────────────────────────────────────
 
+
 def test_mk_xlsx_returns_bytes():
     plan = _make_plan()
     ops = [
@@ -144,6 +143,7 @@ def test_mk_xlsx_contains_material():
 
 # ── ОК ────────────────────────────────────────────────────────────────────────
 
+
 def test_ok_xlsx_returns_bytes():
     plan = _make_plan()
     op = _make_operation()
@@ -188,6 +188,7 @@ def test_ok_xlsx_contains_time_norms():
 
 
 # ── Full package ───────────────────────────────────────────────────────────────
+
 
 def test_full_package_xlsx_returns_bytes():
     plan = _make_plan()

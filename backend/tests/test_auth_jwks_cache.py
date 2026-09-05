@@ -8,7 +8,7 @@ Verifies that:
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -17,6 +17,7 @@ import pytest
 def reset_jwks_cache():
     """Reset module-level JWKS cache state before each test."""
     import app.auth.jwt as jwt_module
+
     original_cache = jwt_module._jwks_cache
     original_fetched_at = jwt_module._jwks_fetched_at
     jwt_module._jwks_cache = None
@@ -42,6 +43,7 @@ async def test_jwks_fetched_only_once_for_multiple_calls():
 
     with patch("httpx.AsyncClient", return_value=mock_client):
         from app.auth.jwt import _get_jwks
+
         results = await asyncio.gather(*[_get_jwks() for _ in range(10)])
 
     assert all(r == fake_jwks for r in results), "All calls should return the same JWKS"
@@ -117,6 +119,7 @@ async def test_jwks_warm_cache_no_additional_fetch():
 
     with patch("httpx.AsyncClient", return_value=mock_client):
         from app.auth.jwt import _get_jwks
+
         result = await _get_jwks()
 
     assert result == fake_jwks

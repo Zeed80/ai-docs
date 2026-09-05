@@ -15,6 +15,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 def _fernet() -> Fernet:
     from app.config import settings
+
     # Derive a 32-byte key from APP_SECRET_KEY via SHA-256
     raw = settings.app_secret_key.encode()
     key_bytes = hashlib.sha256(raw).digest()

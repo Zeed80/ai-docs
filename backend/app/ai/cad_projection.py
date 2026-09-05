@@ -136,8 +136,7 @@ def place_views(
         placements["top"] = {
             # Directly below the front view and sharing its u — first-angle.
             "offset_u": origin_u_mm - tb["u_min"],
-            "offset_v": placements["front"]["offset_v"] + front_height + VIEW_GAP_MM
-            + tb["v_max"],
+            "offset_v": placements["front"]["offset_v"] + front_height + VIEW_GAP_MM + tb["v_max"],
         }
 
     entities: list[Any] = []
@@ -202,14 +201,12 @@ def place_sheet_views(
 
     anchor_index = next(
         (
-            index for index, view in enumerate(views)
+            index
+            for index, view in enumerate(views)
             if index not in skipped and view.get("kind") != "section" and bounds(view)
         ),
         next(
-            (
-                index for index, view in enumerate(views)
-                if index not in skipped and bounds(view)
-            ),
+            (index for index, view in enumerate(views) if index not in skipped and bounds(view)),
             None,
         ),
     )
@@ -310,8 +307,8 @@ _DIMENSION_KINDS = {
 
 
 # ГОСТ 2.307 dimension appearance, in millimetres of paper.
-DIM_OFFSET_MM = 8.0      # dimension line stands off the measured feature
-DIM_EXTENSION_MM = 2.0   # extension line runs past the dimension line
+DIM_OFFSET_MM = 8.0  # dimension line stands off the measured feature
+DIM_EXTENSION_MM = 2.0  # extension line runs past the dimension line
 DIM_ARROW_MM = 3.5
 DIM_TEXT_MM = 3.5
 
@@ -357,8 +354,9 @@ def dimensions_from_kernel(
                 y=(placement["offset_v"] - v) * px_per_mm,
             )
 
-        (u1, v1), (u2, v2) = (float(anchors[0][0]), float(anchors[0][1])), (
-            float(anchors[1][0]), float(anchors[1][1])
+        (u1, v1), (u2, v2) = (
+            (float(anchors[0][0]), float(anchors[0][1])),
+            (float(anchors[1][0]), float(anchors[1][1])),
         )
         du, dv = u2 - u1, v2 - v1
         span = math.hypot(du, dv)
@@ -403,10 +401,10 @@ def dimensions_from_kernel(
         # callout ("Ø56.55", "M75x1,5").  Appending the measured value to the
         # latter produced Ø56.5556.55, 1717 and M75x1,575 on real sheets.
         text = (
-            label
-            if any(character.isdigit() for character in label)
-            else f"{label}{value:g}"
-        ) if isinstance(value, (int, float)) else label
+            (label if any(character.isdigit() for character in label) else f"{label}{value:g}")
+            if isinstance(value, (int, float))
+            else label
+        )
         semantic = parse_dimension(text) or {}
         if text:
             mid_u = (u1 + u2) / 2.0 + ou + nu * 1.5
@@ -424,7 +422,9 @@ def dimensions_from_kernel(
         # and it is what makes this a dimension rather than four strokes.
         entities.append(
             DimensionEntity(
-                p1=to_point(u1, v1), p2=to_point(u2, v2), text=text,
+                p1=to_point(u1, v1),
+                p2=to_point(u2, v2),
+                text=text,
                 # What KIND of size this is, carried through from the kernel. It
                 # was dropped, so every dimension reached the IR as "linear" —
                 # a Ø102 measured between two generatrices exported to DXF as a
@@ -510,10 +510,9 @@ def verify_views_against_solid(
             front_v = front["v_max"] - front["v_min"]
             checks["front_width_mm"] = round(front_u, 3)
             checks["front_height_mm"] = round(front_v, 3)
-            checks["front_matches_solid"] = (
-                abs(front_u - diameter) <= max(0.05, diameter * 0.005)
-                and abs(front_v - diameter) <= max(0.05, diameter * 0.005)
-            )
+            checks["front_matches_solid"] = abs(front_u - diameter) <= max(
+                0.05, diameter * 0.005
+            ) and abs(front_v - diameter) <= max(0.05, diameter * 0.005)
             checks["ok"] = checks["ok"] and checks["front_matches_solid"]
         checks["expected_thickness_mm"] = round(length, 3)
         checks["expected_diameter_mm"] = round(diameter, 3)
@@ -525,10 +524,9 @@ def verify_views_against_solid(
         front_v = front["v_max"] - front["v_min"]
         checks["front_length_mm"] = round(front_u, 3)
         checks["front_height_mm"] = round(front_v, 3)
-        checks["front_matches_solid"] = (
-            abs(front_u - length) <= max(0.05, length * 0.005)
-            and abs(front_v - diameter) <= max(0.05, diameter * 0.005)
-        )
+        checks["front_matches_solid"] = abs(front_u - length) <= max(0.05, length * 0.005) and abs(
+            front_v - diameter
+        ) <= max(0.05, diameter * 0.005)
         checks["ok"] = checks["ok"] and checks["front_matches_solid"]
 
     side = (views.get("side") or {}).get("bounds_mm")
@@ -536,10 +534,9 @@ def verify_views_against_solid(
         side_u = side["u_max"] - side["u_min"]
         side_v = side["v_max"] - side["v_min"]
         checks["side_width_mm"] = round(side_u, 3)
-        checks["side_matches_solid"] = (
-            abs(side_u - diameter) <= max(0.05, diameter * 0.005)
-            and abs(side_v - diameter) <= max(0.05, diameter * 0.005)
-        )
+        checks["side_matches_solid"] = abs(side_u - diameter) <= max(
+            0.05, diameter * 0.005
+        ) and abs(side_v - diameter) <= max(0.05, diameter * 0.005)
         checks["ok"] = checks["ok"] and checks["side_matches_solid"]
 
     # Both in paper millimetres, i.e. already scaled — the same units the

@@ -26,7 +26,7 @@ import structlog
 
 logger = structlog.get_logger()
 
-_WORK_LONG_SIDE = 1000        # ECC on full-res masks is slow and no more accurate
+_WORK_LONG_SIDE = 1000  # ECC on full-res masks is slow and no more accurate
 _MAX_ECC_ITERATIONS = 200
 _ECC_EPS = 1e-6
 # Confidence gate: ECC's correlation coefficient on a genuinely corresponding
@@ -89,13 +89,19 @@ def align_result_to_source(result_png: bytes, source_bytes: bytes) -> bytes:
         res_img = Image.open(io.BytesIO(result_png)).convert("RGB")
         res_full = np.asarray(res_img.resize(src_img.size, Image.LANCZOS))
         aligned = cv2.warpAffine(
-            res_full, full, src_img.size, flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-            borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255),
+            res_full,
+            full,
+            src_img.size,
+            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(255, 255, 255),
         )
         logger.info(
             "align_applied",
-            scale_x=round(float(warp[0, 0]), 3), scale_y=round(float(warp[1, 1]), 3),
-            dx=round(float(full[0, 2]), 1), dy=round(float(full[1, 2]), 1),
+            scale_x=round(float(warp[0, 0]), 3),
+            scale_y=round(float(warp[1, 1]), 3),
+            dx=round(float(full[0, 2]), 1),
+            dy=round(float(full[1, 2]), 1),
         )
         buf = io.BytesIO()
         Image.fromarray(aligned).save(buf, format="PNG")
@@ -120,9 +126,7 @@ def _estimate(result_png: bytes, source_bytes: bytes):
         work_w, work_h = round(src_img.width * scale), round(src_img.height * scale)
 
         src_small = np.asarray(src_img.resize((work_w, work_h), Image.BILINEAR))
-        res_small = np.asarray(
-            res_img.convert("L").resize((work_w, work_h), Image.BILINEAR)
-        )
+        res_small = np.asarray(res_img.convert("L").resize((work_w, work_h), Image.BILINEAR))
         src_mask = _ink_mask(src_small)
         res_mask = _ink_mask(res_small)
         if src_mask.mean() < 0.002 or res_mask.mean() < 0.002:
@@ -158,7 +162,8 @@ def _estimate(result_png: bytes, source_bytes: bytes):
         logger.info(
             "align_estimated",
             cc=round(float(cc), 3),
-            scale_x=round(float(warp[0, 0]), 3), scale_y=round(float(warp[1, 1]), 3),
+            scale_x=round(float(warp[0, 0]), 3),
+            scale_y=round(float(warp[1, 1]), 3),
         )
         return warp, scale
     except ImportError:
@@ -186,9 +191,7 @@ def _ecc_pyramid(src_mask, res_mask, work_w: int, work_h: int):
         quarter_src, quarter_res, warp, cv2.MOTION_AFFINE, _criteria(), None, 5
     )
     warp[:, 2] *= 4
-    return cv2.findTransformECC(
-        src_mask, res_mask, warp, cv2.MOTION_AFFINE, _criteria(), None, 5
-    )
+    return cv2.findTransformECC(src_mask, res_mask, warp, cv2.MOTION_AFFINE, _criteria(), None, 5)
 
 
 def _ecc_phase_seeded(src_mask, res_mask, work_w: int, work_h: int):
@@ -197,9 +200,7 @@ def _ecc_phase_seeded(src_mask, res_mask, work_w: int, work_h: int):
 
     (dx0, dy0), _resp = cv2.phaseCorrelate(src_mask, res_mask)
     warp = np.array([[1, 0, dx0], [0, 1, dy0]], dtype=np.float32)
-    return cv2.findTransformECC(
-        src_mask, res_mask, warp, cv2.MOTION_AFFINE, _criteria(), None, 5
-    )
+    return cv2.findTransformECC(src_mask, res_mask, warp, cv2.MOTION_AFFINE, _criteria(), None, 5)
 
 
 def _ink_mask(gray):

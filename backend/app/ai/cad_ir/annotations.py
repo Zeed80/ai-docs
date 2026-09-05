@@ -10,18 +10,18 @@ from __future__ import annotations
 # text (not the Unicode GD&T glyphs, which few fonts carry) so it survives
 # every render target and DXF consumer.
 TOLERANCE_SYMBOLS: dict[str, str] = {
-    "straightness": "—",       # прямолинейность
-    "flatness": "▱",           # плоскостность
-    "roundness": "○",          # круглость
-    "cylindricity": "⌭",       # цилиндричность
-    "profile_line": "⌒",       # профиль продольного сечения
-    "parallelism": "∥",        # параллельность
-    "perpendicularity": "⊥",   # перпендикулярность
-    "angularity": "∠",         # наклон
-    "position": "⊕",           # позиционный допуск
-    "concentricity": "◎",      # соосность
-    "symmetry": "⌯",           # симметричность
-    "runout": "↗",             # биение
+    "straightness": "—",  # прямолинейность
+    "flatness": "▱",  # плоскостность
+    "roundness": "○",  # круглость
+    "cylindricity": "⌭",  # цилиндричность
+    "profile_line": "⌒",  # профиль продольного сечения
+    "parallelism": "∥",  # параллельность
+    "perpendicularity": "⊥",  # перпендикулярность
+    "angularity": "∠",  # наклон
+    "position": "⊕",  # позиционный допуск
+    "concentricity": "◎",  # соосность
+    "symmetry": "⌯",  # симметричность
+    "runout": "↗",  # биение
 }
 
 # ГОСТ 2.312 weld types (a small, common subset).

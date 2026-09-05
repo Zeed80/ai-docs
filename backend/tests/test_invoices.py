@@ -6,7 +6,15 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Document, DocumentStatus, Invoice, InvoiceLine, InvoiceStatus, Party, PartyRole
+from app.db.models import (
+    Document,
+    DocumentStatus,
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    Party,
+    PartyRole,
+)
 
 
 async def _create_invoice(db: AsyncSession) -> tuple[uuid.UUID, uuid.UUID]:

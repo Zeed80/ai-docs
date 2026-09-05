@@ -34,11 +34,13 @@ def _ir() -> CadIR:
                     Point(x=90, y=10),
                     Point(x=90, y=90),
                 ],
-                holes=[[
-                    Point(x=20, y=20),
-                    Point(x=30, y=20),
-                    Point(x=30, y=30),
-                ]],
+                holes=[
+                    [
+                        Point(x=20, y=20),
+                        Point(x=30, y=20),
+                        Point(x=30, y=30),
+                    ]
+                ],
             ),
         ],
         unresolved_regions=[

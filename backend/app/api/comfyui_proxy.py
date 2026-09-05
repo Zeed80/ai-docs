@@ -40,8 +40,13 @@ PROXY_MOUNT = "/api/comfyui-proxy"
 # request, etc).
 _STRIP_REQUEST_HEADERS = {"host", "content-length", "connection"}
 _STRIP_RESPONSE_HEADERS = {
-    "content-length", "content-encoding", "connection", "transfer-encoding",
-    "keep-alive", "x-frame-options", "content-security-policy",
+    "content-length",
+    "content-encoding",
+    "connection",
+    "transfer-encoding",
+    "keep-alive",
+    "x-frame-options",
+    "content-security-policy",
 }
 _ALLOWED_PATH_PREFIXES = (
     "",
@@ -154,10 +159,7 @@ def _inject_scaffolding(html: str) -> str:
     `<script src>` for the postMessage bridge (see `_BRIDGE_JS`)."""
     import re
 
-    tag = (
-        f'<base href="{PROXY_MOUNT}/">'
-        f'<script src="{PROXY_MOUNT}/{_BRIDGE_JS_PATH}"></script>'
-    )
+    tag = f'<base href="{PROXY_MOUNT}/"><script src="{PROXY_MOUNT}/{_BRIDGE_JS_PATH}"></script>'
     if "<head>" in html:
         return html.replace("<head>", f"<head>{tag}", 1)
     new_html, n = re.subn(r"(<head[^>]*>)", rf"\1{tag}", html, count=1)
@@ -175,24 +177,24 @@ async def bridge_js(user: UserInfo = Depends(get_current_user)) -> Response:
 # declaration order, and `/{path:path}` matches any suffix including
 # `__bridge.js` — without this ordering the catch-all would shadow it and
 # forward the request to ComfyUI instead of serving our own script.
-@router.api_route(
-    "/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
-)
+@router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy(
     path: str,
     request: Request,
     user: UserInfo = Depends(get_current_user),
 ):
     if not _can_access_proxy(user):
-        return Response(content="Недостаточно прав для ComfyUI.", status_code=403, media_type="text/plain")
+        return Response(
+            content="Недостаточно прав для ComfyUI.", status_code=403, media_type="text/plain"
+        )
     if not _path_allowed(path):
-        return Response(content="Путь ComfyUI не разрешен прокси.", status_code=403, media_type="text/plain")
+        return Response(
+            content="Путь ComfyUI не разрешен прокси.", status_code=403, media_type="text/plain"
+        )
     base_url = _comfyui_base_url()
     upstream_url = f"{base_url}/{path}"
     body = await request.body()
-    headers = {
-        k: v for k, v in request.headers.items() if k.lower() not in _STRIP_REQUEST_HEADERS
-    }
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in _STRIP_REQUEST_HEADERS}
 
     client = httpx.AsyncClient(timeout=60.0)
     try:
@@ -233,14 +235,15 @@ async def proxy(
             await client.aclose()
 
     return StreamingResponse(
-        body_iter(), status_code=upstream_resp.status_code, headers=resp_headers, media_type=content_type
+        body_iter(),
+        status_code=upstream_resp.status_code,
+        headers=resp_headers,
+        media_type=content_type,
     )
 
 
 @router.websocket("/ws")
-async def proxy_ws(
-    websocket: WebSocket, user: UserInfo = Depends(get_current_user)
-) -> None:
+async def proxy_ws(websocket: WebSocket, user: UserInfo = Depends(get_current_user)) -> None:
     """Bridges the browser's ComfyUI-frontend WebSocket (live queue/progress
     events) to the real ComfyUI node's ``/ws``. ``get_current_user`` works
     for both HTTP and WS connections (it takes the base ``HTTPConnection``,
@@ -281,7 +284,10 @@ async def proxy_ws(
                         await websocket.send_text(message)
 
             done, pending = await asyncio.wait(
-                [asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())],
+                [
+                    asyncio.create_task(client_to_upstream()),
+                    asyncio.create_task(upstream_to_client()),
+                ],
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:

@@ -3,7 +3,6 @@ from pathlib import Path
 
 from app.domain.engineering_model_graph import EngineeringModelGraph, GraphPatch
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -28,9 +27,7 @@ def test_checked_in_json_schemas_are_draft_2020_12_and_versioned():
     graph_schema = json.loads(
         (REPO_ROOT / "schemas/engineering-model-graph-1.0.schema.json").read_text()
     )
-    patch_schema = json.loads(
-        (REPO_ROOT / "schemas/graph-patch-1.0.schema.json").read_text()
-    )
+    patch_schema = json.loads((REPO_ROOT / "schemas/graph-patch-1.0.schema.json").read_text())
 
     assert graph_schema["$schema"].endswith("2020-12/schema")
     assert graph_schema["properties"]["schema_version"]["const"] == "emg/1.0"

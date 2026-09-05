@@ -30,17 +30,35 @@ def upgrade() -> None:
         sa.Column("corrected_by", sa.String(100), nullable=False),
         sa.Column("used_as_few_shot", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("note", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.ForeignKeyConstraint(["drawing_id"], ["drawings.id"]),
         sa.ForeignKeyConstraint(["feature_id"], ["drawing_features.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_drawing_feature_corrections_drawing_id", "drawing_feature_corrections", ["drawing_id"])
-    op.create_index("ix_dfc_drawing_type_corrected", "drawing_feature_corrections", ["drawing_type", "corrected_type"])
+    op.create_index(
+        "ix_drawing_feature_corrections_drawing_id", "drawing_feature_corrections", ["drawing_id"]
+    )
+    op.create_index(
+        "ix_dfc_drawing_type_corrected",
+        "drawing_feature_corrections",
+        ["drawing_type", "corrected_type"],
+    )
 
 
 def downgrade() -> None:
     op.drop_index("ix_dfc_drawing_type_corrected", table_name="drawing_feature_corrections")
-    op.drop_index("ix_drawing_feature_corrections_drawing_id", table_name="drawing_feature_corrections")
+    op.drop_index(
+        "ix_drawing_feature_corrections_drawing_id", table_name="drawing_feature_corrections"
+    )
     op.drop_table("drawing_feature_corrections")

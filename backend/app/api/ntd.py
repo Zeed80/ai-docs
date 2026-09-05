@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -18,19 +18,25 @@ from app.db.models import (
     DocumentExtraction,
     DocumentStatus,
     ExtractionField,
-    NTDCheckFinding,
-    NTDCheckRun,
-    NTDControlSettings,
     NormativeClause,
     NormativeDocument,
     NormativeDocumentVersion,
     NormativeRequirement,
+    NTDCheckFinding,
+    NTDCheckRun,
+    NTDControlSettings,
 )
 from app.db.session import get_db
 from app.db.text_search import text_search_condition, text_search_rank
 from app.domain.ntd import (
-    NTDCheckRunDetail,
+    NormativeClauseCreate,
+    NormativeClauseOut,
+    NormativeDocumentCreate,
+    NormativeDocumentOut,
+    NormativeRequirementCreate,
+    NormativeRequirementOut,
     NTDCheckAvailabilityResponse,
+    NTDCheckRunDetail,
     NTDCheckRunOut,
     NTDCheckRunRequest,
     NTDControlSettingsOut,
@@ -42,12 +48,6 @@ from app.domain.ntd import (
     NTDFindingDecisionRequest,
     NTDFindingOut,
     NTDRequirementSearchResponse,
-    NormativeClauseCreate,
-    NormativeClauseOut,
-    NormativeDocumentCreate,
-    NormativeDocumentOut,
-    NormativeRequirementCreate,
-    NormativeRequirementOut,
 )
 from app.domain.ntd_checker import build_ntd_findings, build_semantic_ntd_findings
 from app.domain.ntd_parser import detect_normative_metadata, parse_normative_text
@@ -57,34 +57,55 @@ router = APIRouter()
 
 def _doc_out(doc: NormativeDocument) -> NormativeDocumentOut:
     """Build NormativeDocumentOut from ORM object, avoiding MetaData alias conflict."""
-    return NormativeDocumentOut.model_validate({
-        "id": doc.id, "code": doc.code, "title": doc.title,
-        "document_type": doc.document_type, "status": doc.status,
-        "current_version_id": doc.current_version_id, "scope": doc.scope,
-        "source_document_id": doc.source_document_id,
-        "metadata": doc.metadata_, "created_at": doc.created_at,
-    })
+    return NormativeDocumentOut.model_validate(
+        {
+            "id": doc.id,
+            "code": doc.code,
+            "title": doc.title,
+            "document_type": doc.document_type,
+            "status": doc.status,
+            "current_version_id": doc.current_version_id,
+            "scope": doc.scope,
+            "source_document_id": doc.source_document_id,
+            "metadata": doc.metadata_,
+            "created_at": doc.created_at,
+        }
+    )
 
 
 def _clause_out(clause: NormativeClause) -> NormativeClauseOut:
-    return NormativeClauseOut.model_validate({
-        "id": clause.id, "normative_document_id": clause.normative_document_id,
-        "version_id": clause.version_id, "clause_number": clause.clause_number,
-        "title": clause.title, "text": clause.text,
-        "parent_clause_id": clause.parent_clause_id,
-        "metadata": clause.metadata_, "created_at": clause.created_at,
-    })
+    return NormativeClauseOut.model_validate(
+        {
+            "id": clause.id,
+            "normative_document_id": clause.normative_document_id,
+            "version_id": clause.version_id,
+            "clause_number": clause.clause_number,
+            "title": clause.title,
+            "text": clause.text,
+            "parent_clause_id": clause.parent_clause_id,
+            "metadata": clause.metadata_,
+            "created_at": clause.created_at,
+        }
+    )
 
 
 def _requirement_out(req: NormativeRequirement) -> NormativeRequirementOut:
-    return NormativeRequirementOut.model_validate({
-        "id": req.id, "normative_document_id": req.normative_document_id,
-        "clause_id": req.clause_id, "requirement_code": req.requirement_code,
-        "requirement_type": req.requirement_type, "applies_to": req.applies_to,
-        "text": req.text, "required_keywords": req.required_keywords,
-        "severity": req.severity, "is_active": req.is_active,
-        "metadata": req.metadata_, "created_at": req.created_at,
-    })
+    return NormativeRequirementOut.model_validate(
+        {
+            "id": req.id,
+            "normative_document_id": req.normative_document_id,
+            "clause_id": req.clause_id,
+            "requirement_code": req.requirement_code,
+            "requirement_type": req.requirement_type,
+            "applies_to": req.applies_to,
+            "text": req.text,
+            "required_keywords": req.required_keywords,
+            "severity": req.severity,
+            "is_active": req.is_active,
+            "metadata": req.metadata_,
+            "created_at": req.created_at,
+        }
+    )
 
 
 @router.get("/settings/ntd-control", response_model=NTDControlSettingsOut)
@@ -248,7 +269,9 @@ async def create_normative_document_from_source(
     )
 
 
-@router.post("/ntd/documents/{normative_document_id}/index", response_model=NTDDocumentIndexResponse)
+@router.post(
+    "/ntd/documents/{normative_document_id}/index", response_model=NTDDocumentIndexResponse
+)
 async def index_normative_document(
     normative_document_id: uuid.UUID,
     payload: NTDDocumentIndexRequest,
@@ -267,7 +290,9 @@ async def index_normative_document(
             raise HTTPException(status_code=404, detail="Source document not found")
         text = await _document_text(db, source_document.id)
     if not text.strip():
-        text = "\n".join(part for part in [normative_document.title, normative_document.scope] if part)
+        text = "\n".join(
+            part for part in [normative_document.title, normative_document.scope] if part
+        )
     if not text.strip():
         raise HTTPException(status_code=409, detail="No text available for NTD indexing")
 
@@ -469,11 +494,15 @@ async def run_document_ntd_check(
     """Skill: ntd.norm_control_run — Check one document against applicable NTD."""
     request = payload or NTDCheckRunRequest(document_id=document_id)
     if request.document_id != document_id:
-        raise HTTPException(status_code=400, detail="Path document_id and payload document_id differ")
+        raise HTTPException(
+            status_code=400, detail="Path document_id and payload document_id differ"
+        )
     return await _run_ntd_check(db, request)
 
 
-@router.get("/documents/{document_id}/ntd-check/availability", response_model=NTDCheckAvailabilityResponse)
+@router.get(
+    "/documents/{document_id}/ntd-check/availability", response_model=NTDCheckAvailabilityResponse
+)
 async def get_document_ntd_check_availability(
     document_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -772,7 +801,9 @@ async def _applicable_requirements(
 
 async def _refresh_check_counts(db: AsyncSession, check: NTDCheckRun) -> None:
     total = await db.execute(
-        select(func.count()).select_from(NTDCheckFinding).where(NTDCheckFinding.check_id == check.id)
+        select(func.count())
+        .select_from(NTDCheckFinding)
+        .where(NTDCheckFinding.check_id == check.id)
     )
     open_count = await db.execute(
         select(func.count())

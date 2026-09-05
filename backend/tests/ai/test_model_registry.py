@@ -4,8 +4,9 @@ from app.ai import model_registry as mr
 from app.ai.model_registry import ModelRegistry
 from app.ai.schemas import AITask, ModelStatus, ProviderKind
 
-
-REGISTRY_PATH = Path(__file__).parent.parent.parent / "app" / "ai" / "config" / "model_registry.yaml"
+REGISTRY_PATH = (
+    Path(__file__).parent.parent.parent / "app" / "ai" / "config" / "model_registry.yaml"
+)
 
 
 def test_registry_loads_baseline_models() -> None:
@@ -65,7 +66,9 @@ def test_thinking_levels_override_positive_verdict(monkeypatch) -> None:
         "_load_thinking_overrides",
         lambda: {
             "qwen3_6_35b_apex_ollama": {
-                "enabled": None, "level": "high", "levels": ["low", "medium", "high"],
+                "enabled": None,
+                "level": "high",
+                "levels": ["low", "medium", "high"],
             }
         },
     )

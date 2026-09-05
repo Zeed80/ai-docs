@@ -1,9 +1,10 @@
 """Notifications API — in-app notification inbox + real-time WS push."""
+
 from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import structlog
@@ -61,9 +62,7 @@ async def list_notifications(
         stmt = stmt.where(Notification.is_read == True)  # noqa: E712
 
     if cursor:
-        ref = await db.execute(
-            select(Notification.created_at).where(Notification.id == cursor)
-        )
+        ref = await db.execute(select(Notification.created_at).where(Notification.id == cursor))
         ref_ts = ref.scalar_one_or_none()
         if ref_ts:
             stmt = stmt.where(Notification.created_at < ref_ts)
@@ -129,7 +128,6 @@ async def get_delivery_settings(
     db: AsyncSession = Depends(get_db),
 ):
     from app.db.models import UserNotificationSettings
-
     from app.services.notifications import _user_timezone
 
     # Зона читается из профиля в БД, а не из токена: она могла измениться
@@ -195,7 +193,9 @@ async def list_preferences(
             await db.execute(
                 select(UserNotificationPref).where(UserNotificationPref.user_sub == user.sub)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     }
     out = []
     for t in NotificationType:
@@ -322,9 +322,7 @@ async def submit_notification_feedback(
 
     snoozed_until = None
     if payload.action == "snoozed":
-        snoozed_until = datetime.now(timezone.utc) + timedelta(
-            minutes=payload.snooze_minutes or 60
-        )
+        snoozed_until = datetime.now(UTC) + timedelta(minutes=payload.snooze_minutes or 60)
 
     await record_proactive_feedback(
         db,
@@ -371,6 +369,7 @@ async def notifications_ws(websocket: WebSocket) -> None:
     try:
         from app.auth.jwt import _verify_token
         from app.config import settings
+
         if settings.auth_enabled:
             user_info = await _verify_token(token)
             user_sub = user_info.sub
@@ -384,6 +383,7 @@ async def notifications_ws(websocket: WebSocket) -> None:
 
     sid = None
     try:
+
         async def on_event(event: dict) -> None:
             try:
                 await websocket.send_text(json.dumps(event))

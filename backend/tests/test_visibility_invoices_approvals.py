@@ -23,8 +23,12 @@ from app.main import app
 
 def _doc(name: str, **kw) -> Document:
     return Document(
-        file_name=name, file_hash=name, file_size=1, mime_type="application/pdf",
-        storage_path=f"/{name}", **kw,
+        file_name=name,
+        file_hash=name,
+        file_size=1,
+        mime_type="application/pdf",
+        storage_path=f"/{name}",
+        **kw,
     )
 
 
@@ -44,6 +48,7 @@ def _clear_overrides():
 
 # ── Invoices ────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 async def invoices_setup(db_session):
     dept_a = Department(name="A", code="a")
@@ -57,12 +62,16 @@ async def invoices_setup(db_session):
     db_session.add_all([d_leg, d_a, d_b])
     await db_session.flush()
 
-    db_session.add_all([
-        Invoice(document_id=d_leg.id, invoice_number="LEG"),
-        Invoice(document_id=d_a.id, invoice_number="A1"),
-        Invoice(document_id=d_b.id, invoice_number="B1"),
-    ])
-    db_session.add(User(sub="u:alice", email="a@x", name="Alice", role="buyer", department_id=dept_a.id))
+    db_session.add_all(
+        [
+            Invoice(document_id=d_leg.id, invoice_number="LEG"),
+            Invoice(document_id=d_a.id, invoice_number="A1"),
+            Invoice(document_id=d_b.id, invoice_number="B1"),
+        ]
+    )
+    db_session.add(
+        User(sub="u:alice", email="a@x", name="Alice", role="buyer", department_id=dept_a.id)
+    )
     await db_session.commit()
 
 
@@ -71,8 +80,8 @@ async def test_invoice_visibility_scopes_by_document(client: AsyncClient, invoic
     r = await client.get("/api/invoices")
     assert r.status_code == 200
     nums = {i["invoice_number"] for i in r.json()["items"]}
-    assert "LEG" in nums   # legacy/unowned visible to all
-    assert "A1" in nums    # alice's department
+    assert "LEG" in nums  # legacy/unowned visible to all
+    assert "A1" in nums  # alice's department
     assert "B1" not in nums  # other department hidden
 
 
@@ -84,6 +93,7 @@ async def test_invoice_admin_sees_all(client: AsyncClient, invoices_setup):
 
 
 # ── Approvals ─────────────────────────────────────────────────────────────────
+
 
 def _approval(**kw) -> Approval:
     # Use entity_type that is not subject to the orphan-exists filter
@@ -99,12 +109,14 @@ def _approval(**kw) -> Approval:
 
 @pytest.fixture
 async def approvals_setup(db_session):
-    db_session.add_all([
-        _approval(assigned_to="u:alice"),                       # mine
-        _approval(assigned_to="u:bob"),                         # someone else's
-        _approval(assigned_to=None, chain_root_id=None),        # unassigned pickup queue
-        _approval(assigned_to="u:carol", requested_by="u:alice"),  # I requested it
-    ])
+    db_session.add_all(
+        [
+            _approval(assigned_to="u:alice"),  # mine
+            _approval(assigned_to="u:bob"),  # someone else's
+            _approval(assigned_to=None, chain_root_id=None),  # unassigned pickup queue
+            _approval(assigned_to="u:carol", requested_by="u:alice"),  # I requested it
+        ]
+    )
     await db_session.commit()
 
 
@@ -113,10 +125,10 @@ async def test_pending_approvals_scoped_for_non_manager(client: AsyncClient, app
     r = await client.get("/api/approvals/pending")
     assert r.status_code == 200
     assigned = [a["assigned_to"] for a in r.json()["items"]]
-    assert "u:alice" in assigned       # assigned to me
-    assert None in assigned            # unassigned visible
-    assert "u:carol" in assigned       # requested by me
-    assert "u:bob" not in assigned     # other's — hidden
+    assert "u:alice" in assigned  # assigned to me
+    assert None in assigned  # unassigned visible
+    assert "u:carol" in assigned  # requested by me
+    assert "u:bob" not in assigned  # other's — hidden
 
 
 async def test_pending_approvals_manager_sees_all(client: AsyncClient, approvals_setup):

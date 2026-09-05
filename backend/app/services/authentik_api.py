@@ -9,6 +9,7 @@ logger = structlog.get_logger()
 
 def _headers() -> dict[str, str]:
     from app.services.integration_config import get_authentik_token
+
     return {
         "Authorization": f"Bearer {get_authentik_token()}",
         "Content-Type": "application/json",
@@ -17,12 +18,14 @@ def _headers() -> dict[str, str]:
 
 def _base() -> str:
     from app.config import settings
+
     return f"{settings.authentik_url}/api/v3"
 
 
 async def find_user_by_email(email: str) -> int | None:
     """Return Authentik PK for the user with this email, or None."""
     import httpx
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(
             f"{_base()}/core/users/",
@@ -40,6 +43,7 @@ async def find_user_by_email(email: str) -> int | None:
 async def create_user(email: str, username: str, name: str) -> int:
     """Create a user in Authentik and return its PK."""
     import httpx
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.post(
             f"{_base()}/core/users/",
@@ -65,6 +69,7 @@ async def create_user(email: str, username: str, name: str) -> int:
 async def set_password(authentik_pk: int, password: str) -> None:
     """Set password for an Authentik user."""
     import httpx
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.post(
             f"{_base()}/core/users/{authentik_pk}/set_password/",

@@ -59,7 +59,9 @@ def page_product_verdict(text: str | None) -> PageVerdict:
     )
 
 
-def entry_content_hash(document_id, page_number: int, part_number: str | None, name: str | None) -> str:
+def entry_content_hash(
+    document_id, page_number: int, part_number: str | None, name: str | None
+) -> str:
     """Stable identity of a position within its catalog.
 
     Re-running a batch (a restart, a manual re-parse) must not create a second
@@ -85,9 +87,7 @@ def page_image_path(storage_path: str, page_number: int, *, thumb: bool = False)
     return f"{catalog_pages_prefix(storage_path)}/pages/{page_number:04d}{suffix}.webp"
 
 
-def crop_image_path(
-    storage_path: str, page_number: int, key: str, *, thumb: bool = False
-) -> str:
+def crop_image_path(storage_path: str, page_number: int, key: str, *, thumb: bool = False) -> str:
     suffix = "_thumb" if thumb else ""
     safe_key = re.sub(r"[^a-z0-9]+", "", key.lower()) or "0"
     return f"{catalog_pages_prefix(storage_path)}/crops/{page_number:04d}_{safe_key}{suffix}.webp"

@@ -20,7 +20,7 @@ class OpenRouterProvider(OpenAICompatibleProvider):
     kind = ProviderKind.OPENROUTER
 
     @classmethod
-    def from_env(cls) -> "OpenRouterProvider":
+    def from_env(cls) -> OpenRouterProvider:
         config = ProviderConfig(
             kind=ProviderKind.OPENROUTER,
             base_url=_OPENROUTER_BASE,

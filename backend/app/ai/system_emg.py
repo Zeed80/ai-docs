@@ -25,7 +25,6 @@ from app.domain.engineering_model_graph import (
     UnknownValue,
 )
 
-
 SystemProfile = Literal["mep", "electrical", "hydraulic", "pid"]
 PortDirection = Literal["in", "out", "bidirectional"]
 
@@ -66,7 +65,7 @@ class EngineeringSystemModel(_StrictModel):
     connections: list[SystemConnection] = Field(default_factory=list, max_length=100_000)
 
     @model_validator(mode="after")
-    def validate_references_and_compatibility(self) -> "EngineeringSystemModel":
+    def validate_references_and_compatibility(self) -> EngineeringSystemModel:
         equipment_ids = [item.id for item in self.equipment]
         port_ids = [item.id for item in self.ports]
         connection_ids = [item.id for item in self.connections]
@@ -112,9 +111,7 @@ class EngineeringSystemModel(_StrictModel):
             for port_id in (connection.first_port_id, connection.second_port_id)
         )
         return sorted(
-            item.id
-            for item in self.ports
-            if item.required_connection and degree[item.id] == 0
+            item.id for item in self.ports if item.required_connection and degree[item.id] == 0
         )
 
 
@@ -148,53 +145,61 @@ def system_as_graph(
     port_nodes = {}
 
     system_kind_id = "assertion:system:kind"
-    assertions.append(Assertion(
-        id=system_kind_id,
-        subject_id=system_id,
-        predicate=PREDICATE.SYSTEM_KIND,
-        value=ExactValue(kind="exact", value=model.system_kind),
-        origin="human",
-        assurance=assurance,
-        evidence_ids=[evidence.id],
-        confidence=1.0,
-        impacts=["connectivity", "regulatory_check"],
-    ))
+    assertions.append(
+        Assertion(
+            id=system_kind_id,
+            subject_id=system_id,
+            predicate=PREDICATE.SYSTEM_KIND,
+            value=ExactValue(kind="exact", value=model.system_kind),
+            origin="human",
+            assurance=assurance,
+            evidence_ids=[evidence.id],
+            confidence=1.0,
+            impacts=["connectivity", "regulatory_check"],
+        )
+    )
     required.append(system_kind_id)
 
     for item in model.equipment:
         node_id = _stable("component:system", item.id)
         equipment_nodes[item.id] = node_id
         nodes.append(GraphNode(id=node_id, type="Component", name=item.name))
-        edges.append(GraphEdge(
-            id=_stable("contains:system", item.id),
-            type="contains",
-            source_id=system_id,
-            target_id=node_id,
-        ))
+        edges.append(
+            GraphEdge(
+                id=_stable("contains:system", item.id),
+                type="contains",
+                source_id=system_id,
+                target_id=node_id,
+            )
+        )
         assertion_id = _stable("assertion:equipment-type", item.id)
-        assertions.append(Assertion(
-            id=assertion_id,
-            subject_id=node_id,
-            predicate=PREDICATE.EQUIPMENT_TYPE,
-            value=ExactValue(kind="exact", value=item.equipment_type),
-            origin="human",
-            assurance=assurance,
-            evidence_ids=[evidence.id],
-            confidence=1.0,
-            impacts=["connectivity", "envelope"],
-        ))
+        assertions.append(
+            Assertion(
+                id=assertion_id,
+                subject_id=node_id,
+                predicate=PREDICATE.EQUIPMENT_TYPE,
+                value=ExactValue(kind="exact", value=item.equipment_type),
+                origin="human",
+                assurance=assurance,
+                evidence_ids=[evidence.id],
+                confidence=1.0,
+                impacts=["connectivity", "envelope"],
+            )
+        )
         required.append(assertion_id)
 
     for item in model.ports:
         node_id = _stable("port:system", item.id)
         port_nodes[item.id] = node_id
         nodes.append(GraphNode(id=node_id, type="Port", name=item.id))
-        edges.append(GraphEdge(
-            id=_stable("part-of:port", item.id),
-            type="part_of",
-            source_id=node_id,
-            target_id=equipment_nodes[item.equipment_id],
-        ))
+        edges.append(
+            GraphEdge(
+                id=_stable("part-of:port", item.id),
+                type="part_of",
+                source_id=node_id,
+                target_id=equipment_nodes[item.equipment_id],
+            )
+        )
         values = [
             (PREDICATE.PORT_KIND, item.kind, None),
             (PREDICATE.PORT_DIRECTION, item.direction, None),
@@ -204,61 +209,69 @@ def system_as_graph(
             values.append((PREDICATE.PORT_NOMINAL_SIZE, item.nominal_size_mm, "mm"))
         for predicate, value, unit in values:
             assertion_id = _stable(f"assertion:{predicate}", item.id)
-            assertions.append(Assertion(
-                id=assertion_id,
-                subject_id=node_id,
-                predicate=predicate,
-                value=ExactValue(kind="exact", value=value),
-                unit=unit,
-                origin="human",
-                assurance=assurance,
-                evidence_ids=[evidence.id],
-                confidence=1.0,
-                impacts=["connectivity", "connection_opening", "operational_safety"],
-            ))
+            assertions.append(
+                Assertion(
+                    id=assertion_id,
+                    subject_id=node_id,
+                    predicate=predicate,
+                    value=ExactValue(kind="exact", value=value),
+                    unit=unit,
+                    origin="human",
+                    assurance=assurance,
+                    evidence_ids=[evidence.id],
+                    confidence=1.0,
+                    impacts=["connectivity", "connection_opening", "operational_safety"],
+                )
+            )
             required.append(assertion_id)
 
     for connection in model.connections:
-        edges.append(GraphEdge(
-            id=_stable("connects:system", connection.id),
-            type="connects_to",
-            source_id=port_nodes[connection.first_port_id],
-            target_id=port_nodes[connection.second_port_id],
-        ))
+        edges.append(
+            GraphEdge(
+                id=_stable("connects:system", connection.id),
+                type="connects_to",
+                source_id=port_nodes[connection.first_port_id],
+                target_id=port_nodes[connection.second_port_id],
+            )
+        )
 
     unresolved = model.unresolved_port_ids()
     connectivity_id = "assertion:system:connectivity-closed"
     required_2d_id = "assertion:system:required-diagram"
-    assertions.append(Assertion(
-        id=connectivity_id,
-        subject_id=system_id,
-        predicate=PREDICATE.SYSTEM_CONNECTIVITY_CLOSED,
-        value=(
-            ExactValue(kind="exact", value=True)
-            if not unresolved
-            else UnknownValue(
-                kind="unknown",
-                reason="unconnected required ports: " + ", ".join(unresolved),
-            )
-        ),
-        origin="derived",
-        assurance="constraint_validated" if not unresolved else "proposed",
-        confidence=1.0 if not unresolved else 0.0,
-        impacts=["connectivity", "operational_safety"],
-    ))
+    assertions.append(
+        Assertion(
+            id=connectivity_id,
+            subject_id=system_id,
+            predicate=PREDICATE.SYSTEM_CONNECTIVITY_CLOSED,
+            value=(
+                ExactValue(kind="exact", value=True)
+                if not unresolved
+                else UnknownValue(
+                    kind="unknown",
+                    reason="unconnected required ports: " + ", ".join(unresolved),
+                )
+            ),
+            origin="derived",
+            assurance="constraint_validated" if not unresolved else "proposed",
+            confidence=1.0 if not unresolved else 0.0,
+            impacts=["connectivity", "operational_safety"],
+        )
+    )
     required.append(connectivity_id)
-    assertions.append(Assertion(
-        id=required_2d_id,
-        subject_id=system_id,
-        predicate=PREDICATE.SYSTEM_REQUIRED_DIAGRAM_COMPLETE,
-        value=UnknownValue(
-            kind="unknown",
-            reason="P&ID, schematic or system diagram has not been verified",
-        ),
-        origin="derived",
-        assurance="proposed",
-        impacts=["required_view"],
-    ))
+    assertions.append(
+        Assertion(
+            id=required_2d_id,
+            subject_id=system_id,
+            predicate=PREDICATE.SYSTEM_REQUIRED_DIAGRAM_COMPLETE,
+            value=UnknownValue(
+                kind="unknown",
+                reason="P&ID, schematic or system diagram has not been verified",
+            ),
+            origin="derived",
+            assurance="proposed",
+            impacts=["required_view"],
+        )
+    )
     required.append(required_2d_id)
     requirement = Requirement(
         id="requirement:system-release",
@@ -295,10 +308,15 @@ def system_as_graph(
 def build_system_diagram_svg(model: EngineeringSystemModel) -> tuple[bytes, dict]:
     """Render and independently reopen a deterministic semantic system diagram."""
     width = max(420, 120 + len(model.equipment) * 220)
-    height = max(300, 180 + max((
-        sum(port.equipment_id == item.id for port in model.ports)
-        for item in model.equipment
-    ), default=1) * 34)
+    height = max(
+        300,
+        180
+        + max(
+            (sum(port.equipment_id == item.id for port in model.ports) for item in model.equipment),
+            default=1,
+        )
+        * 34,
+    )
     equipment_positions: dict[str, tuple[float, float]] = {}
     port_positions: dict[str, tuple[float, float]] = {}
     equipment_ports = {
@@ -326,7 +344,7 @@ def build_system_diagram_svg(model: EngineeringSystemModel) -> tuple[bytes, dict
             f'<g data-equipment-id="{html.escape(item.id)}">'
             f'<rect x="{x:.1f}" y="{y:.1f}" width="140" height="120" rx="8" />'
             f'<text x="{x + 70:.1f}" y="{y + 24:.1f}" text-anchor="middle">'
-            f'{html.escape(item.name)}</text>{"".join(port_items)}</g>'
+            f"{html.escape(item.name)}</text>{''.join(port_items)}</g>"
         )
     connections = []
     for connection in model.connections:
@@ -347,14 +365,14 @@ def build_system_diagram_svg(model: EngineeringSystemModel) -> tuple[bytes, dict
         '<?xml version="1.0" encoding="UTF-8"?>'
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}">'
-        '<style>rect{fill:#fff;stroke:#111;stroke-width:2}'
-        'circle{fill:#fff;stroke:#111;stroke-width:2}'
-        'polyline{fill:none;stroke:#075985;stroke-width:3}'
-        'text{font:14px sans-serif;fill:#111}</style>'
+        "<style>rect{fill:#fff;stroke:#111;stroke-width:2}"
+        "circle{fill:#fff;stroke:#111;stroke-width:2}"
+        "polyline{fill:none;stroke:#075985;stroke-width:3}"
+        "text{font:14px sans-serif;fill:#111}</style>"
         f'<text x="20" y="30">{html.escape(model.name)} — {html.escape(model.system_kind)}</text>'
         f'<g id="connections">{"".join(connections)}</g>'
         f'<g id="equipment">{"".join(groups)}</g>'
-        '</svg>'
+        "</svg>"
     ).encode()
     reopened = ElementTree.fromstring(svg)
     namespace = {"svg": "http://www.w3.org/2000/svg"}
@@ -407,9 +425,9 @@ def system_diagram_patch(
     ):
         raise ValueError("system diagram report does not validate the supplied SVG")
     required = next(
-        item for item in graph.assertions
-        if item.state == "active"
-        and item.predicate == PREDICATE.SYSTEM_REQUIRED_DIAGRAM_COMPLETE
+        item
+        for item in graph.assertions
+        if item.state == "active" and item.predicate == PREDICATE.SYSTEM_REQUIRED_DIAGRAM_COMPLETE
     )
     suffix = artifact_sha[:16]
     artifact_id = f"artifact:system-diagram:{suffix}"
@@ -432,12 +450,14 @@ def system_diagram_patch(
             GraphNode(id=operation_id, type="BuildOperation", name="Build system diagram"),
             GraphNode(id=artifact_id, type="Artifact", name="System diagram SVG"),
         ],
-        add_edges=[GraphEdge(
-            id=f"generated-by:system-diagram:{suffix}",
-            type="generated_by",
-            source_id=artifact_id,
-            target_id=operation_id,
-        )],
+        add_edges=[
+            GraphEdge(
+                id=f"generated-by:system-diagram:{suffix}",
+                type="generated_by",
+                source_id=artifact_id,
+                target_id=operation_id,
+            )
+        ],
         add_evidence=[evidence],
         add_assertions=[
             Assertion(

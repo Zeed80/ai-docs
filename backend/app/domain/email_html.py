@@ -26,7 +26,9 @@ _JS_URL = re.compile(r"(href|src|action)\s*=\s*(\"|')?\s*javascript:[^\"'>\s]*",
 
 
 _REMOTE_IMG_SRC = re.compile(r"""(?i)\bsrc\s*=\s*(['"]?)(https?://[^'"\s>]+)\1""")
-_REMOTE_BG = re.compile(r"""(?i)background(-image)?\s*:\s*url\(\s*['"]?(https?://[^'")]+)['"]?\s*\)""")
+_REMOTE_BG = re.compile(
+    r"""(?i)background(-image)?\s*:\s*url\(\s*['"]?(https?://[^'")]+)['"]?\s*\)"""
+)
 
 
 def block_remote_images(html: str | None) -> tuple[str | None, int]:
@@ -44,14 +46,14 @@ def block_remote_images(html: str | None) -> tuple[str | None, int]:
         return html, 0
     count = 0
 
-    def _sub_img(match: "re.Match[str]") -> str:
+    def _sub_img(match: re.Match[str]) -> str:
         nonlocal count
         count += 1
         return f'data-blocked-src="{match.group(2)}"'
 
     out = _REMOTE_IMG_SRC.sub(_sub_img, html)
 
-    def _sub_bg(match: "re.Match[str]") -> str:
+    def _sub_bg(match: re.Match[str]) -> str:
         nonlocal count
         count += 1
         return "background-image:none"
@@ -73,13 +75,11 @@ def rewrite_cid_images(html: str | None, message_id) -> str | None:
     if not html or "cid:" not in html.lower():
         return html
 
-    def _sub(match: "re.Match[str]") -> str:
+    def _sub(match: re.Match[str]) -> str:
         from urllib.parse import quote
 
         cid = match.group(2).strip().strip("<>")
-        return (
-            f'src="/api/email/messages/{message_id}/attachments/cid/{quote(cid)}/content"'
-        )
+        return f'src="/api/email/messages/{message_id}/attachments/cid/{quote(cid)}/content"'
 
     return _CID_SRC.sub(_sub, html)
 
@@ -93,8 +93,22 @@ def sanitize_email_html(html: str | None) -> str | None:
         return nh3.clean(
             html,
             tags=nh3.ALLOWED_TAGS
-            | {"img", "table", "thead", "tbody", "tfoot", "tr", "td", "th",
-               "span", "div", "figure", "figcaption", "hr", "pre"},
+            | {
+                "img",
+                "table",
+                "thead",
+                "tbody",
+                "tfoot",
+                "tr",
+                "td",
+                "th",
+                "span",
+                "div",
+                "figure",
+                "figcaption",
+                "hr",
+                "pre",
+            },
             attributes={
                 "*": {"style", "class", "align", "width", "height"},
                 "a": {"href", "title", "target", "rel"},
@@ -118,8 +132,23 @@ def sanitize_email_html(html: str | None) -> str | None:
 # ── HTML → plain text ──────────────────────────────────────────────────────
 
 _BLOCK_TAGS = {
-    "p", "div", "tr", "table", "blockquote", "section", "article",
-    "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "hr", "pre",
+    "p",
+    "div",
+    "tr",
+    "table",
+    "blockquote",
+    "section",
+    "article",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "ul",
+    "ol",
+    "hr",
+    "pre",
 }
 # Cell boundaries need a separator or a price table reads as "Итого240000".
 _CELL_TAGS = {"td", "th"}

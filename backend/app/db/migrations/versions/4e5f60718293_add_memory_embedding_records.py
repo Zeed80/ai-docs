@@ -4,17 +4,17 @@ Revision ID: 4e5f60718293
 Revises: 3d4e5f607182
 Create Date: 2026-04-28 00:00:00.000000
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-
 revision: str = "4e5f60718293"
-down_revision: Union[str, None] = "3d4e5f607182"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "3d4e5f607182"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -32,25 +32,62 @@ def upgrade() -> None:
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
         sa.ForeignKeyConstraint(["document_version_id"], ["document_versions.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_memory_embedding_records_content_type"), "memory_embedding_records", ["content_type"])
-    op.create_index(op.f("ix_memory_embedding_records_content_id"), "memory_embedding_records", ["content_id"])
-    op.create_index(op.f("ix_memory_embedding_records_document_id"), "memory_embedding_records", ["document_id"])
-    op.create_index(op.f("ix_memory_embedding_records_document_version_id"), "memory_embedding_records", ["document_version_id"])
-    op.create_index(op.f("ix_memory_embedding_records_point_id"), "memory_embedding_records", ["point_id"])
-    op.create_index(op.f("ix_memory_embedding_records_status"), "memory_embedding_records", ["status"])
+    op.create_index(
+        op.f("ix_memory_embedding_records_content_type"),
+        "memory_embedding_records",
+        ["content_type"],
+    )
+    op.create_index(
+        op.f("ix_memory_embedding_records_content_id"), "memory_embedding_records", ["content_id"]
+    )
+    op.create_index(
+        op.f("ix_memory_embedding_records_document_id"), "memory_embedding_records", ["document_id"]
+    )
+    op.create_index(
+        op.f("ix_memory_embedding_records_document_version_id"),
+        "memory_embedding_records",
+        ["document_version_id"],
+    )
+    op.create_index(
+        op.f("ix_memory_embedding_records_point_id"), "memory_embedding_records", ["point_id"]
+    )
+    op.create_index(
+        op.f("ix_memory_embedding_records_status"), "memory_embedding_records", ["status"]
+    )
 
 
 def downgrade() -> None:
     op.drop_index(op.f("ix_memory_embedding_records_status"), table_name="memory_embedding_records")
-    op.drop_index(op.f("ix_memory_embedding_records_point_id"), table_name="memory_embedding_records")
-    op.drop_index(op.f("ix_memory_embedding_records_document_version_id"), table_name="memory_embedding_records")
-    op.drop_index(op.f("ix_memory_embedding_records_document_id"), table_name="memory_embedding_records")
-    op.drop_index(op.f("ix_memory_embedding_records_content_id"), table_name="memory_embedding_records")
-    op.drop_index(op.f("ix_memory_embedding_records_content_type"), table_name="memory_embedding_records")
+    op.drop_index(
+        op.f("ix_memory_embedding_records_point_id"), table_name="memory_embedding_records"
+    )
+    op.drop_index(
+        op.f("ix_memory_embedding_records_document_version_id"),
+        table_name="memory_embedding_records",
+    )
+    op.drop_index(
+        op.f("ix_memory_embedding_records_document_id"), table_name="memory_embedding_records"
+    )
+    op.drop_index(
+        op.f("ix_memory_embedding_records_content_id"), table_name="memory_embedding_records"
+    )
+    op.drop_index(
+        op.f("ix_memory_embedding_records_content_type"), table_name="memory_embedding_records"
+    )
     op.drop_table("memory_embedding_records")

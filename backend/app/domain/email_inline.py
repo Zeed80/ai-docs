@@ -35,9 +35,7 @@ def rewrite_to_cid(body_html: str, attachment_id) -> str:
     черновик отправляют повторно.
     """
     cid = cid_for(attachment_id)
-    pattern = (
-        r'<img\b[^>]*?data-attachment-id="' + re.escape(str(attachment_id)) + r'"[^>]*?>'
-    )
+    pattern = r'<img\b[^>]*?data-attachment-id="' + re.escape(str(attachment_id)) + r'"[^>]*?>'
 
     def _swap(m: re.Match) -> str:
         tag = m.group(0)

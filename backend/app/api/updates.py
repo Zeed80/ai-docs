@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +46,14 @@ PROJECT = os.getenv("COMPOSE_PROJECT_NAME", os.getenv("AIW_PROJECT", "infra"))
 # Ordered Authentik major ladder — MUST match infra/installer/upgrade-authentik.sh.
 # Never skip a major; append new ones to the end as they ship.
 AUTHENTIK_LADDER = [
-    "2025.2", "2025.4", "2025.6", "2025.8", "2025.10", "2025.12", "2026.2", "2026.5",
+    "2025.2",
+    "2025.4",
+    "2025.6",
+    "2025.8",
+    "2025.10",
+    "2025.12",
+    "2026.2",
+    "2026.5",
 ]
 
 
@@ -54,11 +61,11 @@ class AuthentikUpdateInfo(BaseModel):
     current_version: str | None
     current_minor: str | None
     latest_minor: str
-    remaining: list[str]           # majors still ahead of current, in order
+    remaining: list[str]  # majors still ahead of current, in order
     next_hop: str | None
     up_to_date: bool
     ladder: list[str]
-    job: dict[str, Any] | None     # current control-file state, if any
+    job: dict[str, Any] | None  # current control-file state, if any
 
 
 class MailcowUpdateInfo(BaseModel):
@@ -85,7 +92,7 @@ class UpdateRequestIn(BaseModel):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _minor_of(tag: str) -> str:
@@ -98,7 +105,7 @@ def _remaining_ladder(current_minor: str | None) -> list[str]:
         return list(AUTHENTIK_LADDER)
     if current_minor in AUTHENTIK_LADDER:
         i = AUTHENTIK_LADDER.index(current_minor)
-        return AUTHENTIK_LADDER[i + 1:]
+        return AUTHENTIK_LADDER[i + 1 :]
     # current older than the first rung → the whole ladder applies
     return list(AUTHENTIK_LADDER)
 
@@ -172,24 +179,33 @@ async def mailcow_info(_user: UserInfo = _admin_dep) -> MailcowUpdateInfo:
     current = _mailcow_current_tag()
     if not current:
         return MailcowUpdateInfo(
-            installed=False, status="not_installed",
+            installed=False,
+            status="not_installed",
             detail="Почтовый сервер не развёрнут — Администрирование → Интеграции → «Развернуть Mailcow».",
         )
     latest = await _mailcow_latest_tag()
     if latest is None:
         return MailcowUpdateInfo(
-            installed=True, current_tag=current, status="unknown",
+            installed=True,
+            current_tag=current,
+            status="unknown",
             detail="Не удалось запросить список релизов Mailcow — статус обновлений неизвестен.",
         )
     if latest == current:
         return MailcowUpdateInfo(
-            installed=True, current_tag=current, latest_tag=latest, status="up_to_date",
+            installed=True,
+            current_tag=current,
+            latest_tag=latest,
+            status="up_to_date",
             detail="Установлен актуальный релиз.",
         )
     return MailcowUpdateInfo(
-        installed=True, current_tag=current, latest_tag=latest, status="update_available",
+        installed=True,
+        current_tag=current,
+        latest_tag=latest,
+        status="update_available",
         detail=f"Доступен релиз {latest}. Обновление выполняется из консоли: "
-               f"infra/installer/update-mailcow.sh --yes (бэкап → апдейт → health-check → откат при сбое).",
+        f"infra/installer/update-mailcow.sh --yes (бэкап → апдейт → health-check → откат при сбое).",
     )
 
 
@@ -242,8 +258,10 @@ async def authentik_request(
         raise HTTPException(422, f"Недопустимый режим: {mode}")
 
     planned = (
-        [remaining[0]] if mode == "next"
-        else remaining if mode == "latest"
+        [remaining[0]]
+        if mode == "next"
+        else remaining
+        if mode == "latest"
         else remaining[: remaining.index(target) + 1]
     )
 
@@ -263,13 +281,18 @@ async def authentik_request(
         "error": None,
     }
     _write_control(state)
-    logger.info("authentik_update_requested", admin=admin.sub, mode=mode, target=target,
-                planned=planned)
-    return {"ok": True, "job": state, "note": (
-        "Заявка поставлена. Host-агент (systemd-таймер update-agent) выполнит "
-        "обновление и вернёт статус сюда. Если агент не установлен — см. "
-        "infra/installer/update-agent.README."
-    )}
+    logger.info(
+        "authentik_update_requested", admin=admin.sub, mode=mode, target=target, planned=planned
+    )
+    return {
+        "ok": True,
+        "job": state,
+        "note": (
+            "Заявка поставлена. Host-агент (systemd-таймер update-agent) выполнит "
+            "обновление и вернёт статус сюда. Если агент не установлен — см. "
+            "infra/installer/update-agent.README."
+        ),
+    }
 
 
 @router.post("/authentik/cancel", response_model=dict)

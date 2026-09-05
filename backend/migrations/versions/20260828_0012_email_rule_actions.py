@@ -3,16 +3,17 @@
 Revision ID: 20260828_0012
 Revises: 20260828_0011
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 revision: str = "20260828_0012"
-down_revision: Union[str, None] = "20260828_0011"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260828_0011"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -34,10 +35,17 @@ def upgrade() -> None:
             sa.Column("mailbox", sa.String(255), nullable=True),
             sa.Column("recipient", sa.String(320), nullable=False),
             sa.Column("thread_root", sa.String(500), nullable=True),
-            sa.Column("sent_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "sent_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.ForeignKeyConstraint(["rule_id"], ["email_rules.id"], ondelete="SET NULL"),
             sa.ForeignKeyConstraint(["draft_id"], ["draft_actions.id"], ondelete="SET NULL"),
-            sa.ForeignKeyConstraint(["in_reply_to_message_id"], ["email_messages.id"], ondelete="SET NULL"),
+            sa.ForeignKeyConstraint(
+                ["in_reply_to_message_id"], ["email_messages.id"], ondelete="SET NULL"
+            ),
             sa.PrimaryKeyConstraint("id"),
         )
         for col in ("rule_id", "mailbox", "recipient", "thread_root", "sent_at"):

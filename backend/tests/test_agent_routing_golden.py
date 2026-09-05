@@ -18,6 +18,7 @@ import urllib.request
 
 import pytest
 
+from app.ai.capability_manifest import load_capability_manifest
 from app.ai.turn_router import (
     TurnDecision,
     build_router_system,
@@ -26,7 +27,6 @@ from app.ai.turn_router import (
     validate_recommended,
 )
 from app.api.capability_router import capability_action_map
-from app.ai.capability_manifest import load_capability_manifest
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 ROUTER_MODEL = os.environ.get("ROUTER_TEST_MODEL", "qwen3.5:9b")
@@ -57,14 +57,26 @@ GOLDEN: list[tuple[str, bool, dict]] = [
     # — flow-status / count —
     ("что сейчас в работе?", False, {"intent": {"flow_status"}}),
     ("сколько счетов на проверке?", False, {"intent": {"flow_status", "count"}}),
-    ("сколько всего поставщиков в базе?", False, {"intent": {"count", "analytical_table", "flow_status"}}),
+    (
+        "сколько всего поставщиков в базе?",
+        False,
+        {"intent": {"count", "analytical_table", "flow_status"}},
+    ),
     # — analytical tables (workspace) —
     ("покажи все счета за май", False, {"intent": {"analytical_table"}, "channel": "workspace"}),
-    ("выведи таблицу поставщиков с оборотом", False, {"intent": {"analytical_table"}, "channel": "workspace"}),
+    (
+        "выведи таблицу поставщиков с оборотом",
+        False,
+        {"intent": {"analytical_table"}, "channel": "workspace"},
+    ),
     ("разложи затраты по месяцам за этот год", False, {"channel": "workspace"}),
     ("сравни цены на фрезы у разных поставщиков", False, {"channel": "workspace"}),
     ("какие позиции дороже 1000 рублей", False, {"channel": "workspace"}),
-    ("топ-10 поставщиков по сумме", False, {"intent": {"analytical_table"}, "channel": "workspace"}),
+    (
+        "топ-10 поставщиков по сумме",
+        False,
+        {"intent": {"analytical_table"}, "channel": "workspace"},
+    ),
     # — table edits (open table) —
     ("добавь столбец с НДС перед суммой", True, {"intent": {"table_edit"}}),
     ("отсортируй по убыванию суммы", True, {"intent": {"table_edit"}}),
@@ -74,14 +86,22 @@ GOLDEN: list[tuple[str, bool, dict]] = [
     ("покажи детали счёта от Хоффманн", False, {"not_intent": {"smalltalk"}}),
     ("классифицируй последний загруженный документ", False, {"not_intent": {"smalltalk", "count"}}),
     # — email —
-    ("составь письмо поставщику с запросом КП", False, {"not_intent": {"count", "smalltalk", "flow_status"}}),
+    (
+        "составь письмо поставщику с запросом КП",
+        False,
+        {"not_intent": {"count", "smalltalk", "flow_status"}},
+    ),
     # — anomalies —
     ("какие аномалии обнаружены на этой неделе", False, {"not_intent": {"smalltalk"}}),
     # — memory / graph (grounding=memory) —
     ("что связано с поставщиком Берёзка?", False, {"not_intent": {"smalltalk", "count"}}),
     ("покажи историю цен на болты М10", False, {"not_intent": {"smalltalk"}}),
     # — SUBSTRING TRAPS (the whole point of the refactor) —
-    ("расскажи про расчёт себестоимости фрезеровки", False, {"not_intent": {"count", "flow_status"}}),
+    (
+        "расскажи про расчёт себестоимости фрезеровки",
+        False,
+        {"not_intent": {"count", "flow_status"}},
+    ),
     ("объясни, как устроен учёт материалов", False, {"not_intent": {"count", "flow_status"}}),
     ("поставщик Москва не отвечает на письма", False, {"not_intent": {"count"}}),
     ("сколько стоит обучение сотрудника не важно", False, {"not_intent": {"table_edit"}}),
@@ -150,7 +170,6 @@ def test_routing_golden_set():
     accuracy = 1.0 - len(failures) / len(GOLDEN)
     report = (
         f"\nRouting golden-set accuracy: {accuracy:.0%} "
-        f"({len(GOLDEN) - len(failures)}/{len(GOLDEN)}) on {ROUTER_MODEL}\n"
-        + "\n".join(failures)
+        f"({len(GOLDEN) - len(failures)}/{len(GOLDEN)}) on {ROUTER_MODEL}\n" + "\n".join(failures)
     )
     assert accuracy >= PASS_THRESHOLD, report

@@ -57,7 +57,7 @@ class SpecTaper(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _require_exactly_one_statement(self) -> "SpecTaper":
+    def _require_exactly_one_statement(self) -> SpecTaper:
         stated = [
             self.ratio is not None,
             self.included_angle_deg is not None,
@@ -125,9 +125,7 @@ class SpecGroove(BaseModel):
     """
 
     id: str | None = None  # see SpecChamfer.id
-    kind: Literal[
-        "relief", "o_ring", "retaining_ring", "thread_runout", "other"
-    ] = "other"
+    kind: Literal["relief", "o_ring", "retaining_ring", "thread_runout", "other"] = "other"
     axial_position_mm: float
     width_mm: float = Field(gt=0)
     depth_mm: float | None = Field(default=None, gt=0)
@@ -137,7 +135,7 @@ class SpecGroove(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _require_one_depth_statement(self) -> "SpecGroove":
+    def _require_one_depth_statement(self) -> SpecGroove:
         if (self.depth_mm is None) == (self.root_diameter_mm is None):
             raise ValueError("groove needs exactly one of depth_mm / root_diameter_mm")
         return self
@@ -162,7 +160,7 @@ class SpecKeyway(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _require_a_slot_not_a_point(self) -> "SpecKeyway":
+    def _require_a_slot_not_a_point(self) -> SpecKeyway:
         if self.length_mm < self.width_mm:
             raise ValueError("keyway length_mm must be at least its width_mm")
         return self
@@ -185,7 +183,7 @@ class SpecCrossHole(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _validate_counterbore(self) -> "SpecCrossHole":
+    def _validate_counterbore(self) -> SpecCrossHole:
         if (self.counterbore_diameter_mm is None) != (self.counterbore_depth_mm is None):
             raise ValueError("counterbore needs both diameter and depth")
         if (
@@ -230,7 +228,7 @@ class SpecAxialHolePattern(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _depth_matches_through_state(self) -> "SpecAxialHolePattern":
+    def _depth_matches_through_state(self) -> SpecAxialHolePattern:
         depths = (self.depth_mm, self.thread_depth_mm, self.drill_depth_mm)
         if self.through is True and any(value is not None for value in depths):
             raise ValueError("through axial holes cannot also have blind depths")
@@ -268,7 +266,7 @@ class SpecCircularHolePattern(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _mode_has_build_geometry(self) -> "SpecCircularHolePattern":
+    def _mode_has_build_geometry(self) -> SpecCircularHolePattern:
         if self.through is True and self.depth_mm is not None:
             raise ValueError("through circular pattern cannot also have blind depth")
         if self.axis_mode == "axial":
@@ -348,8 +346,11 @@ class SpecHolePattern(BaseModel):
                 self.start_angle_deg = 0.0
         elif self.kind == "linear":
             if (
-                self.count is None or self.spacing_mm is None or self.direction_deg is None
-                or self.start_x_mm is None or self.start_y_mm is None
+                self.count is None
+                or self.spacing_mm is None
+                or self.direction_deg is None
+                or self.start_x_mm is None
+                or self.start_y_mm is None
             ):
                 raise ValueError(
                     "linear pattern requires count, spacing_mm, direction_deg, "
@@ -357,9 +358,12 @@ class SpecHolePattern(BaseModel):
                 )
         elif self.kind == "rectangular":
             if (
-                self.rows is None or self.columns is None
-                or self.spacing_x_mm is None or self.spacing_y_mm is None
-                or self.start_x_mm is None or self.start_y_mm is None
+                self.rows is None
+                or self.columns is None
+                or self.spacing_x_mm is None
+                or self.spacing_y_mm is None
+                or self.start_x_mm is None
+                or self.start_y_mm is None
             ):
                 raise ValueError(
                     "rectangular pattern requires rows, columns, spacing_x_mm, "
@@ -381,7 +385,7 @@ class SpecSlot(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _require_capsule_length(self) -> "SpecSlot":
+    def _require_capsule_length(self) -> SpecSlot:
         if self.length_mm < self.width_mm:
             raise ValueError("slot length_mm must be greater than or equal to width_mm")
         return self
@@ -434,7 +438,7 @@ class SpecPrismaticProfile(BaseModel):
     slots: list[SpecSlot] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _require_shape_dimensions(self) -> "SpecPrismaticProfile":
+    def _require_shape_dimensions(self) -> SpecPrismaticProfile:
         if self.shape == "rectangle" and (self.width_mm is None or self.height_mm is None):
             raise ValueError("rectangle requires width_mm and height_mm")
         if (
@@ -481,18 +485,14 @@ class SpecBody(BaseModel):
     features: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _features_must_fit_the_body(self) -> "SpecBody":
+    def _features_must_fit_the_body(self) -> SpecBody:
         """A feature outside the material it is cut into is a misread.
 
         Checked here rather than at build time because the kernel would either
         fail obscurely or, worse, succeed on a part that is not the one drawn.
         """
-        total_length = sum(
-            section.length_mm for section in self.outer if section.length_mm
-        )
-        max_radius = max(
-            (section.diameter_mm / 2.0 for section in self.outer), default=0.0
-        )
+        total_length = sum(section.length_mm for section in self.outer if section.length_mm)
+        max_radius = max((section.diameter_mm / 2.0 for section in self.outer), default=0.0)
         if total_length <= 0:
             return self
         for index, groove in enumerate(self.grooves):
@@ -512,9 +512,7 @@ class SpecBody(BaseModel):
                 raise ValueError(f"keyway {index} is deeper than the part's radius")
         for index, hole in enumerate(self.cross_holes):
             if not (0.0 <= hole.axial_position_mm <= total_length):
-                raise ValueError(
-                    f"cross hole {index} sits outside the {total_length} mm part"
-                )
+                raise ValueError(f"cross hole {index} sits outside the {total_length} mm part")
         return self
 
 
@@ -532,16 +530,14 @@ class SpecView(BaseModel):
     body_index: int = Field(default=0, ge=0)
     label: str | None = None
     parent_view_id: str | None = Field(default=None, max_length=40)
-    relation: Literal[
-        "primary", "orthographic", "section", "detail", "removed_section"
-    ] | None = None
+    relation: Literal["primary", "orthographic", "section", "detail", "removed_section"] | None = (
+        None
+    )
     # Model-space cutting definition. It is optional because a plain central
     # longitudinal section needs no path; an offset section must carry one or
     # remain explicitly unsupported by the coverage gate.
     section_origin_mm: float | None = None
-    section_path_mm: list[tuple[float, float, float]] = Field(
-        default_factory=list, max_length=64
-    )
+    section_path_mm: list[tuple[float, float, float]] = Field(default_factory=list, max_length=64)
     # A detail is a crop of its parent projection, never a separately guessed
     # sketch. Coordinates are in the parent's model-space projection: u grows
     # right from the part's left end for longitudinal views, v grows up from
@@ -553,6 +549,7 @@ class SpecView(BaseModel):
     features_shown: list[str] = Field(default_factory=list, max_length=64)
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
+
 class SpecDimension(BaseModel):
     value: str = Field(min_length=1)
     applies_to: str = ""
@@ -561,8 +558,14 @@ class SpecDimension(BaseModel):
 
 class SpecAnnotation(BaseModel):
     kind: Literal[
-        "roughness", "hardness", "tolerance", "datum", "thread", "weld",
-        "material", "other",
+        "roughness",
+        "hardness",
+        "tolerance",
+        "datum",
+        "thread",
+        "weld",
+        "material",
+        "other",
     ]
     text: str = Field(min_length=1)
     value: str | None = None
@@ -571,7 +574,7 @@ class SpecAnnotation(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
 
-def prismatic_profile_is_complete(profile: "SpecPrismaticProfile | None") -> bool:
+def prismatic_profile_is_complete(profile: SpecPrismaticProfile | None) -> bool:
     """Is this outline sufficient to build a plate/flange on its own?
 
     Shape dimensions come from the model validator, so only the thickness — the
@@ -604,7 +607,7 @@ class EngineeringDrawingSpec(BaseModel):
     geometry_validation_errors: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _record_incomplete_rotation_sections(self) -> "EngineeringDrawingSpec":
+    def _record_incomplete_rotation_sections(self) -> EngineeringDrawingSpec:
         bodies = [self.main_view, *self.parts]
         for body_index, body in enumerate(bodies):
             prismatic = any(
@@ -632,17 +635,22 @@ class EngineeringDrawingSpec(BaseModel):
                     )
             for section_index, section in enumerate(body.bore):
                 if section.length_mm is None:
-                    self.unresolved.append(
-                        f"body:{body_index}:bore:{section_index}:length-missing"
-                    )
+                    self.unresolved.append(f"body:{body_index}:bore:{section_index}:length-missing")
         for view_index, view in enumerate(self.views):
             if view.body_index >= len(bodies):
-                self.unresolved.append(
-                    f"view:{view_index}:body-index-out-of-range"
-                )
+                self.unresolved.append(f"view:{view_index}:body-index-out-of-range")
         optional_markers = (
-            "масштаб", "материал", "обозначен", "штамп", "основн", "масса",
-            "scale", "material", "designation", "title block", "mass",
+            "масштаб",
+            "материал",
+            "обозначен",
+            "штамп",
+            "основн",
+            "масса",
+            "scale",
+            "material",
+            "designation",
+            "title block",
+            "mass",
         )
         blocking = []
         optional = list(self.optional_unresolved)
@@ -678,8 +686,7 @@ def _whole_sheet_reader_schema() -> dict[str, Any]:
     required = schema.get("required")
     if isinstance(required, list):
         schema["required"] = [
-            field for field in required
-            if field not in {"dimensions", "annotations", "title_block"}
+            field for field in required if field not in {"dimensions", "annotations", "title_block"}
         ]
 
     def strip_audit_fields(node: Any) -> None:
@@ -691,8 +698,7 @@ def _whole_sheet_reader_schema() -> dict[str, Any]:
             node_required = node.get("required")
             if isinstance(node_required, list):
                 node["required"] = [
-                    field for field in node_required
-                    if field not in {"evidence", "features"}
+                    field for field in node_required if field not in {"evidence", "features"}
                 ]
             for value in node.values():
                 strip_audit_fields(value)
@@ -823,24 +829,25 @@ _DESCRIPTION_SPEC_PROMPT = (
 def _normalize_model_unresolved(spec: dict, description: str) -> dict:
     """Demote model-requested metadata that was never requested by the engineer."""
     source = description.lower()
-    explicitly_requests_tolerance = any(
-        marker in source for marker in ("допуск", "tolerance")
-    )
+    explicitly_requests_tolerance = any(marker in source for marker in ("допуск", "tolerance"))
     explicitly_requests_rounding = any(
-        marker in source
-        for marker in ("скругл", "радиус", "галтел", "rounded", "fillet", "radius")
+        marker in source for marker in ("скругл", "радиус", "галтел", "rounded", "fillet", "radius")
     )
     blocking: list[str] = []
     optional = list(spec.get("optional_unresolved") or [])
     for item in spec.get("unresolved") or []:
         lowered = str(item).lower()
-        model_added_tolerance = any(
-            marker in lowered for marker in ("допуск", "tolerance")
-        ) and not explicitly_requests_tolerance
-        model_added_rounding = any(
-            marker in lowered
-            for marker in ("скругл", "радиус", "галтел", "rounded", "fillet", "radius")
-        ) and not explicitly_requests_rounding
+        model_added_tolerance = (
+            any(marker in lowered for marker in ("допуск", "tolerance"))
+            and not explicitly_requests_tolerance
+        )
+        model_added_rounding = (
+            any(
+                marker in lowered
+                for marker in ("скругл", "радиус", "галтел", "rounded", "fillet", "radius")
+            )
+            and not explicitly_requests_rounding
+        )
         if model_added_tolerance or model_added_rounding:
             optional.append(str(item))
         else:
@@ -877,10 +884,12 @@ async def read_description_spec(
         router = ai_router
     request = AIRequest(
         task=AITask.CAD_SPEC_READ,
-        messages=[ChatMessage(
-            role="user",
-            content=_DESCRIPTION_SPEC_PROMPT + _SPEC_PROMPT + "\nОПИСАНИЕ:\n" + text,
-        )],
+        messages=[
+            ChatMessage(
+                role="user",
+                content=_DESCRIPTION_SPEC_PROMPT + _SPEC_PROMPT + "\nОПИСАНИЕ:\n" + text,
+            )
+        ],
         confidential=confidential,
         allow_cloud=False,
     )
@@ -964,7 +973,11 @@ def _spec_images(
     if not ys or ys[-1] != max(image.height - tile_size, 0):
         ys.append(max(image.height - tile_size, 0))
     # Bound latency for unusually large sheets while covering both edges and centre.
-    boxes = [(x, y, min(x + tile_size, image.width), min(y + tile_size, image.height)) for y in ys for x in xs]
+    boxes = [
+        (x, y, min(x + tile_size, image.width), min(y + tile_size, image.height))
+        for y in ys
+        for x in xs
+    ]
     full_grid = len(boxes)
     boxes = _tile_budget_boxes(boxes, len(xs), len(ys), _MAX_SPEC_TILES)
     for index, box in enumerate(boxes, start=1):
@@ -975,15 +988,11 @@ def _spec_images(
         descriptions.append(f"image {index}: source bbox {box[0]},{box[1]},{box[2]},{box[3]}")
     coverage = _tile_coverage(boxes, image.width, image.height)
     if len(boxes) < full_grid:
-        descriptions.append(
-            f"внимание: показано {len(boxes)} из {full_grid} фрагментов листа"
-        )
+        descriptions.append(f"внимание: показано {len(boxes)} из {full_grid} фрагментов листа")
     return encoded, descriptions, coverage
 
 
-def _tile_coverage(
-    boxes: list[tuple[int, int, int, int]], width: int, height: int
-) -> float:
+def _tile_coverage(boxes: list[tuple[int, int, int, int]], width: int, height: int) -> float:
     """Share of the sheet the chosen tiles cover, overlaps counted once."""
     if not boxes or width <= 0 or height <= 0:
         return 0.0
@@ -1025,7 +1034,9 @@ async def read_drawing_spec_consensus(
 
     if passes < 2:
         return await read_drawing_spec(
-            image_bytes, router=router, confidential=confidential,
+            image_bytes,
+            router=router,
+            confidential=confidential,
             known_diameters_mm=known_diameters_mm,
         )
 
@@ -1042,7 +1053,9 @@ async def read_drawing_spec_consensus(
         )
         try:
             spec = await read_drawing_spec(
-                image_bytes, router=router, confidential=confidential,
+                image_bytes,
+                router=router,
+                confidential=confidential,
                 known_diameters_mm=known_diameters_mm,
             )
         except (SpecReadTruncatedError, SpecReadMalformedError) as exc:
@@ -1100,7 +1113,7 @@ def _known_diameters_hint(known_diameters_mm: list[float] | None) -> str:
         "вращения со ступенчатым профилем: диаметр КАЖДОЙ ступени в "
         "outer[]/bore[] должен совпадать с одним из перечисленных "
         "значений (±2% или ±0.5мм). Если ни одно значение не подходит — "
-        "впиши точную позицию (например \"body:0:outer:1\") в unresolved "
+        'впиши точную позицию (например "body:0:outer:1") в unresolved '
         "вместо того, чтобы придумывать диаметр, которого нет в списке."
     )
 
@@ -1139,9 +1152,8 @@ async def read_drawing_spec(
 
     from PIL import Image
 
-    from app.ai.schemas import AIRequest, AITask, ChatMessage
     from app.ai.cad_process_log import record_cad_process_event
-    from app.ai.vlm_dimensions import _parse_json_array  # tolerant fence stripping
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
 
     if router is None:
         from app.ai.router import ai_router
@@ -1156,17 +1168,15 @@ async def read_drawing_spec(
     for image_index, (encoded, description) in enumerate(zip(images, tile_descriptions)):
         rendered = Image.open(io.BytesIO(encoded))
         numbers = [int(value) for value in re.findall(r"\d+", description)]
-        source_bbox = (
-            numbers[-4:]
-            if len(numbers) >= 5
-            else [0, 0, image.width, image.height]
+        source_bbox = numbers[-4:] if len(numbers) >= 5 else [0, 0, image.width, image.height]
+        source_images.append(
+            {
+                "image_index": image_index,
+                "image_width": rendered.width,
+                "image_height": rendered.height,
+                "source_bbox": source_bbox,
+            }
         )
-        source_images.append({
-            "image_index": image_index,
-            "image_width": rendered.width,
-            "image_height": rendered.height,
-            "source_bbox": source_bbox,
-        })
     # Dedicated slot for the spec reader (Settings → Models → Оцифровка). When it
     # has no assignment, fall back to the shared drawing-analysis VLM so behaviour
     # is unchanged out of the box.
@@ -1190,8 +1200,7 @@ async def read_drawing_spec(
         )
     known_diameters_hint = _known_diameters_hint(known_diameters_mm)
     full_prompt = (
-        _SPEC_PROMPT
-        + "\nДЛЯ ЭТОГО ПОЛНОГО ПРОХОДА верни только геометрию: "
+        _SPEC_PROMPT + "\nДЛЯ ЭТОГО ПОЛНОГО ПРОХОДА верни только геометрию: "
         "main_view, parts, views, unresolved и optional_unresolved. "
         "Не повторяй dimensions, annotations, title_block и evidence — "
         "они читаются отдельными специализированными проходами."
@@ -1201,10 +1210,12 @@ async def read_drawing_spec(
     )
     request = AIRequest(
         task=read_task,
-        messages=[ChatMessage(
-            role="user",
-            content=full_prompt,
-        )],
+        messages=[
+            ChatMessage(
+                role="user",
+                content=full_prompt,
+            )
+        ],
         images=[base64.b64encode(value).decode() for value in images],
         confidential=confidential,
         allow_cloud=False,
@@ -1336,18 +1347,36 @@ async def read_drawing_spec(
 
 
 _LIST_FIELDS_TOP = (
-    "parts", "views", "dimensions", "annotations", "unresolved",
+    "parts",
+    "views",
+    "dimensions",
+    "annotations",
+    "unresolved",
     "optional_unresolved",
 )
 _LIST_FIELDS_BODY = (
-    "outer", "bore", "features", "chamfers", "fillets", "grooves",
-    "keyways", "cross_holes", "axial_holes", "circular_hole_patterns",
+    "outer",
+    "bore",
+    "features",
+    "chamfers",
+    "fillets",
+    "grooves",
+    "keyways",
+    "cross_holes",
+    "axial_holes",
+    "circular_hole_patterns",
 )
 _LIST_FIELDS_PROFILE = ("holes", "hole_patterns", "slots")
 _ANNOTATION_KINDS = frozenset(
     {
-        "roughness", "hardness", "tolerance", "datum", "thread", "weld",
-        "material", "other",
+        "roughness",
+        "hardness",
+        "tolerance",
+        "datum",
+        "thread",
+        "weld",
+        "material",
+        "other",
     }
 )
 
@@ -1387,8 +1416,11 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
                     item = {**item, "image_index": 0}
                 bbox = item.get("bbox")
                 if bbox is not None and (
-                    not isinstance(bbox, list) or len(bbox) != 4
-                    or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in bbox)
+                    not isinstance(bbox, list)
+                    or len(bbox) != 4
+                    or not all(
+                        isinstance(v, (int, float)) and not isinstance(v, bool) for v in bbox
+                    )
                 ):
                     item = {**item, "bbox": None}
                 cleaned.append(item)
@@ -1397,11 +1429,7 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
         return cleaned
 
     def positive_number(value: Any) -> bool:
-        return (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and value > 0
-        )
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
     def record_incomplete_geometry(path: str, reason: str) -> None:
         unresolved = spec.setdefault("unresolved", [])
@@ -1425,14 +1453,12 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
         items = spec.get(field)
         if isinstance(items, list):
             spec[field] = [
-                item if isinstance(item, str)
-                else json.dumps(item, ensure_ascii=False)[:300]
+                item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)[:300]
                 for item in items
                 if item is not None
             ]
     bodies = [("main_view", spec.get("main_view"))] + [
-        (f"parts.{index}", body)
-        for index, body in enumerate(spec.get("parts") or [])
+        (f"parts.{index}", body) for index, body in enumerate(spec.get("parts") or [])
     ]
     for body_path, body in bodies:
         if not isinstance(body, dict):
@@ -1453,7 +1479,8 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
             holes = profile.get("holes")
             if isinstance(holes, list):
                 profile["holes"] = [
-                    item for item in holes
+                    item
+                    for item in holes
                     if isinstance(item, dict)
                     and positive_number(item.get("diameter_mm"))
                     and isinstance(item.get("center_x_mm"), (int, float))
@@ -1463,9 +1490,11 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
                 ]
             patterns = profile.get("hole_patterns")
             if isinstance(patterns, list):
+
                 def _finite_int(value: Any, low: int, high: int) -> bool:
                     return (
-                        isinstance(value, int) and not isinstance(value, bool)
+                        isinstance(value, int)
+                        and not isinstance(value, bool)
                         and low <= value <= high
                     )
 
@@ -1482,9 +1511,8 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
                         # a linear/rectangular pattern is never held to the
                         # bolt-circle-only check this used to be.
                         if kind == "bolt_circle":
-                            valid = (
-                                _finite_int(item.get("count"), 2, 128)
-                                and positive_number(item.get("bolt_circle_diameter_mm"))
+                            valid = _finite_int(item.get("count"), 2, 128) and positive_number(
+                                item.get("bolt_circle_diameter_mm")
                             )
                         elif kind == "linear":
                             valid = (
@@ -1521,7 +1549,8 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
             slots = profile.get("slots")
             if isinstance(slots, list):
                 profile["slots"] = [
-                    item for item in slots
+                    item
+                    for item in slots
                     if isinstance(item, dict)
                     and positive_number(item.get("width_mm"))
                     and positive_number(item.get("length_mm"))
@@ -1536,9 +1565,7 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
                 shape == "rectangle"
                 and positive_number(profile.get("width_mm"))
                 and positive_number(profile.get("height_mm"))
-            ) or (
-                shape == "circle" and positive_number(profile.get("diameter_mm"))
-            )
+            ) or (shape == "circle" and positive_number(profile.get("diameter_mm")))
             if not profile_complete:
                 body["profile"] = None
                 record_incomplete_geometry(
@@ -1593,17 +1620,13 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
         if item.get("detail_scale_factor") is None:
             item.pop("detail_scale_factor", None)
         path = item.get("section_path_mm")
-        valid_path = (
-            isinstance(path, list)
+        valid_path = isinstance(path, list) and all(
+            isinstance(point, (list, tuple))
+            and len(point) == 3
             and all(
-                isinstance(point, (list, tuple))
-                and len(point) == 3
-                and all(
-                    isinstance(value, (int, float)) and not isinstance(value, bool)
-                    for value in point
-                )
-                for point in path
+                isinstance(value, (int, float)) and not isinstance(value, bool) for value in point
             )
+            for point in path
         )
         if path and not valid_path:
             item["section_path_mm"] = []
@@ -1779,20 +1802,22 @@ def _sections_from_list(items: Any) -> list[dict]:
             continue
         diameter = _num(it.get("diameter_mm")) or _num(it.get("diameter"))
         if diameter is not None and diameter > 0:
-            sections.append({
-                "d": diameter,
-                "l": _num(it.get("length_mm")) or _num(it.get("length")),
-                "note": it.get("note"),
-                "taper": it.get("taper"),
-                "thread": it.get("thread"),
-                "tolerance": it.get("tolerance"),
-                "roughness": it.get("roughness"),
-                # Ф2.6c: assign_stable_feature_ids' own id, carried through so
-                # the compiled revolve/thread operation can realize the
-                # section's Feature node — dropped nowhere else in this
-                # compact form on purpose.
-                "id": it.get("id"),
-            })
+            sections.append(
+                {
+                    "d": diameter,
+                    "l": _num(it.get("length_mm")) or _num(it.get("length")),
+                    "note": it.get("note"),
+                    "taper": it.get("taper"),
+                    "thread": it.get("thread"),
+                    "tolerance": it.get("tolerance"),
+                    "roughness": it.get("roughness"),
+                    # Ф2.6c: assign_stable_feature_ids' own id, carried through so
+                    # the compiled revolve/thread operation can realize the
+                    # section's Feature node — dropped nowhere else in this
+                    # compact form on purpose.
+                    "id": it.get("id"),
+                }
+            )
     return sections
 
 
@@ -1862,11 +1887,13 @@ def _sections_from_features(features: Any) -> list[dict]:
             continue
         diameter = _num(feature.get("diameter_mm")) or _num(feature.get("diameter"))
         if diameter is not None and diameter > 0:
-            sections.append({
-                "d": diameter,
-                "l": _num(feature.get("length_mm")) or _num(feature.get("length")),
-                "note": feature.get("note"),
-            })
+            sections.append(
+                {
+                    "d": diameter,
+                    "l": _num(feature.get("length_mm")) or _num(feature.get("length")),
+                    "note": feature.get("note"),
+                }
+            )
     return sections
 
 
@@ -1916,7 +1943,12 @@ def _rotation_parts(spec: dict) -> list[dict]:
 # consumer that receives the silhouette without them builds a smooth stand-in
 # and has no way to know something was left behind.
 _BODY_FEATURE_FIELDS = (
-    "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
+    "chamfers",
+    "fillets",
+    "grooves",
+    "keyways",
+    "cross_holes",
+    "axial_holes",
     "circular_hole_patterns",
 )
 
@@ -1996,8 +2028,13 @@ def _sections_are_complete(sections: list[dict]) -> bool:
 
 
 def _emit_profile(
-    sections: list[dict], px_per_mm: float, x_left: float, axis_y: float, seg,
-    bore: list[dict] | None = None, sectioned: bool = False,
+    sections: list[dict],
+    px_per_mm: float,
+    x_left: float,
+    axis_y: float,
+    seg,
+    bore: list[dict] | None = None,
+    sectioned: bool = False,
 ) -> float:
     """Emit one stepped rotation profile (both generatrices + its OWN axis).
 
@@ -2098,8 +2135,12 @@ def _section_wall_loops(
     if not outer_edges or not bore_edges:
         return []
     # Every x where either contour changes radius — the exact column breaks.
-    breaks = sorted({e[0] for e in outer_edges} | {e[1] for e in outer_edges}
-                    | {e[0] for e in bore_edges} | {e[1] for e in bore_edges})
+    breaks = sorted(
+        {e[0] for e in outer_edges}
+        | {e[1] for e in outer_edges}
+        | {e[0] for e in bore_edges}
+        | {e[1] for e in bore_edges}
+    )
 
     def _radius_at(edges: list[tuple[float, float, float]], x: float) -> float:
         for x0, x1, radius in edges:
@@ -2143,9 +2184,7 @@ def _log_spec_rejected(source: str, exc: ValidationError) -> None:
     structlog.get_logger(__name__).warning(
         "cad_spec_rejected",
         source=source,
-        fields=[
-            ".".join(str(part) for part in err["loc"]) for err in exc.errors()[:8]
-        ],
+        fields=[".".join(str(part) for part in err["loc"]) for err in exc.errors()[:8]],
         messages=[err["msg"] for err in exc.errors()[:8]],
     )
 
@@ -2170,9 +2209,7 @@ def _first_vision_model(task: Any) -> tuple[str | None, bool]:
     from app.ai.task_routing import get_routing_for
 
     try:
-        registry = ModelRegistry.from_yaml(
-            "backend/app/ai/config/model_registry.yaml"
-        )
+        registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
     except Exception:  # noqa: BLE001 — never block drafting on a config read
         return None, True
     chain = list(get_routing_for(task).models or [])
@@ -2204,9 +2241,7 @@ def _model_supports_thinking(model_key: str | None) -> bool:
     from app.ai.model_registry import ModelRegistry
 
     try:
-        registry = ModelRegistry.from_yaml(
-            "backend/app/ai/config/model_registry.yaml"
-        )
+        registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
     except Exception:  # noqa: BLE001 — never block a read on a config error
         return False
     capability = registry.models.get(model_key)
@@ -2250,7 +2285,7 @@ _NOT_A_SIZE = re.compile(
 
 
 def _callout_kind(text: str) -> str | None:
-    """"diameter", "linear", or None when the callout is not a size at all.
+    """ "diameter", "linear", or None when the callout is not a size at all.
 
     Letting a non-size into the nominal index means one of them eventually
     lands on a feature whose number happens to match, and the drawing then
@@ -2332,14 +2367,18 @@ def _emit_rotation_side_view(
         Segment(
             p1=Point(x=center_x - over, y=center_y),
             p2=Point(x=center_x + over, y=center_y),
-            line_class="axis", width_class="thin", **common,
+            line_class="axis",
+            width_class="thin",
+            **common,
         )
     )
     entities.append(
         Segment(
             p1=Point(x=center_x, y=center_y - over),
             p2=Point(x=center_x, y=center_y + over),
-            line_class="axis", width_class="thin", **common,
+            line_class="axis",
+            width_class="thin",
+            **common,
         )
     )
 
@@ -2354,13 +2393,32 @@ _GOST_SHEETS: dict[str, tuple[float, float]] = {
 }
 # ratio = drawn / real, descending (enlargements → 1:1 → reductions).
 _STD_SCALES: list[tuple[float, str]] = [
-    (100.0, "100:1"), (50.0, "50:1"), (40.0, "40:1"), (20.0, "20:1"),
-    (10.0, "10:1"), (5.0, "5:1"), (4.0, "4:1"), (2.5, "2.5:1"), (2.0, "2:1"),
+    (100.0, "100:1"),
+    (50.0, "50:1"),
+    (40.0, "40:1"),
+    (20.0, "20:1"),
+    (10.0, "10:1"),
+    (5.0, "5:1"),
+    (4.0, "4:1"),
+    (2.5, "2.5:1"),
+    (2.0, "2:1"),
     (1.0, "1:1"),
-    (1 / 2, "1:2"), (1 / 2.5, "1:2.5"), (1 / 4, "1:4"), (1 / 5, "1:5"),
-    (1 / 10, "1:10"), (1 / 15, "1:15"), (1 / 20, "1:20"), (1 / 25, "1:25"),
-    (1 / 40, "1:40"), (1 / 50, "1:50"), (1 / 75, "1:75"), (1 / 100, "1:100"),
-    (1 / 200, "1:200"), (1 / 400, "1:400"), (1 / 500, "1:500"), (1 / 1000, "1:1000"),
+    (1 / 2, "1:2"),
+    (1 / 2.5, "1:2.5"),
+    (1 / 4, "1:4"),
+    (1 / 5, "1:5"),
+    (1 / 10, "1:10"),
+    (1 / 15, "1:15"),
+    (1 / 20, "1:20"),
+    (1 / 25, "1:25"),
+    (1 / 40, "1:40"),
+    (1 / 50, "1:50"),
+    (1 / 75, "1:75"),
+    (1 / 100, "1:100"),
+    (1 / 200, "1:200"),
+    (1 / 400, "1:400"),
+    (1 / 500, "1:500"),
+    (1 / 1000, "1:1000"),
 ]
 _FRAME_LEFT_MM, _FRAME_OTHER_MM = 20.0, 5.0
 # Below this share of the usable area a 1:1 drawing is too small to read, so an
@@ -2375,7 +2433,10 @@ _PAPER_PX_PER_MM = 4.0
 
 
 def _drawing_area_mm(
-    sheet_format: str, landscape: bool, *, reserve_title_block: bool,
+    sheet_format: str,
+    landscape: bool,
+    *,
+    reserve_title_block: bool,
     reserve_notes_mm: float = 0.0,
 ) -> tuple[float, float, float, float, float, float]:
     """Paper size and the usable drawing area inside the ГОСТ frame, in mm.
@@ -2400,8 +2461,14 @@ def _drawing_area_mm(
 
 
 def choose_standard_scale(
-    obj_w_mm: float, obj_h_mm: float, sheet_format: str, *, landscape: bool = True,
-    fill: float = 0.8, reserve_title_block: bool = False, reserve_notes_mm: float = 0.0,
+    obj_w_mm: float,
+    obj_h_mm: float,
+    sheet_format: str,
+    *,
+    landscape: bool = True,
+    fill: float = 0.8,
+    reserve_title_block: bool = False,
+    reserve_notes_mm: float = 0.0,
 ) -> tuple[float, str]:
     """Pick the LARGEST ГОСТ 2.302 scale at which the object fits the sheet.
 
@@ -2410,7 +2477,9 @@ def choose_standard_scale(
     e.g. ``(0.5, "1:2")``.
     """
     _pw, _ph, _x0, _y0, area_w, area_h = _drawing_area_mm(
-        sheet_format, landscape, reserve_title_block=reserve_title_block,
+        sheet_format,
+        landscape,
+        reserve_title_block=reserve_title_block,
         reserve_notes_mm=reserve_notes_mm,
     )
     avail_w = area_w * fill
@@ -2421,9 +2490,7 @@ def choose_standard_scale(
     # read, never merely because the sheet has room. Taking the largest fitting
     # scale unconditionally would redraw a 100 mm shaft at 2.5:1 and silently
     # change the character of the sheet being reproduced.
-    fills_sheet = (
-        obj_w_mm >= avail_w * _MIN_1TO1_FILL or obj_h_mm >= avail_h * _MIN_1TO1_FILL
-    )
+    fills_sheet = obj_w_mm >= avail_w * _MIN_1TO1_FILL or obj_h_mm >= avail_h * _MIN_1TO1_FILL
     if obj_w_mm <= avail_w and obj_h_mm <= avail_h and fills_sheet:
         return 1.0, "1:1"
     for ratio, label in _STD_SCALES:
@@ -2449,7 +2516,6 @@ def _read_scale_ratio(spec: dict | None) -> tuple[float, str] | None:
         if normalised == known:
             return ratio, known
     return None
-
 
 
 # ГОСТ 2.316 requirements column: same width as the title block, set directly
@@ -2498,7 +2564,10 @@ def technical_requirements_height_mm(spec: dict, *, text_mm: float = 5.0) -> flo
 
 
 def _place_on_sheet(
-    layout_w_mm: float, layout_h_mm: float, sheet_format: str, landscape: bool,
+    layout_w_mm: float,
+    layout_h_mm: float,
+    sheet_format: str,
+    landscape: bool,
     spec: dict | None = None,
 ) -> tuple[float, str, float, float, float, float, float]:
     """Pick the ГОСТ 2.302 scale and centre the drawing in the usable area.
@@ -2510,27 +2579,33 @@ def _place_on_sheet(
     """
     notes_mm = technical_requirements_height_mm(spec or {})
     ratio, scale_label = choose_standard_scale(
-        layout_w_mm, layout_h_mm, sheet_format,
-        landscape=landscape, reserve_title_block=True, reserve_notes_mm=notes_mm,
+        layout_w_mm,
+        layout_h_mm,
+        sheet_format,
+        landscape=landscape,
+        reserve_title_block=True,
+        reserve_notes_mm=notes_mm,
     )
     read_scale = _read_scale_ratio(spec)
     if read_scale is not None:
         _pw, _ph, _ax, _ay, fit_w, fit_h = _drawing_area_mm(
-            sheet_format, landscape, reserve_title_block=True,
+            sheet_format,
+            landscape,
+            reserve_title_block=True,
             reserve_notes_mm=notes_mm,
         )
         read_ratio, read_label = read_scale
         # Honour the source scale only if the drawing still fits the sheet;
         # otherwise the auto choice wins and the difference is visible in the
         # stamp, not hidden.
-        if (
-            layout_w_mm * read_ratio <= fit_w * 0.8
-            and layout_h_mm * read_ratio <= fit_h * 0.8
-        ):
+        if layout_w_mm * read_ratio <= fit_w * 0.8 and layout_h_mm * read_ratio <= fit_h * 0.8:
             ratio, scale_label = read_ratio, read_label
     ppp = _PAPER_PX_PER_MM
     paper_w, paper_h, area_x0, area_y0, area_w, area_h = _drawing_area_mm(
-        sheet_format, landscape, reserve_title_block=True, reserve_notes_mm=notes_mm,
+        sheet_format,
+        landscape,
+        reserve_title_block=True,
+        reserve_notes_mm=notes_mm,
     )
     drawn_w = layout_w_mm * ratio
     drawn_h = layout_h_mm * ratio
@@ -2568,25 +2643,24 @@ def draft_sheet_without_geometry(
     entities = list(_sheet_frame_entities(paper_w, paper_h, ppp, spec, None))
 
     text_style = {
-        "line_class": "dim", "width_class": "thin",
-        "origin": "spec", "assurance": "inferred",
+        "line_class": "dim",
+        "width_class": "thin",
+        "origin": "spec",
+        "assurance": "inferred",
     }
     height = 5.0 * ppp
     lines = technical_requirements_lines(spec)
     y = 20.0 * ppp
     for line in lines:
         entities.append(
-            TextEntity(
-                position=Point(x=20.0 * ppp, y=y), text=line, height=height, **text_style
-            )
+            TextEntity(position=Point(x=20.0 * ppp, y=y), text=line, height=height, **text_style)
         )
         y += height * 1.6
 
     # The callouts, so a person finishing this sheet by hand does not have to
     # read the source again for numbers the reader already got right.
     values = [
-        str((item or {}).get("value") or "").strip()
-        for item in (spec.get("dimensions") or [])
+        str((item or {}).get("value") or "").strip() for item in (spec.get("dimensions") or [])
     ]
     values = [value for value in values if value]
     if values:
@@ -2595,7 +2669,8 @@ def draft_sheet_without_geometry(
             TextEntity(
                 position=Point(x=20.0 * ppp, y=y),
                 text="Прочитанные размеры (геометрия не построена):",
-                height=height, **text_style,
+                height=height,
+                **text_style,
             )
         )
         y += height * 1.6
@@ -2604,15 +2679,18 @@ def draft_sheet_without_geometry(
         for chunk in textwrap.wrap(", ".join(values), width=110):
             entities.append(
                 TextEntity(
-                    position=Point(x=20.0 * ppp, y=y), text=chunk,
-                    height=height * 0.8, **text_style,
+                    position=Point(x=20.0 * ppp, y=y),
+                    text=chunk,
+                    height=height * 0.8,
+                    **text_style,
                 )
             )
             y += height * 1.3
 
     ir = CadIR(
         source=SourceInfo(
-            image_width=int(paper_w * ppp), image_height=int(paper_h * ppp),
+            image_width=int(paper_w * ppp),
+            image_height=int(paper_h * ppp),
             kind="spec",
         ),
         # Paper-space pixels are generated at a known 4 px/mm. This makes the
@@ -2715,8 +2793,7 @@ def draft_rotation_body(
             return None
 
     part_dims = [
-        (sum(s["l"] for s in body["outer"]), max(s["d"] for s in body["outer"]))
-        for body in parts
+        (sum(s["l"] for s in body["outer"]), max(s["d"] for s in body["outer"])) for body in parts
     ]
     # A requested left view sits to the right of its front view, on the same
     # axis. Its footprint must enter the scale decision BEFORE a ГОСТ 2.302
@@ -2765,8 +2842,12 @@ def draft_rotation_body(
     def seg(x1, y1, x2, y2, cls="contour", width="main"):
         entities.append(
             Segment(
-                p1=Point(x=x1, y=y1), p2=Point(x=x2, y=y2),
-                line_class=cls, width_class=width, origin="spec", assurance="inferred",
+                p1=Point(x=x1, y=y1),
+                p2=Point(x=x2, y=y2),
+                line_class=cls,
+                width_class=width,
+                origin="spec",
+                assurance="inferred",
             )
         )
 
@@ -2778,24 +2859,35 @@ def draft_rotation_body(
     ):
         axis_y = cursor_y + h * px_per_mm / 2.0
         front_right = _emit_profile(
-            body["outer"], px_per_mm, x_left, axis_y, seg,
-            bore=body.get("bore"), sectioned=sectioned,
+            body["outer"],
+            px_per_mm,
+            x_left,
+            axis_y,
+            seg,
+            bore=body.get("bore"),
+            sectioned=sectioned,
         )
         right_edge = max(right_edge, front_right)
         if sectioned:
-            for loop in _section_wall_loops(
-                body["outer"], body["bore"], px_per_mm, x_left, axis_y
-            ):
-                entities.append(HatchRegion(
-                    boundary=loop, pattern="ansi31",
-                    origin="spec", assurance="inferred",
-                ))
+            for loop in _section_wall_loops(body["outer"], body["bore"], px_per_mm, x_left, axis_y):
+                entities.append(
+                    HatchRegion(
+                        boundary=loop,
+                        pattern="ansi31",
+                        origin="spec",
+                        assurance="inferred",
+                    )
+                )
         if has_side:
             # Same axis_y = exact ГОСТ 2.305 projection alignment.
             side_center_x = front_right + (_VIEW_GAP_MM + h / 2.0) * px_per_mm
             _emit_rotation_side_view(
-                body["outer"], body.get("bore"), px_per_mm,
-                side_center_x, axis_y, entities,
+                body["outer"],
+                body.get("bore"),
+                px_per_mm,
+                side_center_x,
+                axis_y,
+                entities,
             )
             right_edge = max(right_edge, side_center_x + h * px_per_mm / 2.0)
         section_x = x_left
@@ -2803,35 +2895,41 @@ def draft_rotation_body(
         for section in body["outer"]:
             length_px = section["l"] * px_per_mm
             diameter_px = section["d"] * px_per_mm
-            entities.append(DimensionEntity(
-                kind="linear",
-                p1=Point(x=section_x, y=dim_y),
-                p2=Point(x=section_x + length_px, y=dim_y),
-                text=_dimension_text(dim_index, section["l"], diameter=False),
-                value_mm=section["l"],
-                origin="spec",
-                assurance="inferred",
-            ))
+            entities.append(
+                DimensionEntity(
+                    kind="linear",
+                    p1=Point(x=section_x, y=dim_y),
+                    p2=Point(x=section_x + length_px, y=dim_y),
+                    text=_dimension_text(dim_index, section["l"], diameter=False),
+                    value_mm=section["l"],
+                    origin="spec",
+                    assurance="inferred",
+                )
+            )
             mid_x = section_x + length_px / 2.0
-            entities.append(DimensionEntity(
-                kind="diameter",
-                p1=Point(x=mid_x, y=axis_y - diameter_px / 2.0),
-                p2=Point(x=mid_x, y=axis_y + diameter_px / 2.0),
-                text=_dimension_text(dim_index, section["d"], diameter=True),
-                value_mm=section["d"],
+            entities.append(
+                DimensionEntity(
+                    kind="diameter",
+                    p1=Point(x=mid_x, y=axis_y - diameter_px / 2.0),
+                    p2=Point(x=mid_x, y=axis_y + diameter_px / 2.0),
+                    text=_dimension_text(dim_index, section["d"], diameter=True),
+                    value_mm=section["d"],
+                    origin="spec",
+                    assurance="inferred",
+                )
+            )
+            section_x += length_px
+        entities.append(
+            DimensionEntity(
+                kind="linear",
+                p1=Point(x=x_left, y=dim_y + 8.0 * px_per_mm),
+                p2=Point(x=section_x, y=dim_y + 8.0 * px_per_mm),
+                text=_dimension_text(dim_index, _w, diameter=False),
+                value_mm=_w,
                 origin="spec",
                 assurance="inferred",
-            ))
-            section_x += length_px
-        entities.append(DimensionEntity(
-            kind="linear",
-            p1=Point(x=x_left, y=dim_y + 8.0 * px_per_mm),
-            p2=Point(x=section_x, y=dim_y + 8.0 * px_per_mm),
-            text=_dimension_text(dim_index, _w, diameter=False),
-            value_mm=_w,
-            origin="spec",
-            assurance="inferred",
-        ))
+            )
+        )
         cursor_y += (h + gap_mm) * px_per_mm
 
     if sheet_format:
@@ -2885,12 +2983,14 @@ def _expanded_profile_holes(profile: dict) -> list[dict] | None:
                 return None
             for index in range(count):
                 angle = math.radians(start + index * 360.0 / count)
-                holes.append({
-                    "center_x_mm": pcd * math.cos(angle) / 2.0,
-                    "center_y_mm": pcd * math.sin(angle) / 2.0,
-                    "diameter_mm": diameter,
-                    "tolerance": tolerance,
-                })
+                holes.append(
+                    {
+                        "center_x_mm": pcd * math.cos(angle) / 2.0,
+                        "center_y_mm": pcd * math.sin(angle) / 2.0,
+                        "diameter_mm": diameter,
+                        "tolerance": tolerance,
+                    }
+                )
         elif kind == "linear":
             count = pattern.get("count")
             spacing = _num(pattern.get("spacing_mm"))
@@ -2898,19 +2998,25 @@ def _expanded_profile_holes(profile: dict) -> list[dict] | None:
             x0 = _num(pattern.get("start_x_mm"))
             y0 = _num(pattern.get("start_y_mm"))
             if (
-                not isinstance(count, int) or count < 2 or not spacing
-                or direction is None or x0 is None or y0 is None
+                not isinstance(count, int)
+                or count < 2
+                or not spacing
+                or direction is None
+                or x0 is None
+                or y0 is None
             ):
                 return None
             angle = math.radians(direction)
             dx, dy = math.cos(angle) * spacing, math.sin(angle) * spacing
             for index in range(count):
-                holes.append({
-                    "center_x_mm": x0 + dx * index,
-                    "center_y_mm": y0 + dy * index,
-                    "diameter_mm": diameter,
-                    "tolerance": tolerance,
-                })
+                holes.append(
+                    {
+                        "center_x_mm": x0 + dx * index,
+                        "center_y_mm": y0 + dy * index,
+                        "diameter_mm": diameter,
+                        "tolerance": tolerance,
+                    }
+                )
         elif kind == "rectangular":
             rows = pattern.get("rows")
             columns = pattern.get("columns")
@@ -2919,19 +3025,26 @@ def _expanded_profile_holes(profile: dict) -> list[dict] | None:
             x0 = _num(pattern.get("start_x_mm"))
             y0 = _num(pattern.get("start_y_mm"))
             if (
-                not isinstance(rows, int) or not isinstance(columns, int)
-                or rows < 1 or columns < 1 or not sx or not sy
-                or x0 is None or y0 is None
+                not isinstance(rows, int)
+                or not isinstance(columns, int)
+                or rows < 1
+                or columns < 1
+                or not sx
+                or not sy
+                or x0 is None
+                or y0 is None
             ):
                 return None
             for row in range(rows):
                 for column in range(columns):
-                    holes.append({
-                        "center_x_mm": x0 + sx * column,
-                        "center_y_mm": y0 + sy * row,
-                        "diameter_mm": diameter,
-                        "tolerance": tolerance,
-                    })
+                    holes.append(
+                        {
+                            "center_x_mm": x0 + sx * column,
+                            "center_y_mm": y0 + sy * row,
+                            "diameter_mm": diameter,
+                            "tolerance": tolerance,
+                        }
+                    )
         else:
             return None
     return holes
@@ -2954,8 +3067,13 @@ def _feature_fits_profile(
 
 
 def _flange_section_view(
-    profile: dict, *, px_per_mm: float, axis_y: float, left_x: float,
-    dim_index: list, common: dict,
+    profile: dict,
+    *,
+    px_per_mm: float,
+    axis_y: float,
+    left_x: float,
+    dim_index: list,
+    common: dict,
 ) -> tuple[list[Any], float]:
     """Longitudinal section of a flange, placed in projection with its face view.
 
@@ -2975,16 +3093,24 @@ def _flange_section_view(
 
     bore = 0.0
     for hole in profile.get("holes") or []:
-        if isinstance(hole, dict) and abs(_num(hole.get("center_x_mm")) or 0.0) < 1e-6 \
-                and abs(_num(hole.get("center_y_mm")) or 0.0) < 1e-6:
+        if (
+            isinstance(hole, dict)
+            and abs(_num(hole.get("center_x_mm")) or 0.0) < 1e-6
+            and abs(_num(hole.get("center_y_mm")) or 0.0) < 1e-6
+        ):
             bore = max(bore, _num(hole.get("diameter_mm")) or 0.0)
     bore_half = bore * px_per_mm / 2.0
 
     def seg(x1, y1, x2, y2, cls="contour", w="main"):
-        entities.append(Segment(
-            p1=Point(x=x1, y=y1), p2=Point(x=x2, y=y2),
-            line_class=cls, width_class=w, **common,
-        ))
+        entities.append(
+            Segment(
+                p1=Point(x=x1, y=y1),
+                p2=Point(x=x2, y=y2),
+                line_class=cls,
+                width_class=w,
+                **common,
+            )
+        )
 
     right_x = left_x + width
     # Outer silhouette of the cut: two walls, top and bottom.
@@ -2996,46 +3122,70 @@ def _flange_section_view(
         seg(right_x, outer_y, right_x, inner_y)
         if bore_half:
             seg(left_x, inner_y, right_x, inner_y)
-            entities.append(HatchRegion(
-                boundary=[
-                    Point(x=left_x, y=outer_y), Point(x=right_x, y=outer_y),
-                    Point(x=right_x, y=inner_y), Point(x=left_x, y=inner_y),
-                ],
-                pattern="ansi31", **common,
-            ))
+            entities.append(
+                HatchRegion(
+                    boundary=[
+                        Point(x=left_x, y=outer_y),
+                        Point(x=right_x, y=outer_y),
+                        Point(x=right_x, y=inner_y),
+                        Point(x=left_x, y=inner_y),
+                    ],
+                    pattern="ansi31",
+                    **common,
+                )
+            )
     if not bore_half:
-        entities.append(HatchRegion(
-            boundary=[
-                Point(x=left_x, y=axis_y - half), Point(x=right_x, y=axis_y - half),
-                Point(x=right_x, y=axis_y + half), Point(x=left_x, y=axis_y + half),
-            ],
-            pattern="ansi31", **common,
-        ))
+        entities.append(
+            HatchRegion(
+                boundary=[
+                    Point(x=left_x, y=axis_y - half),
+                    Point(x=right_x, y=axis_y - half),
+                    Point(x=right_x, y=axis_y + half),
+                    Point(x=left_x, y=axis_y + half),
+                ],
+                pattern="ansi31",
+                **common,
+            )
+        )
 
     axis_common = {**common, "line_class": "axis", "width_class": "thin"}
-    entities.append(Segment(
-        p1=Point(x=left_x - 8 * px_per_mm, y=axis_y),
-        p2=Point(x=right_x + 8 * px_per_mm, y=axis_y),
-        **axis_common,
-    ))
+    entities.append(
+        Segment(
+            p1=Point(x=left_x - 8 * px_per_mm, y=axis_y),
+            p2=Point(x=right_x + 8 * px_per_mm, y=axis_y),
+            **axis_common,
+        )
+    )
     # The thickness lives only here, so it is dimensioned only here.
-    entities.append(DimensionEntity(
-        kind="linear",
-        p1=Point(x=left_x, y=axis_y + half + 12 * px_per_mm),
-        p2=Point(x=right_x, y=axis_y + half + 12 * px_per_mm),
-        text=_dimension_text(dim_index, thickness, diameter=False),
-        value_mm=thickness, **common,
-    ))
-    entities.append(TextEntity(
-        position=Point(x=left_x, y=axis_y - half - 6 * px_per_mm),
-        text="А-А", height=5.0 * px_per_mm,
-        line_class="dim", width_class="thin", **common,
-    ))
+    entities.append(
+        DimensionEntity(
+            kind="linear",
+            p1=Point(x=left_x, y=axis_y + half + 12 * px_per_mm),
+            p2=Point(x=right_x, y=axis_y + half + 12 * px_per_mm),
+            text=_dimension_text(dim_index, thickness, diameter=False),
+            value_mm=thickness,
+            **common,
+        )
+    )
+    entities.append(
+        TextEntity(
+            position=Point(x=left_x, y=axis_y - half - 6 * px_per_mm),
+            text="А-А",
+            height=5.0 * px_per_mm,
+            line_class="dim",
+            width_class="thin",
+            **common,
+        )
+    )
     return entities, right_x
 
 
 def _flange_face_extras(
-    profile: dict, *, px_per_mm: float, center_x: float, center_y: float,
+    profile: dict,
+    *,
+    px_per_mm: float,
+    center_x: float,
+    center_y: float,
     common: dict,
 ) -> list[Any]:
     """What a face view of a flange needs beyond its circles.
@@ -3048,22 +3198,31 @@ def _flange_face_extras(
     axis_common = {**common, "line_class": "axis", "width_class": "thin"}
     outer_half = float(profile["diameter_mm"]) * px_per_mm / 2.0
     over = outer_half + 8 * px_per_mm
-    entities.append(Segment(
-        p1=Point(x=center_x - over, y=center_y), p2=Point(x=center_x + over, y=center_y),
-        **axis_common,
-    ))
-    entities.append(Segment(
-        p1=Point(x=center_x, y=center_y - over), p2=Point(x=center_x, y=center_y + over),
-        **axis_common,
-    ))
+    entities.append(
+        Segment(
+            p1=Point(x=center_x - over, y=center_y),
+            p2=Point(x=center_x + over, y=center_y),
+            **axis_common,
+        )
+    )
+    entities.append(
+        Segment(
+            p1=Point(x=center_x, y=center_y - over),
+            p2=Point(x=center_x, y=center_y + over),
+            **axis_common,
+        )
+    )
     for pattern in profile.get("hole_patterns") or []:
         pcd = _num(pattern.get("bolt_circle_diameter_mm"))
         if not pcd:
             continue
-        entities.append(Circle(
-            center=Point(x=center_x, y=center_y), radius=pcd * px_per_mm / 2.0,
-            **axis_common,
-        ))
+        entities.append(
+            Circle(
+                center=Point(x=center_x, y=center_y),
+                radius=pcd * px_per_mm / 2.0,
+                **axis_common,
+            )
+        )
     return entities
 
 
@@ -3120,8 +3279,12 @@ def draft_prismatic_body(
             slot_y = _num(slot.get("center_y_mm"))
             rotation = _num(slot.get("rotation_deg"))
             if (
-                not length or not slot_width or length < slot_width
-                or slot_x is None or slot_y is None or rotation is None
+                not length
+                or not slot_width
+                or length < slot_width
+                or slot_x is None
+                or slot_y is None
+                or rotation is None
                 or not _feature_fits_profile(
                     profile, center_x=slot_x, center_y=slot_y, radius=length / 2.0
                 )
@@ -3137,7 +3300,13 @@ def draft_prismatic_body(
     sheet_info = None
     if sheet_format:
         (
-            ratio, scale_label, paper_px_per_mm, paper_w, paper_h, x_left, y_top,
+            ratio,
+            scale_label,
+            paper_px_per_mm,
+            paper_w,
+            paper_h,
+            x_left,
+            y_top,
         ) = _place_on_sheet(layout_w, layout_h, sheet_format, landscape, spec)
         px_per_mm = ratio * paper_px_per_mm
         width_px, height_px = paper_w * paper_px_per_mm, paper_h * paper_px_per_mm
@@ -3169,16 +3338,58 @@ def draft_prismatic_body(
             bottom = local_y + height_mm * px_per_mm
             corner_radius = (_num(profile.get("corner_radius_mm")) or 0.0) * px_per_mm
             if corner_radius:
-                entities.extend([
-                    Segment(p1=Point(x=local_x + corner_radius, y=local_y), p2=Point(x=right - corner_radius, y=local_y), **common),
-                    Arc(center=Point(x=right - corner_radius, y=local_y + corner_radius), radius=corner_radius, start_angle=270, end_angle=360, **common),
-                    Segment(p1=Point(x=right, y=local_y + corner_radius), p2=Point(x=right, y=bottom - corner_radius), **common),
-                    Arc(center=Point(x=right - corner_radius, y=bottom - corner_radius), radius=corner_radius, start_angle=0, end_angle=90, **common),
-                    Segment(p1=Point(x=right - corner_radius, y=bottom), p2=Point(x=local_x + corner_radius, y=bottom), **common),
-                    Arc(center=Point(x=local_x + corner_radius, y=bottom - corner_radius), radius=corner_radius, start_angle=90, end_angle=180, **common),
-                    Segment(p1=Point(x=local_x, y=bottom - corner_radius), p2=Point(x=local_x, y=local_y + corner_radius), **common),
-                    Arc(center=Point(x=local_x + corner_radius, y=local_y + corner_radius), radius=corner_radius, start_angle=180, end_angle=270, **common),
-                ])
+                entities.extend(
+                    [
+                        Segment(
+                            p1=Point(x=local_x + corner_radius, y=local_y),
+                            p2=Point(x=right - corner_radius, y=local_y),
+                            **common,
+                        ),
+                        Arc(
+                            center=Point(x=right - corner_radius, y=local_y + corner_radius),
+                            radius=corner_radius,
+                            start_angle=270,
+                            end_angle=360,
+                            **common,
+                        ),
+                        Segment(
+                            p1=Point(x=right, y=local_y + corner_radius),
+                            p2=Point(x=right, y=bottom - corner_radius),
+                            **common,
+                        ),
+                        Arc(
+                            center=Point(x=right - corner_radius, y=bottom - corner_radius),
+                            radius=corner_radius,
+                            start_angle=0,
+                            end_angle=90,
+                            **common,
+                        ),
+                        Segment(
+                            p1=Point(x=right - corner_radius, y=bottom),
+                            p2=Point(x=local_x + corner_radius, y=bottom),
+                            **common,
+                        ),
+                        Arc(
+                            center=Point(x=local_x + corner_radius, y=bottom - corner_radius),
+                            radius=corner_radius,
+                            start_angle=90,
+                            end_angle=180,
+                            **common,
+                        ),
+                        Segment(
+                            p1=Point(x=local_x, y=bottom - corner_radius),
+                            p2=Point(x=local_x, y=local_y + corner_radius),
+                            **common,
+                        ),
+                        Arc(
+                            center=Point(x=local_x + corner_radius, y=local_y + corner_radius),
+                            radius=corner_radius,
+                            start_angle=180,
+                            end_angle=270,
+                            **common,
+                        ),
+                    ]
+                )
             else:
                 corners = [
                     Point(x=local_x, y=local_y),
@@ -3189,61 +3400,74 @@ def draft_prismatic_body(
                 for p1, p2 in zip(corners, corners[1:] + corners[:1], strict=True):
                     entities.append(Segment(p1=p1, p2=p2, **common))
             dim_y = local_y + height_mm * px_per_mm + 10.0 * px_per_mm
-            entities.append(DimensionEntity(
-                kind="linear",
-                p1=Point(x=local_x, y=dim_y),
-                p2=Point(x=local_x + width_mm * px_per_mm, y=dim_y),
-                text=_dimension_text(dim_index, width_mm, diameter=False),
-                value_mm=width_mm, **common,
-            ))
+            entities.append(
+                DimensionEntity(
+                    kind="linear",
+                    p1=Point(x=local_x, y=dim_y),
+                    p2=Point(x=local_x + width_mm * px_per_mm, y=dim_y),
+                    text=_dimension_text(dim_index, width_mm, diameter=False),
+                    value_mm=width_mm,
+                    **common,
+                )
+            )
             dim_x = local_x + width_mm * px_per_mm + 10.0 * px_per_mm
-            entities.append(DimensionEntity(
-                kind="linear",
-                p1=Point(x=dim_x, y=local_y),
-                p2=Point(x=dim_x, y=local_y + height_mm * px_per_mm),
-                text=_dimension_text(dim_index, height_mm, diameter=False),
-                value_mm=height_mm, **common,
-            ))
+            entities.append(
+                DimensionEntity(
+                    kind="linear",
+                    p1=Point(x=dim_x, y=local_y),
+                    p2=Point(x=dim_x, y=local_y + height_mm * px_per_mm),
+                    text=_dimension_text(dim_index, height_mm, diameter=False),
+                    value_mm=height_mm,
+                    **common,
+                )
+            )
         else:
             radius = width_mm * px_per_mm / 2.0
             entities.append(Circle(center=Point(x=center_x, y=center_y), radius=radius, **common))
-            entities.append(DimensionEntity(
-                kind="diameter",
-                p1=Point(x=center_x - radius, y=center_y),
-                p2=Point(x=center_x + radius, y=center_y),
-                text=_dimension_text(dim_index, width_mm, diameter=True),
-                value_mm=width_mm, **common,
-            ))
+            entities.append(
+                DimensionEntity(
+                    kind="diameter",
+                    p1=Point(x=center_x - radius, y=center_y),
+                    p2=Point(x=center_x + radius, y=center_y),
+                    text=_dimension_text(dim_index, width_mm, diameter=True),
+                    value_mm=width_mm,
+                    **common,
+                )
+            )
 
         axis_common = {**common, "line_class": "axis", "width_class": "thin"}
-        entities.append(Segment(
-            p1=Point(x=center_x - 6 * px_per_mm, y=center_y),
-            p2=Point(x=center_x + 6 * px_per_mm, y=center_y),
-            **axis_common,
-        ))
-        entities.append(Segment(
-            p1=Point(x=center_x, y=center_y - 6 * px_per_mm),
-            p2=Point(x=center_x, y=center_y + 6 * px_per_mm),
-            **axis_common,
-        ))
+        entities.append(
+            Segment(
+                p1=Point(x=center_x - 6 * px_per_mm, y=center_y),
+                p2=Point(x=center_x + 6 * px_per_mm, y=center_y),
+                **axis_common,
+            )
+        )
+        entities.append(
+            Segment(
+                p1=Point(x=center_x, y=center_y - 6 * px_per_mm),
+                p2=Point(x=center_x, y=center_y + 6 * px_per_mm),
+                **axis_common,
+            )
+        )
         for hole in profile_holes:
             hole_x = center_x + float(hole["center_x_mm"]) * px_per_mm
             # Spec uses engineering +y upward; image coordinates grow downward.
             hole_y = center_y - float(hole["center_y_mm"]) * px_per_mm
             diameter = float(hole["diameter_mm"])
             radius = diameter * px_per_mm / 2.0
-            entities.append(Circle(
-                center=Point(x=hole_x, y=hole_y), radius=radius, **common
-            ))
-            entities.append(DimensionEntity(
-                kind="diameter",
-                p1=Point(x=hole_x, y=hole_y - radius),
-                p2=Point(x=hole_x, y=hole_y + radius),
-                text=f"Ø{diameter:g}" + str(hole.get("tolerance") or ""),
-                value_mm=diameter,
-                tolerance=hole.get("tolerance") or None,
-                **common,
-            ))
+            entities.append(Circle(center=Point(x=hole_x, y=hole_y), radius=radius, **common))
+            entities.append(
+                DimensionEntity(
+                    kind="diameter",
+                    p1=Point(x=hole_x, y=hole_y - radius),
+                    p2=Point(x=hole_x, y=hole_y + radius),
+                    text=f"Ø{diameter:g}" + str(hole.get("tolerance") or ""),
+                    value_mm=diameter,
+                    tolerance=hole.get("tolerance") or None,
+                    **common,
+                )
+            )
         for pattern in profile.get("hole_patterns") or []:
             # Ф2.5: only a bolt_circle pattern has a PCD to dimension — a
             # linear/rectangular pattern's holes are already individually
@@ -3252,14 +3476,16 @@ def draft_prismatic_body(
                 continue
             pcd = float(pattern["bolt_circle_diameter_mm"])
             pcd_radius = pcd * px_per_mm / 2.0
-            entities.append(DimensionEntity(
-                kind="diameter",
-                p1=Point(x=center_x - pcd_radius, y=center_y),
-                p2=Point(x=center_x + pcd_radius, y=center_y),
-                text=f"Ø{pcd:g} PCD",
-                value_mm=pcd,
-                **common,
-            ))
+            entities.append(
+                DimensionEntity(
+                    kind="diameter",
+                    p1=Point(x=center_x - pcd_radius, y=center_y),
+                    p2=Point(x=center_x + pcd_radius, y=center_y),
+                    text=f"Ø{pcd:g} PCD",
+                    value_mm=pcd,
+                    **common,
+                )
+            )
         for slot in profile.get("slots") or []:
             slot_x_mm = float(slot["center_x_mm"])
             slot_y_mm = float(slot["center_y_mm"])
@@ -3279,63 +3505,67 @@ def draft_prismatic_body(
 
             left_x, left_y = -ux * half_straight, -uy * half_straight
             right_x, right_y = ux * half_straight, uy * half_straight
-            entities.extend([
-                Segment(
-                    p1=slot_point(left_x + vx * radius_mm, left_y + vy * radius_mm),
-                    p2=slot_point(right_x + vx * radius_mm, right_y + vy * radius_mm),
-                    **common,
-                ),
-                Segment(
-                    p1=slot_point(left_x - vx * radius_mm, left_y - vy * radius_mm),
-                    p2=slot_point(right_x - vx * radius_mm, right_y - vy * radius_mm),
-                    **common,
-                ),
-            ])
+            entities.extend(
+                [
+                    Segment(
+                        p1=slot_point(left_x + vx * radius_mm, left_y + vy * radius_mm),
+                        p2=slot_point(right_x + vx * radius_mm, right_y + vy * radius_mm),
+                        **common,
+                    ),
+                    Segment(
+                        p1=slot_point(left_x - vx * radius_mm, left_y - vy * radius_mm),
+                        p2=slot_point(right_x - vx * radius_mm, right_y - vy * radius_mm),
+                        **common,
+                    ),
+                ]
+            )
             image_angle = -math.degrees(theta)
-            entities.extend([
-                Arc(
-                    center=slot_point(left_x, left_y),
-                    radius=radius_mm * px_per_mm,
-                    start_angle=image_angle + 90.0,
-                    end_angle=image_angle + 270.0,
-                    **common,
-                ),
-                Arc(
-                    center=slot_point(right_x, right_y),
-                    radius=radius_mm * px_per_mm,
-                    start_angle=image_angle - 90.0,
-                    end_angle=image_angle + 90.0,
-                    **common,
-                ),
-            ])
-            entities.extend([
-                DimensionEntity(
-                    kind="linear",
-                    p1=slot_point(-ux * length_mm / 2.0, -uy * length_mm / 2.0),
-                    p2=slot_point(ux * length_mm / 2.0, uy * length_mm / 2.0),
-                    text=f"{length_mm:g}", value_mm=length_mm,
-                    tolerance=slot.get("tolerance") or None,
-                    **common,
-                ),
-                DimensionEntity(
-                    kind="linear",
-                    p1=slot_point(-vx * radius_mm, -vy * radius_mm),
-                    p2=slot_point(vx * radius_mm, vy * radius_mm),
-                    text=f"{slot_width_mm:g}", value_mm=slot_width_mm,
-                    **common,
-                ),
-            ])
+            entities.extend(
+                [
+                    Arc(
+                        center=slot_point(left_x, left_y),
+                        radius=radius_mm * px_per_mm,
+                        start_angle=image_angle + 90.0,
+                        end_angle=image_angle + 270.0,
+                        **common,
+                    ),
+                    Arc(
+                        center=slot_point(right_x, right_y),
+                        radius=radius_mm * px_per_mm,
+                        start_angle=image_angle - 90.0,
+                        end_angle=image_angle + 90.0,
+                        **common,
+                    ),
+                ]
+            )
+            entities.extend(
+                [
+                    DimensionEntity(
+                        kind="linear",
+                        p1=slot_point(-ux * length_mm / 2.0, -uy * length_mm / 2.0),
+                        p2=slot_point(ux * length_mm / 2.0, uy * length_mm / 2.0),
+                        text=f"{length_mm:g}",
+                        value_mm=length_mm,
+                        tolerance=slot.get("tolerance") or None,
+                        **common,
+                    ),
+                    DimensionEntity(
+                        kind="linear",
+                        p1=slot_point(-vx * radius_mm, -vy * radius_mm),
+                        p2=slot_point(vx * radius_mm, vy * radius_mm),
+                        text=f"{slot_width_mm:g}",
+                        value_mm=slot_width_mm,
+                        **common,
+                    ),
+                ]
+            )
         cursor_y += (height_mm + gap_mm) * px_per_mm
 
     if sheet_format:
-        entities += _sheet_frame_entities(
-            paper_w, paper_h, paper_px_per_mm, spec, scale_label
-        )
+        entities += _sheet_frame_entities(paper_w, paper_h, paper_px_per_mm, spec, scale_label)
     extra = {"sheet": sheet_info} if sheet_info is not None else {}
     return CadIR(
-        source=SourceInfo(
-            image_width=int(width_px), image_height=int(height_px), kind="spec"
-        ),
+        source=SourceInfo(image_width=int(width_px), image_height=int(height_px), kind="spec"),
         scale=1.0 / px_per_mm,
         scale_source=scale_source,
         entities=entities,
@@ -3381,9 +3611,13 @@ def draft_from_spec(
         try:
             import asyncio
 
-            generated = asyncio.get_event_loop().run_until_complete(
-                _draft_generative(spec, draft_model, router=router)
-            ) if not _in_running_loop() else None
+            generated = (
+                asyncio.get_event_loop().run_until_complete(
+                    _draft_generative(spec, draft_model, router=router)
+                )
+                if not _in_running_loop()
+                else None
+            )
             if generated is not None and generated.entities:
                 return generated
         except Exception:  # noqa: BLE001 — never sink the pipeline on a model error
@@ -3430,8 +3664,11 @@ async def draft_from_spec_async(
     if draft_model:
         try:
             generated = await _draft_generative(
-                spec, draft_model, router=router,
-                sheet_format=sheet_format, landscape=landscape,
+                spec,
+                draft_model,
+                router=router,
+                sheet_format=sheet_format,
+                landscape=landscape,
             )
             if generated is not None and generated.entities:
                 return generated
@@ -3478,8 +3715,8 @@ async def _draft_generative(
     import json
     import time
 
-    from app.ai.schemas import AIRequest, AITask, ChatMessage
     from app.ai.cad_process_log import record_cad_process_event
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
 
     if router is None:
         from app.ai.router import ai_router
@@ -3488,10 +3725,12 @@ async def _draft_generative(
     full_prompt = _DRAFT_PROMPT + json.dumps(spec, ensure_ascii=False)
     request = AIRequest(
         task=AITask.CAD_SPEC_DRAFT,
-        messages=[ChatMessage(
-            role="user",
-            content=full_prompt,
-        )],
+        messages=[
+            ChatMessage(
+                role="user",
+                content=full_prompt,
+            )
+        ],
         preferred_model=draft_model,
         confidential=True,
         allow_cloud=False,
@@ -3533,7 +3772,8 @@ async def _draft_generative(
         "drafter.model.request",
         "completed" if dsl else "failed",
         "Ответ генеративного чертёжника получен"
-        if dsl else "Ответ генеративного чертёжника не является корректным JSON",
+        if dsl
+        else "Ответ генеративного чертёжника не является корректным JSON",
         {
             "model": response.model or draft_model,
             "duration_ms": response.usage.latency_ms,
@@ -3573,43 +3813,69 @@ def _dsl_to_ir(dsl: dict, *, canvas: int = 1000) -> CadIR | None:
 
     for ln in dsl.get("lines", []) or []:
         if isinstance(ln, (list, tuple)) and len(ln) >= 4:
-            entities.append(Segment(
-                p1=_pt(ln[0], ln[1]), p2=_pt(ln[2], ln[3]),
-                line_class="contour", width_class="main",
-                origin="spec", assurance="inferred",
-            ))
+            entities.append(
+                Segment(
+                    p1=_pt(ln[0], ln[1]),
+                    p2=_pt(ln[2], ln[3]),
+                    line_class="contour",
+                    width_class="main",
+                    origin="spec",
+                    assurance="inferred",
+                )
+            )
     for c in dsl.get("circles", []) or []:
         if isinstance(c, (list, tuple)) and len(c) >= 3:
-            entities.append(Circle(
-                center=_pt(c[0], c[1]), radius=float(c[2]),
-                line_class="contour", width_class="main",
-                origin="spec", assurance="inferred",
-            ))
+            entities.append(
+                Circle(
+                    center=_pt(c[0], c[1]),
+                    radius=float(c[2]),
+                    line_class="contour",
+                    width_class="main",
+                    origin="spec",
+                    assurance="inferred",
+                )
+            )
     for a in dsl.get("arcs", []) or []:
         if isinstance(a, (list, tuple)) and len(a) >= 5:
-            entities.append(Arc(
-                center=_pt(a[0], a[1]), radius=float(a[2]),
-                start_angle=float(a[3]), end_angle=float(a[4]),
-                line_class="contour", width_class="main",
-                origin="spec", assurance="inferred",
-            ))
+            entities.append(
+                Arc(
+                    center=_pt(a[0], a[1]),
+                    radius=float(a[2]),
+                    start_angle=float(a[3]),
+                    end_angle=float(a[4]),
+                    line_class="contour",
+                    width_class="main",
+                    origin="spec",
+                    assurance="inferred",
+                )
+            )
     for pl in dsl.get("polylines", []) or []:
         if not isinstance(pl, dict):
             continue
         pts = [_pt(p[0], p[1]) for p in (pl.get("pts") or []) if len(p) >= 2]
         if len(pts) >= 2:
-            entities.append(Polyline(
-                points=pts, closed=bool(pl.get("closed")),
-                line_class="contour", width_class="main",
-                origin="spec", assurance="inferred",
-            ))
+            entities.append(
+                Polyline(
+                    points=pts,
+                    closed=bool(pl.get("closed")),
+                    line_class="contour",
+                    width_class="main",
+                    origin="spec",
+                    assurance="inferred",
+                )
+            )
     for ax in dsl.get("axes", []) or []:
         if isinstance(ax, (list, tuple)) and len(ax) >= 4:
-            entities.append(Segment(
-                p1=_pt(ax[0], ax[1]), p2=_pt(ax[2], ax[3]),
-                line_class="axis", width_class="thin",
-                origin="spec", assurance="inferred",
-            ))
+            entities.append(
+                Segment(
+                    p1=_pt(ax[0], ax[1]),
+                    p2=_pt(ax[2], ax[3]),
+                    line_class="axis",
+                    width_class="thin",
+                    origin="spec",
+                    assurance="inferred",
+                )
+            )
     if not entities:
         return None
     return CadIR(
@@ -3626,11 +3892,15 @@ def _entity_points(e: Any) -> list[tuple[float, float]]:
     if e.type == "segment":
         return [(e.p1.x, e.p1.y), (e.p2.x, e.p2.y)]
     if e.type == "circle":
-        return [(e.center.x - e.radius, e.center.y - e.radius),
-                (e.center.x + e.radius, e.center.y + e.radius)]
+        return [
+            (e.center.x - e.radius, e.center.y - e.radius),
+            (e.center.x + e.radius, e.center.y + e.radius),
+        ]
     if e.type == "arc":
-        return [(e.center.x - e.radius, e.center.y - e.radius),
-                (e.center.x + e.radius, e.center.y + e.radius)]
+        return [
+            (e.center.x - e.radius, e.center.y - e.radius),
+            (e.center.x + e.radius, e.center.y + e.radius),
+        ]
     if e.type == "polyline":
         return [(p.x, p.y) for p in e.points]
     return []
@@ -3638,6 +3908,7 @@ def _entity_points(e: Any) -> list[tuple[float, float]]:
 
 def _translate_scale(e: Any, k: float, ox: float, oy: float, bx0: float, by0: float) -> None:
     """In-place map an entity from generated space to sheet px: (p-b0)*k+o."""
+
     def m(px, py):
         return (px - bx0) * k + ox, (py - by0) * k + oy
 
@@ -3664,9 +3935,11 @@ def _layout_on_sheet(ir: CadIR, spec: dict, sheet_format: str, landscape: bool) 
     pts = [p for e in ir.entities for p in _entity_points(e)]
     if not pts:
         return
-    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
     bx0, bx1, by0, by1 = min(xs), max(xs), min(ys), max(ys)
-    gen_w = max(bx1 - bx0, 1e-6); gen_h = max(by1 - by0, 1e-6)
+    gen_w = max(bx1 - bx0, 1e-6)
+    gen_h = max(by1 - by0, 1e-6)
 
     short, long = _GOST_SHEETS.get(sheet_format.upper(), _GOST_SHEETS["A4"])
     pw_mm, ph_mm = (long, short) if landscape else (short, long)
@@ -3690,14 +3963,17 @@ def _layout_on_sheet(ir: CadIR, spec: dict, sheet_format: str, landscape: bool) 
         mm_per_unit = real_max / max(gen_w, gen_h)
         real_w = gen_w * mm_per_unit
         real_h = gen_h * mm_per_unit
-        ratio, scale_label = choose_standard_scale(real_w, real_h, sheet_format, landscape=landscape)
+        ratio, scale_label = choose_standard_scale(
+            real_w, real_h, sheet_format, landscape=landscape
+        )
         k = mm_per_unit * ratio * ppp  # gen-unit → paper px at the standard scale
         ir.scale = 1.0 / (ratio * ppp)  # real mm per px
         ir.scale_source = "sheet_format"
     else:
         k = min(frame_w / gen_w, frame_h / gen_h) * 0.8  # fit-to-frame, 80%
 
-    draw_w = gen_w * k; draw_h = gen_h * k
+    draw_w = gen_w * k
+    draw_h = gen_h * k
     ox = frame_x0 + max((frame_w - draw_w) / 2.0, 0.0)
     oy = frame_y0 + max((frame_h - draw_h) / 2.0, 0.0)
     for e in ir.entities:
@@ -3706,6 +3982,7 @@ def _layout_on_sheet(ir: CadIR, spec: dict, sheet_format: str, landscape: bool) 
     ir.source.image_width = int(pw_mm * ppp)
     ir.source.image_height = int(ph_mm * ppp)
     ir.sheet = SheetInfo(
-        format=sheet_format.upper(), frame=False,
+        format=sheet_format.upper(),
+        frame=False,
         title_block={"scale": scale_label} if scale_label else {},
     )

@@ -90,6 +90,7 @@ def _load_breaker_from_redis(model: str) -> CircuitBreaker | None:
     """Restore circuit breaker state from Redis if it was OPEN at last shutdown."""
     try:
         from app.utils.redis_client import get_sync_redis
+
         r = get_sync_redis()
         raw = r.get(_breaker_redis_key(model))
         if not raw:
@@ -109,15 +110,18 @@ def _persist_breaker(model: str, breaker: CircuitBreaker) -> None:
     """Persist circuit breaker state to Redis so it survives restarts."""
     try:
         from app.utils.redis_client import get_sync_redis
+
         r = get_sync_redis()
         r.setex(
             _breaker_redis_key(model),
             _BREAKER_TTL,
-            json.dumps({
-                "failures": breaker._failures,
-                "state": breaker._state.value,
-                "last_failure_time": breaker._last_failure_time,
-            }),
+            json.dumps(
+                {
+                    "failures": breaker._failures,
+                    "state": breaker._state.value,
+                    "last_failure_time": breaker._last_failure_time,
+                }
+            ),
         )
     except Exception:
         pass
@@ -280,7 +284,7 @@ async def generate(
                 error=str(e),
             )
             if attempt < max_retries:
-                await _async_sleep(2 ** attempt)
+                await _async_sleep(2**attempt)
 
         except httpx.HTTPStatusError as e:
             last_error = e
@@ -358,7 +362,7 @@ def _extract_json_from_text(text: str) -> str:
         text = fence.group(1)
 
     # Find the outermost JSON object or array
-    for start_char, end_char in [('{', '}'), ('[', ']')]:
+    for start_char, end_char in [("{", "}"), ("[", "]")]:
         start = text.find(start_char)
         if start != -1:
             depth = 0
@@ -368,7 +372,7 @@ def _extract_json_from_text(text: str) -> str:
                 if escape:
                     escape = False
                     continue
-                if ch == '\\' and in_str:
+                if ch == "\\" and in_str:
                     escape = True
                     continue
                 if ch == '"':
@@ -381,7 +385,7 @@ def _extract_json_from_text(text: str) -> str:
                 elif ch == end_char:
                     depth -= 1
                     if depth == 0:
-                        return text[start:i + 1]
+                        return text[start : i + 1]
 
     return text.strip()
 
@@ -433,7 +437,7 @@ async def _generate_json_openai_compatible(
     timeout_seconds: float,
 ) -> dict:
     """Generate structured JSON via any OpenAI-compatible endpoint (openrouter, deepseek, vllm…)."""
-    from app.ai.model_resolver import _provider_base_url, _provider_api_key
+    from app.ai.model_resolver import _provider_api_key, _provider_base_url
 
     base_url = _provider_base_url(provider)
     api_key = _provider_api_key(provider)
@@ -544,8 +548,11 @@ async def generate_json(
     if provider == "anthropic":
         try:
             result = await _generate_json_anthropic(
-                prompt, model=model, system=system,
-                temperature=temperature, max_tokens=max_tokens,
+                prompt,
+                model=model,
+                system=system,
+                temperature=temperature,
+                max_tokens=max_tokens,
                 timeout_seconds=timeout_seconds,
             )
             breaker.record_success()
@@ -557,22 +564,42 @@ async def generate_json(
 
     # ── OpenAI-compatible cloud providers ─────────────────────────────────────
     _openai_compat_providers = {
-        "openrouter", "openai", "deepseek", "gemini", "mistral", "groq",
-        "together", "fireworks", "xai", "cohere", "perplexity", "minimax",
-        "kimi", "qwen", "vllm", "lmstudio", "openai_compatible",
+        "openrouter",
+        "openai",
+        "deepseek",
+        "gemini",
+        "mistral",
+        "groq",
+        "together",
+        "fireworks",
+        "xai",
+        "cohere",
+        "perplexity",
+        "minimax",
+        "kimi",
+        "qwen",
+        "vllm",
+        "lmstudio",
+        "openai_compatible",
     }
     if provider in _openai_compat_providers:
         try:
             result = await _generate_json_openai_compatible(
-                prompt, model=model, provider=provider, system=system,
-                temperature=temperature, max_tokens=max_tokens,
+                prompt,
+                model=model,
+                provider=provider,
+                system=system,
+                temperature=temperature,
+                max_tokens=max_tokens,
                 timeout_seconds=timeout_seconds,
             )
             breaker.record_success()
             return result
         except Exception as exc:
             breaker.record_failure()
-            logger.error("generate_json_cloud_error", provider=provider, model=model, error=str(exc))
+            logger.error(
+                "generate_json_cloud_error", provider=provider, model=model, error=str(exc)
+            )
             raise
 
     messages = []
@@ -666,7 +693,8 @@ async def generate_json(
             last_error = ValueError(f"Failed to parse JSON from model output: {e}")
             if attempt < 2:
                 import asyncio as _asyncio
-                await _asyncio.sleep(2 ** attempt)
+
+                await _asyncio.sleep(2**attempt)
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             breaker.record_failure()
@@ -678,10 +706,17 @@ async def generate_json(
                 logger.error("llamacpp_unreachable", url=url, error=str(e))
                 break  # no point retrying — server is simply not running
             last_error = e
-            logger.warning("generate_json_retry", model=model, provider=provider, attempt=attempt + 1, error=str(e))
+            logger.warning(
+                "generate_json_retry",
+                model=model,
+                provider=provider,
+                attempt=attempt + 1,
+                error=str(e),
+            )
             if attempt < 2:
                 import asyncio
-                await asyncio.sleep(2 ** attempt)
+
+                await asyncio.sleep(2**attempt)
 
         except Exception as e:
             last_error = e
@@ -737,7 +772,11 @@ async def chat(
         return OllamaResponse(
             text=data.get("message", {}).get("content", ""),
             model=model,
-            total_duration_ms=data.get("total_duration", 0) // 1_000_000,
+            # total_duration — время самой генерации по версии сервера; оно не
+            # включает ожидание в очереди и сеть, а при разгрузке модели
+            # приходит нулём. Замеренное здесь elapsed_ms — то, что реально
+            # ждал вызывающий; раньше оно вычислялось и выбрасывалось.
+            total_duration_ms=(data.get("total_duration", 0) // 1_000_000) or elapsed_ms,
             eval_count=data.get("eval_count", 0),
         )
 
@@ -774,16 +813,31 @@ async def reasoning_generate(
     # ── Cloud providers ───────────────────────────────────────────────────────
     if not confidential and provider == "anthropic" and settings.anthropic_api_key:
         return await _claude_generate(
-            prompt, model=model_name, system=system,
-            temperature=temperature, max_tokens=max_tokens,
+            prompt,
+            model=model_name,
+            system=system,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     if not confidential and provider in (
-        "openrouter", "openai", "deepseek", "gemini", "mistral", "groq",
-        "together", "fireworks", "xai", "cohere", "perplexity", "minimax",
-        "kimi", "qwen",
+        "openrouter",
+        "openai",
+        "deepseek",
+        "gemini",
+        "mistral",
+        "groq",
+        "together",
+        "fireworks",
+        "xai",
+        "cohere",
+        "perplexity",
+        "minimax",
+        "kimi",
+        "qwen",
     ):
-        from app.ai.model_resolver import _provider_base_url, _provider_api_key
+        from app.ai.model_resolver import _provider_api_key, _provider_base_url
+
         base_url = _provider_base_url(provider)
         if not base_url.endswith("/v1"):
             base_url = base_url.rstrip("/") + "/v1"
@@ -831,10 +885,17 @@ async def reasoning_generate(
         return resp_lc.json()["choices"][0]["message"]["content"]
 
     # ── Legacy fallback: check old ai_reasoning_backend setting ───────────────
-    if not confidential and settings.ai_reasoning_backend == "claude" and settings.anthropic_api_key:
+    if (
+        not confidential
+        and settings.ai_reasoning_backend == "claude"
+        and settings.anthropic_api_key
+    ):
         return await _claude_generate(
-            prompt, model=model_name, system=system,
-            temperature=temperature, max_tokens=max_tokens,
+            prompt,
+            model=model_name,
+            system=system,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     # Default: local Ollama with reasoning model
@@ -925,11 +986,13 @@ async def chat_with_images(
     messages: list[dict] = []
     if system:
         messages.append({"role": "system", "content": system})
-    messages.append({
-        "role": "user",
-        "content": prompt,
-        "images": b64_images,
-    })
+    messages.append(
+        {
+            "role": "user",
+            "content": prompt,
+            "images": b64_images,
+        }
+    )
 
     payload: dict = {
         "model": effective_model,
@@ -981,14 +1044,18 @@ async def chat_with_images(
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             last_error = e
             breaker.record_failure()
-            logger.warning("ollama_vlm_retry", model=effective_model, attempt=attempt + 1, error=str(e))
+            logger.warning(
+                "ollama_vlm_retry", model=effective_model, attempt=attempt + 1, error=str(e)
+            )
             if attempt < 2:
-                await _async_sleep(2 ** attempt)
+                await _async_sleep(2**attempt)
 
         except httpx.HTTPStatusError as e:
             last_error = e
             breaker.record_failure()
-            logger.error("ollama_vlm_http_error", model=effective_model, status=e.response.status_code)
+            logger.error(
+                "ollama_vlm_http_error", model=effective_model, status=e.response.status_code
+            )
             break
 
         except Exception as e:
@@ -1014,4 +1081,5 @@ async def check_health() -> dict:
 
 async def _async_sleep(seconds: float) -> None:
     import asyncio
+
     await asyncio.sleep(seconds)

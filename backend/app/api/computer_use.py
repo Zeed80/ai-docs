@@ -14,7 +14,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import AliasChoices, BaseModel, Field
 from sqlalchemy import select
@@ -30,7 +29,9 @@ router = APIRouter()
 
 
 class ComputerActionIn(BaseModel):
-    action: str = Field(pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_click|desktop_type|desktop_read|desktop_close|file_read|file_write|shell)$")
+    action: str = Field(
+        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_click|desktop_type|desktop_read|desktop_close|file_read|file_write|shell)$"
+    )
     work_order_id: uuid.UUID
     step_id: uuid.UUID | None = None
     target: str = Field(min_length=1, max_length=4096)
@@ -64,12 +65,13 @@ def _host_allowed(url: str, hosts: list[str]) -> bool:
     if any(h == "*" for h in hosts):
         return True
     return any(
-        host == allowed.casefold() or host.endswith("." + allowed.casefold())
-        for allowed in hosts
+        host == allowed.casefold() or host.endswith("." + allowed.casefold()) for allowed in hosts
     )
 
 
-async def _perform(action: str, target: str, body: dict, grant: ComputerUseGrant) -> tuple[dict, dict]:
+async def _perform(
+    action: str, target: str, body: dict, grant: ComputerUseGrant
+) -> tuple[dict, dict]:
     if action in {"browser_fetch", "desktop_snapshot"}:
         if not _host_allowed(target, list(grant.allowed_hosts or [])):
             raise HTTPException(status_code=403, detail="Host is outside granted allowlist")
@@ -90,7 +92,9 @@ async def _perform(action: str, target: str, body: dict, grant: ComputerUseGrant
             "final_url": response.final_url,
             "status": response.status,
             "text_sha256": hashlib.sha256(response.text.encode()).hexdigest(),
-            "screenshot_sha256": hashlib.sha256(screenshot.encode()).hexdigest() if screenshot else None,
+            "screenshot_sha256": hashlib.sha256(screenshot.encode()).hexdigest()
+            if screenshot
+            else None,
         }
         if screenshot:
             result["screenshot_b64"] = screenshot
@@ -113,15 +117,21 @@ async def _perform(action: str, target: str, body: dict, grant: ComputerUseGrant
             }
         )
         async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(get_config().browser_url.rstrip("/") + endpoint, json=payload)
+            response = await client.post(
+                get_config().browser_url.rstrip("/") + endpoint, json=payload
+            )
         response.raise_for_status()
         result = response.json()
         if not result.get("ok"):
-            raise HTTPException(status_code=409, detail=result.get("error") or "Desktop action failed")
+            raise HTTPException(
+                status_code=409, detail=result.get("error") or "Desktop action failed"
+            )
         screenshot = result.get("screenshot_b64")
         evidence = {
             "url": result.get("url"),
-            "screenshot_sha256": hashlib.sha256(screenshot.encode()).hexdigest() if screenshot else None,
+            "screenshot_sha256": hashlib.sha256(screenshot.encode()).hexdigest()
+            if screenshot
+            else None,
         }
         return result, evidence
     if action == "file_read":
@@ -131,7 +141,9 @@ async def _perform(action: str, target: str, body: dict, grant: ComputerUseGrant
         if len(data) > limit:
             raise HTTPException(status_code=413, detail="File exceeds granted read limit")
         digest = hashlib.sha256(data).hexdigest()
-        return {"content": data.decode("utf-8", errors="replace"), "size": len(data)}, {"sha256": digest}
+        return {"content": data.decode("utf-8", errors="replace"), "size": len(data)}, {
+            "sha256": digest
+        }
     if action == "file_write":
         path = _safe_path(target, list(grant.allowed_roots or []))
         content = str(body.get("content") or "").encode()
@@ -144,7 +156,9 @@ async def _perform(action: str, target: str, body: dict, grant: ComputerUseGrant
     argv = shlex.split(target)
     if not argv or argv[0] not in set(grant.allowed_commands or []):
         raise HTTPException(status_code=403, detail="Command is outside granted allowlist")
-    cwd = _safe_path(str(body.get("cwd") or (grant.allowed_roots or [""])[0]), list(grant.allowed_roots or []))
+    cwd = _safe_path(
+        str(body.get("cwd") or (grant.allowed_roots or [""])[0]), list(grant.allowed_roots or [])
+    )
     process = await asyncio.create_subprocess_exec(
         *argv,
         cwd=str(cwd),
@@ -153,12 +167,18 @@ async def _perform(action: str, target: str, body: dict, grant: ComputerUseGrant
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=min(int(body.get("timeout", 60)), 120))
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(), timeout=min(int(body.get("timeout", 60)), 120)
+        )
     except TimeoutError:
         process.kill()
         await process.wait()
         raise HTTPException(status_code=408, detail="Brokered command timed out") from None
-    result = {"exit_code": process.returncode, "stdout": stdout.decode(errors="replace")[:200000], "stderr": stderr.decode(errors="replace")[:200000]}
+    result = {
+        "exit_code": process.returncode,
+        "stdout": stdout.decode(errors="replace")[:200000],
+        "stderr": stderr.decode(errors="replace")[:200000],
+    }
     return result, {"output_sha256": hashlib.sha256(stdout + stderr).hexdigest()}
 
 
@@ -201,8 +221,12 @@ async def execute_computer_action(
         )
     ).scalar_one_or_none()
     if grant is None or body.action not in set(grant.actions or []):
-        raise HTTPException(status_code=423, detail="A matching active computer-use grant is required")
-    digest = hashlib.sha256(json.dumps(body.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
+        raise HTTPException(
+            status_code=423, detail="A matching active computer-use grant is required"
+        )
+    digest = hashlib.sha256(
+        json.dumps(body.model_dump(mode="json"), sort_keys=True).encode()
+    ).hexdigest()
     audit = ComputerUseAction(
         work_order_id=order.id,
         grant_id=grant.id,
@@ -296,7 +320,9 @@ async def _discover_one(
     from app.api.web_search import WebFetchRequest, fetch_page
 
     digest = hashlib.sha256(
-        json.dumps({"action": "web_discover", "target": url, "queries": queries}, sort_keys=True).encode()
+        json.dumps(
+            {"action": "web_discover", "target": url, "queries": queries}, sort_keys=True
+        ).encode()
     ).hexdigest()
     audit = ComputerUseAction(
         work_order_id=order.id,
@@ -326,6 +352,7 @@ async def _discover_one(
         # one from a failure), see record_connector_failure's own docstring.
         try:
             from app.ai.connectors import record_connector_failure
+
             await record_connector_failure(db, url=url)
         except Exception as learn_exc:
             log_degraded("computer_use.web_discover.connector_failure", learn_exc)
@@ -339,10 +366,13 @@ async def _discover_one(
         await db.commit()
         try:
             from app.ai.connectors import record_connector_failure
+
             await record_connector_failure(db, url=url)
         except Exception as learn_exc:
             log_degraded("computer_use.web_discover.connector_failure", learn_exc)
-        return WebDiscoverSource(url=url, snippet=snippet, diagnostics=[f"read_error:{str(exc)[:120]}"])
+        return WebDiscoverSource(
+            url=url, snippet=snippet, diagnostics=[f"read_error:{str(exc)[:120]}"]
+        )
 
     is_pdf = any("pdf" in d for d in page.diagnostics)
     await db.refresh(audit, with_for_update=True)
@@ -362,6 +392,7 @@ async def _discover_one(
     if page.status == 200 and len(page.text.strip()) >= _MIN_USEFUL_TEXT_LENGTH:
         try:
             from app.ai.connectors import record_connector_success
+
             await record_connector_success(db, url=url, queries=queries)
         except Exception as learn_exc:
             log_degraded("computer_use.web_discover.connector_success", learn_exc)
@@ -409,7 +440,9 @@ async def web_discover(
         )
     ).scalar_one_or_none()
     if grant is None or "browser_fetch" not in set(grant.actions or []):
-        raise HTTPException(status_code=423, detail="A matching active computer-use grant is required")
+        raise HTTPException(
+            status_code=423, detail="A matching active computer-use grant is required"
+        )
 
     search_diagnostics: list[str] = []
     candidate_urls: list[str] = []
@@ -418,7 +451,10 @@ async def web_discover(
         try:
             found = await execute_web_search(
                 WebSearchRequest(
-                    query=q, limit=body.max_sources, recency_days=body.recency_days, intent="research"
+                    query=q,
+                    limit=body.max_sources,
+                    recency_days=body.recency_days,
+                    intent="research",
                 )
             )
             for r in found.results:
@@ -465,5 +501,8 @@ async def web_discover(
         )
 
     return WebDiscoverOut(
-        queries=list(body.queries), fetched=fetched, skipped=skipped, search_diagnostics=search_diagnostics
+        queries=list(body.queries),
+        fetched=fetched,
+        skipped=skipped,
+        search_diagnostics=search_diagnostics,
     )

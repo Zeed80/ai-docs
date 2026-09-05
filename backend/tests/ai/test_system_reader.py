@@ -26,12 +26,18 @@ def _sheet(**overrides) -> SystemSheetRead:
         ],
         "ports": [
             {
-                "id": "p1", "equipment_id": "e1", "kind": "supply",
-                "direction": "out", "medium": "вода",
+                "id": "p1",
+                "equipment_id": "e1",
+                "kind": "supply",
+                "direction": "out",
+                "medium": "вода",
             },
             {
-                "id": "p2", "equipment_id": "e2", "kind": "inlet",
-                "direction": "in", "medium": "вода",
+                "id": "p2",
+                "equipment_id": "e2",
+                "kind": "inlet",
+                "direction": "in",
+                "medium": "вода",
             },
         ],
         "connections": [
@@ -56,12 +62,18 @@ def test_incompatible_medium_connection_is_excluded_individually():
     sheet = _sheet(
         ports=[
             {
-                "id": "p1", "equipment_id": "e1", "kind": "supply",
-                "direction": "out", "medium": "вода",
+                "id": "p1",
+                "equipment_id": "e1",
+                "kind": "supply",
+                "direction": "out",
+                "medium": "вода",
             },
             {
-                "id": "p2", "equipment_id": "e2", "kind": "inlet",
-                "direction": "in", "medium": "пар",
+                "id": "p2",
+                "equipment_id": "e2",
+                "kind": "inlet",
+                "direction": "in",
+                "medium": "пар",
             },
         ],
     )
@@ -79,12 +91,18 @@ def test_port_on_unknown_equipment_is_excluded():
     sheet = _sheet(
         ports=[
             {
-                "id": "p1", "equipment_id": "does-not-exist", "kind": "supply",
-                "direction": "out", "medium": "вода",
+                "id": "p1",
+                "equipment_id": "does-not-exist",
+                "kind": "supply",
+                "direction": "out",
+                "medium": "вода",
             },
             {
-                "id": "p2", "equipment_id": "e2", "kind": "inlet",
-                "direction": "in", "medium": "вода",
+                "id": "p2",
+                "equipment_id": "e2",
+                "kind": "inlet",
+                "direction": "in",
+                "medium": "вода",
             },
         ],
         connections=[],
@@ -99,12 +117,20 @@ def test_required_unconnected_port_is_reported_unresolved():
     sheet = _sheet(
         ports=[
             {
-                "id": "p1", "equipment_id": "e1", "kind": "supply",
-                "direction": "out", "medium": "вода", "required_connection": True,
+                "id": "p1",
+                "equipment_id": "e1",
+                "kind": "supply",
+                "direction": "out",
+                "medium": "вода",
+                "required_connection": True,
             },
             {
-                "id": "p2", "equipment_id": "e2", "kind": "inlet",
-                "direction": "in", "medium": "вода", "required_connection": True,
+                "id": "p2",
+                "equipment_id": "e2",
+                "kind": "inlet",
+                "direction": "in",
+                "medium": "вода",
+                "required_connection": True,
             },
         ],
         connections=[],

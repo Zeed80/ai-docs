@@ -280,12 +280,16 @@ async def test_ingest_auto_process_creates_queued_pipeline_job(
     doc_id = resp.json()["id"]
 
     job = (
-        await db_session.execute(
-            select(DocumentProcessingJob)
-            .where(DocumentProcessingJob.document_id == uuid.UUID(doc_id))
-            .order_by(DocumentProcessingJob.created_at.desc())
+        (
+            await db_session.execute(
+                select(DocumentProcessingJob)
+                .where(DocumentProcessingJob.document_id == uuid.UUID(doc_id))
+                .order_by(DocumentProcessingJob.created_at.desc())
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     assert job is not None
     assert job.status == "queued"
     assert job.current_step == "classification"

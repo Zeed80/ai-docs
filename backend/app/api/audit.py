@@ -8,13 +8,13 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func, and_
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
-from app.db.models import AuditLog, AuditTimelineEvent
 from app.auth.jwt import get_current_user, require_role
 from app.auth.models import UserInfo, UserRole
+from app.db.models import AuditLog, AuditTimelineEvent
+from app.db.session import get_db
 
 router = APIRouter()
 
@@ -103,7 +103,11 @@ async def audit_list(
         base = base.where(and_(*filters))
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
-    rows = (await db.execute(base.order_by(AuditLog.timestamp.desc()).offset(offset).limit(limit))).scalars().all()
+    rows = (
+        (await db.execute(base.order_by(AuditLog.timestamp.desc()).offset(offset).limit(limit)))
+        .scalars()
+        .all()
+    )
 
     return AuditLogListResponse(items=rows, total=total)
 
@@ -141,7 +145,15 @@ async def audit_timeline(
         base = base.where(and_(*filters))
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
-    rows = (await db.execute(base.order_by(AuditTimelineEvent.timestamp.desc()).offset(offset).limit(limit))).scalars().all()
+    rows = (
+        (
+            await db.execute(
+                base.order_by(AuditTimelineEvent.timestamp.desc()).offset(offset).limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     return AuditTimelineResponse(items=rows, total=total)
 
@@ -178,7 +190,11 @@ async def audit_filter(
         base = base.where(and_(*filters))
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
-    rows = (await db.execute(base.order_by(AuditLog.timestamp.desc()).offset(offset).limit(limit))).scalars().all()
+    rows = (
+        (await db.execute(base.order_by(AuditLog.timestamp.desc()).offset(offset).limit(limit)))
+        .scalars()
+        .all()
+    )
 
     return AuditLogListResponse(items=rows, total=total)
 

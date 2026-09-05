@@ -82,7 +82,9 @@ async def test_manual_upload_path_leaves_metadata_unset(db_session, supplier):
     assert result["created"] == 1
     assert result["conflicted"] == 0
     entry = (
-        await db_session.execute(select(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id == supplier.id))
+        await db_session.execute(
+            select(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id == supplier.id)
+        )
     ).scalar_one()
     assert entry.metadata_ is None
 
@@ -104,7 +106,9 @@ async def test_web_sourced_entry_gets_ingested_review_status(db_session, supplie
 
     assert result["created"] == 1
     entry = (
-        await db_session.execute(select(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id == supplier.id))
+        await db_session.execute(
+            select(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id == supplier.id)
+        )
     ).scalar_one()
     assert entry.metadata_["review_status"] == "ingested"
     assert entry.metadata_["source_url"] == "https://acme.example/catalog"
@@ -147,13 +151,17 @@ async def test_conflicting_web_sourced_entry_creates_anomaly_and_leaves_existing
     assert existing.price_value == existing_price  # untouched
 
     new_entries = (
-        await db_session.execute(
-            select(ToolCatalogEntry).where(
-                ToolCatalogEntry.supplier_id == supplier.id,
-                ToolCatalogEntry.id != existing.id,
+        (
+            await db_session.execute(
+                select(ToolCatalogEntry).where(
+                    ToolCatalogEntry.supplier_id == supplier.id,
+                    ToolCatalogEntry.id != existing.id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(new_entries) == 1
     assert new_entries[0].metadata_["review_status"] == "needs_review"
     assert new_entries[0].metadata_["conflicts_with_entry_id"] == str(existing.id)
@@ -204,9 +212,9 @@ async def test_row_without_tool_type_is_kept_not_skipped(db_session, supplier):
         db_session,
         supplier.id,
         [
-            {"name": "Фреза концевая Ø8"},   # type inferred
+            {"name": "Фреза концевая Ø8"},  # type inferred
             {"name": "Ящик инструментальный"},  # unrecognised → other
-            {"part_number": "NO-NAME"},          # no name → skipped
+            {"part_number": "NO-NAME"},  # no name → skipped
         ],
     )
     assert result["created"] == 2
@@ -246,7 +254,10 @@ async def test_parse_catalog_text_returns_empty_for_non_catalog_page():
 @pytest.mark.asyncio
 async def test_parse_catalog_text_never_raises_on_malformed_response():
     with (
-        patch("app.ai.ollama_client.generate_json", new=AsyncMock(return_value={"unexpected": "shape"})),
+        patch(
+            "app.ai.ollama_client.generate_json",
+            new=AsyncMock(return_value={"unexpected": "shape"}),
+        ),
         patch("app.ai.model_resolver.get_reasoning_model", return_value=_FakeModel()),
     ):
         rows = await _parse_catalog_text_via_llm("текст")
@@ -256,7 +267,10 @@ async def test_parse_catalog_text_never_raises_on_malformed_response():
 @pytest.mark.asyncio
 async def test_parse_catalog_text_never_raises_when_llm_call_fails():
     with (
-        patch("app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=RuntimeError("model down"))),
+        patch(
+            "app.ai.ollama_client.generate_json",
+            new=AsyncMock(side_effect=RuntimeError("model down")),
+        ),
         patch("app.ai.model_resolver.get_reasoning_model", return_value=_FakeModel()),
     ):
         rows = await _parse_catalog_text_via_llm("текст")
@@ -290,7 +304,9 @@ async def test_ingest_web_catalog_source_creates_entries_with_provenance(db_sess
     assert result["entries_created"] == 1
     assert result["source_url"] == "https://acme.example/catalog"
     entry = (
-        await db_session.execute(select(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id == supplier.id))
+        await db_session.execute(
+            select(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id == supplier.id)
+        )
     ).scalar_one()
     assert entry.metadata_["review_status"] == "ingested"
     assert entry.metadata_["source_url"] == "https://acme.example/catalog"
@@ -367,11 +383,15 @@ async def test_approve_entry_clears_review_status(client: AsyncClient, db_sessio
 
 
 @pytest.mark.asyncio
-async def test_approve_entry_is_idempotent_for_never_gated_entries(client: AsyncClient, db_session, supplier):
+async def test_approve_entry_is_idempotent_for_never_gated_entries(
+    client: AsyncClient, db_session, supplier
+):
     """A manually-created entry (no review_status at all) — approving it is a
     harmless no-op, not an error."""
     entry = ToolCatalogEntry(
-        supplier_id=supplier.id, tool_type=ToolTypeEnum.drill, name="Ручная запись",
+        supplier_id=supplier.id,
+        tool_type=ToolTypeEnum.drill,
+        name="Ручная запись",
     )
     db_session.add(entry)
     await db_session.commit()
@@ -419,10 +439,12 @@ async def test_resolve_supplier_by_name_creates_linked_tool_supplier(
 async def test_resolve_supplier_ambiguous_returns_candidates(client: AsyncClient, db_session):
     from app.db.models import Party, PartyRole
 
-    db_session.add_all([
-        Party(name="ООО Инструмент Плюс", role=PartyRole.supplier),
-        Party(name="АО Инструмент Плюс Сервис", role=PartyRole.supplier),
-    ])
+    db_session.add_all(
+        [
+            Party(name="ООО Инструмент Плюс", role=PartyRole.supplier),
+            Party(name="АО Инструмент Плюс Сервис", role=PartyRole.supplier),
+        ]
+    )
     await db_session.commit()
 
     resp = await client.post(
@@ -486,12 +508,16 @@ async def test_attach_web_catalog_by_supplier_name_creates_entries(
     assert data["party_id"] == str(party.id)
 
     entries = (
-        await db_session.execute(
-            select(ToolCatalogEntry).where(
-                ToolCatalogEntry.supplier_id == uuid.UUID(data["tool_supplier_id"])
+        (
+            await db_session.execute(
+                select(ToolCatalogEntry).where(
+                    ToolCatalogEntry.supplier_id == uuid.UUID(data["tool_supplier_id"])
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(entries) == 1
     # Draft-first, exactly like the Ф3 web path it reuses.
     assert entries[0].metadata_["review_status"] == "ingested"
@@ -500,7 +526,9 @@ async def test_attach_web_catalog_by_supplier_name_creates_entries(
 @pytest.mark.asyncio
 async def test_attach_web_catalog_empty_page_fails_honestly(client: AsyncClient, party):
     """A JS-only catalog page must not report a successful attach of 0 items."""
-    with patch("app.api.web_search.fetch_page", new=AsyncMock(return_value=_fetched("Свяжитесь с нами"))):
+    with patch(
+        "app.api.web_search.fetch_page", new=AsyncMock(return_value=_fetched("Свяжитесь с нами"))
+    ):
         resp = await client.post(
             "/api/tool-catalog/attach-web-catalog",
             json={
@@ -522,10 +550,12 @@ async def test_attach_web_catalog_ambiguous_supplier_asks_instead_of_guessing(
 ):
     from app.db.models import Party, PartyRole
 
-    db_session.add_all([
-        Party(name="ООО Резец", role=PartyRole.supplier),
-        Party(name="ООО Резец-Инструмент", role=PartyRole.supplier),
-    ])
+    db_session.add_all(
+        [
+            Party(name="ООО Резец", role=PartyRole.supplier),
+            Party(name="ООО Резец-Инструмент", role=PartyRole.supplier),
+        ]
+    )
     await db_session.commit()
 
     resp = await client.post(
@@ -578,10 +608,12 @@ async def test_discover_catalogs_combines_search_and_site_scan(client: AsyncClie
     with (
         patch(
             "app.api.web_search.execute_web_search",
-            new=AsyncMock(return_value=_search_response(
-                ("https://mirstan.example/files/price-2026.pdf", "Прайс-лист 2026"),
-                ("https://example.org/news", "Новости отрасли"),  # filtered out
-            )),
+            new=AsyncMock(
+                return_value=_search_response(
+                    ("https://mirstan.example/files/price-2026.pdf", "Прайс-лист 2026"),
+                    ("https://example.org/news", "Новости отрасли"),  # filtered out
+                )
+            ),
         ),
         patch("app.api.web_search.fetch_page", new=AsyncMock(return_value=site_page)),
     ):
@@ -592,7 +624,7 @@ async def test_discover_catalogs_combines_search_and_site_scan(client: AsyncClie
     assert resp.status_code == 200, resp.text
     data = resp.json()
     urls = [c["url"] for c in data["candidates"]]
-    assert "https://mirstan.example/files/price-2026.pdf" in urls   # from search
+    assert "https://mirstan.example/files/price-2026.pdf" in urls  # from search
     assert "https://mirstan.example/files/katalog-frezy.pdf" in urls  # from site scan
     assert "https://example.org/news" not in urls
     assert "https://mirstan.example/about/" not in urls
@@ -608,8 +640,12 @@ async def test_discover_catalogs_combines_search_and_site_scan(client: AsyncClie
 @pytest.mark.asyncio
 async def test_discover_catalogs_reports_nothing_found_honestly(client: AsyncClient, party):
     with (
-        patch("app.api.web_search.execute_web_search", new=AsyncMock(return_value=_search_response())),
-        patch("app.api.web_search.fetch_page", new=AsyncMock(return_value=_page("https://x.example"))),
+        patch(
+            "app.api.web_search.execute_web_search", new=AsyncMock(return_value=_search_response())
+        ),
+        patch(
+            "app.api.web_search.fetch_page", new=AsyncMock(return_value=_page("https://x.example"))
+        ),
     ):
         resp = await client.post(
             "/api/tool-catalog/discover-catalogs",
@@ -672,7 +708,9 @@ async def test_attach_report_block_has_clickable_link_column(client: AsyncClient
     with (
         patch(
             "app.api.web_search.fetch_page",
-            new=AsyncMock(return_value=_page("https://mirstan.example/ok.pdf", text="прайс " * 100)),
+            new=AsyncMock(
+                return_value=_page("https://mirstan.example/ok.pdf", text="прайс " * 100)
+            ),
         ),
         patch("app.ai.ollama_client.generate_json", new=AsyncMock(return_value={"rows": [_row()]})),
         patch("app.ai.model_resolver.get_reasoning_model", return_value=_FakeModel()),
@@ -806,11 +844,16 @@ async def test_ingest_status_reports_finished_totals(client: AsyncClient, party)
     supplier_id = resolved.json()["tool_supplier_id"]
     clear_source_statuses(supplier_id)
     record_source_status(
-        supplier_id, "https://mirstan.example/a.pdf", status="attached",
-        entries_created=38, message="Добавлено позиций: 38",
+        supplier_id,
+        "https://mirstan.example/a.pdf",
+        status="attached",
+        entries_created=38,
+        message="Добавлено позиций: 38",
     )
     record_source_status(
-        supplier_id, "https://mirstan.example/b.pdf", status="empty",
+        supplier_id,
+        "https://mirstan.example/b.pdf",
+        status="empty",
         message="Позиций каталога в тексте не найдено.",
     )
 
@@ -844,9 +887,7 @@ def test_report_source_name_is_readable():
 
 
 @pytest.mark.asyncio
-async def test_same_article_on_several_pages_of_one_catalog_is_not_an_anomaly(
-    db_session, supplier
-):
+async def test_same_article_on_several_pages_of_one_catalog_is_not_an_anomaly(db_session, supplier):
     """Live result of the old rule: 469 open cards, all of them one article
     printed on several pages of the SAME catalog. Nobody could act on them and
     real anomalies drowned in the noise."""
@@ -876,17 +917,19 @@ async def test_same_article_on_several_pages_of_one_catalog_is_not_an_anomaly(
 
     assert result["anomaly_ids"] == []
     cards = (
-        await db_session.execute(
-            select(AnomalyCard).where(AnomalyCard.entity_type == "tool_catalog_entry")
+        (
+            await db_session.execute(
+                select(AnomalyCard).where(AnomalyCard.entity_type == "tool_catalog_entry")
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert cards == []
 
 
 @pytest.mark.asyncio
-async def test_material_price_gap_between_two_catalogs_is_reported_once(
-    db_session, supplier
-):
+async def test_material_price_gap_between_two_catalogs_is_reported_once(db_session, supplier):
     """A real event: the same article costs different money in two sources."""
     from app.db.models import AnomalyCard, AnomalyType, ToolCatalogEntry, ToolTypeEnum
 
@@ -1004,9 +1047,7 @@ async def test_ingest_status_does_not_report_catalogs_that_were_deleted(
     party = Party(name="ООО Устаревший Статус", inn="7700000123")
     db_session.add(party)
     await db_session.flush()
-    supplier = ToolSupplier(
-        name="ООО Устаревший Статус", is_active=True, main_supplier_id=party.id
-    )
+    supplier = ToolSupplier(name="ООО Устаревший Статус", is_active=True, main_supplier_id=party.id)
     db_session.add(supplier)
     await db_session.commit()
 

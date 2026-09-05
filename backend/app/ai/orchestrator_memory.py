@@ -23,17 +23,19 @@ logger = structlog.get_logger()
 _TTL_SECONDS = 30 * 24 * 3600  # 30 days
 _SKILL_KEY_PREFIX = "orchestrator:skill:"
 _INTENT_KEY_PREFIX = "orchestrator:intent:"
-_RECIPE_KEY_PREFIX = "orchestrator:recipe:"   # last successful skill sequence per intent
+_RECIPE_KEY_PREFIX = "orchestrator:recipe:"  # last successful skill sequence per intent
 _USER_RATING_KEY_PREFIX = "user:skill_rating:"
 _MAX_INTENT_ENTRIES = 30
 
 
 # ── Redis helpers ─────────────────────────────────────────────────────────────
 
+
 def _redis():
     """Return a Redis client or None if unavailable."""
     try:
         from app.utils.redis_client import get_sync_redis
+
         return get_sync_redis()
     except Exception:
         return None
@@ -41,12 +43,13 @@ def _redis():
 
 # ── Feedback recording ────────────────────────────────────────────────────────
 
+
 @dataclass
 class TurnFeedback:
-    intent_text: str              # raw user message (first 300 chars)
-    intent_category: str          # from plan.worker.role / intent field
-    skills_planned: list[str]     # from plan.worker.recommended_skills
-    skills_used: list[str]        # from trace.tool_calls (sanitised names)
+    intent_text: str  # raw user message (first 300 chars)
+    intent_category: str  # from plan.worker.role / intent field
+    skills_planned: list[str]  # from plan.worker.recommended_skills
+    skills_used: list[str]  # from trace.tool_calls (sanitised names)
     audit_passed: bool
     retries: int = 0
     duration_ms: int = 0
@@ -84,10 +87,17 @@ def record_turn_feedback(feedback: TurnFeedback) -> None:
         for skill in feedback.skills_used:
             key = _SKILL_KEY_PREFIX + skill
             raw = r.get(key)
-            stats: dict[str, Any] = json.loads(raw) if raw else {
-                "success": 0, "fail": 0,
-                "total_ms": 0, "count_ms": 0, "last_at": 0,
-            }
+            stats: dict[str, Any] = (
+                json.loads(raw)
+                if raw
+                else {
+                    "success": 0,
+                    "fail": 0,
+                    "total_ms": 0,
+                    "count_ms": 0,
+                    "last_at": 0,
+                }
+            )
             if feedback.skill_success(skill):
                 stats["success"] += 1
             else:
@@ -104,13 +114,15 @@ def record_turn_feedback(feedback: TurnFeedback) -> None:
         raw = r.get(key)
         entries: list[dict] = json.loads(raw) if raw else []
         for skill in feedback.skills_used:
-            entries.append({
-                "skill": skill,
-                "outcome": "success" if feedback.skill_success(skill) else "fail",
-                "ms": feedback.duration_ms,
-                "ts": now,
-                "retries": feedback.retries,
-            })
+            entries.append(
+                {
+                    "skill": skill,
+                    "outcome": "success" if feedback.skill_success(skill) else "fail",
+                    "ms": feedback.duration_ms,
+                    "ts": now,
+                    "retries": feedback.retries,
+                }
+            )
         # Keep last N entries
         entries = entries[-_MAX_INTENT_ENTRIES:]
         r.setex(key, _TTL_SECONDS, json.dumps(entries))
@@ -137,6 +149,7 @@ def record_turn_feedback(feedback: TurnFeedback) -> None:
 
 
 # ── Preference reading ────────────────────────────────────────────────────────
+
 
 @dataclass
 class SkillScore:
@@ -188,13 +201,15 @@ def get_skill_scores(skills: list[str]) -> list[SkillScore]:
             d = json.loads(raw)
             count_ms = d.get("count_ms", 0)
             avg_ms = int(d["total_ms"] / count_ms) if count_ms else 0
-            scores.append(SkillScore(
-                name=skill,
-                success=d.get("success", 0),
-                fail=d.get("fail", 0),
-                avg_ms=avg_ms,
-                last_at=d.get("last_at", 0),
-            ))
+            scores.append(
+                SkillScore(
+                    name=skill,
+                    success=d.get("success", 0),
+                    fail=d.get("fail", 0),
+                    avg_ms=avg_ms,
+                    last_at=d.get("last_at", 0),
+                )
+            )
         return scores
     except Exception:
         return []
@@ -252,7 +267,9 @@ def build_tool_preference_hint(
                 agg[skill]["success"] += 1
             else:
                 agg[skill]["fail"] += 1
-            agg[skill]["total_retries"] = agg[skill].get("total_retries", 0) + entry.get("retries", 0)
+            agg[skill]["total_retries"] = agg[skill].get("total_retries", 0) + entry.get(
+                "retries", 0
+            )
 
         if not agg:
             return ""
@@ -269,7 +286,9 @@ def build_tool_preference_hint(
         sorted_skills = sorted(agg.items(), key=lambda kv: score(kv[1]), reverse=True)
 
         preferred = [s for s, st in sorted_skills if score(st) >= 0.6][:5]
-        avoid = [s for s, st in sorted_skills if score(st) < 0.3 and (st["success"] + st["fail"]) >= 2][:3]
+        avoid = [
+            s for s, st in sorted_skills if score(st) < 0.3 and (st["success"] + st["fail"]) >= 2
+        ][:3]
 
         lines: list[str] = ["История использования инструментов для похожих задач:"]
         if preferred:
@@ -287,7 +306,9 @@ def build_tool_preference_hint(
             global_scores = get_skill_scores(candidate_skills)
             never_failed = [s.name for s in global_scores if s.fail == 0 and s.success >= 3]
             if never_failed:
-                lines.append(f"  Глобально надёжные (≥3 успехов, 0 сбоев): {', '.join(never_failed[:5])}")
+                lines.append(
+                    f"  Глобально надёжные (≥3 успехов, 0 сбоев): {', '.join(never_failed[:5])}"
+                )
 
         # 4. User thumbs up/down ratings
         if candidate_skills:
@@ -367,6 +388,7 @@ def get_user_rating_hint(candidate_skills: list[str]) -> str:
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
 
 def _hash_intent(text: str, category: str) -> str:
     """Stable short hash for intent text + category."""

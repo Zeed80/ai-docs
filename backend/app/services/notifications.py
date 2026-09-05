@@ -1,7 +1,9 @@
 """Notification service — creates in-app notifications and pushes them in real time."""
+
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -89,9 +91,9 @@ def local_hour(timezone_name: str | None) -> int:
     Неизвестная или битая зона — не повод уронить уведомление: тогда как
     раньше, по времени сервера.
     """
-    from datetime import datetime, timezone as _tz
+    from datetime import datetime
 
-    now = datetime.now(_tz.utc)
+    now = datetime.now(UTC)
     if timezone_name:
         try:
             from zoneinfo import ZoneInfo

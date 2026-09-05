@@ -141,9 +141,7 @@ async def _dispatch() -> int:
 
     async with factory() as db:
         crons = list(
-            (await db.execute(select(AgentCron).where(AgentCron.enabled.is_(True))))
-            .scalars()
-            .all()
+            (await db.execute(select(AgentCron).where(AgentCron.enabled.is_(True)))).scalars().all()
         )
 
     for cron in crons:
@@ -218,9 +216,7 @@ async def _dispatch() -> int:
                 legacy_task.status = "completed" if order.status == "completed" else "failed"
                 legacy_task.output = order.result_summary
                 metadata = dict(legacy_task.metadata_ or {})
-                metadata.update(
-                    {"work_order_id": str(order.id), "work_order_status": order.status}
-                )
+                metadata.update({"work_order_id": str(order.id), "work_order_status": order.status})
                 legacy_task.metadata_ = metadata
                 await db.commit()
         logger.info(

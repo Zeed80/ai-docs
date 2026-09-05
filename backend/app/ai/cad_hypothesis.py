@@ -17,8 +17,20 @@ import math
 import structlog
 
 from app.ai.cad_ir.assurance import set_assurance
-from app.ai.cad_ir.schema import Alternative, CadIR, Circle, DimensionEntity, ReviewItem, Segment, TextEntity
-from app.ai.techdraw_reference import STANDARD_RA_SERIES, is_valid_tolerance_symbol, nearest_ra, parse_thread
+from app.ai.cad_ir.schema import (
+    Alternative,
+    CadIR,
+    Circle,
+    DimensionEntity,
+    ReviewItem,
+    Segment,
+    TextEntity,
+)
+from app.ai.techdraw_reference import (
+    is_valid_tolerance_symbol,
+    nearest_ra,
+    parse_thread,
+)
 
 logger = structlog.get_logger()
 
@@ -44,9 +56,7 @@ def apply_vlm_readings(entity: TextEntity | DimensionEntity, readings: list[dict
     if isinstance(entity, DimensionEntity) and leading.get("value_mm") is not None:
         entity.value_mm = leading["value_mm"]
         entity.tolerance = leading.get("tolerance")
-    entity.alternatives = [
-        Alternative(value=r["text"], p=r["confidence"]) for r in readings[1:]
-    ]
+    entity.alternatives = [Alternative(value=r["text"], p=r["confidence"]) for r in readings[1:]]
     entity.evidence = [*entity.evidence, f"vlm:kind={leading.get('kind', 'unclear')}"]
 
 
@@ -85,8 +95,10 @@ def _ra_bonus(value_mm: float | None, text: str) -> float:
     if "ra" not in text.lower() and value_mm is None:
         return 0.0
     try:
-        val = value_mm if value_mm is not None else float(
-            "".join(c for c in text if c.isdigit() or c in ".,").replace(",", ".")
+        val = (
+            value_mm
+            if value_mm is not None
+            else float("".join(c for c in text if c.isdigit() or c in ".,").replace(",", "."))
         )
     except ValueError:
         return 0.0
@@ -130,8 +142,9 @@ def _geometry_bonus(value_mm: float | None, entity, ir: CadIR) -> float:
     return 0.35 if abs(measured - value_mm) / measured <= _GEOMETRY_MATCH_TOLERANCE else 0.0
 
 
-def _score_candidate(reading_text: str, tolerance: str | None,
-                      confidence: float, entity, ir: CadIR) -> float:
+def _score_candidate(
+    reading_text: str, tolerance: str | None, confidence: float, entity, ir: CadIR
+) -> float:
     # Each candidate is scored against ITS OWN numeric reading — Ø18 and Ø16
     # predict different geometry, so they cannot share one value_mm the way
     # an entity-level field would suggest.
@@ -178,7 +191,9 @@ def resolve_hypotheses(ir: CadIR) -> None:
         if decisive and winner_text == entity.text:
             set_assurance(entity, "constraint_validated", actor="solver")
             logger.info(
-                "hypothesis_resolved", entity_id=entity.id, text=winner_text,
+                "hypothesis_resolved",
+                entity_id=entity.id,
+                text=winner_text,
                 margin=round(winner_score - runner_up_score, 3),
             )
         else:
@@ -188,7 +203,8 @@ def resolve_hypotheses(ir: CadIR) -> None:
             if entity.id not in resolved_ids:
                 ir.review.append(ReviewItem(entity_id=entity.id, reason="unresolved_hypothesis"))
             logger.info(
-                "hypothesis_ambiguous", entity_id=entity.id,
+                "hypothesis_ambiguous",
+                entity_id=entity.id,
                 candidates=[c[0] for c in candidates],
                 margin=round(winner_score - runner_up_score, 3),
             )
@@ -270,10 +286,7 @@ def resolve_line_hypotheses(ir: CadIR) -> None:
             (a.entity["line_class"], a.p) for a in geo_alts
         ]
         scored = sorted(
-            (
-                (conf + _axis_bonus_for_class(lc, entity, ir), lc, conf)
-                for lc, conf in candidates
-            ),
+            ((conf + _axis_bonus_for_class(lc, entity, ir), lc, conf) for lc, conf in candidates),
             key=lambda t: t[0],
             reverse=True,
         )
@@ -288,7 +301,8 @@ def resolve_line_hypotheses(ir: CadIR) -> None:
             if entity.id not in resolved_ids:
                 ir.review.append(ReviewItem(entity_id=entity.id, reason="unresolved_hypothesis"))
             logger.info(
-                "line_hypothesis_ambiguous", entity_id=entity.id,
+                "line_hypothesis_ambiguous",
+                entity_id=entity.id,
                 candidates=[c[0] for c in candidates],
             )
 
@@ -299,7 +313,11 @@ def check_dimension_chains(ir: CadIR) -> list[str]:
     span within ±0.5%; only warn past a 5% delta (small legitimate mismatches
     are common — different chains, rounding)."""
     warnings: list[str] = []
-    linear = [e for e in ir.entities if isinstance(e, DimensionEntity) and e.kind == "linear" and e.value_mm]
+    linear = [
+        e
+        for e in ir.entities
+        if isinstance(e, DimensionEntity) and e.kind == "linear" and e.value_mm
+    ]
     if len(linear) < 3:
         return warnings
     nominals = sorted(e.value_mm for e in linear)

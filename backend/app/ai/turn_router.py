@@ -40,22 +40,22 @@ RouterRole = Literal[
 ]
 
 TurnIntent = Literal[
-    "smalltalk",        # greeting / chit-chat — no tools, no data
-    "flow_status",      # "что в работе?", queue/pipeline status — secretary answers
-    "count",            # deterministic "сколько …" count question
-    "answer_self",      # factual answer the worker gives after grounding
-    "analytical_table", # build/show a table or analytical breakdown on the desktop
-    "table_edit",       # edit an already-open spec table ("добавь столбец…")
-    "document_op",      # operate on a specific document/invoice (get/classify/…)
-    "specialist",       # delegate to a role specialist for multi-step work
-    "capability_gap",   # no tool can satisfy this — surface a gap
+    "smalltalk",  # greeting / chit-chat — no tools, no data
+    "flow_status",  # "что в работе?", queue/pipeline status — secretary answers
+    "count",  # deterministic "сколько …" count question
+    "answer_self",  # factual answer the worker gives after grounding
+    "analytical_table",  # build/show a table or analytical breakdown on the desktop
+    "table_edit",  # edit an already-open spec table ("добавь столбец…")
+    "document_op",  # operate on a specific document/invoice (get/classify/…)
+    "specialist",  # delegate to a role specialist for multi-step work
+    "capability_gap",  # no tool can satisfy this — surface a gap
 ]
 
 GroundingMode = Literal[
-    "none",        # no retrieval needed (smalltalk, flow-status, table from SQL)
+    "none",  # no retrieval needed (smalltalk, flow-status, table from SQL)
     "structured",  # answer from structured DB (spec_table / list / count)
-    "rag",         # needs document retrieval (hybrid search over content)
-    "memory",      # needs knowledge-graph / memory facts
+    "rag",  # needs document retrieval (hybrid search over content)
+    "memory",  # needs knowledge-graph / memory facts
 ]
 
 OutputChannel = Literal["chat", "workspace"]
@@ -113,16 +113,20 @@ class TurnDecision(BaseModel):
                 if isinstance(item, str):
                     norm_rec.append({"capability": item, "action": ""})
                 elif isinstance(item, dict) and item.get("capability"):
-                    norm_rec.append({
-                        "capability": str(item["capability"]),
-                        "action": str(item.get("action") or ""),
-                    })
+                    norm_rec.append(
+                        {
+                            "capability": str(item["capability"]),
+                            "action": str(item.get("action") or ""),
+                        }
+                    )
                 elif getattr(item, "capability", None):
                     # Already a RecommendedTool (direct construction) — keep it.
-                    norm_rec.append({
-                        "capability": str(item.capability),
-                        "action": str(getattr(item, "action", "") or ""),
-                    })
+                    norm_rec.append(
+                        {
+                            "capability": str(item.capability),
+                            "action": str(getattr(item, "action", "") or ""),
+                        }
+                    )
         out["recommended"] = norm_rec
 
         # entities: keep only string→string pairs (models sometimes emit numbers).
@@ -188,7 +192,9 @@ def coerce_channel(decision: TurnDecision) -> TurnDecision:
     return decision
 
 
-def build_router_system(action_map: dict[str, list[str]], catalog_descriptions: dict[str, str]) -> str:
+def build_router_system(
+    action_map: dict[str, list[str]], catalog_descriptions: dict[str, str]
+) -> str:
     """System prompt: enumerate the real catalog + the typed decision contract."""
     from app.ai.agent_config import get_builtin_agent_config
 
@@ -241,7 +247,9 @@ def build_router_user(content: str, *, has_open_spec_table: bool, history_summar
     parts = []
     if history_summary:
         parts.append(f"Недавний контекст диалога:\n{history_summary}")
-    parts.append(f"Открыта ли сейчас таблица на Рабочем столе: {'да' if has_open_spec_table else 'нет'}.")
+    parts.append(
+        f"Открыта ли сейчас таблица на Рабочем столе: {'да' if has_open_spec_table else 'нет'}."
+    )
     parts.append(
         "Если открыта таблица и пользователь явно её правит — intent=table_edit. "
         "Фраза, начинающаяся с «и…»/«добавь…», НЕ обязательно правка таблицы: "
@@ -251,7 +259,7 @@ def build_router_user(content: str, *, has_open_spec_table: bool, history_summar
     return "\n\n".join(parts)
 
 
-def _looks_defaulted(d: "TurnDecision | None") -> bool:
+def _looks_defaulted(d: TurnDecision | None) -> bool:
     """True when a decision is the all-defaults shell produced by validating {}.
 
     Some local models (e.g. Qwopus) ignore the JSON-schema constraint and answer
@@ -259,10 +267,7 @@ def _looks_defaulted(d: "TurnDecision | None") -> bool:
     defaulted TurnDecision (specialist/chat/0.0). Detect that so we can re-parse
     the raw text leniently instead of mis-routing.
     """
-    return (
-        d is None
-        or (d.intent == "specialist" and d.confidence == 0.0 and not d.recommended)
-    )
+    return d is None or (d.intent == "specialist" and d.confidence == 0.0 and not d.recommended)
 
 
 def lenient_parse_decision(text: str) -> dict | None:
@@ -275,7 +280,9 @@ def lenient_parse_decision(text: str) -> dict | None:
     cleaned = text.strip()
     # Strip <think>…</think> reasoning blocks (Qwopus/qwen3 emit them even when
     # the role's thinking toggle is off) before any JSON/YAML parse.
-    cleaned = _re.sub(r"<\s*think(?:ing)?\s*>[\s\S]*?</\s*think(?:ing)?\s*>", "", cleaned, flags=_re.IGNORECASE)
+    cleaned = _re.sub(
+        r"<\s*think(?:ing)?\s*>[\s\S]*?</\s*think(?:ing)?\s*>", "", cleaned, flags=_re.IGNORECASE
+    )
     # Drop a dangling unclosed <think> preamble (model truncated mid-reasoning).
     cleaned = _re.sub(r"^[\s\S]*?</\s*think(?:ing)?\s*>", "", cleaned, flags=_re.IGNORECASE)
     cleaned = cleaned.strip()
@@ -306,9 +313,7 @@ def lenient_parse_decision(text: str) -> dict | None:
     try:
         import yaml as _yaml
 
-        stripped = "\n".join(
-            _re.sub(r"^\s*-\s+", "", line) for line in cleaned.splitlines()
-        )
+        stripped = "\n".join(_re.sub(r"^\s*-\s+", "", line) for line in cleaned.splitlines())
         obj = _yaml.safe_load(stripped)
         if isinstance(obj, list):  # list of single-key maps → merge
             merged: dict = {}
@@ -325,8 +330,8 @@ def lenient_parse_decision(text: str) -> dict | None:
 
 def _catalog() -> tuple[dict[str, list[str]], dict[str, str]]:
     """(action_map, descriptions) from the single source of truth."""
-    from app.api.capability_router import capability_action_map
     from app.ai.capability_manifest import load_capability_manifest
+    from app.api.capability_router import capability_action_map
 
     action_map = capability_action_map()
     descriptions: dict[str, str] = {}
@@ -385,7 +390,7 @@ async def route_turn(
             ),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return None, "timeout"
     except Exception:
         return None, "error"

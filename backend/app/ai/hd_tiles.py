@@ -17,11 +17,13 @@ TILE_SIDE = 1024
 TILE_OVERLAP = 160
 
 
-def split_tiles(width: int, height: int, tile: int = TILE_SIDE,
-                overlap: int = TILE_OVERLAP) -> list[tuple[int, int, int, int]]:
+def split_tiles(
+    width: int, height: int, tile: int = TILE_SIDE, overlap: int = TILE_OVERLAP
+) -> list[tuple[int, int, int, int]]:
     """Cover (width, height) with equal tiles of ``tile`` px overlapping by
     ``overlap``. Edge tiles are shifted inwards (never resized), so every
     tile is exactly tile×tile as long as the image is at least that big."""
+
     def steps(total: int) -> list[int]:
         if total <= tile:
             return [0]
@@ -32,12 +34,12 @@ def split_tiles(width: int, height: int, tile: int = TILE_SIDE,
 
     return [
         (x, y, min(x + tile, width), min(y + tile, height))
-        for y in steps(height) for x in steps(width)
+        for y in steps(height)
+        for x in steps(width)
     ]
 
 
-def stitch_tiles(width: int, height: int,
-                 tiles: list[tuple[tuple[int, int, int, int], "object"]]):
+def stitch_tiles(width: int, height: int, tiles: list[tuple[tuple[int, int, int, int], object]]):
     """Blend rendered tiles back into a full canvas. Per-pixel weights ramp
     linearly to zero towards each tile edge that has a neighbour, so seams
     dissolve inside the overlap zone."""
@@ -58,8 +60,9 @@ def stitch_tiles(width: int, height: int,
     return Image.fromarray(np.clip(acc / weight, 0, 255).astype("uint8"))
 
 
-def _tile_weight(w: int, h: int, fade_left: bool, fade_top: bool,
-                 fade_right: bool, fade_bottom: bool):
+def _tile_weight(
+    w: int, h: int, fade_left: bool, fade_top: bool, fade_right: bool, fade_bottom: bool
+):
     import numpy as np
 
     ramp = TILE_OVERLAP

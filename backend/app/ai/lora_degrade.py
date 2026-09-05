@@ -33,8 +33,9 @@ def unwarp_exact(photo: np.ndarray, quad: np.ndarray, out_w: int, out_h: int, rn
     src = (quad + rng.uniform(-jitter, jitter, quad.shape)).astype(np.float32)
     dst = np.float32([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]])
     m = cv2.getPerspectiveTransform(src, dst)
-    return cv2.warpPerspective(photo, m, (out_w, out_h), flags=cv2.INTER_CUBIC,
-                               borderMode=cv2.BORDER_REPLICATE)
+    return cv2.warpPerspective(
+        photo, m, (out_w, out_h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE
+    )
 
 
 def post_unwarp_defects(img: np.ndarray, rng) -> np.ndarray:
@@ -59,8 +60,9 @@ def _residual_trapezoid(img: np.ndarray, rng) -> np.ndarray:
     src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
     dst = src + rng.uniform(-amp, amp, src.shape).astype(np.float32) * np.float32([w, h])
     m = cv2.getPerspectiveTransform(src, dst)
-    return cv2.warpPerspective(img, m, (w, h), flags=cv2.INTER_CUBIC,
-                               borderMode=cv2.BORDER_REPLICATE)
+    return cv2.warpPerspective(
+        img, m, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE
+    )
 
 
 def _page_curl(img: np.ndarray, rng) -> np.ndarray:
@@ -73,8 +75,9 @@ def _page_curl(img: np.ndarray, rng) -> np.ndarray:
     dy = (amp * np.sin(np.pi * xs / w + phase)).astype(np.float32)
     map_x, map_y = np.meshgrid(xs, np.arange(h, dtype=np.float32))
     map_y = (map_y + dy[None, :]).astype(np.float32)
-    out = cv2.remap(img, map_x.astype(np.float32), map_y, cv2.INTER_LINEAR,
-                    borderMode=cv2.BORDER_REPLICATE)
+    out = cv2.remap(
+        img, map_x.astype(np.float32), map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+    )
     shade = 1.0 - 0.08 * np.abs(np.sin(np.pi * xs / w + phase))
     return np.clip(out.astype(np.float32) * shade[None, :, None], 0, 255).astype(np.uint8)
 
@@ -92,7 +95,7 @@ def _fold_crease(img: np.ndarray, rng) -> np.ndarray:
     map_x = (xs + kink * nx).astype(np.float32)
     map_y = (ys + kink * ny).astype(np.float32)
     out = cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-    stripe = 1.0 - rng.uniform(0.05, 0.12) * np.exp(-(dist / rng.uniform(6, 15)) ** 2)
+    stripe = 1.0 - rng.uniform(0.05, 0.12) * np.exp(-((dist / rng.uniform(6, 15)) ** 2))
     return np.clip(out.astype(np.float32) * stripe[..., None], 0, 255).astype(np.uint8)
 
 
@@ -106,9 +109,7 @@ def clahe_like_prod(img: np.ndarray) -> np.ndarray:
 
 
 def _paper_tint(img: np.ndarray, rng) -> np.ndarray:
-    tint = np.array([
-        rng.uniform(0.94, 1.0), rng.uniform(0.93, 0.99), rng.uniform(0.88, 0.97)
-    ])
+    tint = np.array([rng.uniform(0.94, 1.0), rng.uniform(0.93, 0.99), rng.uniform(0.88, 0.97)])
     out = img.astype(np.float32) * tint
     h, w = img.shape[:2]
     grain = rng.normal(0, rng.uniform(1.0, 3.0), (h // 4, w // 4, 1)).astype(np.float32)
@@ -142,10 +143,9 @@ def _wood_background(h: int, w: int, rng) -> np.ndarray:
     base = np.array([rng.integers(150, 190), rng.integers(105, 140), rng.integers(60, 95)])
     bg = np.tile(base.astype(np.float32), (h, w, 1))
     xs = np.arange(w, dtype=np.float32)
-    stripes = (
-        np.sin(xs / rng.uniform(15, 60) + rng.uniform(0, 6.28)) * rng.uniform(5, 15)
-        + np.sin(xs / rng.uniform(120, 400) + rng.uniform(0, 6.28)) * rng.uniform(5, 12)
-    )
+    stripes = np.sin(xs / rng.uniform(15, 60) + rng.uniform(0, 6.28)) * rng.uniform(5, 15) + np.sin(
+        xs / rng.uniform(120, 400) + rng.uniform(0, 6.28)
+    ) * rng.uniform(5, 12)
     bg += stripes[None, :, None]
     bg += rng.normal(0, 3, (h, w, 1))
     return np.clip(bg, 0, 255).astype(np.uint8)
@@ -166,8 +166,14 @@ def _perspective_onto_desk(img: np.ndarray, rng) -> tuple[np.ndarray, np.ndarray
     src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
     dst = np.float32([jitter(0, 0), jitter(w, 0), jitter(w, h), jitter(0, h)])
     m = cv2.getPerspectiveTransform(src, dst)
-    warped = cv2.warpPerspective(img, m, (out_w, out_h), flags=cv2.INTER_CUBIC,
-                                 borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 255, 0))
+    warped = cv2.warpPerspective(
+        img,
+        m,
+        (out_w, out_h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 255, 0),
+    )
     mask = (warped[..., 0] == 0) & (warped[..., 1] == 255) & (warped[..., 2] == 0)
     warped[mask] = bg[mask]
     return warped, dst
@@ -206,6 +212,7 @@ def _blur_noise_jpeg(img: np.ndarray, rng) -> np.ndarray:
         out.astype(np.float32) + rng.normal(0, rng.uniform(1.5, 5.0), out.shape), 0, 255
     ).astype(np.uint8)
     quality = int(rng.integers(55, 90))
-    _ok, enc = cv2.imencode(".jpg", cv2.cvtColor(out, cv2.COLOR_RGB2BGR),
-                            [cv2.IMWRITE_JPEG_QUALITY, quality])
+    _ok, enc = cv2.imencode(
+        ".jpg", cv2.cvtColor(out, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, quality]
+    )
     return cv2.cvtColor(cv2.imdecode(enc, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)

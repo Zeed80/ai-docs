@@ -3,7 +3,6 @@
 import pytest
 from httpx import AsyncClient
 
-
 # ── Block CRUD ──────────────────────────────────────────────────────────────
 
 
@@ -21,9 +20,9 @@ async def test_get_workspace_blocks_empty(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_verify_block_not_found(client: AsyncClient):
-    resp = await client.post("/api/workspace/agent/verify-block", json={
-        "canvas_id": "agent:nonexistent-block-xyz"
-    })
+    resp = await client.post(
+        "/api/workspace/agent/verify-block", json={"canvas_id": "agent:nonexistent-block-xyz"}
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["exists"] is False
@@ -49,10 +48,13 @@ async def test_clear_all_blocks(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_publish_invoice_table_empty(client: AsyncClient):
-    resp = await client.post("/api/workspace/agent/invoices/table", json={
-        "canvas_id": "test:invoice-list",
-        "limit": 10,
-    })
+    resp = await client.post(
+        "/api/workspace/agent/invoices/table",
+        json={
+            "canvas_id": "test:invoice-list",
+            "limit": 10,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "published"
@@ -65,9 +67,12 @@ async def test_publish_invoice_table_empty(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_publish_invoice_table_appears_in_blocks(client: AsyncClient):
     await client.delete("/api/workspace/blocks")
-    await client.post("/api/workspace/agent/invoices/table", json={
-        "canvas_id": "test:invoice-table-check",
-    })
+    await client.post(
+        "/api/workspace/agent/invoices/table",
+        json={
+            "canvas_id": "test:invoice-table-check",
+        },
+    )
     resp = await client.get("/api/workspace/blocks")
     assert resp.status_code == 200
     data = resp.json()
@@ -77,12 +82,15 @@ async def test_publish_invoice_table_appears_in_blocks(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_verify_block_after_publish(client: AsyncClient):
-    await client.post("/api/workspace/agent/invoices/table", json={
-        "canvas_id": "test:verify-after-publish",
-    })
-    resp = await client.post("/api/workspace/agent/verify-block", json={
-        "canvas_id": "test:verify-after-publish"
-    })
+    await client.post(
+        "/api/workspace/agent/invoices/table",
+        json={
+            "canvas_id": "test:verify-after-publish",
+        },
+    )
+    resp = await client.post(
+        "/api/workspace/agent/verify-block", json={"canvas_id": "test:verify-after-publish"}
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["exists"] is True
@@ -94,13 +102,16 @@ async def test_verify_block_after_publish(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_publish_general_block(client: AsyncClient):
-    resp = await client.post("/api/workspace/agent/generated/general", json={
-        "canvas_id": "test:general-block",
-        "block_type": "table",
-        "title": "Тестовый блок",
-        "columns": [{"key": "name", "header": "Имя", "type": "text"}],
-        "rows": [{"name": "строка 1"}],
-    })
+    resp = await client.post(
+        "/api/workspace/agent/generated/general",
+        json={
+            "canvas_id": "test:general-block",
+            "block_type": "table",
+            "title": "Тестовый блок",
+            "columns": [{"key": "name", "header": "Имя", "type": "text"}],
+            "rows": [{"name": "строка 1"}],
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "published"
@@ -109,54 +120,66 @@ async def test_publish_general_block(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_delete_specific_block(client: AsyncClient):
-    await client.post("/api/workspace/agent/generated/general", json={
-        "canvas_id": "test:block-to-delete",
-        "block_type": "table",
-        "title": "Удалить меня",
-        "columns": [{"key": "id", "header": "ID", "type": "text"}],
-        "rows": [],
-    })
+    await client.post(
+        "/api/workspace/agent/generated/general",
+        json={
+            "canvas_id": "test:block-to-delete",
+            "block_type": "table",
+            "title": "Удалить меня",
+            "columns": [{"key": "id", "header": "ID", "type": "text"}],
+            "rows": [],
+        },
+    )
 
     resp = await client.delete("/api/workspace/blocks/test:block-to-delete")
     assert resp.status_code == 200
 
     # Verify deleted
-    verify_resp = await client.post("/api/workspace/agent/verify-block", json={
-        "canvas_id": "test:block-to-delete"
-    })
+    verify_resp = await client.post(
+        "/api/workspace/agent/verify-block", json={"canvas_id": "test:block-to-delete"}
+    )
     assert verify_resp.json()["exists"] is False
 
 
 @pytest.mark.asyncio
 async def test_compare_table_data_publishes_diff(client: AsyncClient):
-    await client.post("/api/workspace/agent/generated/general", json={
-        "canvas_id": "test:left-compare",
-        "block_type": "table",
-        "title": "Left",
-        "columns": [
-            {"key": "sku", "header": "SKU", "type": "text"},
-            {"key": "price", "header": "Цена", "type": "number"},
-        ],
-        "rows": [{"sku": "A", "price": 10}, {"sku": "B", "price": 20}],
-    })
-    await client.post("/api/workspace/agent/generated/general", json={
-        "canvas_id": "test:right-compare",
-        "block_type": "table",
-        "title": "Right",
-        "columns": [
-            {"key": "sku", "header": "SKU", "type": "text"},
-            {"key": "price", "header": "Цена", "type": "number"},
-        ],
-        "rows": [{"sku": "A", "price": 12}, {"sku": "C", "price": 30}],
-    })
+    await client.post(
+        "/api/workspace/agent/generated/general",
+        json={
+            "canvas_id": "test:left-compare",
+            "block_type": "table",
+            "title": "Left",
+            "columns": [
+                {"key": "sku", "header": "SKU", "type": "text"},
+                {"key": "price", "header": "Цена", "type": "number"},
+            ],
+            "rows": [{"sku": "A", "price": 10}, {"sku": "B", "price": 20}],
+        },
+    )
+    await client.post(
+        "/api/workspace/agent/generated/general",
+        json={
+            "canvas_id": "test:right-compare",
+            "block_type": "table",
+            "title": "Right",
+            "columns": [
+                {"key": "sku", "header": "SKU", "type": "text"},
+                {"key": "price", "header": "Цена", "type": "number"},
+            ],
+            "rows": [{"sku": "A", "price": 12}, {"sku": "C", "price": 30}],
+        },
+    )
 
-    resp = await client.post("/api/workspace/agent/compare-table-data", json={
-        "left_canvas_id": "test:left-compare",
-        "right_canvas_id": "test:right-compare",
-        "canvas_id": "test:compare-result",
-        "key_fields": ["sku"],
-        "compare_fields": ["price"],
-    })
+    resp = await client.post(
+        "/api/workspace/agent/compare-table-data",
+        json={
+            "left_canvas_id": "test:left-compare",
+            "right_canvas_id": "test:right-compare",
+            "canvas_id": "test:compare-result",
+            "key_fields": ["sku"],
+            "compare_fields": ["price"],
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "published"
@@ -203,18 +226,33 @@ async def test_invoice_table_filters_by_supplier(client: AsyncClient, db_session
     await db_session.flush()
 
     now = datetime.now(UTC)
-    db_session.add_all([
-        Invoice(document_id=doc_wanted.id, invoice_number="F-1", invoice_date=now,
-                supplier_id=wanted.id, total_amount=100),
-        Invoice(document_id=doc_other.id, invoice_number="O-1", invoice_date=now,
-                supplier_id=other.id, total_amount=200),
-    ])
+    db_session.add_all(
+        [
+            Invoice(
+                document_id=doc_wanted.id,
+                invoice_number="F-1",
+                invoice_date=now,
+                supplier_id=wanted.id,
+                total_amount=100,
+            ),
+            Invoice(
+                document_id=doc_other.id,
+                invoice_number="O-1",
+                invoice_date=now,
+                supplier_id=other.id,
+                total_amount=200,
+            ),
+        ]
+    )
     await db_session.commit()
 
-    resp = await client.post("/api/workspace/agent/invoices/table", json={
-        "canvas_id": "test:invoice-supplier-filter",
-        "supplier_query": "Нужный Поставщик",
-    })
+    resp = await client.post(
+        "/api/workspace/agent/invoices/table",
+        json={
+            "canvas_id": "test:invoice-supplier-filter",
+            "supplier_query": "Нужный Поставщик",
+        },
+    )
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["total"] == 1
@@ -229,10 +267,13 @@ async def test_invoice_table_filters_by_supplier(client: AsyncClient, db_session
 @pytest.mark.asyncio
 async def test_invoice_table_unknown_supplier_is_not_found(client: AsyncClient):
     """An unknown name must not read as "done, 0 invoices" (finding #5)."""
-    resp = await client.post("/api/workspace/agent/invoices/table", json={
-        "canvas_id": "test:invoice-unknown-supplier",
-        "supplier_query": "ООО Совсем Неизвестный Контрагент",
-    })
+    resp = await client.post(
+        "/api/workspace/agent/invoices/table",
+        json={
+            "canvas_id": "test:invoice-unknown-supplier",
+            "supplier_query": "ООО Совсем Неизвестный Контрагент",
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["status"] == "not_found"
 
@@ -282,8 +323,11 @@ async def test_items_by_supplier_table_honours_the_filter(client: AsyncClient, d
 
     def _doc(digest: str) -> Document:
         return Document(
-            file_name=f"{digest}.pdf", file_hash=digest, file_size=256,
-            mime_type="application/pdf", storage_path=f"g/{digest}.pdf",
+            file_name=f"{digest}.pdf",
+            file_hash=digest,
+            file_size=256,
+            mime_type="application/pdf",
+            storage_path=f"g/{digest}.pdf",
             status=DocumentStatus.needs_review,
         )
 
@@ -292,16 +336,32 @@ async def test_items_by_supplier_table_honours_the_filter(client: AsyncClient, d
     await db_session.flush()
 
     now = datetime.now(UTC)
-    inv1 = Invoice(document_id=d1.id, invoice_number="G-1", invoice_date=now,
-                   supplier_id=wanted.id, total_amount=100)
-    inv2 = Invoice(document_id=d2.id, invoice_number="G-2", invoice_date=now,
-                   supplier_id=other.id, total_amount=200)
+    inv1 = Invoice(
+        document_id=d1.id,
+        invoice_number="G-1",
+        invoice_date=now,
+        supplier_id=wanted.id,
+        total_amount=100,
+    )
+    inv2 = Invoice(
+        document_id=d2.id,
+        invoice_number="G-2",
+        invoice_date=now,
+        supplier_id=other.id,
+        total_amount=200,
+    )
     db_session.add_all([inv1, inv2])
     await db_session.flush()
-    db_session.add_all([
-        InvoiceLine(invoice_id=inv1.id, line_number=1, description="Фреза", quantity=1, amount=100),
-        InvoiceLine(invoice_id=inv2.id, line_number=1, description="Болт", quantity=1, amount=200),
-    ])
+    db_session.add_all(
+        [
+            InvoiceLine(
+                invoice_id=inv1.id, line_number=1, description="Фреза", quantity=1, amount=100
+            ),
+            InvoiceLine(
+                invoice_id=inv2.id, line_number=1, description="Болт", quantity=1, amount=200
+            ),
+        ]
+    )
     await db_session.commit()
 
     resp = await client.post(

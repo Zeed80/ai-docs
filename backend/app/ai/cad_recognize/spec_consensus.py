@@ -62,7 +62,8 @@ def _vote_number(values: list[Any], *, minimum: int) -> tuple[float | None, int]
     560.0 off the same sheet mean the same dimension.
     """
     numbers = [
-        float(value) for value in values
+        float(value)
+        for value in values
         if isinstance(value, (int, float)) and not isinstance(value, bool)
     ]
     best: tuple[float, int] | None = None
@@ -132,18 +133,19 @@ def _vote_sections(
     assert best is not None
     if best[1] < minimum:
         counts = sorted({len(read) for read in populated})
-        return None, best[1], (
-            "проходы чтения не сошлись на профиле "
-            f"(ступеней по проходам: {counts}, совпало {best[1]} из {len(reads)})"
+        return (
+            None,
+            best[1],
+            (
+                "проходы чтения не сошлись на профиле "
+                f"(ступеней по проходам: {counts}, совпало {best[1]} из {len(reads)})"
+            ),
         )
     accepted = [dict(item) for item in best[0]]
-    agreeing_reads = [
-        read for read in populated if _sections_agree(read, best[0])
-    ]
+    agreeing_reads = [read for read in populated if _sections_agree(read, best[0])]
     for index, section in enumerate(accepted):
         thread_reads = [
-            [read[index]["thread"]]
-            if isinstance(read[index].get("thread"), dict) else []
+            [read[index]["thread"]] if isinstance(read[index].get("thread"), dict) else []
             for read in agreeing_reads
         ]
         agreed_threads = _agreed_feature_items(thread_reads, minimum=minimum)
@@ -192,7 +194,12 @@ def _body_consensus(
             disagreements.append(f"{label} (контур): {profile_problem}")
 
     for field in (
-        "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
+        "chamfers",
+        "fillets",
+        "grooves",
+        "keyways",
+        "cross_holes",
+        "axial_holes",
         "circular_hole_patterns",
     ):
         feature_reads = [body.get(field) or [] for body in bodies]
@@ -200,9 +207,7 @@ def _body_consensus(
         if accepted:
             merged[field] = accepted
         elif any(feature_reads):
-            disagreements.append(
-                f"{label} ({field}): проходы не сошлись на малых элементах"
-            )
+            disagreements.append(f"{label} ({field}): проходы не сошлись на малых элементах")
     return merged, disagreements
 
 
@@ -228,22 +233,18 @@ def _feature_items_agree(left: dict, right: dict) -> bool:
     return True
 
 
-def _agreed_feature_items(
-    reads: list[list[dict]], *, minimum: int
-) -> list[dict]:
+def _agreed_feature_items(reads: list[list[dict]], *, minimum: int) -> list[dict]:
     """Keep only complete feature objects independently confirmed by passes."""
-    candidates = [
-        item for read in reads for item in read if isinstance(item, dict)
-    ]
+    candidates = [item for read in reads for item in read if isinstance(item, dict)]
     accepted: list[dict] = []
     for candidate in candidates:
         if any(_feature_items_agree(candidate, item) for item in accepted):
             continue
         votes = sum(
-            1 for read in reads
+            1
+            for read in reads
             if any(
-                isinstance(item, dict) and _feature_items_agree(candidate, item)
-                for item in read
+                isinstance(item, dict) and _feature_items_agree(candidate, item) for item in read
             )
         )
         if votes >= minimum:
@@ -296,7 +297,11 @@ def _lookup(read: dict, path: tuple[Any, ...], merged: dict) -> tuple[Any, dict 
             if identity:
                 key, expected = identity
                 current = next(
-                    (item for item in current if isinstance(item, dict) and _text_key(item.get(key)) == expected),
+                    (
+                        item
+                        for item in current
+                        if isinstance(item, dict) and _text_key(item.get(key)) == expected
+                    ),
                     None,
                 )
                 if current is None:
@@ -364,7 +369,9 @@ def _build_value_provenance(merged: dict, reads: list[dict]) -> dict[str, dict]:
             "passes": total,
             "confidence": round(len(agreeing) / total, 3) if total else 0.0,
             "accepted_from_passes": [item["pass"] for item in agreeing],
-            "observations": [{"pass": item["pass"], "value": item["value"]} for item in observations],
+            "observations": [
+                {"pass": item["pass"], "value": item["value"]} for item in observations
+            ],
             "evidence": [
                 {**evidence, "pass": item["pass"]}
                 for item in agreeing
@@ -378,9 +385,7 @@ def _profile_consensus(
     profiles: list[dict], *, minimum: int, seen: int, total: int
 ) -> tuple[dict | None, str | None]:
     if seen < minimum:
-        return None, (
-            f"контур прочитан только в {seen} из {total} проходов"
-        )
+        return None, (f"контур прочитан только в {seen} из {total} проходов")
     merged: dict[str, Any] = {}
     shape, shape_votes = _vote_text([p.get("shape") for p in profiles], minimum=minimum)
     if shape is None:
@@ -411,7 +416,9 @@ def consensus_spec(specs: list[dict], *, minimum: int = MIN_AGREEMENT) -> dict:
     if len(usable) == 1:
         merged = dict(usable[0])
         merged["consensus"] = {
-            "passes": 1, "usable": 1, "agreement": "single_pass",
+            "passes": 1,
+            "usable": 1,
+            "agreement": "single_pass",
         }
         merged["value_provenance"] = _build_value_provenance(merged, usable)
         return merged
@@ -467,14 +474,19 @@ def consensus_spec(specs: list[dict], *, minimum: int = MIN_AGREEMENT) -> dict:
 
     # Anything a single pass declared unresolved stays unresolved: one reader
     # admitting it could not prove a value is enough to keep it out.
-    inherited = sorted({
-        str(item) for spec in usable for item in (spec.get("unresolved") or []) if str(item)
-    })
+    inherited = sorted(
+        {str(item) for spec in usable for item in (spec.get("unresolved") or []) if str(item)}
+    )
     merged["unresolved"] = sorted(set(disagreements) | set(inherited))
-    merged["optional_unresolved"] = sorted(set(optional) | {
-        str(item) for spec in usable
-        for item in (spec.get("optional_unresolved") or []) if str(item)
-    })
+    merged["optional_unresolved"] = sorted(
+        set(optional)
+        | {
+            str(item)
+            for spec in usable
+            for item in (spec.get("optional_unresolved") or [])
+            if str(item)
+        }
+    )
     merged["consensus"] = {
         "passes": len(specs),
         "usable": total,
@@ -495,12 +507,8 @@ def _agreed_items(reads: list[list[dict]], key: str, *, minimum: int) -> list[di
         for item in read:
             if not isinstance(item, dict):
                 continue
-            if key == "kind" and (
-                item.get("view_id") or item.get("label")
-            ):
-                text = _text_key(
-                    f"{item.get(key)}|{item.get('view_id') or item.get('label')}"
-                )
+            if key == "kind" and (item.get("view_id") or item.get("label")):
+                text = _text_key(f"{item.get(key)}|{item.get('view_id') or item.get('label')}")
             else:
                 text = _text_key(item.get(key))
             if not text or text in seen_here:

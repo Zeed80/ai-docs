@@ -63,7 +63,9 @@ async def test_cloud_model_requires_allow_cloud():
 
 def test_auditor_allow_cloud_is_protected_and_off_by_default():
     config = BuiltinAgentConfig(
-        model="mock", backend_url="http://backend", ollama_url="http://ollama",
+        model="mock",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
         exposed_skills=[],
     )
     assert config.auditor_allow_cloud is False
@@ -75,9 +77,12 @@ def test_auditor_allow_cloud_is_protected_and_off_by_default():
 @pytest.mark.parametrize("cloud_enabled", [False, True])
 async def test_semantic_audit_propagates_auditor_allow_cloud(monkeypatch, cloud_enabled):
     config = BuiltinAgentConfig(
-        department_enabled=True, audit_enabled=True,
+        department_enabled=True,
+        audit_enabled=True,
         auditor_allow_cloud=cloud_enabled,
-        model="mock", backend_url="http://backend", ollama_url="http://ollama",
+        model="mock",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
         exposed_skills=[],
     )
     monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
@@ -99,8 +104,10 @@ async def test_semantic_audit_propagates_auditor_allow_cloud(monkeypatch, cloud_
     report = AuditReport(passed=True, issues=[])
 
     from app.ai.orchestrator import OrchestratorPlan, WorkerAssignment, WorkspaceOutputSpec
+
     plan = OrchestratorPlan(
-        goal="тест", intent="general",
+        goal="тест",
+        intent="general",
         worker=WorkerAssignment(role="data_analyst", task="тест"),
         workspace=WorkspaceOutputSpec(),
     )

@@ -14,12 +14,40 @@ One definition, one fallback, both callers.
 
 from __future__ import annotations
 
-DEFAULT_ALLOWED_EXTENSIONS: frozenset[str] = frozenset({
-    ".bmp", ".csv", ".doc", ".docx", ".dwg", ".dxf", ".eml", ".gif",
-    ".iges", ".igs", ".jpeg", ".jpg", ".json", ".log", ".md", ".msg",
-    ".odt", ".pdf", ".png", ".step", ".stp", ".svg", ".tif", ".tiff",
-    ".txt", ".webp", ".xls", ".xlsx", ".xlsm", ".xml",
-})
+DEFAULT_ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".bmp",
+        ".csv",
+        ".doc",
+        ".docx",
+        ".dwg",
+        ".dxf",
+        ".eml",
+        ".gif",
+        ".iges",
+        ".igs",
+        ".jpeg",
+        ".jpg",
+        ".json",
+        ".log",
+        ".md",
+        ".msg",
+        ".odt",
+        ".pdf",
+        ".png",
+        ".step",
+        ".stp",
+        ".svg",
+        ".tif",
+        ".tiff",
+        ".txt",
+        ".webp",
+        ".xls",
+        ".xlsx",
+        ".xlsm",
+        ".xml",
+    }
+)
 
 
 def extension_of(filename: str | None) -> str:

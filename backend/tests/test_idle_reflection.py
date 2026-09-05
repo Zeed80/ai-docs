@@ -6,11 +6,11 @@ Redis-stub fixture pattern.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import MemoryFact, SourceConnector, User
@@ -40,9 +40,9 @@ def _mem_redis_settings(monkeypatch):
 @pytest.fixture(autouse=True)
 async def _clean_tables(db_session: AsyncSession):
     yield
-    await db_session.execute(delete(MemoryFact).where(
-        MemoryFact.kind.in_(["idle_reflection_state", "proposed_fact"])
-    ))
+    await db_session.execute(
+        delete(MemoryFact).where(MemoryFact.kind.in_(["idle_reflection_state", "proposed_fact"]))
+    )
     await db_session.execute(delete(SourceConnector))
     await db_session.execute(delete(User))
     await db_session.commit()
@@ -54,8 +54,14 @@ def _user(sub: str, *, last_seen_at: datetime | None) -> User:
 
 def _proposed_fact(*, scope: str, title: str, summary: str, created_at: datetime) -> MemoryFact:
     fact = MemoryFact(
-        scope=scope, kind="proposed_fact", title=title, summary=summary,
-        source="memory_promotion", confidence=0.8, pinned=False, status="active",
+        scope=scope,
+        kind="proposed_fact",
+        title=title,
+        summary=summary,
+        source="memory_promotion",
+        confidence=0.8,
+        pinned=False,
+        status="active",
         metadata_={"promotion_status": "pending"},
     )
     fact.created_at = created_at  # override TimestampMixin's default for ordering control
@@ -72,22 +78,24 @@ async def test_is_system_idle_true_when_no_user_ever_logged_in(db_session: Async
 
 @pytest.mark.asyncio
 async def test_is_system_idle_false_when_a_user_was_recently_seen(db_session: AsyncSession):
-    db_session.add(_user("alice", last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=5)))
+    db_session.add(_user("alice", last_seen_at=datetime.now(UTC) - timedelta(minutes=5)))
     await db_session.commit()
     assert await is_system_idle(db_session, threshold_minutes=30) is False
 
 
 @pytest.mark.asyncio
 async def test_is_system_idle_true_when_last_seen_is_past_threshold(db_session: AsyncSession):
-    db_session.add(_user("alice", last_seen_at=datetime.now(timezone.utc) - timedelta(hours=2)))
+    db_session.add(_user("alice", last_seen_at=datetime.now(UTC) - timedelta(hours=2)))
     await db_session.commit()
     assert await is_system_idle(db_session, threshold_minutes=30) is True
 
 
 @pytest.mark.asyncio
-async def test_is_system_idle_uses_the_most_recently_seen_of_several_users(db_session: AsyncSession):
-    db_session.add(_user("alice", last_seen_at=datetime.now(timezone.utc) - timedelta(hours=2)))
-    db_session.add(_user("bob", last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=1)))
+async def test_is_system_idle_uses_the_most_recently_seen_of_several_users(
+    db_session: AsyncSession,
+):
+    db_session.add(_user("alice", last_seen_at=datetime.now(UTC) - timedelta(hours=2)))
+    db_session.add(_user("bob", last_seen_at=datetime.now(UTC) - timedelta(minutes=1)))
     await db_session.commit()
     assert await is_system_idle(db_session, threshold_minutes=30) is False
 
@@ -97,11 +105,19 @@ async def test_is_system_idle_uses_the_most_recently_seen_of_several_users(db_se
 
 @pytest.mark.asyncio
 async def test_consolidate_keeps_newest_and_supersedes_older_duplicates(db_session: AsyncSession):
-    now = datetime.now(timezone.utc)
-    older = _proposed_fact(scope="project", title="Поставщик X сменил реквизиты",
-                            summary="v1", created_at=now - timedelta(hours=2))
-    newer = _proposed_fact(scope="project", title="Поставщик X сменил реквизиты",
-                            summary="v2", created_at=now - timedelta(minutes=5))
+    now = datetime.now(UTC)
+    older = _proposed_fact(
+        scope="project",
+        title="Поставщик X сменил реквизиты",
+        summary="v1",
+        created_at=now - timedelta(hours=2),
+    )
+    newer = _proposed_fact(
+        scope="project",
+        title="Поставщик X сменил реквизиты",
+        summary="v2",
+        created_at=now - timedelta(minutes=5),
+    )
     db_session.add_all([older, newer])
     await db_session.flush()
 
@@ -119,10 +135,12 @@ async def test_consolidate_keeps_newest_and_supersedes_older_duplicates(db_sessi
 
 @pytest.mark.asyncio
 async def test_consolidate_leaves_distinct_titles_and_scopes_untouched(db_session: AsyncSession):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     a = _proposed_fact(scope="project", title="A", summary="a", created_at=now)
     b = _proposed_fact(scope="project", title="B", summary="b", created_at=now)
-    c = _proposed_fact(scope="owner:alice", title="A", summary="a-alice", created_at=now)  # same title, different scope
+    c = _proposed_fact(
+        scope="owner:alice", title="A", summary="a-alice", created_at=now
+    )  # same title, different scope
     db_session.add_all([a, b, c])
     await db_session.flush()
 
@@ -137,12 +155,20 @@ async def test_consolidate_leaves_distinct_titles_and_scopes_untouched(db_sessio
 
 @pytest.mark.asyncio
 async def test_consolidate_ignores_already_superseded_and_other_kinds(db_session: AsyncSession):
-    now = datetime.now(timezone.utc)
-    already = _proposed_fact(scope="project", title="Дубль", summary="old", created_at=now - timedelta(hours=1))
+    now = datetime.now(UTC)
+    already = _proposed_fact(
+        scope="project", title="Дубль", summary="old", created_at=now - timedelta(hours=1)
+    )
     already.status = "superseded"
     other_kind = MemoryFact(
-        scope="project", kind="verified_fact", title="Дубль", summary="verified",
-        source="memory_promotion", confidence=1.0, pinned=False, status="active",
+        scope="project",
+        kind="verified_fact",
+        title="Дубль",
+        summary="verified",
+        source="memory_promotion",
+        confidence=1.0,
+        pinned=False,
+        status="active",
     )
     db_session.add_all([already, other_kind])
     await db_session.flush()
@@ -155,10 +181,16 @@ async def test_consolidate_ignores_already_superseded_and_other_kinds(db_session
 
 @pytest.mark.asyncio
 async def test_consolidate_handles_triple_duplicates(db_session: AsyncSession):
-    now = datetime.now(timezone.utc)
-    v1 = _proposed_fact(scope="project", title="T", summary="v1", created_at=now - timedelta(hours=3))
-    v2 = _proposed_fact(scope="project", title="T", summary="v2", created_at=now - timedelta(hours=2))
-    v3 = _proposed_fact(scope="project", title="T", summary="v3", created_at=now - timedelta(minutes=1))
+    now = datetime.now(UTC)
+    v1 = _proposed_fact(
+        scope="project", title="T", summary="v1", created_at=now - timedelta(hours=3)
+    )
+    v2 = _proposed_fact(
+        scope="project", title="T", summary="v2", created_at=now - timedelta(hours=2)
+    )
+    v3 = _proposed_fact(
+        scope="project", title="T", summary="v3", created_at=now - timedelta(minutes=1)
+    )
     db_session.add_all([v1, v2, v3])
     await db_session.flush()
 
@@ -177,8 +209,13 @@ async def test_consolidate_handles_triple_duplicates(db_session: AsyncSession):
 # ── revalidate_due_connectors ───────────────────────────────────────────
 
 
-def _connector(*, domain: str, sample_url: str | None, revalidate_after: datetime | None,
-                status: str = "retired") -> SourceConnector:
+def _connector(
+    *,
+    domain: str,
+    sample_url: str | None,
+    revalidate_after: datetime | None,
+    status: str = "retired",
+) -> SourceConnector:
     return SourceConnector(
         domain_pattern=domain,
         strategy={"sample_url": sample_url, "queries": ["q"]} if sample_url else {},
@@ -194,8 +231,9 @@ def _connector(*, domain: str, sample_url: str | None, revalidate_after: datetim
 @pytest.mark.asyncio
 async def test_revalidate_due_connector_success_revives_it(db_session: AsyncSession):
     connector = _connector(
-        domain="revive.example", sample_url="https://revive.example/catalog",
-        revalidate_after=datetime.now(timezone.utc) - timedelta(minutes=1),
+        domain="revive.example",
+        sample_url="https://revive.example/catalog",
+        revalidate_after=datetime.now(UTC) - timedelta(minutes=1),
     )
     db_session.add(connector)
     await db_session.commit()
@@ -203,8 +241,10 @@ async def test_revalidate_due_connector_success_revives_it(db_session: AsyncSess
     from app.api.web_search import WebFetchResponse
 
     fetch_response = WebFetchResponse(
-        url="https://revive.example/catalog", status=200,
-        text="каталог инструмента " * 20, diagnostics=[],
+        url="https://revive.example/catalog",
+        status=200,
+        text="каталог инструмента " * 20,
+        diagnostics=[],
     )
     with patch("app.api.web_search.fetch_page", new=AsyncMock(return_value=fetch_response)):
         result = await revalidate_due_connectors(db_session, batch_size=5)
@@ -220,8 +260,9 @@ async def test_revalidate_due_connector_success_revives_it(db_session: AsyncSess
 @pytest.mark.asyncio
 async def test_revalidate_due_connector_failure_keeps_backing_off(db_session: AsyncSession):
     connector = _connector(
-        domain="stillbad.example", sample_url="https://stillbad.example/x",
-        revalidate_after=datetime.now(timezone.utc) - timedelta(minutes=1),
+        domain="stillbad.example",
+        sample_url="https://stillbad.example/x",
+        revalidate_after=datetime.now(UTC) - timedelta(minutes=1),
     )
     db_session.add(connector)
     await db_session.commit()
@@ -239,8 +280,9 @@ async def test_revalidate_due_connector_failure_keeps_backing_off(db_session: As
 @pytest.mark.asyncio
 async def test_revalidate_skips_connector_without_sample_url(db_session: AsyncSession):
     connector = _connector(
-        domain="nourls.example", sample_url=None,
-        revalidate_after=datetime.now(timezone.utc) - timedelta(minutes=1),
+        domain="nourls.example",
+        sample_url=None,
+        revalidate_after=datetime.now(UTC) - timedelta(minutes=1),
     )
     db_session.add(connector)
     await db_session.commit()
@@ -254,8 +296,9 @@ async def test_revalidate_skips_connector_without_sample_url(db_session: AsyncSe
 @pytest.mark.asyncio
 async def test_revalidate_ignores_connector_not_yet_due(db_session: AsyncSession):
     connector = _connector(
-        domain="notyet.example", sample_url="https://notyet.example/x",
-        revalidate_after=datetime.now(timezone.utc) + timedelta(days=5),
+        domain="notyet.example",
+        sample_url="https://notyet.example/x",
+        revalidate_after=datetime.now(UTC) + timedelta(days=5),
     )
     db_session.add(connector)
     await db_session.commit()
@@ -267,12 +310,15 @@ async def test_revalidate_ignores_connector_not_yet_due(db_session: AsyncSession
 
 @pytest.mark.asyncio
 async def test_revalidate_respects_batch_size(db_session: AsyncSession):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for i in range(3):
-        db_session.add(_connector(
-            domain=f"many{i}.example", sample_url=f"https://many{i}.example/x",
-            revalidate_after=now - timedelta(minutes=1),
-        ))
+        db_session.add(
+            _connector(
+                domain=f"many{i}.example",
+                sample_url=f"https://many{i}.example/x",
+                revalidate_after=now - timedelta(minutes=1),
+            )
+        )
     await db_session.commit()
 
     with patch("app.api.web_search.fetch_page", new=AsyncMock(side_effect=RuntimeError("x"))):
@@ -293,7 +339,7 @@ async def test_run_idle_reflection_skips_when_disabled(db_session: AsyncSession)
 
 @pytest.mark.asyncio
 async def test_run_idle_reflection_skips_when_user_active(db_session: AsyncSession):
-    db_session.add(_user("alice", last_seen_at=datetime.now(timezone.utc)))
+    db_session.add(_user("alice", last_seen_at=datetime.now(UTC)))
     await db_session.commit()
     result = await run_idle_reflection(db_session, force=False)
     assert result == {"skipped": True, "reason": "user_active"}
@@ -301,8 +347,10 @@ async def test_run_idle_reflection_skips_when_user_active(db_session: AsyncSessi
 
 @pytest.mark.asyncio
 async def test_run_idle_reflection_runs_when_idle_and_reports_work_done(db_session: AsyncSession):
-    now = datetime.now(timezone.utc)
-    older = _proposed_fact(scope="project", title="Дубль", summary="v1", created_at=now - timedelta(hours=1))
+    now = datetime.now(UTC)
+    older = _proposed_fact(
+        scope="project", title="Дубль", summary="v1", created_at=now - timedelta(hours=1)
+    )
     newer = _proposed_fact(scope="project", title="Дубль", summary="v2", created_at=now)
     db_session.add_all([older, newer])
     await db_session.commit()
@@ -327,7 +375,7 @@ async def test_run_idle_reflection_respects_min_interval_between_runs(db_session
 
 @pytest.mark.asyncio
 async def test_run_idle_reflection_force_bypasses_every_gate(db_session: AsyncSession):
-    db_session.add(_user("alice", last_seen_at=datetime.now(timezone.utc)))
+    db_session.add(_user("alice", last_seen_at=datetime.now(UTC)))
     save_idle_reflection_settings(IdleReflectionSettings(enabled=False))
     await db_session.commit()
 

@@ -1,7 +1,7 @@
 """Auto-Approval Rules API — configure conditions for automatic document/invoice approval."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -68,9 +68,7 @@ class CheckResult(BaseModel):
 
 @router.get("", response_model=list[AutoApprovalRuleOut])
 async def list_rules(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(AutoApprovalRule).order_by(AutoApprovalRule.created_at.desc())
-    )
+    result = await db.execute(select(AutoApprovalRule).order_by(AutoApprovalRule.created_at.desc()))
     return result.scalars().all()
 
 
@@ -166,7 +164,7 @@ async def check_invoice(
 
         # Matched — increment counter
         rule.apply_count += 1
-        rule.last_applied_at = datetime.now(timezone.utc)
+        rule.last_applied_at = datetime.now(UTC)
         await db.commit()
         return CheckResult(
             matched=True,

@@ -27,7 +27,6 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -52,6 +51,7 @@ INVOICE_JPG_NASH = INVOICES_DIR / "Наш Инструмент № 1603 от 30.
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _json_from_text(text: str) -> dict:
     """Extract first JSON object from model response text."""
@@ -86,7 +86,9 @@ class TestParameterProfiles:
 
         profiles = get_all_profiles()
         required = {"anti_hallucination", "structured_reasoning", "balanced", "creative"}
-        assert required <= set(profiles.keys()), f"Missing profiles: {required - set(profiles.keys())}"
+        assert required <= set(profiles.keys()), (
+            f"Missing profiles: {required - set(profiles.keys())}"
+        )
 
     def test_anti_hallucination_is_deterministic(self):
         from app.ai.parameter_profiles import get_inference_params
@@ -107,7 +109,7 @@ class TestParameterProfiles:
         )
 
     def test_task_default_profiles_cover_all_tasks(self):
-        from app.ai.parameter_profiles import TASK_DEFAULT_PROFILE, get_inference_params
+        from app.ai.parameter_profiles import get_inference_params
         from app.ai.schemas import AITask
 
         for task in AITask:
@@ -117,7 +119,7 @@ class TestParameterProfiles:
 
     def test_custom_profile_save_and_retrieve(self, tmp_path, monkeypatch):
         """Custom profiles persist via Redis; mock Redis for unit testing."""
-        from app.ai.parameter_profiles import _BUILTIN_PROFILES, get_all_profiles
+        from app.ai.parameter_profiles import get_all_profiles
 
         store: dict = {}
 
@@ -157,7 +159,14 @@ class TestInferenceParamInjection:
         req = AIRequest(
             task=AITask.INVOICE_OCR,
             prompt="test",
-            metadata={"inference_params": {"temperature": 0.0, "top_p": 1.0, "top_k": 1, "repeat_penalty": 1.1}},
+            metadata={
+                "inference_params": {
+                    "temperature": 0.0,
+                    "top_p": 1.0,
+                    "top_k": 1,
+                    "repeat_penalty": 1.1,
+                }
+            },
         )
         opts = _inference_options(req, default_temperature=0.5)
         assert opts["temperature"] == 0.0
@@ -180,7 +189,9 @@ class TestInferenceParamInjection:
         req = AIRequest(
             task=AITask.EMAIL_DRAFTING,
             prompt="test",
-            metadata={"inference_params": {"temperature": 0.7, "top_p": 0.95, "repeat_penalty": 1.05}},
+            metadata={
+                "inference_params": {"temperature": 0.7, "top_p": 0.95, "repeat_penalty": 1.05}
+            },
         )
         result = _inference_params(req, default_temperature=0.2)
         assert result["temperature"] == 0.7
@@ -190,9 +201,10 @@ class TestInferenceParamInjection:
     def test_router_dispatch_injects_params(self):
         """_dispatch must inject inference_params into request.metadata."""
         import asyncio
-        from app.ai.router import AIRouter
-        from app.ai.schemas import AIRequest, AITask, AIResponse, ProviderKind, ProviderConfig
+
         from app.ai.providers.base import AIProvider
+        from app.ai.router import AIRouter
+        from app.ai.schemas import AIRequest, AIResponse, AITask, ProviderConfig, ProviderKind
 
         captured: dict = {}
 
@@ -208,21 +220,29 @@ class TestInferenceParamInjection:
 
             async def vision(self, request, model):
                 return await self.chat(request, model)
+
             async def embedding(self, request, model):
-                return AIResponse(task=request.task, provider=self.kind, model=model, embedding=[0.1])
+                return AIResponse(
+                    task=request.task, provider=self.kind, model=model, embedding=[0.1]
+                )
+
             async def rerank(self, request, model):
                 return AIResponse(task=request.task, provider=self.kind, model=model, scores=[0.5])
+
             async def tool_calling(self, request, model):
                 return await self.chat(request, model)
+
             async def structured_extract(self, request, model):
                 return await self.chat(request, model)
 
         from app.ai.model_registry import ModelRegistry
-        from app.ai.schemas import ModelCapability, ModelStatus, Modality, ProviderConfig, TaskRoute
+        from app.ai.schemas import Modality, ModelCapability, TaskRoute
 
         registry = MagicMock(spec=ModelRegistry)
         registry.providers = {
-            ProviderKind.OLLAMA: ProviderConfig(kind=ProviderKind.OLLAMA, base_url="http://fake", is_local=True)
+            ProviderKind.OLLAMA: ProviderConfig(
+                kind=ProviderKind.OLLAMA, base_url="http://fake", is_local=True
+            )
         }
         model_cap = ModelCapability(
             name="test_model",
@@ -262,6 +282,7 @@ class TestGPUManager:
 
         async def fake_allocs():
             from app.ai.gpu_manager import ProviderAllocation
+
             return {
                 "ollama": ProviderAllocation(provider="ollama", vram_used_gb=10.0, running=True),
                 "llamacpp": ProviderAllocation(provider="llamacpp", vram_used_gb=0.0),
@@ -286,6 +307,7 @@ class TestGPUManager:
 
         async def fake_allocs():
             from app.ai.gpu_manager import ProviderAllocation
+
             return {
                 "ollama": ProviderAllocation(provider="ollama", vram_used_gb=7.0, running=True),
                 "llamacpp": ProviderAllocation(provider="llamacpp", vram_used_gb=0.0),
@@ -309,6 +331,7 @@ class TestGPUManager:
 
         async def fake_allocs():
             from app.ai.gpu_manager import ProviderAllocation
+
             return {"ollama": ProviderAllocation(provider="ollama", vram_used_gb=23.5)}
 
         monkeypatch.setattr(gpu_manager, "get_allocations", fake_allocs)
@@ -333,7 +356,6 @@ class TestRunAsyncFix:
 
     def test_domain_runtimeerror_propagates(self):
         """Domain RuntimeError (e.g. llamacpp unreachable) must not be swallowed."""
-        import asyncio as _asyncio
         from app.tasks.extraction import _run_async
 
         async def llamacpp_domain_error():
@@ -378,10 +400,17 @@ class TestDocumentPipelineIntegration:
     @pytest.mark.asyncio
     async def test_classify_returns_invoice_type(self, monkeypatch):
         from app.ai.router import ai_router
-        from app.ai.ollama_client import generate_json
 
-        async def mock_generate_json(prompt, *, model=None, provider=None, system=None,
-                                     temperature=0.1, max_tokens=4096, timeout_seconds=120.0):
+        async def mock_generate_json(
+            prompt,
+            *,
+            model=None,
+            provider=None,
+            system=None,
+            temperature=0.1,
+            max_tokens=4096,
+            timeout_seconds=120.0,
+        ):
             # Verify that temperature=0.0 is passed (anti_hallucination profile)
             assert temperature == 0.0, f"Expected temp=0.0, got {temperature}"
             return {"type": "invoice", "confidence": 0.99, "reasoning": "СЧЁТ keyword found"}
@@ -399,8 +428,16 @@ class TestDocumentPipelineIntegration:
         """extract_invoice must use temperature=0.0 (anti_hallucination profile)."""
         captured_temp: list[float] = []
 
-        async def mock_generate_json(prompt, *, model=None, provider=None, system=None,
-                                     temperature=0.1, max_tokens=4096, timeout_seconds=120.0):
+        async def mock_generate_json(
+            prompt,
+            *,
+            model=None,
+            provider=None,
+            system=None,
+            temperature=0.1,
+            max_tokens=4096,
+            timeout_seconds=120.0,
+        ):
             captured_temp.append(temperature)
             return {
                 "invoice_number": "УТ-1007",
@@ -414,6 +451,7 @@ class TestDocumentPipelineIntegration:
         monkeypatch.setattr("app.ai.router.generate_json", mock_generate_json)
 
         from app.ai.router import ai_router
+
         await ai_router.extract_invoice("СЧЁТ УТ-1007 НВС Компани...")
         assert captured_temp, "generate_json must be called"
         assert captured_temp[0] == 0.0, f"extract_invoice must use temp=0.0, got {captured_temp[0]}"
@@ -424,21 +462,24 @@ class TestDocumentPipelineIntegration:
         from app.ai.router import ai_router
 
         async def mock_reasoning(*args, **kwargs):
-            temp = kwargs.get("temperature", -1)
-            return json.dumps({
-                "subject": "Запрос о поставке",
-                "body_text": "Уважаемые коллеги...",
-                "body_html": "<p>Уважаемые коллеги...</p>",
-                "tone": "formal",
-                "risk_flags": [],
-            })
+            return json.dumps(
+                {
+                    "subject": "Запрос о поставке",
+                    "body_text": "Уважаемые коллеги...",
+                    "body_html": "<p>Уважаемые коллеги...</p>",
+                    "tone": "formal",
+                    "risk_flags": [],
+                }
+            )
 
         monkeypatch.setattr("app.ai.router.reasoning_generate", mock_reasoning)
 
-        result = await ai_router.generate_email({
-            "supplier": "ООО Графит-Гарант",
-            "request": "Запросить счёт на уплотнения",
-        })
+        result = await ai_router.generate_email(
+            {
+                "supplier": "ООО Графит-Гарант",
+                "request": "Запросить счёт на уплотнения",
+            }
+        )
         assert "subject" in result
 
 
@@ -503,7 +544,9 @@ class TestRealInvoiceOllamaGemma4:
 
         # 300s timeout needed for vision+OCR on large JPG images
         return OllamaProvider(
-            ProviderConfig(kind=ProviderKind.OLLAMA, base_url=self.OLLAMA_URL, timeout_seconds=600.0)
+            ProviderConfig(
+                kind=ProviderKind.OLLAMA, base_url=self.OLLAMA_URL, timeout_seconds=600.0
+            )
         )
 
     @pytest.mark.asyncio
@@ -512,8 +555,8 @@ class TestRealInvoiceOllamaGemma4:
         if not INVOICE_JPG.exists():
             pytest.skip(f"Invoice file not found: {INVOICE_JPG}")
 
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
         from app.ai.parameter_profiles import get_inference_params
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         img_b64 = _encode_image(INVOICE_JPG)
         params = get_inference_params(AITask.INVOICE_OCR)
@@ -533,6 +576,7 @@ class TestRealInvoiceOllamaGemma4:
 
         t0 = time.perf_counter()
         from app.ai.schemas import AITask as _T
+
         model = assigned_ollama_model(_T.INVOICE_OCR, need_vision=True)
         resp = await ollama_provider.vision(req, model)
         elapsed = time.perf_counter() - t0
@@ -551,7 +595,7 @@ class TestRealInvoiceOllamaGemma4:
         inn_got = str(data.get("vendor_inn", "")).replace(" ", "")
         inn_exp = "7447286384"
         assert len(inn_got) >= 9 and any(
-            inn_exp[i:i+8] in inn_got for i in range(len(inn_exp) - 8 + 1)
+            inn_exp[i : i + 8] in inn_got for i in range(len(inn_exp) - 8 + 1)
         ), f"INN wrong (expected ~{inn_exp}): {data}"
         assert 25000 <= float(data.get("total", 0)) <= 26000, f"Total wrong: {data}"
 
@@ -567,6 +611,7 @@ class TestRealInvoiceOllamaGemma4:
         # Extract text from PDF
         try:
             import pdfplumber
+
             with pdfplumber.open(INVOICE_PDF_NVS) as pdf:
                 text = "\n".join(p.extract_text() or "" for p in pdf.pages[:2])
         except Exception:
@@ -574,8 +619,8 @@ class TestRealInvoiceOllamaGemma4:
 
         assert text.strip(), "PDF must have extractable text"
 
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
         from app.ai.parameter_profiles import get_inference_params
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         params = get_inference_params(AITask.INVOICE_OCR)
         req = AIRequest(
@@ -595,8 +640,11 @@ class TestRealInvoiceOllamaGemma4:
         # qwen3.5:9b на большом PDF-тексте может быть медленным — 240s timeout
         from app.ai.providers.ollama import OllamaProvider
         from app.ai.schemas import ProviderConfig, ProviderKind
+
         slow_provider = OllamaProvider(
-            ProviderConfig(kind=ProviderKind.OLLAMA, base_url=self.OLLAMA_URL, timeout_seconds=240.0)
+            ProviderConfig(
+                kind=ProviderKind.OLLAMA, base_url=self.OLLAMA_URL, timeout_seconds=240.0
+            )
         )
         resp = await slow_provider.chat(req, "qwen3.5:9b")
         elapsed = time.perf_counter() - t0
@@ -606,7 +654,9 @@ class TestRealInvoiceOllamaGemma4:
         # Supplier INN 7721739432 — model may return buyer INN 7726314000;
         # assert supplier INN is present in either vendor_inn or any field
         response_text = resp.text or ""
-        assert "7721739432" in response_text, f"Supplier INN 7721739432 must appear in response: {response_text[:200]}"
+        assert "7721739432" in response_text, (
+            f"Supplier INN 7721739432 must appear in response: {response_text[:200]}"
+        )
         total = float(data.get("total", data.get("total_amount", 0)))
         assert 35000 <= total <= 42000, f"Total must be ~38594: {data}"
         print(f"\n  Elapsed: {elapsed:.1f}s | Tokens: {resp.usage.total_tokens}")
@@ -619,13 +669,14 @@ class TestRealInvoiceOllamaGemma4:
 
         try:
             import pdfplumber
+
             with pdfplumber.open(INVOICE_PDF_XOFFMANN) as pdf:
                 text = "\n".join(p.extract_text() or "" for p in pdf.pages[:3])
         except Exception:
             pytest.skip("pdfplumber not available")
 
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
         from app.ai.parameter_profiles import get_inference_params
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         params = get_inference_params(AITask.INVOICE_OCR)
         req = AIRequest(
@@ -641,17 +692,16 @@ class TestRealInvoiceOllamaGemma4:
             metadata={"inference_params": params},
         )
 
-        resp = await ollama_provider.chat(
-            req, assigned_ollama_model(AITask.STRUCTURED_EXTRACTION)
-        )
+        resp = await ollama_provider.chat(req, assigned_ollama_model(AITask.STRUCTURED_EXTRACTION))
         data = _json_from_text(resp.text)
 
         # Xoffmann счёт: ПРЗ2419587. Полное юридическое имя — «Хоффманн Профессиональный Инструмент»
         assert "ПРЗ2419587" in str(data.get("invoice_number", "")), f"Invoice: {data}"
         vendor = str(data.get("vendor", ""))
         # Accept both latin (Hoffmann/Xoffmann) and cyrillic (Хоффманн) transliterations
-        assert any(v in vendor for v in ["Hoffmann", "Xoffmann", "Хоффманн", "HOFFMANN"]), \
+        assert any(v in vendor for v in ["Hoffmann", "Xoffmann", "Хоффманн", "HOFFMANN"]), (
             f"Vendor must contain Hoffmann/Хоффманн: {data}"
+        )
 
 
 @pytest.mark.llamacpp
@@ -676,7 +726,9 @@ class TestRealInvoiceLlamaCpp:
             pytest.skip(f"llama.cpp not reachable at {self.LLAMACPP_URL}")
 
         return OpenAICompatibleProvider(
-            ProviderConfig(kind=ProviderKind.LLAMACPP, base_url=self.LLAMACPP_URL, timeout_seconds=300.0)
+            ProviderConfig(
+                kind=ProviderKind.LLAMACPP, base_url=self.LLAMACPP_URL, timeout_seconds=300.0
+            )
         )
 
     @pytest.mark.asyncio
@@ -687,13 +739,14 @@ class TestRealInvoiceLlamaCpp:
 
         try:
             import pdfplumber
+
             with pdfplumber.open(INVOICE_PDF_NVS) as pdf:
                 text = "\n".join(p.extract_text() or "" for p in pdf.pages[:2])
         except Exception:
             pytest.skip("pdfplumber not available")
 
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
         from app.ai.parameter_profiles import get_inference_params
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         params = get_inference_params(AITask.INVOICE_OCR)
         req = AIRequest(
@@ -721,8 +774,9 @@ class TestRealInvoiceLlamaCpp:
         # Supplier INN: 7721739432 (НВС Компани) — explicitly labeled as "supplier_inn"
         # in the prompt to avoid confusion with buyer INN 7726314000 (АО ПТС).
         supplier_inn = str(data.get("supplier_inn", data.get("vendor_inn", "")))
-        assert "7721739432" in supplier_inn, \
+        assert "7721739432" in supplier_inn, (
             f"Supplier INN 7721739432 not found: {data} (full response: {(resp.text or '')[:150]})"
+        )
         total = float(data.get("total", data.get("total_amount", 0)))
         assert 35000 <= total <= 42000, f"Total must be ~38594: {data}"
 
@@ -731,8 +785,8 @@ class TestRealInvoiceLlamaCpp:
     @pytest.mark.asyncio
     async def test_llamacpp_temperature_respected(self, llamacpp_provider):
         """llamacpp must respect temperature=0.0 from anti_hallucination profile."""
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
         from app.ai.parameter_profiles import get_inference_params
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         results = []
         params = get_inference_params(AITask.INVOICE_OCR)
@@ -742,7 +796,9 @@ class TestRealInvoiceLlamaCpp:
             req = AIRequest(
                 task=AITask.INVOICE_OCR,
                 messages=[
-                    ChatMessage(role="user", content="Сумма 25884. Ответь только числом: сколько рублей?"),
+                    ChatMessage(
+                        role="user", content="Сумма 25884. Ответь только числом: сколько рублей?"
+                    ),
                 ],
                 metadata={"inference_params": params},
             )
@@ -766,7 +822,9 @@ class TestAgentQueries:
         from app.ai.schemas import ProviderConfig, ProviderKind
 
         return OllamaProvider(
-            ProviderConfig(kind=ProviderKind.OLLAMA, base_url=self.OLLAMA_URL, timeout_seconds=180.0)
+            ProviderConfig(
+                kind=ProviderKind.OLLAMA, base_url=self.OLLAMA_URL, timeout_seconds=180.0
+            )
         )
 
     AGENT_SYSTEM = (
@@ -777,9 +835,9 @@ class TestAgentQueries:
     @pytest.mark.asyncio
     async def test_orchestrator_planning_temp(self, ollama_provider):
         """Orchestrator planning uses temperature=0.15 (structured_reasoning profile)."""
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
         from app.ai.parameter_profiles import get_inference_params
         from app.ai.providers.ollama import _inference_options
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         params = get_inference_params(AITask.ORCHESTRATOR_PLANNING)
         assert params["temperature"] == 0.15, f"Orchestrator must use temp=0.15: {params}"
@@ -788,7 +846,10 @@ class TestAgentQueries:
             task=AITask.ORCHESTRATOR_PLANNING,
             messages=[
                 ChatMessage(role="system", content=self.AGENT_SYSTEM),
-                ChatMessage(role="user", content="Пришёл счёт на 784 200 руб. Что проверить перед оплатой? (3 пункта)"),
+                ChatMessage(
+                    role="user",
+                    content="Пришёл счёт на 784 200 руб. Что проверить перед оплатой? (3 пункта)",
+                ),
             ],
             metadata={"inference_params": params},
         )
@@ -796,9 +857,7 @@ class TestAgentQueries:
         opts = _inference_options(req, default_temperature=0.5)
         assert opts["temperature"] == 0.15
 
-        resp = await ollama_provider.chat(
-            req, assigned_ollama_model(AITask.STRUCTURED_EXTRACTION)
-        )
+        resp = await ollama_provider.chat(req, assigned_ollama_model(AITask.STRUCTURED_EXTRACTION))
         assert resp.text and len(resp.text) > 50, "Response must be non-trivial"
         # Must give structured answer with at least one numbered item
         assert any(c in resp.text for c in ["1.", "1)", "•", "-"]), "Must give structured list"
@@ -806,8 +865,8 @@ class TestAgentQueries:
     @pytest.mark.asyncio
     async def test_anomaly_detection_reasoning(self, ollama_provider):
         """Agent must detect price anomaly in invoice data."""
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
         from app.ai.parameter_profiles import get_inference_params
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         params = get_inference_params(AITask.ENGINEERING_REASONING)
 
@@ -828,19 +887,18 @@ class TestAgentQueries:
             metadata={"inference_params": params},
         )
 
-        resp = await ollama_provider.chat(
-            req, assigned_ollama_model(AITask.STRUCTURED_EXTRACTION)
-        )
+        resp = await ollama_provider.chat(req, assigned_ollama_model(AITask.STRUCTURED_EXTRACTION))
         text = (resp.text or "").upper()
         # Price 15 000 ruб/шт is 6-10× above market — must detect anomaly
-        assert "ДА" in text or "АНОМАЛИ" in text or "ЗАВЫШ" in text or "ПРЕВЫШ" in text, \
+        assert "ДА" in text or "АНОМАЛИ" in text or "ЗАВЫШ" in text or "ПРЕВЫШ" in text, (
             f"Must detect price anomaly: {resp.text}"
+        )
 
     @pytest.mark.asyncio
     async def test_email_drafting_creative(self, ollama_provider):
         """Email drafting uses temperature=0.7 and produces varied output."""
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
         from app.ai.parameter_profiles import get_inference_params
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         params = get_inference_params(AITask.EMAIL_DRAFTING)
         assert params["temperature"] == 0.7
@@ -861,22 +919,21 @@ class TestAgentQueries:
                 ],
                 metadata={"inference_params": params},
             )
-            resp = await ollama_provider.chat(
-                req, assigned_ollama_model(AITask.EMAIL_DRAFTING)
-            )
+            resp = await ollama_provider.chat(req, assigned_ollama_model(AITask.EMAIL_DRAFTING))
             results.append((resp.text or "").strip())
 
         # Both responses must mention НВС and поставка
         for r in results:
             assert len(r) > 50, f"Email must be non-empty: {r[:50]}"
-            assert any(kw in r for kw in ["НВС", "поставк", "срок", "фрез", "УТ-1007"]), \
+            assert any(kw in r for kw in ["НВС", "поставк", "срок", "фрез", "УТ-1007"]), (
                 f"Email must mention context: {r[:100]}"
+            )
 
     @pytest.mark.asyncio
     async def test_inn_verification_reasoning(self, ollama_provider):
         """Agent must explain why INN verification matters for invoices."""
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
         from app.ai.parameter_profiles import get_inference_params
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         params = get_inference_params(AITask.ENGINEERING_REASONING)
 
@@ -896,13 +953,14 @@ class TestAgentQueries:
         text = resp.text or ""
         assert len(text) > 50, "Response must be substantive"
         # Must mention tax or legal risks
-        assert any(kw in text.lower() for kw in ["ндс", "налог", "фнс", "риск", "мошен", "фиктив"]), \
-            f"Must mention tax/legal risks: {text[:200]}"
+        assert any(
+            kw in text.lower() for kw in ["ндс", "налог", "фнс", "риск", "мошен", "фиктив"]
+        ), f"Must mention tax/legal risks: {text[:200]}"
 
     @pytest.mark.asyncio
     async def test_semantic_search_embedding_quality(self, ollama_provider):
         """Embeddings from Ollama must have correct dimensionality."""
-        from app.ai.schemas import AIRequest, AITask, ProviderConfig, ProviderKind
+        from app.ai.schemas import AIRequest, AITask
 
         req = AIRequest(
             task=AITask.EMBEDDING,
@@ -911,7 +969,9 @@ class TestAgentQueries:
         resp = await ollama_provider.embedding(req, "qwen3-embedding:8b")
 
         assert resp.embedding is not None, "Embedding must not be None"
-        assert len(resp.embedding) == 4096, f"qwen3-embedding:8b must produce 4096-dim, got {len(resp.embedding)}"
+        assert len(resp.embedding) == 4096, (
+            f"qwen3-embedding:8b must produce 4096-dim, got {len(resp.embedding)}"
+        )
         # Embedding must be normalized (L2 ≈ 1.0)
         l2 = sum(x * x for x in resp.embedding) ** 0.5
         assert 0.95 <= l2 <= 1.05, f"Embedding must be normalized, L2={l2:.3f}"
@@ -938,6 +998,7 @@ class TestProviderComparison:
             pytest.skip(f"Invoice file not found: {INVOICE_PDF_NVS}")
         try:
             import pdfplumber
+
             with pdfplumber.open(INVOICE_PDF_NVS) as pdf:
                 return "\n".join(p.extract_text() or "" for p in pdf.pages[:2])
         except Exception:
@@ -946,11 +1007,13 @@ class TestProviderComparison:
     @pytest.mark.asyncio
     async def test_ollama_assigned_models_accuracy(self, nvs_text):
         """Both Ollama models must correctly extract the key fields from NVS invoice."""
+        from app.ai.parameter_profiles import get_inference_params
         from app.ai.providers.ollama import OllamaProvider
         from app.ai.schemas import AIRequest, AITask, ChatMessage, ProviderConfig, ProviderKind
-        from app.ai.parameter_profiles import get_inference_params
 
-        config = ProviderConfig(kind=ProviderKind.OLLAMA, base_url=self.OLLAMA_URL, timeout_seconds=300.0)
+        config = ProviderConfig(
+            kind=ProviderKind.OLLAMA, base_url=self.OLLAMA_URL, timeout_seconds=300.0
+        )
         provider = OllamaProvider(config)
         params = get_inference_params(AITask.INVOICE_OCR)
         prompt_suffix = '{"invoice_number":"","vendor_inn":"","total_amount":0}'
@@ -964,7 +1027,9 @@ class TestProviderComparison:
                 task=AITask.INVOICE_OCR,
                 messages=[
                     ChatMessage(role="system", content="Extract invoice fields. Reply JSON only."),
-                    ChatMessage(role="user", content=f"Invoice:\n{nvs_text[:2500]}\n\n{prompt_suffix}"),
+                    ChatMessage(
+                        role="user", content=f"Invoice:\n{nvs_text[:2500]}\n\n{prompt_suffix}"
+                    ),
                 ],
                 metadata={"inference_params": params},
             )
@@ -981,22 +1046,24 @@ class TestProviderComparison:
 
         for model, r in results.items():
             data = r["data"]
-            response_text = r.get("response_text", "")
             gt = self.NVS_GROUND_TRUTH
 
             # Invoice number must be correct
-            assert gt["invoice_number"] in str(data.get("invoice_number", "")), \
+            assert gt["invoice_number"] in str(data.get("invoice_number", "")), (
                 f"{model}: wrong invoice_number: {data}"
+            )
 
             # Supplier INN 7721739432 must appear somewhere in the response
             # (model may put it in vendor_inn or confuse with buyer INN 7726314000)
             raw_text = r.get("response_text", str(data))
-            assert gt["vendor_inn"] in str(data.get("vendor_inn", raw_text)), \
+            assert gt["vendor_inn"] in str(data.get("vendor_inn", raw_text)), (
                 f"{model}: supplier INN {gt['vendor_inn']} not found in: {data}"
+            )
 
             total = float(data.get("total_amount", data.get("total", 0)))
-            assert abs(total - gt["total_amount"]) < 1.0, \
+            assert abs(total - gt["total_amount"]) < 1.0, (
                 f"{model}: wrong total: {total} (expected {gt['total_amount']})"
+            )
             print(f"\n  {model}: {r['elapsed']:.1f}s | {r['tokens']}tok | {data}")
 
 
@@ -1063,13 +1130,14 @@ class TestRealInvoiceVLLM:
 
         try:
             import pdfplumber
+
             with pdfplumber.open(INVOICE_PDF_NVS) as pdf:
                 text = "\n".join(p.extract_text() or "" for p in pdf.pages[:2])
         except Exception:
             pytest.skip("pdfplumber not available")
 
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
         from app.ai.parameter_profiles import get_inference_params
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         params = get_inference_params(AITask.INVOICE_OCR)
         req = AIRequest(
@@ -1128,7 +1196,9 @@ class TestRealInvoiceVLLM:
         from app.ai.ollama_client import generate_json
 
         # Long prompt to stress-test the cap
-        long_text = "Счёт-фактура. " + "Позиция инструмента, артикул, единица, количество, цена. " * 80
+        long_text = (
+            "Счёт-фактура. " + "Позиция инструмента, артикул, единица, количество, цена. " * 80
+        )
         result = await generate_json(
             prompt=f"Данные:\n{long_text}\n\nИзвлеки invoice_number и total_amount в JSON.",
             model=self.MODEL,
@@ -1143,8 +1213,8 @@ class TestRealInvoiceVLLM:
     @pytest.mark.asyncio
     async def test_vllm_determinism_temperature_zero(self, vllm_provider):
         """vLLM at temperature=0.0 must produce identical responses."""
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
         from app.ai.parameter_profiles import get_inference_params
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         params = get_inference_params(AITask.INVOICE_OCR)
         assert params["temperature"] == 0.0
@@ -1178,7 +1248,7 @@ class TestRealInvoiceVLLM:
             messages=[
                 ChatMessage(
                     role="user",
-                    content="Classify this Russian text: СЧЁТ №276. Reply JSON: {\"type\": \"invoice\"}",
+                    content='Classify this Russian text: СЧЁТ №276. Reply JSON: {"type": "invoice"}',
                 ),
             ],
             metadata={"inference_params": {"temperature": 0.0}},
@@ -1206,12 +1276,13 @@ class TestRealInvoiceVLLM:
 
         try:
             import pdfplumber
+
             with pdfplumber.open(INVOICE_PDF_NVS) as pdf:
                 text = "\n".join(p.extract_text() or "" for p in pdf.pages[:1])
         except Exception:
             pytest.skip("pdfplumber not available")
 
-        prompt = f"Document:\n{text[:2000]}\n\nReply JSON: {{\"invoice_number\": \"\", \"total\": 0}}"
+        prompt = f'Document:\n{text[:2000]}\n\nReply JSON: {{"invoice_number": "", "total": 0}}'
 
         # vLLM timing
         req = AIRequest(
@@ -1237,7 +1308,9 @@ class TestRealInvoiceVLLM:
             pytest.skip("Ollama not available for comparison")
 
         print(f"\n  vLLM Qwen2.5-1.5B:  {vllm_elapsed:.1f}s | {vllm_resp.usage.total_tokens}tok")
-        print(f"  Ollama {ollama_model}: {ollama_elapsed:.1f}s | {ollama_resp.usage.total_tokens}tok")
+        print(
+            f"  Ollama {ollama_model}: {ollama_elapsed:.1f}s | {ollama_resp.usage.total_tokens}tok"
+        )
         print(f"  Speed ratio: {ollama_elapsed / vllm_elapsed:.1f}× (vLLM faster)")
 
         # Both should succeed
@@ -1266,7 +1339,9 @@ class TestVLLMGPUBudgetIntegration:
         if gpu is not None:
             assert gpu.total_gb > 0, "GPU total VRAM must be positive"
             assert gpu.used_gb >= 0, "GPU used VRAM must be non-negative"
-            print(f"\n  GPU: {gpu.used_gb:.1f}/{gpu.total_gb:.1f} GB | driver: {gpu.driver_version}")
+            print(
+                f"\n  GPU: {gpu.used_gb:.1f}/{gpu.total_gb:.1f} GB | driver: {gpu.driver_version}"
+            )
         else:
             print("\n  GPU stats: not available (nvidia-smi not accessible from backend)")
 

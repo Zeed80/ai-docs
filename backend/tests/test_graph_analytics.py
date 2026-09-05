@@ -32,9 +32,9 @@ def _mem_redis_settings(monkeypatch):
 @pytest.fixture(autouse=True)
 async def _clean_graph_tables(db_session: AsyncSession):
     yield
-    await db_session.execute(delete(MemoryFact).where(MemoryFact.kind.in_(
-        ["graph_insight", "graph_analytics_state"]
-    )))
+    await db_session.execute(
+        delete(MemoryFact).where(MemoryFact.kind.in_(["graph_insight", "graph_analytics_state"]))
+    )
     await db_session.execute(delete(KnowledgeEdge))
     await db_session.execute(delete(KnowledgeNode))
     await db_session.commit()
@@ -42,8 +42,11 @@ async def _clean_graph_tables(db_session: AsyncSession):
 
 async def _seed_supplier_invoice_graph(db: AsyncSession) -> None:
     supplier = KnowledgeNode(
-        node_type="supplier", entity_type="supplier", title="ООО Ромашка",
-        confidence=1.0, created_by="system",
+        node_type="supplier",
+        entity_type="supplier",
+        title="ООО Ромашка",
+        confidence=1.0,
+        created_by="system",
     )
     db.add(supplier)
     await db.flush()
@@ -51,30 +54,46 @@ async def _seed_supplier_invoice_graph(db: AsyncSession) -> None:
     invoices = []
     for i in range(3):
         inv = KnowledgeNode(
-            node_type="invoice", entity_type="invoice", title=f"Счёт №{i}",
-            confidence=1.0, created_by="system",
+            node_type="invoice",
+            entity_type="invoice",
+            title=f"Счёт №{i}",
+            confidence=1.0,
+            created_by="system",
         )
         db.add(inv)
         invoices.append(inv)
     await db.flush()
 
     for inv in invoices:
-        db.add(KnowledgeEdge(
-            source_node_id=supplier.id, target_node_id=inv.id,
-            edge_type="has_invoice", confidence=1.0, created_by="system",
-        ))
+        db.add(
+            KnowledgeEdge(
+                source_node_id=supplier.id,
+                target_node_id=inv.id,
+                edge_type="has_invoice",
+                confidence=1.0,
+                created_by="system",
+            )
+        )
 
     # One cross-domain edge (rare) to exercise the "surprising connection" path.
     machine = KnowledgeNode(
-        node_type="machine", entity_type="machine", title="Токарный станок",
-        confidence=1.0, created_by="system",
+        node_type="machine",
+        entity_type="machine",
+        title="Токарный станок",
+        confidence=1.0,
+        created_by="system",
     )
     db.add(machine)
     await db.flush()
-    db.add(KnowledgeEdge(
-        source_node_id=invoices[0].id, target_node_id=machine.id,
-        edge_type="uses_machine", confidence=1.0, created_by="system",
-    ))
+    db.add(
+        KnowledgeEdge(
+            source_node_id=invoices[0].id,
+            target_node_id=machine.id,
+            edge_type="uses_machine",
+            confidence=1.0,
+            created_by="system",
+        )
+    )
     await db.commit()
 
 
@@ -91,12 +110,18 @@ async def test_run_graph_analytics_computes_god_nodes_and_stores_facts(db_sessio
     # supplier (degree 3) and invoice #0 (degree 2: supplier + machine) qualify.
     assert result["god_nodes"] == 2
 
-    facts = (await db_session.execute(
-        select(MemoryFact).where(MemoryFact.kind == "graph_insight")
-    )).scalars().all()
+    facts = (
+        (await db_session.execute(select(MemoryFact).where(MemoryFact.kind == "graph_insight")))
+        .scalars()
+        .all()
+    )
     titles = [f.title for f in facts]
     assert "Самые связанные узлы графа памяти" in titles
-    assert any("ромашка" in f.summary.lower() for f in facts if f.title == "Самые связанные узлы графа памяти")
+    assert any(
+        "ромашка" in f.summary.lower()
+        for f in facts
+        if f.title == "Самые связанные узлы графа памяти"
+    )
 
 
 @pytest.mark.asyncio
@@ -159,28 +184,41 @@ async def test_run_graph_analytics_replaces_stale_insights_on_rerun(db_session: 
     # Add another supplier+invoice to change the graph, then force a rerun —
     # old graph_insight rows must be replaced, not accumulated.
     supplier2 = KnowledgeNode(
-        node_type="supplier", entity_type="supplier", title="ЗАО Лютик",
-        confidence=1.0, created_by="system",
+        node_type="supplier",
+        entity_type="supplier",
+        title="ЗАО Лютик",
+        confidence=1.0,
+        created_by="system",
     )
     db_session.add(supplier2)
     await db_session.flush()
     inv2 = KnowledgeNode(
-        node_type="invoice", entity_type="invoice", title="Счёт №99",
-        confidence=1.0, created_by="system",
+        node_type="invoice",
+        entity_type="invoice",
+        title="Счёт №99",
+        confidence=1.0,
+        created_by="system",
     )
     db_session.add(inv2)
     await db_session.flush()
-    db_session.add(KnowledgeEdge(
-        source_node_id=supplier2.id, target_node_id=inv2.id,
-        edge_type="has_invoice", confidence=1.0, created_by="system",
-    ))
+    db_session.add(
+        KnowledgeEdge(
+            source_node_id=supplier2.id,
+            target_node_id=inv2.id,
+            edge_type="has_invoice",
+            confidence=1.0,
+            created_by="system",
+        )
+    )
     await db_session.commit()
 
     await run_graph_analytics_async(db_session, force=True)
     await db_session.commit()
 
-    facts = (await db_session.execute(
-        select(MemoryFact).where(MemoryFact.kind == "graph_insight")
-    )).scalars().all()
+    facts = (
+        (await db_session.execute(select(MemoryFact).where(MemoryFact.kind == "graph_insight")))
+        .scalars()
+        .all()
+    )
     god_node_facts = [f for f in facts if f.title == "Самые связанные узлы графа памяти"]
     assert len(god_node_facts) == 1  # not duplicated across runs

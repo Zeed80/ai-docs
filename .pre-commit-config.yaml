@@ -1,6 +1,8 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.0
+    # Версия обязана совпадать с ruff из backend[dev]: у 0.9 и 0.16 разные
+    # наборы правил, и хук отвергал бы то, что локальный ruff считает чистым.
+    rev: v0.16.6
     hooks:
       - id: ruff
         args: [--fix]

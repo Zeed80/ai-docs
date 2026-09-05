@@ -19,7 +19,6 @@ from app.api.providers_api import (
     _cloud_overrides,
 )
 
-
 # ── Совместимость со старой формой ───────────────────────────────────────────
 
 

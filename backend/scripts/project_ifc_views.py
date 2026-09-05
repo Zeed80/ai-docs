@@ -29,12 +29,17 @@ def main() -> int:
     payload = project_ifc(args.source)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, ensure_ascii=False))
-    print(json.dumps({
-        "schema": payload["ifc_schema"],
-        "elements": len(payload["elements"]),
-        "geometry_failures": len(payload["geometry_failures"]),
-        "view_segments": {key: len(value) for key, value in payload["views"].items()},
-    }, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "schema": payload["ifc_schema"],
+                "elements": len(payload["elements"]),
+                "geometry_failures": len(payload["geometry_failures"]),
+                "view_segments": {key: len(value) for key, value in payload["views"].items()},
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0 if payload["elements"] else 1
 
 

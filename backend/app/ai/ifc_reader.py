@@ -61,12 +61,14 @@ def _edge_indices(geometry: Any) -> set[tuple[int, int]]:
         return edges
     faces = list(getattr(geometry, "faces", ()) or ())
     for index in range(0, len(faces) - 2, 3):
-        triangle = [int(value) for value in faces[index:index + 3]]
-        edges.update({
-            tuple(sorted((triangle[0], triangle[1]))),
-            tuple(sorted((triangle[1], triangle[2]))),
-            tuple(sorted((triangle[2], triangle[0]))),
-        })
+        triangle = [int(value) for value in faces[index : index + 3]]
+        edges.update(
+            {
+                tuple(sorted((triangle[0], triangle[1]))),
+                tuple(sorted((triangle[1], triangle[2]))),
+                tuple(sorted((triangle[2], triangle[0]))),
+            }
+        )
     return edges
 
 
@@ -103,7 +105,7 @@ def _drawing_edges(
 
     edge_normals: dict[tuple[int, int], list[tuple[float, float, float]]] = defaultdict(list)
     for index in range(0, len(faces) - 2, 3):
-        triangle = tuple(int(value) for value in faces[index:index + 3])
+        triangle = tuple(int(value) for value in faces[index : index + 3])
         normal = _triangle_normal(vertices, triangle)
         if normal is None:
             continue
@@ -138,10 +140,7 @@ def _lerp3(
     right: tuple[float, float, float],
     fraction: float,
 ) -> tuple[float, float, float]:
-    return tuple(
-        left[index] + (right[index] - left[index]) * fraction
-        for index in range(3)
-    )  # type: ignore[return-value]
+    return tuple(left[index] + (right[index] - left[index]) * fraction for index in range(3))  # type: ignore[return-value]
 
 
 def _section_segments(
@@ -156,7 +155,7 @@ def _section_segments(
     segments = []
     seen: set[tuple[float, ...]] = set()
     for index in range(0, len(faces) - 2, 3):
-        triangle = [_vertex(vertices, int(value)) for value in faces[index:index + 3]]
+        triangle = [_vertex(vertices, int(value)) for value in faces[index : index + 3]]
         intersections: list[tuple[float, float, float]] = []
         triangle_edges = (
             (triangle[0], triangle[1]),
@@ -176,7 +175,7 @@ def _section_segments(
             if -tolerance <= fraction <= 1 + tolerance:
                 point = _lerp3(start, end, min(1.0, max(0.0, fraction)))
                 if not any(
-                    sum((point[axis] - other[axis]) ** 2 for axis in range(3)) <= tolerance ** 2
+                    sum((point[axis] - other[axis]) ** 2 for axis in range(3)) <= tolerance**2
                     for other in intersections
                 ):
                     intersections.append(point)
@@ -199,10 +198,10 @@ def _section_segments(
                 shared = None
                 for left_point in (left_start, left_end):
                     for right_point in (right_start, right_end):
-                        if sum(
-                            (left_point[axis] - right_point[axis]) ** 2
-                            for axis in range(3)
-                        ) <= tolerance ** 2:
+                        if (
+                            sum((left_point[axis] - right_point[axis]) ** 2 for axis in range(3))
+                            <= tolerance**2
+                        ):
                             shared = (left_point, right_point)
                             break
                     if shared:
@@ -245,11 +244,13 @@ def _visible_edge_parts(
         right_fraction = (index + 1) / samples
         midpoint = _lerp3(start, end, (left_fraction + right_fraction) / 2)
         visibility = "visible" if visible_at(midpoint, start, end) else "hidden"
-        parts.append((
-            _lerp3(start, end, left_fraction),
-            _lerp3(start, end, right_fraction),
-            visibility,
-        ))
+        parts.append(
+            (
+                _lerp3(start, end, left_fraction),
+                _lerp3(start, end, right_fraction),
+                visibility,
+            )
+        )
     merged = []
     for start_part, end_part, visibility in parts:
         if merged and merged[-1][2] == visibility:
@@ -278,7 +279,7 @@ def _build_depth_buffer(
     depth = np.full((resolution, resolution), -np.inf, dtype=np.float32)
     for _, vertices, faces, _, _, _ in meshes:
         for index in range(0, len(faces) - 2, 3):
-            triangle = [_vertex(vertices, int(value)) for value in faces[index:index + 3]]
+            triangle = [_vertex(vertices, int(value)) for value in faces[index : index + 3]]
             pixel = [
                 (
                     1 + (point[axes[0]] - u_min) * u_scale,
@@ -293,35 +294,31 @@ def _build_depth_buffer(
             if x1 < x0 or y1 < y0:
                 continue
             px0, px1, px2 = pixel
-            denominator = (
-                (px1[1] - px2[1]) * (px0[0] - px2[0])
-                + (px2[0] - px1[0]) * (px0[1] - px2[1])
+            denominator = (px1[1] - px2[1]) * (px0[0] - px2[0]) + (px2[0] - px1[0]) * (
+                px0[1] - px2[1]
             )
             if abs(denominator) <= 1e-9:
                 continue
-            grid_y, grid_x = np.mgrid[y0:y1 + 1, x0:x1 + 1]
+            grid_y, grid_x = np.mgrid[y0 : y1 + 1, x0 : x1 + 1]
             weight0 = (
-                (px1[1] - px2[1]) * (grid_x - px2[0])
-                + (px2[0] - px1[0]) * (grid_y - px2[1])
+                (px1[1] - px2[1]) * (grid_x - px2[0]) + (px2[0] - px1[0]) * (grid_y - px2[1])
             ) / denominator
             weight1 = (
-                (px2[1] - px0[1]) * (grid_x - px2[0])
-                + (px0[0] - px2[0]) * (grid_y - px2[1])
+                (px2[1] - px0[1]) * (grid_x - px2[0]) + (px0[0] - px2[0]) * (grid_y - px2[1])
             ) / denominator
             weight2 = 1.0 - weight0 - weight1
             inside = (weight0 >= -1e-5) & (weight1 >= -1e-5) & (weight2 >= -1e-5)
             if not inside.any():
                 continue
             triangle_depth = [
-                sum(point[axis] * direction[axis] for axis in range(3))
-                for point in triangle
+                sum(point[axis] * direction[axis] for axis in range(3)) for point in triangle
             ]
             values = (
                 weight0 * triangle_depth[0]
                 + weight1 * triangle_depth[1]
                 + weight2 * triangle_depth[2]
             )
-            target = depth[y0:y1 + 1, x0:x1 + 1]
+            target = depth[y0 : y1 + 1, x0 : x1 + 1]
             target[inside] = np.maximum(target[inside], values[inside])
     return {
         "depth": depth,
@@ -355,9 +352,7 @@ def _depth_visible(
     if length <= 1e-9:
         return False
     perpendicular = (-edge_y / length * 2.0, edge_x / length * 2.0)
-    point_depth = sum(
-        point[axis] * buffer["direction"][axis] for axis in range(3)
-    )
+    point_depth = sum(point[axis] * buffer["direction"][axis] for axis in range(3))
     for sign in (-1, 1):
         px = int(round(x + sign * perpendicular[0]))
         py = int(round(y + sign * perpendicular[1]))
@@ -403,27 +398,32 @@ def project_ifc(path: pathlib.Path) -> dict[str, Any]:
             if not vertices or not faces:
                 raise ValueError("empty tessellation")
         except Exception as exc:  # noqa: BLE001
-            failures.append({
-                "guid": guid,
-                "ifc_class": product.is_a(),
-                "error": f"{type(exc).__name__}:{exc}",
-            })
+            failures.append(
+                {
+                    "guid": guid,
+                    "ifc_class": product.is_a(),
+                    "error": f"{type(exc).__name__}:{exc}",
+                }
+            )
             continue
         container = ifcopenshell.util.element.get_container(product)
         storey = ifcopenshell.util.element.get_container(product, ifc_class="IfcBuildingStorey")
         storey_elevation_m = (
             float(ifcopenshell.util.placement.get_storey_elevation(storey)) * unit_scale
-            if storey is not None else None
+            if storey is not None
+            else None
         )
-        elements.append({
-            "guid": guid,
-            "ifc_class": product.is_a(),
-            "name": str(getattr(product, "Name", "") or ""),
-            "container_guid": str(getattr(container, "GlobalId", "") or ""),
-            "storey_guid": str(getattr(storey, "GlobalId", "") or ""),
-            "storey_elevation_m": storey_elevation_m,
-            "triangle_count": len(faces) // 3,
-        })
+        elements.append(
+            {
+                "guid": guid,
+                "ifc_class": product.is_a(),
+                "name": str(getattr(product, "Name", "") or ""),
+                "container_guid": str(getattr(container, "GlobalId", "") or ""),
+                "storey_guid": str(getattr(storey, "GlobalId", "") or ""),
+                "storey_elevation_m": storey_elevation_m,
+                "triangle_count": len(faces) // 3,
+            }
+        )
         meshes.append((product, vertices, faces, container, storey, storey_elevation_m))
 
     all_vertices = [
@@ -441,9 +441,7 @@ def project_ifc(path: pathlib.Path) -> dict[str, Any]:
         diagonal = 1.0
     visibility_tolerance = max(1e-5, diagonal * 1e-6)
     depth_buffers = {
-        view_name: _build_depth_buffer(
-            meshes, view["axes"], view["direction"], bounds
-        )
+        view_name: _build_depth_buffer(meshes, view["axes"], view["direction"], bounds)
         for view_name, view in VIEWS.items()
     }
     for product, vertices, faces, container, storey, storey_elevation in meshes:
@@ -454,13 +452,16 @@ def project_ifc(path: pathlib.Path) -> dict[str, Any]:
             seen: set[tuple[float, ...]] = set()
             for (left, right), edge_kind in edges.items():
                 start, end = _vertex(vertices, left), _vertex(vertices, right)
-                visibility_test = lambda point, edge_start, edge_end: _depth_visible(
-                    depth_buffers[view_name],
-                    point,
-                    edge_start,
-                    edge_end,
-                    visibility_tolerance,
-                )
+
+                def visibility_test(point, edge_start, edge_end):
+                    return _depth_visible(
+                        depth_buffers[view_name],
+                        point,
+                        edge_start,
+                        edge_end,
+                        visibility_tolerance,
+                    )
+
                 for visible_start, visible_end, visibility in _visible_edge_parts(
                     start,
                     end,
@@ -475,30 +476,34 @@ def project_ifc(path: pathlib.Path) -> dict[str, Any]:
                     if key in seen:
                         continue
                     seen.add(key)
-                    views[view_name].append({
-                        "type": "segment",
-                        "p1": p1,
-                        "p2": p2,
-                        "element_guid": guid,
-                        "ifc_class": product.is_a(),
-                        "edge_kind": edge_kind,
-                        "visibility": visibility,
-                    })
+                    views[view_name].append(
+                        {
+                            "type": "segment",
+                            "p1": p1,
+                            "p2": p2,
+                            "element_guid": guid,
+                            "ifc_class": product.is_a(),
+                            "edge_kind": edge_kind,
+                            "visibility": visibility,
+                        }
+                    )
 
         if storey is not None and storey_elevation is not None:
             section_elevation = storey_elevation + SECTION_HEIGHT_M
             for start, end in _section_segments(vertices, faces, section_elevation):
-                views["plan_section"].append({
-                    "type": "segment",
-                    "p1": [round(start[0], 6), round(start[1], 6)],
-                    "p2": [round(end[0], 6), round(end[1], 6)],
-                    "element_guid": guid,
-                    "ifc_class": product.is_a(),
-                    "edge_kind": "section",
-                    "visibility": "visible",
-                    "section_plane": round(section_elevation, 6),
-                    "storey_guid": str(getattr(storey, "GlobalId", "") or ""),
-                })
+                views["plan_section"].append(
+                    {
+                        "type": "segment",
+                        "p1": [round(start[0], 6), round(start[1], 6)],
+                        "p2": [round(end[0], 6), round(end[1], 6)],
+                        "element_guid": guid,
+                        "ifc_class": product.is_a(),
+                        "edge_kind": "section",
+                        "visibility": "visible",
+                        "section_plane": round(section_elevation, 6),
+                        "storey_guid": str(getattr(storey, "GlobalId", "") or ""),
+                    }
+                )
     return {
         "schema_version": 2,
         "source": str(path),
@@ -591,9 +596,13 @@ def ifc_to_construction_model(
     for storey in model_file.by_type("IfcBuildingStorey"):
         sid = str(storey.GlobalId)
         elevation = ifcopenshell.util.placement.get_storey_elevation(storey) or 0.0
-        storeys.append(ConstructionStorey(
-            id=sid, name=str(storey.Name or sid), elevation_mm=storey_elevation_to_mm(elevation),
-        ))
+        storeys.append(
+            ConstructionStorey(
+                id=sid,
+                name=str(storey.Name or sid),
+                elevation_mm=storey_elevation_to_mm(elevation),
+            )
+        )
         storey_ids[storey.id()] = sid
 
     def resolve_storey(product: Any) -> Any:
@@ -638,15 +647,21 @@ def ifc_to_construction_model(
             if not vertices:
                 raise ValueError("empty tessellation")
         except Exception as exc:  # noqa: BLE001
-            skipped.append({
-                "guid": guid, "ifc_class": product.is_a(),
-                "reason": "geometry_failed", "detail": f"{type(exc).__name__}:{exc}",
-            })
+            skipped.append(
+                {
+                    "guid": guid,
+                    "ifc_class": product.is_a(),
+                    "reason": "geometry_failed",
+                    "detail": f"{type(exc).__name__}:{exc}",
+                }
+            )
             continue
 
         xs, ys, zs = vertices[0::3], vertices[1::3], vertices[2::3]
         box = ConstructionBox(
-            x_mm=geom_to_mm(min(xs)), y_mm=geom_to_mm(min(ys)), z_mm=geom_to_mm(min(zs)),
+            x_mm=geom_to_mm(min(xs)),
+            y_mm=geom_to_mm(min(ys)),
+            z_mm=geom_to_mm(min(zs)),
             width_mm=max(geom_to_mm(max(xs) - min(xs)), 1e-6),
             depth_mm=max(geom_to_mm(max(ys) - min(ys)), 1e-6),
             height_mm=max(geom_to_mm(max(zs) - min(zs)), 1e-6),
@@ -666,10 +681,14 @@ def ifc_to_construction_model(
                 opening = fills_opening.get(product.id())
                 host = opening_host.get(opening.id()) if opening is not None else None
             if host is None:
-                skipped.append({
-                    "guid": guid, "ifc_class": product.is_a(), "reason": "no_host",
-                    "detail": "no host wall/slab via IfcRelVoidsElement/IfcRelFillsElement",
-                })
+                skipped.append(
+                    {
+                        "guid": guid,
+                        "ifc_class": product.is_a(),
+                        "reason": "no_host",
+                        "detail": "no host wall/slab via IfcRelVoidsElement/IfcRelFillsElement",
+                    }
+                )
                 continue
             host_id = str(host.GlobalId)
 

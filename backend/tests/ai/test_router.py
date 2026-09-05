@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from app.ai.model_registry import ModelRegistry
 from app.ai.providers.base import AIProvider
 from app.ai.router import AIConfidentialityPolicyError, AIRouter
 from app.ai.schemas import (
@@ -9,11 +10,10 @@ from app.ai.schemas import (
     AIResponse,
     AITask,
     ChatMessage,
+    ProposedToolCall,
     ProviderConfig,
     ProviderKind,
-    ProposedToolCall,
 )
-from app.ai.model_registry import ModelRegistry
 
 
 class InvoiceMiniSchema(BaseModel):

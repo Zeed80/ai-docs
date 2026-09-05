@@ -2,16 +2,16 @@
 anomaly.resolve, anomaly.explain"""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import exists, or_, select, func
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.session import get_db
+from app.audit.service import add_timeline_event, log_action
 from app.db.models import (
     AnomalyCard,
     AnomalySeverity,
@@ -19,12 +19,9 @@ from app.db.models import (
     AnomalyType,
     Document,
     Invoice,
-    InvoiceLine,
-    InvoiceStatus,
-    Party,
     SupplierProfile,
-    SupplierRequisiteHistory,
 )
+from app.db.session import get_db
 from app.domain.anomalies import (
     AnomalyCardOut,
     AnomalyCheckRequest,
@@ -33,7 +30,6 @@ from app.domain.anomalies import (
     AnomalyExplainResponse,
     AnomalyResolveRequest,
 )
-from app.audit.service import log_action, add_timeline_event
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -97,6 +93,7 @@ async def check_all_anomalies(
             await db.refresh(a)
         try:
             from app.domain.memory_builder import build_anomaly_memory_async
+
             for a in anomalies:
                 await build_anomaly_memory_async(db, a)
             await db.commit()
@@ -110,6 +107,7 @@ async def check_all_anomalies(
     )
     try:
         from app.core.metrics import anomalies_detected_total
+
         for a in anomalies:
             anomalies_detected_total.labels(anomaly_type=a.anomaly_type.value).inc()
     except Exception:
@@ -129,11 +127,13 @@ async def _detect_duplicate(db: AsyncSession, invoice: Invoice) -> AnomalyCard |
 
     result = await db.execute(
         select(func.count()).select_from(
-            select(Invoice).where(
+            select(Invoice)
+            .where(
                 Invoice.invoice_number == invoice.invoice_number,
                 Invoice.supplier_id == invoice.supplier_id,
                 Invoice.id != invoice.id,
-            ).subquery()
+            )
+            .subquery()
         )
     )
     count = result.scalar() or 0
@@ -157,10 +157,12 @@ async def _detect_new_supplier(db: AsyncSession, invoice: Invoice) -> AnomalyCar
 
     result = await db.execute(
         select(func.count()).select_from(
-            select(Invoice).where(
+            select(Invoice)
+            .where(
                 Invoice.supplier_id == invoice.supplier_id,
                 Invoice.id != invoice.id,
-            ).subquery()
+            )
+            .subquery()
         )
     )
     count = result.scalar() or 0
@@ -265,12 +267,14 @@ async def _detect_price_spike(db: AsyncSession, invoice: Invoice) -> AnomalyCard
         if prev_price and prev_price > 0:
             change_pct = (line.unit_price - prev_price) / prev_price * 100
             if change_pct > threshold_pct:
-                spikes.append({
-                    "item": line.description,
-                    "old_price": prev_price,
-                    "new_price": line.unit_price,
-                    "change_pct": round(change_pct, 1),
-                })
+                spikes.append(
+                    {
+                        "item": line.description,
+                        "old_price": prev_price,
+                        "new_price": line.unit_price,
+                        "change_pct": round(change_pct, 1),
+                    }
+                )
 
     if spikes:
         worst = max(spikes, key=lambda s: s["change_pct"])
@@ -333,6 +337,7 @@ async def create_anomaly(
     await db.refresh(card)
     try:
         from app.domain.memory_builder import build_anomaly_memory_async
+
         await build_anomaly_memory_async(db, card)
         await db.commit()
     except Exception as e:
@@ -362,8 +367,10 @@ async def list_anomalies(
     query = select(AnomalyCard).where(
         # Skip anomalies whose referenced document/invoice no longer exists
         or_(
-            (AnomalyCard.entity_type == "document") & exists().where(Document.id == AnomalyCard.entity_id),
-            (AnomalyCard.entity_type == "invoice") & exists().where(Invoice.id == AnomalyCard.entity_id),
+            (AnomalyCard.entity_type == "document")
+            & exists().where(Document.id == AnomalyCard.entity_id),
+            (AnomalyCard.entity_type == "invoice")
+            & exists().where(Invoice.id == AnomalyCard.entity_id),
             ~AnomalyCard.entity_type.in_(["document", "invoice"]),
         )
     )
@@ -396,8 +403,12 @@ async def bulk_resolve_anomalies(
 ) -> dict:
     """Bulk resolve a list of anomaly cards."""
     if payload.resolution not in ("resolved", "false_positive"):
-        raise HTTPException(status_code=400, detail="resolution must be 'resolved' or 'false_positive'")
-    resolution_status = AnomalyStatus.resolved if payload.resolution == "resolved" else AnomalyStatus.false_positive
+        raise HTTPException(
+            status_code=400, detail="resolution must be 'resolved' or 'false_positive'"
+        )
+    resolution_status = (
+        AnomalyStatus.resolved if payload.resolution == "resolved" else AnomalyStatus.false_positive
+    )
     result = await db.execute(
         select(AnomalyCard).where(
             AnomalyCard.id.in_(payload.ids),
@@ -407,7 +418,7 @@ async def bulk_resolve_anomalies(
     cards = result.scalars().all()
     for card in cards:
         card.status = resolution_status
-        card.resolved_at = datetime.now(timezone.utc)
+        card.resolved_at = datetime.now(UTC)
     await db.commit()
     return {"resolved": len(cards), "ids": [str(c.id) for c in cards]}
 
@@ -422,6 +433,7 @@ async def get_anomaly(
     card = result.scalar_one_or_none()
     if card is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="Anomaly not found")
     return card
 
@@ -436,9 +448,7 @@ async def resolve_anomaly(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: anomaly.resolve — Resolve an anomaly (approval gate)."""
-    result = await db.execute(
-        select(AnomalyCard).where(AnomalyCard.id == anomaly_id)
-    )
+    result = await db.execute(select(AnomalyCard).where(AnomalyCard.id == anomaly_id))
     card = result.scalar_one_or_none()
     if not card:
         raise HTTPException(404, "Anomaly not found")
@@ -451,16 +461,20 @@ async def resolve_anomaly(
         card.status = AnomalyStatus.resolved
 
     card.resolved_by = "user"
-    card.resolved_at = datetime.now(timezone.utc)
+    card.resolved_at = datetime.now(UTC)
     card.resolution_comment = payload.comment
 
     await log_action(
-        db, action="anomaly.resolve", entity_type="anomaly",
+        db,
+        action="anomaly.resolve",
+        entity_type="anomaly",
         entity_id=card.id,
         details={"resolution": payload.resolution, "comment": payload.comment},
     )
     await add_timeline_event(
-        db, entity_type=card.entity_type, entity_id=card.entity_id,
+        db,
+        entity_type=card.entity_type,
+        entity_id=card.entity_id,
         event_type="anomaly_resolved",
         summary=f"Аномалия «{card.title}» — {payload.resolution}",
         actor="user",
@@ -469,6 +483,7 @@ async def resolve_anomaly(
     await db.refresh(card)
     try:
         from app.domain.memory_builder import build_anomaly_memory_async
+
         await build_anomaly_memory_async(db, card)
         await db.commit()
     except Exception as e:
@@ -535,17 +550,18 @@ async def explain_anomaly(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: anomaly.explain — Get human-readable explanation of an anomaly."""
-    result = await db.execute(
-        select(AnomalyCard).where(AnomalyCard.id == anomaly_id)
-    )
+    result = await db.execute(select(AnomalyCard).where(AnomalyCard.id == anomaly_id))
     card = result.scalar_one_or_none()
     if not card:
         raise HTTPException(404, "Anomaly not found")
 
-    info = EXPLAIN_MAP.get(card.anomaly_type.value, {
-        "explanation": card.description or "Неизвестный тип аномалии",
-        "actions": ["Проверить вручную"],
-    })
+    info = EXPLAIN_MAP.get(
+        card.anomaly_type.value,
+        {
+            "explanation": card.description or "Неизвестный тип аномалии",
+            "actions": ["Проверить вручную"],
+        },
+    )
 
     return AnomalyExplainResponse(
         anomaly_id=card.id,

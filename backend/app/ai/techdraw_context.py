@@ -14,9 +14,24 @@ import re
 
 from app.ai import techdraw_reference as tdref
 
-_THREAD_RE = re.compile(r"\bM\s*(\d+(?:[.,]\d+)?)(?:\s*[×xXхХ]\s*(\d+(?:[.,]\d+)?))?", re.IGNORECASE)
+_THREAD_RE = re.compile(
+    r"\bM\s*(\d+(?:[.,]\d+)?)(?:\s*[×xXхХ]\s*(\d+(?:[.,]\d+)?))?", re.IGNORECASE
+)
 _DIM_RE = re.compile(r"(?:ø|⌀|d\s*=?\s*)?(\d+(?:[.,]\d+)?)\s*(?:мм)?", re.IGNORECASE)
-_TOLERANCE_MARKERS = ("допуск", "посадк", "квалитет", "h6", "h7", "h8", "h9", "js6", "k6", "m6", "n6", "p6")
+_TOLERANCE_MARKERS = (
+    "допуск",
+    "посадк",
+    "квалитет",
+    "h6",
+    "h7",
+    "h8",
+    "h9",
+    "js6",
+    "k6",
+    "m6",
+    "n6",
+    "p6",
+)
 
 
 def _material_hint(description: str) -> str | None:
@@ -38,9 +53,7 @@ def _thread_hints(description: str) -> list[str]:
         if not base:
             continue
         fine = ", ".join(f"{p:g}" for p in base.fine_pitches_mm) or "нет"
-        hints.append(
-            f"Резьба M{d:g}: крупный шаг {base.coarse_pitch_mm:g}мм, мелкие шаги: {fine}."
-        )
+        hints.append(f"Резьба M{d:g}: крупный шаг {base.coarse_pitch_mm:g}мм, мелкие шаги: {fine}.")
     return hints
 
 

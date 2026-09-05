@@ -8,9 +8,7 @@ from app.ai import recipes
 
 
 def test_extract_entities_supplier_and_date():
-    entities = recipes.extract_entities(
-        'выведи счета поставщика «Ромашка» с 01.05.2026 в таблицу'
-    )
+    entities = recipes.extract_entities("выведи счета поставщика «Ромашка» с 01.05.2026 в таблицу")
     assert entities.get("supplier_name") == "Ромашка"
     assert entities.get("date_1") == "01.05.2026"
 
@@ -28,13 +26,8 @@ def test_parameterize_steps_replaces_literals_with_slots():
             "args_template": {"action": "publish", "canvas_id": "agent:invoices"},
         },
     ]
-    templated, slots = recipes.parameterize_steps(
-        steps, 'покажи счета поставщика «Ромашка»'
-    )
-    assert (
-        templated[0]["args_template"]["filters"]["supplier_query"]
-        == "{{user.supplier_name}}"
-    )
+    templated, slots = recipes.parameterize_steps(steps, "покажи счета поставщика «Ромашка»")
+    assert templated[0]["args_template"]["filters"]["supplier_query"] == "{{user.supplier_name}}"
     assert "supplier_name" in slots
     assert slots["supplier_name"]["example"] == "Ромашка"
     # Untouched literals survive.
@@ -43,7 +36,7 @@ def test_parameterize_steps_replaces_literals_with_slots():
 
 def test_resolve_slots_roundtrip():
     param_slots = {"supplier_name": {"source": "supplier_name", "example": "Ромашка"}}
-    resolved = recipes.resolve_slots(param_slots, 'счета поставщика «Лютик» в таблицу')
+    resolved = recipes.resolve_slots(param_slots, "счета поставщика «Лютик» в таблицу")
     assert resolved == {"supplier_name": "Лютик"}
     # Unresolvable slot → None (recipe must not replay with missing params).
     assert recipes.resolve_slots(param_slots, "выведи все счета") is None
@@ -87,7 +80,9 @@ def test_image_studio_non_recipeable_contract():
     gates = recipes._gate_actions_map()
     non_recipeable = recipes._non_recipeable_actions_map()
     assert "accept_techdraw" in gates.get("image_studio", set())
-    assert {"generate", "iterate", "accept", "accept_techdraw"} <= non_recipeable.get("image_studio", set())
+    assert {"generate", "iterate", "accept", "accept_techdraw"} <= non_recipeable.get(
+        "image_studio", set()
+    )
 
 
 @pytest.mark.asyncio
@@ -109,16 +104,23 @@ async def test_record_candidate_rejects_non_recipeable_image_studio_step(monkeyp
 def test_sheet_macro_chain_dataflow_sheet_id():
     """A create→patch sheet macro links sheet_id as a step reference (reproducible)."""
     steps = [
-        {"capability": "sheets", "action": "create",
-         "args_template": {"action": "create", "title": "Отчёт"}},
-        {"capability": "sheets", "action": "patch_cells",
-         "args_template": {"action": "patch_cells", "sheet_id": "SID",
-                           "edits": [{"row": 0, "col": "A", "value": 1}]}},
+        {
+            "capability": "sheets",
+            "action": "create",
+            "args_template": {"action": "create", "title": "Отчёт"},
+        },
+        {
+            "capability": "sheets",
+            "action": "patch_cells",
+            "args_template": {
+                "action": "patch_cells",
+                "sheet_id": "SID",
+                "edits": [{"row": 0, "col": "A", "value": 1}],
+            },
+        },
     ]
     step_results = [{"sheet_id": "SID"}, {"status": "patched"}]
-    templated, _slots = recipes.parameterize_steps(
-        steps, "сделай лист отчёта", step_results
-    )
+    templated, _slots = recipes.parameterize_steps(steps, "сделай лист отчёта", step_results)
     # The runtime sheet_id became a data-flow reference, not an orphan literal.
     assert templated[1]["args_template"]["sheet_id"] == "{{step.0.sheet_id}}"
     assert recipes.is_reproducible(templated, "сделай лист отчёта")

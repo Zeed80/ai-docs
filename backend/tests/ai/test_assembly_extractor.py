@@ -18,10 +18,7 @@ from app.ai.assembly_extractor import _detect_balloons, _detect_bom_table, _ocr_
 
 
 def _gearbox_bytes() -> bytes:
-    path = (
-        pathlib.Path(__file__).resolve().parents[3]
-        / "example-drawings" / "gearbox_assembly.png"
-    )
+    path = pathlib.Path(__file__).resolve().parents[3] / "example-drawings" / "gearbox_assembly.png"
     return path.read_bytes()
 
 

@@ -33,8 +33,12 @@ _SHAFT = {
         ],
     },
     "dimensions": [
-        {"value": "Ø80js6"}, {"value": "Ø102"}, {"value": "Ø60"},
-        {"value": "150"}, {"value": "120"}, {"value": "470"},
+        {"value": "Ø80js6"},
+        {"value": "Ø102"},
+        {"value": "Ø60"},
+        {"value": "150"},
+        {"value": "120"},
+        {"value": "470"},
     ],
 }
 _HOLLOW = {
@@ -85,7 +89,7 @@ def test_a_solid_shaft_keeps_its_plain_view():
 
 
 def test_a_view_the_reader_saw_is_reproduced():
-    """"top" was read, validated, and then silently never drawn."""
+    """ "top" was read, validated, and then silently never drawn."""
     spec = {**_SHAFT, "views": [{"kind": "top", "body_index": 0}]}
     assert "top" in [view["kind"] for view in plan_views("solid_rotation", spec)]
 
@@ -93,17 +97,18 @@ def test_a_view_the_reader_saw_is_reproduced():
 def test_read_offset_section_reaches_the_kernel_view_plan():
     spec = {
         **_SHAFT,
-        "views": [{
-            "kind": "section", "view_id": "section-b",
-            "parent_view_id": "main", "label": "Б-Б",
-            "section_origin_mm": 12.0,
-            "section_path_mm": [[0, 0, 0], [20, 0, 0], [20, 10, 0]],
-        }],
+        "views": [
+            {
+                "kind": "section",
+                "view_id": "section-b",
+                "parent_view_id": "main",
+                "label": "Б-Б",
+                "section_origin_mm": 12.0,
+                "section_path_mm": [[0, 0, 0], [20, 0, 0], [20, 10, 0]],
+            }
+        ],
     }
-    section = next(
-        view for view in plan_views("solid_rotation", spec)
-        if view["kind"] == "section"
-    )
+    section = next(view for view in plan_views("solid_rotation", spec) if view["kind"] == "section")
     assert section["label"] == "Б-Б"
     assert section["section_origin_mm"] == 12.0
     assert len(section["section_path_mm"]) == 3
@@ -112,16 +117,19 @@ def test_read_offset_section_reaches_the_kernel_view_plan():
 def test_removed_section_is_built_as_section_with_separate_presentation_kind():
     spec = {
         **_SHAFT,
-        "views": [{
-            "kind": "removed_section", "view_id": "section-v",
-            "parent_view_id": "main", "label": "В-В",
-        }],
+        "views": [
+            {
+                "kind": "removed_section",
+                "view_id": "section-v",
+                "parent_view_id": "main",
+                "label": "В-В",
+            }
+        ],
     }
     plan = plan_sheet(spec, _SHAFT_REPORT)
     coverage = verify_view_coverage(plan, spec)
     removed = next(
-        view for view in plan.views
-        if view.get("presentation_kind") == "removed_section"
+        view for view in plan.views if view.get("presentation_kind") == "removed_section"
     )
     assert removed["kind"] == "section"
     assert removed["label"] == "В-В"
@@ -141,13 +149,17 @@ def test_detail_view_stays_an_explicit_coverage_blocker():
 def test_detail_with_model_crop_is_planned_and_satisfies_coverage():
     spec = {
         **_SHAFT,
-        "views": [{
-            "kind": "detail", "view_id": "d", "label": "А",
-            "parent_view_id": "main",
-            "detail_center_mm": [150.0, 0.0],
-            "detail_radius_mm": 20.0,
-            "detail_scale_factor": 4.0,
-        }],
+        "views": [
+            {
+                "kind": "detail",
+                "view_id": "d",
+                "label": "А",
+                "parent_view_id": "main",
+                "detail_center_mm": [150.0, 0.0],
+                "detail_radius_mm": 20.0,
+                "detail_scale_factor": 4.0,
+            }
+        ],
     }
     plan = plan_sheet(spec, _SHAFT_REPORT)
     detail = next(view for view in plan.views if view["kind"] == "detail")
@@ -177,8 +189,9 @@ def test_a_shaft_with_cross_features_gets_the_end_view_that_shows_them():
     spec = {
         "main_view": {
             **_SHAFT["main_view"],
-            "keyways": [{"axial_start_mm": 20.0, "length_mm": 85.0,
-                         "width_mm": 12.0, "depth_mm": 5.0}],
+            "keyways": [
+                {"axial_start_mm": 20.0, "length_mm": 85.0, "width_mm": 12.0, "depth_mm": 5.0}
+            ],
         }
     }
     assert "side" in [view["kind"] for view in plan_views("solid_rotation", spec)]
@@ -190,11 +203,13 @@ def test_a_shaft_with_axial_holes_gets_the_end_view_that_shows_the_pattern():
     spec = {
         "main_view": {
             **_SHAFT["main_view"],
-            "axial_holes": [{
-                "count": 2,
-                "bolt_circle_diameter_mm": 40,
-                "thread": {"designation": "M8", "nominal_diameter_mm": 8},
-            }],
+            "axial_holes": [
+                {
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 40,
+                    "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+                }
+            ],
         }
     }
     plan = plan_sheet(spec, _SHAFT_REPORT)
@@ -237,13 +252,15 @@ def test_geometry_only_sheet_reopens_as_dxf_without_frame_entities():
 
     plan = plan_sheet(_SHAFT, _SHAFT_REPORT)
     drawing = {
-        "views": [{
-            "kind": "front",
-            "bounds_mm": {"u_min": 0, "u_max": 100, "v_min": -10, "v_max": 10},
-            "visible": [{"type": "line", "points": [[0, 0], [100, 0]]}],
-            "hidden": [],
-            "hatch": [],
-        }],
+        "views": [
+            {
+                "kind": "front",
+                "bounds_mm": {"u_min": 0, "u_max": 100, "v_min": -10, "v_max": 10},
+                "visible": [{"type": "line", "points": [[0, 0], [100, 0]]}],
+                "hidden": [],
+                "hatch": [],
+            }
+        ],
         "dimensions": [],
     }
     ir, _extent = _assemble(drawing, _SHAFT, plan)
@@ -283,11 +300,7 @@ def test_geometry_only_sheet_places_exact_structured_annotations_in_reserved_ban
     assert verify_dxf_roundtrip(ir)["ok"] is True
 
     document = ezdxf.read(io.StringIO(render_ir_to_dxf(ir).decode("utf-8")))
-    dxf_texts = {
-        entity.dxf.text
-        for entity in document.modelspace()
-        if entity.dxftype() == "TEXT"
-    }
+    dxf_texts = {entity.dxf.text for entity in document.modelspace() if entity.dxftype() == "TEXT"}
     assert {"Ra 1,6", "Д", "↗ 0,008 Д"} <= dxf_texts
 
 
@@ -304,11 +317,13 @@ def _view(kind: str, lines: list[tuple[int, float, float, float]], circles=()) -
         "bounds_mm": {"u_min": -94.0, "u_max": 94.0, "v_min": -20.4, "v_max": 20.4},
         "visible": [
             {
-                "type": "line", "edge_index": index,
+                "type": "line",
+                "edge_index": index,
                 "points": [[u0, v], [u1, v]],
             }
             for index, v, u0, u1 in lines
-        ] + [
+        ]
+        + [
             {"type": "circle", "edge_index": index, "center": [0.0, 0.0], "radius": r}
             for index, r in circles
         ],
@@ -320,11 +335,17 @@ def _view(kind: str, lines: list[tuple[int, float, float, float]], circles=()) -
 # Measured off a real 1:2.5 section of the shaft above: each step's two
 # generatrices, mirrored about the axis. Note the upper one comes SECOND for
 # two of the three steps — the case that used to lose those diameters.
-_SECTION = _view("section", [
-    (3, 16.0, -94.0, -34.0), (4, -16.0, -94.0, -34.0),
-    (6, -20.4, -34.0, 46.0), (8, -12.0, 46.0, 94.0),
-    (14, 12.0, 46.0, 94.0), (16, 20.4, -34.0, 46.0),
-])
+_SECTION = _view(
+    "section",
+    [
+        (3, 16.0, -94.0, -34.0),
+        (4, -16.0, -94.0, -34.0),
+        (6, -20.4, -34.0, 46.0),
+        (8, -12.0, 46.0, 94.0),
+        (14, 12.0, 46.0, 94.0),
+        (16, 20.4, -34.0, 46.0),
+    ],
+)
 
 
 def test_every_step_diameter_is_dimensioned_whichever_generatrix_comes_first():
@@ -332,24 +353,24 @@ def test_every_step_diameter_is_dimensioned_whichever_generatrix_comes_first():
     plan.ratio, plan.scaffold_views = 0.4, set()
     requests = _dimension_requests({"views": [_SECTION]}, _SHAFT, plan)
 
-    diameters = sorted(
-        request["_nominal_mm"] for request in requests if request["_is_diameter"]
-    )
+    diameters = sorted(request["_nominal_mm"] for request in requests if request["_is_diameter"])
     assert diameters == [60.0, 80.0, 102.0]
     # A diameter on a longitudinal view is measured between BOTH generatrices.
-    assert all(
-        "second_edge_index" in request
-        for request in requests if request["_is_diameter"]
-    )
+    assert all("second_edge_index" in request for request in requests if request["_is_diameter"])
 
 
 def test_the_bore_is_dimensioned_too():
     plan = plan_sheet(_HOLLOW, _SHAFT_REPORT)
     plan.ratio, plan.scaffold_views = 0.4, set()
-    section = _view("section", [
-        (3, 16.0, -94.0, -34.0), (4, -16.0, -94.0, -34.0),
-        (10, -8.0, -94.0, 94.0), (11, 8.0, -94.0, 94.0),
-    ])
+    section = _view(
+        "section",
+        [
+            (3, 16.0, -94.0, -34.0),
+            (4, -16.0, -94.0, -34.0),
+            (10, -8.0, -94.0, 94.0),
+            (11, 8.0, -94.0, 94.0),
+        ],
+    )
     requests = _dimension_requests({"views": [section]}, _HOLLOW, plan)
     assert 40.0 in [request["_nominal_mm"] for request in requests]
 
@@ -359,15 +380,16 @@ def test_the_dimension_chain_is_left_open():
     the overall length carries it."""
     plan = plan_sheet(_SHAFT, _SHAFT_REPORT)
     plan.ratio, plan.scaffold_views = 0.4, set()
-    lengths_view = _view("front", [
-        (1, 16.0, -94.0, -34.0),   # 150 mm step, at 1:2.5 -> 60 mm
-        (5, 20.4, -34.0, 46.0),    # 200 mm step -> 80 mm (the longest: skipped)
-        (6, 12.0, 46.0, 94.0),     # 120 mm step -> 48 mm
-    ])
-    requests = _dimension_requests({"views": [lengths_view]}, _SHAFT, plan)
-    lengths = sorted(
-        request["_nominal_mm"] for request in requests if not request["_is_diameter"]
+    lengths_view = _view(
+        "front",
+        [
+            (1, 16.0, -94.0, -34.0),  # 150 mm step, at 1:2.5 -> 60 mm
+            (5, 20.4, -34.0, 46.0),  # 200 mm step -> 80 mm (the longest: skipped)
+            (6, 12.0, 46.0, 94.0),  # 120 mm step -> 48 mm
+        ],
     )
+    requests = _dimension_requests({"views": [lengths_view]}, _SHAFT, plan)
+    lengths = sorted(request["_nominal_mm"] for request in requests if not request["_is_diameter"])
     assert 200.0 not in lengths
     assert lengths == [120.0, 150.0]
 
@@ -386,11 +408,14 @@ def test_overall_length_is_requested_only_once_between_end_faces():
     }
     plan = plan_sheet(spec, {"bounds_mm": {"x": 80, "y": 80, "z": 100}})
     plan.ratio, plan.scaffold_views = 1.0, set()
-    view = _view("section", [
-        (1, 15.0, 0.0, 100.0),
-        (2, 0.0, 0.0, 0.0),
-        (3, 0.0, 100.0, 100.0),
-    ])
+    view = _view(
+        "section",
+        [
+            (1, 15.0, 0.0, 100.0),
+            (2, 0.0, 0.0, 0.0),
+            (3, 0.0, 100.0, 100.0),
+        ],
+    )
 
     requests = _dimension_requests({"views": [view]}, spec, plan)
     overall = [request for request in requests if request.get("_is_overall")]

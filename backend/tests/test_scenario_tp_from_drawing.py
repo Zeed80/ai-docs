@@ -7,9 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import yaml
 
-_SCENARIO_PATH = (
-    Path(__file__).parents[2] / "aiagent" / "scenarios" / "tp_from_drawing.yml"
-)
+_SCENARIO_PATH = Path(__file__).parents[2] / "aiagent" / "scenarios" / "tp_from_drawing.yml"
 
 
 def _load_scenario_yaml() -> dict:
@@ -19,6 +17,7 @@ def _load_scenario_yaml() -> dict:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _drawing_result(drawing_id: str, status: str = "analyzed") -> dict:
     return {"drawing_id": drawing_id, "status": status, "features_count": 5}
@@ -70,10 +69,12 @@ def _nc_failed() -> dict:
 
 # ── ScenarioRunner import guard ────────────────────────────────────────────────
 
+
 @pytest.fixture
 def runner_cls():
     try:
         from app.ai.scenario_runner import ScenarioRunner
+
         return ScenarioRunner
     except ImportError:
         pytest.skip("ScenarioRunner not available")
@@ -81,9 +82,11 @@ def runner_cls():
 
 # ── Happy path ────────────────────────────────────────────────────────────────
 
+
 def _scenario_ctx(runner_cls, mock_skill, drawing_id):
     """Context manager: patches both _call_skill and gateway_config.load_scenario."""
     from unittest.mock import patch as _patch
+
     scenario_data = _load_scenario_yaml()
     return (
         _patch("app.ai.scenario_runner._call_skill", mock_skill),
@@ -100,13 +103,15 @@ async def test_happy_path_normcontrol_passed(runner_cls):
     drawing_id = str(uuid.uuid4())
     plan_id = str(uuid.uuid4())
 
-    mock_skill = AsyncMock(return_value={
-        "plan_id": plan_id,
-        "drawing_id": drawing_id,
-        "status": "passed",
-        "errors_count": 0,
-        "operations_count": 5,
-    })
+    mock_skill = AsyncMock(
+        return_value={
+            "plan_id": plan_id,
+            "drawing_id": drawing_id,
+            "status": "passed",
+            "errors_count": 0,
+            "operations_count": 5,
+        }
+    )
 
     scenario_data = _load_scenario_yaml()
 
@@ -130,12 +135,14 @@ async def test_normcontrol_failure_does_not_approve(runner_cls):
     drawing_id = str(uuid.uuid4())
     plan_id = str(uuid.uuid4())
 
-    mock_skill = AsyncMock(return_value={
-        "plan_id": plan_id,
-        "drawing_id": drawing_id,
-        "status": "failed",
-        "errors_count": 1,
-    })
+    mock_skill = AsyncMock(
+        return_value={
+            "plan_id": plan_id,
+            "drawing_id": drawing_id,
+            "status": "failed",
+            "errors_count": 1,
+        }
+    )
 
     scenario_data = _load_scenario_yaml()
 
@@ -156,10 +163,12 @@ async def test_normcontrol_failure_does_not_approve(runner_cls):
 
 # ── Scenario YAML existence and structure ──────────────────────────────────────
 
+
 def test_scenario_yaml_exists():
     """Scenario 9 YAML file must exist and be parseable."""
-    import yaml
     from pathlib import Path
+
+    import yaml
 
     path = Path(__file__).parents[2] / "aiagent" / "scenarios" / "tp_from_drawing.yml"
     assert path.exists(), f"Scenario file not found: {path}"
@@ -219,13 +228,16 @@ def test_scenario_worker_role_is_technologist():
 
 # ── Drawing not analyzed triggers re-analysis ──────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_drawing_not_analyzed_scenario_still_runs(runner_cls):
     """Scenario runs even if drawing starts in 'uploaded' state."""
     drawing_id = str(uuid.uuid4())
     plan_id = str(uuid.uuid4())
 
-    mock_skill = AsyncMock(return_value={"status": "ok", "plan_id": plan_id, "drawing_id": drawing_id})
+    mock_skill = AsyncMock(
+        return_value={"status": "ok", "plan_id": plan_id, "drawing_id": drawing_id}
+    )
     scenario_data = _load_scenario_yaml()
 
     with (

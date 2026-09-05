@@ -8,7 +8,6 @@ from httpx import AsyncClient
 
 from app.db.models import ApiKey, AuditLog, User
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
@@ -126,11 +125,14 @@ async def test_list_users_search(client: AsyncClient, admin_user):
 
 @pytest.mark.asyncio
 async def test_create_user(client: AsyncClient):
-    resp = await client.post("/api/admin/users", json={
-        "name": "New Employee",
-        "email": "new.employee@factory.ru",
-        "role": "accountant",
-    })
+    resp = await client.post(
+        "/api/admin/users",
+        json={
+            "name": "New Employee",
+            "email": "new.employee@factory.ru",
+            "role": "accountant",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["email"] == "new.employee@factory.ru"
@@ -142,21 +144,27 @@ async def test_create_user(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_user_invalid_role(client: AsyncClient):
-    resp = await client.post("/api/admin/users", json={
-        "name": "Bad Role",
-        "email": "badrole@factory.ru",
-        "role": "superuser",
-    })
+    resp = await client.post(
+        "/api/admin/users",
+        json={
+            "name": "Bad Role",
+            "email": "badrole@factory.ru",
+            "role": "superuser",
+        },
+    )
     assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_create_user_duplicate_email(client: AsyncClient, admin_user):
-    resp = await client.post("/api/admin/users", json={
-        "name": "Duplicate",
-        "email": "admin@example.com",
-        "role": "viewer",
-    })
+    resp = await client.post(
+        "/api/admin/users",
+        json={
+            "name": "Duplicate",
+            "email": "admin@example.com",
+            "role": "viewer",
+        },
+    )
     assert resp.status_code == 409
 
 
@@ -183,9 +191,12 @@ async def test_get_user_not_found(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_user_role(client: AsyncClient, viewer_user):
-    resp = await client.patch(f"/api/admin/users/{viewer_user.sub}", json={
-        "role": "accountant",
-    })
+    resp = await client.patch(
+        f"/api/admin/users/{viewer_user.sub}",
+        json={
+            "role": "accountant",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["role"] == "accountant"
@@ -193,9 +204,12 @@ async def test_update_user_role(client: AsyncClient, viewer_user):
 
 @pytest.mark.asyncio
 async def test_update_user_preferences(client: AsyncClient, viewer_user):
-    resp = await client.patch(f"/api/admin/users/{viewer_user.sub}", json={
-        "preferences": {"theme": "dark", "locale": "ru"},
-    })
+    resp = await client.patch(
+        f"/api/admin/users/{viewer_user.sub}",
+        json={
+            "preferences": {"theme": "dark", "locale": "ru"},
+        },
+    )
     assert resp.status_code == 200
 
 
@@ -326,10 +340,13 @@ async def test_list_api_keys(client: AsyncClient, api_key):
 
 @pytest.mark.asyncio
 async def test_create_api_key(client: AsyncClient):
-    resp = await client.post("/api/admin/api-keys", json={
-        "name": "CI/CD Pipeline Key",
-        "scopes": ["documents.read", "invoices.read"],
-    })
+    resp = await client.post(
+        "/api/admin/api-keys",
+        json={
+            "name": "CI/CD Pipeline Key",
+            "scopes": ["documents.read", "invoices.read"],
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["name"] == "CI/CD Pipeline Key"

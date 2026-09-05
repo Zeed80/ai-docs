@@ -48,19 +48,11 @@ def verify_engineering_ir(
     findings: list[VerificationFinding] = []
     entity_ids = {entity.id for entity in ir.entities}
 
-    referenced_ids = {
-        entity_id
-        for view in graph.views
-        for entity_id in view.entity_ids
-    } | {
-        entity_id
-        for feature in graph.features
-        for entity_id in feature.entity_ids
-    } | {
-        entity_id
-        for relation in graph.dimensions
-        for entity_id in relation.target_entity_ids
-    }
+    referenced_ids = (
+        {entity_id for view in graph.views for entity_id in view.entity_ids}
+        | {entity_id for feature in graph.features for entity_id in feature.entity_ids}
+        | {entity_id for relation in graph.dimensions for entity_id in relation.target_entity_ids}
+    )
     missing = sorted(referenced_ids - entity_ids)
     if missing:
         findings.append(

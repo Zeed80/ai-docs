@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -79,7 +79,7 @@ class DeployStatusOut(BaseModel):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def read_control() -> dict[str, Any] | None:
@@ -125,7 +125,7 @@ def _agent_available() -> bool:
     """
     beat = CONTROL_DIR / "agent.heartbeat"
     try:
-        age = datetime.now(timezone.utc).timestamp() - beat.stat().st_mtime
+        age = datetime.now(UTC).timestamp() - beat.stat().st_mtime
     except OSError:
         return False
     return age <= _HEARTBEAT_MAX_AGE_S
@@ -144,7 +144,9 @@ async def deploy_status(_user: UserInfo = _admin_dep) -> DeployStatusOut:
         agent_available=_agent_available(),
         job=DeployState(**{**{"status": "idle"}, **(job or {})}) if job else None,
         suggested_domain=suggested,
-        note=None if _agent_available() else (
+        note=None
+        if _agent_available()
+        else (
             "Host-агент не обнаружен: заявка будет ждать его установки "
             "(infra/installer/update-agent.README). Либо разверните вручную: "
             "bash infra/installer/install-mailcow.sh --domain <хост> --yes"

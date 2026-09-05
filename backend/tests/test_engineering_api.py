@@ -21,56 +21,79 @@ from app.db.models import (
 
 @pytest.mark.asyncio
 async def test_revision_lifecycle_and_projection(client: AsyncClient, db_session):
-    project_response = await client.post("/api/engineering/projects", json={"name": "Корпус редуктора", "code": "ENG-001"})
+    project_response = await client.post(
+        "/api/engineering/projects", json={"name": "Корпус редуктора", "code": "ENG-001"}
+    )
     assert project_response.status_code == 201
     project_id = project_response.json()["id"]
 
-    first = await client.post(f"/api/engineering/projects/{project_id}/revisions", json={
-        "base_revision": None,
-        "payload": {"schema_version": 1, "parts": []},
-        "validation": {"issues": []},
-        "created_by": "engineer",
-    })
+    first = await client.post(
+        f"/api/engineering/projects/{project_id}/revisions",
+        json={
+            "base_revision": None,
+            "payload": {"schema_version": 1, "parts": []},
+            "validation": {"issues": []},
+            "created_by": "engineer",
+        },
+    )
     assert first.status_code == 201
     revision = first.json()
     assert revision["revision"] == 0
     assert revision["status"] == "validated"
 
-    drawing = Drawing(filename="engineering-detail.dxf", format="dxf", status=DrawingStatus.analyzed)
+    drawing = Drawing(
+        filename="engineering-detail.dxf", format="dxf", status=DrawingStatus.analyzed
+    )
     db_session.add(drawing)
     await db_session.commit()
-    projection = await client.post(f"/api/engineering/revisions/{revision['id']}/projections", json={
-        "projection_type": "drawing",
-        "entity_type": "drawing",
-        "entity_id": str(drawing.id),
-    })
+    projection = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/projections",
+        json={
+            "projection_type": "drawing",
+            "entity_type": "drawing",
+            "entity_id": str(drawing.id),
+        },
+    )
     assert projection.status_code == 201
 
-    approved = await client.post(f"/api/engineering/revisions/{revision['id']}/approve", json={"approved_by": "chief-engineer"})
+    approved = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/approve",
+        json={"approved_by": "chief-engineer"},
+    )
     assert approved.status_code == 200
     assert approved.json()["status"] == "approved"
 
-    frozen = await client.post(f"/api/engineering/revisions/{revision['id']}/projections", json={
-        "projection_type": "drawing", "entity_type": "drawing", "entity_id": str(drawing.id)
-    })
+    frozen = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/projections",
+        json={"projection_type": "drawing", "entity_type": "drawing", "entity_id": str(drawing.id)},
+    )
     assert frozen.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_revision_can_reference_immutable_cad_ir_snapshot(client: AsyncClient, db_session):
     project = (await client.post("/api/engineering/projects", json={"name": "CAD связь"})).json()
-    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
     generation = ImageGeneration(operation="vectorize")
     db_session.add(generation)
     await db_session.flush()
-    cad_revision = CadIrRevision(generation_id=generation.id, revision=0, ir_path="cad/snapshot.json")
+    cad_revision = CadIrRevision(
+        generation_id=generation.id, revision=0, ir_path="cad/snapshot.json"
+    )
     db_session.add(cad_revision)
     await db_session.commit()
-    projection = await client.post(f"/api/engineering/revisions/{revision['id']}/projections", json={
-        "projection_type": "cad_source",
-        "entity_type": "cad_ir_revision",
-        "entity_id": str(cad_revision.id),
-    })
+    projection = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/projections",
+        json={
+            "projection_type": "cad_source",
+            "entity_type": "cad_ir_revision",
+            "entity_id": str(cad_revision.id),
+        },
+    )
     assert projection.status_code == 201
     assert projection.json()["entity_type"] == "cad_ir_revision"
     validation = await client.post(f"/api/engineering/revisions/{revision['id']}/validate")
@@ -83,28 +106,53 @@ async def test_revision_can_reference_immutable_cad_ir_snapshot(client: AsyncCli
 async def test_revision_conflict_and_validation_gate(client: AsyncClient):
     project = (await client.post("/api/engineering/projects", json={"name": "Фланец"})).json()
     project_id = project["id"]
-    rejected = await client.post(f"/api/engineering/projects/{project_id}/revisions", json={"base_revision": 0})
+    rejected = await client.post(
+        f"/api/engineering/projects/{project_id}/revisions", json={"base_revision": 0}
+    )
     assert rejected.status_code == 409
 
-    revision = (await client.post(f"/api/engineering/projects/{project_id}/revisions", json={
-        "base_revision": None,
-        "validation": {"issues": [{"severity": "error", "code": "SCALE_UNKNOWN"}]},
-    })).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project_id}/revisions",
+            json={
+                "base_revision": None,
+                "validation": {"issues": [{"severity": "error", "code": "SCALE_UNKNOWN"}]},
+            },
+        )
+    ).json()
     assert revision["status"] == "needs_review"
-    approval = await client.post(f"/api/engineering/revisions/{revision['id']}/approve", json={"approved_by": "chief-engineer"})
+    approval = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/approve",
+        json={"approved_by": "chief-engineer"},
+    )
     assert approval.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_material_assignment_is_revisioned(client: AsyncClient):
-    material = (await client.post("/api/engineering/materials", json={
-        "designation": "40Х", "standard": "ГОСТ 4543-2016", "density_kg_m3": 7850,
-    })).json()
+    material = (
+        await client.post(
+            "/api/engineering/materials",
+            json={
+                "designation": "40Х",
+                "standard": "ГОСТ 4543-2016",
+                "density_kg_m3": 7850,
+            },
+        )
+    ).json()
     project = (await client.post("/api/engineering/projects", json={"name": "Шестерня"})).json()
-    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
-    assigned = await client.post(f"/api/engineering/revisions/{revision['id']}/materials", json={
-        "material_id": material["id"], "object_key": "part:gear",
-    })
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    assigned = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/materials",
+        json={
+            "material_id": material["id"],
+            "object_key": "part:gear",
+        },
+    )
     assert assigned.status_code == 201
     assert assigned.json()["material"]["designation"] == "40Х"
 
@@ -112,10 +160,24 @@ async def test_material_assignment_is_revisioned(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_assembly_reports_aabb_collision(client: AsyncClient):
     project = (await client.post("/api/engineering/projects", json={"name": "Редуктор"})).json()
-    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
-    assembly = (await client.post(f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Главная"})).json()
-    for key, bounds in (("housing", {"x_min": 0, "x_max": 10, "y_min": 0, "y_max": 10, "z_min": 0, "z_max": 10}), ("shaft", {"x_min": 9, "x_max": 12, "y_min": 0, "y_max": 2, "z_min": 0, "z_max": 2})):
-        response = await client.post(f"/api/engineering/assemblies/{assembly['id']}/components", json={"instance_key": key, "designation": key, "bounds": bounds})
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    assembly = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Главная"}
+        )
+    ).json()
+    for key, bounds in (
+        ("housing", {"x_min": 0, "x_max": 10, "y_min": 0, "y_max": 10, "z_min": 0, "z_max": 10}),
+        ("shaft", {"x_min": 9, "x_max": 12, "y_min": 0, "y_max": 2, "z_min": 0, "z_max": 2}),
+    ):
+        response = await client.post(
+            f"/api/engineering/assemblies/{assembly['id']}/components",
+            json={"instance_key": key, "designation": key, "bounds": bounds},
+        )
         assert response.status_code == 201
     report = await client.post(f"/api/engineering/assemblies/{assembly['id']}/validate")
     assert report.status_code == 200
@@ -127,14 +189,21 @@ async def _digitized_child_drawing(
 ) -> Drawing:
     """A Drawing already linked to an EngineeringRevision via /projections."""
     drawing = Drawing(
-        filename=f"{drawing_number}.dxf", format="dxf", status=DrawingStatus.analyzed,
+        filename=f"{drawing_number}.dxf",
+        format="dxf",
+        status=DrawingStatus.analyzed,
         drawing_number=drawing_number,
     )
     db_session.add(drawing)
     await db_session.commit()
-    projection = await client.post(f"/api/engineering/revisions/{revision_id}/projections", json={
-        "projection_type": "drawing", "entity_type": "drawing", "entity_id": str(drawing.id),
-    })
+    projection = await client.post(
+        f"/api/engineering/revisions/{revision_id}/projections",
+        json={
+            "projection_type": "drawing",
+            "entity_type": "drawing",
+            "entity_id": str(drawing.id),
+        },
+    )
     assert projection.status_code == 201
     await db_session.refresh(drawing)
     return drawing
@@ -156,31 +225,48 @@ async def test_assembly_components_from_bom_matches_digitized_drawing(
     client: AsyncClient, db_session
 ):
     project = (await client.post("/api/engineering/projects", json={"name": "Редуктор БОМ"})).json()
-    assembly_revision = (await client.post(
-        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
-    )).json()
-    assembly = (await client.post(
-        f"/api/engineering/revisions/{assembly_revision['id']}/assemblies", json={"name": "Главная"}
-    )).json()
+    assembly_revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    assembly = (
+        await client.post(
+            f"/api/engineering/revisions/{assembly_revision['id']}/assemblies",
+            json={"name": "Главная"},
+        )
+    ).json()
 
     child_project = (await client.post("/api/engineering/projects", json={"name": "Вал"})).json()
-    child_revision = (await client.post(
-        f"/api/engineering/projects/{child_project['id']}/revisions", json={"base_revision": None}
-    )).json()
+    child_revision = (
+        await client.post(
+            f"/api/engineering/projects/{child_project['id']}/revisions",
+            json={"base_revision": None},
+        )
+    ).json()
     child_drawing = await _digitized_child_drawing(
         client, db_session, drawing_number="ДП-001", revision_id=child_revision["id"]
     )
 
-    sb_drawing = await _assembly_drawing_with_bom(db_session, [
-        {
-            "item_no": 1, "designation": "Вал", "quantity": 1.0,
-            "drawing_number": "ДП-001", "confidence": 0.9,
-        },
-        {
-            "item_no": 2, "designation": "Подшипник 6205", "quantity": 2.0,
-            "drawing_number": "ДП-999", "confidence": 0.8,
-        },
-    ])
+    sb_drawing = await _assembly_drawing_with_bom(
+        db_session,
+        [
+            {
+                "item_no": 1,
+                "designation": "Вал",
+                "quantity": 1.0,
+                "drawing_number": "ДП-001",
+                "confidence": 0.9,
+            },
+            {
+                "item_no": 2,
+                "designation": "Подшипник 6205",
+                "quantity": 2.0,
+                "drawing_number": "ДП-999",
+                "confidence": 0.8,
+            },
+        ],
+    )
 
     resp = await client.post(
         f"/api/engineering/assemblies/{assembly['id']}/components/from-bom",
@@ -194,26 +280,38 @@ async def test_assembly_components_from_bom_matches_digitized_drawing(
     assert matched["bom-2"]["component_revision_id"] is None
     assert len(body["unresolved"]) == 1
     assert body["unresolved"][0] == {
-        "item_no": 2, "designation": "Подшипник 6205",
-        "drawing_number": "ДП-999", "reason": "no_match",
+        "item_no": 2,
+        "designation": "Подшипник 6205",
+        "drawing_number": "ДП-999",
+        "reason": "no_match",
     }
 
 
 @pytest.mark.asyncio
 async def test_assembly_components_from_bom_is_idempotent(client: AsyncClient, db_session):
     project = (await client.post("/api/engineering/projects", json={"name": "Идемпотент"})).json()
-    revision = (await client.post(
-        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
-    )).json()
-    assembly = (await client.post(
-        f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
-    )).json()
-    sb_drawing = await _assembly_drawing_with_bom(db_session, [
-        {
-            "item_no": 1, "designation": "Гайка", "quantity": 4.0,
-            "drawing_number": None, "confidence": 0.5,
-        },
-    ])
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    assembly = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+        )
+    ).json()
+    sb_drawing = await _assembly_drawing_with_bom(
+        db_session,
+        [
+            {
+                "item_no": 1,
+                "designation": "Гайка",
+                "quantity": 4.0,
+                "drawing_number": None,
+                "confidence": 0.5,
+            },
+        ],
+    )
 
     first = await client.post(
         f"/api/engineering/assemblies/{assembly['id']}/components/from-bom",
@@ -237,30 +335,43 @@ async def test_assembly_components_from_bom_ambiguous_stays_unresolved(
     client: AsyncClient, db_session
 ):
     project = (await client.post("/api/engineering/projects", json={"name": "Дубликат"})).json()
-    revision = (await client.post(
-        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
-    )).json()
-    assembly = (await client.post(
-        f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
-    )).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    assembly = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+        )
+    ).json()
 
     for label in ("A", "B"):
-        dup_project = (await client.post(
-            "/api/engineering/projects", json={"name": f"Дубль {label}"}
-        )).json()
-        dup_revision = (await client.post(
-            f"/api/engineering/projects/{dup_project['id']}/revisions", json={"base_revision": None}
-        )).json()
+        dup_project = (
+            await client.post("/api/engineering/projects", json={"name": f"Дубль {label}"})
+        ).json()
+        dup_revision = (
+            await client.post(
+                f"/api/engineering/projects/{dup_project['id']}/revisions",
+                json={"base_revision": None},
+            )
+        ).json()
         await _digitized_child_drawing(
             client, db_session, drawing_number="ДП-777", revision_id=dup_revision["id"]
         )
 
-    sb_drawing = await _assembly_drawing_with_bom(db_session, [
-        {
-            "item_no": 1, "designation": "Втулка", "quantity": 1.0,
-            "drawing_number": "дп-777", "confidence": 0.7,
-        },
-    ])
+    sb_drawing = await _assembly_drawing_with_bom(
+        db_session,
+        [
+            {
+                "item_no": 1,
+                "designation": "Втулка",
+                "quantity": 1.0,
+                "drawing_number": "дп-777",
+                "confidence": 0.7,
+            },
+        ],
+    )
 
     resp = await client.post(
         f"/api/engineering/assemblies/{assembly['id']}/components/from-bom",
@@ -275,12 +386,16 @@ async def test_assembly_components_from_bom_ambiguous_stays_unresolved(
 @pytest.mark.asyncio
 async def test_assembly_components_from_bom_requires_extraction(client: AsyncClient, db_session):
     project = (await client.post("/api/engineering/projects", json={"name": "Без БОМ"})).json()
-    revision = (await client.post(
-        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
-    )).json()
-    assembly = (await client.post(
-        f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
-    )).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    assembly = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+        )
+    ).json()
     empty_drawing = Drawing(filename="empty-sb.pdf", format="pdf", status=DrawingStatus.analyzed)
     db_session.add(empty_drawing)
     await db_session.commit()
@@ -297,18 +412,28 @@ async def test_assembly_components_from_bom_blocked_on_approved_revision(
     client: AsyncClient, db_session
 ):
     project = (await client.post("/api/engineering/projects", json={"name": "Утверждено"})).json()
-    revision = (await client.post(
-        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
-    )).json()
-    assembly = (await client.post(
-        f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
-    )).json()
-    sb_drawing = await _assembly_drawing_with_bom(db_session, [
-        {
-            "item_no": 1, "designation": "Болт", "quantity": 4.0,
-            "drawing_number": None, "confidence": 0.6,
-        },
-    ])
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    assembly = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+        )
+    ).json()
+    sb_drawing = await _assembly_drawing_with_bom(
+        db_session,
+        [
+            {
+                "item_no": 1,
+                "designation": "Болт",
+                "quantity": 4.0,
+                "drawing_number": None,
+                "confidence": 0.6,
+            },
+        ],
+    )
     approved = await client.post(
         f"/api/engineering/revisions/{revision['id']}/approve",
         json={"approved_by": "chief-engineer"},
@@ -349,38 +474,42 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
         "app.api.engineering._exact_interference",
         exact_interference,
     )
-    project = (await client.post(
-        "/api/engineering/projects", json={"name": "EMG сборка"}
-    )).json()
-    revision = (await client.post(
-        f"/api/engineering/projects/{project['id']}/revisions",
-        json={"base_revision": None},
-    )).json()
-    assembly = (await client.post(
-        f"/api/engineering/revisions/{revision['id']}/assemblies",
-        json={"name": "Вал в корпусе", "designation": "ASM-EMG"},
-    )).json()
+    project = (await client.post("/api/engineering/projects", json={"name": "EMG сборка"})).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions",
+            json={"base_revision": None},
+        )
+    ).json()
+    assembly = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/assemblies",
+            json={"name": "Вал в корпусе", "designation": "ASM-EMG"},
+        )
+    ).json()
     component_responses = []
     for key, designation, metadata in (
         ("housing", "Housing", {"grounded": True}),
         ("shaft", "Shaft", {}),
     ):
-        component_responses.append(await client.post(
-            f"/api/engineering/assemblies/{assembly['id']}/components",
-            json={
-                "instance_key": key,
-                "designation": designation,
-                "metadata": {
-                    **metadata,
-                    "shape": {
-                        "kind": "box",
-                        "width_mm": 10,
-                        "height_mm": 10,
-                        "depth_mm": 10,
+        component_responses.append(
+            await client.post(
+                f"/api/engineering/assemblies/{assembly['id']}/components",
+                json={
+                    "instance_key": key,
+                    "designation": designation,
+                    "metadata": {
+                        **metadata,
+                        "shape": {
+                            "kind": "box",
+                            "width_mm": 10,
+                            "height_mm": 10,
+                            "depth_mm": 10,
+                        },
                     },
                 },
-            },
-        ))
+            )
+        )
     assert all(response.status_code == 201 for response in component_responses)
     mate = await client.post(
         f"/api/engineering/assemblies/{assembly['id']}/mates",
@@ -392,9 +521,7 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
     )
     assert mate.status_code == 201
 
-    first = await client.post(
-        f"/api/engineering/assemblies/{assembly['id']}/model-graph"
-    )
+    first = await client.post(f"/api/engineering/assemblies/{assembly['id']}/model-graph")
     assert first.status_code == 200
     assert first.json()["revision"] == 0
     assert first.json()["profile"] == "assembly"
@@ -449,18 +576,14 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
         "app.storage.download_file",
         lambda path: graph_objects[path],
     )
-    built = await client.post(
-        f"/api/engineering/assemblies/{assembly['id']}/model-graph/build"
-    )
+    built = await client.post(f"/api/engineering/assemblies/{assembly['id']}/model-graph/build")
     assert built.status_code == 200
     assert built.json()["revision"] == 1
     assert built.json()["artifact_sha256"] == step_sha
     assert built.json()["solid_count"] == 2
     assert built.json()["production_export_allowed"] is False
 
-    drawing = await client.post(
-        f"/api/engineering/assemblies/{assembly['id']}/model-graph/drawing"
-    )
+    drawing = await client.post(f"/api/engineering/assemblies/{assembly['id']}/model-graph/drawing")
     assert drawing.status_code == 200
     assert drawing.json()["revision"] == 2
     assert drawing.json()["views"] == ["assembled", "exploded"]
@@ -473,13 +596,9 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
     assert drawing_replay.json()["idempotent_replay"] is True
 
     graph_rows = (
-        await client.get(
-            f"/api/engineering-model-graphs/projects/{project['id']}/graphs"
-        )
+        await client.get(f"/api/engineering-model-graphs/projects/{project['id']}/graphs")
     ).json()
-    assembly_graph = next(
-        item for item in graph_rows if item["graph_id"].startswith("assembly:")
-    )
+    assembly_graph = next(item for item in graph_rows if item["graph_id"].startswith("assembly:"))
     admission = await client.get(
         f"/api/engineering-model-graphs/revisions/{assembly_graph['id']}"
         "/build-admission/production",
@@ -499,7 +618,8 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
         item["code"] for item in incompatible.json()["blockers"]
     }
     drawing_artifact = next(
-        item for item in assembly_graph["graph"]["nodes"]
+        item
+        for item in assembly_graph["graph"]["nodes"]
         if item["id"].startswith("artifact:assembly-drawing:")
     )
     artifact_url = (
@@ -509,10 +629,7 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
     downloaded = await client.get(artifact_url)
     assert downloaded.status_code == 200
     assert downloaded.headers["content-type"].startswith("image/svg+xml")
-    assert (
-        downloaded.headers["x-engineering-artifact-sha256"]
-        == drawing.json()["artifact_sha256"]
-    )
+    assert downloaded.headers["x-engineering-artifact-sha256"] == drawing.json()["artifact_sha256"]
     report_download = await client.get(artifact_url, params={"kind": "report"})
     assert report_download.status_code == 200
     assert report_download.json()["views"] == ["assembled", "exploded"]
@@ -524,9 +641,7 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
     assert tampered.status_code == 409
     graph_objects[artifact_path] = original_svg
 
-    unchanged = await client.post(
-        f"/api/engineering/assemblies/{assembly['id']}/model-graph"
-    )
+    unchanged = await client.post(f"/api/engineering/assemblies/{assembly['id']}/model-graph")
     assert unchanged.status_code == 200
     assert unchanged.json()["revision"] == 2
     assert unchanged.json()["release_status"] == "approved"
@@ -537,22 +652,17 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
     shaft.quantity = 4
     await db_session.commit()
 
-    second = await client.post(
-        f"/api/engineering/assemblies/{assembly['id']}/model-graph"
-    )
+    second = await client.post(f"/api/engineering/assemblies/{assembly['id']}/model-graph")
     assert second.status_code == 200
     assert second.json()["revision"] == 3
     active_quantities = [
         assertion["value"]["value"]
         for assertion in second.json()["graph"]["assertions"]
-        if assertion["state"] == "active"
-        and assertion["predicate"] == "component.quantity"
+        if assertion["state"] == "active" and assertion["predicate"] == "component.quantity"
     ]
     assert sorted(active_quantities) == [1, 4]
 
-    replay = await client.post(
-        f"/api/engineering/assemblies/{assembly['id']}/model-graph"
-    )
+    replay = await client.post(f"/api/engineering/assemblies/{assembly['id']}/model-graph")
     assert replay.status_code == 200
     assert replay.json()["revision"] == 3
 
@@ -562,15 +672,25 @@ async def test_construction_ifc_parse_endpoint_returns_model_and_report(
     client: AsyncClient, monkeypatch
 ):
     fake_model = {
-        "site_name": "Площадка", "building_name": "Здание",
+        "site_name": "Площадка",
+        "building_name": "Здание",
         "storeys": [{"id": "l1", "name": "Этаж 1", "elevation_mm": 0}],
-        "elements": [{
-            "id": "w1", "kind": "wall", "name": "Стена", "storey_id": "l1",
-            "box": {
-                "x_mm": 0, "y_mm": 0, "z_mm": 0,
-                "width_mm": 5000, "depth_mm": 200, "height_mm": 3000,
-            },
-        }],
+        "elements": [
+            {
+                "id": "w1",
+                "kind": "wall",
+                "name": "Стена",
+                "storey_id": "l1",
+                "box": {
+                    "x_mm": 0,
+                    "y_mm": 0,
+                    "z_mm": 0,
+                    "width_mm": 5000,
+                    "depth_mm": 200,
+                    "height_mm": 3000,
+                },
+            }
+        ],
     }
     fake_report = {"ifc_schema": "IFC4", "mapped_elements": 1, "storeys": 1, "skipped": []}
     captured: dict = {}
@@ -579,6 +699,7 @@ async def test_construction_ifc_parse_endpoint_returns_model_and_report(
         captured["site_name"] = site_name
         captured["building_name"] = building_name
         from app.ai.construction_emg import ConstructionModel
+
         return ConstructionModel.model_validate(fake_model), fake_report
 
     monkeypatch.setattr("app.ai.ifc_reader.ifc_to_construction_model", _fake_reader)
@@ -586,8 +707,9 @@ async def test_construction_ifc_parse_endpoint_returns_model_and_report(
     resp = await client.post(
         "/api/engineering/construction/ifc/parse",
         params={"site_name": "Override"},
-        files={"file": ("model.ifc", b"ISO-10303-21; fake; END-ISO-10303-21;",
-                        "application/x-step")},
+        files={
+            "file": ("model.ifc", b"ISO-10303-21; fake; END-ISO-10303-21;", "application/x-step")
+        },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -608,8 +730,9 @@ async def test_construction_ifc_parse_returns_null_model_when_blocked(
 
     resp = await client.post(
         "/api/engineering/construction/ifc/parse",
-        files={"file": ("empty.ifc", b"ISO-10303-21; fake; END-ISO-10303-21;",
-                        "application/x-step")},
+        files={
+            "file": ("empty.ifc", b"ISO-10303-21; fake; END-ISO-10303-21;", "application/x-step")
+        },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -650,35 +773,37 @@ async def test_construction_graph_builds_reopened_ifc_and_replays_idempotently(
     ):
         monkeypatch.setattr(target, lambda path: graph_objects.pop(path, None))
 
-    project = (await client.post(
-        "/api/engineering/projects", json={"name": "IFC building"}
-    )).json()
+    project = (await client.post("/api/engineering/projects", json={"name": "IFC building"})).json()
     payload = {
         "construction_model": {
             "site_name": "Site",
             "building_name": "Building",
             "storeys": [{"id": "l1", "name": "Level 1", "elevation_mm": 0}],
-            "elements": [{
-                "id": "w1",
-                "kind": "wall",
-                "name": "Wall",
-                "storey_id": "l1",
-                "material": "Concrete",
-                "box": {
-                    "x_mm": 0,
-                    "y_mm": 0,
-                    "z_mm": 0,
-                    "width_mm": 5000,
-                    "depth_mm": 200,
-                    "height_mm": 3000,
-                },
-            }],
+            "elements": [
+                {
+                    "id": "w1",
+                    "kind": "wall",
+                    "name": "Wall",
+                    "storey_id": "l1",
+                    "material": "Concrete",
+                    "box": {
+                        "x_mm": 0,
+                        "y_mm": 0,
+                        "z_mm": 0,
+                        "width_mm": 5000,
+                        "depth_mm": 200,
+                        "height_mm": 3000,
+                    },
+                }
+            ],
         },
     }
-    revision = (await client.post(
-        f"/api/engineering/projects/{project['id']}/revisions",
-        json={"base_revision": None, "payload": payload},
-    )).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions",
+            json={"base_revision": None, "payload": payload},
+        )
+    ).json()
     initial = await client.post(
         f"/api/engineering/revisions/{revision['id']}/construction-model-graph"
     )
@@ -699,12 +824,14 @@ async def test_construction_graph_builds_reopened_ifc_and_replays_idempotently(
         "valid": True,
         "ifc_sha256": ifc_sha,
         "product_class_counts": {"IfcWall": 1},
-        "products": [{
-            "source_id": "w1",
-            "ifc_class": "IfcWall",
-            "global_id": "0testGlobalId0000000000",
-            "name": "Wall",
-        }],
+        "products": [
+            {
+                "source_id": "w1",
+                "ifc_class": "IfcWall",
+                "global_id": "0testGlobalId0000000000",
+                "name": "Wall",
+            }
+        ],
     }
     monkeypatch.setattr(
         "app.ai.construction_emg.compile_construction_ifc",
@@ -769,49 +896,53 @@ async def test_system_graph_connectivity_is_approval_gated_and_idempotent(
         "app.storage.delete_file",
         lambda path: graph_objects.pop(path, None),
     )
-    project = (await client.post(
-        "/api/engineering/projects", json={"name": "Hydraulic system"}
-    )).json()
-    revision = (await client.post(
-        f"/api/engineering/projects/{project['id']}/revisions",
-        json={
-            "base_revision": None,
-            "payload": {"system_model": {
-                "profile": "hydraulic",
-                "name": "Power unit",
-                "system_kind": "hydraulic_power",
-                "equipment": [
-                    {"id": "pump", "name": "Pump", "equipment_type": "pump"},
-                    {"id": "tank", "name": "Tank", "equipment_type": "reservoir"},
-                ],
-                "ports": [
-                    {
-                        "id": "pump-out",
-                        "equipment_id": "pump",
-                        "kind": "pressure",
-                        "direction": "out",
-                        "medium": "oil",
-                    },
-                    {
-                        "id": "tank-in",
-                        "equipment_id": "tank",
-                        "kind": "return",
-                        "direction": "in",
-                        "medium": "oil",
-                    },
-                ],
-                "connections": [{
-                    "id": "line-1",
-                    "first_port_id": "pump-out",
-                    "second_port_id": "tank-in",
-                }],
-            }},
-        },
-    )).json()
+    project = (
+        await client.post("/api/engineering/projects", json={"name": "Hydraulic system"})
+    ).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions",
+            json={
+                "base_revision": None,
+                "payload": {
+                    "system_model": {
+                        "profile": "hydraulic",
+                        "name": "Power unit",
+                        "system_kind": "hydraulic_power",
+                        "equipment": [
+                            {"id": "pump", "name": "Pump", "equipment_type": "pump"},
+                            {"id": "tank", "name": "Tank", "equipment_type": "reservoir"},
+                        ],
+                        "ports": [
+                            {
+                                "id": "pump-out",
+                                "equipment_id": "pump",
+                                "kind": "pressure",
+                                "direction": "out",
+                                "medium": "oil",
+                            },
+                            {
+                                "id": "tank-in",
+                                "equipment_id": "tank",
+                                "kind": "return",
+                                "direction": "in",
+                                "medium": "oil",
+                            },
+                        ],
+                        "connections": [
+                            {
+                                "id": "line-1",
+                                "first_port_id": "pump-out",
+                                "second_port_id": "tank-in",
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+    ).json()
 
-    initial = await client.post(
-        f"/api/engineering/revisions/{revision['id']}/system-model-graph"
-    )
+    initial = await client.post(f"/api/engineering/revisions/{revision['id']}/system-model-graph")
     assert initial.status_code == 200
     assert initial.json()["profile"] == "hydraulic"
     assert initial.json()["revision"] == 0
@@ -822,9 +953,7 @@ async def test_system_graph_connectivity_is_approval_gated_and_idempotent(
         json={"approved_by": "chief-engineer"},
     )
     assert approved.status_code == 200
-    promoted = await client.post(
-        f"/api/engineering/revisions/{revision['id']}/system-model-graph"
-    )
+    promoted = await client.post(f"/api/engineering/revisions/{revision['id']}/system-model-graph")
     assert promoted.status_code == 200
     assert promoted.json()["revision"] == 1
     assert promoted.json()["production_export_allowed"] is False
@@ -842,9 +971,7 @@ async def test_system_graph_connectivity_is_approval_gated_and_idempotent(
     assert diagram_replay.json()["revision"] == 2
     assert diagram_replay.json()["idempotent_replay"] is True
 
-    replay = await client.post(
-        f"/api/engineering/revisions/{revision['id']}/system-model-graph"
-    )
+    replay = await client.post(f"/api/engineering/revisions/{revision['id']}/system-model-graph")
     assert replay.status_code == 200
     assert replay.json()["revision"] == 2
 
@@ -852,7 +979,11 @@ async def test_system_graph_connectivity_is_approval_gated_and_idempotent(
 @pytest.mark.asyncio
 async def test_release_validation_promotes_clean_revision(client: AsyncClient):
     project = (await client.post("/api/engineering/projects", json={"name": "Втулка"})).json()
-    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
     response = await client.post(f"/api/engineering/revisions/{revision['id']}/validate")
     assert response.status_code == 200
     assert response.json()["status"] == "passed"
@@ -860,15 +991,31 @@ async def test_release_validation_promotes_clean_revision(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_failed_analysis_case_blocks_release(client: AsyncClient):
-    material = (await client.post("/api/engineering/materials", json={
-        "designation": "Сталь", "yield_strength_mpa": 100,
-    })).json()
+    material = (
+        await client.post(
+            "/api/engineering/materials",
+            json={
+                "designation": "Сталь",
+                "yield_strength_mpa": 100,
+            },
+        )
+    ).json()
     project = (await client.post("/api/engineering/projects", json={"name": "Тяга"})).json()
-    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
-    case = (await client.post(f"/api/engineering/revisions/{revision['id']}/analysis-cases", json={
-        "name": "Осевое растяжение", "material_id": material["id"],
-        "inputs": {"force_n": 2_000, "area_mm2": 10},
-    })).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    case = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/analysis-cases",
+            json={
+                "name": "Осевое растяжение",
+                "material_id": material["id"],
+                "inputs": {"force_n": 2_000, "area_mm2": 10},
+            },
+        )
+    ).json()
     run = await client.post(f"/api/engineering/analysis-cases/{case['id']}/run")
     assert run.status_code == 200
     assert run.json()["status"] == "failed"
@@ -948,7 +1095,9 @@ async def test_change_request_full_lifecycle(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_change_request_reject_and_supersession(client: AsyncClient):
-    project = (await client.post("/api/engineering/projects", json={"name": "Отказ и замена"})).json()
+    project = (
+        await client.post("/api/engineering/projects", json={"name": "Отказ и замена"})
+    ).json()
     revision = (
         await client.post(
             f"/api/engineering/projects/{project['id']}/revisions",
@@ -1004,16 +1153,28 @@ async def test_assembly_exact_interference_degrades_loudly_without_kernel(client
     """E5: components with declared occupancy solids go to the kernel; when it
     is unreachable the check degrades to AABB with an explicit note — never
     silently."""
-    project = (await client.post("/api/engineering/projects", json={"name": "Точная сборка"})).json()
-    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
-    assembly = (await client.post(f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"})).json()
+    project = (
+        await client.post("/api/engineering/projects", json={"name": "Точная сборка"})
+    ).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    assembly = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+        )
+    ).json()
     for key in ("a", "b"):
         response = await client.post(
             f"/api/engineering/assemblies/{assembly['id']}/components",
             json={
                 "instance_key": key,
                 "designation": key,
-                "metadata": {"shape": {"kind": "box", "width_mm": 10, "height_mm": 10, "depth_mm": 10}},
+                "metadata": {
+                    "shape": {"kind": "box", "width_mm": 10, "height_mm": 10, "depth_mm": 10}
+                },
             },
         )
         assert response.status_code == 201
@@ -1042,16 +1203,27 @@ async def test_assembly_exact_result_overrides_aabb(client: AsyncClient, monkeyp
 
     monkeypatch.setattr(engineering_api, "_exact_interference", fake_exact)
     project = (await client.post("/api/engineering/projects", json={"name": "Поворот"})).json()
-    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
-    assembly = (await client.post(f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"})).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    assembly = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+        )
+    ).json()
     overlapping = {"x_min": 0, "x_max": 10, "y_min": 0, "y_max": 10, "z_min": 0, "z_max": 10}
     for key in ("bar", "cube"):
         await client.post(
             f"/api/engineering/assemblies/{assembly['id']}/components",
             json={
-                "instance_key": key, "designation": key,
+                "instance_key": key,
+                "designation": key,
                 "bounds": overlapping,  # AABB says collision
-                "metadata": {"shape": {"kind": "box", "width_mm": 10, "height_mm": 10, "depth_mm": 10}},
+                "metadata": {
+                    "shape": {"kind": "box", "width_mm": 10, "height_mm": 10, "depth_mm": 10}
+                },
             },
         )
     report = (await client.post(f"/api/engineering/assemblies/{assembly['id']}/validate")).json()
@@ -1061,12 +1233,16 @@ async def test_assembly_exact_result_overrides_aabb(client: AsyncClient, monkeyp
 
 async def _new_assembly(client: AsyncClient, name: str) -> str:
     project = (await client.post("/api/engineering/projects", json={"name": name})).json()
-    revision = (await client.post(
-        f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
-    )).json()
-    assembly = (await client.post(
-        f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
-    )).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    assembly = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"}
+        )
+    ).json()
     return assembly["id"]
 
 
@@ -1121,7 +1297,8 @@ async def test_assembly_solve_preview_skips_unsupported_and_missing_frame_mates(
         f"/api/engineering/assemblies/{assembly_id}/mates",
         json={
             "mate_type": "concentric",
-            "first_instance_key": "base", "second_instance_key": "arm",
+            "first_instance_key": "base",
+            "second_instance_key": "arm",
         },
     )
 
@@ -1146,7 +1323,9 @@ async def test_assembly_solve_preview_maps_mate_type_and_calls_kernel(
     async def fake_solve(payload):
         captured["payload"] = payload
         return {
-            "solved": True, "status_code": 0, "reason": "solved",
+            "solved": True,
+            "status_code": 0,
+            "reason": "solved",
             "placements": {
                 "base": {"position_mm": [0, 0, 0], "axis": [0, 0, 1], "angle_deg": 0},
                 "arm": {"position_mm": [5, 5, 10], "axis": [1, 0, 0], "angle_deg": 0},
@@ -1159,14 +1338,16 @@ async def test_assembly_solve_preview_maps_mate_type_and_calls_kernel(
     await client.post(
         f"/api/engineering/assemblies/{assembly_id}/components",
         json={
-            "instance_key": "base", "designation": "База",
+            "instance_key": "base",
+            "designation": "База",
             "metadata": {"grounded": True},
         },
     )
     await client.post(
         f"/api/engineering/assemblies/{assembly_id}/components",
         json={
-            "instance_key": "arm", "designation": "Рычаг",
+            "instance_key": "arm",
+            "designation": "Рычаг",
             "transform": {"translate": [20, 0, 0]},
         },
     )
@@ -1174,7 +1355,8 @@ async def test_assembly_solve_preview_maps_mate_type_and_calls_kernel(
         f"/api/engineering/assemblies/{assembly_id}/mates",
         json={
             "mate_type": "concentric",
-            "first_instance_key": "base", "second_instance_key": "arm",
+            "first_instance_key": "base",
+            "second_instance_key": "arm",
             "parameters": {
                 "first_frame": {"position_mm": [5, 5, 10], "axis": [1, 0, 0]},
                 "second_frame": {"position_mm": [0, 0, 0], "axis": [1, 0, 0]},
@@ -1194,14 +1376,10 @@ async def test_assembly_solve_preview_maps_mate_type_and_calls_kernel(
     assert joint["first"]["key"] == "base"
     assert joint["second"]["key"] == "arm"
 
-    [arm_component] = [
-        c for c in captured["payload"]["components"] if c["key"] == "arm"
-    ]
+    [arm_component] = [c for c in captured["payload"]["components"] if c["key"] == "arm"]
     assert arm_component["position_mm"] == [20.0, 0.0, 0.0]  # from transform.translate
     assert arm_component["grounded"] is False
-    [base_component] = [
-        c for c in captured["payload"]["components"] if c["key"] == "base"
-    ]
+    [base_component] = [c for c in captured["payload"]["components"] if c["key"] == "base"]
     assert base_component["grounded"] is True
 
 
@@ -1210,15 +1388,31 @@ async def test_analysis_runs_are_immutable_snapshots(client: AsyncClient):
     """F2: each run freezes inputs + material card + solver version; editing
     the live material later does not rewrite past runs; bad input is recorded
     as an invalid_input run before the 422."""
-    material = (await client.post("/api/engineering/materials", json={
-        "designation": "Сталь F2", "yield_strength_mpa": 100,
-    })).json()
+    material = (
+        await client.post(
+            "/api/engineering/materials",
+            json={
+                "designation": "Сталь F2",
+                "yield_strength_mpa": 100,
+            },
+        )
+    ).json()
     project = (await client.post("/api/engineering/projects", json={"name": "Снапшоты"})).json()
-    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
-    case = (await client.post(f"/api/engineering/revisions/{revision['id']}/analysis-cases", json={
-        "name": "Осевое", "material_id": material["id"],
-        "inputs": {"force_n": 500, "area_mm2": 10},
-    })).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None}
+        )
+    ).json()
+    case = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/analysis-cases",
+            json={
+                "name": "Осевое",
+                "material_id": material["id"],
+                "inputs": {"force_n": 500, "area_mm2": 10},
+            },
+        )
+    ).json()
 
     first = await client.post(f"/api/engineering/analysis-cases/{case['id']}/run")
     assert first.status_code == 200
@@ -1240,10 +1434,16 @@ async def test_analysis_runs_are_immutable_snapshots(client: AsyncClient):
     assert [r["run_number"] for r in runs] == [2, 1]
 
     # invalid input is a recorded run, then 422
-    bad_case = (await client.post(f"/api/engineering/revisions/{revision['id']}/analysis-cases", json={
-        "name": "Без площади", "analysis_type": "axial_stress",
-        "inputs": {"force_n": 500},
-    })).json()
+    bad_case = (
+        await client.post(
+            f"/api/engineering/revisions/{revision['id']}/analysis-cases",
+            json={
+                "name": "Без площади",
+                "analysis_type": "axial_stress",
+                "inputs": {"force_n": 500},
+            },
+        )
+    ).json()
     bad = await client.post(f"/api/engineering/analysis-cases/{bad_case['id']}/run")
     assert bad.status_code == 422
     bad_runs = (await client.get(f"/api/engineering/analysis-cases/{bad_case['id']}/runs")).json()

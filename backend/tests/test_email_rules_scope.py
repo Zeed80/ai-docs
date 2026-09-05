@@ -7,8 +7,8 @@ scanned all mailboxes and returned their subject lines.
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -22,18 +22,29 @@ COLLEAGUE_SUB = "colleague-sub"
 
 def _mailbox(name: str, *, owner_sub: str | None, mailbox_type: str) -> MailboxConfig:
     return MailboxConfig(
-        name=name, display_name=name, owner_sub=owner_sub, mailbox_type=mailbox_type,
-        imap_host="mail.example.com", imap_port=993, imap_user=name,
-        imap_password_encrypted="x", imap_ssl=True, is_active=True,
+        name=name,
+        display_name=name,
+        owner_sub=owner_sub,
+        mailbox_type=mailbox_type,
+        imap_host="mail.example.com",
+        imap_port=993,
+        imap_user=name,
+        imap_password_encrypted="x",
+        imap_ssl=True,
+        is_active=True,
     )
 
 
 def _message(mailbox: str, subject: str) -> tuple[EmailThread, EmailMessage]:
     thread = EmailThread(subject=subject, mailbox=mailbox, message_count=1)
     msg = EmailMessage(
-        thread=thread, mailbox=mailbox, subject=subject,
-        from_address="supplier@example.com", to_addresses=["x@example.com"],
-        body_text="счёт на оплату", received_at=datetime.now(timezone.utc),
+        thread=thread,
+        mailbox=mailbox,
+        subject=subject,
+        from_address="supplier@example.com",
+        to_addresses=["x@example.com"],
+        body_text="счёт на оплату",
+        received_at=datetime.now(UTC),
         message_id_header=f"<{uuid.uuid4()}@example.com>",
     )
     return thread, msg
@@ -52,12 +63,18 @@ async def people_client(db_session) -> AsyncIterator[AsyncClient]:
     settings.rate_limit_api_per_minute = 0
     people = {
         COLLEAGUE_SUB: UserInfo(
-            sub=COLLEAGUE_SUB, email="colleague@example.com", name="Коллега",
-            preferred_username="colleague", roles=[UserRole.viewer],
+            sub=COLLEAGUE_SUB,
+            email="colleague@example.com",
+            name="Коллега",
+            preferred_username="colleague",
+            roles=[UserRole.viewer],
         ),
         OWNER_SUB: UserInfo(
-            sub=OWNER_SUB, email="admin@example.com", name="Админ",
-            preferred_username="admin", roles=[UserRole.admin],
+            sub=OWNER_SUB,
+            email="admin@example.com",
+            name="Админ",
+            preferred_username="admin",
+            roles=[UserRole.admin],
         ),
     }
 
@@ -81,11 +98,13 @@ async def people_client(db_session) -> AsyncIterator[AsyncClient]:
 
 @pytest_asyncio.fixture
 async def mailboxes(db_session):
-    db_session.add_all([
-        _mailbox("procurement", owner_sub=None, mailbox_type="shared"),
-        _mailbox("colleague@example.com", owner_sub=COLLEAGUE_SUB, mailbox_type="personal"),
-        _mailbox("boss@example.com", owner_sub="boss-sub", mailbox_type="personal"),
-    ])
+    db_session.add_all(
+        [
+            _mailbox("procurement", owner_sub=None, mailbox_type="shared"),
+            _mailbox("colleague@example.com", owner_sub=COLLEAGUE_SUB, mailbox_type="personal"),
+            _mailbox("boss@example.com", owner_sub="boss-sub", mailbox_type="personal"),
+        ]
+    )
     await db_session.commit()
 
 
@@ -95,7 +114,10 @@ async def test_non_admin_cannot_create_an_all_mailboxes_rule(people_client, mail
         json={
             "name": "Всё подряд",
             "mailbox": None,
-            "conditions": {"match": "all", "rules": [{"field": "subject", "op": "contains", "value": "счёт"}]},
+            "conditions": {
+                "match": "all",
+                "rules": [{"field": "subject", "op": "contains", "value": "счёт"}],
+            },
             "actions": [{"type": "star"}],
         },
     )
@@ -108,7 +130,10 @@ async def test_non_admin_cannot_create_a_rule_for_someone_elses_mailbox(people_c
         json={
             "name": "Чужой ящик",
             "mailbox": "boss@example.com",
-            "conditions": {"match": "all", "rules": [{"field": "subject", "op": "contains", "value": "счёт"}]},
+            "conditions": {
+                "match": "all",
+                "rules": [{"field": "subject", "op": "contains", "value": "счёт"}],
+            },
             "actions": [{"type": "star"}],
         },
     )
@@ -122,7 +147,10 @@ async def test_admin_may_still_create_a_company_wide_rule(people_client, mailbox
         json={
             "name": "Общая маркировка",
             "mailbox": None,
-            "conditions": {"match": "all", "rules": [{"field": "subject", "op": "contains", "value": "счёт"}]},
+            "conditions": {
+                "match": "all",
+                "rules": [{"field": "subject", "op": "contains", "value": "счёт"}],
+            },
             "actions": [{"type": "star"}],
         },
     )
@@ -136,19 +164,27 @@ async def test_engine_ignores_a_personal_rule_in_another_mailbox(db_session, mai
     from app.domain.email_rules import apply_rules
 
     # A rule the colleague owns, scoped to their own mailbox…
-    db_session.add(EmailRule(
-        name="Моё правило", mailbox="colleague@example.com", owner_sub=COLLEAGUE_SUB,
-        is_active=True, priority=10,
-        conditions={"match": "all", "rules": [{"field": "subject", "op": "contains", "value": "счёт"}]},
-        actions=[{"type": "star"}],
-    ))
+    db_session.add(
+        EmailRule(
+            name="Моё правило",
+            mailbox="colleague@example.com",
+            owner_sub=COLLEAGUE_SUB,
+            is_active=True,
+            priority=10,
+            conditions={
+                "match": "all",
+                "rules": [{"field": "subject", "op": "contains", "value": "счёт"}],
+            },
+            actions=[{"type": "star"}],
+        )
+    )
     thread, msg = _message("boss@example.com", "Счёт от поставщика")
     db_session.add_all([thread, msg])
     await db_session.commit()
 
     # …must not fire on the boss's private mail.
     applied = await db_session.run_sync(
-        lambda sync_session: apply_rules(sync_session, msg, "boss@example.com")
+        lambda session: apply_rules(session, msg, "boss@example.com")
     )
     assert applied == []
     assert not msg.is_starred
@@ -157,11 +193,20 @@ async def test_engine_ignores_a_personal_rule_in_another_mailbox(db_session, mai
 async def test_engine_applies_a_shared_admin_rule_everywhere(db_session, mailboxes):
     from app.domain.email_rules import apply_rules
 
-    db_session.add(EmailRule(
-        name="Общая", mailbox=None, owner_sub=None, is_active=True, priority=10,
-        conditions={"match": "all", "rules": [{"field": "subject", "op": "contains", "value": "счёт"}]},
-        actions=[{"type": "star"}],
-    ))
+    db_session.add(
+        EmailRule(
+            name="Общая",
+            mailbox=None,
+            owner_sub=None,
+            is_active=True,
+            priority=10,
+            conditions={
+                "match": "all",
+                "rules": [{"field": "subject", "op": "contains", "value": "счёт"}],
+            },
+            actions=[{"type": "star"}],
+        )
+    )
     thread, msg = _message("procurement", "Счёт от поставщика")
     db_session.add_all([thread, msg])
     await db_session.commit()
@@ -181,9 +226,15 @@ async def test_dry_run_does_not_leak_other_peoples_subjects(people_client, db_se
     thread, msg = _message("boss@example.com", "Секретное письмо начальника про счёт")
     db_session.add_all([thread, msg])
     legacy = EmailRule(
-        name="Легаси-правило", mailbox=None, owner_sub=COLLEAGUE_SUB,
-        is_active=True, priority=10,
-        conditions={"match": "all", "rules": [{"field": "subject", "op": "contains", "value": "счёт"}]},
+        name="Легаси-правило",
+        mailbox=None,
+        owner_sub=COLLEAGUE_SUB,
+        is_active=True,
+        priority=10,
+        conditions={
+            "match": "all",
+            "rules": [{"field": "subject", "op": "contains", "value": "счёт"}],
+        },
         actions=[{"type": "star"}],
     )
     db_session.add(legacy)
@@ -206,16 +257,26 @@ async def test_dry_run_sees_real_attachments(people_client, db_session, mailboxe
     msg.has_attachments = True
     db_session.add_all([thread, msg])
     await db_session.flush()
-    db_session.add(EmailAttachment(
-        message_id=msg.id, filename="счёт-2026.pdf", content_type="application/pdf",
-        size=100, storage_path="documents/aa/bb/cc", sha256="c" * 64,
-    ))
+    db_session.add(
+        EmailAttachment(
+            message_id=msg.id,
+            filename="счёт-2026.pdf",
+            content_type="application/pdf",
+            size=100,
+            storage_path="documents/aa/bb/cc",
+            sha256="c" * 64,
+        )
+    )
     rule = EmailRule(
-        name="По имени вложения", mailbox="procurement", owner_sub=None,
-        is_active=True, priority=10,
-        conditions={"match": "all", "rules": [
-            {"field": "attachment_name", "op": "contains", "value": "счёт"}
-        ]},
+        name="По имени вложения",
+        mailbox="procurement",
+        owner_sub=None,
+        is_active=True,
+        priority=10,
+        conditions={
+            "match": "all",
+            "rules": [{"field": "attachment_name", "op": "contains", "value": "счёт"}],
+        },
         actions=[{"type": "star"}],
     )
     db_session.add(rule)

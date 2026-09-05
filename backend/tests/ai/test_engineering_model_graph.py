@@ -2,8 +2,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.ai.cad_emg_compat import (
-    feature_tree_revision_patch,
     feature_tree_from_graph,
+    feature_tree_revision_patch,
     legacy_spec_as_low_assurance,
     spec_feature_tree_as_graph,
 )
@@ -56,34 +56,60 @@ def _graph(*, critical_assurance="proposed") -> EngineeringModelGraph:
         ],
         assertions=[
             Assertion(
-                id="a-envelope", subject_id="product", predicate="envelope.width",
-                value=ExactValue(kind="exact", value=40.0), unit="mm",
-                origin="assumed", assurance=critical_assurance, confidence=0.5,
+                id="a-envelope",
+                subject_id="product",
+                predicate="envelope.width",
+                value=ExactValue(kind="exact", value=40.0),
+                unit="mm",
+                origin="assumed",
+                assurance=critical_assurance,
+                confidence=0.5,
                 impacts=["envelope"],
             ),
             Assertion(
-                id="a-decor", subject_id="decor", predicate="local.radius",
-                value=ExactValue(kind="exact", value=0.5), unit="mm",
-                origin="traced", assurance="corroborated", confidence=0.8,
+                id="a-decor",
+                subject_id="decor",
+                predicate="local.radius",
+                value=ExactValue(kind="exact", value=0.5),
+                unit="mm",
+                origin="traced",
+                assurance="corroborated",
+                confidence=0.8,
                 impacts=["visual_only"],
             ),
             Assertion(
-                id="a-kind", subject_id="op", predicate="operation.kind",
+                id="a-kind",
+                subject_id="op",
+                predicate="operation.kind",
                 value=ExactValue(kind="exact", value="extrude"),
-                origin="human", assurance="human_approved", confidence=1.0,
+                origin="human",
+                assurance="human_approved",
+                confidence=1.0,
             ),
             Assertion(
-                id="a-depth", subject_id="op", predicate="operation.param.depth_mm",
-                value=ExactValue(kind="exact", value=12.0), unit="mm",
-                origin="observed", assurance="constraint_validated", confidence=0.95,
+                id="a-depth",
+                subject_id="op",
+                predicate="operation.param.depth_mm",
+                value=ExactValue(kind="exact", value=12.0),
+                unit="mm",
+                origin="observed",
+                assurance="constraint_validated",
+                confidence=0.95,
             ),
         ],
         requirements=[
-            Requirement(id="r-envelope", kind="envelope", target_node_ids=["product"], assertion_ids=["a-envelope"])
+            Requirement(
+                id="r-envelope",
+                kind="envelope",
+                target_node_ids=["product"],
+                assertion_ids=["a-envelope"],
+            )
         ],
         build_targets=[
             BuildTarget(
-                id="production", kind="production_step", root_node_ids=["product"],
+                id="production",
+                kind="production_step",
+                root_node_ids=["product"],
                 requirement_ids=["r-envelope"],
             )
         ],
@@ -106,12 +132,14 @@ def test_legacy_consensus_provenance_becomes_assertion_level_source_region():
             "main_view": {"outer": [{"diameter_mm": 30}]},
             "value_provenance": {
                 "main_view/outer/0/diameter_mm": {
-                    "evidence": [{
-                        "source_bbox": [10, 20, 110, 70],
-                        "raw_text": "Ø30",
-                        "image_index": 1,
-                        "pass": 2,
-                    }],
+                    "evidence": [
+                        {
+                            "source_bbox": [10, 20, 110, 70],
+                            "raw_text": "Ø30",
+                            "image_index": 1,
+                            "pass": 2,
+                        }
+                    ],
                 },
             },
         },
@@ -121,8 +149,7 @@ def test_legacy_consensus_provenance_becomes_assertion_level_source_region():
     )
 
     assertion = next(
-        item for item in graph.assertions
-        if item.predicate == "main_view.outer[0].diameter_mm"
+        item for item in graph.assertions if item.predicate == "main_view.outer[0].diameter_mm"
     )
     assert assertion.origin == "derived"
     assert assertion.assurance == "proposed"
@@ -133,12 +160,9 @@ def test_legacy_consensus_provenance_becomes_assertion_level_source_region():
     assert evidence.payload["fallback"] is False
     assert evidence.payload["raw_text"] == "Ø30"
     assert any(
-        item.id == evidence.source_region_id and item.type == "SourceRegion"
-        for item in graph.nodes
+        item.id == evidence.source_region_id and item.type == "SourceRegion" for item in graph.nodes
     )
-    assert not any(
-        item.predicate.startswith("value_provenance") for item in graph.assertions
-    )
+    assert not any(item.predicate.startswith("value_provenance") for item in graph.assertions)
 
 
 def test_legacy_drawing_scale_is_validated_and_requires_local_evidence():
@@ -148,21 +172,21 @@ def test_legacy_drawing_scale_is_validated_and_requires_local_evidence():
         source_sha256="a" * 64,
     )
     _state, issues = verify_graph(without_evidence)
-    assert "drawing_scale_evidence_missing" in {
-        item["code"] for item in issues
-    }
+    assert "drawing_scale_evidence_missing" in {item["code"] for item in issues}
 
     with_evidence = legacy_spec_as_low_assurance(
         {
             "title_block": {"scale": "1:2"},
             "value_provenance": {
                 "title_block/scale": {
-                    "evidence": [{
-                        "source_bbox": [10, 20, 80, 45],
-                        "raw_text": "1:2",
-                        "image_index": 0,
-                        "pass": 1,
-                    }],
+                    "evidence": [
+                        {
+                            "source_bbox": [10, 20, 80, 45],
+                            "raw_text": "1:2",
+                            "image_index": 0,
+                            "pass": 1,
+                        }
+                    ],
                 },
             },
         },
@@ -171,9 +195,7 @@ def test_legacy_drawing_scale_is_validated_and_requires_local_evidence():
         source_uri="image-gen/scale.png",
     )
     _state, issues = verify_graph(with_evidence)
-    scale_codes = {
-        item["code"] for item in issues if "scale" in item["code"]
-    }
+    scale_codes = {item["code"] for item in issues if "scale" in item["code"]}
     assert scale_codes == set()
 
 
@@ -187,8 +209,7 @@ def test_nonstandard_legacy_scale_is_reported_without_guessing():
     _state, issues = verify_graph(graph)
 
     issue = next(
-        item for item in issues
-        if item["code"] == "drawing_scale_nonstandard_or_unreadable"
+        item for item in issues if item["code"] == "drawing_scale_nonstandard_or_unreadable"
     )
     assert issue["value"] == "примерно1:3"
     assert issue["severity"] == "warning"
@@ -197,14 +218,24 @@ def test_nonstandard_legacy_scale_is_reported_without_guessing():
 def test_graph_patch_is_atomic_revision_safe_and_model_cannot_approve():
     graph = _graph()
     patch = GraphPatch(
-        patch_id="p1", base_revision=0, base_sha256=graph.canonical_sha256,
-        producer="reader", pass_id="pass-1", idempotency_key="key-1",
+        patch_id="p1",
+        base_revision=0,
+        base_sha256=graph.canonical_sha256,
+        producer="reader",
+        pass_id="pass-1",
+        idempotency_key="key-1",
         add_nodes=[GraphNode(id="feature", type="Feature")],
-        add_assertions=[Assertion(
-            id="a-feature", subject_id="feature", predicate="feature.kind",
-            value=ExactValue(kind="exact", value="hole"), origin="observed",
-            assurance="observed", confidence=0.8,
-        )],
+        add_assertions=[
+            Assertion(
+                id="a-feature",
+                subject_id="feature",
+                predicate="feature.kind",
+                value=ExactValue(kind="exact", value="hole"),
+                origin="observed",
+                assurance="observed",
+                confidence=0.8,
+            )
+        ],
     )
     merged = apply_graph_patch(graph, patch)
     assert merged.revision == 1
@@ -215,12 +246,17 @@ def test_graph_patch_is_atomic_revision_safe_and_model_cannot_approve():
     with pytest.raises(PatchMergeError, match="duplicate_idempotency_key"):
         apply_graph_patch(graph, patch, applied_idempotency_keys={"key-1"})
 
-    forbidden = patch.model_copy(update={
-        "patch_id": "p2", "idempotency_key": "key-2",
-        "add_assertions": [patch.add_assertions[0].model_copy(update={
-            "id": "a-forbidden", "assurance": "constraint_validated"
-        })],
-    })
+    forbidden = patch.model_copy(
+        update={
+            "patch_id": "p2",
+            "idempotency_key": "key-2",
+            "add_assertions": [
+                patch.add_assertions[0].model_copy(
+                    update={"id": "a-forbidden", "assurance": "constraint_validated"}
+                )
+            ],
+        }
+    )
     with pytest.raises(PatchMergeError, match="producer_cannot_validate_or_approve"):
         apply_graph_patch(graph, forbidden)
 
@@ -229,50 +265,63 @@ def test_contract_upgrade_patch_adds_gates_without_removing_existing_contract():
     current = _graph()
     payload = current.model_dump(mode="json")
     payload["canonical_sha256"] = ""
-    payload["assertions"].append({
-        "id": "a-required-view",
-        "subject_id": "product",
-        "predicate": "drawing.required_views_complete",
-        "value": {"kind": "unknown", "reason": "not generated"},
-        "origin": "derived",
-        "assurance": "proposed",
-        "confidence": 0.0,
-        "impacts": ["required_view"],
-    })
-    payload["requirements"].append({
-        "id": "r-view", "kind": "view", "target_node_ids": ["product"],
-        "assertion_ids": ["a-required-view"], "mandatory": True,
-    })
+    payload["assertions"].append(
+        {
+            "id": "a-required-view",
+            "subject_id": "product",
+            "predicate": "drawing.required_views_complete",
+            "value": {"kind": "unknown", "reason": "not generated"},
+            "origin": "derived",
+            "assurance": "proposed",
+            "confidence": 0.0,
+            "impacts": ["required_view"],
+        }
+    )
+    payload["requirements"].append(
+        {
+            "id": "r-view",
+            "kind": "view",
+            "target_node_ids": ["product"],
+            "assertion_ids": ["a-required-view"],
+            "mandatory": True,
+        }
+    )
     payload["build_targets"][0]["requirement_ids"].append("r-view")
     desired = EngineeringModelGraph.model_validate(payload).sealed()
 
     patch = graph_contract_upgrade_patch(
-        current, desired, patch_prefix="contract-upgrade:test",
+        current,
+        desired,
+        patch_prefix="contract-upgrade:test",
     )
 
     assert patch is not None
     upgraded = apply_graph_patch(current, patch)
-    assert {item.id for item in current.requirements} <= {
-        item.id for item in upgraded.requirements
-    }
+    assert {item.id for item in current.requirements} <= {item.id for item in upgraded.requirements}
     assert "r-view" in upgraded.build_targets[0].requirement_ids
-    assert "a-required-view" in compile_build_plan(
-        upgraded, "production"
-    ).critical_assumption_ids
+    assert "a-required-view" in compile_build_plan(upgraded, "production").critical_assumption_ids
     with pytest.raises(PatchMergeError, match="contract_replacement_requires"):
         apply_graph_patch(current, patch.model_copy(update={"producer": "reader"}))
 
 
 def test_confirmed_assertion_can_only_be_superseded_by_human_with_replacement():
     graph = _graph(critical_assurance="human_approved")
-    replacement = graph.assertions[0].model_copy(update={
-        "id": "a-envelope-2", "supersedes_assertion_id": "a-envelope",
-        "value": ExactValue(kind="exact", value=42.0),
-    })
+    replacement = graph.assertions[0].model_copy(
+        update={
+            "id": "a-envelope-2",
+            "supersedes_assertion_id": "a-envelope",
+            "value": ExactValue(kind="exact", value=42.0),
+        }
+    )
     patch = GraphPatch(
-        patch_id="p", base_revision=0, base_sha256=graph.canonical_sha256,
-        producer="system", pass_id="pass", idempotency_key="k",
-        add_assertions=[replacement], supersede_assertion_ids=["a-envelope"],
+        patch_id="p",
+        base_revision=0,
+        base_sha256=graph.canonical_sha256,
+        producer="system",
+        pass_id="pass",
+        idempotency_key="k",
+        add_assertions=[replacement],
+        supersede_assertion_ids=["a-envelope"],
     )
     with pytest.raises(PatchMergeError, match="confirmed_assertions_require_human"):
         apply_graph_patch(graph, patch)
@@ -291,14 +340,22 @@ def test_same_value_supersede_of_a_confirmed_assertion_does_not_require_human():
     instead of the gate firing on every subsequent plain rebuild even when
     nothing had actually changed."""
     graph = _graph(critical_assurance="human_approved")
-    same_value = graph.assertions[0].model_copy(update={
-        "id": "a-envelope-2", "supersedes_assertion_id": "a-envelope",
-        "value": ExactValue(kind="exact", value=40.0),  # identical to a-envelope's own value
-    })
+    same_value = graph.assertions[0].model_copy(
+        update={
+            "id": "a-envelope-2",
+            "supersedes_assertion_id": "a-envelope",
+            "value": ExactValue(kind="exact", value=40.0),  # identical to a-envelope's own value
+        }
+    )
     patch = GraphPatch(
-        patch_id="p", base_revision=0, base_sha256=graph.canonical_sha256,
-        producer="system", pass_id="pass", idempotency_key="k",
-        add_assertions=[same_value], supersede_assertion_ids=["a-envelope"],
+        patch_id="p",
+        base_revision=0,
+        base_sha256=graph.canonical_sha256,
+        producer="system",
+        pass_id="pass",
+        idempotency_key="k",
+        add_assertions=[same_value],
+        supersede_assertion_ids=["a-envelope"],
     )
     merged = apply_graph_patch(graph, patch)  # must not raise
     assert next(item for item in merged.assertions if item.id == "a-envelope").state == "superseded"
@@ -306,20 +363,30 @@ def test_same_value_supersede_of_a_confirmed_assertion_does_not_require_human():
 
     # A genuinely different value from a system producer is still rejected —
     # this is the legitimate protection the gate exists for.
-    different_value = graph.assertions[0].model_copy(update={
-        "id": "a-envelope-3", "supersedes_assertion_id": "a-envelope",
-        "value": ExactValue(kind="exact", value=41.0),
-    })
-    changed_patch = patch.model_copy(update={
-        "add_assertions": [different_value], "idempotency_key": "k2",
-    })
+    different_value = graph.assertions[0].model_copy(
+        update={
+            "id": "a-envelope-3",
+            "supersedes_assertion_id": "a-envelope",
+            "value": ExactValue(kind="exact", value=41.0),
+        }
+    )
+    changed_patch = patch.model_copy(
+        update={
+            "add_assertions": [different_value],
+            "idempotency_key": "k2",
+        }
+    )
     with pytest.raises(PatchMergeError, match="confirmed_assertions_require_human"):
         apply_graph_patch(graph, changed_patch)
 
     # A retraction (no replacement value at all) is always a real change.
     retract_patch = GraphPatch(
-        patch_id="p-retract", base_revision=0, base_sha256=graph.canonical_sha256,
-        producer="system", pass_id="pass", idempotency_key="k3",
+        patch_id="p-retract",
+        base_revision=0,
+        base_sha256=graph.canonical_sha256,
+        producer="system",
+        pass_id="pass",
+        idempotency_key="k3",
         retract_assertion_ids=["a-envelope"],
     )
     with pytest.raises(PatchMergeError, match="confirmed_assertions_require_human"):
@@ -355,23 +422,33 @@ def test_system_rebuild_after_human_confirms_one_operation_value_does_not_break(
         label="original",
     )
     graph = spec_feature_tree_as_graph(
-        {"part": "plate", "depth_mm": 10.0}, candidate, graph_id="emg:no-op-rebuild",
+        {"part": "plate", "depth_mm": 10.0},
+        candidate,
+        graph_id="emg:no-op-rebuild",
     )
     depth_assertion = next(
-        item for item in graph.assertions
+        item
+        for item in graph.assertions
         if item.subject_id == "operation:0" and item.predicate == "operation.param.depth_mm"
     )
     # Simulate a human confirming this value via correct_generation_model_assertion.
-    confirmed = depth_assertion.model_copy(update={
-        "id": "a-human-confirm",
-        "assurance": "human_approved",
-        "origin": "human",
-        "supersedes_assertion_id": depth_assertion.id,
-    })
+    confirmed = depth_assertion.model_copy(
+        update={
+            "id": "a-human-confirm",
+            "assurance": "human_approved",
+            "origin": "human",
+            "supersedes_assertion_id": depth_assertion.id,
+        }
+    )
     confirm_patch = GraphPatch(
-        patch_id="p-confirm", base_revision=graph.revision, base_sha256=graph.canonical_sha256,
-        producer="human", pass_id="review", idempotency_key="confirm:1",
-        add_assertions=[confirmed], supersede_assertion_ids=[depth_assertion.id],
+        patch_id="p-confirm",
+        base_revision=graph.revision,
+        base_sha256=graph.canonical_sha256,
+        producer="human",
+        pass_id="review",
+        idempotency_key="confirm:1",
+        add_assertions=[confirmed],
+        supersede_assertion_ids=[depth_assertion.id],
     )
     confirmed_graph = apply_graph_patch(graph, confirm_patch)
 
@@ -409,42 +486,56 @@ def test_criticality_is_target_dependency_based_and_release_stays_blocked():
 def test_assertion_impact_reports_target_criticality_and_downstream_rebuilds():
     graph = _graph()
     payload = graph.model_dump(mode="json")
-    payload["nodes"].extend([
-        {"id": "artifact", "type": "Artifact"},
-        {"id": "face", "type": "TopologyElement"},
-        {"id": "view-front", "type": "View", "name": "Front"},
-        {"id": "ifc-wall", "type": "Component", "name": "Wall"},
-    ])
-    payload["edges"].extend([
+    payload["nodes"].extend(
+        [
+            {"id": "artifact", "type": "Artifact"},
+            {"id": "face", "type": "TopologyElement"},
+            {"id": "view-front", "type": "View", "name": "Front"},
+            {"id": "ifc-wall", "type": "Component", "name": "Wall"},
+        ]
+    )
+    payload["edges"].extend(
+        [
+            {
+                "id": "e-artifact",
+                "type": "generated_by",
+                "source_id": "artifact",
+                "target_id": "op",
+            },
+            {
+                "id": "e-topology",
+                "type": "maps_to_topology",
+                "source_id": "artifact",
+                "target_id": "face",
+            },
+            {
+                "id": "e-view",
+                "type": "represented_by",
+                "source_id": "artifact",
+                "target_id": "view-front",
+            },
+            {
+                "id": "e-bim",
+                "type": "depends_on",
+                "source_id": "ifc-wall",
+                "target_id": "op",
+            },
+        ]
+    )
+    payload["assertions"].append(
         {
-            "id": "e-artifact", "type": "generated_by",
-            "source_id": "artifact", "target_id": "op",
-        },
-        {
-            "id": "e-topology", "type": "maps_to_topology",
-            "source_id": "artifact", "target_id": "face",
-        },
-        {
-            "id": "e-view", "type": "represented_by",
-            "source_id": "artifact", "target_id": "view-front",
-        },
-        {
-            "id": "e-bim", "type": "depends_on",
-            "source_id": "ifc-wall", "target_id": "op",
-        },
-    ])
-    payload["assertions"].append({
-        "id": "a-ifc-guid",
-        "subject_id": "ifc-wall",
-        "predicate": "ifc.guid",
-        "value": {"kind": "exact", "value": "2Yx"},
-        "origin": "observed",
-        "assurance": "corroborated",
-        "confidence": 1,
-        "impacts": ["base_topology"],
-        "evidence_ids": [],
-        "state": "active",
-    })
+            "id": "a-ifc-guid",
+            "subject_id": "ifc-wall",
+            "predicate": "ifc.guid",
+            "value": {"kind": "exact", "value": "2Yx"},
+            "origin": "observed",
+            "assurance": "corroborated",
+            "confidence": 1,
+            "impacts": ["base_topology"],
+            "evidence_ids": [],
+            "state": "active",
+        }
+    )
     graph = EngineeringModelGraph.model_validate(payload).sealed()
 
     report = assertion_impact_report(graph, "a-envelope", "production")
@@ -457,7 +548,10 @@ def test_assertion_impact_reports_target_criticality_and_downstream_rebuilds():
     assert report.affected_view_ids == ["view-front"]
     assert report.affected_bim_object_ids == ["ifc-wall"]
     assert report.dependency_paths["face"] == [
-        "product", "op", "artifact", "face",
+        "product",
+        "op",
+        "artifact",
+        "face",
     ]
 
     decorative = assertion_impact_report(graph, "a-decor", "production")
@@ -467,30 +561,50 @@ def test_assertion_impact_reports_target_criticality_and_downstream_rebuilds():
 
 def test_hypothesis_selection_uses_fixed_scoring_and_stable_tie_break():
     options = [
-        HypothesisOption(id="b", assertion_ids=[], hard_constraints_satisfied=True, evidence_coverage=0.8),
-        HypothesisOption(id="a", assertion_ids=[], hard_constraints_satisfied=True, evidence_coverage=0.8),
-        HypothesisOption(id="c", assertion_ids=[], hard_constraints_satisfied=False, evidence_coverage=1.0),
+        HypothesisOption(
+            id="b", assertion_ids=[], hard_constraints_satisfied=True, evidence_coverage=0.8
+        ),
+        HypothesisOption(
+            id="a", assertion_ids=[], hard_constraints_satisfied=True, evidence_coverage=0.8
+        ),
+        HypothesisOption(
+            id="c", assertion_ids=[], hard_constraints_satisfied=False, evidence_coverage=1.0
+        ),
     ]
     assert select_hypothesis(options) == "a"
 
 
 def _trace(*, critical=False, verdict="match"):
     proposal = TraceProposal(
-        id="tp1", source_region_id="roi-1", hypothesis_id="h1",
+        id="tp1",
+        source_region_id="roi-1",
+        hypothesis_id="h1",
         primitives=[TracePrimitive(kind="polyline", parameters={"points": [0.0, 0.0, 1.0, 1.0]})],
-        source_bbox=(10, 20, 30, 40), uncertainty=0.1,
+        source_bbox=(10, 20, 30, 40),
+        uncertainty=0.1,
         checks=DeterministicTraceChecks(
-            connected=True, closed=True, no_self_intersections=True,
-            no_dangling_ends=True, anchors_satisfied=True,
-            dimensions_satisfied=True, forbidden_geometry_clear=True,
-            pixel_precision=0.95, pixel_recall=0.9,
+            connected=True,
+            closed=True,
+            no_self_intersections=True,
+            no_dangling_ends=True,
+            anchors_satisfied=True,
+            dimensions_satisfied=True,
+            forbidden_geometry_clear=True,
+            pixel_precision=0.95,
+            pixel_recall=0.9,
             critical_impact_detected=critical,
         ),
     )
     visual = VisualVerification(
-        proposal_id="tp1", verdict=verdict, element_count=1,
-        shape_matches=True, position_matches=True, orientation_matches=True,
-        connectivity_matches=True, confidence=0.9, raw_output="{}",
+        proposal_id="tp1",
+        verdict=verdict,
+        element_count=1,
+        shape_matches=True,
+        position_matches=True,
+        orientation_matches=True,
+        connectivity_matches=True,
+        confidence=0.9,
+        raw_output="{}",
         verifier_model="independent-vlm",
     )
     return proposal, visual
@@ -545,7 +659,13 @@ def test_trace_ranking_limits_region_to_three_proposals():
     assert ranked[0][1].accepted
     with pytest.raises(ValueError, match="at most three"):
         rank_trace_proposals(
-            [(proposal.model_copy(update={"id": str(i)}), visual.model_copy(update={"proposal_id": str(i)})) for i in range(4)],
+            [
+                (
+                    proposal.model_copy(update={"id": str(i)}),
+                    visual.model_copy(update={"proposal_id": str(i)}),
+                )
+                for i in range(4)
+            ],
             assertion_is_non_critical=True,
             conflicts_with_validated=False,
         )
@@ -576,23 +696,37 @@ def _mechanical_graph_with_feature(*, linked: bool) -> EngineeringModelGraph:
     ]
     if linked:
         nodes.append(GraphNode(id="view:front", type="View"))
-        edges.append(GraphEdge(
-            id="shown", type="represented_by",
-            source_id="feature:0:chamfers:0", target_id="view:front",
-        ))
+        edges.append(
+            GraphEdge(
+                id="shown",
+                type="represented_by",
+                source_id="feature:0:chamfers:0",
+                target_id="view:front",
+            )
+        )
     return EngineeringModelGraph(
-        graph_id="emg:mech-feature-test", profile="mechanical",
-        nodes=nodes, edges=edges,
+        graph_id="emg:mech-feature-test",
+        profile="mechanical",
+        nodes=nodes,
+        edges=edges,
         assertions=[
             Assertion(
-                id="a-kind", subject_id="op", predicate="operation.kind",
+                id="a-kind",
+                subject_id="op",
+                predicate="operation.kind",
                 value=ExactValue(kind="exact", value="extrude"),
-                origin="human", assurance="human_approved", confidence=1.0,
+                origin="human",
+                assurance="human_approved",
+                confidence=1.0,
             ),
             Assertion(
-                id="a-material", subject_id="product", predicate="material.designation",
+                id="a-material",
+                subject_id="product",
+                predicate="material.designation",
                 value=ExactValue(kind="exact", value="Steel"),
-                origin="human", assurance="human_approved", confidence=1.0,
+                origin="human",
+                assurance="human_approved",
+                confidence=1.0,
             ),
         ],
     ).sealed()
@@ -658,18 +792,20 @@ def test_legacy_spec_links_unknowns_to_normalized_source_without_trace_permissio
 
 def test_spec_candidate_round_trips_through_sealed_graph_before_kernel():
     candidate = FeatureTreeCandidate(
-        features=[Feature3D(
-            kind="chamfer",
-            params={
-                "size_mm": 1.0,
-                "edge_selector": {"curve": "Circle", "at_z_mm": 20.0},
-            },
-            param_provenance={
-                "size_mm": ParamProvenance(origin="stated", detail="callout"),
-                "edge_selector": ParamProvenance(origin="propagated", detail="profile"),
-            },
-            confidence=0.9,
-        )],
+        features=[
+            Feature3D(
+                kind="chamfer",
+                params={
+                    "size_mm": 1.0,
+                    "edge_selector": {"curve": "Circle", "at_z_mm": 20.0},
+                },
+                param_provenance={
+                    "size_mm": ParamProvenance(origin="stated", detail="callout"),
+                    "edge_selector": ParamProvenance(origin="propagated", detail="profile"),
+                },
+                confidence=0.9,
+            )
+        ],
         score=0.9,
         label="source candidate",
     )
@@ -697,14 +833,16 @@ def test_missing_data_notes_survive_the_sealed_graph_round_trip():
         "требует подтверждения в редакторе"
     )
     candidate = FeatureTreeCandidate(
-        features=[Feature3D(
-            kind="revolve",
-            params={"profile_points": [{"r": 10.0, "z": 0.0}, {"r": 10.0, "z": 20.0}]},
-            param_provenance={
-                "profile_points": ParamProvenance(origin="guessed", detail=friendly_note),
-            },
-            confidence=0.9,
-        )],
+        features=[
+            Feature3D(
+                kind="revolve",
+                params={"profile_points": [{"r": 10.0, "z": 0.0}, {"r": 10.0, "z": 20.0}]},
+                param_provenance={
+                    "profile_points": ParamProvenance(origin="guessed", detail=friendly_note),
+                },
+                confidence=0.9,
+            )
+        ],
         score=0.9,
         label="shaft candidate",
         missing_data=[friendly_note],
@@ -724,12 +862,14 @@ def test_spec_feature_tree_as_graph_draws_realizes_edge_to_its_source_feature():
     Ф1.2 Feature node it was built from — closing the gap where the two
     graphs never referenced each other."""
     candidate = FeatureTreeCandidate(
-        features=[Feature3D(
-            kind="chamfer",
-            source_feature_ids=["0:chamfers:0"],
-            params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
-            confidence=0.9,
-        )],
+        features=[
+            Feature3D(
+                kind="chamfer",
+                source_feature_ids=["0:chamfers:0"],
+                params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
+                confidence=0.9,
+            )
+        ],
         score=0.9,
         label="chamfer candidate",
     )
@@ -756,20 +896,28 @@ def test_realizes_edge_is_never_drawn_to_a_feature_node_that_does_not_exist():
     a leaf this native builder does not cover) gets no edge — never a
     dangling reference, which would fail graph integrity validation anyway."""
     candidate = FeatureTreeCandidate(
-        features=[Feature3D(
-            kind="chamfer",
-            source_feature_ids=["0:chamfers:0"],
-            params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
-            confidence=0.9,
-        )],
+        features=[
+            Feature3D(
+                kind="chamfer",
+                source_feature_ids=["0:chamfers:0"],
+                params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
+                confidence=0.9,
+            )
+        ],
         score=0.9,
         label="chamfer candidate",
     )
     graph = spec_feature_tree_as_graph(
         # No "id" on the chamfer item — no Feature node exists for it.
-        {"part": "test", "main_view": {"type": "shaft", "chamfers": [
-            {"size_mm": 1.0, "location": "left_end"},
-        ]}},
+        {
+            "part": "test",
+            "main_view": {
+                "type": "shaft",
+                "chamfers": [
+                    {"size_mm": 1.0, "location": "left_end"},
+                ],
+            },
+        },
         candidate,
         graph_id="emg:no-realizes",
     )
@@ -778,19 +926,27 @@ def test_realizes_edge_is_never_drawn_to_a_feature_node_that_does_not_exist():
 
 def test_feature_tree_from_graph_recovers_source_feature_ids_from_realizes_edges():
     candidate = FeatureTreeCandidate(
-        features=[Feature3D(
-            kind="chamfer",
-            source_feature_ids=["0:chamfers:0"],
-            params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
-            confidence=0.9,
-        )],
+        features=[
+            Feature3D(
+                kind="chamfer",
+                source_feature_ids=["0:chamfers:0"],
+                params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
+                confidence=0.9,
+            )
+        ],
         score=0.9,
         label="chamfer candidate",
     )
     graph = spec_feature_tree_as_graph(
-        {"part": "test", "main_view": {"type": "shaft", "chamfers": [
-            {"id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end"},
-        ]}},
+        {
+            "part": "test",
+            "main_view": {
+                "type": "shaft",
+                "chamfers": [
+                    {"id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end"},
+                ],
+            },
+        },
         candidate,
         graph_id="emg:realizes-roundtrip",
     )
@@ -806,24 +962,33 @@ def test_correcting_a_feature_assertion_never_makes_a_clean_build_provisional():
     requirement — that would silently turn every part with a chamfer into a
     provisional build, which nothing about this change is meant to do."""
     candidate = FeatureTreeCandidate(
-        features=[Feature3D(
-            kind="chamfer",
-            source_feature_ids=["0:chamfers:0"],
-            params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
-            confidence=0.9,
-        )],
+        features=[
+            Feature3D(
+                kind="chamfer",
+                source_feature_ids=["0:chamfers:0"],
+                params={"size_mm": 1.0, "edge_selector": {"curve": "Circle", "at_z_mm": 0.0}},
+                confidence=0.9,
+            )
+        ],
         score=0.9,
         label="chamfer candidate",
     )
     graph = spec_feature_tree_as_graph(
-        {"part": "test", "main_view": {"type": "shaft", "chamfers": [
-            {"id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end"},
-        ]}},
+        {
+            "part": "test",
+            "main_view": {
+                "type": "shaft",
+                "chamfers": [
+                    {"id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end"},
+                ],
+            },
+        },
         candidate,
         graph_id="emg:realizes-impact",
     )
     feature_kind_assertion = next(
-        item for item in graph.assertions
+        item
+        for item in graph.assertions
         if item.subject_id == "feature:0:chamfers:0" and item.predicate == "feature.kind"
     )
     report = assertion_impact_report(graph, feature_kind_assertion.id, "preview")
@@ -842,17 +1007,23 @@ def test_correcting_a_feature_assertion_never_makes_a_clean_build_provisional():
 
 def test_human_spec_rebuild_is_an_atomic_patch_and_old_operations_are_not_rebuilt():
     original = FeatureTreeCandidate(
-        features=[Feature3D(
-            kind="extrude", params={"depth_mm": 10.0},
-            param_provenance={
-                "depth_mm": ParamProvenance(origin="stated", detail="source"),
-            }, confidence=0.8,
-        )],
+        features=[
+            Feature3D(
+                kind="extrude",
+                params={"depth_mm": 10.0},
+                param_provenance={
+                    "depth_mm": ParamProvenance(origin="stated", detail="source"),
+                },
+                confidence=0.8,
+            )
+        ],
         score=0.8,
         label="original",
     )
     graph = spec_feature_tree_as_graph(
-        {"part": "plate", "depth_mm": 10.0}, original, graph_id="emg:edit",
+        {"part": "plate", "depth_mm": 10.0},
+        original,
+        graph_id="emg:edit",
     )
     corrected = original.model_copy(deep=True)
     corrected.features[0].params["depth_mm"] = 12.0
@@ -868,9 +1039,7 @@ def test_human_spec_rebuild_is_an_atomic_patch_and_old_operations_are_not_rebuil
 
     assert revised.revision == 1
     assert any(item.state == "superseded" for item in revised.assertions)
-    assert compile_build_plan(revised, "preview").operation_node_ids == [
-        "operation:r1:0000"
-    ]
+    assert compile_build_plan(revised, "preview").operation_node_ids == ["operation:r1:0000"]
     projected = feature_tree_from_graph(revised, target_id="preview")
     assert projected.features[0].params["depth_mm"] == 12.0
     assert projected.features[0].param_provenance["depth_mm"].origin == "stated"
@@ -885,12 +1054,11 @@ def test_human_spec_rebuild_is_an_atomic_patch_and_old_operations_are_not_rebuil
         idempotency_key="edit:2",
     )
     revised_again = apply_graph_patch(revised, second)
-    assert compile_build_plan(revised_again, "preview").operation_node_ids == [
-        "operation:r2:0000"
-    ]
-    assert feature_tree_from_graph(
-        revised_again, target_id="preview"
-    ).features[0].params["depth_mm"] == 14.0
+    assert compile_build_plan(revised_again, "preview").operation_node_ids == ["operation:r2:0000"]
+    assert (
+        feature_tree_from_graph(revised_again, target_id="preview").features[0].params["depth_mm"]
+        == 14.0
+    )
 
 
 def test_human_feature_tree_patch_retains_actor_and_engineering_reason():
@@ -900,7 +1068,9 @@ def test_human_feature_tree_patch_retains_actor_and_engineering_reason():
         label="plate",
     )
     graph = spec_feature_tree_as_graph(
-        {"part": "plate"}, candidate, graph_id="emg:audited-edit",
+        {"part": "plate"},
+        candidate,
+        graph_id="emg:audited-edit",
     )
     patch = feature_tree_revision_patch(
         graph,
@@ -935,43 +1105,56 @@ def test_rebuild_patch_also_carries_the_missing_data_note_forward():
         "требует подтверждения в редакторе"
     )
     clean = FeatureTreeCandidate(
-        features=[Feature3D(
-            kind="extrude", params={"depth_mm": 10.0},
-            param_provenance={
-                "depth_mm": ParamProvenance(origin="stated", detail="source"),
-            }, confidence=0.8,
-        )],
+        features=[
+            Feature3D(
+                kind="extrude",
+                params={"depth_mm": 10.0},
+                param_provenance={
+                    "depth_mm": ParamProvenance(origin="stated", detail="source"),
+                },
+                confidence=0.8,
+            )
+        ],
         score=0.8,
         label="clean",
     )
     graph = spec_feature_tree_as_graph(
-        {"part": "plate", "depth_mm": 10.0}, clean, graph_id="emg:missing-data-rebuild",
+        {"part": "plate", "depth_mm": 10.0},
+        clean,
+        graph_id="emg:missing-data-rebuild",
     )
     with_guess = clean.model_copy(deep=True)
     with_guess.missing_data = [friendly_note]
     patch = feature_tree_revision_patch(
-        graph, {"part": "plate", "depth_mm": 10.0}, with_guess,
-        producer="system", pass_id="rebuild:1", idempotency_key="rebuild:1",
+        graph,
+        {"part": "plate", "depth_mm": 10.0},
+        with_guess,
+        producer="system",
+        pass_id="rebuild:1",
+        idempotency_key="rebuild:1",
     )
     revised = apply_graph_patch(graph, patch)
 
-    assert friendly_note in feature_tree_from_graph(
-        revised, target_id="preview"
-    ).missing_data
+    assert friendly_note in feature_tree_from_graph(revised, target_id="preview").missing_data
 
 
 def test_feature_tree_operation_sequence_is_numeric_beyond_nine_features():
     candidate = FeatureTreeCandidate(
-        features=[Feature3D(
-            kind="hole",
-            params={"diameter_mm": float(index + 1), "through": True},
-            confidence=0.9,
-        ) for index in range(12)],
+        features=[
+            Feature3D(
+                kind="hole",
+                params={"diameter_mm": float(index + 1), "through": True},
+                confidence=0.9,
+            )
+            for index in range(12)
+        ],
         score=0.9,
         label="twelve holes",
     )
     graph = spec_feature_tree_as_graph(
-        {"part": "pattern"}, candidate, graph_id="emg:sequence",
+        {"part": "pattern"},
+        candidate,
+        graph_id="emg:sequence",
     )
 
     projected = feature_tree_from_graph(graph, target_id="preview")

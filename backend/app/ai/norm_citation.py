@@ -30,7 +30,7 @@ from app.db.models import NormativeDocument
 
 
 def _doc_code_base(norm_ref: str) -> str:
-    """"ГОСТ 2.303-68" -> "ГОСТ 2.303" — strip a trailing YEAR/edition
+    """ "ГОСТ 2.303-68" -> "ГОСТ 2.303" — strip a trailing YEAR/edition
     suffix (the last "-NN" or "-NNNN" segment) so a citation matches
     whichever edition happens to be ingested.
 

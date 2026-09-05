@@ -10,8 +10,6 @@ gemma4 → qwen3.8 ссылки на gemma4 остались в цепочках
 «неизвестно», а не «модели нет».
 """
 
-import pytest
-
 from app.ai.provider_registry import Availability
 from app.ai.schemas import ProviderKind
 
@@ -75,9 +73,7 @@ def test_cloud_providers_are_never_called_missing(monkeypatch):
     об их отсутствии нельзя."""
     from app.ai.provider_registry import model_availability
 
-    assert model_availability(
-        ProviderKind.ANTHROPIC, "claude-sonnet-4-6"
-    ) is Availability.UNKNOWN
+    assert model_availability(ProviderKind.ANTHROPIC, "claude-sonnet-4-6") is Availability.UNKNOWN
 
 
 def test_prune_drops_only_what_is_certainly_gone(monkeypatch):
@@ -104,12 +100,10 @@ def test_prune_drops_only_what_is_certainly_gone(monkeypatch):
     import app.ai.provider_registry as pr
 
     monkeypatch.setattr(pr, "list_instances", lambda kind: [_Node("http://gpu")])
-    monkeypatch.setattr(
-        pr, "_models_on_node", lambda node: {"qwen3.8:27b"}
-    )
+    monkeypatch.setattr(pr, "_models_on_node", lambda node: {"qwen3.8:27b"})
 
     kept, dropped = ag.prune_dead_keys(["alive", "gone", "cloudy", "never-existed"])
-    assert kept == ["alive", "cloudy"]      # облако не трогаем
+    assert kept == ["alive", "cloudy"]  # облако не трогаем
     assert dropped == ["gone", "never-existed"]
 
 
@@ -121,9 +115,7 @@ def test_prune_keeps_everything_when_the_catalog_is_unreadable(monkeypatch):
     def _boom(cls, path):
         raise RuntimeError("нет файла")
 
-    monkeypatch.setattr(
-        "app.ai.model_registry.ModelRegistry.from_yaml", classmethod(_boom)
-    )
+    monkeypatch.setattr("app.ai.model_registry.ModelRegistry.from_yaml", classmethod(_boom))
     kept, dropped = ag.prune_dead_keys(["a", "b"])
     assert kept == ["a", "b"]
     assert dropped == []

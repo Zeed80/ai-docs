@@ -23,7 +23,6 @@ from app.domain.work_orders import (
     verify_nonempty_result,
 )
 
-
 # ── Ф4-re (AGENT_AUTONOMY_ROADMAP.md): a failed acceptance criterion must ──
 # get the same bounded-replan chance as a step-execution failure, not go
 # straight to "blocked" regardless of budget. Found live on the persistence
@@ -58,8 +57,12 @@ async def test_deterministic_criterion_failure_replans_within_budget(db_session)
     assert claimed is not None
     claimed_order, claimed_step, attempt = claimed
     await complete_attempt(
-        db_session, order=claimed_order, step=claimed_step, attempt=attempt,
-        output={"text": "слишком коротко"}, actor="worker-1",
+        db_session,
+        order=claimed_order,
+        step=claimed_step,
+        attempt=attempt,
+        output={"text": "слишком коротко"},
+        actor="worker-1",
     )
 
     passed = await verify_nonempty_result(db_session, order=claimed_order, step=claimed_step)
@@ -98,8 +101,12 @@ async def test_deterministic_criterion_failure_blocks_once_replan_budget_exhaust
     assert claimed is not None
     claimed_order, claimed_step, attempt = claimed
     await complete_attempt(
-        db_session, order=claimed_order, step=claimed_step, attempt=attempt,
-        output={"text": "слишком коротко"}, actor="worker-1",
+        db_session,
+        order=claimed_order,
+        step=claimed_step,
+        attempt=attempt,
+        output={"text": "слишком коротко"},
+        actor="worker-1",
     )
 
     passed = await verify_nonempty_result(db_session, order=claimed_order, step=claimed_step)
@@ -126,14 +133,22 @@ async def test_semantic_verifier_rejection_replans_within_budget(db_session):
         ],
     )
     _plan, step = await create_single_step_plan(
-        db_session, order, kind="agent_turn", title="Execute", input_data={"prompt": order.objective}
+        db_session,
+        order,
+        kind="agent_turn",
+        title="Execute",
+        input_data={"prompt": order.objective},
     )
     claimed = await claim_ready_step(db_session, worker_id="worker-1", work_order_id=order.id)
     assert claimed is not None
     claimed_order, claimed_step, attempt = claimed
     await complete_attempt(
-        db_session, order=claimed_order, step=claimed_step, attempt=attempt,
-        output={"text": "Правдоподобный, но ещё не проверенный результат"}, actor="worker-1",
+        db_session,
+        order=claimed_order,
+        step=claimed_step,
+        attempt=attempt,
+        output={"text": "Правдоподобный, но ещё не проверенный результат"},
+        actor="worker-1",
     )
     passed = await verify_nonempty_result(db_session, order=claimed_order, step=claimed_step)
     assert passed is False
@@ -182,14 +197,22 @@ async def test_semantic_verifier_rejection_blocks_once_replan_budget_exhausted(d
         ],
     )
     _plan, step = await create_single_step_plan(
-        db_session, order, kind="agent_turn", title="Execute", input_data={"prompt": order.objective}
+        db_session,
+        order,
+        kind="agent_turn",
+        title="Execute",
+        input_data={"prompt": order.objective},
     )
     claimed = await claim_ready_step(db_session, worker_id="worker-1", work_order_id=order.id)
     assert claimed is not None
     claimed_order, claimed_step, attempt = claimed
     await complete_attempt(
-        db_session, order=claimed_order, step=claimed_step, attempt=attempt,
-        output={"text": "Правдоподобный, но ещё не проверенный результат"}, actor="worker-1",
+        db_session,
+        order=claimed_order,
+        step=claimed_step,
+        attempt=attempt,
+        output={"text": "Правдоподобный, но ещё не проверенный результат"},
+        actor="worker-1",
     )
     await verify_nonempty_result(db_session, order=claimed_order, step=claimed_step)
     claimed_order.plan_revision = 2  # already past max_replans=1
@@ -241,14 +264,22 @@ async def test_rejected_semantic_criterion_is_reset_to_pending_on_the_next_attem
         ],
     )
     _plan, step = await create_single_step_plan(
-        db_session, order, kind="agent_turn", title="Execute", input_data={"prompt": order.objective}
+        db_session,
+        order,
+        kind="agent_turn",
+        title="Execute",
+        input_data={"prompt": order.objective},
     )
     claimed = await claim_ready_step(db_session, worker_id="worker-1", work_order_id=order.id)
     assert claimed is not None
     claimed_order, claimed_step, attempt = claimed
     await complete_attempt(
-        db_session, order=claimed_order, step=claimed_step, attempt=attempt,
-        output={"text": "Первая, слабая попытка"}, actor="worker-1",
+        db_session,
+        order=claimed_order,
+        step=claimed_step,
+        attempt=attempt,
+        output={"text": "Первая, слабая попытка"},
+        actor="worker-1",
     )
     await verify_nonempty_result(db_session, order=claimed_order, step=claimed_step)
     criterion = (
@@ -259,8 +290,13 @@ async def test_rejected_semantic_criterion_is_reset_to_pending_on_the_next_attem
     # Independent verifier rejects it — status left "failed" by
     # record_verifier_verdict, same as it always has been.
     await record_verifier_verdict(
-        db_session, order=claimed_order, criterion=criterion, ok=False,
-        reason="Недостаточно доказательств", evidence_payload={}, actor="independent-verifier",
+        db_session,
+        order=claimed_order,
+        criterion=criterion,
+        ok=False,
+        reason="Недостаточно доказательств",
+        evidence_payload={},
+        actor="independent-verifier",
     )
     assert criterion.status == "failed"
     # This fix's own side effect: a rejection with replan budget remaining
@@ -301,9 +337,7 @@ async def test_verified_work_order_completes_with_evidence(db_session):
         title="Execute",
         input_data={"prompt": order.objective},
     )
-    claimed = await claim_ready_step(
-        db_session, worker_id="worker-1", work_order_id=order.id
-    )
+    claimed = await claim_ready_step(db_session, worker_id="worker-1", work_order_id=order.id)
     assert claimed is not None
     claimed_order, claimed_step, attempt = claimed
 
@@ -315,9 +349,7 @@ async def test_verified_work_order_completes_with_evidence(db_session):
         output={"text": "Результат создан и проверен."},
         actor="worker-1",
     )
-    passed = await verify_nonempty_result(
-        db_session, order=claimed_order, step=claimed_step
-    )
+    passed = await verify_nonempty_result(db_session, order=claimed_order, step=claimed_step)
     await db_session.flush()
 
     assert passed is True
@@ -326,9 +358,7 @@ async def test_verified_work_order_completes_with_evidence(db_session):
     assert claimed_order.completed_at is not None
     criterion = (
         await db_session.execute(
-            select(WorkAcceptanceCriterion).where(
-                WorkAcceptanceCriterion.work_order_id == order.id
-            )
+            select(WorkAcceptanceCriterion).where(WorkAcceptanceCriterion.work_order_id == order.id)
         )
     ).scalar_one()
     assert criterion.status == "passed"
@@ -391,9 +421,7 @@ async def test_unknown_required_criterion_blocks_false_completion(db_session):
         title="Execute",
         input_data={"prompt": order.objective},
     )
-    claimed = await claim_ready_step(
-        db_session, worker_id="worker-1", work_order_id=order.id
-    )
+    claimed = await claim_ready_step(db_session, worker_id="worker-1", work_order_id=order.id)
     assert claimed is not None
     claimed_order, claimed_step, attempt = claimed
     await complete_attempt(
@@ -405,18 +433,14 @@ async def test_unknown_required_criterion_blocks_false_completion(db_session):
         actor="worker-1",
     )
 
-    passed = await verify_nonempty_result(
-        db_session, order=claimed_order, step=claimed_step
-    )
+    passed = await verify_nonempty_result(db_session, order=claimed_order, step=claimed_step)
 
     assert passed is False
     assert claimed_order.status == "blocked"
     assert claimed_order.blocker["code"] == "independent_verification_required"
     criterion = (
         await db_session.execute(
-            select(WorkAcceptanceCriterion).where(
-                WorkAcceptanceCriterion.work_order_id == order.id
-            )
+            select(WorkAcceptanceCriterion).where(WorkAcceptanceCriterion.work_order_id == order.id)
         )
     ).scalar_one()
 

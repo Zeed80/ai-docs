@@ -17,22 +17,35 @@ async def test_send_approval_shows_the_letter_not_identifiers(db_session):
     draft_id и дайджест, а прочитать письмо было негде."""
     from app.db.models import DraftAction, MailboxConfig
 
-    db_session.add(MailboxConfig(
-        name="prev-box", imap_host="imap.example.com", imap_port=993,
-        imap_user="prev", imap_password_encrypted="x", imap_ssl=True,
-        smtp_host="smtp.example.com", smtp_port=587, smtp_user="prev@example.com",
-        smtp_password_encrypted="y", is_active=True,
-    ))
+    db_session.add(
+        MailboxConfig(
+            name="prev-box",
+            imap_host="imap.example.com",
+            imap_port=993,
+            imap_user="prev",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            smtp_user="prev@example.com",
+            smtp_password_encrypted="y",
+            is_active=True,
+        )
+    )
     draft = DraftAction(
-        action_type="email.send", entity_type="email",
+        action_type="email.send",
+        entity_type="email",
         draft_data={
             "to_addresses": ["sales@romex.example"],
             "subject": "Запрос счёта",
             "body_text": "Добрый день! Пришлите, пожалуйста, счёт.",
             "mailbox": "prev-box",
             "risk_flags": [
-                {"code": "first_time_recipient", "severity": "warning",
-                 "message": "Впервые пишем на этот адрес"},
+                {
+                    "code": "first_time_recipient",
+                    "severity": "warning",
+                    "message": "Впервые пишем на этот адрес",
+                },
             ],
         },
     )
@@ -93,14 +106,16 @@ async def test_pending_approvals_are_in_the_single_inbox(client, db_session):
     попадало в общий список того, что ждёт человека."""
     from app.db.models import Approval, ApprovalActionType, ApprovalStatus
 
-    db_session.add(Approval(
-        action_type=ApprovalActionType.email_send,
-        entity_type="email",
-        entity_id=uuid.uuid4(),
-        status=ApprovalStatus.pending,
-        requested_by="sveta",
-        context={"title": "Отправить письмо", "subtitle": "Ромекс", "irreversible": True},
-    ))
+    db_session.add(
+        Approval(
+            action_type=ApprovalActionType.email_send,
+            entity_type="email",
+            entity_id=uuid.uuid4(),
+            status=ApprovalStatus.pending,
+            requested_by="sveta",
+            context={"title": "Отправить письмо", "subtitle": "Ромекс", "irreversible": True},
+        )
+    )
     await db_session.commit()
 
     resp = await client.get("/api/inbox?kinds=approval,email")
@@ -127,8 +142,7 @@ async def test_quiet_hours_and_digest_are_configurable(client):
     """Категории отвечали на «о чём», и нечем было сказать «не ночью»."""
     saved = await client.put(
         "/api/notifications/delivery",
-        json={"quiet_from_hour": 22, "quiet_to_hour": 8, "digest_enabled": True,
-              "digest_hour": 9},
+        json={"quiet_from_hour": 22, "quiet_to_hour": 8, "digest_enabled": True, "digest_hour": 9},
     )
     assert saved.status_code == 200, saved.text
     again = await client.get("/api/notifications/delivery")
@@ -139,10 +153,10 @@ async def test_quiet_hours_and_digest_are_configurable(client):
 @pytest.mark.parametrize(
     "start,end,hour,quiet",
     [
-        (22, 8, 23, True),    # окно через полночь
+        (22, 8, 23, True),  # окно через полночь
         (22, 8, 3, True),
         (22, 8, 12, False),
-        (9, 18, 12, True),    # обычное дневное окно
+        (9, 18, 12, True),  # обычное дневное окно
         (9, 18, 20, False),
         (None, None, 3, False),
     ],
@@ -171,14 +185,24 @@ async def test_quiet_hours_follow_the_users_profile_timezone(db_session, monkeyp
     from app.db.models import User, UserNotificationSettings
     from app.services import notifications as svc
 
-    db_session.add(User(
-        sub="tz-user", email="tz@example.com", name="Дальний",
-        preferred_username="tz", role="buyer", is_active=True,
-        timezone="Asia/Vladivostok",
-    ))
-    db_session.add(UserNotificationSettings(
-        user_sub="tz-user", quiet_from_hour=22, quiet_to_hour=8,
-    ))
+    db_session.add(
+        User(
+            sub="tz-user",
+            email="tz@example.com",
+            name="Дальний",
+            preferred_username="tz",
+            role="buyer",
+            is_active=True,
+            timezone="Asia/Vladivostok",
+        )
+    )
+    db_session.add(
+        UserNotificationSettings(
+            user_sub="tz-user",
+            quiet_from_hour=22,
+            quiet_to_hour=8,
+        )
+    )
     await db_session.commit()
 
     # 15:00 UTC — полночь во Владивостоке (UTC+10): тишина, хотя по серверу день.
@@ -227,10 +251,15 @@ async def test_agent_quality_report_answers_where_it_errs(client, db_session):
     """Сырьё для «где агент чаще ошибается» собиралось, витрины не было."""
     from app.db.models import Approval, ApprovalActionType, ApprovalStatus
 
-    db_session.add(Approval(
-        action_type=ApprovalActionType.email_send, entity_type="email",
-        entity_id=uuid.uuid4(), status=ApprovalStatus.rejected, requested_by="sveta",
-    ))
+    db_session.add(
+        Approval(
+            action_type=ApprovalActionType.email_send,
+            entity_type="email",
+            entity_id=uuid.uuid4(),
+            status=ApprovalStatus.rejected,
+            requested_by="sveta",
+        )
+    )
     await db_session.commit()
 
     resp = await client.get("/api/agent/quality?days=30")

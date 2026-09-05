@@ -59,8 +59,8 @@ def test_dispatch_fans_out_every_active_mailbox_by_name(sync_db):
 
     with Session(sync_db) as db:
         db.add(_row("procurement"))
-        db.add(_row("sales-team-2024"))          # arbitrary name — used to be ignored
-        db.add(_row("archived", active=False))   # inactive — skipped
+        db.add(_row("sales-team-2024"))  # arbitrary name — used to be ignored
+        db.add(_row("archived", active=False))  # inactive — skipped
         db.commit()
 
     sent: list[str] = []
@@ -89,7 +89,8 @@ def test_list_active_mailboxes_all_vs_sweep(sync_db):
 
 
 def test_fetch_unseen_raises_on_connection_failure_instead_of_returning_empty():
-    from app.tasks.imap_client import MailboxConfig as ImapCfg, fetch_unseen_from_mailbox
+    from app.tasks.imap_client import MailboxConfig as ImapCfg
+    from app.tasks.imap_client import fetch_unseen_from_mailbox
 
     cfg = ImapCfg(
         name="procurement",
@@ -114,12 +115,15 @@ def test_poll_records_sync_error_on_imap_failure(sync_db, monkeypatch):
 
     from app.tasks.imap_client import MailboxConfig as ImapCfg
 
-    with patch(
-        "app.tasks.imap_client.get_mailbox_configs",
-        return_value=[ImapCfg(name="procurement", host="h", port=993, user="u", password="p")],
-    ), patch(
-        "app.tasks.imap_client.fetch_unseen_from_mailbox",
-        side_effect=RuntimeError("AUTHENTICATIONFAILED"),
+    with (
+        patch(
+            "app.tasks.imap_client.get_mailbox_configs",
+            return_value=[ImapCfg(name="procurement", host="h", port=993, user="u", password="p")],
+        ),
+        patch(
+            "app.tasks.imap_client.fetch_unseen_from_mailbox",
+            side_effect=RuntimeError("AUTHENTICATIONFAILED"),
+        ),
     ):
         with pytest.raises(Exception):
             ingest.poll_imap_mailbox("procurement")
@@ -140,10 +144,13 @@ def test_poll_clears_sync_error_and_stamps_last_sync_on_success(sync_db, monkeyp
         db.add(r)
         db.commit()
 
-    with patch(
-        "app.tasks.imap_client.get_mailbox_configs",
-        return_value=[ImapCfg(name="procurement", host="h", port=993, user="u", password="p")],
-    ), patch("app.tasks.imap_client.fetch_unseen_from_mailbox", return_value=[]):
+    with (
+        patch(
+            "app.tasks.imap_client.get_mailbox_configs",
+            return_value=[ImapCfg(name="procurement", host="h", port=993, user="u", password="p")],
+        ),
+        patch("app.tasks.imap_client.fetch_unseen_from_mailbox", return_value=[]),
+    ):
         out = ingest.poll_imap_mailbox("procurement")
 
     assert out["fetched"] == 0
@@ -187,15 +194,19 @@ async def test_a_stricter_csp_set_by_an_endpoint_survives_the_middleware(monkeyp
     mw = SecurityHeadersMiddleware(app=None)
 
     def _request() -> Request:
-        return Request({
-            "type": "http", "method": "GET", "path": "/api/email/x",
-            "headers": [], "query_string": b"", "client": ("1.2.3.4", 0),
-        })
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/email/x",
+                "headers": [],
+                "query_string": b"",
+                "client": ("1.2.3.4", 0),
+            }
+        )
 
     async def _strict(_req):
-        return Response(
-            b"", headers={"Content-Security-Policy": "default-src 'none'; sandbox"}
-        )
+        return Response(b"", headers={"Content-Security-Policy": "default-src 'none'; sandbox"})
 
     async def _plain(_req):
         return Response(b"")

@@ -4,25 +4,22 @@ Revision ID: 20260821_0002
 Revises: 20260821_0001
 Create Date: 2026-08-21
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 revision: str = "20260821_0002"
-down_revision: Union[str, None] = "20260821_0001"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260821_0001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "price_history_entries", sa.Column("source", sa.String(30), nullable=True)
-    )
-    op.create_index(
-        "ix_price_history_entries_source", "price_history_entries", ["source"]
-    )
+    op.add_column("price_history_entries", sa.Column("source", sa.String(30), nullable=True))
+    op.create_index("ix_price_history_entries_source", "price_history_entries", ["source"])
 
     for name, column in (
         ("unit", sa.Column("unit", sa.String(30), nullable=True)),
@@ -59,8 +56,14 @@ def downgrade() -> None:
     )
     op.drop_index("ix_tool_catalog_entries_canonical_item_id", "tool_catalog_entries")
     for name in (
-        "canonical_item_id", "valid_until", "valid_from", "min_order_qty",
-        "pack_size", "vat_rate", "price_includes_vat", "unit",
+        "canonical_item_id",
+        "valid_until",
+        "valid_from",
+        "min_order_qty",
+        "pack_size",
+        "vat_rate",
+        "price_includes_vat",
+        "unit",
     ):
         op.drop_column("tool_catalog_entries", name)
     op.drop_index("ix_price_history_entries_source", "price_history_entries")

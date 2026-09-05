@@ -95,10 +95,15 @@ def _line_class_for(dxf_entity) -> str:
     if layer in _LAYER_TO_LINE_CLASS:
         return _LAYER_TO_LINE_CLASS[layer]
     for marker, cls in (
-        ("CENTER", "axis"), ("AXIS", "axis"), ("ОСЕВ", "axis"),
-        ("HIDDEN", "hidden"), ("DASH", "hidden"),
-        ("DIM", "dim"), ("РАЗМЕР", "dim"),
-        ("HATCH", "hatch"), ("ШТРИХ", "hatch"),
+        ("CENTER", "axis"),
+        ("AXIS", "axis"),
+        ("ОСЕВ", "axis"),
+        ("HIDDEN", "hidden"),
+        ("DASH", "hidden"),
+        ("DIM", "dim"),
+        ("РАЗМЕР", "dim"),
+        ("HATCH", "hatch"),
+        ("ШТРИХ", "hatch"),
         ("THIN", "thin"),
     ):
         if marker in layer:
@@ -119,8 +124,14 @@ def _safe_extents(doc, msp):
     from ezdxf.math import BoundingBox
 
     supported = {
-        "LINE", "CIRCLE", "ARC", "LWPOLYLINE", "POLYLINE",
-        "TEXT", "MTEXT", "HATCH",
+        "LINE",
+        "CIRCLE",
+        "ARC",
+        "LWPOLYLINE",
+        "POLYLINE",
+        "TEXT",
+        "MTEXT",
+        "HATCH",
     }
     result = BoundingBox()
     for entity in msp:
@@ -225,26 +236,32 @@ def dxf_to_ir(data: bytes, px_per_mm: float = _PX_PER_MM) -> CadIR:
         }
         try:
             if kind == "LINE":
-                entities.append(Segment(
-                    p1=px(e.dxf.start.x, e.dxf.start.y),
-                    p2=px(e.dxf.end.x, e.dxf.end.y),
-                    **common,
-                ))
+                entities.append(
+                    Segment(
+                        p1=px(e.dxf.start.x, e.dxf.start.y),
+                        p2=px(e.dxf.end.x, e.dxf.end.y),
+                        **common,
+                    )
+                )
             elif kind == "CIRCLE":
-                entities.append(Circle(
-                    center=px(e.dxf.center.x, e.dxf.center.y),
-                    radius=mm(float(e.dxf.radius)),
-                    **common,
-                ))
+                entities.append(
+                    Circle(
+                        center=px(e.dxf.center.x, e.dxf.center.y),
+                        radius=mm(float(e.dxf.radius)),
+                        **common,
+                    )
+                )
             elif kind == "ARC":
                 sa, ea = float(e.dxf.start_angle), float(e.dxf.end_angle)
-                entities.append(Arc(
-                    center=px(e.dxf.center.x, e.dxf.center.y),
-                    radius=mm(float(e.dxf.radius)),
-                    start_angle=-ea,
-                    end_angle=-sa,
-                    **common,
-                ))
+                entities.append(
+                    Arc(
+                        center=px(e.dxf.center.x, e.dxf.center.y),
+                        radius=mm(float(e.dxf.radius)),
+                        start_angle=-ea,
+                        end_angle=-sa,
+                        **common,
+                    )
+                )
             elif kind in ("LWPOLYLINE", "POLYLINE"):
                 if kind == "LWPOLYLINE":
                     pts = [px(p[0], p[1]) for p in e.get_points()]
@@ -268,9 +285,7 @@ def dxf_to_ir(data: bytes, px_per_mm: float = _PX_PER_MM) -> CadIR:
                 if text.strip():
                     position = px(pos.x, pos.y)
                     layer = str(getattr(e.dxf, "layer", "") or "").upper()
-                    annotation = _annotation_from_text(
-                        text, position, mm(height), layer
-                    )
+                    annotation = _annotation_from_text(text, position, mm(height), layer)
                     entities.append(
                         annotation
                         or TextEntity(
@@ -297,17 +312,19 @@ def dxf_to_ir(data: bytes, px_per_mm: float = _PX_PER_MM) -> CadIR:
                     first, second = e.dxf.defpoint2, e.dxf.defpoint3
                     dim_kind = "angular" if dim_type in (2, 5) else "linear"
                 if first is not None and second is not None:
-                    entities.append(DimensionEntity(
-                        p1=px(first.x, first.y),
-                        p2=px(second.x, second.y),
-                        kind=dim_kind,
-                        text=label,
-                        value_mm=_numeric_value(label, measured),
-                        line_class="dim",
-                        width_class="thin",
-                        origin="human",
-                        confidence=1.0,
-                    ))
+                    entities.append(
+                        DimensionEntity(
+                            p1=px(first.x, first.y),
+                            p2=px(second.x, second.y),
+                            kind=dim_kind,
+                            text=label,
+                            value_mm=_numeric_value(label, measured),
+                            line_class="dim",
+                            width_class="thin",
+                            origin="human",
+                            confidence=1.0,
+                        )
+                    )
             elif kind == "HATCH":
                 from ezdxf import path as ezpath
 
@@ -333,17 +350,17 @@ def dxf_to_ir(data: bytes, px_per_mm: float = _PX_PER_MM) -> CadIR:
                     outer = [loops[0][1]]
                     holes = [points for _, points in loops[1:]]
                 for index, boundary in enumerate(outer):
-                    entities.append(HatchRegion(
-                        boundary=boundary,
-                        holes=holes if index == 0 else [],
-                        pattern=(
-                            "solid"
-                            if int(getattr(e.dxf, "solid_fill", 0) or 0)
-                            else "ansi31"
-                        ),
-                        origin="human",
-                        confidence=1.0,
-                    ))
+                    entities.append(
+                        HatchRegion(
+                            boundary=boundary,
+                            holes=holes if index == 0 else [],
+                            pattern=(
+                                "solid" if int(getattr(e.dxf, "solid_fill", 0) or 0) else "ansi31"
+                            ),
+                            origin="human",
+                            confidence=1.0,
+                        )
+                    )
             elif kind == "INSERT":
                 if depth >= 16:
                     raise ValueError("INSERT nesting exceeds 16 levels")
@@ -360,8 +377,7 @@ def dxf_to_ir(data: bytes, px_per_mm: float = _PX_PER_MM) -> CadIR:
 
     if not entities:
         raise DxfImportError(
-            "DXF прочитан, но не содержит поддерживаемых сущностей "
-            "(LINE/CIRCLE/ARC/POLYLINE/TEXT)."
+            "DXF прочитан, но не содержит поддерживаемых сущностей (LINE/CIRCLE/ARC/POLYLINE/TEXT)."
         )
 
     w_mm = (max_x - min_x) * unit_mm + 2 * _MARGIN_MM

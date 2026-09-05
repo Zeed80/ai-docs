@@ -65,8 +65,12 @@ def upgrade() -> None:
             ),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
         )
-        op.create_index("ix_drawing_view_sections_drawing_id", "drawing_view_sections", ["drawing_id"])
-        op.create_index("ix_drawing_view_sections_section_type", "drawing_view_sections", ["section_type"])
+        op.create_index(
+            "ix_drawing_view_sections_drawing_id", "drawing_view_sections", ["drawing_id"]
+        )
+        op.create_index(
+            "ix_drawing_view_sections_section_type", "drawing_view_sections", ["section_type"]
+        )
 
     # ── DrawingAssemblyBOM table ──────────────────────────────────────────────
     if not insp.has_table("drawing_assembly_boms"):
@@ -91,7 +95,9 @@ def upgrade() -> None:
             ),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
         )
-        op.create_index("ix_drawing_assembly_boms_drawing_id", "drawing_assembly_boms", ["drawing_id"])
+        op.create_index(
+            "ix_drawing_assembly_boms_drawing_id", "drawing_assembly_boms", ["drawing_id"]
+        )
         op.create_index(
             "ix_drawing_assembly_boms_drawing_item",
             "drawing_assembly_boms",

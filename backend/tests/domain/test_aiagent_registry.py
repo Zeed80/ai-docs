@@ -13,6 +13,7 @@ try:
     from scripts.generate_aiagent_registry import build_registry
 except ImportError:
     import pytest
+
     pytest.skip(
         "scripts.generate_aiagent_registry not yet implemented",
         allow_module_level=True,
@@ -21,6 +22,7 @@ except ImportError:
 import json
 
 import yaml
+
 
 def test_aiagent_registry_is_generated_from_openapi() -> None:
     registry = build_registry()
@@ -52,6 +54,4 @@ def test_aiagent_contract_has_no_generated_policy_errors() -> None:
 
     assert result["ok"] is True
     assert result["registry_tools"] >= 40
-    assert "tech.learning_rule_activate" in {
-        tool["name"] for tool in build_registry()["tools"]
-    }
+    assert "tech.learning_rule_activate" in {tool["name"] for tool in build_registry()["tools"]}

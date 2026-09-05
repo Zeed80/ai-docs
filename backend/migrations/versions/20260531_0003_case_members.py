@@ -24,7 +24,9 @@ def upgrade() -> None:
         sa.Column("case_id", GUID(), sa.ForeignKey("work_cases.id"), nullable=False),
         sa.Column("user_sub", sa.String(255), nullable=False),
         sa.Column("role", sa.String(20), nullable=False, server_default="collaborator"),
-        sa.Column("added_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "added_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.Column("added_by", sa.String(255), nullable=True),
         sa.UniqueConstraint("case_id", "user_sub", name="uq_case_member"),
     )

@@ -19,11 +19,17 @@ def test_source_projection_requires_localized_evidence_for_every_read_section():
 
 def test_source_projection_passes_only_when_all_independent_checks_pass():
     result = evaluate_source_projection(
-        {"main_view": {"outer": [{
-            "diameter_mm": 20,
-            "length_mm": 30,
-            "evidence": [{"image_index": 0, "bbox": [1, 2, 3, 4]}],
-        }]}},
+        {
+            "main_view": {
+                "outer": [
+                    {
+                        "diameter_mm": 20,
+                        "length_mm": 30,
+                        "evidence": [{"image_index": 0, "bbox": [1, 2, 3, 4]}],
+                    }
+                ]
+            }
+        },
         {"raster_check": "checked", "findings": []},
         _solid(),
     )
@@ -36,9 +42,10 @@ def test_source_projection_passes_only_when_all_independent_checks_pass():
 def test_source_projection_rejects_an_independent_raster_error():
     result = evaluate_source_projection(
         {"main_view": {"outer": [{"evidence": [{"image_index": 0}]}]}},
-        {"raster_check": "checked", "findings": [
-            {"severity": "error", "message": "силуэт не совпадает"}
-        ]},
+        {
+            "raster_check": "checked",
+            "findings": [{"severity": "error", "message": "силуэт не совпадает"}],
+        },
         _solid(),
     )
     assert result["ok"] is False
@@ -47,9 +54,11 @@ def test_source_projection_rejects_an_independent_raster_error():
 
 def test_source_projection_audits_axial_hole_pattern_evidence():
     result = evaluate_source_projection(
-        {"main_view": {"axial_holes": [{
-            "count": 2, "bolt_circle_diameter_mm": 65, "evidence": []
-        }]}},
+        {
+            "main_view": {
+                "axial_holes": [{"count": 2, "bolt_circle_diameter_mm": 65, "evidence": []}]
+            }
+        },
         {"raster_check": "checked", "findings": []},
         _solid(),
     )

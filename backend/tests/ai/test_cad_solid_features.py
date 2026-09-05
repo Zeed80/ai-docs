@@ -62,16 +62,21 @@ def test_a_taper_is_resolved_the_same_way_however_the_sheet_states_it():
 
 def test_a_conical_step_reaches_the_solid_as_a_cone():
     """Built as a cylinder, a 7:24 spindle nose is a part that fits nothing."""
-    candidate = feature_tree_from_spec({
-        "main_view": {
-            "type": "тело вращения (вал)",
-            "outer": [
-                {"diameter_mm": 100.0, "length_mm": 48.0,
-                 "taper": {"kind": "ratio", "ratio": "7:24"}},
-                {"diameter_mm": 80.0, "length_mm": 200.0},
-            ],
-        },
-    })
+    candidate = feature_tree_from_spec(
+        {
+            "main_view": {
+                "type": "тело вращения (вал)",
+                "outer": [
+                    {
+                        "diameter_mm": 100.0,
+                        "length_mm": 48.0,
+                        "taper": {"kind": "ratio", "ratio": "7:24"},
+                    },
+                    {"diameter_mm": 80.0, "length_mm": 200.0},
+                ],
+            },
+        }
+    )
     assert candidate is not None
     points = candidate.features[0].params["profile_points"]
     # Enter at r=50, leave at r=43 — the cone, not a step.
@@ -80,28 +85,39 @@ def test_a_conical_step_reaches_the_solid_as_a_cone():
 
 
 def test_a_groove_becomes_a_groove_operation():
-    candidate = _tree(grooves=[
-        {"kind": "relief", "axial_position_mm": 250.0, "width_mm": 6.0, "depth_mm": 3.0}
-    ])
+    candidate = _tree(
+        grooves=[{"kind": "relief", "axial_position_mm": 250.0, "width_mm": 6.0, "depth_mm": 3.0}]
+    )
     grooves = _of_kind(candidate, "groove")
     assert len(grooves) == 1
     assert grooves[0].params == {
-        "axial_position_mm": 250.0, "width_mm": 6.0, "internal": False, "depth_mm": 3.0
+        "axial_position_mm": 250.0,
+        "width_mm": 6.0,
+        "internal": False,
+        "depth_mm": 3.0,
     }
 
 
 def test_a_groove_may_state_its_root_instead_of_its_depth():
-    candidate = _tree(grooves=[
-        {"axial_position_mm": 250.0, "width_mm": 6.0, "root_diameter_mm": 96.0}
-    ])
+    candidate = _tree(
+        grooves=[{"axial_position_mm": 250.0, "width_mm": 6.0, "root_diameter_mm": 96.0}]
+    )
     assert _of_kind(candidate, "groove")[0].params["root_diameter_mm"] == 96.0
 
 
 def test_a_keyway_carries_the_sheets_own_numbers():
-    candidate = _tree(keyways=[{
-        "axial_start_mm": 40.0, "length_mm": 85.0, "width_mm": 12.0,
-        "depth_mm": 5.0, "angle_deg": 90.0, "end_type": "closed",
-    }])
+    candidate = _tree(
+        keyways=[
+            {
+                "axial_start_mm": 40.0,
+                "length_mm": 85.0,
+                "width_mm": 12.0,
+                "depth_mm": 5.0,
+                "angle_deg": 90.0,
+                "end_type": "closed",
+            }
+        ]
+    )
     keyway = _of_kind(candidate, "keyway")[0]
     assert keyway.params["length_mm"] == 85.0
     assert keyway.params["angle_deg"] == 90.0
@@ -110,9 +126,9 @@ def test_a_keyway_carries_the_sheets_own_numbers():
 
 def test_a_ring_of_cross_holes_is_expanded_around_the_axis():
     """Four oil ways at 90° apart are four operations, not one with a count."""
-    candidate = _tree(cross_holes=[
-        {"diameter_mm": 9.0, "axial_position_mm": 200.0, "count": 4, "through": True}
-    ])
+    candidate = _tree(
+        cross_holes=[{"diameter_mm": 9.0, "axial_position_mm": 200.0, "count": 4, "through": True}]
+    )
     holes = _of_kind(candidate, "hole")
     assert len(holes) == 4
     assert [hole.params["angle_deg"] for hole in holes] == [0.0, 90.0, 180.0, 270.0]
@@ -120,15 +136,19 @@ def test_a_ring_of_cross_holes_is_expanded_around_the_axis():
 
 
 def test_radial_counterbore_compiles_as_a_second_shallow_cut():
-    candidate = _tree(cross_holes=[{
-        "diameter_mm": 10.0,
-        "axial_position_mm": 200.0,
-        "angle_deg": 0.0,
-        "through": False,
-        "depth_mm": 8.5,
-        "counterbore_diameter_mm": 24.0,
-        "counterbore_depth_mm": 3.0,
-    }])
+    candidate = _tree(
+        cross_holes=[
+            {
+                "diameter_mm": 10.0,
+                "axial_position_mm": 200.0,
+                "angle_deg": 0.0,
+                "through": False,
+                "depth_mm": 8.5,
+                "counterbore_diameter_mm": 24.0,
+                "counterbore_depth_mm": 3.0,
+            }
+        ]
+    )
 
     holes = _of_kind(candidate, "hole")
     assert [(item.params["diameter_mm"], item.params["depth_mm"]) for item in holes] == [
@@ -141,25 +161,29 @@ def test_a_chamfer_points_at_the_end_face_it_names():
     candidate = _tree(chamfers=[{"size_mm": 1.0, "angle_deg": 45.0, "location": "left_end"}])
     chamfer = _of_kind(candidate, "chamfer")[0]
     assert chamfer.params["edge_selector"] == {
-        "curve": "Circle", "at_z_mm": 0.0, "diameter_mm": 80.0
+        "curve": "Circle",
+        "at_z_mm": 0.0,
+        "diameter_mm": 80.0,
     }
     assert chamfer.params["size_mm"] == 1.0
 
 
 def test_internal_bore_thread_reaches_the_feature_tree_with_axial_location():
-    candidate = _tree(bore=[
-        {"diameter_mm": 50, "length_mm": 445},
-        {
-            "diameter_mm": 55,
-            "length_mm": 25,
-            "thread": {
-                "designation": "M54,5x2",
-                "nominal_diameter_mm": 54.5,
-                "pitch_mm": 2,
-                "internal": True,
+    candidate = _tree(
+        bore=[
+            {"diameter_mm": 50, "length_mm": 445},
+            {
+                "diameter_mm": 55,
+                "length_mm": 25,
+                "thread": {
+                    "designation": "M54,5x2",
+                    "nominal_diameter_mm": 54.5,
+                    "pitch_mm": 2,
+                    "internal": True,
+                },
             },
-        },
-    ])
+        ]
+    )
 
     thread = _of_kind(candidate, "thread")[0]
     assert thread.params == {
@@ -173,10 +197,8 @@ def test_internal_bore_thread_reaches_the_feature_tree_with_axial_location():
 
 
 def test_a_chamfer_on_a_shoulder_is_placed_by_the_diameter_it_names():
-    """"1x45° at the Ø80 shoulder" is a place; the kernel needs an edge."""
-    candidate = _tree(chamfers=[
-        {"size_mm": 2.0, "location": "shoulder", "at_diameter_mm": 80.0}
-    ])
+    """ "1x45° at the Ø80 shoulder" is a place; the kernel needs an edge."""
+    candidate = _tree(chamfers=[{"size_mm": 2.0, "location": "shoulder", "at_diameter_mm": 80.0}])
     selector = _of_kind(candidate, "chamfer")[0].params["edge_selector"]
     # The Ø80 step ends at z=150 — that is where its shoulder is.
     assert selector == {"curve": "Circle", "at_z_mm": 150.0, "diameter_mm": 80.0}
@@ -194,12 +216,16 @@ def test_unplaceable_edge_note_embeds_its_array_index():
     "fillet[N]:" out of this note to know which chamfers[i]/fillets[i] row
     to patch with the diameter/z a human just clicked — the index has to be
     in the text, not just "which one of possibly several failed"."""
-    candidate = _tree(chamfers=[
-        {"size_mm": 2.0, "location": "shoulder", "at_diameter_mm": 80.0},
-        {"size_mm": 1.0, "location": "shoulder"},
-    ])
-    assert any(item.startswith("chamfer[1]: не удалось определить ребро")
-               for item in candidate.missing_data)
+    candidate = _tree(
+        chamfers=[
+            {"size_mm": 2.0, "location": "shoulder", "at_diameter_mm": 80.0},
+            {"size_mm": 1.0, "location": "shoulder"},
+        ]
+    )
+    assert any(
+        item.startswith("chamfer[1]: не удалось определить ребро")
+        for item in candidate.missing_data
+    )
 
 
 def test_a_fillet_at_the_bore_edge_is_placed_the_same_way_as_bore_mouth():
@@ -207,9 +233,11 @@ def test_a_fillet_at_the_bore_edge_is_placed_the_same_way_as_bore_mouth():
     (SpecChamfer's spelling) — same edge, different name; a fillet given an
     explicit at_z_mm here (as the click-to-repair flow supplies) must not
     fall through to "unplaceable" just because of the name mismatch."""
-    candidate = _tree(fillets=[
-        {"radius_mm": 1.0, "location": "bore", "at_z_mm": 40.0},
-    ])
+    candidate = _tree(
+        fillets=[
+            {"radius_mm": 1.0, "location": "bore", "at_z_mm": 40.0},
+        ]
+    )
     selector = _of_kind(candidate, "fillet")[0].params["edge_selector"]
     assert selector == {"curve": "Circle", "at_z_mm": 40.0}
 
@@ -231,6 +259,7 @@ def test_a_plain_shaft_still_builds_exactly_as_before():
 # from assign_stable_feature_ids) each compiled operation was built from,
 # so spec_feature_tree_as_graph can draw a realizes edge back to it.
 
+
 def test_a_plain_shaft_has_no_source_feature_ids_when_nothing_is_id_tagged():
     """The existing fixtures never carry ids — must stay empty, not guessed."""
     candidate = feature_tree_from_spec(_SHAFT)
@@ -238,33 +267,48 @@ def test_a_plain_shaft_has_no_source_feature_ids_when_nothing_is_id_tagged():
 
 
 def test_base_revolve_source_feature_ids_cover_outer_and_bore_sections():
-    candidate = feature_tree_from_spec({
-        "main_view": {
-            "type": "тело вращения (вал)",
-            "outer": [
-                {"id": "0:outer:0", "diameter_mm": 80.0, "length_mm": 150.0},
-                {"id": "0:outer:1", "diameter_mm": 60.0, "length_mm": 120.0},
-            ],
-            "bore": [{"id": "0:bore:0", "diameter_mm": 30.0, "length_mm": 270.0}],
-        },
-    })
+    candidate = feature_tree_from_spec(
+        {
+            "main_view": {
+                "type": "тело вращения (вал)",
+                "outer": [
+                    {"id": "0:outer:0", "diameter_mm": 80.0, "length_mm": 150.0},
+                    {"id": "0:outer:1", "diameter_mm": 60.0, "length_mm": 120.0},
+                ],
+                "bore": [{"id": "0:bore:0", "diameter_mm": 30.0, "length_mm": 270.0}],
+            },
+        }
+    )
     revolve = _of_kind(candidate, "revolve")[0]
     assert revolve.source_feature_ids == ["0:outer:0", "0:outer:1", "0:bore:0"]
 
 
 def test_groove_keyway_and_chamfer_each_carry_their_own_source_id():
     candidate = _tree(
-        grooves=[{
-            "id": "0:grooves:0", "axial_position_mm": 250.0,
-            "width_mm": 6.0, "depth_mm": 3.0,
-        }],
-        keyways=[{
-            "id": "0:keyways:0", "axial_start_mm": 40.0, "length_mm": 85.0,
-            "width_mm": 12.0, "depth_mm": 5.0,
-        }],
-        chamfers=[{
-            "id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end",
-        }],
+        grooves=[
+            {
+                "id": "0:grooves:0",
+                "axial_position_mm": 250.0,
+                "width_mm": 6.0,
+                "depth_mm": 3.0,
+            }
+        ],
+        keyways=[
+            {
+                "id": "0:keyways:0",
+                "axial_start_mm": 40.0,
+                "length_mm": 85.0,
+                "width_mm": 12.0,
+                "depth_mm": 5.0,
+            }
+        ],
+        chamfers=[
+            {
+                "id": "0:chamfers:0",
+                "size_mm": 1.0,
+                "location": "left_end",
+            }
+        ],
     )
     assert _of_kind(candidate, "groove")[0].source_feature_ids == ["0:grooves:0"]
     assert _of_kind(candidate, "keyway")[0].source_feature_ids == ["0:keyways:0"]
@@ -275,12 +319,20 @@ def test_cross_hole_ring_and_its_counterbore_share_one_source_id():
     """Four expanded holes plus a counterbore are all ONE read cross_holes[]
     item — every compiled operation must point back to that same id, not a
     synthetic per-instance one that does not exist as a Feature node."""
-    candidate = _tree(cross_holes=[{
-        "id": "0:cross_holes:0",
-        "diameter_mm": 10.0, "axial_position_mm": 200.0, "count": 4,
-        "through": False, "depth_mm": 8.5,
-        "counterbore_diameter_mm": 24.0, "counterbore_depth_mm": 3.0,
-    }])
+    candidate = _tree(
+        cross_holes=[
+            {
+                "id": "0:cross_holes:0",
+                "diameter_mm": 10.0,
+                "axial_position_mm": 200.0,
+                "count": 4,
+                "through": False,
+                "depth_mm": 8.5,
+                "counterbore_diameter_mm": 24.0,
+                "counterbore_depth_mm": 3.0,
+            }
+        ]
+    )
     holes = _of_kind(candidate, "hole")
     assert len(holes) == 8  # 4 main + 4 counterbore
     assert all(hole.source_feature_ids == ["0:cross_holes:0"] for hole in holes)
@@ -290,12 +342,15 @@ def test_cross_hole_ring_and_its_counterbore_share_one_source_id():
 # git blame on _one_rotation_body_features before this) — the single most
 # common way a real, otherwise-fully-read shaft produced no 3D at all.
 
+
 def test_fill_provisional_step_lengths_averages_the_known_lengths():
-    filled, notes = _fill_provisional_step_lengths([
-        {"id": "0:outer:0", "d": 80.0, "l": 150.0},
-        {"id": "0:outer:1", "d": 102.0, "l": 200.0},
-        {"id": "0:outer:2", "d": 60.0},
-    ])
+    filled, notes = _fill_provisional_step_lengths(
+        [
+            {"id": "0:outer:0", "d": 80.0, "l": 150.0},
+            {"id": "0:outer:1", "d": 102.0, "l": 200.0},
+            {"id": "0:outer:2", "d": 60.0},
+        ]
+    )
     assert [section["l"] for section in filled] == [150.0, 200.0, 175.0]
     assert len(notes) == 1
     assert "0:outer:2" in notes[0]
@@ -304,29 +359,44 @@ def test_fill_provisional_step_lengths_averages_the_known_lengths():
 
 def test_fill_provisional_step_lengths_refuses_a_missing_diameter():
     """A diameter is the part's actual fit/size — never guessed."""
-    assert _fill_provisional_step_lengths([
-        {"id": "0:outer:0", "d": 80.0, "l": 150.0},
-        {"id": "0:outer:1", "l": 200.0},
-    ]) is None
+    assert (
+        _fill_provisional_step_lengths(
+            [
+                {"id": "0:outer:0", "d": 80.0, "l": 150.0},
+                {"id": "0:outer:1", "l": 200.0},
+            ]
+        )
+        is None
+    )
 
 
 def test_fill_provisional_step_lengths_refuses_when_nothing_is_known():
     """No stated length anywhere in the list — nothing honest to anchor a guess to."""
-    assert _fill_provisional_step_lengths([
-        {"id": "0:outer:0", "d": 80.0},
-        {"id": "0:outer:1", "d": 60.0},
-    ]) is None
+    assert (
+        _fill_provisional_step_lengths(
+            [
+                {"id": "0:outer:0", "d": 80.0},
+                {"id": "0:outer:1", "d": 60.0},
+            ]
+        )
+        is None
+    )
 
 
 def test_a_missing_step_length_builds_with_a_flagged_guess_not_a_refusal():
-    candidate = feature_tree_from_spec({
-        "part": "Вал",
-        "main_view": {"type": "тело вращения (вал)", "outer": [
-            {"id": "0:outer:0", "diameter_mm": 80.0, "length_mm": 150.0},
-            {"id": "0:outer:1", "diameter_mm": 102.0, "length_mm": 200.0},
-            {"id": "0:outer:2", "diameter_mm": 60.0},
-        ]},
-    })
+    candidate = feature_tree_from_spec(
+        {
+            "part": "Вал",
+            "main_view": {
+                "type": "тело вращения (вал)",
+                "outer": [
+                    {"id": "0:outer:0", "diameter_mm": 80.0, "length_mm": 150.0},
+                    {"id": "0:outer:1", "diameter_mm": 102.0, "length_mm": 200.0},
+                    {"id": "0:outer:2", "diameter_mm": 60.0},
+                ],
+            },
+        }
+    )
     assert candidate is not None
     revolve = _of_kind(candidate, "revolve")[0]
     assert revolve.param_provenance["profile_points"].origin == "guessed"
@@ -339,10 +409,13 @@ def test_missing_step_length_is_a_warning_not_a_blocker():
     has something to look at and fix, rather than a text-only refusal."""
     spec = {
         "part": "Вал",
-        "main_view": {"type": "тело вращения (вал)", "outer": [
-            {"id": "0:outer:0", "diameter_mm": 80.0, "length_mm": 150.0},
-            {"id": "0:outer:1", "diameter_mm": 60.0},
-        ]},
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"id": "0:outer:0", "diameter_mm": 80.0, "length_mm": 150.0},
+                {"id": "0:outer:1", "diameter_mm": 60.0},
+            ],
+        },
     }
     candidate = feature_tree_from_spec(spec)
     gate = solid_build_gate(spec, candidate)
@@ -357,39 +430,50 @@ def test_a_bore_with_no_stated_length_anywhere_builds_solid_not_refused():
     outer step, a cavity's depth cannot be honestly guessed from nothing.
     Falls back to the SAME already-existing, already-reviewable outcome as
     no section view at all: solid, bore not modelled — never refused."""
-    candidate = feature_tree_from_spec({
-        "part": "Вал",
-        "main_view": {"type": "тело вращения (вал)", "outer": [
-            {"id": "0:outer:0", "diameter_mm": 30.0, "length_mm": 40.0},
-            {"id": "0:outer:1", "diameter_mm": 50.0, "length_mm": 60.0},
-        ], "bore": [
-            {"id": "0:bore:0", "diameter_mm": 15.7},
-        ]},
-    })
+    candidate = feature_tree_from_spec(
+        {
+            "part": "Вал",
+            "main_view": {
+                "type": "тело вращения (вал)",
+                "outer": [
+                    {"id": "0:outer:0", "diameter_mm": 30.0, "length_mm": 40.0},
+                    {"id": "0:outer:1", "diameter_mm": 50.0, "length_mm": 60.0},
+                ],
+                "bore": [
+                    {"id": "0:bore:0", "diameter_mm": 15.7},
+                ],
+            },
+        }
+    )
     assert candidate is not None
     revolve = _of_kind(candidate, "revolve")[0]
     assert "bore_points" not in revolve.params
     # The OUTER profile itself was fully stated — not tainted by the bore gap.
     assert revolve.param_provenance["profile_points"].origin == "stated"
     assert any(
-        "расточка" in item and "не может быть построена" in item
-        for item in candidate.missing_data
+        "расточка" in item and "не может быть построена" in item for item in candidate.missing_data
     )
 
 
 def test_a_bore_missing_only_some_lengths_still_averages_normally():
     """A bore with >=1 known length is the SAME averaging case as outer —
     only a bore with NOTHING known anywhere falls back to no-bore."""
-    candidate = feature_tree_from_spec({
-        "part": "Вал",
-        "main_view": {"type": "тело вращения (вал)", "outer": [
-            {"id": "0:outer:0", "diameter_mm": 30.0, "length_mm": 40.0},
-            {"id": "0:outer:1", "diameter_mm": 50.0, "length_mm": 60.0},
-        ], "bore": [
-            {"id": "0:bore:0", "diameter_mm": 15.7, "length_mm": 30.0},
-            {"id": "0:bore:1", "diameter_mm": 12.0},
-        ]},
-    })
+    candidate = feature_tree_from_spec(
+        {
+            "part": "Вал",
+            "main_view": {
+                "type": "тело вращения (вал)",
+                "outer": [
+                    {"id": "0:outer:0", "diameter_mm": 30.0, "length_mm": 40.0},
+                    {"id": "0:outer:1", "diameter_mm": 50.0, "length_mm": 60.0},
+                ],
+                "bore": [
+                    {"id": "0:bore:0", "diameter_mm": 15.7, "length_mm": 30.0},
+                    {"id": "0:bore:1", "diameter_mm": 12.0},
+                ],
+            },
+        }
+    )
     assert candidate is not None
     revolve = _of_kind(candidate, "revolve")[0]
     assert "bore_points" in revolve.params

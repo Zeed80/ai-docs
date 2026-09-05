@@ -31,9 +31,17 @@ ThinkingLevel = Literal["low", "medium", "high"]
 # keyed by ProviderKind.value) and the builtin-agent chat loop
 # (agent_loop.py, keyed by the user-configured provider string — a superset
 # that also includes the "qwen" alias for DashScope/Qwen).
-REASONING_EFFORT_PROVIDERS = frozenset({
-    "ollama_cloud", "openai", "groq", "xai", "dashscope", "qwen", "cerebras",
-})
+REASONING_EFFORT_PROVIDERS = frozenset(
+    {
+        "ollama_cloud",
+        "openai",
+        "groq",
+        "xai",
+        "dashscope",
+        "qwen",
+        "cerebras",
+    }
+)
 
 # Anthropic extended-thinking budget table. Levels are a UX convenience over
 # the raw token budget the API actually wants; "medium" (4096) intentionally
@@ -55,7 +63,9 @@ ANTHROPIC_DEFAULT_THINKING_BUDGET = 2048
 # their own API contracts). No per-model curation needed — this class of
 # provider is why the level is safe to auto-offer with zero admin/YAML
 # involvement, unlike Ollama below.
-LEVEL_GUARANTEED_PROVIDER_KINDS = frozenset({"anthropic", "openrouter"}) | REASONING_EFFORT_PROVIDERS
+LEVEL_GUARANTEED_PROVIDER_KINDS = (
+    frozenset({"anthropic", "openrouter"}) | REASONING_EFFORT_PROVIDERS
+)
 
 
 def effective_thinking_levels(

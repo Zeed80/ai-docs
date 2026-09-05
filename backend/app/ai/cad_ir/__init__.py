@@ -10,8 +10,8 @@ revisions (``CadIrRevision``) and re-render without any LLM involvement.
 from app.ai.cad_ir.schema import (
     Arc,
     CadIR,
-    Circle,
     CadParameter,
+    Circle,
     DimensionEntity,
     Entity,
     GeometricConstraint,

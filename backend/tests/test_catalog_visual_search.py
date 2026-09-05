@@ -93,9 +93,7 @@ async def test_photo_finds_the_position_behind_it(db_session, indexed_position, 
     monkeypatch.setattr(vl, "vl_info", _info)
     monkeypatch.setattr(vl, "embed_query", _embed_query)
     monkeypatch.setattr(catalogs_api, "search_visual_catalog", _search, raising=False)
-    monkeypatch.setattr(
-        "app.vector.qdrant_store.search_visual_catalog", _search, raising=False
-    )
+    monkeypatch.setattr("app.vector.qdrant_store.search_visual_catalog", _search, raising=False)
 
     result = await search_catalog_visually(
         CatalogVisualSearchRequest(image_base64=base64.b64encode(_png()).decode()),
@@ -129,9 +127,7 @@ async def test_similar_by_entry_never_returns_the_position_itself(
 
     monkeypatch.setattr(vl, "vl_info", _info)
     monkeypatch.setattr(vl, "embed_query", _embed_query)
-    monkeypatch.setattr(
-        "app.vector.qdrant_store.search_visual_catalog", _search, raising=False
-    )
+    monkeypatch.setattr("app.vector.qdrant_store.search_visual_catalog", _search, raising=False)
 
     await search_catalog_visually(
         CatalogVisualSearchRequest(entry_id=indexed_position.id), db_session
@@ -212,13 +208,9 @@ async def test_reranking_is_off_unless_asked_for(db_session, indexed_position, m
     monkeypatch.setattr(vl, "vl_info", _info)
     monkeypatch.setattr(vl, "embed_query", _embed_query)
     monkeypatch.setattr(vl, "rerank_candidates", _rerank)
-    monkeypatch.setattr(
-        "app.vector.qdrant_store.search_visual_catalog", _search, raising=False
-    )
+    monkeypatch.setattr("app.vector.qdrant_store.search_visual_catalog", _search, raising=False)
 
-    result = await search_catalog_visually(
-        CatalogVisualSearchRequest(query="фреза"), db_session
-    )
+    result = await search_catalog_visually(CatalogVisualSearchRequest(query="фреза"), db_session)
     assert result.reranked is False
     assert called == []
 

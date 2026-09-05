@@ -35,12 +35,12 @@ from app.ai.degradation import log_degraded
 logger = structlog.get_logger()
 
 # Similarity thresholds (cosine score from Qdrant).
-REPLAY_SCORE = 0.86   # active recipe + resolvable slots → deterministic replay
-HINT_SCORE = 0.70     # any recipe → planner hint with recommended steps
-DEDUPE_SCORE = 0.93   # candidate is "the same task" → add trigger example
+REPLAY_SCORE = 0.86  # active recipe + resolvable slots → deterministic replay
+HINT_SCORE = 0.70  # any recipe → planner hint with recommended steps
+DEDUPE_SCORE = 0.93  # candidate is "the same task" → add trigger example
 
-_ACTIVATE_AFTER = 2       # successful replays before draft → active
-_RETIRE_FAIL_RATE = 0.5   # retired when fail rate exceeds this (≥4 uses)
+_ACTIVATE_AFTER = 2  # successful replays before draft → active
+_RETIRE_FAIL_RATE = 0.5  # retired when fail rate exceeds this (≥4 uses)
 _RETIRE_MIN_USES = 4
 _MAX_TRIGGER_EXAMPLES = 5
 _MIN_STEPS = 2
@@ -52,12 +52,33 @@ _MAX_STEPS = 10
 # Аргументы с этими ключами, заполненные литералом НЕ из запроса, — почти всегда
 # runtime-значения из вывода предыдущего шага (id, полученный из list/search).
 # Такой ход невоспроизводим: replay подставляет только слоты из текста запроса.
-_RUNTIME_ID_KEYS = frozenset({
-    "id", "invoice_id", "document_id", "supplier_id", "buyer_id", "item_id",
-    "receipt_id", "node_id", "chunk_id", "message_id", "case_id", "payment_id",
-    "anomaly_id", "draft_id", "thread_id", "order_id", "line_id", "contract_id",
-    "request_id", "proposal_id", "recipe_id", "event_id", "rule_id",
-})
+_RUNTIME_ID_KEYS = frozenset(
+    {
+        "id",
+        "invoice_id",
+        "document_id",
+        "supplier_id",
+        "buyer_id",
+        "item_id",
+        "receipt_id",
+        "node_id",
+        "chunk_id",
+        "message_id",
+        "case_id",
+        "payment_id",
+        "anomaly_id",
+        "draft_id",
+        "thread_id",
+        "order_id",
+        "line_id",
+        "contract_id",
+        "request_id",
+        "proposal_id",
+        "recipe_id",
+        "event_id",
+        "rule_id",
+    }
+)
 _UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
@@ -76,8 +97,19 @@ _TRUST_AFTER_CONFIRMED = 2
 # these and the recipe's learned trigger did NOT, the task is likely different
 # ("счета X" vs "счета КРОМЕ X") → do not replay, let the worker reason.
 _INTENT_MODIFIERS = (
-    "не ", "кроме", "без ", "только", "лишь", "исключени", "сравни", "против",
-    " vs ", "динамик", "измени", "почему", "по сравнению",
+    "не ",
+    "кроме",
+    "без ",
+    "только",
+    "лишь",
+    "исключени",
+    "сравни",
+    "против",
+    " vs ",
+    "динамик",
+    "измени",
+    "почему",
+    "по сравнению",
 )
 
 _VECTOR_SCOPE = "recipe_triggers"
@@ -185,6 +217,7 @@ def extract_entities(text: str) -> dict[str, str]:
     entities: dict[str, str] = {}
     try:
         from app.ai import route_table
+
         supplier = route_table.extract_supplier_name(text)
         if supplier:
             entities["supplier_name"] = supplier
@@ -263,14 +296,10 @@ def parameterize_steps(
         templated.append({**step, "args_template": args})
 
     used_slots = {
-        slot
-        for step in templated
-        for slot in _SLOT_RE.findall(str(step.get("args_template")))
+        slot for step in templated for slot in _SLOT_RE.findall(str(step.get("args_template")))
     }
     param_slots = {
-        slot: {"source": slot, "example": entities[slot]}
-        for slot in used_slots
-        if slot in entities
+        slot: {"source": slot, "example": entities[slot]} for slot in used_slots if slot in entities
     }
     return templated, param_slots
 
@@ -499,6 +528,7 @@ def render_args(
 
 def _collection_name() -> str:
     from app.ai.embeddings import embedding_collection_name, get_active_embedding_profile
+
     profile = get_active_embedding_profile()
     return embedding_collection_name(
         scope=_VECTOR_SCOPE,
@@ -515,8 +545,9 @@ async def _index_trigger(recipe_id: str, example_idx: int, text: str) -> None:
     profile = get_active_embedding_profile()
     vector = await embed_text(text, task_type="passage")
     collection = _collection_name()
-    ensure_collection(collection, vector_size=profile.dimension,
-                      distance_metric=profile.distance_metric)
+    ensure_collection(
+        collection, vector_size=profile.dimension, distance_metric=profile.distance_metric
+    )
     upsert_memory_embedding(
         point_id=f"recipe:{recipe_id}:{example_idx}",
         vector=vector,
@@ -762,14 +793,16 @@ async def replay(
                 )
                 if resp.status_code >= 400:
                     if on_event:
-                        await on_event({
-                            "type": "tool_result",
-                            "tool": capability,
-                            "result": {
-                                "error": f"HTTP {resp.status_code}",
-                                "detail": resp.text[:300],
-                            },
-                        })
+                        await on_event(
+                            {
+                                "type": "tool_result",
+                                "tool": capability,
+                                "result": {
+                                    "error": f"HTTP {resp.status_code}",
+                                    "detail": resp.text[:300],
+                                },
+                            }
+                        )
                     await record_outcome(recipe.id, success=False)
                     return False
                 result = resp.json() if resp.content else {}
@@ -819,10 +852,7 @@ async def record_outcome(recipe_id, *, success: bool, retire: bool = False) -> N
                 ):
                     recipe.status = "active"
                     logger.info("recipe_activated", recipe=str(recipe.id))
-                elif (
-                    total >= _RETIRE_MIN_USES
-                    and recipe.fail_count / total > _RETIRE_FAIL_RATE
-                ):
+                elif total >= _RETIRE_MIN_USES and recipe.fail_count / total > _RETIRE_FAIL_RATE:
                     recipe.status = "retired"
                     logger.info("recipe_retired_failrate", recipe=str(recipe.id))
             await db.commit()
@@ -854,6 +884,8 @@ async def reindex_all_triggers(db) -> dict[str, int]:
                 indexed += 1
             except Exception as exc:  # noqa: BLE001 — one bad trigger can't stop the rebuild
                 failed += 1
-                logger.warning("recipe_trigger_reindex_failed", recipe=str(recipe.id), error=str(exc)[:200])
+                logger.warning(
+                    "recipe_trigger_reindex_failed", recipe=str(recipe.id), error=str(exc)[:200]
+                )
     logger.info("recipe_triggers_reindexed", recipes=len(rows), indexed=indexed, failed=failed)
     return {"recipes": len(rows), "triggers_indexed": indexed, "triggers_failed": failed}

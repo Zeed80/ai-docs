@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 DIGITIZATION_TYPES = (
     "auto",
     "rotation_body",
@@ -59,9 +58,7 @@ def resolve_digitization_type(value: str | None) -> DigitizationTypeDecision:
     )
 
 
-def validate_spec_for_digitization_type(
-    spec: dict, digitization_type: str | None
-) -> list[str]:
+def validate_spec_for_digitization_type(spec: dict, digitization_type: str | None) -> list[str]:
     """Return user-actionable blockers without inventing a different class."""
 
     decision = resolve_digitization_type(digitization_type)

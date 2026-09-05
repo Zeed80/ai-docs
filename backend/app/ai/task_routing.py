@@ -102,6 +102,7 @@ class TaskRouting(BaseModel):
 # Redis helpers
 # ---------------------------------------------------------------------------
 
+
 def _redis_get() -> dict[str, dict] | None:
     try:
         from app.utils.redis_client import get_sync_redis
@@ -200,6 +201,7 @@ def _invalidate_lifecycle_cache() -> None:
     """Drop the pinned-model cache so orchestrator changes take effect."""
     try:
         from app.ai.model_lifecycle import invalidate_cache
+
         invalidate_cache()
     except Exception:
         pass
@@ -214,6 +216,7 @@ def _enforce_confidential(task: AITask, routing: TaskRouting) -> TaskRouting:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def get_task_routing() -> dict[AITask, TaskRouting]:
     """Return effective routing for every task (defaults overlaid with Redis)."""

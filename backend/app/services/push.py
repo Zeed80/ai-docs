@@ -3,6 +3,7 @@
 Privacy: only a per-device random topic is stored; pushes carry a short
 title/body plus type/action_url/notification_id. Document content is never sent.
 """
+
 from __future__ import annotations
 
 import secrets
@@ -55,23 +56,31 @@ def _headers(title: str, click_url: str | None, ntype: str | None) -> dict[str, 
     return headers
 
 
-def _publish_sync(topic: str, title: str, body: str, click_url: str | None, ntype: str | None) -> None:
+def _publish_sync(
+    topic: str, title: str, body: str, click_url: str | None, ntype: str | None
+) -> None:
     url = f"{settings.ntfy_url.rstrip('/')}/{topic}"
     # When the title can't go in a header (non-ASCII), prepend it to the body.
     message = body if title.isascii() else f"{title}\n{body}"
     try:
         with httpx.Client(timeout=_TIMEOUT) as client:
-            client.post(url, content=message.encode("utf-8"), headers=_headers(title, click_url, ntype))
+            client.post(
+                url, content=message.encode("utf-8"), headers=_headers(title, click_url, ntype)
+            )
     except Exception as e:  # never let push failures break the caller
         logger.warning("ntfy_publish_failed", topic=topic, error=str(e))
 
 
-async def _publish_async(topic: str, title: str, body: str, click_url: str | None, ntype: str | None) -> None:
+async def _publish_async(
+    topic: str, title: str, body: str, click_url: str | None, ntype: str | None
+) -> None:
     url = f"{settings.ntfy_url.rstrip('/')}/{topic}"
     message = body if title.isascii() else f"{title}\n{body}"
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            await client.post(url, content=message.encode("utf-8"), headers=_headers(title, click_url, ntype))
+            await client.post(
+                url, content=message.encode("utf-8"), headers=_headers(title, click_url, ntype)
+            )
     except Exception as e:
         logger.warning("ntfy_publish_failed", topic=topic, error=str(e))
 
@@ -89,13 +98,17 @@ async def push_to_user(
     if not settings.ntfy_enabled:
         return
     rows = (
-        await db.execute(
-            select(DeviceRegistration.ntfy_topic).where(
-                DeviceRegistration.user_sub == user_sub,
-                DeviceRegistration.enabled == True,  # noqa: E712
+        (
+            await db.execute(
+                select(DeviceRegistration.ntfy_topic).where(
+                    DeviceRegistration.user_sub == user_sub,
+                    DeviceRegistration.enabled == True,  # noqa: E712
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     click = _absolute_url(action_url)
     for topic in rows:
         await _publish_async(topic, title, body, click, notification_type)

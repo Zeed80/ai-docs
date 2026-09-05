@@ -48,9 +48,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         from app.config import settings
 
-        csp_exempt = any(
-            request.url.path.startswith(p) for p in _CSP_EXEMPT_PATH_PREFIXES
-        )
+        csp_exempt = any(request.url.path.startswith(p) for p in _CSP_EXEMPT_PATH_PREFIXES)
         # Найдено при приёмке (Правило 0): middleware перезаписывал CSP, уже
         # выставленный эндпоинтом, и более строгая политика выдачи вложений
         # (`default-src 'none'; sandbox`) молча заменялась на общеприложенческую
@@ -76,9 +74,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             )
 
         if settings.app_env == "production":
-            response.headers["Strict-Transport-Security"] = (
-                "max-age=31536000; includeSubDomains"
-            )
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
         logger.info(
             "http_request",

@@ -3,7 +3,6 @@ from pathlib import Path
 
 from app.ai.emg_regression import run_emg_regression
 
-
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
 
@@ -17,7 +16,10 @@ def test_four_domain_golden_manifest_passes_and_is_deterministic():
     assert first["passed"] is True
     assert first["case_count"] == 4
     assert {item["actual"]["profile"] for item in first["cases"]} == {
-        "mechanical", "assembly", "construction", "hydraulic",
+        "mechanical",
+        "assembly",
+        "construction",
+        "hydraulic",
     }
 
 

@@ -33,8 +33,18 @@ def upgrade() -> None:
             sa.Column("app_version", sa.String(50), nullable=True),
             sa.Column("revoked", sa.Boolean(), nullable=False, server_default=sa.text("false")),
             sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint("handle", name="uq_device_unlock_handle"),
         )

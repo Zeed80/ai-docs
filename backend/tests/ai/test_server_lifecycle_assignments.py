@@ -33,9 +33,7 @@ def docker(monkeypatch):
 
 
 def _assign(monkeypatch, *providers: str) -> None:
-    monkeypatch.setattr(
-        server_lifecycle, "assigned_providers", lambda: set(providers)
-    )
+    monkeypatch.setattr(server_lifecycle, "assigned_providers", lambda: set(providers))
 
 
 @pytest.mark.asyncio
@@ -110,9 +108,7 @@ async def test_the_idle_sweep_reaps_the_unassigned_first(monkeypatch, docker):
 
 
 @pytest.mark.asyncio
-async def test_unassigned_is_reaped_even_with_on_demand_switched_off(
-    monkeypatch, docker
-):
+async def test_unassigned_is_reaped_even_with_on_demand_switched_off(monkeypatch, docker):
     _assign(monkeypatch, "ollama")
     monkeypatch.setattr(server_lifecycle, "on_demand_enabled", lambda: False)
 
@@ -135,9 +131,13 @@ def test_only_primary_assignments_count(monkeypatch):
         task_routing,
         "get_task_routing",
         lambda: {
-            AITask.ENGINEERING_REASONING: _Routing("qwen3_6_35b_apex_ollama", [
-                "qwen3_6_35b_apex_ollama", "qwen3_vl_8b_vllm",
-            ]),
+            AITask.ENGINEERING_REASONING: _Routing(
+                "qwen3_6_35b_apex_ollama",
+                [
+                    "qwen3_6_35b_apex_ollama",
+                    "qwen3_vl_8b_vllm",
+                ],
+            ),
         },
     )
     # The fallback names a vLLM model; only the Ollama primary counts.

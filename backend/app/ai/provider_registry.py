@@ -16,14 +16,14 @@ from __future__ import annotations
 import json
 import os
 import time
-from enum import Enum
 from dataclasses import dataclass, field
+from enum import Enum
 
 import httpx
 import structlog
 
-from app.ai.secret_box import decrypt
 from app.ai.schemas import ProviderKind
+from app.ai.secret_box import decrypt
 from app.config import settings
 
 logger = structlog.get_logger()
@@ -218,9 +218,7 @@ def _row_to_resolved(row: dict) -> ResolvedProvider | None:
 def list_instances(kind: ProviderKind) -> list[ResolvedProvider]:
     """Return all enabled nodes for ``kind`` (DB cache → YAML/env default)."""
     rows = [
-        r
-        for r in _redis_get_instances()
-        if r.get("kind") == kind.value and r.get("enabled", True)
+        r for r in _redis_get_instances() if r.get("kind") == kind.value and r.get("enabled", True)
     ]
     resolved = [r for r in (_row_to_resolved(row) for row in rows) if r and r.base_url]
     if resolved:
@@ -352,9 +350,7 @@ def select_instance(
         if provider_model in served or bare in served:
             return inst
     if saw_known_inventory:
-        raise RuntimeError(
-            f"Model {provider_model} is not served by any enabled {kind.value} node"
-        )
+        raise RuntimeError(f"Model {provider_model} is not served by any enabled {kind.value} node")
     return instances[0]
 
 

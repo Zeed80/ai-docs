@@ -130,10 +130,12 @@ def cad_ir_profile_to_sketch_segments(entities: list[Entity]) -> list[dict[str, 
         forward = _vertex_key(pa) == current_vertex
         to_point = pb if forward else pa
         if kind == "line":
-            order.append({
-                "kind": "line",
-                "to": [to_point.x - origin_x, to_point.y - origin_y],
-            })
+            order.append(
+                {
+                    "kind": "line",
+                    "to": [to_point.x - origin_x, to_point.y - origin_y],
+                }
+            )
         else:
             arc_start, _arc_end = _arc_endpoints(entity)
             # The loop-walk direction and the arc's OWN stored direction
@@ -141,12 +143,14 @@ def cad_ir_profile_to_sketch_segments(entities: list[Entity]) -> list[dict[str, 
             # we are walking away from.
             frm_point = pa if forward else pb
             arc_forward = _vertex_key(frm_point) == _vertex_key(arc_start)
-            order.append({
-                "kind": "arc",
-                "to": [to_point.x - origin_x, to_point.y - origin_y],
-                "center": [entity.center.x - origin_x, entity.center.y - origin_y],
-                "clockwise": not arc_forward,
-            })
+            order.append(
+                {
+                    "kind": "arc",
+                    "to": [to_point.x - origin_x, to_point.y - origin_y],
+                    "center": [entity.center.x - origin_x, entity.center.y - origin_y],
+                    "clockwise": not arc_forward,
+                }
+            )
         visited.add(current_index)
         current_vertex = _vertex_key(to_point)
         if current_vertex == start_vertex:

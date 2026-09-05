@@ -62,24 +62,70 @@ INVOICE_COLUMNS = [
     TableColumn(key="invoice_number", label="Номер счёта", data_type="string"),
     TableColumn(key="invoice_date", label="Дата счёта", data_type="date"),
     TableColumn(key="due_date", label="Срок оплаты", data_type="date"),
-    TableColumn(key="validity_date", label="Действует до", data_type="date", sortable=False, filterable=False),
+    TableColumn(
+        key="validity_date",
+        label="Действует до",
+        data_type="date",
+        sortable=False,
+        filterable=False,
+    ),
     TableColumn(key="supplier_name", label="Поставщик", data_type="string"),
     TableColumn(key="supplier_inn", label="ИНН поставщика", data_type="string", sortable=False),
-    TableColumn(key="supplier_kpp", label="КПП поставщика", data_type="string", sortable=False, filterable=False),
-    TableColumn(key="supplier_address", label="Адрес поставщика", data_type="string", sortable=False, filterable=False),
-    TableColumn(key="buyer_name", label="Покупатель", data_type="string", sortable=False, filterable=False),
-    TableColumn(key="buyer_inn", label="ИНН покупателя", data_type="string", sortable=False, filterable=False),
+    TableColumn(
+        key="supplier_kpp",
+        label="КПП поставщика",
+        data_type="string",
+        sortable=False,
+        filterable=False,
+    ),
+    TableColumn(
+        key="supplier_address",
+        label="Адрес поставщика",
+        data_type="string",
+        sortable=False,
+        filterable=False,
+    ),
+    TableColumn(
+        key="buyer_name", label="Покупатель", data_type="string", sortable=False, filterable=False
+    ),
+    TableColumn(
+        key="buyer_inn",
+        label="ИНН покупателя",
+        data_type="string",
+        sortable=False,
+        filterable=False,
+    ),
     # items_list — aggregated, multi-line. Not sortable / not filterable as a column.
-    TableColumn(key="items_list", label="Перечень товаров", data_type="string", sortable=False, filterable=False),
+    TableColumn(
+        key="items_list",
+        label="Перечень товаров",
+        data_type="string",
+        sortable=False,
+        filterable=False,
+    ),
     TableColumn(key="total_amount", label="Сумма (с НДС)", data_type="number"),
     TableColumn(key="currency", label="Валюта", data_type="string"),
     TableColumn(key="tax_amount", label="НДС", data_type="number"),
     TableColumn(key="subtotal", label="Сумма без НДС", data_type="number"),
-    TableColumn(key="payment_id", label="Идентификатор платежа", data_type="string", sortable=False, filterable=False),
+    TableColumn(
+        key="payment_id",
+        label="Идентификатор платежа",
+        data_type="string",
+        sortable=False,
+        filterable=False,
+    ),
     # notes — user-editable free text. Not sortable; searchable via keyword search.
-    TableColumn(key="notes", label="Примечание", data_type="string", sortable=False, filterable=False),
+    TableColumn(
+        key="notes", label="Примечание", data_type="string", sortable=False, filterable=False
+    ),
     # special_marks — AI-extracted special conditions (read-only for users).
-    TableColumn(key="special_marks", label="Особые отметки", data_type="string", sortable=False, filterable=False),
+    TableColumn(
+        key="special_marks",
+        label="Особые отметки",
+        data_type="string",
+        sortable=False,
+        filterable=False,
+    ),
     TableColumn(key="status", label="Статус", data_type="enum"),
     TableColumn(key="overall_confidence", label="Уверенность", data_type="number"),
     TableColumn(key="line_count", label="Позиций", data_type="number"),
@@ -126,13 +172,10 @@ def _supplier_name_subq():
 
 async def _query_invoices(req: TableQueryRequest, db: AsyncSession) -> TableQueryResponse:
     items_subq = invoice_items_list_subquery()
-    query = (
-        select(Invoice, items_subq.label("items_list"))
-        .options(
-            selectinload(Invoice.lines),
-            selectinload(Invoice.supplier),
-            selectinload(Invoice.buyer),
-        )
+    query = select(Invoice, items_subq.label("items_list")).options(
+        selectinload(Invoice.lines),
+        selectinload(Invoice.supplier),
+        selectinload(Invoice.buyer),
     )
 
     # Apply filters
@@ -146,7 +189,9 @@ async def _query_invoices(req: TableQueryRequest, db: AsyncSession) -> TableQuer
         q = req.search
         query = query.where(
             or_(
-                text_search_condition(db, [Invoice.invoice_number, Invoice.notes, Invoice.special_marks], q),
+                text_search_condition(
+                    db, [Invoice.invoice_number, Invoice.notes, Invoice.special_marks], q
+                ),
                 Invoice.supplier.has(text_search_condition(db, [Party.name], q)),
                 Invoice.lines.any(text_search_condition(db, [InvoiceLine.description], q)),
             )
@@ -175,39 +220,44 @@ async def _query_invoices(req: TableQueryRequest, db: AsyncSession) -> TableQuer
     columns = _select_columns(INVOICE_COLUMNS, req.columns)
     rows = []
     for idx, (inv, items_list) in enumerate(records):
-        rows.append(TableRow(
-            id=str(inv.id),
-            data={
-                "document_id": str(inv.document_id) if inv.document_id else None,
-                "row_no": req.offset + idx + 1,
-                "invoice_number": inv.invoice_number,
-                "invoice_date": inv.invoice_date.isoformat() if inv.invoice_date else None,
-                "due_date": inv.due_date.isoformat() if inv.due_date else None,
-                "validity_date": inv.validity_date.isoformat() if inv.validity_date else None,
-                "supplier_name": inv.supplier.name if inv.supplier else None,
-                "supplier_inn": inv.supplier.inn if inv.supplier else None,
-                "supplier_kpp": inv.supplier.kpp if inv.supplier else None,
-                "supplier_address": inv.supplier.address if inv.supplier else None,
-                "buyer_name": inv.buyer.name if inv.buyer else None,
-                "buyer_inn": inv.buyer.inn if inv.buyer else None,
-                "items_list": items_list,
-                "total_amount": inv.total_amount,
-                "currency": inv.currency,
-                "tax_amount": inv.tax_amount,
-                "subtotal": inv.subtotal,
-                "payment_id": inv.payment_id,
-                "notes": inv.notes,
-                "special_marks": inv.special_marks,
-                "status": inv.status.value if inv.status else None,
-                "overall_confidence": inv.overall_confidence,
-                "line_count": len(inv.lines),
-                "created_at": inv.created_at.isoformat() if inv.created_at else None,
-            },
-        ))
+        rows.append(
+            TableRow(
+                id=str(inv.id),
+                data={
+                    "document_id": str(inv.document_id) if inv.document_id else None,
+                    "row_no": req.offset + idx + 1,
+                    "invoice_number": inv.invoice_number,
+                    "invoice_date": inv.invoice_date.isoformat() if inv.invoice_date else None,
+                    "due_date": inv.due_date.isoformat() if inv.due_date else None,
+                    "validity_date": inv.validity_date.isoformat() if inv.validity_date else None,
+                    "supplier_name": inv.supplier.name if inv.supplier else None,
+                    "supplier_inn": inv.supplier.inn if inv.supplier else None,
+                    "supplier_kpp": inv.supplier.kpp if inv.supplier else None,
+                    "supplier_address": inv.supplier.address if inv.supplier else None,
+                    "buyer_name": inv.buyer.name if inv.buyer else None,
+                    "buyer_inn": inv.buyer.inn if inv.buyer else None,
+                    "items_list": items_list,
+                    "total_amount": inv.total_amount,
+                    "currency": inv.currency,
+                    "tax_amount": inv.tax_amount,
+                    "subtotal": inv.subtotal,
+                    "payment_id": inv.payment_id,
+                    "notes": inv.notes,
+                    "special_marks": inv.special_marks,
+                    "status": inv.status.value if inv.status else None,
+                    "overall_confidence": inv.overall_confidence,
+                    "line_count": len(inv.lines),
+                    "created_at": inv.created_at.isoformat() if inv.created_at else None,
+                },
+            )
+        )
 
     return TableQueryResponse(
-        columns=columns, rows=rows, total=total,
-        offset=req.offset, limit=req.limit,
+        columns=columns,
+        rows=rows,
+        total=total,
+        offset=req.offset,
+        limit=req.limit,
     )
 
 
@@ -336,8 +386,11 @@ async def _query_documents(req: TableQueryRequest, db: AsyncSession) -> TableQue
     ]
 
     return TableQueryResponse(
-        columns=columns, rows=rows, total=total,
-        offset=req.offset, limit=req.limit,
+        columns=columns,
+        rows=rows,
+        total=total,
+        offset=req.offset,
+        limit=req.limit,
     )
 
 
@@ -466,9 +519,7 @@ def _export_xlsx(data: TableQueryResponse, table_name: str) -> StreamingResponse
         max_len = len(col.label)
         for row in data.rows:
             val = str(row.data.get(col.key, "") or "")
-            max_len = max(
-                max_len, max((len(line) for line in val.splitlines()), default=0)
-            )
+            max_len = max(max_len, max((len(line) for line in val.splitlines()), default=0))
         width = min(max(max_len + 3, 12), 60)
         if is_money_key(col.key):
             width = max(width, 16)
@@ -567,13 +618,10 @@ async def export_1c(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: table.export_1c — Export invoices to 1С CommerceML XML format."""
-    query = (
-        select(Invoice)
-        .options(
-            selectinload(Invoice.lines),
-            selectinload(Invoice.supplier),
-            selectinload(Invoice.buyer),
-        )
+    query = select(Invoice).options(
+        selectinload(Invoice.lines),
+        selectinload(Invoice.supplier),
+        selectinload(Invoice.buyer),
     )
 
     if payload.invoice_ids:
@@ -611,10 +659,13 @@ def _build_commerceml_xml(invoices: list) -> str:
     """Build CommerceML 2.10 compatible XML for 1С import."""
     from lxml import etree
 
-    root = etree.Element("КоммерческаяИнформация", attrib={
-        "ВерсияСхемы": "2.10",
-        "ДатаФормирования": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-    })
+    root = etree.Element(
+        "КоммерческаяИнформация",
+        attrib={
+            "ВерсияСхемы": "2.10",
+            "ДатаФормирования": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        },
+    )
 
     for inv in invoices:
         doc_el = etree.SubElement(root, "Документ")
@@ -677,6 +728,7 @@ def _build_commerceml_xml(invoices: list) -> str:
 
 def _add_text(parent, tag: str, text: str):
     from lxml import etree
+
     el = etree.SubElement(parent, tag)
     el.text = text
     return el
@@ -813,9 +865,14 @@ async def import_excel(
             if existing:
                 changes = _detect_invoice_changes(existing, row_dict)
                 if changes:
-                    diff.append(ImportDiffRow(
-                        row_index=idx, entity_id=row_id, action="update", changes=changes,
-                    ))
+                    diff.append(
+                        ImportDiffRow(
+                            row_index=idx,
+                            entity_id=row_id,
+                            action="update",
+                            changes=changes,
+                        )
+                    )
                     updates += 1
                 else:
                     diff.append(ImportDiffRow(row_index=idx, entity_id=row_id, action="skip"))
@@ -903,9 +960,7 @@ async def apply_diff(
 
         try:
             if row.action == "update" and row.entity_id:
-                result = await db.execute(
-                    select(Invoice).where(Invoice.id == row.entity_id)
-                )
+                result = await db.execute(select(Invoice).where(Invoice.id == row.entity_id))
                 invoice = result.scalar_one_or_none()
                 if not invoice:
                     errors.append(f"Invoice {row.entity_id} not found")
@@ -923,10 +978,7 @@ async def apply_diff(
 
             elif row.action == "create":
                 # Create minimal Invoice record from changes
-                inv = Invoice(**{
-                    k: v for k, v in row.changes.items()
-                    if hasattr(Invoice, k)
-                })
+                inv = Invoice(**{k: v for k, v in row.changes.items() if hasattr(Invoice, k)})
                 db.add(inv)
                 applied += 1
 
@@ -961,15 +1013,17 @@ async def inline_edit(
     """Skill: table.inline_edit — Edit a single cell value."""
     from app.db.models import Invoice as InvoiceModel
 
-    result = await db.execute(
-        select(InvoiceModel).where(InvoiceModel.id == payload.entity_id)
-    )
+    result = await db.execute(select(InvoiceModel).where(InvoiceModel.id == payload.entity_id))
     invoice = result.scalar_one_or_none()
     if not invoice:
         raise HTTPException(404, "Entity not found")
 
     editable_fields = {
-        "invoice_number", "currency", "total_amount", "tax_amount", "subtotal",
+        "invoice_number",
+        "currency",
+        "total_amount",
+        "tax_amount",
+        "subtotal",
     }
     if payload.field not in editable_fields:
         raise HTTPException(400, f"Field '{payload.field}' is not editable")
@@ -984,15 +1038,19 @@ async def inline_edit(
     setattr(invoice, payload.field, new_value)
 
     await log_action(
-        db, action="table.inline_edit", entity_type="invoice",
+        db,
+        action="table.inline_edit",
+        entity_type="invoice",
         entity_id=invoice.id,
         details={"field": payload.field, "old": str(old_value), "new": str(new_value)},
     )
     await db.commit()
 
     return InlineEditResponse(
-        entity_id=invoice.id, field=payload.field,
-        old_value=old_value, new_value=new_value,
+        entity_id=invoice.id,
+        field=payload.field,
+        old_value=old_value,
+        new_value=new_value,
     )
 
 
@@ -1038,8 +1096,14 @@ async def batch_action(
                 errors.append(f"{eid}: cannot approve (status={inv.status.value})")
                 continue
             inv.status = InvoiceStatusModel.approved
-            await ate(db, entity_type="invoice", entity_id=inv.id,
-                      event_type="approved", summary="Batch approved", actor="user")
+            await ate(
+                db,
+                entity_type="invoice",
+                entity_id=inv.id,
+                event_type="approved",
+                summary="Batch approved",
+                actor="user",
+            )
             succeeded += 1
 
         elif payload.action == "reject":
@@ -1047,10 +1111,14 @@ async def batch_action(
                 errors.append(f"{eid}: cannot reject (status={inv.status.value})")
                 continue
             inv.status = InvoiceStatusModel.rejected
-            await ate(db, entity_type="invoice", entity_id=inv.id,
-                      event_type="rejected",
-                      summary=f"Batch rejected: {payload.reason or 'no reason'}",
-                      actor="user")
+            await ate(
+                db,
+                entity_type="invoice",
+                entity_id=inv.id,
+                event_type="rejected",
+                summary=f"Batch rejected: {payload.reason or 'no reason'}",
+                actor="user",
+            )
             succeeded += 1
 
         else:
@@ -1059,7 +1127,9 @@ async def batch_action(
 
     if succeeded > 0:
         await log_action(
-            db, action=f"table.batch_{payload.action}", entity_type="invoice",
+            db,
+            action=f"table.batch_{payload.action}",
+            entity_type="invoice",
             entity_id=None,
             details={"count": succeeded, "ids": [str(e) for e in payload.entity_ids]},
         )

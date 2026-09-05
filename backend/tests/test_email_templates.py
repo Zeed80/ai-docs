@@ -53,15 +53,18 @@ async def test_list_templates(client: AsyncClient, template):
 
 @pytest.mark.asyncio
 async def test_create_template(client: AsyncClient):
-    resp = await client.post("/api/email-templates/", json={
-        "name": "Подтверждение заказа",
-        "slug": "order-confirm",
-        "category": "confirmation",
-        "language": "ru",
-        "subject": "Подтверждение заказа №{{order_id}}",
-        "body_html": "<p>Ваш заказ №{{order_id}} принят.</p>",
-        "variables": ["order_id"],
-    })
+    resp = await client.post(
+        "/api/email-templates/",
+        json={
+            "name": "Подтверждение заказа",
+            "slug": "order-confirm",
+            "category": "confirmation",
+            "language": "ru",
+            "subject": "Подтверждение заказа №{{order_id}}",
+            "body_html": "<p>Ваш заказ №{{order_id}} принят.</p>",
+            "variables": ["order_id"],
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Подтверждение заказа"
@@ -92,9 +95,12 @@ async def test_get_template_not_found(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_template(client: AsyncClient, template):
-    resp = await client.patch(f"/api/email-templates/{template.id}", json={
-        "subject": "Обновлённый запрос КП",
-    })
+    resp = await client.patch(
+        f"/api/email-templates/{template.id}",
+        json={
+            "subject": "Обновлённый запрос КП",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["subject"] == "Обновлённый запрос КП"
@@ -105,13 +111,16 @@ async def test_update_template(client: AsyncClient, template):
 
 @pytest.mark.asyncio
 async def test_delete_template(client: AsyncClient):
-    create_resp = await client.post("/api/email-templates/", json={
-        "name": "Временный шаблон",
-        "category": "custom",
-        "language": "ru",
-        "subject": "Тест",
-        "body_html": "<p>Тест</p>",
-    })
+    create_resp = await client.post(
+        "/api/email-templates/",
+        json={
+            "name": "Временный шаблон",
+            "category": "custom",
+            "language": "ru",
+            "subject": "Тест",
+            "body_html": "<p>Тест</p>",
+        },
+    )
     template_id = create_resp.json()["id"]
 
     resp = await client.delete(f"/api/email-templates/{template_id}")
@@ -123,9 +132,12 @@ async def test_delete_template(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_render_template(client: AsyncClient, template):
-    resp = await client.post(f"/api/email-templates/{template.id}/render", json={
-        "variables": {"product": "Болт М8×40"},
-    })
+    resp = await client.post(
+        f"/api/email-templates/{template.id}/render",
+        json={
+            "variables": {"product": "Болт М8×40"},
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "subject" in data or "body_html" in data or "rendered" in data or isinstance(data, dict)

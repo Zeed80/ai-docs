@@ -55,7 +55,9 @@ def upgrade() -> None:
             ),
             sa.PrimaryKeyConstraint("id"),
         )
-        op.create_index("ix_source_connectors_domain_pattern", "source_connectors", ["domain_pattern"])
+        op.create_index(
+            "ix_source_connectors_domain_pattern", "source_connectors", ["domain_pattern"]
+        )
         op.create_index("ix_source_connectors_status", "source_connectors", ["status"])
 
 

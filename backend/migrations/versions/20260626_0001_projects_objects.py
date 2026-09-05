@@ -42,10 +42,18 @@ def upgrade() -> None:
             sa.Column("normalized_name", sa.String(300), nullable=False),
             sa.Column("code", sa.String(100), nullable=True),
             sa.Column("description", sa.Text(), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                      server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False,
-                      server_default=sa.func.now()),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
             sa.UniqueConstraint("normalized_name", name="uq_projects_normalized_name"),
         )
         op.create_index("ix_projects_normalized_name", "projects", ["normalized_name"])
@@ -60,10 +68,18 @@ def upgrade() -> None:
             sa.Column("normalized_name", sa.String(300), nullable=False),
             sa.Column("code", sa.String(100), nullable=True),
             sa.Column("description", sa.Text(), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                      server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False,
-                      server_default=sa.func.now()),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
             sa.UniqueConstraint("normalized_name", name="uq_site_objects_normalized_name"),
         )
         op.create_index("ix_site_objects_normalized_name", "site_objects", ["normalized_name"])
@@ -71,14 +87,16 @@ def upgrade() -> None:
         op.create_index("ix_site_objects_project_id", "site_objects", ["project_id"])
 
     if not _has_column(insp, "documents", "project_id"):
-        op.add_column("documents",
-                      sa.Column("project_id", GUID(),
-                                sa.ForeignKey("projects.id"), nullable=True))
+        op.add_column(
+            "documents",
+            sa.Column("project_id", GUID(), sa.ForeignKey("projects.id"), nullable=True),
+        )
         op.create_index("ix_documents_project_id", "documents", ["project_id"])
     if not _has_column(insp, "documents", "object_id"):
-        op.add_column("documents",
-                      sa.Column("object_id", GUID(),
-                                sa.ForeignKey("site_objects.id"), nullable=True))
+        op.add_column(
+            "documents",
+            sa.Column("object_id", GUID(), sa.ForeignKey("site_objects.id"), nullable=True),
+        )
         op.create_index("ix_documents_object_id", "documents", ["object_id"])
 
 

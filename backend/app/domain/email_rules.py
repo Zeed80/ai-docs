@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 
@@ -33,6 +33,7 @@ _MAX_AUTO_REPLIES_PER_THREAD_PER_DAY = 2
 
 
 # ── known domains (also fixes the hard-coded set in email.risk_check) ──────────
+
 
 def our_domains_sync(db) -> set[str]:
     """Домены САМОЙ организации — наш почтовый домен и домены наших ящиков.
@@ -130,6 +131,7 @@ async def known_domains(db) -> set[str]:
 
 # ── condition evaluation ─────────────────────────────────────────────────────
 
+
 def _domain(addr: str) -> str:
     return addr.split("@")[-1].lower() if "@" in (addr or "") else ""
 
@@ -191,7 +193,9 @@ def _match_one(rule: dict, msg, attachments, known_supplier_domains) -> bool:
     return False
 
 
-def evaluate_conditions(msg, attachments, conditions: dict, *, known_supplier_domains: set[str]) -> bool:
+def evaluate_conditions(
+    msg, attachments, conditions: dict, *, known_supplier_domains: set[str]
+) -> bool:
     rules = (conditions or {}).get("rules") or []
     if not rules:
         return False
@@ -200,6 +204,7 @@ def evaluate_conditions(msg, attachments, conditions: dict, *, known_supplier_do
 
 
 # ── action application (sync — Celery ingest path) ───────────────────────────
+
 
 def apply_rules(db, msg, mailbox: str, *, only_rule_id=None) -> list[dict]:
     """Run every active rule for ``mailbox`` against ``msg``. Mutates msg/thread,
@@ -255,9 +260,11 @@ def apply_rules(db, msg, mailbox: str, *, only_rule_id=None) -> list[dict]:
     if not rules:
         return []
 
-    attachments = db.execute(
-        select(EmailAttachment).where(EmailAttachment.message_id == msg.id)
-    ).scalars().all()
+    attachments = (
+        db.execute(select(EmailAttachment).where(EmailAttachment.message_id == msg.id))
+        .scalars()
+        .all()
+    )
     ksd = known_domains_sync(db)
     thread = db.get(EmailThread, msg.thread_id) if msg.thread_id else None
 
@@ -287,8 +294,11 @@ def apply_rules(db, msg, mailbox: str, *, only_rule_id=None) -> list[dict]:
                     lid = uuid.UUID(str(action["label_id"]))
                     exists = db.get(EmailThreadLabel, (thread.id, lid))
                     if not exists:
-                        db.add(EmailThreadLabel(thread_id=thread.id, label_id=lid,
-                                                added_by=f"rule:{rule.id}"))
+                        db.add(
+                            EmailThreadLabel(
+                                thread_id=thread.id, label_id=lid, added_by=f"rule:{rule.id}"
+                            )
+                        )
                 elif kind == "remove_label" and action.get("label_id") and thread:
                     db.query(EmailThreadLabel).filter_by(
                         thread_id=thread.id, label_id=uuid.UUID(str(action["label_id"]))
@@ -302,7 +312,8 @@ def apply_rules(db, msg, mailbox: str, *, only_rule_id=None) -> list[dict]:
                         action = {**action, "assigned_to_sub": assigned}
                     else:
                         logger.info(
-                            "email_rule_assign_no_user", rule_id=str(rule.id),
+                            "email_rule_assign_no_user",
+                            rule_id=str(rule.id),
                             role=action.get("role"),
                         )
                         continue
@@ -353,9 +364,7 @@ def apply_rules(db, msg, mailbox: str, *, only_rule_id=None) -> list[dict]:
                         )
                         from app.domain.email_send import draft_content_digest
 
-                        draft.draft_data["content_digest"] = draft_content_digest(
-                            draft.draft_data
-                        )
+                        draft.draft_data["content_digest"] = draft_content_digest(draft.draft_data)
                         db.add(draft)
                         db.flush()
                         # Ф3: an automatic reply goes through the same risk
@@ -363,22 +372,28 @@ def apply_rules(db, msg, mailbox: str, *, only_rule_id=None) -> list[dict]:
                         # stamped "approved" and dispatched directly, so the
                         # one path with no human in it was also the only path
                         # with no checks.
-                        blocked, codes = (
-                            _rule_send_blocked(db, draft) if do_send else (False, [])
-                        )
+                        blocked, codes = _rule_send_blocked(db, draft) if do_send else (False, [])
                         if blocked:
                             logger.warning(
                                 "email_rule_auto_send_blocked_by_risk",
-                                rule_id=str(rule.id), codes=codes,
+                                rule_id=str(rule.id),
+                                codes=codes,
                             )
                             do_send = False
-                            draft.draft_data = {**draft.draft_data, "status": "draft",
-                                                "sent_by": None,
-                                                "blocked_by": codes}
+                            draft.draft_data = {
+                                **draft.draft_data,
+                                "status": "draft",
+                                "sent_by": None,
+                                "blocked_by": codes,
+                            }
                         if do_send:
                             _dispatch_rule_send(
-                                db, draft, rule, msg,
-                                _bare_addr(msg.from_address), mailbox,
+                                db,
+                                draft,
+                                rule,
+                                msg,
+                                _bare_addr(msg.from_address),
+                                mailbox,
                             )
                         else:
                             _notify_rule_draft(msg, rule)
@@ -395,18 +410,17 @@ def apply_rules(db, msg, mailbox: str, *, only_rule_id=None) -> list[dict]:
                     stop = True
                 applied.append(action)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("email_rule_action_failed", rule_id=str(rule.id),
-                               action=kind, error=str(exc))
+                logger.warning(
+                    "email_rule_action_failed", rule_id=str(rule.id), action=kind, error=str(exc)
+                )
 
         if applied:
             from app.core.metrics import email_rule_actions_total
 
             for action in applied:
-                email_rule_actions_total.labels(
-                    action=str(action.get("type") or "unknown")
-                ).inc()
+                email_rule_actions_total.labels(action=str(action.get("type") or "unknown")).inc()
             rule.run_count = (rule.run_count or 0) + 1
-            rule.last_run_at = datetime.now(timezone.utc)
+            rule.last_run_at = datetime.now(UTC)
             db.add(EmailRuleLog(rule_id=rule.id, message_id=msg.id, actions_applied=applied))
             all_applied.extend(applied)
         if stop or rule.stop_processing:
@@ -459,15 +473,20 @@ def _assign_thread(db, thread, role: str) -> str | None:
     first. Returns the sub, or None when nobody holds that role — in which case
     the action is NOT recorded as applied.
     """
-    from sqlalchemy import func as _f, select as _sel
+    from sqlalchemy import func as _f
+    from sqlalchemy import select as _sel
 
     from app.db.models import EmailThread, NotificationType, User
 
     if thread is None:
         return None
-    candidates = db.execute(
-        _sel(User.sub).where(User.role == role, User.is_active == True)  # noqa: E712
-    ).scalars().all()
+    candidates = (
+        db.execute(
+            _sel(User.sub).where(User.role == role, User.is_active == True)  # noqa: E712
+        )
+        .scalars()
+        .all()
+    )
     if not candidates:
         return None
     load = dict(
@@ -521,13 +540,17 @@ def _forward_message(db, msg, rule, address: str, mailbox: str) -> None:
     external = domain not in our_domains_sync(db)
 
     body_html = (
-        f"<p>Переслано правилом «{rule.name}».</p>"
-        f"<p>От: {msg.from_address}<br/>Тема: {msg.subject or '(без темы)'}</p>"
-        f"<hr/>{msg.body_html or ''}"
-    ) if msg.body_html else (
-        f"<p>Переслано правилом «{rule.name}».</p>"
-        f"<p>От: {msg.from_address}<br/>Тема: {msg.subject or '(без темы)'}</p>"
-        f"<hr/><pre>{(msg.body_text or '')[:5000]}</pre>"
+        (
+            f"<p>Переслано правилом «{rule.name}».</p>"
+            f"<p>От: {msg.from_address}<br/>Тема: {msg.subject or '(без темы)'}</p>"
+            f"<hr/>{msg.body_html or ''}"
+        )
+        if msg.body_html
+        else (
+            f"<p>Переслано правилом «{rule.name}».</p>"
+            f"<p>От: {msg.from_address}<br/>Тема: {msg.subject or '(без темы)'}</p>"
+            f"<hr/><pre>{(msg.body_text or '')[:5000]}</pre>"
+        )
     )
     do_send = (not external) and bool(rule.auto_send) and _auto_send_allowed(db, msg, target)
     subject = msg.subject or "(без темы)"
@@ -566,17 +589,25 @@ def _forward_message(db, msg, rule, address: str, mailbox: str) -> None:
     blocked, codes = _rule_send_blocked(db, draft) if do_send else (False, [])
     if blocked:
         logger.warning(
-            "email_rule_forward_blocked_by_risk", rule_id=str(rule.id), codes=codes,
+            "email_rule_forward_blocked_by_risk",
+            rule_id=str(rule.id),
+            codes=codes,
         )
         do_send = False
-        draft.draft_data = {**draft.draft_data, "status": "draft", "sent_by": None,
-                            "blocked_by": codes}
+        draft.draft_data = {
+            **draft.draft_data,
+            "status": "draft",
+            "sent_by": None,
+            "blocked_by": codes,
+        }
 
     if do_send:
         _dispatch_rule_send(db, draft, rule, msg, target, mailbox)
     else:
         logger.info(
-            "email_rule_forward_prepared", rule_id=str(rule.id), to=target,
+            "email_rule_forward_prepared",
+            rule_id=str(rule.id),
+            to=target,
             external=external,
         )
         _notify_rule_draft(msg, rule)
@@ -590,14 +621,16 @@ def _dispatch_rule_send(db, draft, rule, msg, recipient: str, mailbox: str) -> N
         from app.tasks.email_sender import send_email_draft
 
         draft.draft_data = {**draft.draft_data, "status": "queued"}
-        db.add(EmailAutoReply(
-            rule_id=rule.id,
-            draft_id=draft.id,
-            in_reply_to_message_id=msg.id,
-            mailbox=mailbox,
-            recipient=recipient,
-            thread_root=_thread_root(msg),
-        ))
+        db.add(
+            EmailAutoReply(
+                rule_id=rule.id,
+                draft_id=draft.id,
+                in_reply_to_message_id=msg.id,
+                mailbox=mailbox,
+                recipient=recipient,
+                thread_root=_thread_root(msg),
+            )
+        )
         db.flush()
         send_email_draft.delay(str(draft.id))
         logger.info("email_rule_auto_sent", rule_id=str(rule.id), to=recipient)
@@ -611,7 +644,7 @@ def _thread_root(msg) -> str | None:
     refs = (getattr(msg, "references", None) or "").split()
     if refs:
         return refs[0][:500]
-    return (msg.in_reply_to or msg.message_id_header or None)
+    return msg.in_reply_to or msg.message_id_header or None
 
 
 def _bare_addr(addr: str) -> str:
@@ -634,25 +667,23 @@ def _auto_send_allowed(db, msg, recipient: str | None = None) -> bool:
     Now both limits are counted from ``email_auto_replies`` — rows that exist
     only because a message actually went out.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
-    from sqlalchemy import func as _f, select as _sel
+    from sqlalchemy import func as _f
+    from sqlalchemy import select as _sel
 
-    from app.db.models import EmailAutoReply, MailServerConfig
+    from app.db.models import EmailAutoReply, MailboxConfig, MailServerConfig
     from app.tasks.imap_client import is_automated_message
-
-    from app.db.models import MailboxConfig
 
     cfg = db.execute(_sel(MailServerConfig)).scalars().first()
     # Ф9 — the mailbox gets the last word. NULL = inherit the global policy.
     box = db.execute(
-        _sel(MailboxConfig.auto_send_enabled, MailboxConfig.auto_send_max_per_day)
-        .where(MailboxConfig.name == msg.mailbox)
+        _sel(MailboxConfig.auto_send_enabled, MailboxConfig.auto_send_max_per_day).where(
+            MailboxConfig.name == msg.mailbox
+        )
     ).first()
     box_enabled = box[0] if box else None
-    enabled = box_enabled if box_enabled is not None else bool(
-        cfg and cfg.auto_send_enabled
-    )
+    enabled = box_enabled if box_enabled is not None else bool(cfg and cfg.auto_send_enabled)
     if not enabled:
         return False
 
@@ -666,8 +697,14 @@ def _auto_send_allowed(db, msg, recipient: str | None = None) -> bool:
     if any(marker in sender for marker in ("no-reply", "noreply", "donotreply", "mailer-daemon")):
         return False
     body = f"{msg.subject or ''}\n{(msg.body_text or '')[:2000]}".lower()
-    if any(k in body for k in ("не отвечайте на это письмо", "автоматическое уведомление",
-                               "this is an automated message")):
+    if any(
+        k in body
+        for k in (
+            "не отвечайте на это письмо",
+            "автоматическое уведомление",
+            "this is an automated message",
+        )
+    ):
         return False
 
     # Not if a human already replied in this thread.
@@ -675,36 +712,45 @@ def _auto_send_allowed(db, msg, recipient: str | None = None) -> bool:
         from app.db.models import EmailMessage as _EM
 
         human_reply = db.execute(
-            _sel(_EM.id).where(
-                _EM.thread_id == msg.thread_id, _EM.is_inbound == False,  # noqa: E712
-            ).limit(1)
+            _sel(_EM.id)
+            .where(
+                _EM.thread_id == msg.thread_id,
+                _EM.is_inbound == False,  # noqa: E712
+            )
+            .limit(1)
         ).first()
         if human_reply:
             return False
 
     to = (recipient or _bare_addr(msg.from_address)).lower()
-    since = datetime.now(timezone.utc) - timedelta(days=1)
+    since = datetime.now(UTC) - timedelta(days=1)
 
     # Per-conversation: two systems answering each other loop within one thread
     # long before any daily cap notices.
     root = _thread_root(msg)
     if root:
-        in_thread = db.execute(
-            _sel(_f.count(EmailAutoReply.id)).where(
-                EmailAutoReply.thread_root == root,
-                EmailAutoReply.sent_at >= since,
-            )
-        ).scalar() or 0
+        in_thread = (
+            db.execute(
+                _sel(_f.count(EmailAutoReply.id)).where(
+                    EmailAutoReply.thread_root == root,
+                    EmailAutoReply.sent_at >= since,
+                )
+            ).scalar()
+            or 0
+        )
         if in_thread >= _MAX_AUTO_REPLIES_PER_THREAD_PER_DAY:
             logger.warning("email_auto_reply_thread_limit", thread_root=root)
             return False
 
-    per_recipient = db.execute(
-        _sel(_f.count(EmailAutoReply.id)).where(
-            _f.lower(EmailAutoReply.recipient) == to,
-            EmailAutoReply.sent_at >= since,
-        )
-    ).scalar() or 0
+    per_recipient = (
+        db.execute(
+            _sel(_f.count(EmailAutoReply.id)).where(
+                _f.lower(EmailAutoReply.recipient) == to,
+                EmailAutoReply.sent_at >= since,
+            )
+        ).scalar()
+        or 0
+    )
     if per_recipient >= _MAX_AUTO_REPLIES_PER_RECIPIENT_PER_DAY:
         logger.warning("email_auto_reply_recipient_limit", recipient=to)
         return False
@@ -716,45 +762,60 @@ def _auto_send_allowed(db, msg, recipient: str | None = None) -> bool:
     if box_cap is not None:
         total_q = total_q.where(EmailAutoReply.mailbox == msg.mailbox)
     total_today = db.execute(total_q).scalar() or 0
-    daily_cap = box_cap if box_cap is not None else (
-        (cfg.auto_send_max_per_day if cfg else None) or 20
+    daily_cap = (
+        box_cap if box_cap is not None else ((cfg.auto_send_max_per_day if cfg else None) or 20)
     )
     if total_today >= daily_cap:
-        logger.warning("email_auto_reply_global_limit", sent=total_today,
-                       cap=daily_cap, mailbox=msg.mailbox)
+        logger.warning(
+            "email_auto_reply_global_limit", sent=total_today, cap=daily_cap, mailbox=msg.mailbox
+        )
         return False
     return True
 
 
 def _notify_rule_draft(msg, rule) -> None:
     try:
+        from sqlalchemy import select as _sel
+
         from app.db.models import MailboxConfig, NotificationType, User
         from app.db.sync_session import sync_session
         from app.services.notifications import create_notification_sync
-        from sqlalchemy import select as _sel
 
         with sync_session() as ndb:
             row = ndb.execute(
-                _sel(MailboxConfig.assigned_role, MailboxConfig.owner_sub, MailboxConfig.mailbox_type)
-                .where(MailboxConfig.name == msg.mailbox)
+                _sel(
+                    MailboxConfig.assigned_role, MailboxConfig.owner_sub, MailboxConfig.mailbox_type
+                ).where(MailboxConfig.name == msg.mailbox)
             ).first()
             subs: list[str] = []
             if row and row[2] == "personal" and row[1]:
                 subs = [row[1]]
             elif row and row[0]:
-                subs = list(ndb.execute(
-                    _sel(User.sub).where(User.role == row[0], User.is_active == True)  # noqa: E712
-                ).scalars().all())
+                subs = list(
+                    ndb.execute(
+                        _sel(User.sub).where(User.role == row[0], User.is_active == True)  # noqa: E712
+                    )
+                    .scalars()
+                    .all()
+                )
             if not subs:
-                subs = list(ndb.execute(
-                    _sel(User.sub).where(User.role == "admin", User.is_active == True)  # noqa: E712
-                ).scalars().all())
+                subs = list(
+                    ndb.execute(
+                        _sel(User.sub).where(User.role == "admin", User.is_active == True)  # noqa: E712
+                    )
+                    .scalars()
+                    .all()
+                )
             for sub in subs:
                 create_notification_sync(
-                    ndb, user_sub=sub, type=NotificationType.email_received,
+                    ndb,
+                    user_sub=sub,
+                    type=NotificationType.email_received,
                     title=f"Правило «{rule.name}»: подготовлен черновик ответа",
                     body=f"На письмо от {msg.from_address}: {(msg.subject or '')[:120]}",
-                    entity_type="email", entity_id=msg.id, action_url="/email?panel=draft",
+                    entity_type="email",
+                    entity_id=msg.id,
+                    action_url="/email?panel=draft",
                 )
     except Exception as exc:  # noqa: BLE001
         logger.warning("email_rule_draft_notify_failed", error=str(exc))

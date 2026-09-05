@@ -5,7 +5,16 @@ from __future__ import annotations
 import pytest
 
 from app.ai.cad_ir import CadIR, SourceInfo
-from app.ai.cad_ir.schema import Circle, DimensionEntity, Point, Polyline, ReviewItem, Segment, SheetInfo, TextEntity
+from app.ai.cad_ir.schema import (
+    Circle,
+    DimensionEntity,
+    Point,
+    Polyline,
+    ReviewItem,
+    Segment,
+    SheetInfo,
+    TextEntity,
+)
 from app.ai.cad_validate import CadCheckCode, run_llm_review_levels, validate_ir
 
 
@@ -23,10 +32,14 @@ def _codes(report) -> set[str]:
 
 
 def test_clean_ir_passes() -> None:
-    report = validate_ir(_ir([
-        Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0)),
-        Circle(center=Point(x=50, y=50), radius=20),
-    ]))
+    report = validate_ir(
+        _ir(
+            [
+                Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0)),
+                Circle(center=Point(x=50, y=50), radius=20),
+            ]
+        )
+    )
     assert report.issues == []
     assert report.blocking == []
 
@@ -114,9 +127,14 @@ def test_geometry_issue_has_no_profile_rule() -> None:
 def test_nonstandard_text_height_flagged() -> None:
     # scale 0.5 → a 9px label is 4.5mm, not in the 2.304 series (nearest 5).
     txt = TextEntity(position=Point(x=10, y=10), text="42", height=9.0)
-    report = validate_ir(_ir([
-        Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0)), txt,
-    ]))
+    report = validate_ir(
+        _ir(
+            [
+                Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0)),
+                txt,
+            ]
+        )
+    )
     hits = [i for i in report.issues if i.code == "ESKD_TEXT_HEIGHT"]
     assert len(hits) == 1
     assert hits[0].rule_id == "ESKD.2.304.text_height"
@@ -125,9 +143,14 @@ def test_nonstandard_text_height_flagged() -> None:
 def test_standard_text_height_not_flagged() -> None:
     # 7px * 0.5 = 3.5mm — exactly a nominal height.
     txt = TextEntity(position=Point(x=10, y=10), text="42", height=7.0)
-    report = validate_ir(_ir([
-        Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0)), txt,
-    ]))
+    report = validate_ir(
+        _ir(
+            [
+                Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0)),
+                txt,
+            ]
+        )
+    )
     assert "ESKD_TEXT_HEIGHT" not in _codes(report)
 
 
@@ -139,7 +162,10 @@ def test_text_height_silent_without_scale() -> None:
 
 def test_dimension_without_value_flagged() -> None:
     dim = DimensionEntity(
-        p1=Point(x=0, y=0), p2=Point(x=100, y=0), text="", value_mm=None,
+        p1=Point(x=0, y=0),
+        p2=Point(x=100, y=0),
+        text="",
+        value_mm=None,
     )
     report = validate_ir(_ir([dim]))
     hits = [i for i in report.issues if i.code == "ESKD_DIMENSION_INCOMPLETE"]
@@ -149,7 +175,10 @@ def test_dimension_without_value_flagged() -> None:
 
 def test_dimension_with_value_not_flagged() -> None:
     dim = DimensionEntity(
-        p1=Point(x=0, y=0), p2=Point(x=100, y=0), text="50", value_mm=50.0,
+        p1=Point(x=0, y=0),
+        p2=Point(x=100, y=0),
+        text="50",
+        value_mm=50.0,
     )
     report = validate_ir(_ir([dim]))
     assert "ESKD_DIMENSION_INCOMPLETE" not in _codes(report)
@@ -170,11 +199,15 @@ def test_low_confidence_annotation_enters_review_but_geometry_does_not() -> None
     # judges geometry visually, and flooding the queue with segments blocks
     # acceptance for no benefit.
     low_text = TextEntity(position=Point(x=5, y=5), text="Ø40", confidence=0.55)
-    ir = _ir([
-        Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0), confidence=0.55),  # geometry, not queued
-        Segment(p1=Point(x=0, y=10), p2=Point(x=100, y=10), confidence=0.95),
-        low_text,
-    ])
+    ir = _ir(
+        [
+            Segment(
+                p1=Point(x=0, y=0), p2=Point(x=100, y=0), confidence=0.55
+            ),  # geometry, not queued
+            Segment(p1=Point(x=0, y=10), p2=Point(x=100, y=10), confidence=0.95),
+            low_text,
+        ]
+    )
     validate_ir(ir)
     pending = [r for r in ir.review if not r.resolved]
     assert len(pending) == 1
@@ -203,18 +236,32 @@ def test_low_coverage_is_blocking() -> None:
 
 
 def test_every_issue_carries_an_assurance_level() -> None:
-    report = validate_ir(_ir([
-        Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0), line_class="axis", width_class="main"),
-    ], scale=None))
+    report = validate_ir(
+        _ir(
+            [
+                Segment(
+                    p1=Point(x=0, y=0), p2=Point(x=100, y=0), line_class="axis", width_class="main"
+                ),
+            ],
+            scale=None,
+        )
+    )
     assert report.issues  # SCALE_UNKNOWN + ESKD_LINE_WEIGHT at minimum
     for issue in report.issues:
         assert issue.level > 0
 
 
 def test_by_level_groups_issues_correctly() -> None:
-    report = validate_ir(_ir([
-        Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0), line_class="axis", width_class="main"),
-    ], scale=None))
+    report = validate_ir(
+        _ir(
+            [
+                Segment(
+                    p1=Point(x=0, y=0), p2=Point(x=100, y=0), line_class="axis", width_class="main"
+                ),
+            ],
+            scale=None,
+        )
+    )
     grouped = report.by_level()
     assert 1 in grouped  # SCALE_UNKNOWN
     assert 4 in grouped  # ESKD_LINE_WEIGHT (+ ESKD_NO_CONTOUR_GEOMETRY, also level 4)
@@ -325,10 +372,12 @@ def test_title_block_incomplete_when_region_empty_of_text() -> None:
 
 
 def test_title_block_complete_when_text_inside_region() -> None:
-    ir = _ir([
-        Segment(p1=Point(x=0, y=0), p2=Point(x=10, y=0)),
-        TextEntity(position=Point(x=150, y=120), text="АБВГ.001", height=10),
-    ])
+    ir = _ir(
+        [
+            Segment(p1=Point(x=0, y=0), p2=Point(x=10, y=0)),
+            TextEntity(position=Point(x=150, y=120), text="АБВГ.001", height=10),
+        ]
+    )
     ir.sheet = SheetInfo(
         frame=True,
         title_block={"detected": True, "region": {"x0": 100, "y0": 100, "x1": 200, "y1": 150}},
@@ -339,7 +388,9 @@ def test_title_block_complete_when_text_inside_region() -> None:
 
 def test_title_block_not_checked_without_frame() -> None:
     ir = _ir([Segment(p1=Point(x=0, y=0), p2=Point(x=10, y=0))])
-    ir.sheet = SheetInfo(frame=False, title_block={"detected": True, "region": {"x0": 0, "y0": 0, "x1": 1, "y1": 1}})
+    ir.sheet = SheetInfo(
+        frame=False, title_block={"detected": True, "region": {"x0": 0, "y0": 0, "x1": 1, "y1": 1}}
+    )
     report = validate_ir(ir)
     assert not [i for i in report.issues if i.code == "ESKD_TITLE_BLOCK_INCOMPLETE"]
 
@@ -371,9 +422,11 @@ async def test_llm_review_parses_issues_with_correct_levels() -> None:
 
     fake_router = AsyncMock()
     fake_router.run.return_value = AIResponse(
-        task=AITask.DRAWING_ANALYSIS_VLM, provider=ProviderKind.OLLAMA, model="test",
+        task=AITask.DRAWING_ANALYSIS_VLM,
+        provider=ProviderKind.OLLAMA,
+        model="test",
         text='{"issues": [{"level": 6, "severity": "warn", "message": "нет обозначения базы"}, '
-             '{"level": 7, "severity": "info", "message": "странная пропорция"}]}',
+        '{"level": 7, "severity": "info", "message": "странная пропорция"}]}',
     )
     issues = await run_llm_review_levels(b"fake-png", router=fake_router)
     assert len(issues) == 2
@@ -400,7 +453,9 @@ async def test_llm_review_empty_issues_when_drawing_looks_fine() -> None:
 
     fake_router = AsyncMock()
     fake_router.run.return_value = AIResponse(
-        task=AITask.DRAWING_ANALYSIS_VLM, provider=ProviderKind.OLLAMA, model="test",
+        task=AITask.DRAWING_ANALYSIS_VLM,
+        provider=ProviderKind.OLLAMA,
+        model="test",
         text='{"issues": []}',
     )
     issues = await run_llm_review_levels(b"fake-png", router=fake_router)

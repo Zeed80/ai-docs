@@ -18,8 +18,10 @@ def _closed_square_ir() -> CadIR:
         x2, y2 = pts[(i + 1) % 4]
         segs.append(
             Segment(
-                p1=Point(x=x1, y=y1), p2=Point(x=x2, y=y2),
-                line_class="contour", width_class="main",
+                p1=Point(x=x1, y=y1),
+                p2=Point(x=x2, y=y2),
+                line_class="contour",
+                width_class="main",
             )
         )
     return CadIR(source=SourceInfo(image_width=400, image_height=300), scale=1.0, entities=segs)

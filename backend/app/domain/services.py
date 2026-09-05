@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-
 from datetime import timedelta
 
 from sqlalchemy import Select, func, or_, select
@@ -24,8 +23,8 @@ from app.domain.models import (
     Invoice,
     InvoiceLine,
     ManufacturingCase,
-    ProcessingJobStatus,
     PriceHistoryEntry,
+    ProcessingJobStatus,
     Supplier,
     TaskJob,
     TaskJobStatus,
@@ -170,7 +169,6 @@ def get_email_thread(db: Session, thread_id: str) -> EmailThread | None:
     return db.get(EmailThread, thread_id)
 
 
-
 def get_task_job(db: Session, task_id: str) -> TaskJob | None:
     return db.get(TaskJob, task_id)
 
@@ -186,7 +184,9 @@ def list_agent_actions(db: Session, case_id: str | None = None) -> list[AgentAct
     return list(db.scalars(stmt))
 
 
-def list_task_jobs(db: Session, status: str | None = None, case_id: str | None = None) -> list[TaskJob]:
+def list_task_jobs(
+    db: Session, status: str | None = None, case_id: str | None = None
+) -> list[TaskJob]:
     stmt = select(TaskJob).order_by(TaskJob.created_at.desc())
     if status:
         stmt = stmt.where(TaskJob.status == status)
@@ -211,9 +211,7 @@ def list_approval_gates(
 def list_case_documents(db: Session, case_id: str) -> list[Document]:
     return list(
         db.scalars(
-            select(Document)
-            .where(Document.case_id == case_id)
-            .order_by(Document.created_at.desc())
+            select(Document).where(Document.case_id == case_id).order_by(Document.created_at.desc())
         )
     )
 
@@ -550,7 +548,9 @@ def build_invoice_anomaly_card(
         severity = "high"
     if checks:
         signals.extend(checks.warnings)
-        signals.extend([f"Supplier requisites diff: {item}" for item in checks.supplier_requisites_diff])
+        signals.extend(
+            [f"Supplier requisites diff: {item}" for item in checks.supplier_requisites_diff]
+        )
         if checks.supplier_requisites_diff and severity == "low":
             severity = "medium"
     for line in invoice.lines:
@@ -669,8 +669,6 @@ def create_email_thread(
     db.commit()
     db.refresh(thread)
     return thread
-
-
 
 
 def add_imap_placeholder_audit(
@@ -968,7 +966,11 @@ def fail_task_job(
         actor=actor,
         case_id=job.case_id,
         document_id=job.document_id,
-        payload={"task_id": job.id, "error_message": error_message, "attempt_count": job.attempt_count},
+        payload={
+            "task_id": job.id,
+            "error_message": error_message,
+            "attempt_count": job.attempt_count,
+        },
     )
     db.commit()
     db.refresh(job)
@@ -1051,8 +1053,9 @@ def add_signed_file_url_audit(
     db.commit()
 
 
-
-def _get_or_create_supplier(db: Session, extraction: InvoiceExtractionResult) -> tuple[Supplier, list[str]]:
+def _get_or_create_supplier(
+    db: Session, extraction: InvoiceExtractionResult
+) -> tuple[Supplier, list[str]]:
     supplier_data = extraction.supplier
     supplier: Supplier | None = None
     diff: list[str] = []
@@ -1102,7 +1105,11 @@ def _check_invoice_extraction(
     line_total_sum = 0.0
     has_line_totals = False
     for line in extraction.lines:
-        if line.quantity is not None and line.unit_price is not None and line.line_total is not None:
+        if (
+            line.quantity is not None
+            and line.unit_price is not None
+            and line.line_total is not None
+        ):
             expected = round(line.quantity * line.unit_price, 2)
             actual = round(line.line_total, 2)
             if abs(expected - actual) > 0.02:
@@ -1122,16 +1129,22 @@ def _check_invoice_extraction(
             )
     if extraction.subtotal_amount is not None and extraction.tax_amount is not None:
         expected_total = round(extraction.subtotal_amount + extraction.tax_amount, 2)
-        if extraction.total_amount is not None and abs(expected_total - round(extraction.total_amount, 2)) > 0.02:
+        if (
+            extraction.total_amount is not None
+            and abs(expected_total - round(extraction.total_amount, 2)) > 0.02
+        ):
             arithmetic_ok = False
             warnings.append(
                 f"Total mismatch: subtotal+tax {expected_total}, total {round(extraction.total_amount, 2)}"
             )
-    duplicate_by_hash = db.scalar(
-        select(Invoice)
-        .join(Document, Invoice.document_id == Document.id)
-        .where(Document.sha256 == document.sha256)
-    ) is not None
+    duplicate_by_hash = (
+        db.scalar(
+            select(Invoice)
+            .join(Document, Invoice.document_id == Document.id)
+            .where(Document.sha256 == document.sha256)
+        )
+        is not None
+    )
     duplicate_by_supplier_number = False
     if extraction.invoice_number:
         duplicate_by_supplier_number = (

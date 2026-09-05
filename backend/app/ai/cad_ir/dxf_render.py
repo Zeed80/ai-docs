@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import re
 
-from app.ai.cad_ir.dim_render import arrow_len_mm, dimension_label
 from app.ai.cad_ir.annotations import annotation_text
+from app.ai.cad_ir.dim_render import arrow_len_mm, dimension_label
 from app.ai.cad_ir.schema import (
     LINE_CLASS_LAYERS,
     TEXT_LAYER,
@@ -76,9 +76,13 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
         layer = LINE_CLASS_LAYERS.get(entity.line_class, "OBJECT")
         attribs = {"layer": layer, "lineweight": _LINEWEIGHT[entity.width_class]}
         if isinstance(entity, Segment):
-            msp.add_line(pt(entity.p1.x, entity.p1.y), pt(entity.p2.x, entity.p2.y), dxfattribs=attribs)
+            msp.add_line(
+                pt(entity.p1.x, entity.p1.y), pt(entity.p2.x, entity.p2.y), dxfattribs=attribs
+            )
         elif isinstance(entity, Circle):
-            msp.add_circle(pt(entity.center.x, entity.center.y), entity.radius * scale, dxfattribs=attribs)
+            msp.add_circle(
+                pt(entity.center.x, entity.center.y), entity.radius * scale, dxfattribs=attribs
+            )
         elif isinstance(entity, Arc):
             a0, a1 = sorted((entity.start_angle, entity.end_angle))
             msp.add_arc(
@@ -115,15 +119,28 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
             override = {"dimtxt": 3.5, "dimasz": arrow_len_mm()}
             if entity.kind == "diameter":
                 dim = msp.add_diameter_dim_2p(
-                    p1_mm, p2_mm, text=text, override=override, dxfattribs=dim_attribs,
+                    p1_mm,
+                    p2_mm,
+                    text=text,
+                    override=override,
+                    dxfattribs=dim_attribs,
                 )
             elif entity.kind == "radial":
                 dim = msp.add_radius_dim_2p(
-                    p1_mm, p2_mm, text=text, override=override, dxfattribs=dim_attribs,
+                    p1_mm,
+                    p2_mm,
+                    text=text,
+                    override=override,
+                    dxfattribs=dim_attribs,
                 )
             else:
                 dim = msp.add_aligned_dim(
-                    p1_mm, p2_mm, distance=0, text=text, override=override, dxfattribs=dim_attribs,
+                    p1_mm,
+                    p2_mm,
+                    distance=0,
+                    text=text,
+                    override=override,
+                    dxfattribs=dim_attribs,
                 )
             dim.render()
         elif isinstance(entity, HatchRegion):
@@ -135,7 +152,8 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
             else:
                 hatch.set_pattern_fill("ANSI31", scale=max(scale, 0.05) * 10)
             hatch.paths.add_polyline_path(
-                [pt(p.x, p.y) for p in entity.boundary], is_closed=True,
+                [pt(p.x, p.y) for p in entity.boundary],
+                is_closed=True,
                 flags=const.BOUNDARY_PATH_EXTERNAL,
             )
             # Nested loops (a section fill with a bolt hole through it) —
@@ -143,7 +161,8 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
             # hatch's own fill algorithm subtracts from the outer region.
             for hole in entity.holes:
                 hatch.paths.add_polyline_path(
-                    [pt(p.x, p.y) for p in hole], is_closed=True,
+                    [pt(p.x, p.y) for p in hole],
+                    is_closed=True,
                     flags=const.BOUNDARY_PATH_DEFAULT,
                 )
         elif isinstance(entity, AnnotationEntity):
@@ -155,7 +174,8 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
             )
             h = max(entity.height * scale, 0.1)
             msp.add_text(
-                text, dxfattribs={"layer": "DIM", "height": h},
+                text,
+                dxfattribs={"layer": "DIM", "height": h},
             ).set_placement(pt(entity.position.x, entity.position.y))
             if entity.leader is not None:
                 msp.add_line(
@@ -167,9 +187,14 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
                 x_mm, y_mm = pt(entity.position.x, entity.position.y)
                 w = max(h * len(text) * 0.62, h * 1.6)
                 msp.add_lwpolyline(
-                    [(x_mm - h * 0.3, y_mm - h * 0.2), (x_mm + w, y_mm - h * 0.2),
-                     (x_mm + w, y_mm + h * 1.2), (x_mm - h * 0.3, y_mm + h * 1.2)],
-                    close=True, dxfattribs={"layer": "DIM"},
+                    [
+                        (x_mm - h * 0.3, y_mm - h * 0.2),
+                        (x_mm + w, y_mm - h * 0.2),
+                        (x_mm + w, y_mm + h * 1.2),
+                        (x_mm - h * 0.3, y_mm + h * 1.2),
+                    ],
+                    close=True,
+                    dxfattribs={"layer": "DIM"},
                 )
 
     buf = io.StringIO()
@@ -234,9 +259,7 @@ def verify_dxf_roundtrip(ir: CadIR) -> dict:
 # write; neutralize both (plus $FINGERPRINTGUID for good measure) so the same
 # IR yields byte-identical DXF (C5 reproducibility).
 _EZDXF_MARKER = re.compile(r"(\d+\.\d+\.\d+) @ \d{4}-\d{2}-\d{2}T[\d:.+-]+")
-_GUID_HEADER = re.compile(
-    r"(\$(?:VERSION|FINGERPRINT)GUID\r?\n\s*2\r?\n)\{[0-9A-Fa-f-]+\}"
-)
+_GUID_HEADER = re.compile(r"(\$(?:VERSION|FINGERPRINT)GUID\r?\n\s*2\r?\n)\{[0-9A-Fa-f-]+\}")
 
 
 def _normalize_dxf(text: str) -> str:

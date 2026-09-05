@@ -20,7 +20,6 @@ from app.ai.agent_config import (
 )
 from app.api import providers_api as p
 
-
 # ── Аксессоры без отрицания ──────────────────────────────────────────────────
 
 
@@ -62,8 +61,8 @@ def test_diverged_agent_roles_are_reported_not_hidden(monkeypatch):
     monkeypatch.setattr(
         "app.ai.agent_config.get_builtin_agent_config",
         lambda: BuiltinAgentConfig(
-            orchestrator_disable_thinking=True,   # рассуждение выключено
-            worker_disable_thinking=False,        # а здесь включено
+            orchestrator_disable_thinking=True,  # рассуждение выключено
+            worker_disable_thinking=False,  # а здесь включено
         ),
     )
     assert p._slot_thinking_values("agent_orchestrator") == [False, True]

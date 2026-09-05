@@ -8,7 +8,7 @@ invisible.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -29,7 +29,6 @@ from app.domain.imap_sync import (
     parse_select_response,
 )
 
-
 # ── protocol parsing (no server needed) ────────────────────────────────────
 
 
@@ -45,18 +44,20 @@ def test_cyrillic_folder_names_round_trip():
 
 
 def test_special_use_and_name_hints_map_to_our_folders():
-    folders = parse_list_response([
-        rb'(\HasNoChildren \Sent) "|" "Sent"',
-        rb'(\HasChildren) "/" "INBOX"',
-        rb'(\HasNoChildren) "/" "INBOX/ToMyself"',
-        # As the server actually sends it: modified UTF-7, not readable text.
-        rb'(\HasNoChildren) "/" "&BBoEPgRABDcEOAQ9BDA-"',
-        rb'(\HasNoChildren) "/" "Work"',
-        rb'(\Noselect \HasChildren) "/" "[Gmail]"',
-    ])
+    folders = parse_list_response(
+        [
+            rb'(\HasNoChildren \Sent) "|" "Sent"',
+            rb'(\HasChildren) "/" "INBOX"',
+            rb'(\HasNoChildren) "/" "INBOX/ToMyself"',
+            # As the server actually sends it: modified UTF-7, not readable text.
+            rb'(\HasNoChildren) "/" "&BBoEPgRABDcEOAQ9BDA-"',
+            rb'(\HasNoChildren) "/" "Work"',
+            rb'(\Noselect \HasChildren) "/" "[Gmail]"',
+        ]
+    )
     by_name = {f.name: f for f in folders}
 
-    assert by_name["Sent"].local_folder == "sent"          # via SPECIAL-USE
+    assert by_name["Sent"].local_folder == "sent"  # via SPECIAL-USE
     assert by_name["INBOX"].local_folder == "inbox"
     trash = by_name["&BBoEPgRABDcEOAQ9BDA-"]
     assert decode_mailbox_name(trash.name) == "Корзина"
@@ -96,16 +97,17 @@ def test_stored_folder_names_are_used_verbatim():
     every SELECT of a Cyrillic folder fails, which is what happened live."""
     wire = "&BCEEPwQwBDw-"
     assert decode_mailbox_name(wire) == "Спам"
-    assert encode_mailbox_name(wire) != wire      # double-encoding corrupts it
+    assert encode_mailbox_name(wire) != wire  # double-encoding corrupts it
     assert encode_mailbox_name(decode_mailbox_name(wire)) == wire
 
 
 def test_flag_responses_are_parsed():
-
-    flags = parse_flags_response([
-        (rb"1 (UID 17 FLAGS (\Seen \Flagged))", b""),
-        (rb"2 (UID 18 FLAGS ())", b""),
-    ])
+    flags = parse_flags_response(
+        [
+            (rb"1 (UID 17 FLAGS (\Seen \Flagged))", b""),
+            (rb"2 (UID 18 FLAGS ())", b""),
+        ]
+    )
     assert flags[17] == {"\\Seen", "\\Flagged"}
     assert flags[18] == set()
 
@@ -115,25 +117,44 @@ def test_flag_responses_are_parsed():
 
 @pytest_asyncio.fixture
 async def synced_mailbox(db_session):
-    db_session.add(MailboxConfig(
-        name="procurement", display_name="Закупки", imap_host="m.example.com",
-        imap_port=993, imap_user="procurement", imap_password_encrypted="x",
-        imap_ssl=True, is_active=True,
-    ))
-    db_session.add_all([
-        MailboxFolder(mailbox="procurement", remote_name="INBOX",
-                      local_folder="inbox", sync_enabled=True),
-        MailboxFolder(mailbox="procurement", remote_name="Archive",
-                      local_folder="archive", special_use="\\Archive", sync_enabled=True),
-    ])
-    thread = EmailThread(subject="Счёт", mailbox="procurement", message_count=1,
-                         folder="inbox")
+    db_session.add(
+        MailboxConfig(
+            name="procurement",
+            display_name="Закупки",
+            imap_host="m.example.com",
+            imap_port=993,
+            imap_user="procurement",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            is_active=True,
+        )
+    )
+    db_session.add_all(
+        [
+            MailboxFolder(
+                mailbox="procurement", remote_name="INBOX", local_folder="inbox", sync_enabled=True
+            ),
+            MailboxFolder(
+                mailbox="procurement",
+                remote_name="Archive",
+                local_folder="archive",
+                special_use="\\Archive",
+                sync_enabled=True,
+            ),
+        ]
+    )
+    thread = EmailThread(subject="Счёт", mailbox="procurement", message_count=1, folder="inbox")
     msg = EmailMessage(
-        thread=thread, mailbox="procurement", subject="Счёт",
-        from_address="x@y.example", to_addresses=["procurement@example.com"],
-        received_at=datetime.now(timezone.utc),
+        thread=thread,
+        mailbox="procurement",
+        subject="Счёт",
+        from_address="x@y.example",
+        to_addresses=["procurement@example.com"],
+        received_at=datetime.now(UTC),
         message_id_header=f"<{uuid.uuid4()}@y.example>",
-        imap_uid=17, imap_folder="INBOX", is_read=False,
+        imap_uid=17,
+        imap_folder="INBOX",
+        is_read=False,
     )
     db_session.add_all([thread, msg])
     await db_session.commit()
@@ -150,8 +171,9 @@ async def test_marking_read_queues_a_server_op(
     monkeypatch.setattr(sync.push_ops, "apply_async", lambda *a, **k: None)
     thread, msg = synced_mailbox
 
-    resp = await client.post("/api/email/threads/actions",
-                             json={"thread_ids": [str(thread.id)], "action": "read"})
+    resp = await client.post(
+        "/api/email/threads/actions", json={"thread_ids": [str(thread.id)], "action": "read"}
+    )
     assert resp.status_code == 200
 
     ops = (await db_session.execute(select(EmailSyncOp))).scalars().all()
@@ -170,8 +192,9 @@ async def test_archiving_queues_a_move_to_the_mapped_server_folder(
     monkeypatch.setattr(sync.push_ops, "apply_async", lambda *a, **k: None)
     thread, _ = synced_mailbox
 
-    await client.post("/api/email/threads/actions",
-                      json={"thread_ids": [str(thread.id)], "action": "archive"})
+    await client.post(
+        "/api/email/threads/actions", json={"thread_ids": [str(thread.id)], "action": "archive"}
+    )
 
     ops = (await db_session.execute(select(EmailSyncOp))).scalars().all()
     move = [o for o in ops if o.op == "move"]
@@ -190,13 +213,14 @@ async def test_a_move_with_no_mapped_server_folder_is_not_invented(
     monkeypatch.setattr(sync.push_ops, "apply_async", lambda *a, **k: None)
     thread, _ = synced_mailbox
 
-    await client.post("/api/email/threads/actions",
-                      json={"thread_ids": [str(thread.id)], "action": "spam"})
+    await client.post(
+        "/api/email/threads/actions", json={"thread_ids": [str(thread.id)], "action": "spam"}
+    )
 
     ops = (await db_session.execute(select(EmailSyncOp))).scalars().all()
-    assert [o.op for o in ops] == []          # no Spam folder mapped
+    assert [o.op for o in ops] == []  # no Spam folder mapped
     await db_session.refresh(thread)
-    assert thread.folder == "spam"            # local state still correct
+    assert thread.folder == "spam"  # local state still correct
 
 
 async def test_a_message_without_a_uid_is_skipped_not_queued(
@@ -213,8 +237,9 @@ async def test_a_message_without_a_uid_is_skipped_not_queued(
     msg.imap_uid = None
     await db_session.commit()
 
-    await client.post("/api/email/threads/actions",
-                      json={"thread_ids": [str(thread.id)], "action": "read"})
+    await client.post(
+        "/api/email/threads/actions", json={"thread_ids": [str(thread.id)], "action": "read"}
+    )
     ops = (await db_session.execute(select(EmailSyncOp))).scalars().all()
     assert ops == []
 
@@ -266,15 +291,27 @@ def test_an_empty_folder_is_not_left_marked_as_failing(test_engine, monkeypatch)
 
     try:
         with Session(engine) as db:
-            db.add(MailboxConfig(
-                name="syncbox", display_name="Sync", imap_host="m.example.com",
-                imap_port=993, imap_user="syncbox", imap_password_encrypted="x",
-                imap_ssl=True, is_active=True,
-            ))
-            db.add(MailboxFolder(
-                mailbox="syncbox", remote_name="INBOX", local_folder="inbox",
-                sync_enabled=True, sync_error="select failed",
-            ))
+            db.add(
+                MailboxConfig(
+                    name="syncbox",
+                    display_name="Sync",
+                    imap_host="m.example.com",
+                    imap_port=993,
+                    imap_user="syncbox",
+                    imap_password_encrypted="x",
+                    imap_ssl=True,
+                    is_active=True,
+                )
+            )
+            db.add(
+                MailboxFolder(
+                    mailbox="syncbox",
+                    remote_name="INBOX",
+                    local_folder="inbox",
+                    sync_enabled=True,
+                    sync_error="select failed",
+                )
+            )
             db.commit()
 
         result = sync.sync_flags.apply(args=["syncbox"]).get()
@@ -307,30 +344,49 @@ def test_server_side_flag_changes_come_back_to_us(test_engine, monkeypatch):
     engine = create_engine(sync_url, pool_pre_ping=True)
     monkeypatch.setattr("app.db.sync_session.sync_session", lambda: Session(engine))
     monkeypatch.setattr(
-        sync, "_connect",
+        sync,
+        "_connect",
         lambda config: _FakeIMAP(flags_by_uid={41: ["\\Seen", "\\Flagged"]}),
     )
 
     ids = {}
     try:
         with Session(engine) as db:
-            db.add(MailboxConfig(
-                name="syncbox2", display_name="Sync", imap_host="m.example.com",
-                imap_port=993, imap_user="syncbox2", imap_password_encrypted="x",
-                imap_ssl=True, is_active=True,
-            ))
-            db.add(MailboxFolder(
-                mailbox="syncbox2", remote_name="INBOX", local_folder="inbox",
-                sync_enabled=True,
-            ))
-            thread = EmailThread(subject="Письмо", mailbox="syncbox2", message_count=1,
-                                 is_read=False, unread_count=1)
+            db.add(
+                MailboxConfig(
+                    name="syncbox2",
+                    display_name="Sync",
+                    imap_host="m.example.com",
+                    imap_port=993,
+                    imap_user="syncbox2",
+                    imap_password_encrypted="x",
+                    imap_ssl=True,
+                    is_active=True,
+                )
+            )
+            db.add(
+                MailboxFolder(
+                    mailbox="syncbox2",
+                    remote_name="INBOX",
+                    local_folder="inbox",
+                    sync_enabled=True,
+                )
+            )
+            thread = EmailThread(
+                subject="Письмо", mailbox="syncbox2", message_count=1, is_read=False, unread_count=1
+            )
             msg = EmailMessage(
-                thread=thread, mailbox="syncbox2", subject="Письмо",
-                from_address="x@y.example", to_addresses=["syncbox2@example.com"],
-                received_at=datetime.now(timezone.utc),
+                thread=thread,
+                mailbox="syncbox2",
+                subject="Письмо",
+                from_address="x@y.example",
+                to_addresses=["syncbox2@example.com"],
+                received_at=datetime.now(UTC),
                 message_id_header=f"<{uuid.uuid4()}@y.example>",
-                imap_uid=41, imap_folder="INBOX", is_read=False, is_starred=False,
+                imap_uid=41,
+                imap_folder="INBOX",
+                is_read=False,
+                is_starred=False,
             )
             db.add_all([thread, msg])
             db.commit()
@@ -400,17 +456,21 @@ async def test_outbound_copy_records_its_server_uid(db_session, synced_mailbox):
     from app.db.models import MailboxFolder
     from app.domain.email_thread import record_outbound_message
 
-    db_session.add(MailboxFolder(
-        mailbox="procurement", remote_name="Sent", local_folder="sent",
-        special_use="\\Sent", sync_enabled=True,
-    ))
+    db_session.add(
+        MailboxFolder(
+            mailbox="procurement",
+            remote_name="Sent",
+            local_folder="sent",
+            special_use="\\Sent",
+            sync_enabled=True,
+        )
+    )
     await db_session.commit()
 
     msg = await record_outbound_message(
         db_session,
         mailbox="procurement",
-        draft_data={"to_addresses": ["x@y.example"], "subject": "Ответ",
-                    "body_text": "текст"},
+        draft_data={"to_addresses": ["x@y.example"], "subject": "Ответ", "body_text": "текст"},
         smtp_message_id="<out-1@ourfirm.example>",
         from_address="zakupki@ourfirm.example",
         imap_uid=99,
@@ -433,7 +493,8 @@ def test_idle_degrades_to_polling_instead_of_failing(monkeypatch):
     monkeypatch.setattr(email_idle, "_idle_supported", lambda: False)
 
     assert email_idle.idle_dispatch.apply().get() == {
-        "status": "skipped", "reason": "imapclient_not_installed",
+        "status": "skipped",
+        "reason": "imapclient_not_installed",
     }
     result = email_idle.idle_watch.apply(args=["procurement"]).get()
     assert result["status"] == "skipped"
@@ -457,7 +518,8 @@ def test_idle_dispatch_leases_one_watcher_per_mailbox(test_engine, monkeypatch):
 
     launched: list[str] = []
     monkeypatch.setattr(
-        email_idle.idle_watch, "apply_async",
+        email_idle.idle_watch,
+        "apply_async",
         lambda args=None, **k: launched.append(args[0]),
     )
 
@@ -474,18 +536,25 @@ def test_idle_dispatch_leases_one_watcher_per_mailbox(test_engine, monkeypatch):
 
     try:
         with Session(engine) as db:
-            db.add(MailboxConfig(
-                name="idlebox", display_name="Idle", imap_host="m.example.com",
-                imap_port=993, imap_user="idlebox", imap_password_encrypted="x",
-                imap_ssl=True, is_active=True,
-            ))
+            db.add(
+                MailboxConfig(
+                    name="idlebox",
+                    display_name="Idle",
+                    imap_host="m.example.com",
+                    imap_port=993,
+                    imap_user="idlebox",
+                    imap_password_encrypted="x",
+                    imap_ssl=True,
+                    is_active=True,
+                )
+            )
             db.commit()
 
         first = email_idle.idle_dispatch.apply().get()
         assert "idlebox" in first["started"]
 
         second = email_idle.idle_dispatch.apply().get()
-        assert second["started"] == []          # lease still held
+        assert second["started"] == []  # lease still held
         assert launched == ["idlebox"]
     finally:
         with Session(engine) as db:
@@ -501,26 +570,26 @@ def test_a_subfolder_of_inbox_is_treated_as_inbox():
     здесь. Самая тихая из возможных потерь."""
     from app.domain.imap_sync import RemoteFolder
 
-    assert RemoteFolder(
-        name="INBOX/ToMyself", flags=(), delimiter="/"
-    ).local_folder == "inbox"
-    assert RemoteFolder(
-        name="INBOX.Newsletters", flags=(), delimiter="."
-    ).local_folder == "inbox"
+    assert RemoteFolder(name="INBOX/ToMyself", flags=(), delimiter="/").local_folder == "inbox"
+    assert RemoteFolder(name="INBOX.Newsletters", flags=(), delimiter=".").local_folder == "inbox"
     # Спец-папки и привычные имена по-прежнему сильнее, чем «дочерняя INBOX».
-    assert RemoteFolder(
-        name="INBOX/Sent", flags=(), delimiter="/"
-    ).local_folder == "sent"
-    assert RemoteFolder(
-        name="INBOX/Trash", flags=("\\Trash",), delimiter="/", special_use="\\Trash"
-    ).local_folder == "trash"
+    assert RemoteFolder(name="INBOX/Sent", flags=(), delimiter="/").local_folder == "sent"
+    assert (
+        RemoteFolder(
+            name="INBOX/Trash", flags=("\\Trash",), delimiter="/", special_use="\\Trash"
+        ).local_folder
+        == "trash"
+    )
     # Папка верхнего уровня, которую мы не узнали, остаётся неназначенной:
     # угадывать, что «Work» это входящие, нельзя.
     assert RemoteFolder(name="Work", flags=(), delimiter="/").local_folder is None
     # Невыбираемый контейнер письмами не бывает.
-    assert RemoteFolder(
-        name="INBOX/Archive2024", flags=("\\Noselect",), delimiter="/", selectable=False
-    ).local_folder is None
+    assert (
+        RemoteFolder(
+            name="INBOX/Archive2024", flags=("\\Noselect",), delimiter="/", selectable=False
+        ).local_folder
+        is None
+    )
 
 
 async def test_an_unrecognised_folder_can_be_mapped_by_hand(client, db_session):
@@ -528,12 +597,21 @@ async def test_an_unrecognised_folder_can_be_mapped_by_hand(client, db_session):
     эндпоинта для этого не было вовсе."""
     from app.db.models import MailboxConfig, MailboxFolder
 
-    db_session.add(MailboxConfig(
-        name="mapbox", imap_host="m.example.com", imap_port=993, imap_user="mapbox",
-        imap_password_encrypted="x", imap_ssl=True, is_active=True,
-    ))
+    db_session.add(
+        MailboxConfig(
+            name="mapbox",
+            imap_host="m.example.com",
+            imap_port=993,
+            imap_user="mapbox",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            is_active=True,
+        )
+    )
     folder = MailboxFolder(
-        mailbox="mapbox", remote_name="Work/Suppliers", local_folder=None,
+        mailbox="mapbox",
+        remote_name="Work/Suppliers",
+        local_folder=None,
         sync_enabled=False,
     )
     db_session.add(folder)
@@ -541,7 +619,8 @@ async def test_an_unrecognised_folder_can_be_mapped_by_hand(client, db_session):
 
     # Синк без назначения — это no-op, который выглядит работающим.
     resp = await client.patch(
-        f"/api/mailbox/folders/{folder.id}", json={"sync_enabled": True},
+        f"/api/mailbox/folders/{folder.id}",
+        json={"sync_enabled": True},
     )
     assert resp.status_code == 422, resp.text
 
@@ -554,13 +633,15 @@ async def test_an_unrecognised_folder_can_be_mapped_by_hand(client, db_session):
     assert resp.json()["sync_enabled"] is True
 
     resp = await client.patch(
-        f"/api/mailbox/folders/{folder.id}", json={"local_folder": "мусорка"},
+        f"/api/mailbox/folders/{folder.id}",
+        json={"local_folder": "мусорка"},
     )
     assert resp.status_code == 422
 
     # Снятие назначения выключает и синк.
     resp = await client.patch(
-        f"/api/mailbox/folders/{folder.id}", json={"local_folder": None},
+        f"/api/mailbox/folders/{folder.id}",
+        json={"local_folder": None},
     )
     assert resp.json()["sync_enabled"] is False
 

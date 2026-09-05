@@ -52,8 +52,14 @@ def mail_server_configured():
 @pytest.fixture
 async def employee(db_session):
     db_session.add(
-        User(sub=OWNER_SUB, email="ivan@example.com", name="Иван Петров",
-             preferred_username="ivan", role="buyer", is_active=True)
+        User(
+            sub=OWNER_SUB,
+            email="ivan@example.com",
+            name="Иван Петров",
+            preferred_username="ivan",
+            role="buyer",
+            is_active=True,
+        )
     )
     await db_session.commit()
 
@@ -124,9 +130,15 @@ def test_triage_sweeps_only_mailboxes_with_consent(sync_db):
         db.add(_personal_row())  # personal, sweep_enabled=False
         db.add(
             MailboxConfig(
-                name="procurement", display_name="Закупки", mailbox_type="shared",
-                imap_host="imap.example.com", imap_port=993, imap_user="procurement",
-                imap_password_encrypted="x", imap_ssl=True, is_active=True,
+                name="procurement",
+                display_name="Закупки",
+                mailbox_type="shared",
+                imap_host="imap.example.com",
+                imap_port=993,
+                imap_user="procurement",
+                imap_password_encrypted="x",
+                imap_ssl=True,
+                is_active=True,
                 sweep_enabled=True,
             )
         )
@@ -164,8 +176,9 @@ def test_triage_reports_db_failure_instead_of_faking_defaults(monkeypatch):
 
 
 async def test_owner_can_toggle_sweep_for_own_mailbox(client: AsyncClient, db_session):
-    db_session.add(_personal_row(name="dev@example.com", owner_sub="dev-user",
-                                 imap_user="dev@example.com"))
+    db_session.add(
+        _personal_row(name="dev@example.com", owner_sub="dev-user", imap_user="dev@example.com")
+    )
     await db_session.commit()
 
     resp = await client.patch("/api/mailbox/me/sweep", json={"sweep_enabled": True})
@@ -193,7 +206,9 @@ async def test_deactivate_then_provision_again(client: AsyncClient, db_session, 
     assert personal_mailbox.sweep_enabled is False
 
     with (
-        patch("app.services.mailcow_api.check_local_part_available", new=AsyncMock(return_value=True)),
+        patch(
+            "app.services.mailcow_api.check_local_part_available", new=AsyncMock(return_value=True)
+        ),
         patch("app.services.mailcow_api.create_mailbox", new=AsyncMock(return_value={})),
     ):
         resp = await client.post(
@@ -207,7 +222,9 @@ async def test_deactivate_then_provision_again(client: AsyncClient, db_session, 
 
 async def test_new_mailbox_starts_without_ai_access(client: AsyncClient, employee):
     with (
-        patch("app.services.mailcow_api.check_local_part_available", new=AsyncMock(return_value=True)),
+        patch(
+            "app.services.mailcow_api.check_local_part_available", new=AsyncMock(return_value=True)
+        ),
         patch("app.services.mailcow_api.create_mailbox", new=AsyncMock(return_value={})),
     ):
         resp = await client.post(f"/api/admin/users/{OWNER_SUB}/mailbox", json={})
@@ -241,7 +258,9 @@ async def test_destructive_delete_requires_address_confirmation(
 async def test_provision_uses_configured_default_quota(client: AsyncClient, employee):
     create_mock = AsyncMock(return_value={})
     with (
-        patch("app.services.mailcow_api.check_local_part_available", new=AsyncMock(return_value=True)),
+        patch(
+            "app.services.mailcow_api.check_local_part_available", new=AsyncMock(return_value=True)
+        ),
         patch("app.services.mailcow_api.create_mailbox", new=create_mock),
     ):
         resp = await client.post(f"/api/admin/users/{OWNER_SUB}/mailbox", json={})

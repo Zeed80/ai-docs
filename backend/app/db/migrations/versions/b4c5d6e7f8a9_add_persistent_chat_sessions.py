@@ -5,18 +5,17 @@ Revises: a1b2c3d4e5f6
 Create Date: 2026-05-04 18:25:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-
 
 # revision identifiers, used by Alembic.
 revision: str = "b4c5d6e7f8a9"
-down_revision: Union[str, None] = "a1b2c3d4e5f6"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "a1b2c3d4e5f6"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -48,7 +47,9 @@ def upgrade() -> None:
         ["last_message_at"],
         unique=False,
     )
-    op.create_index(op.f("ix_chat_sessions_deleted_at"), "chat_sessions", ["deleted_at"], unique=False)
+    op.create_index(
+        op.f("ix_chat_sessions_deleted_at"), "chat_sessions", ["deleted_at"], unique=False
+    )
 
     op.create_table(
         "chat_messages",
@@ -72,7 +73,9 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["session_id"], ["chat_sessions.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_chat_messages_session_id"), "chat_messages", ["session_id"], unique=False)
+    op.create_index(
+        op.f("ix_chat_messages_session_id"), "chat_messages", ["session_id"], unique=False
+    )
     op.create_index(op.f("ix_chat_messages_role"), "chat_messages", ["role"], unique=False)
 
     op.create_table(
@@ -123,9 +126,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(op.f("ix_chat_message_attachments_document_id"), table_name="chat_message_attachments")
-    op.drop_index(op.f("ix_chat_message_attachments_message_id"), table_name="chat_message_attachments")
-    op.drop_index(op.f("ix_chat_message_attachments_session_id"), table_name="chat_message_attachments")
+    op.drop_index(
+        op.f("ix_chat_message_attachments_document_id"), table_name="chat_message_attachments"
+    )
+    op.drop_index(
+        op.f("ix_chat_message_attachments_message_id"), table_name="chat_message_attachments"
+    )
+    op.drop_index(
+        op.f("ix_chat_message_attachments_session_id"), table_name="chat_message_attachments"
+    )
     op.drop_table("chat_message_attachments")
     op.drop_index(op.f("ix_chat_messages_role"), table_name="chat_messages")
     op.drop_index(op.f("ix_chat_messages_session_id"), table_name="chat_messages")

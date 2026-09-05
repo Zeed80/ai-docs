@@ -56,8 +56,7 @@ def summarize_results(results: list[dict]) -> dict:
         "false_accepts": false_accepts,
         "false_accept_rate": false_accepts / max(accepted, 1),
         "dxf_reopen_rate": (
-            sum(bool(result["dxf_reopens"]) for result in results)
-            / max(len(results), 1)
+            sum(bool(result["dxf_reopens"]) for result in results) / max(len(results), 1)
         ),
     }
 
@@ -81,40 +80,30 @@ def main() -> int:
     for case in cases:
         errors: list[str] = []
         graph = EngineeringDrawingGraph.model_validate(case["graph"])
-        verification = verify_drawing_graph(
-            graph, pixel_recall=1.0, pixel_precision=1.0
-        )
+        verification = verify_drawing_graph(graph, pixel_recall=1.0, pixel_precision=1.0)
         ir = draft_drawing_graph(graph, verification=verification)
         expected = case["expected"]
         counts = dict(Counter(entity.type for entity in ir.entities))
         ids = [entity.id for entity in ir.entities]
         relation_kinds = sorted(relation.kind for relation in ir.relations)
-        texts = sorted(
-            entity.text for entity in ir.entities if entity.type == "text"
-        )
+        texts = sorted(entity.text for entity in ir.entities if entity.type == "text")
         dimensions = sorted(
             entity.value_mm
             for entity in ir.entities
             if entity.type == "dimension" and entity.value_mm is not None
         )
-        expected_values = sorted(
-            float(value) for value in expected["dimension_values_mm"]
-        )
+        expected_values = sorted(float(value) for value in expected["dimension_values_mm"])
         parameters_matched = match_parameter_values(dimensions, expected_values)
         if counts != expected["entity_counts"]:
             errors.append(f"counts={counts} expected={expected['entity_counts']}")
         if ids != expected["entity_ids"]:
             errors.append(f"ids={ids} expected={expected['entity_ids']}")
         if relation_kinds != sorted(expected["relation_kinds"]):
-            errors.append(
-                f"relations={relation_kinds} expected={expected['relation_kinds']}"
-            )
+            errors.append(f"relations={relation_kinds} expected={expected['relation_kinds']}")
         if texts != sorted(expected["texts"]):
             errors.append(f"texts={texts} expected={expected['texts']}")
         if dimensions != sorted(expected["dimension_values_mm"]):
-            errors.append(
-                f"dimensions={dimensions} expected={expected['dimension_values_mm']}"
-            )
+            errors.append(f"dimensions={dimensions} expected={expected['dimension_values_mm']}")
         try:
             doc = ezdxf.read(io.StringIO(render_ir_to_dxf(ir).decode()))
             dxf_types = sorted({entity.dxftype() for entity in doc.modelspace()})
@@ -129,31 +118,27 @@ def main() -> int:
         if ir.digitization_status != "exact_candidate":
             errors.append(f"status={ir.digitization_status}")
         if not verification.exact_ready:
-            errors.append(
-                "verification=" + ",".join(
-                    issue.code for issue in verification.blocking
-                )
-            )
-        accepted = bool(
-            ir.digitization_status == "exact_candidate" and verification.exact_ready
-        )
+            errors.append("verification=" + ",".join(issue.code for issue in verification.blocking))
+        accepted = bool(ir.digitization_status == "exact_candidate" and verification.exact_ready)
         false_accept = bool(accepted and errors)
-        results.append({
-            "id": case["id"],
-            "passed": not errors,
-            "errors": errors,
-            "entity_counts": counts,
-            "entity_ids_preserved": ids == expected["entity_ids"],
-            "relation_kinds": relation_kinds,
-            "texts": texts,
-            "dimension_values_mm": dimensions,
-            "parameters_matched": parameters_matched,
-            "parameters_total": len(expected_values),
-            "accepted": accepted,
-            "false_accept": false_accept,
-            "dxf_types": dxf_types,
-            "dxf_reopens": dxf_reopens,
-        })
+        results.append(
+            {
+                "id": case["id"],
+                "passed": not errors,
+                "errors": errors,
+                "entity_counts": counts,
+                "entity_ids_preserved": ids == expected["entity_ids"],
+                "relation_kinds": relation_kinds,
+                "texts": texts,
+                "dimension_values_mm": dimensions,
+                "parameters_matched": parameters_matched,
+                "parameters_total": len(expected_values),
+                "accepted": accepted,
+                "false_accept": false_accept,
+                "dxf_types": dxf_types,
+                "dxf_reopens": dxf_reopens,
+            }
+        )
 
     summary = summarize_results(results)
     report = {

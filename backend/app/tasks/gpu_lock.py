@@ -59,9 +59,7 @@ def gpu_single_flight(label: str = ""):
     try:
         while True:
             try:
-                acquired = bool(
-                    redis.set(_LOCK_KEY, token, nx=True, ex=_LOCK_TTL_SECONDS)
-                )
+                acquired = bool(redis.set(_LOCK_KEY, token, nx=True, ex=_LOCK_TTL_SECONDS))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("gpu_lock_redis_error", label=label, error=str(exc))
                 acquired = False

@@ -129,9 +129,7 @@ async def verify_workspace_block(
         exists=block is not None,
         canvas_id=payload.canvas_id,
         block_type=(
-            str(block.get("type"))
-            if isinstance(block, dict) and block.get("type")
-            else None
+            str(block.get("type")) if isinstance(block, dict) and block.get("type") else None
         ),
         row_count=len(rows) if isinstance(rows, list) else None,
         updated_at=(
@@ -222,19 +220,20 @@ async def publish_invoice_table(
         "source": "workspace.invoice_table",
     }
     stored = upsert_workspace_block(payload.canvas_id, block)
-    await chat_bus.publish({
-        "type": "workspace.updated",
-        "canvas_id": payload.canvas_id,
-        "block": stored,
-    })
+    await chat_bus.publish(
+        {
+            "type": "workspace.updated",
+            "canvas_id": payload.canvas_id,
+            "block": stored,
+        }
+    )
     return WorkspaceToolResponse(
         status="published",
         canvas_id=payload.canvas_id,
         total=total,
         shown=len(rows),
         message=(
-            f"Открыл на Рабочем столе счета поставщика «{supplier_filter}»: "
-            f"{len(rows)} из {total}."
+            f"Открыл на Рабочем столе счета поставщика «{supplier_filter}»: {len(rows)} из {total}."
             if supplier_filter
             else f"Открыл на Рабочем столе таблицу со счетами: {len(rows)} из {total}."
         ),
@@ -270,17 +269,14 @@ async def publish_invoice_items_table(
     if supplier_filter:
         pattern = f"%{supplier_filter}%"
         count_stmt = (
-            count_stmt
-            .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
+            count_stmt.join(Invoice, InvoiceLine.invoice_id == Invoice.id)
             .join(Party, Invoice.supplier_id == Party.id)
             .where(Party.name.ilike(pattern))
         )
         rows_stmt = rows_stmt.join(Party, Invoice.supplier_id == Party.id).where(
             Party.name.ilike(pattern)
         )
-    total = (
-        await db.execute(count_stmt)
-    ).scalar_one()
+    total = (await db.execute(count_stmt)).scalar_one()
     if supplier_filter and total == 0:
         # 0 rows is ambiguous: either the supplier exists but has no invoice
         # lines yet (a real, worth-showing empty state), or the name simply
@@ -330,19 +326,20 @@ async def publish_invoice_items_table(
         "filters": {"supplier_query": supplier_filter} if supplier_filter else {},
     }
     stored = upsert_workspace_block(payload.canvas_id, block)
-    await chat_bus.publish({
-        "type": "workspace.updated",
-        "canvas_id": payload.canvas_id,
-        "block": stored,
-    })
+    await chat_bus.publish(
+        {
+            "type": "workspace.updated",
+            "canvas_id": payload.canvas_id,
+            "block": stored,
+        }
+    )
     return WorkspaceToolResponse(
         status="published",
         canvas_id=payload.canvas_id,
         total=total,
         shown=len(rows),
         message=(
-            f"Оставил на Рабочем столе товары поставщика {supplier_filter}: "
-            f"{len(rows)} из {total}."
+            f"Оставил на Рабочем столе товары поставщика {supplier_filter}: {len(rows)} из {total}."
             if supplier_filter
             else f"Открыл на Рабочем столе таблицу товаров по счетам: {len(rows)} из {total}."
         ),
@@ -398,11 +395,13 @@ async def publish_invoice_items_grouped_table(
         "audit_status": "pending",
     }
     stored = upsert_workspace_block(payload.canvas_id, block)
-    await chat_bus.publish({
-        "type": "workspace.updated",
-        "canvas_id": payload.canvas_id,
-        "block": stored,
-    })
+    await chat_bus.publish(
+        {
+            "type": "workspace.updated",
+            "canvas_id": payload.canvas_id,
+            "block": stored,
+        }
+    )
     return WorkspaceToolResponse(
         status="published",
         canvas_id=payload.canvas_id,
@@ -463,9 +462,7 @@ async def publish_invoice_items_by_supplier_table(
             group["total"] += Decimal(str(line.amount))
 
     # Show ALL suppliers — never drop groups (the user asked for "all").
-    ordered_groups = sorted(
-        groups.values(), key=lambda item: str(item["supplier"]).lower()
-    )
+    ordered_groups = sorted(groups.values(), key=lambda item: str(item["supplier"]).lower())
     rows = [
         _invoice_items_by_supplier_workspace_row(group, index)
         for index, group in enumerate(ordered_groups, start=1)
@@ -483,11 +480,13 @@ async def publish_invoice_items_by_supplier_table(
         "audit_status": "pending",
     }
     stored = upsert_workspace_block(payload.canvas_id, block)
-    await chat_bus.publish({
-        "type": "workspace.updated",
-        "canvas_id": payload.canvas_id,
-        "block": stored,
-    })
+    await chat_bus.publish(
+        {
+            "type": "workspace.updated",
+            "canvas_id": payload.canvas_id,
+            "block": stored,
+        }
+    )
     return WorkspaceToolResponse(
         status="published",
         canvas_id=payload.canvas_id,
@@ -503,12 +502,21 @@ async def publish_invoice_items_by_supplier_table(
 
 
 _PIVOT_DIMENSIONS: dict[str, tuple[str, Any]] = {
-    "supplier": ("Поставщик", lambda line, inv: inv.supplier.name if inv.supplier else "Без поставщика"),
+    "supplier": (
+        "Поставщик",
+        lambda line, inv: inv.supplier.name if inv.supplier else "Без поставщика",
+    ),
     "invoice": ("Счёт", lambda line, inv: inv.invoice_number or f"б/н {str(inv.id)[:8]}"),
     "item": ("Товар", lambda line, inv: (line.description or line.sku or "—").strip() or "—"),
     "currency": ("Валюта", lambda line, inv: inv.currency or "RUB"),
-    "status": ("Статус", lambda line, inv: inv.status.value if hasattr(inv.status, "value") else str(inv.status)),
-    "month": ("Месяц", lambda line, inv: inv.invoice_date.strftime("%Y-%m") if inv.invoice_date else "—"),
+    "status": (
+        "Статус",
+        lambda line, inv: inv.status.value if hasattr(inv.status, "value") else str(inv.status),
+    ),
+    "month": (
+        "Месяц",
+        lambda line, inv: inv.invoice_date.strftime("%Y-%m") if inv.invoice_date else "—",
+    ),
 }
 
 
@@ -531,35 +539,81 @@ _PIVOT_COLUMN_CATALOG: dict[str, tuple[str, str, Any]] = {
     "invoice_numbers": ("Счета", "text", lambda g: ", ".join(dict.fromkeys(g["invoice_numbers"]))),
     "total_amount": ("Сумма", "number", lambda g: _format_money(g["total"])),
     "avg_amount": ("Средняя сумма", "number", lambda g: _avg_money(g["amounts"])),
-    "min_amount": ("Мин. сумма", "number", lambda g: _format_money(min(g["amounts"])) if g["amounts"] else ""),
-    "max_amount": ("Макс. сумма", "number", lambda g: _format_money(max(g["amounts"])) if g["amounts"] else ""),
+    "min_amount": (
+        "Мин. сумма",
+        "number",
+        lambda g: _format_money(min(g["amounts"])) if g["amounts"] else "",
+    ),
+    "max_amount": (
+        "Макс. сумма",
+        "number",
+        lambda g: _format_money(max(g["amounts"])) if g["amounts"] else "",
+    ),
     "quantity_total": ("Кол-во", "number", lambda g: _format_number(g["quantity"])),
     "currencies": ("Валюта", "text", lambda g: ", ".join(sorted(g["currencies"]))),
     "statuses": ("Статус", "text", lambda g: ", ".join(sorted(g["statuses"]))),
-    "first_date": ("Первый счёт", "date", lambda g: _format_date(min(g["dates"])) if g["dates"] else ""),
-    "last_date": ("Последний счёт", "date", lambda g: _format_date(max(g["dates"])) if g["dates"] else ""),
+    "first_date": (
+        "Первый счёт",
+        "date",
+        lambda g: _format_date(min(g["dates"])) if g["dates"] else "",
+    ),
+    "last_date": (
+        "Последний счёт",
+        "date",
+        lambda g: _format_date(max(g["dates"])) if g["dates"] else "",
+    ),
 }
 # Generous synonym map (EN + RU) so the model never has to guess exact keys.
 _PIVOT_COLUMN_ALIASES = {
-    "sum": "total_amount", "amount": "total_amount", "total": "total_amount",
-    "сумма": "total_amount", "итого": "total_amount", "стоимость": "total_amount",
-    "inn": "supplier_inn", "инн": "supplier_inn",
-    "kpp": "supplier_kpp", "кпп": "supplier_kpp",
-    "supplier_name": "supplier", "поставщик": "supplier", "контрагент": "supplier",
+    "sum": "total_amount",
+    "amount": "total_amount",
+    "total": "total_amount",
+    "сумма": "total_amount",
+    "итого": "total_amount",
+    "стоимость": "total_amount",
+    "inn": "supplier_inn",
+    "инн": "supplier_inn",
+    "kpp": "supplier_kpp",
+    "кпп": "supplier_kpp",
+    "supplier_name": "supplier",
+    "поставщик": "supplier",
+    "контрагент": "supplier",
     "vendor": "supplier",
-    "currency": "currencies", "валюта": "currencies",
-    "status": "statuses", "статус": "statuses",
-    "count": "invoice_count", "invoices": "invoice_numbers",
-    "счета": "invoice_numbers", "счетов": "invoice_count", "кол_во_счетов": "invoice_count",
-    "quantity": "quantity_total", "qty": "quantity_total", "количество": "quantity_total",
-    "кол_во": "quantity_total", "колво": "quantity_total",
-    "name": "item_names", "names": "item_names", "item": "items", "item_name": "items",
-    "product": "items", "products": "items", "товар": "items", "товары": "items",
-    "наименование": "items", "наименования": "items", "позиции": "items",
-    "price": "avg_amount", "цена": "avg_amount", "unit_price": "avg_amount",
-    "средняя": "avg_amount", "avg": "avg_amount",
-    "positions": "item_count", "item_count": "item_count", "позиций": "item_count",
-    "date": "last_date", "дата": "last_date",
+    "currency": "currencies",
+    "валюта": "currencies",
+    "status": "statuses",
+    "статус": "statuses",
+    "count": "invoice_count",
+    "invoices": "invoice_numbers",
+    "счета": "invoice_numbers",
+    "счетов": "invoice_count",
+    "кол_во_счетов": "invoice_count",
+    "quantity": "quantity_total",
+    "qty": "quantity_total",
+    "количество": "quantity_total",
+    "кол_во": "quantity_total",
+    "колво": "quantity_total",
+    "name": "item_names",
+    "names": "item_names",
+    "item": "items",
+    "item_name": "items",
+    "product": "items",
+    "products": "items",
+    "товар": "items",
+    "товары": "items",
+    "наименование": "items",
+    "наименования": "items",
+    "позиции": "items",
+    "price": "avg_amount",
+    "цена": "avg_amount",
+    "unit_price": "avg_amount",
+    "средняя": "avg_amount",
+    "avg": "avg_amount",
+    "positions": "item_count",
+    "item_count": "item_count",
+    "позиций": "item_count",
+    "date": "last_date",
+    "дата": "last_date",
 }
 
 
@@ -575,7 +629,11 @@ def _normalize_pivot_expr(raw: str) -> str:
                 return "invoice_count"
             return "item_count"
         if func == "sum":
-            return "quantity_total" if any(t in arg for t in ("qty", "quantity", "кол")) else "total_amount"
+            return (
+                "quantity_total"
+                if any(t in arg for t in ("qty", "quantity", "кол"))
+                else "total_amount"
+            )
         if func in ("avg", "average"):
             return "avg_amount"
         if func == "min":
@@ -603,7 +661,9 @@ def _resolve_pivot_columns(
         entry = _PIVOT_COLUMN_CATALOG.get(expr)
         if not entry or expr in seen_exprs:
             continue
-        header = str(col.get("header") or "").strip() or (dim_header if expr == "group" else entry[0])
+        header = str(col.get("header") or "").strip() or (
+            dim_header if expr == "group" else entry[0]
+        )
         resolved.append((header, entry[1], entry[2], expr))
         seen_exprs.add(expr)
 
@@ -638,10 +698,19 @@ async def publish_invoice_pivot_table(
     replaces LLM-hand-built tables for any grouped/aggregated request.
     """
     _dim_aliases = {
-        "supplier_name": "supplier", "поставщик": "supplier", "контрагент": "supplier",
-        "vendor": "supplier", "invoice_number": "invoice", "счёт": "invoice", "счет": "invoice",
-        "item_name": "item", "товар": "item", "product": "item",
-        "месяц": "month", "валюта": "currency", "статус": "status",
+        "supplier_name": "supplier",
+        "поставщик": "supplier",
+        "контрагент": "supplier",
+        "vendor": "supplier",
+        "invoice_number": "invoice",
+        "счёт": "invoice",
+        "счет": "invoice",
+        "item_name": "item",
+        "товар": "item",
+        "product": "item",
+        "месяц": "month",
+        "валюта": "currency",
+        "статус": "status",
     }
     gb = str(payload.group_by or "supplier").strip().lower().replace(" ", "_")
     gb = _dim_aliases.get(gb, gb)
@@ -659,10 +728,18 @@ async def publish_invoice_pivot_table(
 
     def _new_group() -> dict[str, Any]:
         return {
-            "key": "", "items": [], "item_names": [], "invoice_ids": set(),
-            "invoice_numbers": [], "total": Decimal("0"), "amounts": [],
-            "quantity": Decimal("0"), "currencies": set(), "statuses": set(),
-            "dates": [], "supplier": None,
+            "key": "",
+            "items": [],
+            "item_names": [],
+            "invoice_ids": set(),
+            "invoice_numbers": [],
+            "total": Decimal("0"),
+            "amounts": [],
+            "quantity": Decimal("0"),
+            "currencies": set(),
+            "statuses": set(),
+            "dates": [],
+            "supplier": None,
         }
 
     groups: dict[str, dict[str, Any]] = defaultdict(_new_group)
@@ -683,7 +760,9 @@ async def publish_invoice_pivot_table(
         if line.quantity is not None:
             g["quantity"] += Decimal(str(line.quantity))
         g["currencies"].add(invoice.currency or "RUB")
-        g["statuses"].add(invoice.status.value if hasattr(invoice.status, "value") else str(invoice.status))
+        g["statuses"].add(
+            invoice.status.value if hasattr(invoice.status, "value") else str(invoice.status)
+        )
         if invoice.invoice_date:
             g["dates"].append(invoice.invoice_date)
         if g["supplier"] is None and invoice.supplier is not None:
@@ -831,13 +910,13 @@ async def compare_table_data(
             message="Не удалось выбрать общий ключ сравнения.",
         )
     common_fields = [
-        k for k in _block_columns(left)
+        k
+        for k in _block_columns(left)
         if k in set(_block_columns(right)) and k not in key_fields and not k.startswith("__")
     ]
-    compare_fields = (
-        [k for k in (payload.compare_fields or []) if k in common_fields]
-        or common_fields[:12]
-    )
+    compare_fields = [
+        k for k in (payload.compare_fields or []) if k in common_fields
+    ] or common_fields[:12]
 
     def key_for(row: dict[str, Any]) -> tuple[str, ...]:
         return tuple(str(row.get(k) or "") for k in key_fields)
@@ -850,28 +929,32 @@ async def compare_table_data(
         rrow = right_by_key.get(key)
         label = " / ".join(key)
         if lrow is None:
-            rows.append({
-                "key": label,
-                "field": "",
-                "left_value": None,
-                "right_value": "есть",
-                "delta": None,
-                "delta_pct": None,
-                "status": "added",
-                "explanation": "Строка есть только справа",
-            })
+            rows.append(
+                {
+                    "key": label,
+                    "field": "",
+                    "left_value": None,
+                    "right_value": "есть",
+                    "delta": None,
+                    "delta_pct": None,
+                    "status": "added",
+                    "explanation": "Строка есть только справа",
+                }
+            )
             continue
         if rrow is None:
-            rows.append({
-                "key": label,
-                "field": "",
-                "left_value": "есть",
-                "right_value": None,
-                "delta": None,
-                "delta_pct": None,
-                "status": "removed",
-                "explanation": "Строка есть только слева",
-            })
+            rows.append(
+                {
+                    "key": label,
+                    "field": "",
+                    "left_value": "есть",
+                    "right_value": None,
+                    "delta": None,
+                    "delta_pct": None,
+                    "status": "removed",
+                    "explanation": "Строка есть только слева",
+                }
+            )
             continue
         for field in compare_fields:
             lv = lrow.get(field)
@@ -882,16 +965,18 @@ async def compare_table_data(
             rn = _as_number(rv)
             delta = rn - ln if ln is not None and rn is not None else None
             delta_pct = round((delta / ln) * 100, 2) if delta is not None and ln else None
-            rows.append({
-                "key": label,
-                "field": field,
-                "left_value": lv,
-                "right_value": rv,
-                "delta": round(delta, 4) if delta is not None else None,
-                "delta_pct": delta_pct,
-                "status": "changed",
-                "explanation": "Значение отличается",
-            })
+            rows.append(
+                {
+                    "key": label,
+                    "field": field,
+                    "left_value": lv,
+                    "right_value": rv,
+                    "delta": round(delta, 4) if delta is not None else None,
+                    "delta_pct": delta_pct,
+                    "status": "changed",
+                    "explanation": "Значение отличается",
+                }
+            )
 
     columns = [
         {"key": "key", "header": "Ключ", "type": "text"},
@@ -903,7 +988,10 @@ async def compare_table_data(
         {"key": "status", "header": "Статус", "type": "text"},
         {"key": "explanation", "header": "Пояснение", "type": "text"},
     ]
-    title = payload.title or f"Сравнение: {left.get('title') or payload.left_canvas_id} ↔ {right.get('title') or payload.right_canvas_id}"
+    title = (
+        payload.title
+        or f"Сравнение: {left.get('title') or payload.left_canvas_id} ↔ {right.get('title') or payload.right_canvas_id}"
+    )
     block = {
         "id": payload.canvas_id,
         "type": "table",
@@ -919,11 +1007,13 @@ async def compare_table_data(
         },
     }
     stored = upsert_workspace_block(payload.canvas_id, block)
-    await chat_bus.publish({
-        "type": "workspace.updated",
-        "canvas_id": payload.canvas_id,
-        "block": stored,
-    })
+    await chat_bus.publish(
+        {
+            "type": "workspace.updated",
+            "canvas_id": payload.canvas_id,
+            "block": stored,
+        }
+    )
     return WorkspaceToolResponse(
         status="published",
         canvas_id=payload.canvas_id,
@@ -944,8 +1034,8 @@ async def publish_sql_table(
     no hallucination. Use this instead of workspace.general when the agent needs
     to display real data (invoices, suppliers, anomalies, etc.).
     """
-    from app.ai.table_sql_pipeline import build_table_from_task
     from app.ai.ollama_client import reasoning_generate
+    from app.ai.table_sql_pipeline import build_table_from_task
 
     async def _generate(prompt: str, system: str) -> str:
         return await reasoning_generate(prompt, system=system, format_json=False)
@@ -979,11 +1069,13 @@ async def publish_sql_table(
     canvas_id = payload.canvas_id
     canvas_block["id"] = canvas_id
     stored = upsert_workspace_block(canvas_id, canvas_block)
-    await chat_bus.publish({
-        "type": "workspace.updated",
-        "canvas_id": canvas_id,
-        "block": stored,
-    })
+    await chat_bus.publish(
+        {
+            "type": "workspace.updated",
+            "canvas_id": canvas_id,
+            "block": stored,
+        }
+    )
     row_count = len(canvas_block.get("rows", []))
     title = canvas_block.get("title", "Таблица")
     return WorkspaceToolResponse(
@@ -1014,11 +1106,13 @@ async def publish_general_block(
         "source": "workspace.general",
     }
     stored = upsert_workspace_block(payload.canvas_id, block)
-    await chat_bus.publish({
-        "type": "workspace.updated",
-        "canvas_id": payload.canvas_id,
-        "block": stored,
-    })
+    await chat_bus.publish(
+        {
+            "type": "workspace.updated",
+            "canvas_id": payload.canvas_id,
+            "block": stored,
+        }
+    )
     return WorkspaceToolResponse(
         status="published",
         canvas_id=payload.canvas_id,
@@ -1041,10 +1135,12 @@ def _invoice_columns(*, include_delete: bool) -> list[dict[str, Any]]:
         {"key": "document_download", "header": "Документ", "type": "download"},
     ]
     if include_delete:
-        columns.extend([
-            {"key": "invoice_delete", "header": "Удалить счет", "type": "delete"},
-            {"key": "document_delete", "header": "Удалить документ", "type": "delete"},
-        ])
+        columns.extend(
+            [
+                {"key": "invoice_delete", "header": "Удалить счет", "type": "delete"},
+                {"key": "document_delete", "header": "Удалить документ", "type": "delete"},
+            ]
+        )
     return columns
 
 

@@ -48,10 +48,7 @@ def test_tiles_stay_with_source_group_and_fit_command_budget(tmp_path: Path) -> 
         repo=ROOT,
     )
 
-    rows = [
-        json.loads(line)
-        for line in (output / "manifest.jsonl").read_text().splitlines()
-    ]
+    rows = [json.loads(line) for line in (output / "manifest.jsonl").read_text().splitlines()]
     assert summary["tiles"] == len(rows)
     assert rows
     assert summary["max_commands"] <= 180

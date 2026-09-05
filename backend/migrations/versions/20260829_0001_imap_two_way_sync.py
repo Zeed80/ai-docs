@@ -3,16 +3,17 @@
 Revision ID: 20260829_0001
 Revises: 20260828_0013
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 revision: str = "20260829_0001"
-down_revision: Union[str, None] = "20260828_0013"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260828_0013"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -47,8 +48,18 @@ def upgrade() -> None:
             sa.Column("sync_enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
             sa.Column("last_sync_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("sync_error", sa.Text(), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint("mailbox", "remote_name", name="uq_mailbox_folder"),
         )
@@ -67,8 +78,18 @@ def upgrade() -> None:
             sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("last_error", sa.Text(), nullable=True),
             sa.Column("applied_at", sa.DateTime(timezone=True), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.ForeignKeyConstraint(["message_id"], ["email_messages.id"], ondelete="CASCADE"),
             sa.PrimaryKeyConstraint("id"),
         )
@@ -76,10 +97,12 @@ def upgrade() -> None:
             op.create_index(f"ix_email_sync_ops_{col}", "email_sync_ops", [col])
 
     # Existing rows were all fetched from the mailbox's single configured folder.
-    op.execute(sa.text(
-        "UPDATE email_messages m SET imap_folder = c.imap_folder "
-        "FROM mailbox_configs c WHERE c.name = m.mailbox AND m.imap_folder IS NULL"
-    ))
+    op.execute(
+        sa.text(
+            "UPDATE email_messages m SET imap_folder = c.imap_folder "
+            "FROM mailbox_configs c WHERE c.name = m.mailbox AND m.imap_folder IS NULL"
+        )
+    )
 
 
 def downgrade() -> None:

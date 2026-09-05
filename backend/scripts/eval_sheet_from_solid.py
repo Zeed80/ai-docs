@@ -70,8 +70,7 @@ async def evaluate(spec: dict) -> dict:
         return result
     dimensions = sheet.drawing.get("dimensions") or []
     stated = [
-        str((item or {}).get("value") or "").strip()
-        for item in (spec.get("dimensions") or [])
+        str((item or {}).get("value") or "").strip() for item in (spec.get("dimensions") or [])
     ]
     result["sheet"] = {
         "part_class": sheet.plan.part_class,
@@ -104,7 +103,9 @@ def score(result: dict) -> tuple[int, int, list[str]]:
     ]
     sheet = result.get("sheet") or {}
     if sheet:
-        checks.append(("views measure the solid", bool((sheet.get("views_match_solid") or {}).get("ok"))))
+        checks.append(
+            ("views measure the solid", bool((sheet.get("views_match_solid") or {}).get("ok")))
+        )
         checks.append(("sheet carries dimensions", int(sheet.get("dimensions_placed") or 0) > 0))
         # A section without hatching is a section nobody can read.
         if "section" in (sheet.get("views") or []):

@@ -16,12 +16,17 @@ from app.ai.cad_ir.schema import CadIR, Circle, Point, Segment, SourceInfo, Text
 def _rect_ir(entities=None, scale=1.0) -> CadIR:
     base = [
         Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0), line_class="contour", width_class="main"),
-        Segment(p1=Point(x=100, y=0), p2=Point(x=100, y=60), line_class="contour", width_class="main"),
-        Segment(p1=Point(x=100, y=60), p2=Point(x=0, y=60), line_class="contour", width_class="main"),
+        Segment(
+            p1=Point(x=100, y=0), p2=Point(x=100, y=60), line_class="contour", width_class="main"
+        ),
+        Segment(
+            p1=Point(x=100, y=60), p2=Point(x=0, y=60), line_class="contour", width_class="main"
+        ),
         Segment(p1=Point(x=0, y=60), p2=Point(x=0, y=0), line_class="contour", width_class="main"),
     ]
     return CadIR(
-        source=SourceInfo(image_width=200, image_height=200), scale=scale,
+        source=SourceInfo(image_width=200, image_height=200),
+        scale=scale,
         entities=base + (entities or []),
     )
 
@@ -42,9 +47,7 @@ def test_guess_candidates_flag_missing_side_view() -> None:
     candidates = generate_feature_tree_candidates(_rect_ir())
     guesses = [c for c in candidates if c.score < 0.5]
     assert guesses
-    assert all(
-        any("боков" in m or "разрез" in m for m in c.missing_data) for c in guesses
-    )
+    assert all(any("боков" in m or "разрез" in m for m in c.missing_data) for c in guesses)
 
 
 def test_stated_depth_wins_and_has_no_missing_side_view_note() -> None:
@@ -65,11 +68,16 @@ def test_gost_tolerance_class_is_not_mistaken_for_a_stated_depth() -> None:
     for text in ("40h7", "Ø30h6", "15H7", "d=20h6"):
         ir = _rect_ir([TextEntity(position=Point(x=50, y=30), text=text, height=5)])
         candidates = generate_feature_tree_candidates(ir)
-        assert all(c.score <= 0.5 for c in candidates), f"{text!r} produced a false high-confidence candidate"
+        assert all(c.score <= 0.5 for c in candidates), (
+            f"{text!r} produced a false high-confidence candidate"
+        )
 
 
 def test_hole_feature_from_circle_with_correct_diameter_mm() -> None:
-    ir = _rect_ir([Circle(center=Point(x=50, y=30), radius=10, line_class="contour", width_class="main")], scale=0.5)
+    ir = _rect_ir(
+        [Circle(center=Point(x=50, y=30), radius=10, line_class="contour", width_class="main")],
+        scale=0.5,
+    )
     candidates = generate_feature_tree_candidates(ir)
     holes = [f for f in candidates[0].features if f.kind == "hole"]
     assert len(holes) == 1
@@ -84,8 +92,10 @@ def test_outer_round_footprint_is_not_mistaken_for_hole() -> None:
         scale=1.0,
         entities=[
             Circle(
-                center=Point(x=50, y=50), radius=50,
-                line_class="contour", width_class="main",
+                center=Point(x=50, y=50),
+                radius=50,
+                line_class="contour",
+                width_class="main",
             )
         ],
     )
@@ -95,10 +105,12 @@ def test_outer_round_footprint_is_not_mistaken_for_hole() -> None:
 
 
 def test_hole_through_flag_from_nearby_text() -> None:
-    ir = _rect_ir([
-        Circle(center=Point(x=50, y=30), radius=5, line_class="contour", width_class="main"),
-        TextEntity(position=Point(x=52, y=32), text="сквозное отверстие", height=5),
-    ])
+    ir = _rect_ir(
+        [
+            Circle(center=Point(x=50, y=30), radius=5, line_class="contour", width_class="main"),
+            TextEntity(position=Point(x=52, y=32), text="сквозное отверстие", height=5),
+        ]
+    )
     candidates = generate_feature_tree_candidates(ir)
     hole = next(f for f in candidates[0].features if f.kind == "hole")
     assert hole.params["through"] is True
@@ -106,7 +118,9 @@ def test_hole_through_flag_from_nearby_text() -> None:
 
 
 def test_hole_without_through_marker_is_flagged_as_missing_data() -> None:
-    ir = _rect_ir([Circle(center=Point(x=50, y=30), radius=5, line_class="contour", width_class="main")])
+    ir = _rect_ir(
+        [Circle(center=Point(x=50, y=30), radius=5, line_class="contour", width_class="main")]
+    )
     candidates = generate_feature_tree_candidates(ir)
     best = candidates[0]
     hole = next(f for f in best.features if f.kind == "hole")
@@ -162,8 +176,11 @@ def test_compile_to_step_degrades_gracefully_without_cadquery() -> None:
     module docstring) — compile_to_step must return None, never raise or
     fake output."""
     candidate = FeatureTreeCandidate(
-        features=[Feature3D(kind="extrude", params={"width_mm": 10, "height_mm": 10, "depth_mm": 5})],
-        score=0.9, label="test",
+        features=[
+            Feature3D(kind="extrude", params={"width_mm": 10, "height_mm": 10, "depth_mm": 5})
+        ],
+        score=0.9,
+        label="test",
     )
     assert compile_to_step(candidate) is None
 

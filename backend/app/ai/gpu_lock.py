@@ -33,6 +33,7 @@ LOCK_MESSAGE = (
     "Локальные модели временно недоступны; облачные маршруты работают."
 )
 
+
 def _redis():
     import redis
 
@@ -148,13 +149,14 @@ def unload_ollama() -> int:
     ollama = settings.ollama_url.rstrip("/")
     n = 0
     try:
-        loaded = json.loads(
-            urllib.request.urlopen(f"{ollama}/api/ps", timeout=15).read()
-        ).get("models", [])
+        loaded = json.loads(urllib.request.urlopen(f"{ollama}/api/ps", timeout=15).read()).get(
+            "models", []
+        )
         for m in loaded:
             body = json.dumps({"model": m["name"], "keep_alive": 0}).encode()
             req = urllib.request.Request(
-                f"{ollama}/api/generate", data=body,
+                f"{ollama}/api/generate",
+                data=body,
                 headers={"Content-Type": "application/json"},
             )
             urllib.request.urlopen(req, timeout=60).read()

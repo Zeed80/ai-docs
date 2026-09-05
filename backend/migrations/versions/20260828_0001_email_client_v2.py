@@ -11,16 +11,17 @@ Revision ID: 20260828_0001
 Revises: 20260826_0002
 Create Date: 2026-08-28
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 revision: str = "20260828_0001"
-down_revision: Union[str, None] = "20260826_0002"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260826_0002"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 _THREAD_COLS = [
@@ -59,8 +60,18 @@ def upgrade() -> None:
         sa.Column("mailbox", sa.String(100), nullable=True),
         sa.Column("owner_sub", sa.String(255), nullable=True),
         sa.Column("is_system", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_email_labels_mailbox", "email_labels", ["mailbox"])
@@ -71,7 +82,12 @@ def upgrade() -> None:
         sa.Column("thread_id", PG_UUID(as_uuid=True), nullable=False),
         sa.Column("label_id", PG_UUID(as_uuid=True), nullable=False),
         sa.Column("added_by", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["thread_id"], ["email_threads.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["label_id"], ["email_labels.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("thread_id", "label_id"),
@@ -91,8 +107,18 @@ def upgrade() -> None:
         sa.Column("storage_path", sa.String(1000), nullable=True),
         sa.Column("document_id", PG_UUID(as_uuid=True), nullable=True),
         sa.Column("sha256", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["message_id"], ["email_messages.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
@@ -112,13 +138,17 @@ def upgrade() -> None:
             )
         )
         # Backfill has_attachments / folder on existing rows.
-        op.execute(sa.text(
-            "UPDATE email_messages SET folder = CASE WHEN is_inbound THEN 'inbox' ELSE 'sent' END"
-        ))
-        op.execute(sa.text(
-            "UPDATE email_threads t SET has_attachments = EXISTS ("
-            "SELECT 1 FROM email_messages m WHERE m.thread_id = t.id AND m.has_attachments)"
-        ))
+        op.execute(
+            sa.text(
+                "UPDATE email_messages SET folder = CASE WHEN is_inbound THEN 'inbox' ELSE 'sent' END"
+            )
+        )
+        op.execute(
+            sa.text(
+                "UPDATE email_threads t SET has_attachments = EXISTS ("
+                "SELECT 1 FROM email_messages m WHERE m.thread_id = t.id AND m.has_attachments)"
+            )
+        )
 
 
 def downgrade() -> None:

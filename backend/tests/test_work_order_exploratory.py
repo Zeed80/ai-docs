@@ -261,12 +261,16 @@ class TestExploratoryPlannerPrompt:
 
         async def fake_generate_json(prompt, *, system, **kwargs):
             captured["system"] = system
-            return {"assumptions": [], "steps": [
-                {"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}
-            ], "verification_plan": {}}
+            return {
+                "assumptions": [],
+                "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+                "verification_plan": {},
+            }
 
         with (
-            patch("app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)),
+            patch(
+                "app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)
+            ),
             patch(
                 "app.ai.model_resolver.get_reasoning_model",
                 return_value=type("M", (), {"model": "m", "provider": "ollama"})(),
@@ -305,18 +309,25 @@ class TestExploratoryPlannerPrompt:
 
         async def fake_generate_json(prompt, *, system, **kwargs):
             captured["prompt"] = prompt
-            return {"assumptions": [], "steps": [
-                {"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}
-            ], "verification_plan": {}}
+            return {
+                "assumptions": [],
+                "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+                "verification_plan": {},
+            }
 
         hint = {
             "domain_pattern": "haltec.ru",
-            "strategy": {"queries": ["haltec сверла каталог"], "sample_url": "https://haltec.ru/catalog"},
+            "strategy": {
+                "queries": ["haltec сверла каталог"],
+                "sample_url": "https://haltec.ru/catalog",
+            },
             "status": "active",
             "score": 0.81,
         }
         with (
-            patch("app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)),
+            patch(
+                "app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)
+            ),
             patch(
                 "app.ai.model_resolver.get_reasoning_model",
                 return_value=type("M", (), {"model": "m", "provider": "ollama"})(),
@@ -341,12 +352,16 @@ class TestExploratoryPlannerPrompt:
 
         async def fake_generate_json(prompt, *, system, **kwargs):
             captured["system"] = system
-            return {"assumptions": [], "steps": [
-                {"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}
-            ], "verification_plan": {}}
+            return {
+                "assumptions": [],
+                "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+                "verification_plan": {},
+            }
 
         with (
-            patch("app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)),
+            patch(
+                "app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)
+            ),
             patch(
                 "app.ai.model_resolver.get_reasoning_model",
                 return_value=type("M", (), {"model": "m", "provider": "ollama"})(),
@@ -423,21 +438,29 @@ class TestExploratoryProgressNotifications:
         claimed = await claim_ready_step(db_session, worker_id="w", work_order_id=order.id)
         _order, claimed_step, attempt = claimed
         await complete_attempt(
-            db_session, order=order, step=claimed_step, attempt=attempt,
-            output={"text": "готово"}, actor="w",
+            db_session,
+            order=order,
+            step=claimed_step,
+            attempt=attempt,
+            output={"text": "готово"},
+            actor="w",
         )
 
         assert await verify_nonempty_result(db_session, order=order, step=claimed_step)
         await db_session.flush()
 
         notifs = (
-            await db_session.execute(
-                select(Notification).where(
-                    Notification.entity_id == order.id,
-                    Notification.source_task == "workorder.progress",
+            (
+                await db_session.execute(
+                    select(Notification).where(
+                        Notification.entity_id == order.id,
+                        Notification.source_task == "workorder.progress",
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         # verify_nonempty_result transitions verifying -> completed — both
         # are notify-worthy statuses, so two notifications are expected here,
         # not a bug.
@@ -451,7 +474,9 @@ class TestExploratoryProgressNotifications:
 
 class TestSummarizeStepOutput:
     def test_agent_turn_output_is_relabeled_not_passed_through_raw(self):
-        step = WorkStep(kind="agent_turn", output={"text": "Не удалось завершить.", "executor": "agent_turn"})
+        step = WorkStep(
+            kind="agent_turn", output={"text": "Не удалось завершить.", "executor": "agent_turn"}
+        )
         summary = _summarize_step_output(step)
         assert summary["kind"] == "agent_turn"
         assert "not a capability result" in summary["note"].lower()
@@ -492,20 +517,22 @@ class TestPlannerErrorFeedback:
         async def fake_generate_json(prompt, *, system, **kwargs):
             captured["prompt"] = prompt
             captured["system"] = system
-            return {"assumptions": [], "steps": [
-                {"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}
-            ], "verification_plan": {}}
+            return {
+                "assumptions": [],
+                "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+                "verification_plan": {},
+            }
 
         with (
-            patch("app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)),
+            patch(
+                "app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)
+            ),
             patch(
                 "app.ai.model_resolver.get_reasoning_model",
                 return_value=type("M", (), {"model": "m", "provider": "ollama"})(),
             ),
         ):
-            await generate_capability_plan(
-                order, planner_error_context="steps: Field required"
-            )
+            await generate_capability_plan(order, planner_error_context="steps: Field required")
 
         assert "last_planner_error" in captured["prompt"]
         assert "steps: Field required" in captured["prompt"]
@@ -515,19 +542,26 @@ class TestPlannerErrorFeedback:
     @pytest.mark.asyncio
     async def test_no_error_context_when_planner_error_context_absent(self):
         order = WorkOrder(
-            objective="Найди каталоги поставщиков", description=None,
-            constraints={}, budgets={}, metadata_={},
+            objective="Найди каталоги поставщиков",
+            description=None,
+            constraints={},
+            budgets={},
+            metadata_={},
         )
         captured: dict = {}
 
         async def fake_generate_json(prompt, *, system, **kwargs):
             captured["system"] = system
-            return {"assumptions": [], "steps": [
-                {"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}
-            ], "verification_plan": {}}
+            return {
+                "assumptions": [],
+                "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+                "verification_plan": {},
+            }
 
         with (
-            patch("app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)),
+            patch(
+                "app.ai.ollama_client.generate_json", new=AsyncMock(side_effect=fake_generate_json)
+            ),
             patch(
                 "app.ai.model_resolver.get_reasoning_model",
                 return_value=type("M", (), {"model": "m", "provider": "ollama"})(),
@@ -542,11 +576,15 @@ class TestPlannerFallbackStreakCap:
     @pytest.mark.asyncio
     async def test_consecutive_schema_failures_below_threshold_keep_replanning(self, db_session):
         order = await create_work_order(
-            db_session, owner_key="tester", objective="Найди каталоги поставщиков",
+            db_session,
+            owner_key="tester",
+            objective="Найди каталоги поставщиков",
         )
         with patch(
             "app.domain.work_planning.generate_capability_plan",
-            new=AsyncMock(side_effect=ValueError("planner produced an invalid capability DAG: boom")),
+            new=AsyncMock(
+                side_effect=ValueError("planner produced an invalid capability DAG: boom")
+            ),
         ):
             for _ in range(_MAX_CONSECUTIVE_PLANNER_FALLBACKS - 1):
                 order.status = "replanning"
@@ -559,11 +597,15 @@ class TestPlannerFallbackStreakCap:
     @pytest.mark.asyncio
     async def test_reaching_threshold_blocks_with_a_distinct_honest_reason(self, db_session):
         order = await create_work_order(
-            db_session, owner_key="tester", objective="Найди каталоги поставщиков",
+            db_session,
+            owner_key="tester",
+            objective="Найди каталоги поставщиков",
         )
         with patch(
             "app.domain.work_planning.generate_capability_plan",
-            new=AsyncMock(side_effect=ValueError("planner produced an invalid capability DAG: boom")),
+            new=AsyncMock(
+                side_effect=ValueError("planner produced an invalid capability DAG: boom")
+            ),
         ):
             for _ in range(_MAX_CONSECUTIVE_PLANNER_FALLBACKS):
                 order.status = "replanning"
@@ -577,11 +619,15 @@ class TestPlannerFallbackStreakCap:
     @pytest.mark.asyncio
     async def test_a_successful_plan_in_between_resets_the_streak(self, db_session):
         order = await create_work_order(
-            db_session, owner_key="tester", objective="Найди каталоги поставщиков",
+            db_session,
+            owner_key="tester",
+            objective="Найди каталоги поставщиков",
         )
-        good_plan = {"assumptions": [], "steps": [
-            {"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}
-        ], "verification_plan": {}}
+        good_plan = {
+            "assumptions": [],
+            "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+            "verification_plan": {},
+        }
 
         with patch(
             "app.domain.work_planning.generate_capability_plan",
@@ -623,7 +669,9 @@ class TestPlannerFallbackStreakCap:
         """fallback_plan() itself never raises — use_model=False (test/manual
         single-step) runs are not the schema-cascade this cap targets."""
         order = await create_work_order(
-            db_session, owner_key="tester", objective="Найди каталоги поставщиков",
+            db_session,
+            owner_key="tester",
+            objective="Найди каталоги поставщиков",
         )
         for _ in range(_MAX_CONSECUTIVE_PLANNER_FALLBACKS + 2):
             order.status = "replanning"

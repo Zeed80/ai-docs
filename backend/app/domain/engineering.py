@@ -1,8 +1,8 @@
 """Public contracts for the canonical engineering-project API."""
 
+import uuid
 from datetime import datetime
 from typing import Literal
-import uuid
 
 from pydantic import AliasChoices, BaseModel, Field
 
@@ -88,7 +88,11 @@ class EngineeringMaterialCreate(BaseModel):
     yield_strength_mpa: float | None = Field(default=None, gt=0)
     tensile_strength_mpa: float | None = Field(default=None, gt=0)
     thermal_expansion_1_k: float | None = Field(default=None, gt=0)
-    metadata_: dict = Field(default_factory=dict, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
 
 
 class EngineeringMaterialOut(EngineeringMaterialCreate):
@@ -102,7 +106,11 @@ class EngineeringMaterialAssignmentCreate(BaseModel):
     object_key: str = Field(min_length=1, max_length=160)
     source: str = Field(default="manual", max_length=30)
     confidence: float = Field(default=1.0, ge=0, le=1)
-    metadata_: dict = Field(default_factory=dict, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
 
 
 class EngineeringMaterialAssignmentOut(EngineeringMaterialAssignmentCreate):
@@ -116,7 +124,11 @@ class EngineeringMaterialAssignmentOut(EngineeringMaterialAssignmentCreate):
 class EngineeringAssemblyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=300)
     designation: str | None = Field(default=None, max_length=160)
-    metadata_: dict = Field(default_factory=dict, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
 
 
 class EngineeringAssemblyOut(EngineeringAssemblyCreate):
@@ -135,7 +147,11 @@ class EngineeringAssemblyComponentCreate(BaseModel):
     transform: dict = Field(default_factory=dict)
     bounds: dict | None = None
     suppressed: bool = False
-    metadata_: dict = Field(default_factory=dict, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
+    metadata_: dict = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
 
 
 class EngineeringAssemblyComponentOut(EngineeringAssemblyComponentCreate):

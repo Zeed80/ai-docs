@@ -53,13 +53,10 @@ def upgrade() -> None:
     # create it without superuser rights.
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
     for name, table, expr in _FTS_INDEXES:
-        op.execute(
-            f"CREATE INDEX IF NOT EXISTS {name} ON {table} USING gin ({expr})"
-        )
+        op.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table} USING gin ({expr})")
     for name, table, column in _TRGM_INDEXES:
         op.execute(
-            f"CREATE INDEX IF NOT EXISTS {name} "
-            f"ON {table} USING gin ({column} gin_trgm_ops)"
+            f"CREATE INDEX IF NOT EXISTS {name} ON {table} USING gin ({column} gin_trgm_ops)"
         )
 
 

@@ -41,8 +41,18 @@ def frame_and_title_block_entities(
     def px(x_mm: float, y_mm: float) -> Point:
         return Point(x=x_mm * px_per_mm, y=y_mm * px_per_mm)
 
-    main = {"line_class": "contour", "width_class": "main", "origin": "human", "assurance": "human_approved"}
-    thin = {"line_class": "contour", "width_class": "thin", "origin": "human", "assurance": "human_approved"}
+    main = {
+        "line_class": "contour",
+        "width_class": "main",
+        "origin": "human",
+        "assurance": "human_approved",
+    }
+    thin = {
+        "line_class": "contour",
+        "width_class": "thin",
+        "origin": "human",
+        "assurance": "human_approved",
+    }
 
     fx0, fy0 = _FRAME_LEFT_MARGIN_MM, _FRAME_MARGIN_MM
     fx1, fy1 = width_mm - _FRAME_MARGIN_MM, height_mm - _FRAME_MARGIN_MM
@@ -79,12 +89,13 @@ def frame_and_title_block_entities(
     for xx in (17, 40, 55, 65, 120, 137, 152, 167):
         entities.append(Segment(p1=px(x0 + xx, y0), p2=px(x0 + xx, y0 + 25), **thin))
     for xx in (65, 120, 137, 152, 167):
-        entities.append(
-            Segment(p1=px(x0 + xx, y0 + 25), p2=px(x0 + xx, y0 + TB_H_MM), **thin)
-        )
+        entities.append(Segment(p1=px(x0 + xx, y0 + 25), p2=px(x0 + xx, y0 + TB_H_MM), **thin))
 
     def label(
-        text: str, x_mm: float, y_mm: float, height_mm: float = 3.0,
+        text: str,
+        x_mm: float,
+        y_mm: float,
+        height_mm: float = 3.0,
         fit_mm: float | None = None,
     ) -> None:
         """Write into a stamp cell, shrinking to stay inside it.

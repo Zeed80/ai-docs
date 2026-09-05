@@ -9,14 +9,12 @@ import base64
 import uuid
 from datetime import UTC, datetime
 from functools import lru_cache
-from typing import Any
 
 import structlog
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.ai import ru_validators as rv
-
 from app.config import settings
 from app.db.models import (
     Document,
@@ -72,6 +70,7 @@ def _run_async(coro):
         # We're already inside an event loop (e.g. called from async context via thread).
         # Use a thread-pool to create a new isolated loop.
         import concurrent.futures
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, coro).result()
 
@@ -140,11 +139,7 @@ def classify_document(self, document_id: str, force: bool = False, priority: boo
         _set_job_step(job, "classification", "running")
 
         metadata = doc.metadata_ or {}
-        if (
-            not force
-            and metadata.get("manual_doc_type_override")
-            and doc.doc_type is not None
-        ):
+        if not force and metadata.get("manual_doc_type_override") and doc.doc_type is not None:
             doc.doc_type_confidence = doc.doc_type_confidence or 1.0
             doc.status = DocumentStatus.extracting
             _set_job_step(job, "classification", "done")
@@ -184,7 +179,7 @@ def classify_document(self, document_id: str, force: bool = False, priority: boo
 
         # ── Early detection: drawing formats are unambiguous by extension ─────
         _drawing_extensions = frozenset({"dxf", "dwg", "step", "stp", "iges", "slddrw", "ipt"})
-        _file_ext = (doc.file_name.rsplit(".", 1)[-1].lower() if "." in doc.file_name else "")
+        _file_ext = doc.file_name.rsplit(".", 1)[-1].lower() if "." in doc.file_name else ""
         if _file_ext in _drawing_extensions:
             doc_type = "drawing"
             confidence = 1.0
@@ -210,6 +205,7 @@ def classify_document(self, document_id: str, force: bool = False, priority: boo
             try:
                 from app.ai.router import ai_router
                 from app.tasks.gpu_lock import gpu_single_flight
+
                 with gpu_single_flight(f"classify:{document_id}"):
                     result = _run_async(ai_router.classify_document(text))
                 doc_type = result.get("type", "other")
@@ -250,12 +246,17 @@ def classify_document(self, document_id: str, force: bool = False, priority: boo
             elif doc_type == "drawing":
                 try:
                     from app.tasks.drawing_analysis import _create_drawing_from_doc_sync
-                    ext = doc.file_name.rsplit(".", 1)[-1].lower() if "." in doc.file_name else "pdf"
+
+                    ext = (
+                        doc.file_name.rsplit(".", 1)[-1].lower() if "." in doc.file_name else "pdf"
+                    )
                     _create_drawing_from_doc_sync(
                         str(doc.id), doc.file_name, ext, doc.storage_path or ""
                     )
                 except Exception as exc:
-                    logger.warning("drawing_from_doc_failed", document_id=document_id, error=str(exc))
+                    logger.warning(
+                        "drawing_from_doc_failed", document_id=document_id, error=str(exc)
+                    )
                 doc.status = DocumentStatus.analyzed
                 _skip_remaining_steps(job, {"extraction", "sql_records", "memory_graph"})
                 _finish_job(job, "done")
@@ -297,6 +298,7 @@ def extract_invoice(self, document_id: str) -> dict:
     """
     logger.info("extract_start", document_id=document_id)
     import time
+
     _t0 = time.monotonic()
 
     with _get_sync_session() as db:
@@ -386,9 +388,8 @@ def extract_invoice(self, document_id: str) -> dict:
         # a larger, more capable local model).  This is text-based, so it works
         # for any document type and does not require re-rendering to images.
         _arith_errors = [e for e in validation_errors if e.get("error_type") == "arithmetic"]
-        _mandatory_missing = (
-            not extracted.get("invoice_number")
-            or not extracted.get("invoice_date")
+        _mandatory_missing = not extracted.get("invoice_number") or not extracted.get(
+            "invoice_date"
         )
 
         if _arith_errors or _mandatory_missing:
@@ -401,12 +402,11 @@ def extract_invoice(self, document_id: str) -> dict:
                 from app.ai.model_registry import ModelRegistry
                 from app.ai.schemas import AITask
                 from app.ai.task_routing import get_routing_for
+
                 _fb_chain = get_routing_for(AITask.INVOICE_OCR).models
                 _fb_key = _fb_chain[1] if len(_fb_chain) > 1 else None
                 if _fb_key:
-                    _reg = ModelRegistry.from_yaml(
-                        "backend/app/ai/config/model_registry.yaml"
-                    )
+                    _reg = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
                     _fb_cap = _reg.models.get(_fb_key)
                     if _fb_cap:
                         _fb_model = _fb_cap.provider_model
@@ -434,9 +434,8 @@ def extract_invoice(self, document_id: str) -> dict:
                     _fb_mandatory_ok = bool(
                         _fb_extracted.get("invoice_number") and _fb_extracted.get("invoice_date")
                     )
-                    _use_fb = (
-                        len(_fb_arith) < len(_arith_errors)
-                        or (_fb_mandatory_ok and _mandatory_missing)
+                    _use_fb = len(_fb_arith) < len(_arith_errors) or (
+                        _fb_mandatory_ok and _mandatory_missing
                     )
                     if _use_fb:
                         extracted = _fb_extracted
@@ -468,10 +467,9 @@ def extract_invoice(self, document_id: str) -> dict:
         # arithmetic errors or missing fields, re-extract from page images.
         # The vision model can read visual table layout (column positions) which
         # resolves discount-column confusion and other layout-dependent errors.
-        _is_visual = (
-            (doc.mime_type or "").startswith(("image/", "application/pdf"))
-            or (doc.file_name or "").lower().endswith((".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"))
-        )
+        _is_visual = (doc.mime_type or "").startswith(("image/", "application/pdf")) or (
+            doc.file_name or ""
+        ).lower().endswith((".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"))
 
         if (_arith_errors or _mandatory_missing) and _is_visual:
             logger.info(
@@ -489,12 +487,10 @@ def extract_invoice(self, document_id: str) -> dict:
                         e for e in vision_errors if e.get("error_type") == "arithmetic"
                     ]
                     _vision_mandatory_ok = bool(
-                        vision_result.get("invoice_number")
-                        and vision_result.get("invoice_date")
+                        vision_result.get("invoice_number") and vision_result.get("invoice_date")
                     )
-                    _use_vision = (
-                        len(_vision_arith_errors) < len(_arith_errors)
-                        or (_vision_mandatory_ok and _mandatory_missing)
+                    _use_vision = len(_vision_arith_errors) < len(_arith_errors) or (
+                        _vision_mandatory_ok and _mandatory_missing
                     )
                     if _use_vision:
                         extracted = vision_result
@@ -531,6 +527,7 @@ def extract_invoice(self, document_id: str) -> dict:
             content = _download_document(doc)
             if content:
                 from app.ai.pdf_processor import bind_bboxes, extract_pdf
+
                 pdf_data = extract_pdf(content, render_pages=False)
                 field_values = {fc.field_name: fc.value for fc in field_confs}
                 bbox_map = bind_bboxes(pdf_data.pages, field_values)
@@ -542,12 +539,12 @@ def extract_invoice(self, document_id: str) -> dict:
 
         # Save DocumentExtraction
         import hashlib as _hashlib
+
         from app.ai.extraction_prompts import EXTRACT_INVOICE_PROMPT as _EXT_PROMPT
         from app.ai.model_resolver import get_ocr_model as _get_ocr
+
         _ocr_cfg = _get_ocr()
-        _prompt_hash = _hashlib.sha1(
-            (_EXT_PROMPT + _ocr_cfg.model).encode()
-        ).hexdigest()[:8]
+        _prompt_hash = _hashlib.sha1((_EXT_PROMPT + _ocr_cfg.model).encode()).hexdigest()[:8]
         extraction = DocumentExtraction(
             document_id=doc.id,
             model_name=f"{_ocr_cfg.provider}/{_ocr_cfg.model}@{_prompt_hash}",
@@ -585,9 +582,7 @@ def extract_invoice(self, document_id: str) -> dict:
         _csum = _checksum_issues(extracted)
         doc.metadata_ = {**(doc.metadata_ or {}), "checksum_issues": _csum}
         if _csum:
-            logger.warning(
-                "extract_checksum_issues", document_id=document_id, issues=_csum
-            )
+            logger.warning("extract_checksum_issues", document_id=document_id, issues=_csum)
 
         # Queue auto-verification. A per-upload ``auto_verify`` flag wins; when
         # absent, fall back to the global ``auto_verify_enabled`` config (on by
@@ -597,6 +592,7 @@ def extract_invoice(self, document_id: str) -> dict:
         _auto_verify = doc_meta.get("auto_verify")
         if _auto_verify is None:
             from app.api.ai_settings import get_ai_config as _get_ai_cfg
+
             _auto_verify = bool(_get_ai_cfg().get("auto_verify_enabled", True))
         if _auto_verify:
             auto_verify_document.delay(document_id)
@@ -629,9 +625,7 @@ def extract_invoice(self, document_id: str) -> dict:
 
 
 #: Non-invoice document types that get structured field extraction.
-GENERIC_EXTRACTION_TYPES = frozenset(
-    {"letter", "contract", "act", "waybill", "commercial_offer"}
-)
+GENERIC_EXTRACTION_TYPES = frozenset({"letter", "contract", "act", "waybill", "commercial_offer"})
 
 
 @celery_app.task(name="app.tasks.extraction.extract_generic_fields", bind=True, max_retries=2)
@@ -701,9 +695,7 @@ def extract_generic_fields(self, document_id: str) -> dict:
                 conf = 0.6
             triples.append((name, value, max(0.0, min(1.0, conf))))
 
-        overall_confidence = (
-            sum(c for _, _, c in triples) / len(triples) if triples else 0.0
-        )
+        overall_confidence = sum(c for _, _, c in triples) / len(triples) if triples else 0.0
 
         # Bbox binding (only meaningful for PDFs with a text layer).
         bbox_map: dict[str, dict | None] = {}
@@ -713,9 +705,7 @@ def extract_generic_fields(self, document_id: str) -> dict:
                 from app.ai.pdf_processor import bind_bboxes, extract_pdf
 
                 pdf_data = extract_pdf(content, render_pages=False)
-                bbox_map = bind_bboxes(
-                    pdf_data.pages, {n: v for n, v, _ in triples}
-                )
+                bbox_map = bind_bboxes(pdf_data.pages, {n: v for n, v, _ in triples})
         except Exception as e:
             logger.warning("generic_bbox_binding_failed", error=str(e))
 
@@ -838,20 +828,22 @@ def _get_document_text(doc: Document) -> str:
 def _get_configured_ocr_model() -> str:
     """Read OCR model name from ai_config (via model_resolver). Legacy: returns only model name."""
     from app.ai.model_resolver import get_ocr_model
+
     return get_ocr_model().model
 
 
 def _get_configured_ocr_model_and_provider() -> tuple[str, str]:
     """Read OCR model + provider from ai_config (via model_resolver)."""
     from app.ai.model_resolver import get_ocr_model
+
     cfg = get_ocr_model()
     return cfg.model, cfg.provider
-
 
 
 def _ollama_vision_ocr(images_b64: list[str], ollama_model: str, prompt: str) -> str:
     """Call Ollama vision API with the model the user configured. Retries once on cold-start empty."""
     import time
+
     import httpx
 
     def _call() -> str:
@@ -890,7 +882,9 @@ def _ollama_vision_ocr(images_b64: list[str], ollama_model: str, prompt: str) ->
             logger.warning("ollama_vision_ocr_empty_retry", model=ollama_model, attempt=attempt)
         except Exception as e:  # noqa: BLE001
             last_err = e
-            logger.warning("ollama_vision_ocr_error_retry", model=ollama_model, attempt=attempt, error=str(e))
+            logger.warning(
+                "ollama_vision_ocr_error_retry", model=ollama_model, attempt=attempt, error=str(e)
+            )
         time.sleep(5)
     if last_err is not None:
         logger.warning("ollama_vision_ocr_failed", model=ollama_model, error=str(last_err))
@@ -910,10 +904,12 @@ def _llamacpp_vision_ocr(images_b64: list[str], prompt: str) -> str:
 
     content: list[dict] = [{"type": "text", "text": prompt}]
     for img in images_b64:
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{img}"},
-        })
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{img}"},
+            }
+        )
 
     try:
         resp = httpx.post(
@@ -949,8 +945,9 @@ _OCR_PROMPT = (
 def _preprocess_image(content: bytes) -> bytes:
     """Enhance image contrast/brightness for better OCR on dark or washed-out scans."""
     try:
-        from PIL import Image, ImageEnhance
         import io
+
+        from PIL import Image, ImageEnhance
 
         img = Image.open(io.BytesIO(content)).convert("RGB")
         img = ImageEnhance.Contrast(img).enhance(1.5)
@@ -1133,7 +1130,6 @@ def _ocr_pdf_content(content: bytes, doc: Document) -> str:
         return ""
 
 
-
 def _vision_extract_invoice(content: bytes) -> dict | None:
     """Extract invoice fields directly from page images using vision model.
 
@@ -1164,9 +1160,7 @@ def _vision_extract_invoice(content: bytes) -> dict | None:
 
         with fitz.open(stream=content, filetype="pdf") as pdf:
             for i in range(min(len(pdf), max_pages)):
-                pixmap = pdf[i].get_pixmap(
-                    matrix=fitz.Matrix(scale, scale), alpha=False
-                )
+                pixmap = pdf[i].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
                 image_bytes = _preprocess_ocr_page(pixmap.tobytes("png"))
                 images_b64.append(base64.b64encode(image_bytes).decode("ascii"))
     except Exception as exc:
@@ -1201,7 +1195,7 @@ def _vision_extract_invoice(content: bytes) -> dict | None:
                 logger.info("vision_extract_page_empty", page=page_idx + 1, model=model)
                 continue
 
-            m = _re.search(r'\{.*\}', raw, _re.DOTALL)
+            m = _re.search(r"\{.*\}", raw, _re.DOTALL)
             if m:
                 try:
                     page_result = _json.loads(m.group())
@@ -1210,7 +1204,9 @@ def _vision_extract_invoice(content: bytes) -> dict | None:
                 except _json.JSONDecodeError:
                     pass
 
-            logger.info("vision_extract_page_no_json", page=page_idx + 1, model=model, raw_len=len(raw))
+            logger.info(
+                "vision_extract_page_no_json", page=page_idx + 1, model=model, raw_len=len(raw)
+            )
 
         if page_result is None:
             continue
@@ -1238,6 +1234,7 @@ def _download_document(doc: Document) -> bytes | None:
     """Download document content from MinIO."""
     try:
         from app.storage import download_file
+
         return download_file(doc.storage_path)
     except Exception as e:
         logger.warning("document_download_failed", error=str(e), path=doc.storage_path)
@@ -1250,11 +1247,13 @@ def _apply_normalization_rules(db: Session, field_confs: list) -> list:
 
     from app.db.models import NormalizationRule, NormRuleStatus
 
-    active_rules = db.execute(
-        select(NormalizationRule).where(
-            NormalizationRule.status == NormRuleStatus.active
+    active_rules = (
+        db.execute(
+            select(NormalizationRule).where(NormalizationRule.status == NormRuleStatus.active)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     if not active_rules:
         return field_confs
@@ -1279,9 +1278,9 @@ def _apply_normalization_rules(db: Session, field_confs: list) -> list:
                     continue
 
             if new_val != old_val:
-                fc = fc._replace(value=new_val) if hasattr(fc, '_replace') else fc
+                fc = fc._replace(value=new_val) if hasattr(fc, "_replace") else fc
                 # For dataclass-like objects, update in place
-                if hasattr(fc, 'value'):
+                if hasattr(fc, "value"):
                     fc.value = new_val
                 fc.reason = "normalization_applied"
                 rule.apply_count += 1
@@ -1324,8 +1323,12 @@ def _compare_extractions(
     """
     MANDATORY = {"invoice_number", "invoice_date"}
     KEY_FIELDS = [
-        "invoice_number", "invoice_date", "total_amount", "currency",
-        "subtotal", "tax_amount",
+        "invoice_number",
+        "invoice_date",
+        "total_amount",
+        "currency",
+        "subtotal",
+        "tax_amount",
     ]
 
     # Mandatory fields must be present
@@ -1364,8 +1367,6 @@ def _compare_extractions(
     return score >= threshold, score
 
 
-
-
 def _upsert_party(db: Session, data: dict, role: str) -> uuid.UUID | None:
     """Create or update a Party from extracted supplier/buyer data. Returns party.id or None."""
     if not data:
@@ -1385,23 +1386,29 @@ def _upsert_party(db: Session, data: dict, role: str) -> uuid.UUID | None:
     def _by_inn():
         # Tolerate pre-existing duplicates: pick the oldest deterministically
         # instead of crashing with MultipleResultsFound.
-        return db.execute(
-            select(Party).where(Party.inn == inn).order_by(Party.created_at.asc())
-        ).scalars().first()
+        return (
+            db.execute(select(Party).where(Party.inn == inn).order_by(Party.created_at.asc()))
+            .scalars()
+            .first()
+        )
 
     party = _by_inn() if inn else None
 
     # Fall back to name match (covers suppliers without INN or OCR errors in INN)
     if party is None and name:
         normalized = name.strip().upper()
-        party = db.execute(
-            select(Party)
-            .where(
-                func.upper(func.trim(Party.name)) == normalized,
-                Party.role.in_([PartyRole.supplier, PartyRole.both, party_role]),
+        party = (
+            db.execute(
+                select(Party)
+                .where(
+                    func.upper(func.trim(Party.name)) == normalized,
+                    Party.role.in_([PartyRole.supplier, PartyRole.both, party_role]),
+                )
+                .order_by(Party.created_at.asc())
             )
-            .order_by(Party.created_at.asc())
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
 
     if party is None:
         from sqlalchemy.exc import IntegrityError
@@ -1463,7 +1470,11 @@ def _checksum_issues(extracted: dict) -> list[str]:
         issues.append("supplier.bank_bik")
     if supplier.get("bank_account") and bik and not rv.account_valid(supplier["bank_account"], bik):
         issues.append("supplier.bank_account")
-    if supplier.get("corr_account") and bik and not rv.corr_account_valid(supplier["corr_account"], bik):
+    if (
+        supplier.get("corr_account")
+        and bik
+        and not rv.corr_account_valid(supplier["corr_account"], bik)
+    ):
         issues.append("supplier.corr_account")
     return issues
 
@@ -1494,14 +1505,14 @@ def _cr_fallback(
         significant_fields_confidence,
         validate_arithmetic,
     )
-    from app.ai.router import ai_router
-    from app.tasks.gpu_lock import gpu_single_flight
 
     # Модель рассуждения — из маршрутизации задач, как и везде. Здесь она
     # читалась из ai_config, то есть из второго хранилища: правка назначения
     # доходила сюда только через зеркало, а оно обновляется лишь при
     # сохранении из интерфейса.
     from app.ai.model_resolver import get_reasoning_model
+    from app.ai.router import ai_router
+    from app.tasks.gpu_lock import gpu_single_flight
 
     _cr_cfg = get_reasoning_model(confidential=True)
     cr_model = _cr_cfg.model or ""
@@ -1530,9 +1541,7 @@ def _cr_fallback(
 
     try:
         with gpu_single_flight(f"cr_fallback:{document_id}"):
-            cr_data = _run_async(
-                ai_router.extract_invoice_with_model(text, cr_model, cr_provider)
-            )
+            cr_data = _run_async(ai_router.extract_invoice_with_model(text, cr_model, cr_provider))
     except Exception as exc:
         logger.warning("cr_fallback_failed", document_id=document_id, error=str(exc))
         return main_data, sig, checksum_problems
@@ -1613,7 +1622,9 @@ def auto_verify_document(self, document_id: str) -> dict:
     # ai_config, который для таких вещей и предназначен.
     cfg = get_ai_config()
 
-    _verify_cfg = get_verify_model() if get_routing_for(AITask.STRUCTURED_EXTRACTION).primary else None
+    _verify_cfg = (
+        get_verify_model() if get_routing_for(AITask.STRUCTURED_EXTRACTION).primary else None
+    )
     verify_model_1 = _verify_cfg.model if _verify_cfg else ""
 
     with _get_sync_session() as db:
@@ -1671,9 +1682,7 @@ def auto_verify_document(self, document_id: str) -> dict:
         sig = significant_fields_confidence(field_confs, threshold)
 
         present = {fc.field_name for fc in field_confs if fc.value is not None}
-        mandatory_missing = [
-            f for f in ("invoice_number", "invoice_date") if f not in present
-        ]
+        mandatory_missing = [f for f in ("invoice_number", "invoice_date") if f not in present]
 
         def _hold_for_review(reason: str, **extra) -> dict:
             doc.metadata_ = {
@@ -1711,18 +1720,36 @@ def auto_verify_document(self, document_id: str) -> dict:
             doc.metadata_ = {**(doc.metadata_ or {}), "checksum_issues": checksum_problems}
             # Try CR fallback before sending to review
             main_data, sig, checksum_problems = _cr_fallback(
-                main_data, text, sig, checksum_problems, cfg, threshold, document_id,
-                main_extraction, field_confs, db,
+                main_data,
+                text,
+                sig,
+                checksum_problems,
+                cfg,
+                threshold,
+                document_id,
+                main_extraction,
+                field_confs,
+                db,
             )
             if checksum_problems or sig.low_fields:
-                return _hold_for_review("checksum_validation_failed", checksum_issues=checksum_problems)
+                return _hold_for_review(
+                    "checksum_validation_failed", checksum_issues=checksum_problems
+                )
 
         # ── Confidence gate ──────────────────────────────────────────────────
         if sig.low_fields:
             # Try CR fallback before sending to review
             main_data, sig, checksum_problems = _cr_fallback(
-                main_data, text, sig, [], cfg, threshold, document_id,
-                main_extraction, field_confs, db,
+                main_data,
+                text,
+                sig,
+                [],
+                cfg,
+                threshold,
+                document_id,
+                main_extraction,
+                field_confs,
+                db,
             )
             if sig.low_fields:
                 return _hold_for_review("significant_fields_low_confidence")
@@ -1738,6 +1765,7 @@ def auto_verify_document(self, document_id: str) -> dict:
             logger.info("auto_verify_extracting", model=verify_model_1, document_id=document_id)
             from app.ai.router import ai_router
             from app.tasks.gpu_lock import gpu_single_flight
+
             try:
                 with gpu_single_flight(f"verify:{document_id}"):
                     extracted = _run_async(
@@ -1815,9 +1843,7 @@ def _invoice_memory_text(extracted: dict) -> str:
         if desc:
             parts.append(desc)
     if extracted.get("total_amount") is not None:
-        parts.append(
-            f"Итого: {extracted['total_amount']} {extracted.get('currency', 'RUB')}"
-        )
+        parts.append(f"Итого: {extracted['total_amount']} {extracted.get('currency', 'RUB')}")
     return ". ".join(parts)
 
 
@@ -1830,6 +1856,7 @@ def process_approved_document(self, document_id: str) -> dict:
     """
     logger.info("post_approve_start", document_id=document_id)
     import time
+
     from sqlalchemy import delete as _sa_delete
     from sqlalchemy import update as _sa_update
 
@@ -1895,9 +1922,7 @@ def process_approved_document(self, document_id: str) -> dict:
                 # receipt the warehouse flow already created. The receipt keeps its
                 # quantities; only the now-stale invoice-line link is cleared.
                 line_ids = (
-                    db.execute(
-                        select(InvoiceLine.id).where(InvoiceLine.invoice_id == existing.id)
-                    )
+                    db.execute(select(InvoiceLine.id).where(InvoiceLine.invoice_id == existing.id))
                     .scalars()
                     .all()
                 )
@@ -1917,6 +1942,7 @@ def process_approved_document(self, document_id: str) -> dict:
                 # Detach price-history entries (nullable FK) and drop derived payment
                 # schedules (non-nullable FK) so the invoice row can be replaced.
                 from app.db.models import PaymentSchedule, PriceHistoryEntry
+
                 db.execute(
                     _sa_update(PriceHistoryEntry)
                     .where(PriceHistoryEntry.invoice_id == existing.id)
@@ -1950,38 +1976,42 @@ def process_approved_document(self, document_id: str) -> dict:
             db.flush()
 
             for line_data in extracted.get("lines", []):
-                db.add(InvoiceLine(
-                    invoice_id=invoice.id,
-                    line_number=line_data.get("line_number", 0),
-                    sku=line_data.get("sku"),
-                    description=line_data.get("description"),
-                    quantity=line_data.get("quantity"),
-                    unit=line_data.get("unit"),
-                    unit_price=line_data.get("unit_price"),
-                    amount=line_data.get("amount"),
-                    pre_discount_amount=line_data.get("pre_discount_amount"),
-                    tax_rate=line_data.get("tax_rate"),
-                    tax_amount=line_data.get("tax_amount"),
-                    weight=line_data.get("weight"),
-                ))
+                db.add(
+                    InvoiceLine(
+                        invoice_id=invoice.id,
+                        line_number=line_data.get("line_number", 0),
+                        sku=line_data.get("sku"),
+                        description=line_data.get("description"),
+                        quantity=line_data.get("quantity"),
+                        unit=line_data.get("unit"),
+                        unit_price=line_data.get("unit_price"),
+                        amount=line_data.get("amount"),
+                        pre_discount_amount=line_data.get("pre_discount_amount"),
+                        tax_rate=line_data.get("tax_rate"),
+                        tax_amount=line_data.get("tax_amount"),
+                        weight=line_data.get("weight"),
+                    )
+                )
 
             _set_job_step(job, "sql_records", "done")
 
             # ── Auto-create pending warehouse receipt ────────────────────────────
             try:
-                invoice_lines = db.execute(
-                    select(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id)
-                ).scalars().all()
+                invoice_lines = (
+                    db.execute(select(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id))
+                    .scalars()
+                    .all()
+                )
                 if invoice_lines:
                     if db.get_bind().dialect.name == "postgresql":
                         from sqlalchemy import text as _text
+
                         next_val = db.execute(_text("SELECT nextval('receipt_seq')")).scalar()
                     else:
                         # SQLite (tests) has no sequences — count-based fallback.
                         next_val = (
-                            db.execute(
-                                select(func.count()).select_from(WarehouseReceipt)
-                            ).scalar() or 0
+                            db.execute(select(func.count()).select_from(WarehouseReceipt)).scalar()
+                            or 0
                         ) + 1
                     receipt_number = f"ПО-{next_val:04d}"
                     pending_receipt = WarehouseReceipt(
@@ -1995,14 +2025,16 @@ def process_approved_document(self, document_id: str) -> dict:
                     db.add(pending_receipt)
                     db.flush()
                     for il in invoice_lines:
-                        db.add(WarehouseReceiptLine(
-                            receipt_id=pending_receipt.id,
-                            description=il.description or "",
-                            quantity_expected=il.quantity or 0,
-                            quantity_received=il.quantity or 0,
-                            unit=il.unit or "шт",
-                            invoice_line_id=il.id,
-                        ))
+                        db.add(
+                            WarehouseReceiptLine(
+                                receipt_id=pending_receipt.id,
+                                description=il.description or "",
+                                quantity_expected=il.quantity or 0,
+                                quantity_received=il.quantity or 0,
+                                unit=il.unit or "шт",
+                                invoice_line_id=il.id,
+                            )
+                        )
                     logger.info(
                         "auto_pending_receipt_created",
                         document_id=document_id,
@@ -2015,16 +2047,21 @@ def process_approved_document(self, document_id: str) -> dict:
             # ── SupplierProfile update ───────────────────────────────────────────
             if supplier_party_id:
                 from app.db.models import SupplierProfile
+
                 profile = db.execute(
                     select(SupplierProfile).where(SupplierProfile.party_id == supplier_party_id)
                 ).scalar_one_or_none()
                 if not profile:
-                    profile = SupplierProfile(party_id=supplier_party_id, total_invoices=0, total_amount=0.0)
+                    profile = SupplierProfile(
+                        party_id=supplier_party_id, total_invoices=0, total_amount=0.0
+                    )
                     db.add(profile)
                 db.flush()
                 profile.total_invoices = (profile.total_invoices or 0) + 1
                 if invoice.total_amount:
-                    profile.total_amount = (profile.total_amount or 0.0) + float(invoice.total_amount)
+                    profile.total_amount = (profile.total_amount or 0.0) + float(
+                        invoice.total_amount
+                    )
                 if invoice.invoice_date:
                     # Compare tz-safely: a stored date read back without tzinfo (e.g.
                     # from a backend that drops it) must not raise against the
@@ -2064,8 +2101,11 @@ def process_approved_document(self, document_id: str) -> dict:
                 context_meta = None
         try:
             from app.domain.memory_builder import build_document_memory_sync
+
             _set_job_step(job, "memory_graph", "running")
-            memory_result = build_document_memory_sync(db, doc, text=text, context_meta=context_meta)
+            memory_result = build_document_memory_sync(
+                db, doc, text=text, context_meta=context_meta
+            )
             _set_job_step(job, "memory_graph", "done")
             logger.info(
                 "post_approve_memory_built",
@@ -2081,9 +2121,12 @@ def process_approved_document(self, document_id: str) -> dict:
         if invoice is not None:
             try:
                 from app.domain.memory_builder import build_supplier_invoice_memory_sync
+
                 build_supplier_invoice_memory_sync(db, invoice)
             except Exception as e:
-                logger.warning("post_approve_business_memory_failed", document_id=document_id, error=str(e))
+                logger.warning(
+                    "post_approve_business_memory_failed", document_id=document_id, error=str(e)
+                )
 
         # ── Step: embedding ──────────────────────────────────────────────────
         if _step_status(job, "embedding") != "done":
@@ -2094,6 +2137,7 @@ def process_approved_document(self, document_id: str) -> dict:
 
         # Dispatch embedding and anomaly tasks after commit
         from app.tasks.embedding import embed_document
+
         embed_document.delay(document_id)
         if invoice is not None:
             # Ф6.2 — supplier resolution as a fallback for what the document
@@ -2117,8 +2161,9 @@ def process_approved_document(self, document_id: str) -> dict:
             try:
                 from app.tasks.scenario_cron import dispatch_event
 
-                dispatch_event("invoice.approved", {"invoice_id": str(invoice.id),
-                                                    "document_id": document_id})
+                dispatch_event(
+                    "invoice.approved", {"invoice_id": str(invoice.id), "document_id": document_id}
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("scenario_event_dispatch_failed", error=str(exc))
 
@@ -2126,12 +2171,15 @@ def process_approved_document(self, document_id: str) -> dict:
             "post_approve_done",
             document_id=document_id,
             invoice_id=str(invoice.id) if invoice is not None else None,
-            supplier_party_id=str(invoice.supplier_id) if invoice is not None and invoice.supplier_id else None,
+            supplier_party_id=str(invoice.supplier_id)
+            if invoice is not None and invoice.supplier_id
+            else None,
             lines=len(extracted.get("lines", [])),
         )
 
         try:
             from app.core.metrics import extraction_duration_seconds
+
             extraction_duration_seconds.observe(time.monotonic() - _t0)
         except Exception as exc:
             # Раньше здесь стоял голый pass, и NameError (_t0 жил в другой
@@ -2147,26 +2195,31 @@ def process_approved_document(self, document_id: str) -> dict:
 def _normalize_company_name(name: str) -> str:
     """Strip common Russian legal form prefixes for fuzzy comparison."""
     import re as _re
+
     s = name.lower().strip()
     for pat in [
-        r'общество с ограниченной ответственностью',
-        r'акционерное общество',
-        r'закрытое акционерное общество',
-        r'публичное акционерное общество',
-        r'индивидуальный предприниматель',
-        r'\bооо\b', r'\bао\b', r'\bзао\b', r'\bпао\b', r'\bип\b', r'\bгуп\b', r'\bмуп\b',
+        r"общество с ограниченной ответственностью",
+        r"акционерное общество",
+        r"закрытое акционерное общество",
+        r"публичное акционерное общество",
+        r"индивидуальный предприниматель",
+        r"\bооо\b",
+        r"\bао\b",
+        r"\bзао\b",
+        r"\bпао\b",
+        r"\bип\b",
+        r"\bгуп\b",
+        r"\bмуп\b",
     ]:
-        s = _re.sub(pat, '', s)
-    s = _re.sub(r'["\'\«\»\(\)]', '', s)
-    return _re.sub(r'\s+', ' ', s).strip()
+        s = _re.sub(pat, "", s)
+    s = _re.sub(r'["\'\«\»\(\)]', "", s)
+    return _re.sub(r"\s+", " ", s).strip()
 
 
 def _llm_match_supplier_name(new_name: str, existing_parties: list) -> "uuid.UUID | None":
     """LLM-based supplier name deduplication. INN match should be tried first."""
     import json as _json
     import re as _re
-    import httpx
-    from app.config import settings
 
     if not new_name or not existing_parties:
         return None
@@ -2181,11 +2234,11 @@ def _llm_match_supplier_name(new_name: str, existing_parties: list) -> "uuid.UUI
     # LLM path — route through AIRouter (classification, local-only).
     names_list = "\n".join(f"{i + 1}. {p.name}" for i, p in enumerate(existing_parties[:30]))
     prompt = (
-        f'Task: decide if the new company is the same legal entity as any in the list.\n'
+        f"Task: decide if the new company is the same legal entity as any in the list.\n"
         f'New company: "{new_name}"\n'
-        f'Existing companies:\n{names_list}\n\n'
-        f'Rules: ООО = Общество с ограниченной ответственностью, '
-        f'АО = Акционерное общество, ЗАО = Закрытое АО, ИП = Индивидуальный предприниматель.\n'
+        f"Existing companies:\n{names_list}\n\n"
+        f"Rules: ООО = Общество с ограниченной ответственностью, "
+        f"АО = Акционерное общество, ЗАО = Закрытое АО, ИП = Индивидуальный предприниматель.\n"
         f'Answer JSON only: {{"match": true/false, "index": <1-based int or null>}}'
     )
     try:
@@ -2202,7 +2255,7 @@ def _llm_match_supplier_name(new_name: str, existing_parties: list) -> "uuid.UUI
             )
         )
         content = response.text or ""
-        m = _re.search(r'\{.*?\}', content, _re.DOTALL)
+        m = _re.search(r"\{.*?\}", content, _re.DOTALL)
         if m:
             result = _json.loads(m.group())
             if result.get("match") and result.get("index"):
@@ -2240,7 +2293,7 @@ def auto_supplier_task(self, document_id: str) -> dict:
     """
     logger.info("auto_supplier_start", document_id=document_id)
 
-    from app.db.models import Invoice, DocumentLink, SupplierProfile, Party, PartyRole
+    from app.db.models import DocumentLink, Invoice, Party, PartyRole
 
     with _get_sync_session() as db:
         doc = db.get(Document, uuid.UUID(document_id))
@@ -2293,21 +2346,32 @@ def auto_supplier_task(self, document_id: str) -> dict:
             # many mailboxes on one domain.
             sender = _document_sender_address(db, doc)
             if sender:
-                existing = db.execute(
-                    select(Party).where(Party.contact_email.ilike(sender))
-                    .order_by(Party.created_at.asc())
-                ).scalars().first()
+                existing = (
+                    db.execute(
+                        select(Party)
+                        .where(Party.contact_email.ilike(sender))
+                        .order_by(Party.created_at.asc())
+                    )
+                    .scalars()
+                    .first()
+                )
                 if existing:
                     party_id, matched_by = existing.id, "email_sender_exact"
                 else:
                     domain = sender.split("@")[-1]
                     if domain:
-                        by_domain = db.execute(
-                            select(Party).where(
-                                Party.contact_email.ilike(f"%@{domain}"),
-                                Party.role.in_(["supplier", "both"]),
-                            ).order_by(Party.created_at.asc())
-                        ).scalars().all()
+                        by_domain = (
+                            db.execute(
+                                select(Party)
+                                .where(
+                                    Party.contact_email.ilike(f"%@{domain}"),
+                                    Party.role.in_(["supplier", "both"]),
+                                )
+                                .order_by(Party.created_at.asc())
+                            )
+                            .scalars()
+                            .all()
+                        )
                         # Only when the domain identifies ONE supplier: a shared
                         # domain (mail.ru, gmail.com) must never bind an invoice
                         # to whoever happens to be first.
@@ -2338,26 +2402,31 @@ def auto_supplier_task(self, document_id: str) -> dict:
             supplier_phone = supplier_data.get("phone")
             if not party_id and supplier_phone and supplier_name:
                 import re as _re
+
                 def _norm(p: str) -> str:
                     d = _re.sub(r"\D", "", p)
                     return ("7" + d[1:]) if len(d) == 11 and d.startswith("8") else d
 
                 norm_phone = _norm(supplier_phone)
-                candidates_phone = db.execute(
-                    select(Party).where(Party.contact_phone.isnot(None))
-                ).scalars().all()
+                candidates_phone = (
+                    db.execute(select(Party).where(Party.contact_phone.isnot(None))).scalars().all()
+                )
                 for cp in candidates_phone:
                     if cp.contact_phone and _norm(cp.contact_phone) == norm_phone:
-                        if (supplier_name.lower() in cp.name.lower()
-                                or cp.name.lower() in supplier_name.lower()):
+                        if (
+                            supplier_name.lower() in cp.name.lower()
+                            or cp.name.lower() in supplier_name.lower()
+                        ):
                             party_id, matched_by = cp.id, "phone"
                             break
 
             # 4. LLM name match
             if not party_id and supplier_name:
-                candidates = db.execute(
-                    select(Party).where(Party.role.in_(["supplier", "both"])).limit(50)
-                ).scalars().all()
+                candidates = (
+                    db.execute(select(Party).where(Party.role.in_(["supplier", "both"])).limit(50))
+                    .scalars()
+                    .all()
+                )
                 party_id = _llm_match_supplier_name(supplier_name, list(candidates))
                 if party_id:
                     matched_by = "llm_name"
@@ -2388,9 +2457,11 @@ def auto_supplier_task(self, document_id: str) -> dict:
                 # Update any party fields that were missing
                 party = db.get(Party, party_id)
                 if party and supplier_data:
+
                     def _fill(attr, val):
                         if val and not getattr(party, attr, None):
                             setattr(party, attr, val)
+
                     _fill("kpp", supplier_data.get("kpp"))
                     _fill("address", supplier_data.get("address"))
                     _fill("bank_name", supplier_data.get("bank_name"))
@@ -2410,11 +2481,14 @@ def auto_supplier_task(self, document_id: str) -> dict:
                 meta["supplier_matched_by"] = matched_by
                 invoice.metadata_ = meta
                 from sqlalchemy.orm.attributes import flag_modified as _fm
+
                 _fm(invoice, "metadata_")
             db.commit()
             logger.info(
-                "auto_supplier_done", document_id=document_id,
-                party_id=str(party_id), matched_by=matched_by,
+                "auto_supplier_done",
+                document_id=document_id,
+                party_id=str(party_id),
+                matched_by=matched_by,
             )
             check_invoice_anomalies.delay(str(invoice.id))
             return {"party_id": str(party_id), "matched_by": matched_by}
@@ -2431,6 +2505,7 @@ def _parse_date(value: str | None) -> datetime | None:
         return None
     try:
         from datetime import date
+
         d = date.fromisoformat(value)
         return datetime(d.year, d.month, d.day, tzinfo=UTC)
     except (ValueError, TypeError):
@@ -2439,9 +2514,18 @@ def _parse_date(value: str | None) -> datetime | None:
 
 # Russian month names → month number (used in date parsing below).
 _RU_MONTHS = {
-    "января": "01", "февраля": "02", "марта": "03", "апреля": "04",
-    "мая": "05", "июня": "06", "июля": "07", "августа": "08",
-    "сентября": "09", "октября": "10", "ноября": "11", "декабря": "12",
+    "января": "01",
+    "февраля": "02",
+    "марта": "03",
+    "апреля": "04",
+    "мая": "05",
+    "июня": "06",
+    "июля": "07",
+    "августа": "08",
+    "сентября": "09",
+    "октября": "10",
+    "ноября": "11",
+    "декабря": "12",
 }
 
 
@@ -2464,16 +2548,16 @@ def _recover_mandatory_fields_from_text(text: str, extracted: dict) -> None:
     # The "Сч. №" abbreviation (bank account) is deliberately excluded — it lacks
     # a date phrase and uses the abbreviated "Сч." prefix.
     _INV_TITLE = re.compile(
-        r"Сч[её]т"                                    # Счёт / Счет
-        r"(?:\s*[-–]\s*|\s+)?"                        # optional separator
-        r"(?:фактура|договор|на\s+оплату)?"           # optional sub-type
-        r"\s*[№#]\s*"                                 # № or #
-        r"([A-Za-zА-Яа-я0-9\-/]+)"                   # NUMBER
-        r"(?:\s+от\s+"                                # " от "
+        r"Сч[её]т"  # Счёт / Счет
+        r"(?:\s*[-–]\s*|\s+)?"  # optional separator
+        r"(?:фактура|договор|на\s+оплату)?"  # optional sub-type
+        r"\s*[№#]\s*"  # № or #
+        r"([A-Za-zА-Яа-я0-9\-/]+)"  # NUMBER
+        r"(?:\s+от\s+"  # " от "
         r"(?:"
-        r"(\d{1,2})[./\-](\d{1,2})[./\-](\d{4})"   # DD.MM.YYYY
+        r"(\d{1,2})[./\-](\d{1,2})[./\-](\d{4})"  # DD.MM.YYYY
         r"|"
-        r"(\d{1,2})\s+([а-яёА-ЯЁ]+)\s+(\d{4})"     # D месяца YYYY
+        r"(\d{1,2})\s+([а-яёА-ЯЁ]+)\s+(\d{4})"  # D месяца YYYY
         r"))?",
         re.IGNORECASE,
     )
@@ -2538,7 +2622,10 @@ def _sanitize_extracted_amounts(extracted: dict) -> None:
                 extracted["subtotal"] = derived
                 logger.info(
                     "sanitize_subtotal_copy_fixed",
-                    was=s, derived=derived, total=g, tax=t,
+                    was=s,
+                    derived=derived,
+                    total=g,
+                    tax=t,
                 )
     except (TypeError, ValueError):
         pass
@@ -2560,6 +2647,7 @@ def _sanitize_numeric_field(value: str) -> str:
 def _try_sanitize_inn(inn_raw: str) -> str:
     """Return sanitized INN if it passes the checksum, else return original."""
     from app.ai import ru_validators as rv
+
     sanitized = _sanitize_numeric_field(inn_raw)
     if sanitized != inn_raw and rv.inn_valid(sanitized):
         logger.info("sanitize_inn_cyrillic", original=inn_raw, fixed=sanitized)
@@ -2644,12 +2732,12 @@ def check_invoice_anomalies(self, invoice_id: str) -> dict:
 async def _run_anomaly_check(invoice_id: str) -> dict:
     """Async inner: reuse detector logic from anomalies API."""
     from sqlalchemy.orm import selectinload as _selectinload
+
     from app.db.models import AnomalyCard, Invoice
     from app.db.session import _get_session_factory
 
     factory = _get_session_factory()
     async with factory() as db:
-        from sqlalchemy.ext.asyncio import AsyncSession
         from sqlalchemy import select as _select
 
         result = await db.execute(

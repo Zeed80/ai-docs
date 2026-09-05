@@ -64,7 +64,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -82,7 +82,7 @@ _STATE_TITLE = "idle_reflection_state"
 
 _DEFAULT_IDLE_THRESHOLD_MINUTES = 30
 _DEFAULT_MIN_INTERVAL_SECONDS = 3_600  # don't re-run more often than hourly even while idle
-_DEFAULT_CONNECTOR_BATCH_SIZE = 5      # cap outbound re-fetches per tick
+_DEFAULT_CONNECTOR_BATCH_SIZE = 5  # cap outbound re-fetches per tick
 
 
 class IdleReflectionSettings(BaseModel):
@@ -92,7 +92,9 @@ class IdleReflectionSettings(BaseModel):
     enabled: bool = True
     idle_threshold_minutes: int = Field(default=_DEFAULT_IDLE_THRESHOLD_MINUTES, ge=1)
     min_interval_seconds: int = Field(default=_DEFAULT_MIN_INTERVAL_SECONDS, ge=60)
-    connector_revalidation_batch_size: int = Field(default=_DEFAULT_CONNECTOR_BATCH_SIZE, ge=1, le=50)
+    connector_revalidation_batch_size: int = Field(
+        default=_DEFAULT_CONNECTOR_BATCH_SIZE, ge=1, le=50
+    )
 
 
 def _redis_get_settings() -> dict | None:
@@ -142,7 +144,7 @@ async def is_system_idle(db: AsyncSession, *, threshold_minutes: int) -> bool:
     most_recent = await db.scalar(select(func.max(User.last_seen_at)))
     if most_recent is None:
         return True
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=threshold_minutes)
+    cutoff = datetime.now(UTC) - timedelta(minutes=threshold_minutes)
     return most_recent < cutoff
 
 
@@ -162,7 +164,7 @@ async def _save_run_state(db: AsyncSession) -> None:
         select(MemoryFact).where(MemoryFact.kind == _STATE_KIND, MemoryFact.title == _STATE_TITLE)
     )
     fact = result.scalar_one_or_none()
-    payload = {"last_run_at": datetime.now(timezone.utc).isoformat()}
+    payload = {"last_run_at": datetime.now(UTC).isoformat()}
     if fact is None:
         fact = MemoryFact(
             scope="project",
@@ -189,12 +191,16 @@ async def consolidate_duplicate_proposed_facts(db: AsyncSession) -> int:
     newest) — same vocabulary supersede_learned_memory/process_work_learning
     already use, not a new one. Returns how many rows were superseded."""
     rows = (
-        await db.execute(
-            select(MemoryFact)
-            .where(MemoryFact.kind == "proposed_fact", MemoryFact.status == "active")
-            .order_by(MemoryFact.scope, MemoryFact.title, MemoryFact.created_at.desc())
+        (
+            await db.execute(
+                select(MemoryFact)
+                .where(MemoryFact.kind == "proposed_fact", MemoryFact.status == "active")
+                .order_by(MemoryFact.scope, MemoryFact.title, MemoryFact.created_at.desc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     groups: dict[tuple[str, str], list[MemoryFact]] = defaultdict(list)
     for fact in rows:
@@ -211,7 +217,10 @@ async def consolidate_duplicate_proposed_facts(db: AsyncSession) -> int:
             consolidated += 1
         logger.info(
             "idle_reflection_proposed_fact_consolidated",
-            scope=scope, title=title[:100], kept=str(newest.id), superseded=len(older),
+            scope=scope,
+            title=title[:100],
+            kept=str(newest.id),
+            superseded=len(older),
         )
     return consolidated
 
@@ -243,13 +252,17 @@ async def revalidate_due_connectors(db: AsyncSession, *, batch_size: int) -> dic
     )
 
     candidates = (
-        await db.execute(
-            select(SourceConnector)
-            .where(SourceConnector.revalidate_after.is_not(None))
-            .order_by(SourceConnector.revalidate_after.asc())
-            .limit(max(1, batch_size) * 3)  # due_for_revalidation is a Python-side time check
+        (
+            await db.execute(
+                select(SourceConnector)
+                .where(SourceConnector.revalidate_after.is_not(None))
+                .order_by(SourceConnector.revalidate_after.asc())
+                .limit(max(1, batch_size) * 3)  # due_for_revalidation is a Python-side time check
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     due = [c for c in candidates if due_for_revalidation(c)][: max(1, batch_size)]
 
     results = {"checked": 0, "revived_or_confirmed": 0, "still_failing": 0, "skipped_no_url": 0}
@@ -263,10 +276,16 @@ async def revalidate_due_connectors(db: AsyncSession, *, batch_size: int) -> dic
         try:
             from app.api.web_search import WebFetchRequest, fetch_page
 
-            page = await fetch_page(WebFetchRequest(url=sample_url, screenshot=False, max_chars=20000))
+            page = await fetch_page(
+                WebFetchRequest(url=sample_url, screenshot=False, max_chars=20000)
+            )
             success = page.status == 200 and len(page.text.strip()) >= _MIN_USEFUL_TEXT_LENGTH
         except Exception as exc:
-            logger.info("idle_reflection_revalidation_fetch_failed", connector=str(connector.id), error=str(exc))
+            logger.info(
+                "idle_reflection_revalidation_fetch_failed",
+                connector=str(connector.id),
+                error=str(exc),
+            )
         _apply_connector_outcome(connector, success=success)
         results["revived_or_confirmed" if success else "still_failing"] += 1
     await db.flush()
@@ -288,7 +307,7 @@ async def run_idle_reflection(db: AsyncSession, *, force: bool = False) -> dict[
         state = await _load_run_state(db)
         last_run_at = state.get("last_run_at") if state else None
         if last_run_at:
-            elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(last_run_at)).total_seconds()
+            elapsed = (datetime.now(UTC) - datetime.fromisoformat(last_run_at)).total_seconds()
             if elapsed < settings.min_interval_seconds:
                 return {"skipped": True, "reason": "interval_not_elapsed"}
         batch_size = settings.connector_revalidation_batch_size

@@ -51,21 +51,53 @@ class Assumption:
 
 # ГОСТ 23360: parallel key width b and shaft groove depth t1, by shaft diameter.
 _KEYWAY_BY_DIAMETER: tuple[tuple[float, float, float], ...] = (
-    (22.0, 6.0, 3.5), (30.0, 8.0, 4.0), (38.0, 10.0, 5.0), (44.0, 12.0, 5.0),
-    (50.0, 14.0, 5.5), (58.0, 16.0, 6.0), (65.0, 18.0, 7.0), (75.0, 20.0, 7.5),
-    (85.0, 22.0, 9.0), (95.0, 25.0, 9.0), (110.0, 28.0, 10.0), (130.0, 32.0, 11.0),
+    (22.0, 6.0, 3.5),
+    (30.0, 8.0, 4.0),
+    (38.0, 10.0, 5.0),
+    (44.0, 12.0, 5.0),
+    (50.0, 14.0, 5.5),
+    (58.0, 16.0, 6.0),
+    (65.0, 18.0, 7.0),
+    (75.0, 20.0, 7.5),
+    (85.0, 22.0, 9.0),
+    (95.0, 25.0, 9.0),
+    (110.0, 28.0, 10.0),
+    (130.0, 32.0, 11.0),
 )
 # ГОСТ 8724: coarse pitch for a metric thread of this nominal diameter.
 _COARSE_PITCH: dict[float, float] = {
-    6.0: 1.0, 8.0: 1.25, 10.0: 1.5, 12.0: 1.75, 14.0: 2.0, 16.0: 2.0, 18.0: 2.5,
-    20.0: 2.5, 22.0: 2.5, 24.0: 3.0, 27.0: 3.0, 30.0: 3.5, 33.0: 3.5, 36.0: 4.0,
-    39.0: 4.0, 42.0: 4.5, 45.0: 4.5, 48.0: 5.0, 52.0: 5.0, 56.0: 5.5, 60.0: 5.5,
-    64.0: 6.0, 68.0: 6.0,
+    6.0: 1.0,
+    8.0: 1.25,
+    10.0: 1.5,
+    12.0: 1.75,
+    14.0: 2.0,
+    16.0: 2.0,
+    18.0: 2.5,
+    20.0: 2.5,
+    22.0: 2.5,
+    24.0: 3.0,
+    27.0: 3.0,
+    30.0: 3.5,
+    33.0: 3.5,
+    36.0: 4.0,
+    39.0: 4.0,
+    42.0: 4.5,
+    45.0: 4.5,
+    48.0: 5.0,
+    52.0: 5.0,
+    56.0: 5.5,
+    60.0: 5.5,
+    64.0: 6.0,
+    68.0: 6.0,
 }
 # ГОСТ 10948: the chamfer sizes a drawing actually uses, by the diameter it is
 # cut on. Not a formula — a designer picks from the series, and so does this.
 _CHAMFER_BY_DIAMETER: tuple[tuple[float, float], ...] = (
-    (10.0, 0.6), (30.0, 1.0), (80.0, 1.6), (150.0, 2.0), (300.0, 2.5),
+    (10.0, 0.6),
+    (30.0, 1.0),
+    (80.0, 1.6),
+    (150.0, 2.0),
+    (300.0, 2.5),
 )
 
 
@@ -144,24 +176,24 @@ def _complete_lengths(
         remainder = overall - known
         index = missing[0]
         sections[index]["length_mm"] = round(remainder, 3)
-        assumptions.append(Assumption(
-            path=f"{body_path}.outer.{index}",
-            field="length_mm",
-            value=round(remainder, 3),
-            rule=(
-                f"остаток габарита {overall:g} мм за вычетом прочитанных "
-                f"ступеней ({known:g} мм)"
-            ),
-            origin="derived",
-        ))
+        assumptions.append(
+            Assumption(
+                path=f"{body_path}.outer.{index}",
+                field="length_mm",
+                value=round(remainder, 3),
+                rule=(
+                    f"остаток габарита {overall:g} мм за вычетом прочитанных "
+                    f"ступеней ({known:g} мм)"
+                ),
+                origin="derived",
+            )
+        )
 
 
 def _complete_features(body_path: str, body: dict, assumptions: list[Assumption]) -> None:
     """Feature sizes the standards fix, when the sheet only named the feature."""
     sections = [s for s in (body.get("outer") or []) if isinstance(s, dict)]
-    max_diameter = max(
-        (_num(s.get("diameter_mm")) or 0.0 for s in sections), default=0.0
-    )
+    max_diameter = max((_num(s.get("diameter_mm")) or 0.0 for s in sections), default=0.0)
 
     for index, chamfer in enumerate(body.get("chamfers") or []):
         if not isinstance(chamfer, dict) or _num(chamfer.get("size_mm")):
@@ -172,12 +204,14 @@ def _complete_features(body_path: str, body: dict, assumptions: list[Assumption]
             continue
         chamfer["size_mm"] = row[1]
         chamfer.setdefault("angle_deg", 45.0)
-        assumptions.append(Assumption(
-            path=f"{body_path}.chamfers.{index}",
-            field="size_mm",
-            value=row[1],
-            rule=f"ГОСТ 10948: фаска {row[1]:g}×45° для Ø{diameter:g} мм",
-        ))
+        assumptions.append(
+            Assumption(
+                path=f"{body_path}.chamfers.{index}",
+                field="size_mm",
+                value=row[1],
+                rule=f"ГОСТ 10948: фаска {row[1]:g}×45° для Ø{diameter:g} мм",
+            )
+        )
 
     for index, keyway in enumerate(body.get("keyways") or []):
         if not isinstance(keyway, dict):
@@ -188,20 +222,24 @@ def _complete_features(body_path: str, body: dict, assumptions: list[Assumption]
             continue
         if not _num(keyway.get("width_mm")):
             keyway["width_mm"] = row[1]
-            assumptions.append(Assumption(
-                path=f"{body_path}.keyways.{index}",
-                field="width_mm",
-                value=row[1],
-                rule=f"ГОСТ 23360: b={row[1]:g} мм для вала Ø{diameter:g} мм",
-            ))
+            assumptions.append(
+                Assumption(
+                    path=f"{body_path}.keyways.{index}",
+                    field="width_mm",
+                    value=row[1],
+                    rule=f"ГОСТ 23360: b={row[1]:g} мм для вала Ø{diameter:g} мм",
+                )
+            )
         if not _num(keyway.get("depth_mm")):
             keyway["depth_mm"] = row[2]
-            assumptions.append(Assumption(
-                path=f"{body_path}.keyways.{index}",
-                field="depth_mm",
-                value=row[2],
-                rule=f"ГОСТ 23360: t1={row[2]:g} мм для вала Ø{diameter:g} мм",
-            ))
+            assumptions.append(
+                Assumption(
+                    path=f"{body_path}.keyways.{index}",
+                    field="depth_mm",
+                    value=row[2],
+                    rule=f"ГОСТ 23360: t1={row[2]:g} мм для вала Ø{diameter:g} мм",
+                )
+            )
 
     for index, section in enumerate(sections):
         thread = section.get("thread")
@@ -216,12 +254,14 @@ def _complete_features(body_path: str, body: dict, assumptions: list[Assumption]
             # nominal is not standard, and a wrong pitch is a scrapped part.
             continue
         thread["pitch_mm"] = pitch
-        assumptions.append(Assumption(
-            path=f"{body_path}.outer.{index}.thread",
-            field="pitch_mm",
-            value=pitch,
-            rule=f"ГОСТ 8724: крупный шаг {pitch:g} мм для M{nominal:g}",
-        ))
+        assumptions.append(
+            Assumption(
+                path=f"{body_path}.outer.{index}.thread",
+                field="pitch_mm",
+                value=pitch,
+                rule=f"ГОСТ 8724: крупный шаг {pitch:g} мм для M{nominal:g}",
+            )
+        )
 
 
 def _record(spec: dict, assumptions: list[Assumption]) -> None:

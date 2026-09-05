@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-
 MODULE_PATH = Path(__file__).parents[3] / "infra/cad-kernel/step_canonical.py"
 SPEC = importlib.util.spec_from_file_location("step_canonical", MODULE_PATH)
 assert SPEC and SPEC.loader
@@ -12,13 +11,15 @@ SPEC.loader.exec_module(MODULE)
 
 
 def _step(data: bytes, *, timestamp: bytes = b"2026-08-14T00:00:00") -> bytes:
-    return b"".join((
-        b"ISO-10303-21;\nHEADER;\n",
-        b"FILE_NAME('model.step','" + timestamp + b"',(''),(''),'",
-        b"Open CASCADE STEP translator 7.9 42','','');\nENDSEC;\nDATA;\n",
-        data,
-        b"\nENDSEC;\nEND-ISO-10303-21;\n",
-    ))
+    return b"".join(
+        (
+            b"ISO-10303-21;\nHEADER;\n",
+            b"FILE_NAME('model.step','" + timestamp + b"',(''),(''),'",
+            b"Open CASCADE STEP translator 7.9 42','','');\nENDSEC;\nDATA;\n",
+            data,
+            b"\nENDSEC;\nEND-ISO-10303-21;\n",
+        )
+    )
 
 
 def test_canonical_step_normalizes_metadata_and_numeric_negative_zero():
@@ -42,9 +43,7 @@ def test_canonical_step_normalizes_metadata_and_numeric_negative_zero():
 
 
 def test_canonical_step_preserves_negative_nonzero_values():
-    canonical = MODULE.canonicalize_step_bytes(
-        _step(b"#1=CARTESIAN_POINT('',(-0.125,0.,1.));")
-    )
+    canonical = MODULE.canonicalize_step_bytes(_step(b"#1=CARTESIAN_POINT('',(-0.125,0.,1.));"))
 
     assert b"-0.125" in canonical
 

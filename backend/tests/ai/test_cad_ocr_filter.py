@@ -44,7 +44,7 @@ def test_punctuation_polluted_read_is_smudge():
 
 
 def test_single_char_needs_high_confidence():
-    assert _classify_ocr_region(_r("A", 90, w=16, h=24)) == "text"   # view letter
+    assert _classify_ocr_region(_r("A", 90, w=16, h=24)) == "text"  # view letter
     assert _classify_ocr_region(_r("8", 50, w=10, h=16)) == "smudge"  # noise
 
 

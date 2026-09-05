@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import copy
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 # Fields worth learning: everything the reader is asked to extract, keyed by
@@ -106,7 +106,7 @@ def build_correction_record(
     return {
         "generation_id": generation_id,
         "source_path": source_path,
-        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "recorded_at": datetime.now(UTC).isoformat(),
         "corrected_by": corrected_by,
         "reader_models": reader_models or [],
         "read_spec": read_spec,
@@ -157,19 +157,13 @@ def reconcile_corrected_feature_blockers(
     body = reconciled.get("main_view") or {}
 
     def positive_number(value: Any) -> bool:
-        return (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and value > 0
-        )
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
     if "axial_holes" in corrected_fields:
         unresolved = [
-            item for item in unresolved
-            if not (
-                "осевые отверстия" in item
-                or "осевой шаблон отверстий" in item
-            )
+            item
+            for item in unresolved
+            if not ("осевые отверстия" in item or "осевой шаблон отверстий" in item)
         ]
         for pattern in body.get("axial_holes") or []:
             if not isinstance(pattern, dict):
@@ -186,9 +180,7 @@ def reconcile_corrected_feature_blockers(
             ):
                 missing.append("глубина сверления")
             if missing:
-                designation = str(
-                    ((pattern.get("thread") or {}).get("designation")) or "резьба"
-                )
+                designation = str(((pattern.get("thread") or {}).get("designation")) or "резьба")
                 unresolved.append(
                     f"малые элементы: осевые отверстия {designation}: не определены "
                     + ", ".join(missing)
@@ -196,11 +188,11 @@ def reconcile_corrected_feature_blockers(
 
     if "chamfers" in corrected_fields:
         count_blockers = [
-            item for item in unresolved
-            if re.search(r"указано\s+\d+\s+фас", item, re.IGNORECASE)
+            item for item in unresolved if re.search(r"указано\s+\d+\s+фас", item, re.IGNORECASE)
         ]
         unresolved = [
-            item for item in unresolved
+            item
+            for item in unresolved
             if not (
                 re.search(r"указано\s+\d+\s+фас", item, re.IGNORECASE)
                 or re.search(r"фаска\s+\d+:\s+не задан", item, re.IGNORECASE)
@@ -225,9 +217,7 @@ def reconcile_corrected_feature_blockers(
         )
         actual = len(body.get("chamfers") or [])
         if expected and actual < expected:
-            unresolved.append(
-                f"малые элементы: указано {expected} фасок, локализовано {actual}"
-            )
+            unresolved.append(f"малые элементы: указано {expected} фасок, локализовано {actual}")
         for index, chamfer in enumerate(body.get("chamfers") or [], start=1):
             if not isinstance(chamfer, dict):
                 continue
@@ -236,9 +226,7 @@ def reconcile_corrected_feature_blockers(
                 isinstance(chamfer.get("at_z_mm"), (int, float))
                 or positive_number(chamfer.get("at_diameter_mm"))
             ):
-                unresolved.append(
-                    f"малые элементы: фаска {index}: не задано положение по Z или Ø"
-                )
+                unresolved.append(f"малые элементы: фаска {index}: не задано положение по Z или Ø")
 
     reconciled["unresolved"] = list(dict.fromkeys(unresolved))
     return reconciled
@@ -254,18 +242,14 @@ def corpus_summary(records: list[dict]) -> dict[str, Any]:
     confirmed: dict[str, int] = {}
     for record in records:
         diff = record.get("diff") or {}
-        for name in (diff.get("changed") or {}):
+        for name in diff.get("changed") or {}:
             per_field[name] = per_field.get(name, 0) + 1
         for name in diff.get("unchanged") or []:
             confirmed[name] = confirmed.get(name, 0) + 1
     return {
         "records": len(records),
-        "corrections_per_field": dict(sorted(
-            per_field.items(), key=lambda item: -item[1]
-        )),
-        "confirmations_per_field": dict(sorted(
-            confirmed.items(), key=lambda item: -item[1]
-        )),
+        "corrections_per_field": dict(sorted(per_field.items(), key=lambda item: -item[1])),
+        "confirmations_per_field": dict(sorted(confirmed.items(), key=lambda item: -item[1])),
         "sheets_with_any_correction": sum(
             1 for r in records if (r.get("diff") or {}).get("changed_count")
         ),

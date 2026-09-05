@@ -65,12 +65,28 @@ INVOICE = {
         "kpp": "503601001",
     },
     "lines": [
-        {"line_number": 1, "sku": "A-1", "description": "Фреза концевая Ø10",
-         "quantity": 10, "unit": "шт", "unit_price": 1500.0, "amount": 15000.0,
-         "tax_rate": 0.2, "tax_amount": 3000.0},
-        {"line_number": 2, "sku": "B-2", "description": "Сверло спиральное Ø5",
-         "quantity": 5, "unit": "шт", "unit_price": 800.0, "amount": 4000.0,
-         "tax_rate": 0.2, "tax_amount": 800.0},
+        {
+            "line_number": 1,
+            "sku": "A-1",
+            "description": "Фреза концевая Ø10",
+            "quantity": 10,
+            "unit": "шт",
+            "unit_price": 1500.0,
+            "amount": 15000.0,
+            "tax_rate": 0.2,
+            "tax_amount": 3000.0,
+        },
+        {
+            "line_number": 2,
+            "sku": "B-2",
+            "description": "Сверло спиральное Ø5",
+            "quantity": 5,
+            "unit": "шт",
+            "unit_price": 800.0,
+            "amount": 4000.0,
+            "tax_rate": 0.2,
+            "tax_amount": 800.0,
+        },
     ],
     "subtotal": 19000.0,
     "tax_amount": 3800.0,
@@ -78,12 +94,12 @@ INVOICE = {
 }
 
 INVOICE_TEXT = (
-    'Счёт № УТ-2834 от 09.08.2024\n'
+    "Счёт № УТ-2834 от 09.08.2024\n"
     'Поставщик: ООО "НВС Компани", ИНН 7707083893, КПП 770701001\n'
     'Покупатель: АО "ПТС", ИНН 5036167355\n'
-    'Фреза концевая Ø10 — 10 шт — 1500,00\n'
-    'Сверло спиральное Ø5 — 5 шт — 800,00\n'
-    'Итого без НДС: 19000,00  НДС 20%: 3800,00  Всего к оплате: 22800,00\n'
+    "Фреза концевая Ø10 — 10 шт — 1500,00\n"
+    "Сверло спиральное Ø5 — 5 шт — 800,00\n"
+    "Итого без НДС: 19000,00  НДС 20%: 3800,00  Всего к оплате: 22800,00\n"
 )
 
 
@@ -97,7 +113,9 @@ def _make_engine():
     return engine
 
 
-def _seed_document(engine, structured: dict, *, file_name="invoice.pdf", file_hash=None) -> uuid.UUID:
+def _seed_document(
+    engine, structured: dict, *, file_name="invoice.pdf", file_hash=None
+) -> uuid.UUID:
     with Session(engine) as s:
         doc = Document(
             file_name=file_name,
@@ -109,13 +127,15 @@ def _seed_document(engine, structured: dict, *, file_name="invoice.pdf", file_ha
         )
         s.add(doc)
         s.flush()
-        s.add(DocumentExtraction(
-            document_id=doc.id,
-            model_name="qwen3.5:9b/ollama",
-            raw_output=structured,
-            structured_data=structured,
-            overall_confidence=0.99,
-        ))
+        s.add(
+            DocumentExtraction(
+                document_id=doc.id,
+                model_name="qwen3.5:9b/ollama",
+                raw_output=structured,
+                structured_data=structured,
+                overall_confidence=0.99,
+            )
+        )
         s.commit()
         return doc.id
 
@@ -146,7 +166,9 @@ def pipeline_env(monkeypatch):
     monkeypatch.setattr(ex, "_get_sync_session", lambda: Session(engine))
     monkeypatch.setattr(ex, "_get_document_text", lambda doc: INVOICE_TEXT)
     monkeypatch.setattr(embed_document, "delay", lambda doc_id, *a, **k: embed_calls.append(doc_id))
-    monkeypatch.setattr(ex.check_invoice_anomalies, "delay", lambda inv_id, *a, **k: anomaly_calls.append(inv_id))
+    monkeypatch.setattr(
+        ex.check_invoice_anomalies, "delay", lambda inv_id, *a, **k: anomaly_calls.append(inv_id)
+    )
 
     return engine, embed_calls, anomaly_calls
 
@@ -158,6 +180,7 @@ def _run(doc_id: uuid.UUID) -> dict:
 
 
 # ── Tests ────────────────────────────────────────────────────────────────────
+
 
 def test_post_approval_fills_sql_records(pipeline_env):
     engine, embed_calls, anomaly_calls = pipeline_env
@@ -183,9 +206,7 @@ def test_post_approval_fills_sql_records(pipeline_env):
         assert inv.buyer_id == parties["buyer"].id
 
         # Line items copied verbatim
-        lines = s.execute(
-            select(InvoiceLine).order_by(InvoiceLine.line_number)
-        ).scalars().all()
+        lines = s.execute(select(InvoiceLine).order_by(InvoiceLine.line_number)).scalars().all()
         assert len(lines) == 2
         assert lines[0].description == "Фреза концевая Ø10"
         assert lines[0].quantity == 10 and lines[0].unit_price == 1500.0
@@ -238,9 +259,7 @@ def test_party_deduplicated_by_inn_across_invoices(pipeline_env):
     _run(doc2)
 
     with Session(engine) as s:
-        suppliers = s.execute(
-            select(Party).where(Party.inn == "7707083893")
-        ).scalars().all()
+        suppliers = s.execute(select(Party).where(Party.inn == "7707083893")).scalars().all()
         assert len(suppliers) == 1, "supplier must be deduplicated by ИНН"
         # Both invoices persisted, sharing the one supplier party
         invoices = s.execute(select(Invoice)).scalars().all()

@@ -79,7 +79,11 @@ def evaluate_constraints(ir: CadIR) -> list[ConstraintResult]:
                 segment = ir.entity_by_id(c.entity_ids[0])
                 if not isinstance(segment, Segment):
                     raise ValueError("ограничение применимо только к отрезку")
-                residual = abs(segment.p2.y - segment.p1.y) if c.kind == "horizontal" else abs(segment.p2.x - segment.p1.x)
+                residual = (
+                    abs(segment.p2.y - segment.p1.y)
+                    if c.kind == "horizontal"
+                    else abs(segment.p2.x - segment.p1.x)
+                )
             elif c.kind in ("parallel", "perpendicular") and len(c.entity_ids) == 2:
                 first, second = _entities(ir, c.entity_ids)
                 if not isinstance(first, Segment) or not isinstance(second, Segment):
@@ -96,7 +100,9 @@ def evaluate_constraints(ir: CadIR) -> list[ConstraintResult]:
                 # fixed, start/end sweep untouched) — same check, widened.
                 if not isinstance(first, (Circle, Arc)) or not isinstance(second, (Circle, Arc)):
                     raise ValueError("соосность применима только к окружностям/дугам")
-                residual = math.hypot(first.center.x - second.center.x, first.center.y - second.center.y)
+                residual = math.hypot(
+                    first.center.x - second.center.x, first.center.y - second.center.y
+                )
             elif c.kind == "equal" and len(c.entity_ids) == 2:
                 first, second = _entities(ir, c.entity_ids)
                 if isinstance(first, Segment) and isinstance(second, Segment):
@@ -107,7 +113,9 @@ def evaluate_constraints(ir: CadIR) -> list[ConstraintResult]:
                     raise ValueError("равенство требует двух отрезков или двух окружностей/дуг")
             elif c.kind == "distance" and len(c.refs) == 2 and target is not None:
                 a, b = (_point(ir, ref.entity_id, ref.point) for ref in c.refs)
-                residual = math.inf if not a or not b else abs(math.hypot(a.x - b.x, a.y - b.y) - target)
+                residual = (
+                    math.inf if not a or not b else abs(math.hypot(a.x - b.x, a.y - b.y) - target)
+                )
             elif c.kind in ("radius", "diameter") and len(c.entity_ids) == 1 and target is not None:
                 circle = ir.entity_by_id(c.entity_ids[0])
                 if not isinstance(circle, (Circle, Arc)):
@@ -127,7 +135,9 @@ def evaluate_constraints(ir: CadIR) -> list[ConstraintResult]:
         except ValueError as exc:
             results.append(ConstraintResult(c.id, False, str(exc), ids))
             continue
-        results.append(ConstraintResult(c.id, residual <= c.tolerance, f"остаток {residual:.6g}", ids))
+        results.append(
+            ConstraintResult(c.id, residual <= c.tolerance, f"остаток {residual:.6g}", ids)
+        )
     return results
 
 
@@ -167,7 +177,9 @@ def _build_system(ir: CadIR, active: list[GeometricConstraint], *, only: set[str
             # to move" rule every other entity here already follows).
             for name in ("center.x", "center.y", "radius"):
                 variables.append((entity.id, name))
-                values.append(entity.radius if name == "radius" else getattr(entity.center, name[-1]))
+                values.append(
+                    entity.radius if name == "radius" else getattr(entity.center, name[-1])
+                )
 
     index = {key: position for position, key in enumerate(variables)}
 
@@ -192,7 +204,9 @@ def _build_system(ir: CadIR, active: list[GeometricConstraint], *, only: set[str
         return data if all(item is not None for item in data) else None
 
     def target(constraint: GeometricConstraint) -> float | None:
-        return parameter_values.get(constraint.parameter) if constraint.parameter else constraint.value
+        return (
+            parameter_values.get(constraint.parameter) if constraint.parameter else constraint.value
+        )
 
     def residuals(vector) -> list[float]:
         out: list[float] = []
@@ -200,42 +214,66 @@ def _build_system(ir: CadIR, active: list[GeometricConstraint], *, only: set[str
             try:
                 if c.kind == "coincident" and len(c.refs) == 2:
                     a, b = point(vector, c.refs[0]), point(vector, c.refs[1])
-                    if not a or not b: raise ValueError
+                    if not a or not b:
+                        raise ValueError
                     out.extend((a[0] - b[0], a[1] - b[1]))
                 elif c.kind in ("horizontal", "vertical") and len(c.entity_ids) == 1:
                     s = segment(vector, c.entity_ids[0])
-                    if not s: raise ValueError
+                    if not s:
+                        raise ValueError
                     out.append(s[3] - s[1] if c.kind == "horizontal" else s[2] - s[0])
                 elif c.kind in ("parallel", "perpendicular", "angle") and len(c.entity_ids) == 2:
                     a, b = segment(vector, c.entity_ids[0]), segment(vector, c.entity_ids[1])
-                    if not a or not b: raise ValueError
+                    if not a or not b:
+                        raise ValueError
                     ax, ay, bx, by = a[2] - a[0], a[3] - a[1], b[2] - b[0], b[3] - b[1]
                     scale = max(math.hypot(ax, ay) * math.hypot(bx, by), 1e-9)
-                    if c.kind == "parallel": out.append((ax * by - ay * bx) / scale)
-                    elif c.kind == "perpendicular": out.append((ax * bx + ay * by) / scale)
+                    if c.kind == "parallel":
+                        out.append((ax * by - ay * bx) / scale)
+                    elif c.kind == "perpendicular":
+                        out.append((ax * bx + ay * by) / scale)
                     else:
                         wanted = target(c)
-                        if wanted is None: raise ValueError
+                        if wanted is None:
+                            raise ValueError
                         angle = math.degrees(math.atan2(ax * by - ay * bx, ax * bx + ay * by))
                         out.append((angle - wanted) / 10.0)
                 elif c.kind == "concentric" and len(c.entity_ids) == 2:
                     a, b = circle(vector, c.entity_ids[0]), circle(vector, c.entity_ids[1])
-                    if not a or not b: raise ValueError
+                    if not a or not b:
+                        raise ValueError
                     out.extend((a[0] - b[0], a[1] - b[1]))
                 elif c.kind == "equal" and len(c.entity_ids) == 2:
-                    a_segment, b_segment = segment(vector, c.entity_ids[0]), segment(vector, c.entity_ids[1])
-                    a_circle, b_circle = circle(vector, c.entity_ids[0]), circle(vector, c.entity_ids[1])
+                    a_segment, b_segment = (
+                        segment(vector, c.entity_ids[0]),
+                        segment(vector, c.entity_ids[1]),
+                    )
+                    a_circle, b_circle = (
+                        circle(vector, c.entity_ids[0]),
+                        circle(vector, c.entity_ids[1]),
+                    )
                     if a_segment and b_segment:
-                        out.append(math.hypot(a_segment[2] - a_segment[0], a_segment[3] - a_segment[1]) - math.hypot(b_segment[2] - b_segment[0], b_segment[3] - b_segment[1]))
-                    elif a_circle and b_circle: out.append(a_circle[2] - b_circle[2])
-                    else: raise ValueError
+                        out.append(
+                            math.hypot(a_segment[2] - a_segment[0], a_segment[3] - a_segment[1])
+                            - math.hypot(b_segment[2] - b_segment[0], b_segment[3] - b_segment[1])
+                        )
+                    elif a_circle and b_circle:
+                        out.append(a_circle[2] - b_circle[2])
+                    else:
+                        raise ValueError
                 elif c.kind == "distance" and len(c.refs) == 2 and target(c) is not None:
                     a, b = point(vector, c.refs[0]), point(vector, c.refs[1])
-                    if not a or not b: raise ValueError
+                    if not a or not b:
+                        raise ValueError
                     out.append(math.hypot(a[0] - b[0], a[1] - b[1]) - target(c))
-                elif c.kind in ("radius", "diameter") and len(c.entity_ids) == 1 and target(c) is not None:
+                elif (
+                    c.kind in ("radius", "diameter")
+                    and len(c.entity_ids) == 1
+                    and target(c) is not None
+                ):
                     item = circle(vector, c.entity_ids[0])
-                    if not item: raise ValueError
+                    if not item:
+                        raise ValueError
                     out.append((item[2] if c.kind == "radius" else item[2] * 2) - target(c))
                 else:
                     raise ValueError
@@ -266,7 +304,13 @@ def solve_constraints(ir: CadIR, *, max_nfev: int = 200) -> SolveResult:
 
     variables, values, residuals = _build_system(ir, active)
     if not variables:
-        return SolveResult(False, math.inf, 0, "Нет редактируемой геометрии для ограничений", tuple(evaluate_constraints(ir)))
+        return SolveResult(
+            False,
+            math.inf,
+            0,
+            "Нет редактируемой геометрии для ограничений",
+            tuple(evaluate_constraints(ir)),
+        )
 
     solved = least_squares(residuals, values, max_nfev=max_nfev, xtol=1e-10, ftol=1e-10, gtol=1e-10)
     for (entity_id, name), value in zip(variables, solved.x, strict=True):

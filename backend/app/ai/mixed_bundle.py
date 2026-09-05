@@ -12,7 +12,6 @@ from pathlib import PurePosixPath
 from app.domain.emg_predicates import PREDICATE
 from app.domain.engineering_model_graph import EngineeringModelGraph
 
-
 _EXPECTED_SUFFIXES = {
     "production_step": {".step", ".stp"},
     "production_ifc": {".ifc"},
@@ -117,17 +116,21 @@ def build_mixed_artifact_bundle(
                 entry["report_archive_path"] = report_archive
                 entry["report_sha256"] = hashlib.sha256(report_content).hexdigest()
             artifact_entries.append(entry)
-        production_targets = [target for target in member.build_targets if target.id == "production"]
+        production_targets = [
+            target for target in member.build_targets if target.id == "production"
+        ]
         if len(production_targets) != 1:
             missing.append({"member": alias, "reason": "production_target_missing"})
             continue
         expected = _EXPECTED_SUFFIXES.get(production_targets[0].kind, set())
         if expected and not found_suffixes.intersection(expected):
-            missing.append({
-                "member": alias,
-                "reason": "required_artifact_missing",
-                "expected_suffixes": sorted(expected),
-            })
+            missing.append(
+                {
+                    "member": alias,
+                    "reason": "required_artifact_missing",
+                    "expected_suffixes": sorted(expected),
+                }
+            )
     manifest = {
         "schema_version": "emg-bundle/1.0",
         "mode": mode,

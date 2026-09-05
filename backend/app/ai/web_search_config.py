@@ -125,15 +125,12 @@ def _env_config() -> dict:
         "endpoint": os.getenv("WEB_SEARCH_ENDPOINT", "").strip() or None,
         # Env key is plaintext; it is not persisted back encrypted unless saved.
         "_api_key_plain": os.getenv("WEB_SEARCH_API_KEY", "").strip(),
-        "fallback_provider": os.getenv("WEB_SEARCH_FALLBACK_PROVIDER", "").strip().lower()
-        or None,
+        "fallback_provider": os.getenv("WEB_SEARCH_FALLBACK_PROVIDER", "").strip().lower() or None,
         "fallback_endpoint": os.getenv("WEB_SEARCH_FALLBACK_ENDPOINT", "").strip() or None,
         "_fallback_api_key_plain": os.getenv("WEB_SEARCH_FALLBACK_API_KEY", "").strip(),
         "browser_url": os.getenv("WEB_BROWSER_URL", "").strip() or _DEFAULT_BROWSER_URL,
         "searxng_engines": [
-            e.strip()
-            for e in os.getenv("WEB_SEARCH_SEARXNG_ENGINES", "").split(",")
-            if e.strip()
+            e.strip() for e in os.getenv("WEB_SEARCH_SEARXNG_ENGINES", "").split(",") if e.strip()
         ],
     }
 
@@ -155,8 +152,7 @@ def get_config() -> WebSearchConfig:
         )
     api_key = secret_box.decrypt(stored.get("api_key_enc")) or env["_api_key_plain"]
     fb_key = (
-        secret_box.decrypt(stored.get("fallback_api_key_enc"))
-        or env["_fallback_api_key_plain"]
+        secret_box.decrypt(stored.get("fallback_api_key_enc")) or env["_fallback_api_key_plain"]
     )
     return WebSearchConfig(
         provider=stored.get("provider") or env["provider"],

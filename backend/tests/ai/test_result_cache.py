@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.ai import result_cache
-from app.ai import agent_loop
+from app.ai import agent_loop, result_cache
 from app.ai.agent_config import BuiltinAgentConfig
 
 
@@ -37,9 +36,14 @@ def test_cache_roundtrip_with_fake_redis(monkeypatch):
 async def test_fast_intent_cache_hit_skips_skill(monkeypatch):
     """A cached count answer is returned without calling the skill."""
     config = BuiltinAgentConfig(
-        enabled=True, model="mock", provider="ollama",
-        backend_url="http://backend", ollama_url="http://ollama",
-        memory_enabled=False, audit_enabled=False, context_compression_enabled=False,
+        enabled=True,
+        model="mock",
+        provider="ollama",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
+        memory_enabled=False,
+        audit_enabled=False,
+        context_compression_enabled=False,
     )
     monkeypatch.setattr(agent_loop, "get_builtin_agent_config", lambda: config)
 
@@ -54,6 +58,7 @@ async def test_fast_intent_cache_hit_skips_skill(monkeypatch):
 
     # Pre-seed the cache (method re-imports cache_get from the module on call).
     from app.ai import result_cache as rc
+
     monkeypatch.setattr(rc, "cache_get", lambda k: "Всего счетов: 99.")
 
     async def fail_skill(*a, **k):

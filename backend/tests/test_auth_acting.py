@@ -62,7 +62,9 @@ def _patched_session_factory(test_engine, monkeypatch):
 async def test_human_caller_is_returned_unchanged():
     """The common case: a real human's own token, not the agent's key. No DB
     lookup should even be attempted — request.headers is never consulted."""
-    human = UserInfo(sub="local:alice", email="a@example.com", name="Alice", preferred_username="alice")
+    human = UserInfo(
+        sub="local:alice", email="a@example.com", name="Alice", preferred_username="alice"
+    )
     request = MagicMock()
     result = await get_effective_user(request, human)
     assert result is human
@@ -94,7 +96,9 @@ async def test_agent_service_with_acting_header_resolves_to_that_human(_patched_
         )
         await db.commit()
 
-    result = await get_effective_user(_request({"x-acting-user": "local:bob"}), _agent_service_user())
+    result = await get_effective_user(
+        _request({"x-acting-user": "local:bob"}), _agent_service_user()
+    )
 
     assert result.sub == "local:bob"
     assert result.roles == [UserRole.engineer]
@@ -102,8 +106,10 @@ async def test_agent_service_with_acting_header_resolves_to_that_human(_patched_
 
 
 @pytest.mark.asyncio
-async def test_agent_service_acting_for_unknown_user_stays_the_service_account(_patched_session_factory):
-    """"Unknown/inactive actor -> stay on the service account rather than
+async def test_agent_service_acting_for_unknown_user_stays_the_service_account(
+    _patched_session_factory,
+):
+    """ "Unknown/inactive actor -> stay on the service account rather than
     inventing an identity" (the module's own stated contract)."""
     result = await get_effective_user(
         _request({"x-acting-user": "local:no-such-user"}), _agent_service_user()
@@ -112,7 +118,9 @@ async def test_agent_service_acting_for_unknown_user_stays_the_service_account(_
 
 
 @pytest.mark.asyncio
-async def test_agent_service_acting_for_deactivated_user_stays_the_service_account(_patched_session_factory):
+async def test_agent_service_acting_for_deactivated_user_stays_the_service_account(
+    _patched_session_factory,
+):
     factory = _patched_session_factory
     async with factory() as db:
         db.add(
@@ -127,7 +135,9 @@ async def test_agent_service_acting_for_deactivated_user_stays_the_service_accou
         )
         await db.commit()
 
-    result = await get_effective_user(_request({"x-acting-user": "local:carol"}), _agent_service_user())
+    result = await get_effective_user(
+        _request({"x-acting-user": "local:carol"}), _agent_service_user()
+    )
 
     assert result.sub == AGENT_SERVICE_SUB
 
@@ -136,6 +146,8 @@ async def test_agent_service_acting_for_deactivated_user_stays_the_service_accou
 async def test_acting_header_ignored_when_caller_is_not_the_agent_service():
     """X-Acting-User is only honoured for the agent-service key — any other
     caller can't impersonate anyone by sending it (module docstring)."""
-    human = UserInfo(sub="local:alice", email="a@example.com", name="Alice", preferred_username="alice")
+    human = UserInfo(
+        sub="local:alice", email="a@example.com", name="Alice", preferred_username="alice"
+    )
     result = await get_effective_user(_request({"x-acting-user": "local:bob"}), human)
     assert result.sub == "local:alice"

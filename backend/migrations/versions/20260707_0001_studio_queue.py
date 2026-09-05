@@ -50,11 +50,18 @@ def upgrade() -> None:
     if "image_generations" in tables:
         cols = {c["name"] for c in insp.get_columns("image_generations")}
         if "accepted_by" not in cols:
-            op.add_column("image_generations", sa.Column("accepted_by", sa.String(255), nullable=True))
+            op.add_column(
+                "image_generations", sa.Column("accepted_by", sa.String(255), nullable=True)
+            )
         if "accepted_at" not in cols:
-            op.add_column("image_generations", sa.Column("accepted_at", sa.DateTime(timezone=True), nullable=True))
+            op.add_column(
+                "image_generations",
+                sa.Column("accepted_at", sa.DateTime(timezone=True), nullable=True),
+            )
         if "quality_rating" not in cols:
-            op.add_column("image_generations", sa.Column("quality_rating", sa.SmallInteger(), nullable=True))
+            op.add_column(
+                "image_generations", sa.Column("quality_rating", sa.SmallInteger(), nullable=True)
+            )
         if "issue_tags" not in cols:
             op.add_column(
                 "image_generations",
@@ -107,8 +114,18 @@ def upgrade() -> None:
         op.create_table(
             "studio_jobs",
             sa.Column("id", GUID(), primary_key=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=False,
+            ),
             sa.Column("owner_sub", sa.String(255), nullable=True),
             sa.Column("kind", kind_enum, nullable=False),
             sa.Column("status", status_enum, nullable=False, server_default="queued"),
@@ -121,7 +138,12 @@ def upgrade() -> None:
             sa.Column("progress", sa.JSON(), nullable=False, server_default="{}"),
             sa.Column("meta", sa.JSON(), nullable=False, server_default="{}"),
             sa.Column("error", sa.Text(), nullable=True),
-            sa.Column("queued_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+            sa.Column(
+                "queued_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.text("now()"),
+                nullable=True,
+            ),
             sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("cancel_requested_at", sa.DateTime(timezone=True), nullable=True),
@@ -137,7 +159,9 @@ def upgrade() -> None:
         op.create_index("ix_studio_jobs_lora_run_id", "studio_jobs", ["lora_run_id"])
         op.create_index("ix_studio_jobs_owner_status", "studio_jobs", ["owner_sub", "status"])
         op.create_index("ix_studio_jobs_resource_status", "studio_jobs", ["resource", "status"])
-        op.create_index("ix_studio_jobs_priority_created", "studio_jobs", ["priority", "created_at"])
+        op.create_index(
+            "ix_studio_jobs_priority_created", "studio_jobs", ["priority", "created_at"]
+        )
 
 
 def downgrade() -> None:

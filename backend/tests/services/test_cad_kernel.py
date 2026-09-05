@@ -13,7 +13,10 @@ from app.services.cad_kernel import (
 
 
 def _archive(
-    *, report: object | None = None, extra: bool = False, iges: bool = False,
+    *,
+    report: object | None = None,
+    extra: bool = False,
+    iges: bool = False,
     topology: object | None = None,
 ) -> bytes:
     payload = io.BytesIO()

@@ -23,17 +23,14 @@ from app.db.models import (
     CatalogPage,
     Document,
     DocumentLink,
-    DocumentType,
     DocumentProcessingJob,
-    Party,
+    DocumentType,
     ToolCatalogEntry,
     ToolSupplier,
 )
 from app.db.session import get_db
 from app.domain.catalogs import (
     CatalogEntryOut,
-    CatalogSimilarRequest,
-    CatalogSimilarResponse,
     CatalogFacets,
     CatalogFacetValue,
     CatalogListResponse,
@@ -44,6 +41,8 @@ from app.domain.catalogs import (
     CatalogPagesResponse,
     CatalogSearchRequest,
     CatalogSearchResponse,
+    CatalogSimilarRequest,
+    CatalogSimilarResponse,
     CatalogVisualSearchRequest,
     CatalogVisualSearchResponse,
 )
@@ -99,9 +98,7 @@ async def list_catalogs(
         # No filter → every supplier's catalogs in ONE call. The catalogs page
         # used to ask two questions per supplier and ran straight into the rate
         # limiter (24 parallel requests answered with 429 — seen in the browser).
-        supplier_ids = [
-            row[0] for row in (await db.execute(select(ToolSupplier.id))).all()
-        ]
+        supplier_ids = [row[0] for row in (await db.execute(select(ToolSupplier.id))).all()]
     if not supplier_ids:
         return CatalogListResponse(items=[], total=0)
 
@@ -145,9 +142,7 @@ async def list_catalogs(
                 select(
                     CatalogPage.document_id,
                     func.count(),
-                    func.count().filter(
-                        CatalogPage.status.in_(("parsed", "skipped", "failed"))
-                    ),
+                    func.count().filter(CatalogPage.status.in_(("parsed", "skipped", "failed"))),
                 )
                 .where(CatalogPage.document_id.in_(doc_ids))
                 .group_by(CatalogPage.document_id)
@@ -317,9 +312,7 @@ async def get_catalog(document_id: uuid.UUID, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=404, detail="Каталог не найден")
     meta = doc.metadata_ or {}
     supplier_id = meta.get("tool_supplier_id")
-    supplier = (
-        await db.get(ToolSupplier, uuid.UUID(supplier_id)) if supplier_id else None
-    )
+    supplier = await db.get(ToolSupplier, uuid.UUID(supplier_id)) if supplier_id else None
     job = (
         await db.execute(
             select(DocumentProcessingJob)
@@ -331,9 +324,9 @@ async def get_catalog(document_id: uuid.UUID, db: AsyncSession = Depends(get_db)
     pages_total = int(
         (
             await db.execute(
-                select(func.count()).select_from(CatalogPage).where(
-                    CatalogPage.document_id == document_id
-                )
+                select(func.count())
+                .select_from(CatalogPage)
+                .where(CatalogPage.document_id == document_id)
             )
         ).scalar_one()
     )
@@ -446,9 +439,9 @@ async def pause_catalog(
     total = int(
         (
             await db.execute(
-                select(func.count()).select_from(CatalogPage).where(
-                    CatalogPage.document_id == document_id
-                )
+                select(func.count())
+                .select_from(CatalogPage)
+                .where(CatalogPage.document_id == document_id)
             )
         ).scalar_one()
     )
@@ -488,7 +481,7 @@ async def delete_catalog(
     """
     from app.db.models import DocumentProcessingJob
     from app.domain.catalog_pages import catalog_pages_prefix
-    from app.storage import delete_file, delete_prefix
+    from app.storage import delete_prefix
 
     doc = await db.get(Document, document_id)
     if not doc:
@@ -498,12 +491,16 @@ async def delete_catalog(
 
     if mode in ("data", "all"):
         entries = (
-            await db.execute(
-                select(ToolCatalogEntry).where(
-                    ToolCatalogEntry.source_document_id == document_id
+            (
+                await db.execute(
+                    select(ToolCatalogEntry).where(
+                        ToolCatalogEntry.source_document_id == document_id
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         # The VISUAL vectors live in their own collection, so deleting the text
         # ones is only half the cleanup — without this a deleted catalog kept
         # answering photo searches with positions that no longer exist.
@@ -544,10 +541,10 @@ async def delete_catalog(
         await db.flush()
 
         pages = (
-            await db.execute(
-                select(CatalogPage).where(CatalogPage.document_id == document_id)
-            )
-        ).scalars().all()
+            (await db.execute(select(CatalogPage).where(CatalogPage.document_id == document_id)))
+            .scalars()
+            .all()
+        )
         for page in pages:
             await db.delete(page)
         removed["pages"] = len(pages)
@@ -567,9 +564,7 @@ async def delete_catalog(
             meta["file_removed"] = True
             doc.metadata_ = meta
             for page in (
-                await db.execute(
-                    select(CatalogPage).where(CatalogPage.document_id == document_id)
-                )
+                await db.execute(select(CatalogPage).where(CatalogPage.document_id == document_id))
             ).scalars():
                 page.image_path = None
                 page.thumb_path = None
@@ -577,17 +572,13 @@ async def delete_catalog(
     if mode == "all":
         await db.execute(sa_delete(DocumentLink).where(DocumentLink.document_id == document_id))
         await db.execute(
-            sa_delete(DocumentProcessingJob).where(
-                DocumentProcessingJob.document_id == document_id
-            )
+            sa_delete(DocumentProcessingJob).where(DocumentProcessingJob.document_id == document_id)
         )
         await db.delete(doc)
     elif mode == "data":
         # Nothing parsed any more — the job's stages would lie otherwise.
         await db.execute(
-            sa_delete(DocumentProcessingJob).where(
-                DocumentProcessingJob.document_id == document_id
-            )
+            sa_delete(DocumentProcessingJob).where(DocumentProcessingJob.document_id == document_id)
         )
 
     await db.commit()
@@ -602,8 +593,7 @@ async def delete_catalog(
                 f"{removed['pages']} страниц. Файл сохранён — можно разобрать заново."
             ),
             "file": (
-                f"Файл и {removed['images']} изображений удалены, "
-                "позиции каталога сохранены."
+                f"Файл и {removed['images']} изображений удалены, позиции каталога сохранены."
             ),
             "all": (
                 f"Каталог удалён полностью: {removed['entries']} позиций, "
@@ -633,9 +623,9 @@ async def list_catalog_pages(
     total = int(
         (
             await db.execute(
-                select(func.count()).select_from(CatalogPage).where(
-                    CatalogPage.document_id == document_id
-                )
+                select(func.count())
+                .select_from(CatalogPage)
+                .where(CatalogPage.document_id == document_id)
             )
         ).scalar_one()
     )
@@ -734,9 +724,7 @@ async def get_catalog_page_image(
         payload = _thumbnail(png) or png
 
     try:
-        await asyncio.to_thread(
-            upload_file, png, full_path, "image/webp"
-        )
+        await asyncio.to_thread(upload_file, png, full_path, "image/webp")
         row.image_path = full_path
         row.image_width, row.image_height = width, height
         if size == "thumb" and payload is not png:
@@ -803,7 +791,9 @@ def _entry_out(
         part_number=entry.part_number,
         name=entry.name,
         description=entry.description,
-        tool_type=entry.tool_type.value if hasattr(entry.tool_type, "value") else str(entry.tool_type),
+        tool_type=entry.tool_type.value
+        if hasattr(entry.tool_type, "value")
+        else str(entry.tool_type),
         diameter_mm=entry.diameter_mm,
         length_mm=entry.length_mm,
         material=entry.material,
@@ -915,14 +905,16 @@ async def search_catalog(
             (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
         )
         rows = (
-            await db.execute(
-                base.order_by(
-                    ToolCatalogEntry.catalog_page.nulls_last(), ToolCatalogEntry.name
+            (
+                await db.execute(
+                    base.order_by(ToolCatalogEntry.catalog_page.nulls_last(), ToolCatalogEntry.name)
+                    .offset((payload.page - 1) * payload.page_size)
+                    .limit(payload.page_size)
                 )
-                .offset((payload.page - 1) * payload.page_size)
-                .limit(payload.page_size)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         items = await _decorate(db, rows, {})
         facets = await _facets(db, payload, supplier_ids) if payload.include_facets else None
         return CatalogSearchResponse(
@@ -939,17 +931,21 @@ async def search_catalog(
     # 1. Exact article — what a person typing "MT190-016C04" means.
     normalized = query_text.replace(" ", "")
     exact_rows = (
-        await db.execute(
-            _apply_filters(select(ToolCatalogEntry.id), payload, supplier_ids)
-            .where(
-                or_(
-                    ToolCatalogEntry.part_number.ilike(query_text),
-                    ToolCatalogEntry.part_number.ilike(f"{normalized}%"),
+        (
+            await db.execute(
+                _apply_filters(select(ToolCatalogEntry.id), payload, supplier_ids)
+                .where(
+                    or_(
+                        ToolCatalogEntry.part_number.ilike(query_text),
+                        ToolCatalogEntry.part_number.ilike(f"{normalized}%"),
+                    )
                 )
+                .limit(50)
             )
-            .limit(50)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     branches["exact"] = list(exact_rows)
 
     # 2. Full text + trigram (typos) via the shared helpers.
@@ -994,9 +990,7 @@ async def search_catalog(
                 vector,
                 tool_type=payload.tool_type,
                 supplier_id=str(supplier_ids[0]) if len(supplier_ids) == 1 else None,
-                catalog_document_id=(
-                    str(catalog_ids[0]) if len(catalog_ids) == 1 else None
-                ),
+                catalog_document_id=(str(catalog_ids[0]) if len(catalog_ids) == 1 else None),
                 has_image=payload.has_image,
                 limit=200,
             )
@@ -1013,7 +1007,9 @@ async def search_catalog(
                         ToolCatalogEntry.id.in_(vector_ids)
                     )
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
         vector_ids = [entry_id for entry_id in vector_ids if entry_id in allowed]
     branches["vector"] = vector_ids
@@ -1029,9 +1025,7 @@ async def search_catalog(
     ranked_ids = sorted(scores, key=lambda key: scores[key], reverse=True)
 
     total_available = len(ranked_ids)
-    window = ranked_ids[
-        (payload.page - 1) * payload.page_size : payload.page * payload.page_size
-    ]
+    window = ranked_ids[(payload.page - 1) * payload.page_size : payload.page * payload.page_size]
     rows = (
         (await db.execute(select(ToolCatalogEntry).where(ToolCatalogEntry.id.in_(window))))
         .scalars()
@@ -1054,7 +1048,7 @@ async def search_catalog(
         report=_entries_report(f"Найдено по запросу «{query_text}»", items),
         message=(
             f"Найдено позиций: {total_available}. У каждой указан каталог и страница; "
-            "image_kind=\"page\" означает превью страницы, а не фото товара."
+            'image_kind="page" означает превью страницы, а не фото товара.'
             if total_available
             else "По этому запросу в каталогах поставщиков ничего не найдено."
         ),
@@ -1112,23 +1106,37 @@ async def _decorate(
         return []
     supplier_ids = {row.supplier_id for row in rows if row.supplier_id}
     doc_ids = {row.source_document_id for row in rows if row.source_document_id}
-    suppliers = {
-        supplier.id: supplier
-        for supplier in (
-            await db.execute(select(ToolSupplier).where(ToolSupplier.id.in_(supplier_ids)))
-        ).scalars()
-    } if supplier_ids else {}
-    documents = {
-        doc.id: doc
-        for doc in (
-            await db.execute(select(Document).where(Document.id.in_(doc_ids)))
-        ).scalars()
-    } if doc_ids else {}
+    suppliers = (
+        {
+            supplier.id: supplier
+            for supplier in (
+                await db.execute(select(ToolSupplier).where(ToolSupplier.id.in_(supplier_ids)))
+            ).scalars()
+        }
+        if supplier_ids
+        else {}
+    )
+    documents = (
+        {
+            doc.id: doc
+            for doc in (
+                await db.execute(select(Document).where(Document.id.in_(doc_ids)))
+            ).scalars()
+        }
+        if doc_ids
+        else {}
+    )
     return [
         _entry_out(
             row,
-            supplier_name=(suppliers.get(row.supplier_id).name if suppliers.get(row.supplier_id) else None),
-            catalog_name=(documents.get(row.source_document_id).file_name if documents.get(row.source_document_id) else None),
+            supplier_name=(
+                suppliers.get(row.supplier_id).name if suppliers.get(row.supplier_id) else None
+            ),
+            catalog_name=(
+                documents.get(row.source_document_id).file_name
+                if documents.get(row.source_document_id)
+                else None
+            ),
             score=round(scores.get(row.id), 4) if scores.get(row.id) else None,
         )
         for row in rows
@@ -1146,9 +1154,7 @@ async def _facets(
     base = _apply_filters(select(ToolCatalogEntry), payload, supplier_ids).subquery()
 
     by_supplier = (
-        await db.execute(
-            select(base.c.supplier_id, func.count()).group_by(base.c.supplier_id)
-        )
+        await db.execute(select(base.c.supplier_id, func.count()).group_by(base.c.supplier_id))
     ).all()
     by_catalog = (
         await db.execute(
@@ -1194,9 +1200,7 @@ async def _facets(
 
     return CatalogFacets(
         suppliers=[
-            CatalogFacetValue(
-                key=str(key), label=supplier_names.get(key, "—"), count=int(count)
-            )
+            CatalogFacetValue(key=str(key), label=supplier_names.get(key, "—"), count=int(count))
             for key, count in by_supplier
             if key
         ],
@@ -1230,7 +1234,7 @@ async def find_similar_positions(
     payload: CatalogSimilarRequest,
     db: AsyncSession = Depends(get_db),
 ) -> CatalogSimilarResponse:
-    """"Чем это заменить" — the question procurement actually asks.
+    """ "Чем это заменить" — the question procurement actually asks.
 
     Runs on the position's own embedding (or a free-text description), so a
     replacement is found by meaning rather than by a matching article number,
@@ -1273,9 +1277,7 @@ async def find_similar_positions(
     tool_type = None
     if source is not None:
         raw_type = (
-            source.tool_type.value
-            if hasattr(source.tool_type, "value")
-            else str(source.tool_type)
+            source.tool_type.value if hasattr(source.tool_type, "value") else str(source.tool_type)
         )
         tool_type = raw_type if raw_type != "other" else None
 
@@ -1293,9 +1295,7 @@ async def find_similar_positions(
         )
         if len(hits) < 3 and tool_type:
             # Too few of that kind — widen rather than answer "ничего нет".
-            hits = await asyncio.to_thread(
-                search_tool_catalog, vector, limit=payload.limit * 4
-            )
+            hits = await asyncio.to_thread(search_tool_catalog, vector, limit=payload.limit * 4)
             tool_type = None
     except Exception as exc:  # noqa: BLE001 — say why, do not pretend there are none
         raise HTTPException(
@@ -1329,9 +1329,7 @@ async def find_similar_positions(
     return CatalogSimilarResponse(
         source=_entry_out(source) if source else None,
         items=items,
-        report=_entries_report(
-            f"Аналоги: {source.name if source else text}"[:120], items
-        ),
+        report=_entries_report(f"Аналоги: {source.name if source else text}"[:120], items),
         message=(
             f"Похожих позиций: {len(items)}"
             + (" (у других поставщиков)" if payload.exclude_same_supplier else "")
@@ -1402,13 +1400,17 @@ async def search_catalog_pages(
     )
     rank = immutable_fts_rank([CatalogPage.text], needle)
     text_rows = (
-        await db.execute(
-            select(CatalogPage)
-            .where(CatalogPage.document_id == document_id, text_condition)
-            .order_by(rank.desc(), CatalogPage.page_number)
-            .limit(limit)
+        (
+            await db.execute(
+                select(CatalogPage)
+                .where(CatalogPage.document_id == document_id, text_condition)
+                .order_by(rank.desc(), CatalogPage.page_number)
+                .limit(limit)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     # Pages whose POSITIONS match — the same words, but already extracted.
     matching_entries = (
@@ -1419,19 +1421,19 @@ async def search_catalog_pages(
                 ToolCatalogEntry.name,
             )
             .where(
-                    ToolCatalogEntry.source_document_id == document_id,
-                    ToolCatalogEntry.is_active.is_(True),
-                    ToolCatalogEntry.catalog_page.isnot(None),
-                    or_(
-                        ToolCatalogEntry.part_number.ilike(f"%{needle}%"),
-                        ToolCatalogEntry.name.ilike(f"%{needle}%"),
-                        immutable_fts_condition(
-                            [
-                                ToolCatalogEntry.name,
-                                ToolCatalogEntry.part_number,
-                                ToolCatalogEntry.description,
-                            ],
-                            needle,
+                ToolCatalogEntry.source_document_id == document_id,
+                ToolCatalogEntry.is_active.is_(True),
+                ToolCatalogEntry.catalog_page.isnot(None),
+                or_(
+                    ToolCatalogEntry.part_number.ilike(f"%{needle}%"),
+                    ToolCatalogEntry.name.ilike(f"%{needle}%"),
+                    immutable_fts_condition(
+                        [
+                            ToolCatalogEntry.name,
+                            ToolCatalogEntry.part_number,
+                            ToolCatalogEntry.description,
+                        ],
+                        needle,
                     ),
                 ),
             )
@@ -1450,13 +1452,17 @@ async def search_catalog_pages(
     missing = [number for number in entry_counts if number not in by_number]
     if missing:
         extra = (
-            await db.execute(
-                select(CatalogPage).where(
-                    CatalogPage.document_id == document_id,
-                    CatalogPage.page_number.in_(missing),
+            (
+                await db.execute(
+                    select(CatalogPage).where(
+                        CatalogPage.document_id == document_id,
+                        CatalogPage.page_number.in_(missing),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for row in extra:
             by_number[row.page_number] = row
 
@@ -1565,9 +1571,7 @@ async def search_catalog_visually(
                     entry=str(source.id),
                     error=str(exc)[:120],
                 )
-        text = text or " ".join(
-            part for part in (source.part_number, source.name) if part
-        )
+        text = text or " ".join(part for part in (source.part_number, source.name) if part)
 
     if not image and not text:
         raise HTTPException(
@@ -1641,12 +1645,16 @@ async def search_catalog_visually(
 
     ids = [uuid.UUID(entry_id) for entry_id in scores]
     rows = (
-        await db.execute(
-            select(ToolCatalogEntry).where(
-                ToolCatalogEntry.id.in_(ids), ToolCatalogEntry.is_active.is_(True)
+        (
+            await db.execute(
+                select(ToolCatalogEntry).where(
+                    ToolCatalogEntry.id.in_(ids), ToolCatalogEntry.is_active.is_(True)
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     # Qdrant's order is the answer; the SQL round-trip only fetches the rows.
     rows.sort(key=lambda entry: -scores.get(str(entry.id), 0.0))
 

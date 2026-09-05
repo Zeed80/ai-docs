@@ -9,18 +9,20 @@ from eval_nist_pmi_locator import summarize
 
 
 def test_summary_is_explicitly_diagnostic_without_bbox_truth():
-    report = summarize([
-        {
-            "reference_record_count": 3,
-            "geometric_tolerance_reference_record_count": 2,
-            "detected_region_count": 0,
-        },
-        {
-            "reference_record_count": 4,
-            "geometric_tolerance_reference_record_count": 3,
-            "detected_region_count": 6,
-        },
-    ])
+    report = summarize(
+        [
+            {
+                "reference_record_count": 3,
+                "geometric_tolerance_reference_record_count": 2,
+                "detected_region_count": 0,
+            },
+            {
+                "reference_record_count": 4,
+                "geometric_tolerance_reference_record_count": 3,
+                "detected_region_count": 6,
+            },
+        ]
+    )
 
     assert report["pages"] == 2
     assert report["reference_records"] == 7

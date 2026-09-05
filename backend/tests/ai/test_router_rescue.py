@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.ai import orchestrator as orch
 from app.ai import turn_router
 from app.ai.agent_config import BuiltinAgentConfig
 from app.ai.orchestrator import AgentOrchestrator
@@ -15,15 +14,20 @@ from app.ai.orchestrator import AgentOrchestrator
 
 def _config() -> BuiltinAgentConfig:
     return BuiltinAgentConfig(
-        enabled=True, model="gemma4:31b", worker_model="gemma4:31b",
-        orchestrator_model="gemma4:31b", fast_model="gemma4:31b",
-        backend_url="http://b", ollama_url="http://o",
+        enabled=True,
+        model="gemma4:31b",
+        worker_model="gemma4:31b",
+        orchestrator_model="gemma4:31b",
+        fast_model="gemma4:31b",
+        backend_url="http://b",
+        ollama_url="http://o",
     )
 
 
 def _orch():
     async def _send(_m):
         return None
+
     return AgentOrchestrator(_send)
 
 
@@ -31,6 +35,7 @@ def _orch():
 async def test_defaulted_router_rescued_for_table_request(monkeypatch):
     async def fake_route(content, **kw):
         return turn_router.safe_default_decision(content), "model"  # degenerate shell
+
     monkeypatch.setattr(turn_router, "route_turn", fake_route)
 
     sess = _orch()
@@ -45,6 +50,7 @@ async def test_defaulted_router_rescued_for_table_request(monkeypatch):
 async def test_defaulted_router_degrades_for_non_table(monkeypatch):
     async def fake_route(content, **kw):
         return turn_router.safe_default_decision(content), "model"
+
     monkeypatch.setattr(turn_router, "route_turn", fake_route)
 
     sess = _orch()

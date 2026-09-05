@@ -30,15 +30,21 @@ class RecordingProvider:
     async def vision(self, request, model):
         self.vision_calls.append(request)
         return AIResponse(
-            task=request.task, provider=self.kind, model=model,
-            text=json.dumps(self.payload), usage=AIUsage(input_tokens=5, output_tokens=5),
+            task=request.task,
+            provider=self.kind,
+            model=model,
+            text=json.dumps(self.payload),
+            usage=AIUsage(input_tokens=5, output_tokens=5),
         )
 
     async def chat(self, request, model):
         self.chat_calls.append(request)
         return AIResponse(
-            task=request.task, provider=self.kind, model=model,
-            text=json.dumps(self.payload), usage=AIUsage(input_tokens=5, output_tokens=5),
+            task=request.task,
+            provider=self.kind,
+            model=model,
+            text=json.dumps(self.payload),
+            usage=AIUsage(input_tokens=5, output_tokens=5),
         )
 
     async def structured_extract(self, request, model):
@@ -57,6 +63,7 @@ def stub_router(monkeypatch):
 
     # Keep telemetry inert.
     from app.ai import telemetry
+
     monkeypatch.setattr(telemetry, "record_call", lambda **kw: None)
     return r
 
@@ -85,6 +92,7 @@ async def test_extract_features_routes_vision_with_images(stub_router):
 async def test_extract_features_defaults_to_singleton_router(monkeypatch, stub_router):
     # router=None must use the shared ai_router (not the removed legacy path).
     import app.ai.router as router_mod
+
     monkeypatch.setattr(router_mod, "ai_router", stub_router)
 
     from app.ai.drawing_extractor import extract_features_from_image
@@ -98,6 +106,7 @@ async def test_extract_features_defaults_to_singleton_router(monkeypatch, stub_r
 async def test_text_fallback_uses_chat_not_vision(monkeypatch, stub_router):
     # extract_drawing_features is text-only → must dispatch chat, never vision.
     import app.ai.router as router_mod
+
     monkeypatch.setattr(router_mod, "ai_router", stub_router)
 
     from app.ai.drawing_extractor import extract_drawing_features

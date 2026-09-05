@@ -17,7 +17,6 @@ FreeCAD (headless) must be installed: apt install freecad or conda install freec
 """
 
 import json
-import math
 import os
 import sys
 
@@ -34,8 +33,8 @@ def main() -> None:
     try:
         import FreeCAD  # type: ignore
         import Import  # type: ignore
-        import Part  # type: ignore
-        from FreeCAD import BoundBox  # type: ignore
+        import Part  # type: ignore  # noqa: F401 — проба доступности FreeCAD
+        from FreeCAD import BoundBox  # type: ignore  # noqa: F401
     except ImportError:
         print("FreeCAD Python modules not available", file=sys.stderr)
         sys.exit(2)
@@ -66,9 +65,12 @@ def main() -> None:
         bb.add(s.BoundBox)
 
     bounding_box_mm = {
-        "x_min": round(bb.XMin, 3), "x_max": round(bb.XMax, 3),
-        "y_min": round(bb.YMin, 3), "y_max": round(bb.YMax, 3),
-        "z_min": round(bb.ZMin, 3), "z_max": round(bb.ZMax, 3),
+        "x_min": round(bb.XMin, 3),
+        "x_max": round(bb.XMax, 3),
+        "y_min": round(bb.YMin, 3),
+        "y_max": round(bb.YMax, 3),
+        "z_min": round(bb.ZMin, 3),
+        "z_max": round(bb.ZMax, 3),
     }
 
     x_size = bb.XLength
@@ -104,12 +106,13 @@ def _export_views(doc: any, output_dir: str) -> None:
     """Export front/side/top orthographic views as PNG."""
     try:
         import FreeCADGui  # type: ignore
+
         FreeCADGui.setupWithoutGUI()
 
         views = {
             "front": (0, -1, 0),
-            "side":  (1, 0, 0),
-            "top":   (0, 0, 1),
+            "side": (1, 0, 0),
+            "top": (0, 0, 1),
         }
 
         for view_name, direction in views.items():
@@ -132,10 +135,12 @@ def _export_views(doc: any, output_dir: str) -> None:
             # запасной экспорт видов не работал ни разу.
             import FreeCAD  # type: ignore
             import TechDraw  # type: ignore
-            import TechDrawGui  # type: ignore
+
             page = doc.addObject("TechDraw::DrawPage", "Page")
             template = doc.addObject("TechDraw::DrawSVGTemplate", "Template")
-            template.Template = FreeCAD.getResourceDir() + "Mod/TechDraw/Templates/A4_LandscapeTD.svg"
+            template.Template = (
+                FreeCAD.getResourceDir() + "Mod/TechDraw/Templates/A4_LandscapeTD.svg"
+            )
             page.Template = template
 
             view = doc.addObject("TechDraw::DrawViewPart", "FrontView")

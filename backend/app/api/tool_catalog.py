@@ -4,14 +4,16 @@ Skill: tool_catalog.*, supplier_catalog.*
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from datetime import UTC, datetime, timedelta
-
+from pydantic import BaseModel
+from pydantic import Field as PydanticField
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,32 +22,28 @@ from app.db.models import (
     Document,
     DocumentType,
     DrawingFeature,
-    FeatureDimension,
-    FeatureSurface,
     InventoryItem,
     ToolCatalogEntry,
     ToolSupplier,
     ToolTypeEnum,
 )
-from sqlalchemy import delete as sa_delete
 from app.db.session import get_db
-from pydantic import BaseModel, Field as PydanticField
 from app.domain.catalog_documents import ARCHIVE_SUFFIXES
 from app.domain.tool_catalog import (
     AttachedSourceResult,
-    CatalogUploadOut,
-    CatalogUploadsResponse,
-    CatalogUploadStep,
     AttachWebCatalogRequest,
     AttachWebCatalogResult,
     CatalogCandidate,
+    CatalogImportResult,
     CatalogIngestStatusRequest,
     CatalogIngestStatusResult,
+    CatalogUploadOut,
+    CatalogUploadsResponse,
+    CatalogUploadStep,
     CrawlSiteRequest,
     CrawlSiteResult,
     DiscoverCatalogsRequest,
     DiscoverCatalogsResult,
-    CatalogImportResult,
     IngestWebSourceRequest,
     IngestWebSourceResult,
     ResolveSupplierResult,
@@ -56,9 +54,8 @@ from app.domain.tool_catalog import (
     ToolCatalogEntryUpdate,
     ToolCatalogEntryWithSupplierOut,
     ToolCatalogListResponse,
-    ToolCatalogSearchRequest,
-    ToolSuggestionResponse,
     ToolSuggestionItem,
+    ToolSuggestionResponse,
     ToolSupplierCreate,
     ToolSupplierListResponse,
     ToolSupplierOut,
@@ -177,6 +174,7 @@ async def delete_supplier(
         # Qdrant cleanup for all entries
         try:
             from app.vector.qdrant_store import delete_tool_catalog_by_supplier
+
             delete_tool_catalog_by_supplier(str(supplier_id))
         except Exception as exc:
             logger.warning("supplier_qdrant_cleanup_failed", error=str(exc))
@@ -185,11 +183,14 @@ async def delete_supplier(
         for eid in entry_ids:
             try:
                 from app.domain.drawing_graph import delete_tool_catalog_graph
+
                 await delete_tool_catalog_graph(eid, db)
             except Exception:
                 pass
 
-        await db.execute(sa_delete(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id == supplier_id))
+        await db.execute(
+            sa_delete(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id == supplier_id)
+        )
 
     await db.delete(supplier)
     await db.commit()
@@ -305,7 +306,9 @@ async def _accept_catalog_upload(
         entries_skipped=0,
         task_id=task_id,
         storage_path=doc.storage_path,
-        status="duplicate" if registered.is_duplicate else ("unpacking" if is_archive else "queued"),
+        status="duplicate"
+        if registered.is_duplicate
+        else ("unpacking" if is_archive else "queued"),
         document_id=doc.id,
         job_id=registered.job.id,
         message=message,
@@ -326,9 +329,7 @@ async def upload_catalog(
     if not supplier:
         raise HTTPException(status_code=404, detail="Поставщик не найден")
 
-    return await _accept_catalog_upload(
-        db, supplier, await file.read(), file.filename or "catalog"
-    )
+    return await _accept_catalog_upload(db, supplier, await file.read(), file.filename or "catalog")
 
 
 @router.get(
@@ -362,12 +363,16 @@ async def list_catalog_uploads(
 
     doc_ids = [d.id for d in docs]
     jobs = (
-        await db.execute(
-            select(DocumentProcessingJob)
-            .where(DocumentProcessingJob.document_id.in_(doc_ids))
-            .order_by(DocumentProcessingJob.created_at.desc())
+        (
+            await db.execute(
+                select(DocumentProcessingJob)
+                .where(DocumentProcessingJob.document_id.in_(doc_ids))
+                .order_by(DocumentProcessingJob.created_at.desc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     latest_job: dict[uuid.UUID, object] = {}
     for job in jobs:
         latest_job.setdefault(job.document_id, job)
@@ -592,6 +597,7 @@ async def create_entry(
     # Async graph ingest
     try:
         from app.domain.drawing_graph import ingest_tool_catalog_graph
+
         await ingest_tool_catalog_graph(entry.id, db)
         await db.commit()
     except Exception:
@@ -689,12 +695,14 @@ async def bulk_delete_entries(
         # Qdrant cleanup
         try:
             from app.vector.qdrant_store import delete_tool_catalog_entry
+
             delete_tool_catalog_entry(str(entry_id))
         except Exception:
             pass
         # Graph cleanup
         try:
             from app.domain.drawing_graph import delete_tool_catalog_graph
+
             await delete_tool_catalog_graph(entry_id, db)
         except Exception:
             pass
@@ -721,6 +729,7 @@ async def delete_entry(
     # Qdrant cleanup
     try:
         from app.vector.qdrant_store import delete_tool_catalog_entry
+
         delete_tool_catalog_entry(str(entry_id))
     except Exception as exc:
         logger.warning("entry_qdrant_cleanup_failed", entry_id=str(entry_id), error=str(exc))
@@ -728,6 +737,7 @@ async def delete_entry(
     # Graph cleanup
     try:
         from app.domain.drawing_graph import delete_tool_catalog_graph
+
         await delete_tool_catalog_graph(entry_id, db)
     except Exception as exc:
         logger.warning("entry_graph_cleanup_failed", entry_id=str(entry_id), error=str(exc))
@@ -787,8 +797,10 @@ async def search_tools(
     entries: list[ToolCatalogEntry] = []
     if ids:
         rows = (
-            await db.execute(select(ToolCatalogEntry).where(ToolCatalogEntry.id.in_(ids)))
-        ).scalars().all()
+            (await db.execute(select(ToolCatalogEntry).where(ToolCatalogEntry.id.in_(ids))))
+            .scalars()
+            .all()
+        )
         order = {entry_id: index for index, entry_id in enumerate(ids)}
         entries = sorted(rows, key=lambda entry: order.get(entry.id, 0))
 
@@ -838,6 +850,7 @@ async def suggest_tools_for_feature(
 
     # Determine likely tool types
     from app.ai.drawing_extractor import infer_tool_type_for_feature
+
     likely_tool_types = infer_tool_type_for_feature(
         feature.feature_type.value,
         [{"dim_type": d.dim_type.value, "nominal": d.nominal} for d in feature.dimensions],
@@ -853,7 +866,6 @@ async def suggest_tools_for_feature(
     # Fetch candidate tools from DB
     q = select(ToolCatalogEntry).where(ToolCatalogEntry.is_active.is_(True))
     if likely_tool_types:
-        from sqlalchemy import cast, String
         q = q.where(
             ToolCatalogEntry.tool_type.in_(
                 [ToolTypeEnum(t) for t in likely_tool_types if _is_valid_tool_type(t)]
@@ -880,9 +892,7 @@ async def suggest_tools_for_feature(
         for tool in candidate_tools:
             if tool.part_number:
                 inv_result = await db.execute(
-                    select(InventoryItem).where(
-                        InventoryItem.sku == tool.part_number
-                    )
+                    select(InventoryItem).where(InventoryItem.sku == tool.part_number)
                 )
                 inv_item = inv_result.scalar_one_or_none()
                 if inv_item and inv_item.current_qty > 0:
@@ -952,7 +962,9 @@ async def suggest_tools_for_feature(
             suggestions.append(
                 ToolSuggestionItem(
                     entry=ToolCatalogEntryOut.model_validate(entry),
-                    supplier=ToolSupplierOut.model_validate(entry.supplier) if entry.supplier else None,
+                    supplier=ToolSupplierOut.model_validate(entry.supplier)
+                    if entry.supplier
+                    else None,
                     score=float(ai_item.get("score", 0.5)),
                     reason=ai_item.get("reason"),
                     warehouse_available=entry_id in warehouse_qty,
@@ -965,7 +977,9 @@ async def suggest_tools_for_feature(
             suggestions.append(
                 ToolSuggestionItem(
                     entry=ToolCatalogEntryOut.model_validate(tool),
-                    supplier=ToolSupplierOut.model_validate(tool.supplier) if tool.supplier else None,
+                    supplier=ToolSupplierOut.model_validate(tool.supplier)
+                    if tool.supplier
+                    else None,
                     score=0.5,
                     reason="Подобрано по типу инструмента",
                     warehouse_available=str(tool.id) in warehouse_qty,
@@ -992,9 +1006,7 @@ async def list_tool_suppliers_by_party(
     party_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ) -> ToolSupplierListResponse:
-    result = await db.execute(
-        select(ToolSupplier).where(ToolSupplier.main_supplier_id == party_id)
-    )
+    result = await db.execute(select(ToolSupplier).where(ToolSupplier.main_supplier_id == party_id))
     items = result.scalars().all()
     return ToolSupplierListResponse(
         items=[ToolSupplierOut.model_validate(s) for s in items],
@@ -1059,6 +1071,7 @@ async def list_entries_by_party(
         q = q.where(ToolCatalogEntry.tool_type == tool_type)
     if query:
         from sqlalchemy import or_
+
         q = q.where(
             or_(
                 ToolCatalogEntry.name.ilike(f"%{query}%"),
@@ -1145,9 +1158,7 @@ def _is_valid_tool_type(value: str) -> bool:
 # of silently picking one.
 
 
-async def _get_or_create_tool_supplier_for_party(
-    db: AsyncSession, party: "Party"
-) -> ToolSupplier:
+async def _get_or_create_tool_supplier_for_party(db: AsyncSession, party: "Party") -> ToolSupplier:
     """Return the ToolSupplier linked to this Party, creating it on demand.
 
     Same find-or-create the GUI upload path uses (upload_catalog_for_party) —
@@ -1222,15 +1233,13 @@ async def _resolve_supplier(
     # prefix is stripped before the ILIKE.
     import re as _re
 
-    core = _re.sub(
-        r"^\s*(ООО|ОАО|ЗАО|ПАО|АО|ИП)\s+", "", name, flags=_re.IGNORECASE
-    ).strip(' "«»\'')
+    core = _re.sub(r"^\s*(ООО|ОАО|ЗАО|ПАО|АО|ИП)\s+", "", name, flags=_re.IGNORECASE).strip(
+        " \"«»'"
+    )
     pattern = f"%{core or name}%"
 
     parties = (
-        (await db.execute(select(Party).where(Party.name.ilike(pattern)).limit(10)))
-        .scalars()
-        .all()
+        (await db.execute(select(Party).where(Party.name.ilike(pattern)).limit(10))).scalars().all()
     )
     if len(parties) == 1:
         supplier = await _get_or_create_tool_supplier_for_party(db, parties[0])
@@ -1244,9 +1253,7 @@ async def _resolve_supplier(
     if len(parties) > 1:
         return None, ResolveSupplierResult(
             resolved=False,
-            candidates=[
-                SupplierCandidate(party_id=p.id, name=p.name, inn=p.inn) for p in parties
-            ],
+            candidates=[SupplierCandidate(party_id=p.id, name=p.name, inn=p.inn) for p in parties],
             message=(
                 f"По названию «{name}» найдено несколько поставщиков "
                 f"({len(parties)}). Уточните, какой именно нужен."
@@ -1255,11 +1262,7 @@ async def _resolve_supplier(
 
     # No Party — maybe a catalog-only supplier (tool vendor without invoices).
     tool_suppliers = (
-        (
-            await db.execute(
-                select(ToolSupplier).where(ToolSupplier.name.ilike(pattern)).limit(10)
-            )
-        )
+        (await db.execute(select(ToolSupplier).where(ToolSupplier.name.ilike(pattern)).limit(10)))
         .scalars()
         .all()
     )
@@ -1276,8 +1279,7 @@ async def _resolve_supplier(
         return None, ResolveSupplierResult(
             resolved=False,
             candidates=[
-                SupplierCandidate(tool_supplier_id=s.id, name=s.name)
-                for s in tool_suppliers
+                SupplierCandidate(tool_supplier_id=s.id, name=s.name) for s in tool_suppliers
             ],
             message=(
                 f"По названию «{name}» найдено несколько поставщиков каталога "
@@ -1353,9 +1355,17 @@ async def attach_web_catalog(
         # fixes stopped after discovery and published a table of invoice items —
         # the model is not required to remember the second step any more.
         discovered = await discover_catalogs(
-            DiscoverCatalogsRequest(**payload.model_dump(include={
-                "supplier_name", "supplier_id", "party_id", "inn", "website",
-            })),
+            DiscoverCatalogsRequest(
+                **payload.model_dump(
+                    include={
+                        "supplier_name",
+                        "supplier_id",
+                        "party_id",
+                        "inn",
+                        "website",
+                    }
+                )
+            ),
             db,
         )
         urls = [c.url for c in discovered.candidates if c.kind != "page"]
@@ -1364,9 +1374,7 @@ async def attach_web_catalog(
         # pages in a web catalog ("их очень много по оборудованию, PDF и просто
         # на сайте"). Attaching only the files would quietly cover half the
         # request, so the site walk is started alongside them.
-        site_pages = [
-            c for c in discovered.candidates if c.kind == "page" and c.on_supplier_site
-        ]
+        site_pages = [c for c in discovered.candidates if c.kind == "page" and c.on_supplier_site]
         if urls and site_pages and discovered.website:
             try:
                 from app.tasks.catalog_crawl import crawl_supplier_site
@@ -1431,14 +1439,14 @@ async def attach_web_catalog(
         from app.domain.catalog_ingest_status import record_source_status
 
         queued = [
-            AttachedSourceResult(
-                url=url, status="queued", message="Поставлен в очередь загрузки."
-            )
+            AttachedSourceResult(url=url, status="queued", message="Поставлен в очередь загрузки.")
             for url in urls
         ]
         for item in queued:
             record_source_status(
-                str(supplier.id), item.url, status="queued",
+                str(supplier.id),
+                item.url,
+                status="queued",
                 message="Поставлен в очередь загрузки.",
             )
         task_id: str | None = None
@@ -1491,8 +1499,7 @@ async def attach_web_catalog(
             sources=queued,
             report=_attach_report_block(supplier.name, queued),
             message=(
-                discovery_note
-                + f"Взял в работу каталогов: {len(urls)} для «{supplier.name}». "
+                discovery_note + f"Взял в работу каталогов: {len(urls)} для «{supplier.name}». "
                 "Разбор идёт в фоне (крупный каталог — несколько минут на файл); "
                 "позиции появляются на карточке поставщика во вкладке «Каталог "
                 "инструментов» по мере разбора. Текущий прогресс — action=ingest_status."
@@ -1519,12 +1526,12 @@ async def attach_web_catalog(
             )
         except HTTPException as exc:
             detail = exc.detail
-            message = (
-                detail.get("message") if isinstance(detail, dict) else str(detail)
+            message = detail.get("message") if isinstance(detail, dict) else str(detail)
+            sources.append(
+                AttachedSourceResult(
+                    url=url, status="error", message=f"Не удалось открыть источник: {message}"[:300]
+                )
             )
-            sources.append(AttachedSourceResult(
-                url=url, status="error", message=f"Не удалось открыть источник: {message}"[:300]
-            ))
             errors.append(f"{url}: {message}"[:300])
             continue
 
@@ -1533,16 +1540,18 @@ async def attach_web_catalog(
         if len(text) < 200:
             # Honest failure: a JS-only page or a blocked download must not look
             # like a successful attach with zero entries.
-            sources.append(AttachedSourceResult(
-                url=url,
-                title=fetched.title,
-                status="empty",
-                text_chars=len(text),
-                message=(
-                    f"Читаемого текста нет ({len(text)} симв.) — JS-каталог или файл, "
-                    "требующий скачивания. Нужна прямая ссылка на PDF/прайс."
-                ),
-            ))
+            sources.append(
+                AttachedSourceResult(
+                    url=url,
+                    title=fetched.title,
+                    status="empty",
+                    text_chars=len(text),
+                    message=(
+                        f"Читаемого текста нет ({len(text)} симв.) — JS-каталог или файл, "
+                        "требующий скачивания. Нужна прямая ссылка на PDF/прайс."
+                    ),
+                )
+            )
             continue
 
         result = await ingest_web_catalog_source(
@@ -1555,10 +1564,15 @@ async def attach_web_catalog(
             max_chunks=payload.max_chunks,
         )
         if result.get("error"):
-            sources.append(AttachedSourceResult(
-                url=url, title=fetched.title, status="error",
-                text_chars=len(text), message=str(result["error"])[:300],
-            ))
+            sources.append(
+                AttachedSourceResult(
+                    url=url,
+                    title=fetched.title,
+                    status="error",
+                    text_chars=len(text),
+                    message=str(result["error"])[:300],
+                )
+            )
             errors.append(f"{url}: {result['error']}"[:300])
             continue
 
@@ -1566,21 +1580,23 @@ async def attach_web_catalog(
         conflicted = int(result["entries_conflicted"])
         anomaly_ids.extend(uuid.UUID(a) for a in result["anomaly_ids"])
         errors.extend(str(e)[:300] for e in result["errors"])
-        sources.append(AttachedSourceResult(
-            url=url,
-            title=fetched.title,
-            status="attached" if created or conflicted else "empty",
-            entries_created=created,
-            entries_conflicted=conflicted,
-            entries_skipped=int(result["entries_skipped"]),
-            text_chars=len(text),
-            message=(
-                f"Добавлено позиций: {created}"
-                + (f", на проверку: {conflicted}" if conflicted else "")
-                if created or conflicted
-                else "Позиций каталога в тексте не найдено."
-            ),
-        ))
+        sources.append(
+            AttachedSourceResult(
+                url=url,
+                title=fetched.title,
+                status="attached" if created or conflicted else "empty",
+                entries_created=created,
+                entries_conflicted=conflicted,
+                entries_skipped=int(result["entries_skipped"]),
+                text_chars=len(text),
+                message=(
+                    f"Добавлено позиций: {created}"
+                    + (f", на проверку: {conflicted}" if conflicted else "")
+                    if created or conflicted
+                    else "Позиций каталога в тексте не найдено."
+                ),
+            )
+        )
 
     total_created = sum(item.entries_created for item in sources)
     total_conflicted = sum(item.entries_conflicted for item in sources)
@@ -1641,9 +1657,7 @@ def _readable_source_name(url: str, title: str | None = None) -> str:
     return unquote(title) if title else name
 
 
-def _attach_report_block(
-    supplier_name: str, sources: list[AttachedSourceResult]
-) -> dict:
+def _attach_report_block(supplier_name: str, sources: list[AttachedSourceResult]) -> dict:
     """Ready-to-publish workspace block for what was attached.
 
     Built here, from the real per-source outcome, so the agent publishes facts
@@ -1685,8 +1699,18 @@ def _attach_report_block(
 _CATALOG_FILE_EXTENSIONS = (".pdf", ".xls", ".xlsx", ".csv")
 # Words that mark a link as a catalog/price list, in the URL or the anchor text.
 _CATALOG_WORDS = (
-    "каталог", "katalog", "catalog", "catalogue", "прайс", "price", "прайс-лист",
-    "прейскурант", "номенклатур", "ассортимент", "brochure", "брошюр",
+    "каталог",
+    "katalog",
+    "catalog",
+    "catalogue",
+    "прайс",
+    "price",
+    "прайс-лист",
+    "прейскурант",
+    "номенклатур",
+    "ассортимент",
+    "brochure",
+    "брошюр",
 )
 
 
@@ -1701,13 +1725,17 @@ async def _known_host_from_entries(db: AsyncSession, supplier_id: uuid.UUID) -> 
     from urllib.parse import urlparse
 
     rows = (
-        await db.execute(
-            select(ToolCatalogEntry.metadata_).where(
-                ToolCatalogEntry.supplier_id == supplier_id,
-                ToolCatalogEntry.metadata_.isnot(None),
+        (
+            await db.execute(
+                select(ToolCatalogEntry.metadata_).where(
+                    ToolCatalogEntry.supplier_id == supplier_id,
+                    ToolCatalogEntry.metadata_.isnot(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     counts: dict[str, int] = {}
     for meta in rows:
         url = (meta or {}).get("source_url") if isinstance(meta, dict) else None
@@ -1769,9 +1797,22 @@ async def _discover_official_site(name: str, inn: str | None) -> tuple[str | Non
             if any(
                 bad in host
                 for bad in (
-                    "rusprofile", "list-org", "sbis", "zachestnyibiznes", "checko",
-                    "vk.com", "facebook", "youtube", "avito", "yandex", "google",
-                    "wikipedia", "2gis", "flamp", "spark-interfax", "audit-it",
+                    "rusprofile",
+                    "list-org",
+                    "sbis",
+                    "zachestnyibiznes",
+                    "checko",
+                    "vk.com",
+                    "facebook",
+                    "youtube",
+                    "avito",
+                    "yandex",
+                    "google",
+                    "wikipedia",
+                    "2gis",
+                    "flamp",
+                    "spark-interfax",
+                    "audit-it",
                 )
             ):
                 continue
@@ -1834,9 +1875,7 @@ def _mentions_supplier(url: str, title: str | None, name: str) -> bool:
     return bool(tokens) and any(token in haystack for token in tokens)
 
 
-def _discovery_message(
-    name: str, website: str | None, ordered: list, files: list
-) -> str:
+def _discovery_message(name: str, website: str | None, ordered: list, files: list) -> str:
     """Say what to do next, not just what happened.
 
     The live failure this addresses: discovery returned links, the model had no
@@ -1886,9 +1925,23 @@ def _candidate_kind(url: str) -> str:
 
 
 _AGGREGATOR_HOSTS = (
-    "rusprofile", "list-org", "sbis", "zachestnyibiznes", "checko", "bizorg",
-    "expocentr", "spark-interfax", "audit-it", "2gis", "flamp", "yell.ru",
-    "wikipedia", "avito", "vk.com", "facebook", "youtube",
+    "rusprofile",
+    "list-org",
+    "sbis",
+    "zachestnyibiznes",
+    "checko",
+    "bizorg",
+    "expocentr",
+    "spark-interfax",
+    "audit-it",
+    "2gis",
+    "flamp",
+    "yell.ru",
+    "wikipedia",
+    "avito",
+    "vk.com",
+    "facebook",
+    "youtube",
 )
 
 
@@ -1930,7 +1983,7 @@ def _same_site(url: str, website: str | None) -> bool:
     from urllib.parse import urlparse
 
     host = (urlparse(url).hostname or "").lower().removeprefix("www.")
-    site_host = (urlparse(website if "//" in website else f"https://{website}").hostname or "")
+    site_host = urlparse(website if "//" in website else f"https://{website}").hostname or ""
     site_host = site_host.lower().removeprefix("www.")
     return bool(site_host) and (host == site_host or host.endswith("." + site_host))
 
@@ -2055,7 +2108,7 @@ async def discover_catalogs(
     if website:
         from urllib.parse import urlparse
 
-        host = (urlparse(website if "//" in website else f"https://{website}").hostname or "")
+        host = urlparse(website if "//" in website else f"https://{website}").hostname or ""
         host = host.removeprefix("www.")
         if host:
             queries = [f"site:{host} каталог", f"site:{host} pdf прайс", *queries]
@@ -2099,13 +2152,18 @@ async def discover_catalogs(
         pages_to_scan.extend(
             base + path
             for path in (
-                "/catalog/", "/katalog/", "/price/", "/prays/", "/prajs/",
-                "/produktsiya/", "/products/", "/oborudovanie/", "/",
+                "/catalog/",
+                "/katalog/",
+                "/price/",
+                "/prays/",
+                "/prajs/",
+                "/produktsiya/",
+                "/products/",
+                "/oborudovanie/",
+                "/",
             )
         )
-    pages_to_scan.extend(
-        url for url, _ in search_hits if _candidate_kind(url) == "page"
-    )
+    pages_to_scan.extend(url for url, _ in search_hits if _candidate_kind(url) == "page")
     seen_pages: list[str] = []
     # Second level: catalog sections found on the first pass are opened too —
     # a machine-tool supplier keeps one PDF per product line behind a section
@@ -2115,9 +2173,7 @@ async def discover_catalogs(
     async def _scan(page_url: str, *, second_level: bool) -> None:
         try:
             fetched = await fetch_page(
-                WebFetchRequest(
-                    url=page_url, max_chars=2000, ocr=False, include_links=True
-                )
+                WebFetchRequest(url=page_url, max_chars=2000, ocr=False, include_links=True)
             )
         except HTTPException as exc:
             diagnostics.append(f"scan_failed:{page_url}:{str(exc.detail)[:120]}")
@@ -2172,8 +2228,7 @@ async def discover_catalogs(
                 # An off-site PAGE is a directory listing or a marketplace, never
                 # this supplier's catalog. Only off-site FILES that carry the
                 # supplier's name are worth keeping (a CDN-hosted PDF).
-                candidate.kind == "page"
-                or not _mentions_supplier(url, candidate.title, name)
+                candidate.kind == "page" or not _mentions_supplier(url, candidate.title, name)
             )
         ]
         for url in foreign:
@@ -2207,9 +2262,8 @@ async def discover_catalogs(
                 "title": _readable_source_name(c.url, c.title),
                 "url": {"href": c.url, "label": c.url},
                 "kind": kind_label.get(c.kind, c.kind),
-                "where": (
-                    "сайт поставщика" if c.on_supplier_site else "внешний источник"
-                ) + (" (обход сайта)" if c.found_via == "site_scan" else " (поиск)"),
+                "where": ("сайт поставщика" if c.on_supplier_site else "внешний источник")
+                + (" (обход сайта)" if c.found_via == "site_scan" else " (поиск)"),
             }
             for c in ordered
         ],
@@ -2269,10 +2323,14 @@ async def catalog_ingest_status(
     # можно сверить с документом. "done" пишет краул на корень сайта —
     # документа с таким адресом не бывает вовсе, сверять нечего.
     catalog_docs = (
-        await db.execute(
-            select(Document).where(Document.doc_type == DocumentType.supplier_catalog)
+        (
+            await db.execute(
+                select(Document).where(Document.doc_type == DocumentType.supplier_catalog)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     by_url = {
         str((doc.metadata_ or {}).get("source_url")): doc
         for doc in catalog_docs
@@ -2325,8 +2383,7 @@ async def catalog_ingest_status(
         if pages_total and pages_done < pages_total:
             record["status"] = "running"
             record["message"] = (
-                f"Разбор идёт: страница {pages_done} из {pages_total}, "
-                f"позиций уже {entries_now}."
+                f"Разбор идёт: страница {pages_done} из {pages_total}, позиций уже {entries_now}."
             )
         else:
             record["status"] = "attached"
@@ -2335,6 +2392,7 @@ async def catalog_ingest_status(
                 if pages_total
                 else f"Позиций: {entries_now}."
             )
+
     async def _entries_around(moment: datetime) -> int:
         """Сколько позиций поставщика появилось в окне вокруг записи.
 
@@ -2430,9 +2488,7 @@ async def catalog_ingest_status(
             + "."
         )
     if stale:
-        message += (
-            f" Записей о ранее загруженных каталогах, которых больше нет: {len(stale)}."
-        )
+        message += f" Записей о ранее загруженных каталогах, которых больше нет: {len(stale)}."
 
     return CatalogIngestStatusResult(
         tool_supplier_id=supplier.id,
@@ -2485,9 +2541,7 @@ async def reindex_catalog(
     )
 
     profile = get_active_embedding_profile()
-    ensure_drawing_collections(
-        profile.dimension, recreate_on_mismatch=payload.recreate_collection
-    )
+    ensure_drawing_collections(profile.dimension, recreate_on_mismatch=payload.recreate_collection)
 
     rows = (
         (
@@ -2533,7 +2587,9 @@ async def reindex_catalog(
             indexed += 1
         except Exception as exc:  # noqa: BLE001 — one bad row can't stop the rebuild
             failed += 1
-            logger.warning("tool_catalog_reindex_entry_failed", entry_id=str(entry.id), error=str(exc)[:200])
+            logger.warning(
+                "tool_catalog_reindex_entry_failed", entry_id=str(entry.id), error=str(exc)[:200]
+            )
     await db.commit()
 
     return ReindexCatalogResult(

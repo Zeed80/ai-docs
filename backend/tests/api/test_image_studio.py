@@ -34,7 +34,9 @@ INVALID_SHAFT = {
 
 @pytest.mark.asyncio
 async def test_design_history_restore_queues_revision_safe_rebuild(
-    client, db_session, monkeypatch,
+    client,
+    db_session,
+    monkeypatch,
 ):
     from app.ai.cad_ir.feature_tree import Feature3D, FeatureTreeCandidate
     from app.db.models import ImageGeneration, ImageGenStatus
@@ -52,9 +54,7 @@ async def test_design_history_restore_queues_revision_safe_rebuild(
     queued: list[tuple[list, str]] = []
     monkeypatch.setattr(
         "app.tasks.cad_trace.restore_design_revision.apply_async",
-        lambda args, queue: (
-            queued.append((args, queue)) or SimpleNamespace(id="restore-task")
-        ),
+        lambda args, queue: queued.append((args, queue)) or SimpleNamespace(id="restore-task"),
     )
 
     generation = ImageGeneration(
@@ -83,10 +83,16 @@ async def test_design_history_restore_queues_revision_safe_rebuild(
     )
     revised = base.model_copy(deep=True)
     revised.features.append(
-        Feature3D(kind="boss", params={
-            "profile": "circle", "diameter_mm": 4.0, "depth_mm": 2.0,
-            "center_x_mm": 0.0, "center_y_mm": 0.0,
-        })
+        Feature3D(
+            kind="boss",
+            params={
+                "profile": "circle",
+                "diameter_mm": 4.0,
+                "depth_mm": 2.0,
+                "center_x_mm": 0.0,
+                "center_y_mm": 0.0,
+            },
+        )
     )
     row1 = await persist_feature_tree_revision(
         db_session,
@@ -112,9 +118,7 @@ async def test_design_history_restore_queues_revision_safe_rebuild(
     }
     await db_session.commit()
 
-    history = await client.get(
-        f"/api/image-gen/{generation.id}/model-graph/design-history"
-    )
+    history = await client.get(f"/api/image-gen/{generation.id}/model-graph/design-history")
     assert history.status_code == 200, history.text
     assert history.json()["current_revision"] == 1
     assert [item["revision"] for item in history.json()["revisions"]] == [0, 1]
@@ -129,10 +133,20 @@ async def test_design_history_restore_queues_revision_safe_rebuild(
     )
     assert restore.status_code == 200, restore.text
     assert restore.json()["rebuild_task_id"] == "restore-task"
-    assert queued == [([
-        str(generation.id), 0, "Откатить ошибочно добавленную бобышку",
-        "restore-design-history-r0", "dev-user", 1, row1.canonical_sha256,
-    ], "celery")]
+    assert queued == [
+        (
+            [
+                str(generation.id),
+                0,
+                "Откатить ошибочно добавленную бобышку",
+                "restore-design-history-r0",
+                "dev-user",
+                1,
+                row1.canonical_sha256,
+            ],
+            "celery",
+        )
+    ]
 
     current = await client.post(
         f"/api/image-gen/{generation.id}/model-graph/design-history/restore",
@@ -147,24 +161,26 @@ async def test_design_history_restore_queues_revision_safe_rebuild(
 
 @pytest.mark.asyncio
 async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
-    client, db_session, monkeypatch,
+    client,
+    db_session,
+    monkeypatch,
 ):
-    from app.db.models import ImageGeneration, ImageGenStatus
+    from PIL import Image
+
+    from app.db.models import ImageGeneration, ImageGenStatus, TraceProposalRecord
     from app.domain.engineering_model_graph import (
         Assertion,
         BuildTarget,
         DeterministicTraceChecks,
         EngineeringModelGraph,
         Evidence,
-        GraphSource,
         GraphNode,
+        GraphSource,
         TracePrimitive,
         TraceProposal,
         UnknownValue,
     )
-    from app.db.models import TraceProposalRecord
     from app.services.engineering_model_graph import persist_pipeline_graph
-    from PIL import Image
 
     objects: dict[str, bytes] = {}
     source_buffer = io.BytesIO()
@@ -187,8 +203,7 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     monkeypatch.setattr(
         "app.tasks.cad_trace.rebuild_from_spec.apply_async",
         lambda args, queue: (
-            rebuild_calls.append((args, queue))
-            or SimpleNamespace(id="rebuild-task")
+            rebuild_calls.append((args, queue)) or SimpleNamespace(id="rebuild-task")
         ),
     )
     generation = ImageGeneration(
@@ -211,65 +226,81 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     graph = EngineeringModelGraph(
         graph_id=f"image-generation:{generation.id}",
         profile="mechanical",
-        sources=[GraphSource(
-            id="source:sheet",
-            uri=source_path,
-            sha256=hashlib.sha256(source_bytes).hexdigest(),
-            media_type="image/png",
-        )],
+        sources=[
+            GraphSource(
+                id="source:sheet",
+                uri=source_path,
+                sha256=hashlib.sha256(source_bytes).hexdigest(),
+                media_type="image/png",
+            )
+        ],
         nodes=[
             GraphNode(id="docs", type="DocumentSet"),
             GraphNode(id="product:legacy-spec", type="Product", name="Blocked shaft"),
             GraphNode(id="region:whole", type="SourceRegion"),
         ],
-        assertions=[Assertion(
-            id="assertion:hole-diameter",
-            subject_id="product:legacy-spec",
-            predicate="hole.diameter_mm",
-            value=UnknownValue(kind="unknown", reason="unreadable"),
-            unit="mm",
-            origin="observed",
-            assurance="proposed",
-            evidence_ids=["evidence:whole"],
-            confidence=0.2,
-            impacts=["connection_opening"],
-        ), Assertion(
-            id="assertion:length",
-            subject_id="product:legacy-spec",
-            predicate="length_mm",
-            value=UnknownValue(kind="unknown", reason="needs review"),
-            unit="mm", origin="observed", assurance="proposed",
-            evidence_ids=["evidence:whole"], confidence=0.5,
-            impacts=["envelope"],
-        ), Assertion(
-            id="assertion:outer-diameter",
-            subject_id="product:legacy-spec",
-            predicate="outer_diameter_mm",
-            value=UnknownValue(kind="unknown", reason="needs review"),
-            unit="mm", origin="observed", assurance="proposed",
-            evidence_ids=["evidence:whole"], confidence=0.5,
-            impacts=["envelope"],
-        )],
-        evidence=[Evidence(
-            id="evidence:whole",
-            kind="raster_region",
-            source_id="source:sheet",
-            source_region_id="region:whole",
-            payload={"bbox_normalized": [0, 0, 1, 1], "fallback": True},
-        )],
-        build_targets=[BuildTarget(
-            id="preview", kind="preview_brep", root_node_ids=["product:legacy-spec"]
-        )],
+        assertions=[
+            Assertion(
+                id="assertion:hole-diameter",
+                subject_id="product:legacy-spec",
+                predicate="hole.diameter_mm",
+                value=UnknownValue(kind="unknown", reason="unreadable"),
+                unit="mm",
+                origin="observed",
+                assurance="proposed",
+                evidence_ids=["evidence:whole"],
+                confidence=0.2,
+                impacts=["connection_opening"],
+            ),
+            Assertion(
+                id="assertion:length",
+                subject_id="product:legacy-spec",
+                predicate="length_mm",
+                value=UnknownValue(kind="unknown", reason="needs review"),
+                unit="mm",
+                origin="observed",
+                assurance="proposed",
+                evidence_ids=["evidence:whole"],
+                confidence=0.5,
+                impacts=["envelope"],
+            ),
+            Assertion(
+                id="assertion:outer-diameter",
+                subject_id="product:legacy-spec",
+                predicate="outer_diameter_mm",
+                value=UnknownValue(kind="unknown", reason="needs review"),
+                unit="mm",
+                origin="observed",
+                assurance="proposed",
+                evidence_ids=["evidence:whole"],
+                confidence=0.5,
+                impacts=["envelope"],
+            ),
+        ],
+        evidence=[
+            Evidence(
+                id="evidence:whole",
+                kind="raster_region",
+                source_id="source:sheet",
+                source_region_id="region:whole",
+                payload={"bbox_normalized": [0, 0, 1, 1], "fallback": True},
+            )
+        ],
+        build_targets=[
+            BuildTarget(id="preview", kind="preview_brep", root_node_ids=["product:legacy-spec"])
+        ],
     ).sealed()
     row = await persist_pipeline_graph(db_session, graph)
     proposal = TraceProposal(
         id="trace-test",
         source_region_id="region:whole",
         hypothesis_id="hypothesis:trace-test",
-        primitives=[TracePrimitive(
-            kind="polyline",
-            parameters={"points": [10, 10, 40, 10, 40, 30, 10, 30]},
-        )],
+        primitives=[
+            TracePrimitive(
+                kind="polyline",
+                parameters={"points": [10, 10, 40, 10, 40, 30, 10, 30]},
+            )
+        ],
         trace_parameters={"scale_mm_per_px": 1.0},
         source_bbox=(0, 0, 100, 80),
         uncertainty=0.1,
@@ -285,16 +316,18 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
             pixel_recall=0.9,
         ),
     )
-    db_session.add(TraceProposalRecord(
-        graph_revision_id=row.id,
-        proposal_id=proposal.id,
-        source_region_id=proposal.source_region_id,
-        assertion_id="assertion:hole-diameter",
-        rank=1,
-        status="accepted",
-        score=0.9,
-        payload=proposal.model_dump(mode="json"),
-    ))
+    db_session.add(
+        TraceProposalRecord(
+            graph_revision_id=row.id,
+            proposal_id=proposal.id,
+            source_region_id=proposal.source_region_id,
+            assertion_id="assertion:hole-diameter",
+            rank=1,
+            status="accepted",
+            score=0.9,
+            payload=proposal.model_dump(mode="json"),
+        )
+    )
     generation.params = {
         **generation.params,
         "engineering_model_graph": {"revision_id": str(row.id)},
@@ -309,21 +342,15 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert body["workflow_status"] == "review_required"
     assert any(item.get("name") == "Blocked shaft" for item in body["graph"]["nodes"])
 
-    downloaded = await client.get(
-        f"/api/image-gen/{generation.id}/model-graph/download"
-    )
+    downloaded = await client.get(f"/api/image-gen/{generation.id}/model-graph/download")
     assert downloaded.status_code == 200
-    assert downloaded.headers["content-type"].startswith(
-        "application/vnd.ptsai.emg+json"
-    )
+    assert downloaded.headers["content-type"].startswith("application/vnd.ptsai.emg+json")
     assert downloaded.headers["x-engineering-graph-sha256"] == row.canonical_sha256
     assert downloaded.headers["x-engineering-graph-revision"] == "0"
     assert downloaded.headers["content-disposition"].endswith('.emg.json"')
     assert downloaded.json()["canonical_sha256"] == row.canonical_sha256
 
-    diagnostics = await client.get(
-        f"/api/image-gen/{generation.id}/diagnostics-package"
-    )
+    diagnostics = await client.get(f"/api/image-gen/{generation.id}/diagnostics-package")
     assert diagnostics.status_code == 200
     assert diagnostics.headers["content-type"].startswith("application/zip")
     assert diagnostics.headers["x-cad-diagnostics-complete"] == "false"
@@ -338,17 +365,14 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
         assert manifest["schema"] == "cad-diagnostics/1.0"
         assert manifest["generation_id"] == str(generation.id)
         assert any(
-            item["name"] == "cad_ir/current.json"
-            and item["reason"] == "revision_not_found"
+            item["name"] == "cad_ir/current.json" and item["reason"] == "revision_not_found"
             for item in manifest["missing_artifacts"]
         )
         for item in manifest["entries"]:
             content = archive.read(item["name"])
             assert item["size_bytes"] == len(content)
             assert item["sha256"] == hashlib.sha256(content).hexdigest()
-    diagnostics_repeat = await client.get(
-        f"/api/image-gen/{generation.id}/diagnostics-package"
-    )
+    diagnostics_repeat = await client.get(f"/api/image-gen/{generation.id}/diagnostics-package")
     assert diagnostics_repeat.status_code == 200
     assert diagnostics_repeat.content == diagnostics.content
 
@@ -361,9 +385,7 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     with Image.open(io.BytesIO(trace_overlay.content)) as overlay_image:
         assert overlay_image.size == (100, 80)
 
-    verification = await client.post(
-        f"/api/image-gen/{generation.id}/model-graph/verify"
-    )
+    verification = await client.post(f"/api/image-gen/{generation.id}/model-graph/verify")
     assert verification.status_code == 200
     assert verification.json()["workflow_status"] == "review_required"
 
@@ -388,10 +410,13 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert dependency["status"] == "passed"
     assert dependency["scope"] == "dependency_graph"
     assert dependency["geometry_validated"] is False
-    assert dependency["changed_assertion_ids"] == [replacement_id := next(
-        item["id"] for item in revised["graph"]["assertions"]
-        if item.get("supersedes_assertion_id") == "assertion:hole-diameter"
-    )]
+    assert dependency["changed_assertion_ids"] == [
+        replacement_id := next(
+            item["id"]
+            for item in revised["graph"]["assertions"]
+            if item.get("supersedes_assertion_id") == "assertion:hole-diameter"
+        )
+    ]
     assert dependency["requires_kernel_rebuild"] is True
     assert dependency["validation_errors"] == []
     assert len(rebuild_calls) == 1
@@ -401,11 +426,11 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     await db_session.refresh(generation)
     assert generation.params["spec_corrected"]["hole"]["diameter_mm"] == 15.7
     old = next(
-        item for item in revised["graph"]["assertions"]
-        if item["id"] == "assertion:hole-diameter"
+        item for item in revised["graph"]["assertions"] if item["id"] == "assertion:hole-diameter"
     )
     replacement = next(
-        item for item in revised["graph"]["assertions"]
+        item
+        for item in revised["graph"]["assertions"]
         if item.get("supersedes_assertion_id") == "assertion:hole-diameter"
     )
     assert old["state"] == "superseded"
@@ -414,9 +439,9 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert replacement["value"] == {"kind": "exact", "value": 15.7}
     assert replacement["id"] == replacement_id
     raster = next(
-        item for item in revised["graph"]["evidence"]
-        if item["id"] in replacement["evidence_ids"]
-        and item["kind"] == "raster_region"
+        item
+        for item in revised["graph"]["evidence"]
+        if item["id"] in replacement["evidence_ids"] and item["kind"] == "raster_region"
     )
     assert raster["payload"]["bbox_normalized"] == [0.1, 0.25, 0.4, 0.5]
     assert raster["payload"]["fallback"] is False
@@ -461,23 +486,32 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     batch_body = batch.json()
     assert batch_body["revision"] == 2
     assert batch_body["corrected_assertion_ids"] == [
-        "assertion:length", "assertion:outer-diameter",
+        "assertion:length",
+        "assertion:outer-diameter",
     ]
     assert batch_body["dependency_validation"]["status"] == "passed"
     assert len(batch_body["dependency_validation"]["changed_assertion_ids"]) == 2
     assert batch_body["dependency_validation"]["geometry_validated"] is False
     assert batch_body["compatibility_spec_updated"] is True
-    assert len([
-        item for item in batch_body["graph"]["assertions"]
-        if item.get("origin") == "human" and item.get("state") == "active"
-    ]) == 3
+    assert (
+        len(
+            [
+                item
+                for item in batch_body["graph"]["assertions"]
+                if item.get("origin") == "human" and item.get("state") == "active"
+            ]
+        )
+        == 3
+    )
     duplicate_batch = await client.post(
         f"/api/image-gen/{generation.id}/model-graph/corrections",
         json={
-            "corrections": [{
-                "assertion_id": "assertion:length",
-                "value": {"kind": "exact", "value": 120},
-            }],
+            "corrections": [
+                {
+                    "assertion_id": "assertion:length",
+                    "value": {"kind": "exact", "value": 120},
+                }
+            ],
             "note": "Повтор",
             "idempotency_key": "human-batch-length-diameter",
         },
@@ -490,8 +524,7 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert patches.json()[0]["accepted"] is True
 
     duplicate = await client.post(
-        f"/api/image-gen/{generation.id}/model-graph/assertions/"
-        f"{replacement['id']}/corrections",
+        f"/api/image-gen/{generation.id}/model-graph/assertions/{replacement['id']}/corrections",
         json=correction_body,
     )
     assert duplicate.status_code == 409
@@ -505,13 +538,9 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     await db_session.commit()
     denied = await client.get(f"/api/image-gen/{other.id}/model-graph")
     assert denied.status_code == 404
-    denied_download = await client.get(
-        f"/api/image-gen/{other.id}/model-graph/download"
-    )
+    denied_download = await client.get(f"/api/image-gen/{other.id}/model-graph/download")
     assert denied_download.status_code == 404
-    denied_diagnostics = await client.get(
-        f"/api/image-gen/{other.id}/diagnostics-package"
-    )
+    denied_diagnostics = await client.get(f"/api/image-gen/{other.id}/diagnostics-package")
     assert denied_diagnostics.status_code == 404
 
 
@@ -549,9 +578,15 @@ async def _seed_feature_correction_graph(db_session, monkeypatch):
         owner_sub="dev-user",
         operation="vectorize",
         status=ImageGenStatus.done,
-        params={"spec": {"main_view": {"chamfers": [
-            {"id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end"},
-        ]}}},
+        params={
+            "spec": {
+                "main_view": {
+                    "chamfers": [
+                        {"id": "0:chamfers:0", "size_mm": 1.0, "location": "left_end"},
+                    ]
+                }
+            }
+        },
     )
     db_session.add(generation)
     await db_session.flush()
@@ -564,22 +599,30 @@ async def _seed_feature_correction_graph(db_session, monkeypatch):
             GraphNode(id="product:legacy-spec", type="Product", name="Bracket"),
             GraphNode(id="feature:0:chamfers:0", type="Feature", name="chamfer 0:chamfers:0"),
         ],
-        assertions=[Assertion(
-            id="assertion:chamfer-size",
-            subject_id="feature:0:chamfers:0",
-            predicate="feature.param.size_mm",
-            value=ExactValue(kind="exact", value=1.0),
-            unit="mm", origin="observed", assurance="proposed", confidence=0.6,
-        ), Assertion(
-            id="assertion:chamfer-kind",
-            subject_id="feature:0:chamfers:0",
-            predicate="feature.kind",
-            value=ExactValue(kind="exact", value="chamfer"),
-            origin="observed", assurance="proposed", confidence=0.6,
-        )],
-        build_targets=[BuildTarget(
-            id="preview", kind="preview_brep", root_node_ids=["product:legacy-spec"]
-        )],
+        assertions=[
+            Assertion(
+                id="assertion:chamfer-size",
+                subject_id="feature:0:chamfers:0",
+                predicate="feature.param.size_mm",
+                value=ExactValue(kind="exact", value=1.0),
+                unit="mm",
+                origin="observed",
+                assurance="proposed",
+                confidence=0.6,
+            ),
+            Assertion(
+                id="assertion:chamfer-kind",
+                subject_id="feature:0:chamfers:0",
+                predicate="feature.kind",
+                value=ExactValue(kind="exact", value="chamfer"),
+                origin="observed",
+                assurance="proposed",
+                confidence=0.6,
+            ),
+        ],
+        build_targets=[
+            BuildTarget(id="preview", kind="preview_brep", root_node_ids=["product:legacy-spec"])
+        ],
     ).sealed()
     row = await persist_pipeline_graph(db_session, graph)
     generation.params = {
@@ -592,7 +635,9 @@ async def _seed_feature_correction_graph(db_session, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_feature_param_correction_mirrors_into_compat_spec_and_rebuilds(
-    client, db_session, monkeypatch,
+    client,
+    db_session,
+    monkeypatch,
 ):
     """Ф2.6b: correcting a Ф1.2 Feature's own feature.param.<name> assertion
     — not just product:legacy-spec — now reaches the compatibility spec
@@ -610,8 +655,7 @@ async def test_feature_param_correction_mirrors_into_compat_spec_and_rebuilds(
     )
 
     correction = await client.post(
-        f"/api/image-gen/{generation.id}/model-graph/assertions/"
-        "assertion:chamfer-size/corrections",
+        f"/api/image-gen/{generation.id}/model-graph/assertions/assertion:chamfer-size/corrections",
         json={
             "value": {"kind": "exact", "value": 1.6},
             "note": "Уточнено по выноске 1.6×45°",
@@ -625,9 +669,7 @@ async def test_feature_param_correction_mirrors_into_compat_spec_and_rebuilds(
     assert body["rebuild_task_id"] == "rebuild-task"
     assert len(rebuild_calls) == 1
     await db_session.refresh(generation)
-    assert (
-        generation.params["spec_corrected"]["main_view"]["chamfers"][0]["size_mm"] == 1.6
-    )
+    assert generation.params["spec_corrected"]["main_view"]["chamfers"][0]["size_mm"] == 1.6
 
 
 @pytest.mark.asyncio
@@ -638,8 +680,7 @@ async def test_feature_kind_correction_cannot_rebuild(client, db_session, monkey
     generation = await _seed_feature_correction_graph(db_session, monkeypatch)
 
     correction = await client.post(
-        f"/api/image-gen/{generation.id}/model-graph/assertions/"
-        "assertion:chamfer-kind/corrections",
+        f"/api/image-gen/{generation.id}/model-graph/assertions/assertion:chamfer-kind/corrections",
         json={
             "value": {"kind": "exact", "value": "fillet"},
             "note": "Похоже на скругление, не фаску",
@@ -720,7 +761,9 @@ async def test_graph_description_method_requires_source_sheet(client):
 
 
 @pytest.mark.asyncio
-async def test_generate_can_use_previous_generation_result_as_source(client, db_session, monkeypatch):
+async def test_generate_can_use_previous_generation_result_as_source(
+    client, db_session, monkeypatch
+):
     from app.db.models import ImageGeneration, ImageGenStatus
 
     copied: dict[str, object] = {}
@@ -794,9 +837,7 @@ async def test_generate_creates_queued_record(client):
 
 
 @pytest.mark.asyncio
-async def test_cad_model_outputs_are_loaded_on_demand_not_in_generation_poll(
-    client, db_session
-):
+async def test_cad_model_outputs_are_loaded_on_demand_not_in_generation_poll(client, db_session):
     from app.db.models import ImageGeneration, ImageGenStatus
 
     gen = ImageGeneration(
@@ -806,13 +847,15 @@ async def test_cad_model_outputs_are_loaded_on_demand_not_in_generation_poll(
         params={
             "cad_process": {"events": [{"sequence": 1}]},
             "cad_partial_spec": {"main_view": {"outer": []}},
-            "cad_model_outputs": [{
-                "id": "model-output-1",
-                "sequence": 1,
-                "at": "2026-08-08T00:00:00Z",
-                "stage": "reader.fragment.question",
-                "answer": '{"outer":[]}',
-            }],
+            "cad_model_outputs": [
+                {
+                    "id": "model-output-1",
+                    "sequence": 1,
+                    "at": "2026-08-08T00:00:00Z",
+                    "stage": "reader.fragment.question",
+                    "answer": '{"outer":[]}',
+                }
+            ],
         },
         source_image_paths=[],
     )
@@ -1078,8 +1121,10 @@ async def test_techdraw_description_repairs_after_one_invalid_attempt(client, mo
 
             spec = INVALID_SHAFT if calls["n"] == 1 else VALID_SHAFT
             return AIResponse(
-                task=AITask.ENGINEERING_REASONING, provider=ProviderKind.OLLAMA,
-                model="fake", text=json.dumps(spec),
+                task=AITask.ENGINEERING_REASONING,
+                provider=ProviderKind.OLLAMA,
+                model="fake",
+                text=json.dumps(spec),
             )
 
     monkeypatch.setattr("app.ai.router.AIRouter", FakeAIRouter)
@@ -1097,8 +1142,10 @@ async def test_techdraw_description_gives_up_after_repair_fails(client, monkeypa
             import json
 
             return AIResponse(
-                task=AITask.ENGINEERING_REASONING, provider=ProviderKind.OLLAMA,
-                model="fake", text=json.dumps(INVALID_SHAFT),
+                task=AITask.ENGINEERING_REASONING,
+                provider=ProviderKind.OLLAMA,
+                model="fake",
+                text=json.dumps(INVALID_SHAFT),
             )
 
     monkeypatch.setattr("app.ai.router.AIRouter", FakeAIRouter)
@@ -1165,19 +1212,26 @@ async def test_techdraw_links_to_document_and_case(client, db_session):
     from app.db.models import Document, DocumentStatus, DocumentType, WorkCase
 
     doc = Document(
-        file_name="drawing.pdf", file_hash="techdraw-link-hash", file_size=10,
-        mime_type="application/pdf", storage_path="documents/drawing.pdf",
-        doc_type=DocumentType.other, status=DocumentStatus.approved,
+        file_name="drawing.pdf",
+        file_hash="techdraw-link-hash",
+        file_size=10,
+        mime_type="application/pdf",
+        storage_path="documents/drawing.pdf",
+        doc_type=DocumentType.other,
+        status=DocumentStatus.approved,
     )
     case = WorkCase(title="Изготовление вала", created_by="tester")
     db_session.add_all([doc, case])
     await db_session.flush()
 
-    resp = await client.post("/api/image-gen/techdraw", json={
-        "spec": VALID_SHAFT,
-        "source_document_id": str(doc.id),
-        "case_id": str(case.id),
-    })
+    resp = await client.post(
+        "/api/image-gen/techdraw",
+        json={
+            "spec": VALID_SHAFT,
+            "source_document_id": str(doc.id),
+            "case_id": str(case.id),
+        },
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["source_document_id"] == str(doc.id)
@@ -1208,11 +1262,14 @@ def test_owns_lets_agent_service_bypass_ownership_for_any_record():
     non-functional end-to-end whenever AUTH_ENABLED=true.
     """
     from app.api.image_generation import _owns
-    from app.db.models import ImageGenStatus, ImageGeneration
+    from app.db.models import ImageGeneration, ImageGenStatus
 
     gen = ImageGeneration(
-        owner_sub="real-human-user", operation="techdraw",
-        status=ImageGenStatus.done, params={}, source_image_paths=[],
+        owner_sub="real-human-user",
+        operation="techdraw",
+        status=ImageGenStatus.done,
+        params={},
+        source_image_paths=[],
     )
     assert _owns(gen, _user("agent-service")) is True
     assert _owns(gen, _user("real-human-user")) is True
@@ -1366,10 +1423,10 @@ async def test_spec_corrections_are_distinct_audited_rebuild_events(
         ([str(generation_id), second_event], "celery"),
     ]
     assert gen.params["spec_correction_event_id"] == second_event
-    assert [
-        item["correction_event_id"]
-        for item in gen.params["spec_correction_history"]
-    ] == [first_event, second_event]
+    assert [item["correction_event_id"] for item in gen.params["spec_correction_history"]] == [
+        first_event,
+        second_event,
+    ]
     assert gen.params["spec_corrected"]["title_block"]["material"] == "Сталь 20"
 
 
@@ -1389,7 +1446,9 @@ async def test_studio_queue_list_cleans_done_and_cancelled_jobs(client, db_sessi
         gen = ImageGeneration(
             owner_sub="dev-user",
             operation="generate",
-            status=ImageGenStatus.done if status != studio_queue.StudioJobStatus.failed else ImageGenStatus.failed,
+            status=ImageGenStatus.done
+            if status != studio_queue.StudioJobStatus.failed
+            else ImageGenStatus.failed,
             prompt=f"job-{idx}",
             params={},
             source_image_paths=[],
@@ -1498,13 +1557,21 @@ def test_pick_upscale_model_parses_combo_shapes():
     from app.tasks.image_generation import _pick_upscale_model
 
     # newer: ["COMBO", {"options": [...]}]
-    oi_new = {"UpscaleModelLoader": {"input": {"required": {
-        "model_name": ["COMBO", {"options": ["4x-UltraSharp.pth", "x2.pth"]}]}}}}
+    oi_new = {
+        "UpscaleModelLoader": {
+            "input": {
+                "required": {"model_name": ["COMBO", {"options": ["4x-UltraSharp.pth", "x2.pth"]}]}
+            }
+        }
+    }
     assert _pick_upscale_model(oi_new) == "4x-UltraSharp.pth"
 
     # older: [[opt, ...], {...}]
-    oi_old = {"UpscaleModelLoader": {"input": {"required": {
-        "model_name": [["RealESRGAN_x4.pth", "other.pth"], {}]}}}}
+    oi_old = {
+        "UpscaleModelLoader": {
+            "input": {"required": {"model_name": [["RealESRGAN_x4.pth", "other.pth"], {}]}}
+        }
+    }
     assert _pick_upscale_model(oi_old) == "RealESRGAN_x4.pth"  # 4x preferred
 
     # no upscaler node → None (skip gracefully)

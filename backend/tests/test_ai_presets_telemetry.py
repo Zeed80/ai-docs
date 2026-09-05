@@ -2,7 +2,8 @@
 
 import pytest
 
-from app.ai import presets, task_routing as tr, telemetry
+from app.ai import presets, telemetry
+from app.ai import task_routing as tr
 from app.ai.schemas import AITask
 
 
@@ -101,11 +102,23 @@ def test_telemetry_record_and_summary(monkeypatch):
     fake = _FakeRedis()
     monkeypatch.setattr(telemetry, "_redis", lambda: fake)
 
-    telemetry.record_call(task="invoice_ocr", model="gemma4_e4b_ollama",
-                          provider="ollama", latency_ms=120, ok=True,
-                          input_tokens=10, output_tokens=5)
-    telemetry.record_call(task="invoice_ocr", model="gemma4_e4b_ollama",
-                          provider="ollama", latency_ms=80, ok=False, error="boom")
+    telemetry.record_call(
+        task="invoice_ocr",
+        model="gemma4_e4b_ollama",
+        provider="ollama",
+        latency_ms=120,
+        ok=True,
+        input_tokens=10,
+        output_tokens=5,
+    )
+    telemetry.record_call(
+        task="invoice_ocr",
+        model="gemma4_e4b_ollama",
+        provider="ollama",
+        latency_ms=80,
+        ok=False,
+        error="boom",
+    )
 
     summary = telemetry.get_summary()
     assert summary["totals"]["calls"] == 2

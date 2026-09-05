@@ -4,12 +4,13 @@ Auto-generated fallback stub — replace execute() with real logic.
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 SKILL_META = {
     "name": "workspace_table_edit_tool",
     "description": "table_edit. Причина: Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.. Запрошенный артефакт: workspac",
-    "created_at": "2026-09-05T09:28:32.443010+00:00",
+    "created_at": "2026-09-05T10:26:03.680894+00:00",
     "source": "agent_generated_stub",
 }
 

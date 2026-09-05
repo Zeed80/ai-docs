@@ -80,28 +80,52 @@ def _predicates(*defs: PredicateDef) -> dict[str, PredicateDef]:
 
 _SHARED = (
     PredicateDef(
-        "artifact.media_type", "shared", ("Artifact",), ("exact",), None,
+        "artifact.media_type",
+        "shared",
+        ("Artifact",),
+        ("exact",),
+        None,
         "MIME/media type of a rendered or exported artifact (svg/pdf/step/ifc/...).",
     ),
     PredicateDef(
-        "artifact.sha256", "shared", ("Artifact",), ("exact",), None,
+        "artifact.sha256",
+        "shared",
+        ("Artifact",),
+        ("exact",),
+        None,
         "Content hash of a rebuilt artifact — the evidence a kernel reopen verified it.",
     ),
     PredicateDef(
-        "artifact.bundle_sha256", "shared", ("Artifact",), ("exact",), None,
+        "artifact.bundle_sha256",
+        "shared",
+        ("Artifact",),
+        ("exact",),
+        None,
         "Hash of a composed multi-domain release bundle (zip/manifest).",
     ),
     PredicateDef(
-        "artifact.bundle_complete", "shared", ("Artifact",), ("exact",), None,
+        "artifact.bundle_complete",
+        "shared",
+        ("Artifact",),
+        ("exact",),
+        None,
         "Whether every required member artifact is present in a mixed-profile bundle.",
     ),
     PredicateDef(
-        PREDICATE_OPERATION_KIND, "shared", ("BuildOperation",), ("exact",), None,
+        PREDICATE_OPERATION_KIND,
+        "shared",
+        ("BuildOperation",),
+        ("exact",),
+        None,
         "What kind of build step this operation is (e.g. assembly_instance, assembly_compile). "
         "compile_build_plan orders operations by this + operation.sequence regardless of profile.",
     ),
     PredicateDef(
-        PREDICATE_OPERATION_SEQUENCE, "shared", ("BuildOperation",), ("exact",), None,
+        PREDICATE_OPERATION_SEQUENCE,
+        "shared",
+        ("BuildOperation",),
+        ("exact",),
+        None,
         "This operation's order among its siblings.",
     ),
 )
@@ -110,55 +134,107 @@ _SHARED = (
 
 _ASSEMBLY = (
     PredicateDef(
-        "product.name", "assembly", ("Product",), ("exact",), None,
+        "product.name",
+        "assembly",
+        ("Product",),
+        ("exact",),
+        None,
         "Assembly display name.",
     ),
     PredicateDef(
-        "product.designation", "assembly", ("Product",), ("exact",), None,
+        "product.designation",
+        "assembly",
+        ("Product",),
+        ("exact",),
+        None,
         "Assembly designation/drawing number.",
     ),
     PredicateDef(
-        "component.instance_key", "assembly", ("Component",), ("exact",), None,
+        "component.instance_key",
+        "assembly",
+        ("Component",),
+        ("exact",),
+        None,
         "Stable key of one component instance within the assembly.",
     ),
     PredicateDef(
-        "component.designation", "assembly", ("Component",), ("exact",), None,
+        "component.designation",
+        "assembly",
+        ("Component",),
+        ("exact",),
+        None,
         "Designation of the component definition this instance is of.",
     ),
     PredicateDef(
-        "component.quantity", "assembly", ("Component",), ("exact",), "1",
+        "component.quantity",
+        "assembly",
+        ("Component",),
+        ("exact",),
+        "1",
         "How many of this instance the assembly uses.",
     ),
     PredicateDef(
-        "component.transform", "assembly", ("Component",), ("exact",), None,
+        "component.transform",
+        "assembly",
+        ("Component",),
+        ("exact",),
+        None,
         "Position/orientation of this instance within the assembly.",
     ),
     PredicateDef(
-        "component.grounded", "assembly", ("Component",), ("exact",), None,
+        "component.grounded",
+        "assembly",
+        ("Component",),
+        ("exact",),
+        None,
         "Whether this instance is grounded (fixed) for the DOF solver.",
     ),
     PredicateDef(
-        "mate.type", "assembly", ("Constraint",), ("exact",), None,
+        "mate.type",
+        "assembly",
+        ("Constraint",),
+        ("exact",),
+        None,
         "Kind of mate constraint (coincident/concentric/distance/...).",
     ),
     PredicateDef(
-        "mate.parameters", "assembly", ("Constraint",), ("exact",), None,
+        "mate.parameters",
+        "assembly",
+        ("Constraint",),
+        ("exact",),
+        None,
         "Mate-specific parameters (offset, angle, ...).",
     ),
     PredicateDef(
-        "assembly.degrees_of_freedom", "assembly", ("Product",), ("exact",), "1",
+        "assembly.degrees_of_freedom",
+        "assembly",
+        ("Product",),
+        ("exact",),
+        "1",
         "Remaining unconstrained DOF of the assembly, from the declared-mate-rank solver.",
     ),
     PredicateDef(
-        "assembly.interference_clear", "assembly", ("Product",), ("exact",), None,
+        "assembly.interference_clear",
+        "assembly",
+        ("Product",),
+        ("exact",),
+        None,
         "Whether the exact B-Rep + AABB-fallback interference check found no collisions.",
     ),
     PredicateDef(
-        "assembly.artifact_reopen_valid", "assembly", ("Product",), ("exact",), None,
+        "assembly.artifact_reopen_valid",
+        "assembly",
+        ("Product",),
+        ("exact",),
+        None,
         "Whether the compiled assembly STEP was verified by reopening it in the kernel.",
     ),
     PredicateDef(
-        "assembly.required_2d_complete", "assembly", ("Product",), ("exact",), None,
+        "assembly.required_2d_complete",
+        "assembly",
+        ("Product",),
+        ("exact",),
+        None,
         "Whether every required 2D assembly/construction sheet has been built.",
     ),
 )
@@ -167,31 +243,59 @@ _ASSEMBLY = (
 
 _CONSTRUCTION = (
     PredicateDef(
-        "spatial.level", "construction", ("Component",), ("exact",), "mm",
+        "spatial.level",
+        "construction",
+        ("Component",),
+        ("exact",),
+        "mm",
         "Storey elevation.",
     ),
     PredicateDef(
-        "element.kind", "construction", ("Feature",), ("exact",), None,
+        "element.kind",
+        "construction",
+        ("Feature",),
+        ("exact",),
+        None,
         "Building element kind (wall/slab/column/opening/...).",
     ),
     PredicateDef(
-        "element.material", "construction", ("Feature",), ("exact", "unknown"), None,
+        "element.material",
+        "construction",
+        ("Feature",),
+        ("exact", "unknown"),
+        None,
         "Building element material.",
     ),
     PredicateDef(
-        "geometry.box", "construction", ("Feature",), ("exact",), "mm",
+        "geometry.box",
+        "construction",
+        ("Feature",),
+        ("exact",),
+        "mm",
         "Axis-aligned bounding box of a building element.",
     ),
     PredicateDef(
-        "construction.openings_contained", "construction", ("System",), ("exact",), None,
+        "construction.openings_contained",
+        "construction",
+        ("System",),
+        ("exact",),
+        None,
         "Whether every opening element is fully contained by its host wall/slab.",
     ),
     PredicateDef(
-        "construction.ifc_reopen_valid", "construction", ("System",), ("exact",), None,
+        "construction.ifc_reopen_valid",
+        "construction",
+        ("System",),
+        ("exact",),
+        None,
         "Whether the compiled IFC was verified by reopening it.",
     ),
     PredicateDef(
-        "construction.required_sheets_complete", "construction", ("System",), ("exact",), None,
+        "construction.required_sheets_complete",
+        "construction",
+        ("System",),
+        ("exact",),
+        None,
         "Whether every required plan/section sheet has been built.",
     ),
 )
@@ -200,35 +304,67 @@ _CONSTRUCTION = (
 
 _SYSTEM = (
     PredicateDef(
-        "system.kind", "system", ("System",), ("exact",), None,
+        "system.kind",
+        "system",
+        ("System",),
+        ("exact",),
+        None,
         "System kind (mep/electrical/hydraulic/pid).",
     ),
     PredicateDef(
-        "equipment.type", "system", ("Component",), ("exact",), None,
+        "equipment.type",
+        "system",
+        ("Component",),
+        ("exact",),
+        None,
         "Equipment type of a system component.",
     ),
     PredicateDef(
-        "port.direction", "system", ("Port",), ("exact",), None,
+        "port.direction",
+        "system",
+        ("Port",),
+        ("exact",),
+        None,
         "Port flow direction (in/out/bidirectional).",
     ),
     PredicateDef(
-        "port.kind", "system", ("Port",), ("exact",), None,
+        "port.kind",
+        "system",
+        ("Port",),
+        ("exact",),
+        None,
         "Port kind (supply/return/...).",
     ),
     PredicateDef(
-        "port.medium", "system", ("Port",), ("exact",), None,
+        "port.medium",
+        "system",
+        ("Port",),
+        ("exact",),
+        None,
         "Medium carried by this port (water/air/signal/...).",
     ),
     PredicateDef(
-        "port.nominal_size", "system", ("Port",), ("exact",), None,
+        "port.nominal_size",
+        "system",
+        ("Port",),
+        ("exact",),
+        None,
         "Nominal size/diameter of this port.",
     ),
     PredicateDef(
-        "system.connectivity_closed", "system", ("System",), ("exact",), None,
+        "system.connectivity_closed",
+        "system",
+        ("System",),
+        ("exact",),
+        None,
         "Whether every port in the system connects to exactly one counterpart.",
     ),
     PredicateDef(
-        "system.required_diagram_complete", "system", ("System",), ("exact",), None,
+        "system.required_diagram_complete",
+        "system",
+        ("System",),
+        ("exact",),
+        None,
         "Whether the required connectivity diagram has been built.",
     ),
 )
@@ -237,7 +373,11 @@ _SYSTEM = (
 
 _MIXED = (
     PredicateDef(
-        "cross_profile.link", "mixed", ("Constraint",), ("exact",), None,
+        "cross_profile.link",
+        "mixed",
+        ("Constraint",),
+        ("exact",),
+        None,
         "One declared link between two member profiles in a mixed bundle "
         "(e.g. a construction opening a hydraulic run passes through).",
     ),
@@ -249,15 +389,27 @@ _MIXED = (
 
 _MECHANICAL = (
     PredicateDef(
-        "observation.cadir_entity_json", "mechanical", ("Geometry",), ("exact",), None,
+        "observation.cadir_entity_json",
+        "mechanical",
+        ("Geometry",),
+        ("exact",),
+        None,
         "Raw CadIR entity, serialized — one vectorized/hybrid-traced drawing entity.",
     ),
     PredicateDef(
-        "scale.mm_per_px", "mechanical", ("Sheet",), ("exact",), "mm",
+        "scale.mm_per_px",
+        "mechanical",
+        ("Sheet",),
+        ("exact",),
+        "mm",
         "Sheet scale recovered from the drawing graph.",
     ),
     PredicateDef(
-        "material.designation", "mechanical", ("Product", "Component"), ("exact",), None,
+        "material.designation",
+        "mechanical",
+        ("Product", "Component"),
+        ("exact",),
+        None,
         "Material designation (ГОСТ/DIN/...).",
     ),
     # native_feature_graph_additions (cad_emg_compat.py) — one Feature node
@@ -265,13 +417,21 @@ _MECHANICAL = (
     # section, replacing the flat legacy-spec dotted-path passthrough for
     # elements the reader gave a stable id (assign_stable_feature_ids).
     PredicateDef(
-        "feature.kind", "mechanical", ("Feature",), ("exact",), None,
+        "feature.kind",
+        "mechanical",
+        ("Feature",),
+        ("exact",),
+        None,
         "Feature kind — the read spec's own list name (chamfer/fillet/groove/"
         "keyway/cross_hole/axial_hole_pattern/circular_hole_pattern/hole/"
         "hole_pattern/slot/section_outer/section_bore).",
     ),
     PredicateDef(
-        "feature.location", "mechanical", ("Feature",), ("exact",), None,
+        "feature.location",
+        "mechanical",
+        ("Feature",),
+        ("exact",),
+        None,
         "Where on the body a chamfer/fillet sits (left_end/right_end/"
         "shoulder/bore_mouth/bore) — the spec's own placement vocabulary, "
         "never a resolved edge id (the kernel resolves the edge itself).",
@@ -279,7 +439,12 @@ _MECHANICAL = (
 )
 
 PREDICATES: dict[str, PredicateDef] = _predicates(
-    *_SHARED, *_ASSEMBLY, *_CONSTRUCTION, *_SYSTEM, *_MIXED, *_MECHANICAL,
+    *_SHARED,
+    *_ASSEMBLY,
+    *_CONSTRUCTION,
+    *_SYSTEM,
+    *_MIXED,
+    *_MECHANICAL,
 )
 
 # Templated families: one entry per *pattern*, matched by prefix. The
@@ -287,19 +452,35 @@ PREDICATES: dict[str, PredicateDef] = _predicates(
 # of its own — see the call sites in assembly_emg.py / cad_emg_compat.py.
 TEMPLATED_PREDICATES: dict[str, PredicateDef] = _predicates(
     PredicateDef(
-        "operation.param.", "shared", ("BuildOperation",), ("exact",), None,
+        "operation.param.",
+        "shared",
+        ("BuildOperation",),
+        ("exact",),
+        None,
         "One named build-input parameter, keyed by name (operation.param.<name>).",
     ),
     PredicateDef(
-        "build.unresolved.", "mechanical", ("BuildOperation",), ("exact",), None,
+        "build.unresolved.",
+        "mechanical",
+        ("BuildOperation",),
+        ("exact",),
+        None,
         "One unresolved-reading note carried into the build, by index.",
     ),
     PredicateDef(
-        "build.removed_assertion.", "mechanical", ("BuildOperation",), ("exact",), None,
+        "build.removed_assertion.",
+        "mechanical",
+        ("BuildOperation",),
+        ("exact",),
+        None,
         "Record of one assertion a correction rebuild superseded, by index.",
     ),
     PredicateDef(
-        "feature.param.", "mechanical", ("Feature",), ("exact",), None,
+        "feature.param.",
+        "mechanical",
+        ("Feature",),
+        ("exact",),
+        None,
         "One named numeric/text field of a read feature, keyed by its spec "
         "field name (feature.param.diameter_mm, feature.param.depth_mm, ...) "
         "— mirrors operation.param. for the same reason: the field-name "
@@ -336,8 +517,10 @@ def classify_predicate(predicate: str, subject_id: str) -> Classification:
     """
     if predicate in PREDICATES:
         return "registered"
-    if any(predicate.startswith(prefix) and len(predicate) > len(prefix)
-           for prefix in TEMPLATED_PREDICATES):
+    if any(
+        predicate.startswith(prefix) and len(predicate) > len(prefix)
+        for prefix in TEMPLATED_PREDICATES
+    ):
         return "templated"
     if is_legacy_spec_passthrough(subject_id):
         return "legacy_passthrough"

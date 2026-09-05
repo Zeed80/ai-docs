@@ -95,9 +95,7 @@ def test_match_route_table_edit():
     assert route is not None
     assert route["intent"] == "table_edit"
     assert route["role"] == "invoice_specialist"
-    canvas = route_table.resolve_canvas_from_route(
-        route, "добавь столбец с названием поставщика"
-    )
+    canvas = route_table.resolve_canvas_from_route(route, "добавь столбец с названием поставщика")
     assert canvas == "agent:invoice-items-grouped"
 
 
@@ -108,7 +106,7 @@ def test_match_route_tech_process():
 
 
 def test_supplier_name_extraction():
-    assert route_table.extract_supplier_name('счета поставщика «Ромашка»') == "Ромашка"
+    assert route_table.extract_supplier_name("счета поставщика «Ромашка»") == "Ромашка"
     # Generic attribute requests must not produce a name.
     assert route_table.extract_supplier_name("лучший поставщик по trust score") is None
     assert route_table.extract_supplier_name("сгруппируй по поставщикам") is None
@@ -124,10 +122,7 @@ def test_supplier_grouping_detection():
 
 def test_fallback_canvas_rules():
     assert route_table.fallback_canvas("выведи все товары списком") == "agent:invoice-items"
-    assert (
-        route_table.fallback_canvas("товары по поставщикам")
-        == "agent:invoice-items-by-supplier"
-    )
+    assert route_table.fallback_canvas("товары по поставщикам") == "agent:invoice-items-by-supplier"
     assert route_table.fallback_canvas("список счетов") == "agent:invoices"
     assert route_table.fallback_canvas("про погоду") is None
 

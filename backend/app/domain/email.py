@@ -197,9 +197,17 @@ class ThreadListResponse(BaseModel):
 class BulkThreadAction(BaseModel):
     thread_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=500)
     action: Literal[
-        "read", "unread", "star", "unstar",
-        "archive", "trash", "spam", "inbox", "move",
-        "add_label", "remove_label",
+        "read",
+        "unread",
+        "star",
+        "unstar",
+        "archive",
+        "trash",
+        "spam",
+        "inbox",
+        "move",
+        "add_label",
+        "remove_label",
     ]
     folder: str | None = None
     label_id: uuid.UUID | None = None

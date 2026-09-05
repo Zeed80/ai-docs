@@ -30,45 +30,40 @@ def _replace_assertion(
             found = True
             updates: dict[str, Any] = {}
             if unknown_reason is not None:
-                updates.update({
-                    "value": UnknownValue(kind="unknown", reason=unknown_reason),
-                    "assurance": "proposed",
-                })
+                updates.update(
+                    {
+                        "value": UnknownValue(kind="unknown", reason=unknown_reason),
+                        "assurance": "proposed",
+                    }
+                )
             if unit is not None:
                 updates["unit"] = unit
             item = item.model_copy(update=updates)
         assertions.append(item)
     if not found:
         raise ValueError(f"corruption predicate not found: {predicate}")
-    return graph.model_copy(update={
-        "assertions": assertions,
-        "canonical_sha256": "",
-    }).sealed()
+    return graph.model_copy(
+        update={
+            "assertions": assertions,
+            "canonical_sha256": "",
+        }
+    ).sealed()
 
 
 def _pending_outputs(graph: EngineeringModelGraph, predicates: set[str]) -> set[str]:
     return {
-        item.id for item in graph.assertions
+        item.id
+        for item in graph.assertions
         if item.state == "active" and item.predicate in predicates
     }
 
 
-def run_emg_admission_corruption(
-    manifest: dict[str, Any], *, fixture_root: Path
-) -> dict[str, Any]:
+def run_emg_admission_corruption(manifest: dict[str, Any], *, fixture_root: Path) -> dict[str, Any]:
     cases_by_id = {item["id"]: item for item in manifest["cases"]}
-    mechanical = build_regression_graph(
-        cases_by_id["mechanical-detal-126-v2"], fixture_root
-    )
-    assembly = build_regression_graph(
-        cases_by_id["assembly-fixed-shaft"], fixture_root
-    )
-    construction = build_regression_graph(
-        cases_by_id["construction-wall-opening"], fixture_root
-    )
-    system = build_regression_graph(
-        cases_by_id["hydraulic-closed-loop"], fixture_root
-    )
+    mechanical = build_regression_graph(cases_by_id["mechanical-detal-126-v2"], fixture_root)
+    assembly = build_regression_graph(cases_by_id["assembly-fixed-shaft"], fixture_root)
+    construction = build_regression_graph(cases_by_id["construction-wall-opening"], fixture_root)
+    system = build_regression_graph(cases_by_id["hydraulic-closed-loop"], fixture_root)
 
     scenarios: list[dict[str, Any]] = []
 
@@ -91,16 +86,18 @@ def run_emg_admission_corruption(
         )
         actual = {item.code for item in report.blockers}
         passed = not report.allowed and expected_codes <= actual
-        scenarios.append({
-            "id": scenario_id,
-            "source_group_id": source_group_id,
-            "drawing_class": drawing_class,
-            "passed": passed,
-            "generator_allowed": report.allowed,
-            "expected_blocker_codes": sorted(expected_codes),
-            "actual_blocker_codes": sorted(actual),
-            "critical_miss": not passed,
-        })
+        scenarios.append(
+            {
+                "id": scenario_id,
+                "source_group_id": source_group_id,
+                "drawing_class": drawing_class,
+                "passed": passed,
+                "generator_allowed": report.allowed,
+                "expected_blocker_codes": sorted(expected_codes),
+                "actual_blocker_codes": sorted(actual),
+                "critical_miss": not passed,
+            }
+        )
 
     evaluate(
         scenario_id="mechanical-canonical-hash-tamper",
@@ -115,9 +112,7 @@ def run_emg_admission_corruption(
         scenario_id="mechanical-unknown-unit",
         source_group_id="fixture:detal-126",
         drawing_class="rotation_body",
-        graph=_replace_assertion(
-            mechanical, "operation.param.length_mm", unit="inch"
-        ),
+        graph=_replace_assertion(mechanical, "operation.param.length_mm", unit="inch"),
         target_id="preview",
         generator="mechanical_brep",
         expected_codes={"verification_unknown_unit"},
@@ -143,10 +138,13 @@ def run_emg_admission_corruption(
         ),
         target_id="production",
         generator="assembly_step",
-        pending=_pending_outputs(assembly, {
-            "assembly.artifact_reopen_valid",
-            "assembly.required_2d_complete",
-        }),
+        pending=_pending_outputs(
+            assembly,
+            {
+                "assembly.artifact_reopen_valid",
+                "assembly.required_2d_complete",
+            },
+        ),
         expected_codes={"critical_parameter_unknown"},
     )
     corrupted_system = _replace_assertion(
@@ -156,26 +154,26 @@ def run_emg_admission_corruption(
     )
     system_plan = compile_build_plan(corrupted_system, "production")
     connectivity = next(
-        item for item in corrupted_system.assertions
-        if item.state == "active"
-        and item.predicate == "system.connectivity_closed"
+        item
+        for item in corrupted_system.assertions
+        if item.state == "active" and item.predicate == "system.connectivity_closed"
     )
     system_passed = (
         not system_plan.production_export_allowed
         and connectivity.id in system_plan.critical_assumption_ids
     )
-    scenarios.append({
-        "id": "system-connectivity-unknown",
-        "source_group_id": "fixture:hydraulic-closed-loop",
-        "drawing_class": "hydraulic_system",
-        "passed": system_passed,
-        "generator_allowed": system_plan.production_export_allowed,
-        "expected_blocker_codes": ["critical_connectivity_unknown"],
-        "actual_blocker_codes": (
-            ["critical_connectivity_unknown"] if system_passed else []
-        ),
-        "critical_miss": not system_passed,
-    })
+    scenarios.append(
+        {
+            "id": "system-connectivity-unknown",
+            "source_group_id": "fixture:hydraulic-closed-loop",
+            "drawing_class": "hydraulic_system",
+            "passed": system_passed,
+            "generator_allowed": system_plan.production_export_allowed,
+            "expected_blocker_codes": ["critical_connectivity_unknown"],
+            "actual_blocker_codes": (["critical_connectivity_unknown"] if system_passed else []),
+            "critical_miss": not system_passed,
+        }
+    )
     evaluate(
         scenario_id="construction-material-unknown",
         source_group_id="fixture:construction-wall-opening",
@@ -185,10 +183,13 @@ def run_emg_admission_corruption(
         ),
         target_id="production",
         generator="construction_ifc",
-        pending=_pending_outputs(construction, {
-            "construction.ifc_reopen_valid",
-            "construction.required_sheets_complete",
-        }),
+        pending=_pending_outputs(
+            construction,
+            {
+                "construction.ifc_reopen_valid",
+                "construction.required_sheets_complete",
+            },
+        ),
         expected_codes={"critical_parameter_unknown"},
     )
     missed = sum(bool(item["critical_miss"]) for item in scenarios)
@@ -200,8 +201,7 @@ def run_emg_admission_corruption(
         "critical_misses": missed,
         "critical_miss_rate": round(missed / len(scenarios), 8),
         "invented_geometry_admitted": sum(
-            item["generator_allowed"] for item in scenarios
-            if "tamper" in item["id"]
+            item["generator_allowed"] for item in scenarios if "tamper" in item["id"]
         ),
         "scenarios": scenarios,
     }

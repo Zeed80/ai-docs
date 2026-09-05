@@ -7,7 +7,7 @@ mailbox owner. The engine itself is app.domain.email_rules (runs on ingest).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Literal
 
 import structlog
@@ -116,12 +116,16 @@ async def list_rules(
 ):
     """Skill: email.rules_list — Filter rules visible to the caller."""
     rows = (
-        await db.execute(
-            select(EmailRule)
-            .where((EmailRule.owner_sub.is_(None)) | (EmailRule.owner_sub == user.sub))
-            .order_by(EmailRule.priority.asc())
+        (
+            await db.execute(
+                select(EmailRule)
+                .where((EmailRule.owner_sub.is_(None)) | (EmailRule.owner_sub == user.sub))
+                .order_by(EmailRule.priority.asc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -229,18 +233,24 @@ async def test_rule(
     if scope is not None:
         q = q.where(scope)
     msgs = (
-        await db.execute(q.order_by(EmailMessage.received_at.desc()).limit(payload.last_n))
-    ).scalars().all()
+        (await db.execute(q.order_by(EmailMessage.received_at.desc()).limit(payload.last_n)))
+        .scalars()
+        .all()
+    )
     ksd = await known_domains(db)
     attachments: dict = {}
     if msgs:
         rows = (
-            await db.execute(
-                select(EmailAttachment).where(
-                    EmailAttachment.message_id.in_([m.id for m in msgs])
+            (
+                await db.execute(
+                    select(EmailAttachment).where(
+                        EmailAttachment.message_id.in_([m.id for m in msgs])
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for att in rows:
             attachments.setdefault(att.message_id, []).append(att)
     matched = [

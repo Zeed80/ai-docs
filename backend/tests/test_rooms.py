@@ -7,7 +7,6 @@ from httpx import AsyncClient
 
 from app.db.models import Room, RoomMember, RoomMessage, RoomType
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
@@ -68,10 +67,13 @@ async def test_list_rooms(client: AsyncClient, group_room):
 
 @pytest.mark.asyncio
 async def test_create_room(client: AsyncClient):
-    resp = await client.post("/api/rooms", json={
-        "name": "Бухгалтерия",
-        "description": "Чат бухгалтерского отдела",
-    })
+    resp = await client.post(
+        "/api/rooms",
+        json={
+            "name": "Бухгалтерия",
+            "description": "Чат бухгалтерского отдела",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Бухгалтерия"
@@ -166,9 +168,12 @@ async def test_list_members(client: AsyncClient, group_room):
 
 @pytest.mark.asyncio
 async def test_add_member(client: AsyncClient, group_room):
-    resp = await client.post(f"/api/rooms/{group_room.id}/members", json={
-        "user_sub": "new-colleague",
-    })
+    resp = await client.post(
+        f"/api/rooms/{group_room.id}/members",
+        json={
+            "user_sub": "new-colleague",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["status"] in ("added", "already_member")
@@ -216,9 +221,12 @@ async def test_list_messages(client: AsyncClient, group_room, room_with_message)
 
 @pytest.mark.asyncio
 async def test_send_message(client: AsyncClient, group_room):
-    resp = await client.post(f"/api/rooms/{group_room.id}/messages", json={
-        "content": "Счёт получен, проверяю.",
-    })
+    resp = await client.post(
+        f"/api/rooms/{group_room.id}/messages",
+        json={
+            "content": "Счёт получен, проверяю.",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["content"] == "Счёт получен, проверяю."
@@ -228,9 +236,12 @@ async def test_send_message(client: AsyncClient, group_room):
 
 @pytest.mark.asyncio
 async def test_send_message_appears_in_list(client: AsyncClient, group_room):
-    await client.post(f"/api/rooms/{group_room.id}/messages", json={
-        "content": "Тестовое сообщение",
-    })
+    await client.post(
+        f"/api/rooms/{group_room.id}/messages",
+        json={
+            "content": "Тестовое сообщение",
+        },
+    )
     resp = await client.get(f"/api/rooms/{group_room.id}/messages")
     contents = [m["content"] for m in resp.json()]
     assert "Тестовое сообщение" in contents

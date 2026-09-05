@@ -8,9 +8,6 @@ Create Date: 2026-05-01
 
 from __future__ import annotations
 
-import sqlalchemy as sa
-from alembic import op
-
 revision = "2bc89634b9df"
 down_revision = "20260424_0001"
 branch_labels = None

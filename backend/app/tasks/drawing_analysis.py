@@ -37,8 +37,8 @@ ALL_SUPPORTED_FORMATS = RASTER_FORMATS | VECTOR_FORMATS | frozenset({"pdf", "ste
     bind=True,
     name="drawing_analysis.analyze_drawing",
     max_retries=2,
-    soft_time_limit=720,   # 12 min — VLM (qwen3.6:35b) classification + extraction
-    time_limit=780,        # 13 min — hard kill after soft limit
+    soft_time_limit=720,  # 12 min — VLM (qwen3.6:35b) classification + extraction
+    time_limit=780,  # 13 min — hard kill after soft limit
 )
 def analyze_drawing(
     self,
@@ -71,7 +71,6 @@ async def _analyze_drawing_async(
     max_views: int = 6,
     force_drawing_type: str | None = None,
 ) -> dict:
-
     from app.ai.drawing_extractor import extract_drawing_features, extract_features_from_image
     from app.ai.embeddings import embed_text as get_text_embedding
     from app.db.models import (
@@ -95,6 +94,7 @@ async def _analyze_drawing_async(
     router = None
     try:
         from app.ai.router import AIRouter
+
         router = AIRouter()
     except Exception as _router_exc:
         logger.warning("drawing_router_unavailable", error=str(_router_exc))
@@ -116,14 +116,15 @@ async def _analyze_drawing_async(
     dxf_entities: list[dict] = []
     title_block: dict = {}
     image_bytes_for_vlm: bytes | None = None
-    view_crops: list = []        # list[ViewCrop] from drawing_preprocessor
-    step_geometry = None         # StepGeometryResult from step_extractor (STEP/IGES only)
+    view_crops: list = []  # list[ViewCrop] from drawing_preprocessor
+    step_geometry = None  # StepGeometryResult from step_extractor (STEP/IGES only)
 
     try:
         # VLM model is resolved by AIRouter from task_routing at dispatch time;
         # resolve a display name here only for logging.
         from app.ai.schemas import AITask as _AITask
         from app.ai.task_routing import resolve_model
+
         _routed_model, _ = resolve_model(_AITask.DRAWING_ANALYSIS_VLM)
         vlm_model = model or _routed_model or "auto"
 
@@ -165,6 +166,7 @@ async def _analyze_drawing_async(
             # Multi-page preprocessing: CLAHE + deskew + each page as a ViewCrop
             try:
                 from app.ai.drawing_preprocessor import preprocess_pdf_pages
+
                 _page_limit = max(1, min(max_views, 10))
                 view_crops = await asyncio.get_event_loop().run_in_executor(
                     None,
@@ -190,10 +192,12 @@ async def _analyze_drawing_async(
             step_geometry = None
             try:
                 from app.ai.step_extractor import extract_step_geometry
+
                 step_geometry = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    functools.partial(extract_step_geometry, file_bytes, drawing.filename,
-                                      generate_views=True),
+                    functools.partial(
+                        extract_step_geometry, file_bytes, drawing.filename, generate_views=True
+                    ),
                 )
                 drawing_text = (
                     f"3D файл: {drawing.filename}\n"
@@ -208,14 +212,17 @@ async def _analyze_drawing_async(
                 # Use rendered orthographic views as VLM input (if generated)
                 if step_geometry.view_images:
                     from app.ai.drawing_preprocessor import ViewCrop
+
                     for view_name, view_png in step_geometry.view_images.items():
-                        view_crops.append(ViewCrop(
-                            view_type=view_name,
-                            image_bytes=view_png,
-                            bbox=(0, 0, 0, 0),
-                            label=view_name,
-                            confidence=0.9,
-                        ))
+                        view_crops.append(
+                            ViewCrop(
+                                view_type=view_name,
+                                image_bytes=view_png,
+                                bbox=(0, 0, 0, 0),
+                                label=view_name,
+                                confidence=0.9,
+                            )
+                        )
                 logger.info(
                     "step_geometry_extracted",
                     drawing_id=drawing_id,
@@ -245,6 +252,7 @@ async def _analyze_drawing_async(
         if image_bytes_for_vlm and not view_crops and fmt not in ("step", "stp", "iges"):
             try:
                 from app.ai.drawing_preprocessor import preprocess_drawing_image
+
                 _preprocessed = await asyncio.get_event_loop().run_in_executor(
                     None,
                     functools.partial(
@@ -282,6 +290,7 @@ async def _analyze_drawing_async(
         if vlm_images is not None:
             try:
                 from app.ai.drawing_extractor import classify_drawing_image
+
                 _classify_img = vlm_images[0] if isinstance(vlm_images, list) else vlm_images
                 classification = await classify_drawing_image(
                     _classify_img,
@@ -314,7 +323,9 @@ async def _analyze_drawing_async(
         few_shot: list[dict] = []
         try:
             async with _get_session_factory()() as db_fs:
-                few_shot = await _load_few_shot_corrections(db_fs, drawing_type=drawing_type, limit=10)
+                few_shot = await _load_few_shot_corrections(
+                    db_fs, drawing_type=drawing_type, limit=10
+                )
         except Exception as _fs_exc:
             logger.warning("few_shot_load_failed", error=str(_fs_exc))
 
@@ -346,6 +357,7 @@ async def _analyze_drawing_async(
             # If VLM returned nothing meaningful → try rule-based DXF extraction first
             if not extraction.get("features") and dxf_entities:
                 from app.ai.drawing_extractor import extract_features_from_dxf_entities
+
                 rule_features = extract_features_from_dxf_entities(dxf_entities, drawing_type)
                 if rule_features:
                     logger.info(
@@ -368,6 +380,7 @@ async def _analyze_drawing_async(
             # Try rule-based first (faster, deterministic)
             if dxf_entities:
                 from app.ai.drawing_extractor import extract_features_from_dxf_entities
+
                 rule_features = extract_features_from_dxf_entities(dxf_entities, drawing_type)
                 if rule_features:
                     logger.info(
@@ -390,6 +403,7 @@ async def _analyze_drawing_async(
         validation_report_dict: dict = {}
         try:
             from app.ai.drawing_validator import report_to_dict, validate_drawing_extraction
+
             val_report = validate_drawing_extraction(
                 drawing_id=drawing_uuid,
                 features_data=features_data,
@@ -420,9 +434,7 @@ async def _analyze_drawing_async(
             drawing.title_block = title_block
             drawing.svg_path = svg_path
             drawing.thumbnail_path = thumbnail_path
-            drawing.drawing_number = (
-                title_block.get("drawing_number") or drawing.drawing_number
-            )
+            drawing.drawing_number = title_block.get("drawing_number") or drawing.drawing_number
             drawing.drawing_type = drawing_type
             if classification:
                 drawing.part_class = classification.part_class
@@ -579,6 +591,7 @@ async def _analyze_drawing_async(
             drawing = await db.get(Drawing, drawing_uuid)
             if drawing:
                 from app.db.models import DrawingStatus
+
                 drawing.status = DrawingStatus.failed
                 drawing.analysis_error = str(exc)[:2000]
                 await db.commit()
@@ -592,7 +605,7 @@ async def _analyze_drawing_async(
     bind=True,
     name="drawing_analysis.extract_assembly_bom",
     max_retries=2,
-    soft_time_limit=300,   # 5 min — table detection + VLM parse + balloon OCR
+    soft_time_limit=300,  # 5 min — table detection + VLM parse + balloon OCR
     time_limit=360,
 )
 def extract_assembly_bom_task(
@@ -619,6 +632,7 @@ async def _extract_assembly_bom_async(drawing_id: str, allow_cloud: bool = False
     router = None
     try:
         from app.ai.router import AIRouter
+
         router = AIRouter()
     except Exception as _router_exc:
         logger.warning("assembly_bom_router_unavailable", error=str(_router_exc))
@@ -635,9 +649,7 @@ async def _extract_assembly_bom_async(drawing_id: str, allow_cloud: bool = False
         file_bytes = await _load_drawing_file(drawing)
         image_bytes = await _render_drawing_sheet_png(file_bytes, (drawing.format or "").lower())
         if image_bytes is None:
-            logger.warning(
-                "assembly_bom_no_raster", drawing_id=drawing_id, fmt=drawing.format
-            )
+            logger.warning("assembly_bom_no_raster", drawing_id=drawing_id, fmt=drawing.format)
             return {"error": "Не удалось получить растровое изображение чертежа"}
 
         result = await extract_assembly_bom(
@@ -654,18 +666,20 @@ async def _extract_assembly_bom_async(drawing_id: str, allow_cloud: bool = False
                 delete(DrawingAssemblyBOM).where(DrawingAssemblyBOM.drawing_id == drawing_uuid)
             )
             for item in result.items[:200]:
-                db.add(DrawingAssemblyBOM(
-                    drawing_id=drawing_uuid,
-                    item_no=item.item_no,
-                    designation=item.designation,
-                    quantity=item.quantity,
-                    unit=item.unit,
-                    material=item.material,
-                    drawing_number=item.drawing_number,
-                    note=item.note,
-                    balloon_coords=item.balloon_coords,
-                    confidence=item.confidence,
-                ))
+                db.add(
+                    DrawingAssemblyBOM(
+                        drawing_id=drawing_uuid,
+                        item_no=item.item_no,
+                        designation=item.designation,
+                        quantity=item.quantity,
+                        unit=item.unit,
+                        material=item.material,
+                        drawing_number=item.drawing_number,
+                        note=item.note,
+                        balloon_coords=item.balloon_coords,
+                        confidence=item.confidence,
+                    )
+                )
             await db.commit()
 
         logger.info(
@@ -723,6 +737,7 @@ def _create_drawing_from_doc_sync(
     async def _inner() -> None:
         from app.db.models import Drawing, DrawingStatus
         from app.db.session import _get_session_factory
+
         async with _get_session_factory()() as db:
             drawing = Drawing(
                 document_id=uuid.UUID(document_id),
@@ -766,14 +781,10 @@ def ingest_supplier_catalog(self, supplier_id: str, file_path: str, filename: st
     Parse supplier tool catalog file and ingest into DB + Qdrant + Graph.
     Supports: PDF (table extraction), Excel (.xlsx), CSV, JSON.
     """
-    return run_async(
-        _ingest_catalog_async(supplier_id, file_path, filename)
-    )
+    return run_async(_ingest_catalog_async(supplier_id, file_path, filename))
 
 
-async def _ingest_catalog_async(
-    supplier_id: str, file_path: str, filename: str
-) -> dict:
+async def _ingest_catalog_async(supplier_id: str, file_path: str, filename: str) -> dict:
     from app.db.models import ToolSupplier
     from app.db.session import _get_session_factory
     from app.vector.qdrant_store import ensure_drawing_collections
@@ -852,11 +863,18 @@ async def _create_catalog_entries_from_rows(
     alongside as "needs_review" so a human can compare and decide (see
     backend/app/api/tool_catalog.py's approve endpoint).
     """
-    from app.ai.embeddings import embed_text as get_text_embedding
-    from app.db.models import AnomalyCard, AnomalySeverity, AnomalyStatus, AnomalyType, ToolCatalogEntry, ToolTypeEnum
+    from sqlalchemy import select
+
+    from app.db.models import (
+        AnomalyCard,
+        AnomalySeverity,
+        AnomalyStatus,
+        AnomalyType,
+        ToolCatalogEntry,
+        ToolTypeEnum,
+    )
     from app.domain.drawing_graph import ingest_tool_catalog_graph
     from app.vector.qdrant_store import upsert_tool_catalog_entry
-    from sqlalchemy import select
 
     prov = dict(provenance or {})
     discovery_method = prov.get("discovery_method", "manual_upload")
@@ -929,14 +947,18 @@ async def _create_catalog_entries_from_rows(
             existing = None
             if part_number:
                 existing = (
-                    await db.execute(
-                        select(ToolCatalogEntry).where(
-                            ToolCatalogEntry.supplier_id == supplier_uuid,
-                            ToolCatalogEntry.part_number == part_number,
-                            ToolCatalogEntry.is_active.is_(True),
+                    (
+                        await db.execute(
+                            select(ToolCatalogEntry).where(
+                                ToolCatalogEntry.supplier_id == supplier_uuid,
+                                ToolCatalogEntry.part_number == part_number,
+                                ToolCatalogEntry.is_active.is_(True),
+                            )
                         )
                     )
-                ).scalars().first()
+                    .scalars()
+                    .first()
+                )
             # What deserves a person's attention is ONE thing: the same article
             # costs materially different money in two different sources. Live
             # result of the old rule (any name difference, or 1 % of price):
@@ -949,18 +971,10 @@ async def _create_catalog_entries_from_rows(
                 and existing.source_document_id == source_document_id
             )
             price_gap = 0.0
-            if (
-                existing is not None
-                and price_value is not None
-                and existing.price_value
-            ):
-                price_gap = abs(existing.price_value - price_value) / max(
-                    existing.price_value, 1.0
-                )
+            if existing is not None and price_value is not None and existing.price_value:
+                price_gap = abs(existing.price_value - price_value) / max(existing.price_value, 1.0)
             conflict = (
-                existing is not None
-                and not same_source
-                and price_gap > _PRICE_CONFLICT_THRESHOLD
+                existing is not None and not same_source and price_gap > _PRICE_CONFLICT_THRESHOLD
             )
             if conflict:
                 metadata["review_status"] = "needs_review"
@@ -983,11 +997,27 @@ async def _create_catalog_entries_from_rows(
                 price_currency=row.get("currency", "RUB"),
                 price_value=price_value,
                 catalog_page=_safe_int(row.get("catalog_page") or row.get("page")),
-                parameters={k: v for k, v in row.items()
-                            if k not in ("name", "tool_type", "part_number", "description",
-                                        "diameter_mm", "diameter", "length_mm", "length",
-                                        "material", "coating", "currency", "price",
-                                        "catalog_page", "page")},
+                parameters={
+                    k: v
+                    for k, v in row.items()
+                    if k
+                    not in (
+                        "name",
+                        "tool_type",
+                        "part_number",
+                        "description",
+                        "diameter_mm",
+                        "diameter",
+                        "length_mm",
+                        "length",
+                        "material",
+                        "coating",
+                        "currency",
+                        "price",
+                        "catalog_page",
+                        "page",
+                    )
+                },
                 metadata_=metadata or None,
             )
             db.add(entry)
@@ -1009,21 +1039,24 @@ async def _create_catalog_entries_from_rows(
                 if conflict:
                     # One open card per article, not one per re-parse.
                     already_open = (
-                        await db.execute(
-                            select(AnomalyCard.id).where(
-                                AnomalyCard.entity_type == "tool_catalog_entry",
-                                AnomalyCard.status == AnomalyStatus.open,
-                                # details is a JSON (not JSONB) column: .astext
-                                # is a JSONB-only operator and raised here, and
-                                # the surrounding try/except swallowed it — the
-                                # conflict was then silently not recorded.
-                                AnomalyCard.details["part_number"].as_string()
-                                == part_number,
-                                AnomalyCard.details["supplier_id"].as_string()
-                                == str(supplier_uuid),
+                        (
+                            await db.execute(
+                                select(AnomalyCard.id).where(
+                                    AnomalyCard.entity_type == "tool_catalog_entry",
+                                    AnomalyCard.status == AnomalyStatus.open,
+                                    # details is a JSON (not JSONB) column: .astext
+                                    # is a JSONB-only operator and raised here, and
+                                    # the surrounding try/except swallowed it — the
+                                    # conflict was then silently not recorded.
+                                    AnomalyCard.details["part_number"].as_string() == part_number,
+                                    AnomalyCard.details["supplier_id"].as_string()
+                                    == str(supplier_uuid),
+                                )
                             )
                         )
-                    ).scalars().first()
+                        .scalars()
+                        .first()
+                    )
                     if already_open is None:
                         anomaly = AnomalyCard(
                             anomaly_type=AnomalyType.price_spike,
@@ -1100,9 +1133,7 @@ async def _create_catalog_entries_from_rows(
                     diameter_mm=entry.diameter_mm,
                     material=entry.material,
                     part_number=entry.part_number,
-                    catalog_document_id=(
-                        str(source_document_id) if source_document_id else None
-                    ),
+                    catalog_document_id=(str(source_document_id) if source_document_id else None),
                     catalog_page=entry.catalog_page,
                     has_image=bool(entry.image_path),
                     price_value=entry.price_value,
@@ -1126,9 +1157,9 @@ async def _create_catalog_entries_from_rows(
 _PRICE_CONFLICT_THRESHOLD = 0.05
 
 _CATALOG_SIGNAL_RE = re.compile(
-    r"[A-ZА-Я0-9]{2,}[-–/][A-ZА-Я0-9]{2,}"          # article numbers: MT245-040G16
-    r"|\bØ\s*\d|\d+[,.]?\d*\s*мм\b"             # dimensions
-    r"|\d[\d\s]{2,}\s*(?:руб|₽|RUB)",              # prices
+    r"[A-ZА-Я0-9]{2,}[-–/][A-ZА-Я0-9]{2,}"  # article numbers: MT245-040G16
+    r"|\bØ\s*\d|\d+[,.]?\d*\s*мм\b"  # dimensions
+    r"|\d[\d\s]{2,}\s*(?:руб|₽|RUB)",  # prices
     re.IGNORECASE,
 )
 
@@ -1215,13 +1246,9 @@ text contains no products at all (a cover page, contacts, a foreword)."""
     # while the same budget spent on its dense pages → hundreds). Order within
     # the source is preserved for the chunks that are actually parsed.
     all_chunks = [
-        text[offset : offset + chunk_chars]
-        for offset in range(0, len(text), chunk_chars)
+        text[offset : offset + chunk_chars] for offset in range(0, len(text), chunk_chars)
     ]
-    scored = [
-        (index, chunk, _catalog_density(chunk))
-        for index, chunk in enumerate(all_chunks)
-    ]
+    scored = [(index, chunk, _catalog_density(chunk)) for index, chunk in enumerate(all_chunks)]
     ranked = sorted(scored, key=lambda item: item[2], reverse=True)[:max_chunks]
     selected = [item for item in sorted(ranked, key=lambda item: item[0]) if item[2] > 0]
     chunks = [chunk for _index, chunk, _score in selected]
@@ -1417,8 +1444,10 @@ async def _convert_dwg_to_dxf(file_bytes: bytes) -> bytes | None:
             try:
                 proc = await asyncio.create_subprocess_exec(
                     dwg2dxf_bin,
-                    "--as", "R2018",
-                    "-o", dxf_path,
+                    "--as",
+                    "R2018",
+                    "-o",
+                    dxf_path,
                     dwg_path,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -1443,6 +1472,7 @@ async def _convert_dwg_to_dxf(file_bytes: bytes) -> bytes | None:
         # Fallback: ezdxf odafc addon (ODA File Converter, if installed separately)
         try:
             from ezdxf.addons import odafc
+
             if odafc.is_installed():
                 doc = odafc.readfile(dwg_path)
                 dxf_io = io.StringIO()
@@ -1484,84 +1514,103 @@ def _extract_dxf_entities(msp: Any, doc: Any) -> tuple[list[dict], list[dict]]:
         try:
             if etype == "CIRCLE":
                 c = entity.dxf.center
-                entities.append({
-                    "type": "CIRCLE",
-                    "center_x": float(c.x),
-                    "center_y": float(c.y),
-                    "radius": float(entity.dxf.radius),
-                    "layer": _layer(entity),
-                })
+                entities.append(
+                    {
+                        "type": "CIRCLE",
+                        "center_x": float(c.x),
+                        "center_y": float(c.y),
+                        "radius": float(entity.dxf.radius),
+                        "layer": _layer(entity),
+                    }
+                )
             elif etype == "LINE":
                 s, e = entity.dxf.start, entity.dxf.end
-                entities.append({
-                    "type": "LINE",
-                    "x1": float(s.x), "y1": float(s.y),
-                    "x2": float(e.x), "y2": float(e.y),
-                    "layer": _layer(entity),
-                })
+                entities.append(
+                    {
+                        "type": "LINE",
+                        "x1": float(s.x),
+                        "y1": float(s.y),
+                        "x2": float(e.x),
+                        "y2": float(e.y),
+                        "layer": _layer(entity),
+                    }
+                )
             elif etype == "ARC":
                 c = entity.dxf.center
-                entities.append({
-                    "type": "ARC",
-                    "center_x": float(c.x),
-                    "center_y": float(c.y),
-                    "radius": float(entity.dxf.radius),
-                    "start_angle": float(entity.dxf.start_angle),
-                    "end_angle": float(entity.dxf.end_angle),
-                    "layer": _layer(entity),
-                })
+                entities.append(
+                    {
+                        "type": "ARC",
+                        "center_x": float(c.x),
+                        "center_y": float(c.y),
+                        "radius": float(entity.dxf.radius),
+                        "start_angle": float(entity.dxf.start_angle),
+                        "end_angle": float(entity.dxf.end_angle),
+                        "layer": _layer(entity),
+                    }
+                )
             elif etype == "ELLIPSE":
                 c = entity.dxf.center
-                entities.append({
-                    "type": "ELLIPSE",
-                    "center_x": float(c.x),
-                    "center_y": float(c.y),
-                    "major_axis_x": float(entity.dxf.major_axis.x),
-                    "major_axis_y": float(entity.dxf.major_axis.y),
-                    "ratio": float(entity.dxf.ratio),
-                    "start_param": float(entity.dxf.start_param),
-                    "end_param": float(entity.dxf.end_param),
-                    "layer": _layer(entity),
-                })
+                entities.append(
+                    {
+                        "type": "ELLIPSE",
+                        "center_x": float(c.x),
+                        "center_y": float(c.y),
+                        "major_axis_x": float(entity.dxf.major_axis.x),
+                        "major_axis_y": float(entity.dxf.major_axis.y),
+                        "ratio": float(entity.dxf.ratio),
+                        "start_param": float(entity.dxf.start_param),
+                        "end_param": float(entity.dxf.end_param),
+                        "layer": _layer(entity),
+                    }
+                )
             elif etype == "LWPOLYLINE":
                 points = [(float(p[0]), float(p[1])) for p in entity.get_points()]
-                entities.append({
-                    "type": "LWPOLYLINE",
-                    "points": points[:100],
-                    "closed": bool(entity.closed),
-                    "layer": _layer(entity),
-                })
+                entities.append(
+                    {
+                        "type": "LWPOLYLINE",
+                        "points": points[:100],
+                        "closed": bool(entity.closed),
+                        "layer": _layer(entity),
+                    }
+                )
             elif etype == "POLYLINE":
                 try:
-                    points = [(float(v.dxf.location.x), float(v.dxf.location.y))
-                              for v in entity.vertices]
-                    entities.append({
-                        "type": "POLYLINE",
-                        "points": points[:100],
-                        "closed": bool(entity.is_closed),
-                        "layer": _layer(entity),
-                    })
+                    points = [
+                        (float(v.dxf.location.x), float(v.dxf.location.y)) for v in entity.vertices
+                    ]
+                    entities.append(
+                        {
+                            "type": "POLYLINE",
+                            "points": points[:100],
+                            "closed": bool(entity.is_closed),
+                            "layer": _layer(entity),
+                        }
+                    )
                 except Exception:
                     pass
             elif etype == "SPLINE":
                 try:
                     # Sample spline as polyline for representation
                     pts = [(float(p[0]), float(p[1])) for p in entity.flattening(0.1)]
-                    entities.append({
-                        "type": "SPLINE",
-                        "points": pts[:100],
-                        "closed": bool(entity.closed),
-                        "degree": int(entity.dxf.degree),
-                        "layer": _layer(entity),
-                    })
+                    entities.append(
+                        {
+                            "type": "SPLINE",
+                            "points": pts[:100],
+                            "closed": bool(entity.closed),
+                            "degree": int(entity.dxf.degree),
+                            "layer": _layer(entity),
+                        }
+                    )
                 except Exception:
                     control_pts = [(float(p[0]), float(p[1])) for p in entity.control_points]
-                    entities.append({
-                        "type": "SPLINE",
-                        "control_points": control_pts[:50],
-                        "degree": int(entity.dxf.degree),
-                        "layer": _layer(entity),
-                    })
+                    entities.append(
+                        {
+                            "type": "SPLINE",
+                            "control_points": control_pts[:50],
+                            "degree": int(entity.dxf.degree),
+                            "layer": _layer(entity),
+                        }
+                    )
             elif etype in ("TEXT", "ATTRIB", "ATTDEF"):
                 text_val = ""
                 try:
@@ -1614,12 +1663,15 @@ def _extract_dxf_entities(msp: Any, doc: Any) -> tuple[list[dict], list[dict]]:
                     # Decode dimtype: 0=linear, 1=aligned, 2=angular, 3=diameter,
                     #                 4=radius, 5=angular3p, 6=ordinate
                     dim_type_names = {
-                        0: "linear", 1: "aligned", 2: "angular",
-                        3: "diameter", 4: "radius", 5: "angular3p", 6: "ordinate",
+                        0: "linear",
+                        1: "aligned",
+                        2: "angular",
+                        3: "diameter",
+                        4: "radius",
+                        5: "angular3p",
+                        6: "ordinate",
                     }
-                    dim_info["dim_type_name"] = dim_type_names.get(
-                        entity.dimtype & 0x0F, "linear"
-                    )
+                    dim_info["dim_type_name"] = dim_type_names.get(entity.dimtype & 0x0F, "linear")
                 except Exception:
                     pass
                 try:
@@ -1633,30 +1685,29 @@ def _extract_dxf_entities(msp: Any, doc: Any) -> tuple[list[dict], list[dict]]:
                     pass
                 entities.append(dim_info)
                 # Also harvest the text for AI analysis
-                text_val = dim_info.get("text_override") or str(
-                    dim_info.get("measurement", "")
-                )
+                text_val = dim_info.get("text_override") or str(dim_info.get("measurement", ""))
                 if text_val:
-                    texts.append({
-                        "type": "DIMENSION",
-                        "text": text_val,
-                        "layer": _layer(entity),
-                    })
+                    texts.append(
+                        {
+                            "type": "DIMENSION",
+                            "text": text_val,
+                            "layer": _layer(entity),
+                        }
+                    )
             elif etype in ("LEADER", "QLEADER"):
                 try:
                     text_val = entity.dxf.text if hasattr(entity.dxf, "text") else ""
                     if text_val:
                         texts.append({"type": etype, "text": text_val, "layer": _layer(entity)})
-                    verts = [
-                        (float(v.x), float(v.y))
-                        for v in entity.vertices
-                    ]
-                    entities.append({
-                        "type": etype,
-                        "vertices": verts[:20],
-                        "text": text_val,
-                        "layer": _layer(entity),
-                    })
+                    verts = [(float(v.x), float(v.y)) for v in entity.vertices]
+                    entities.append(
+                        {
+                            "type": etype,
+                            "vertices": verts[:20],
+                            "text": text_val,
+                            "layer": _layer(entity),
+                        }
+                    )
                 except Exception:
                     pass
             elif etype == "MULTILEADER":
@@ -1667,12 +1718,16 @@ def _extract_dxf_entities(msp: Any, doc: Any) -> tuple[list[dict], list[dict]]:
                     except Exception:
                         pass
                     if text_val:
-                        texts.append({"type": "MULTILEADER", "text": text_val, "layer": _layer(entity)})
-                    entities.append({
-                        "type": "MULTILEADER",
-                        "text": text_val,
-                        "layer": _layer(entity),
-                    })
+                        texts.append(
+                            {"type": "MULTILEADER", "text": text_val, "layer": _layer(entity)}
+                        )
+                    entities.append(
+                        {
+                            "type": "MULTILEADER",
+                            "text": text_val,
+                            "layer": _layer(entity),
+                        }
+                    )
                 except Exception:
                     pass
             elif etype == "TOLERANCE":
@@ -1680,28 +1735,34 @@ def _extract_dxf_entities(msp: Any, doc: Any) -> tuple[list[dict], list[dict]]:
                 try:
                     text_val = entity.dxf.string or ""
                     if text_val:
-                        texts.append({
+                        texts.append(
+                            {
+                                "type": "TOLERANCE",
+                                "text": text_val,
+                                "layer": _layer(entity),
+                            }
+                        )
+                    entities.append(
+                        {
                             "type": "TOLERANCE",
                             "text": text_val,
                             "layer": _layer(entity),
-                        })
-                    entities.append({
-                        "type": "TOLERANCE",
-                        "text": text_val,
-                        "layer": _layer(entity),
-                    })
+                        }
+                    )
                 except Exception:
                     pass
             elif etype == "HATCH":
                 # Cross-hatching indicates section cuts, material patterns
                 try:
-                    entities.append({
-                        "type": "HATCH",
-                        "pattern_name": str(entity.dxf.pattern_name),
-                        "solid_fill": bool(entity.dxf.solid_fill),
-                        "layer": _layer(entity),
-                        "path_count": len(list(entity.paths)),
-                    })
+                    entities.append(
+                        {
+                            "type": "HATCH",
+                            "pattern_name": str(entity.dxf.pattern_name),
+                            "solid_fill": bool(entity.dxf.solid_fill),
+                            "layer": _layer(entity),
+                            "path_count": len(list(entity.paths)),
+                        }
+                    )
                 except Exception:
                     pass
             elif etype in ("SOLID", "TRACE"):
@@ -1712,11 +1773,13 @@ def _extract_dxf_entities(msp: Any, doc: Any) -> tuple[list[dict], list[dict]]:
                         (float(entity.dxf.vtx2.x), float(entity.dxf.vtx2.y)),
                         (float(entity.dxf.vtx3.x), float(entity.dxf.vtx3.y)),
                     ]
-                    entities.append({
-                        "type": etype,
-                        "points": pts,
-                        "layer": _layer(entity),
-                    })
+                    entities.append(
+                        {
+                            "type": etype,
+                            "points": pts,
+                            "layer": _layer(entity),
+                        }
+                    )
                 except Exception:
                     pass
             elif etype == "INSERT" and depth == 0:
@@ -1726,11 +1789,13 @@ def _extract_dxf_entities(msp: Any, doc: Any) -> tuple[list[dict], list[dict]]:
                     block_name = str(entity.dxf.name)
                 except Exception:
                     pass
-                entities.append({
-                    "type": "INSERT",
-                    "block": block_name,
-                    "layer": _layer(entity),
-                })
+                entities.append(
+                    {
+                        "type": "INSERT",
+                        "block": block_name,
+                        "layer": _layer(entity),
+                    }
+                )
                 # Expand block content (one level deep to avoid infinite recursion)
                 try:
                     block = doc.blocks.get(block_name)
@@ -1749,9 +1814,7 @@ def _extract_dxf_entities(msp: Any, doc: Any) -> tuple[list[dict], list[dict]]:
     return entities, texts
 
 
-async def _parse_dxf(
-    file_bytes: bytes, filename: str
-) -> tuple[str | None, list[dict], str]:
+async def _parse_dxf(file_bytes: bytes, filename: str) -> tuple[str | None, list[dict], str]:
     """
     Parse DXF file bytes using ezdxf.
 
@@ -1868,6 +1931,7 @@ async def _svg_to_png_bytes(svg_content: str, width: int = 2048) -> bytes | None
     """Render SVG to PNG bytes for VLM analysis."""
     try:
         import cairosvg
+
         png_bytes = cairosvg.svg2png(bytestring=svg_content.encode("utf-8"), output_width=width)
         return png_bytes
     except Exception:
@@ -1880,6 +1944,7 @@ async def _svg_to_png_bytes(svg_content: str, width: int = 2048) -> bytes | None
 
         from reportlab.graphics import renderPM  # type: ignore
         from svglib.svglib import svg2rlg  # type: ignore
+
         with tempfile.NamedTemporaryFile(suffix=".svg", delete=False) as f:
             f.write(svg_content.encode("utf-8"))
             tmp = f.name
@@ -1899,8 +1964,8 @@ async def _svg_to_png_bytes(svg_content: str, width: int = 2048) -> bytes | None
 async def _pdf_to_png_bytes(file_bytes: bytes, page_index: int = 0, dpi: int = 200) -> bytes | None:
     """Render PDF page to PNG bytes for VLM analysis using PyMuPDF."""
     try:
-
         import fitz
+
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         if doc.page_count > page_index:
             page = doc[page_index]
@@ -1921,6 +1986,7 @@ async def _normalize_raster_to_png(file_bytes: bytes, fmt: str) -> bytes | None:
         import io
 
         from PIL import Image
+
         img = Image.open(io.BytesIO(file_bytes))
         # Convert to RGB if needed (VLM doesn't handle CMYK, palette modes well)
         if img.mode not in ("RGB", "RGBA", "L"):
@@ -1942,6 +2008,7 @@ async def _normalize_raster_to_png(file_bytes: bytes, fmt: str) -> bytes | None:
 def _extract_text_from_svg(svg_content: str) -> str:
     """Extract visible text elements from SVG for additional context."""
     import re
+
     texts = re.findall(r"<text[^>]*>(.*?)</text>", svg_content, re.DOTALL)
     return " ".join(t.strip() for t in texts if t.strip())[:4000]
 
@@ -1970,15 +2037,10 @@ def _parse_step_to_info_svg(file_bytes: bytes, filename: str) -> tuple[str | Non
     entity_counts = Counter(entity_matches).most_common(6)
 
     # Build extracted_text for AI
-    extracted_text = (
-        f"3D файл: {filename}\n"
-        f"Изделия: {', '.join(products[:4])}\n"
-        + (
-            "Типы сущностей: "
-            + ", ".join(f"{k}({v})" for k, v in entity_counts)
-            if entity_counts
-            else ""
-        )
+    extracted_text = f"3D файл: {filename}\nИзделия: {', '.join(products[:4])}\n" + (
+        "Типы сущностей: " + ", ".join(f"{k}({v})" for k, v in entity_counts)
+        if entity_counts
+        else ""
     )
 
     # ── SVG info card ──────────────────────────────────────────────────────
@@ -1989,7 +2051,7 @@ def _parse_step_to_info_svg(file_bytes: bytes, filename: str) -> tuple[str | Non
         bar_w = min(int(count / max(1, entity_counts[0][1]) * 340), 340)
         rows_svg += (
             f'<text x="60" y="{y}" fill="#94a3b8" font-size="13">'
-            f'{html.escape(etype)}</text>'
+            f"{html.escape(etype)}</text>"
             f'<rect x="270" y="{y - 12}" width="{bar_w}" height="12" fill="#3b82f6" opacity="0.7" rx="2"/>'
             f'<text x="{270 + bar_w + 6}" y="{y}" fill="#cbd5e1" font-size="12">{count}</text>'
         )
@@ -2000,7 +2062,7 @@ def _parse_step_to_info_svg(file_bytes: bytes, filename: str) -> tuple[str | Non
         product_lines += (
             f'<text x="60" y="{200 + i * 26}" fill="#e2e8f0" font-size="15" '
             f'font-weight="{"600" if i == 0 else "400"}">'
-            f'{html.escape(p[:55])}</text>'
+            f"{html.escape(p[:55])}</text>"
         )
 
     fmt_label = "STEP ISO 10303" if filename.lower().endswith((".step", ".stp")) else "IGES"
@@ -2022,7 +2084,7 @@ def _parse_step_to_info_svg(file_bytes: bytes, filename: str) -> tuple[str | Non
   <line x1="40" y1="290" x2="{W - 40}" y2="290" stroke="#1e293b" stroke-width="1"/>
   <text x="60" y="305" fill="#94a3b8" font-size="12" font-weight="600" letter-spacing="1">ТИПЫ СУЩНОСТЕЙ</text>
   {rows_svg}
-  <text x="{W//2}" y="{H - 20}" fill="#334155" font-size="11" text-anchor="middle">
+  <text x="{W // 2}" y="{H - 20}" fill="#334155" font-size="11" text-anchor="middle">
     Превью сформировано автоматически · для полного просмотра используйте CAD-приложение
   </text>
 </svg>"""
@@ -2132,8 +2194,18 @@ async def _parse_catalog_any_format(
 # company banner, a date and empty rows, so "row 1 is the header" was wrong for
 # most of them.
 _KNOWN_HEADER_FIELDS = {
-    "name", "part_number", "price", "description", "diameter_mm",
-    "length_mm", "material", "coating", "currency", "tool_type", "unit", "quantity",
+    "name",
+    "part_number",
+    "price",
+    "description",
+    "diameter_mm",
+    "length_mm",
+    "material",
+    "coating",
+    "currency",
+    "tool_type",
+    "unit",
+    "quantity",
 }
 
 
@@ -2166,7 +2238,7 @@ def _rows_from_sheet(raw_rows: list[tuple], sheet_name: str | None = None) -> li
     # it is the only type hint many price lists carry, so it is remembered and
     # attached to the rows that follow instead of being dropped.
     current_category: str | None = None
-    for raw in raw_rows[header_idx + 1:]:
+    for raw in raw_rows[header_idx + 1 :]:
         filled = [cell for cell in raw if cell not in (None, "")]
         if not filled:
             continue
@@ -2263,8 +2335,7 @@ def _parse_csv_catalog(file_bytes: bytes) -> list[dict]:
         text = file_bytes.decode("utf-8-sig", errors="replace")
         delimiter = _sniff_csv_delimiter(text)
         raw_rows = [
-            [cell for cell in row]
-            for row in csv.reader(io.StringIO(text), delimiter=delimiter)
+            [cell for cell in row] for row in csv.reader(io.StringIO(text), delimiter=delimiter)
         ]
         if not raw_rows:
             return []
@@ -2336,7 +2407,7 @@ async def _parse_pdf_catalog(file_bytes: bytes, max_pages: int = 500) -> list[di
                     if header_idx < 0:
                         headers = [_normalize_header(str(h or "")) for h in table[0]]
                         header_idx = 0
-                    for row in table[header_idx + 1:]:
+                    for row in table[header_idx + 1 :]:
                         if not any(row):
                             continue
                         row_dict: dict = {}
@@ -2461,9 +2532,7 @@ async def _ocr_pdf_text(file_bytes: bytes, max_pages: int = 60) -> str:
             for index in indices:
                 page = doc.load_page(index)
                 pixmap = page.get_pixmap(dpi=200)
-                image = Image.frombytes(
-                    "RGB", (pixmap.width, pixmap.height), pixmap.samples
-                )
+                image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
                 try:
                     parts.append(pytesseract.image_to_string(image, lang="rus+eng"))
                 except Exception as exc:  # noqa: BLE001 — one bad page is not fatal
@@ -2528,8 +2597,12 @@ async def _load_drawing_file(drawing: Any) -> bytes:
                 last_exc = exc
                 continue
 
-        logger.error("load_drawing_file_all_paths_failed", drawing_id=str(drawing.id),
-                     tried=candidates, error=str(last_exc))
+        logger.error(
+            "load_drawing_file_all_paths_failed",
+            drawing_id=str(drawing.id),
+            tried=candidates,
+            error=str(last_exc),
+        )
         return b""
     except Exception as exc:
         logger.error("load_drawing_file_failed", error=str(exc))
@@ -2581,19 +2654,24 @@ async def _save_svg_artifacts(
         svg_path = f"drawings/{drawing_id}/drawing.svg"
         svg_bytes = svg_content.encode("utf-8")
         client.put_object(
-            bucket, svg_path,
-            io.BytesIO(svg_bytes), len(svg_bytes),
+            bucket,
+            svg_path,
+            io.BytesIO(svg_bytes),
+            len(svg_bytes),
             content_type="image/svg+xml",
         )
 
         thumbnail_path = None
         try:
             import cairosvg
+
             png_bytes = cairosvg.svg2png(bytestring=svg_bytes, output_width=400)
             thumb_path = f"drawings/{drawing_id}/thumbnail.png"
             client.put_object(
-                bucket, thumb_path,
-                io.BytesIO(png_bytes), len(png_bytes),
+                bucket,
+                thumb_path,
+                io.BytesIO(png_bytes),
+                len(png_bytes),
                 content_type="image/png",
             )
             thumbnail_path = thumb_path
@@ -2614,11 +2692,14 @@ async def _notify_drawing_analyzed(drawing_id: str, features_count: int) -> None
     """Send WebSocket notification via chat bus."""
     try:
         from app.core.chat_bus import chat_bus
-        await chat_bus.publish({
-            "type": "drawing_analyzed",
-            "drawing_id": drawing_id,
-            "features_count": features_count,
-        })
+
+        await chat_bus.publish(
+            {
+                "type": "drawing_analyzed",
+                "drawing_id": drawing_id,
+                "features_count": features_count,
+            }
+        )
     except Exception:
         pass
 
@@ -2628,6 +2709,7 @@ async def _notify_drawing_analyzed(drawing_id: str, features_count: int) -> None
 
 def _safe_feature_type(value: str) -> Any:
     from app.db.models import DrawingFeatureType
+
     try:
         return DrawingFeatureType(value)
     except ValueError:
@@ -2636,6 +2718,7 @@ def _safe_feature_type(value: str) -> Any:
 
 def _safe_primitive_type(value: str) -> Any:
     from app.db.models import FeaturePrimitiveType
+
     try:
         return FeaturePrimitiveType(value)
     except ValueError:
@@ -2644,6 +2727,7 @@ def _safe_primitive_type(value: str) -> Any:
 
 def _safe_dim_type(value: str) -> Any:
     from app.db.models import FeatureDimType
+
     try:
         return FeatureDimType(value)
     except ValueError:
@@ -2652,6 +2736,7 @@ def _safe_dim_type(value: str) -> Any:
 
 def _safe_roughness_type(value: str) -> Any:
     from app.db.models import RoughnessType
+
     try:
         return RoughnessType(value)
     except ValueError:
@@ -2700,17 +2785,35 @@ def _normalize_header(header: str) -> str:
     """Normalize catalog column header to a known field name."""
     h = header.lower().strip()
     mappings = {
-        "наименование": "name", "name": "name", "название": "name",
-        "тип инструмента": "tool_type", "tool_type": "tool_type", "тип": "tool_type",
-        "артикул": "part_number", "part_number": "part_number", "код": "part_number",
-        "описание": "description", "description": "description",
-        "диаметр": "diameter_mm", "diameter": "diameter_mm", "d": "diameter_mm", "ø": "diameter_mm",
-        "длина": "length_mm", "length": "length_mm", "l": "length_mm",
-        "материал": "material", "material": "material",
-        "покрытие": "coating", "coating": "coating",
-        "цена": "price", "price": "price", "стоимость": "price",
-        "валюта": "currency", "currency": "currency",
-        "страница": "catalog_page", "page": "catalog_page",
+        "наименование": "name",
+        "name": "name",
+        "название": "name",
+        "тип инструмента": "tool_type",
+        "tool_type": "tool_type",
+        "тип": "tool_type",
+        "артикул": "part_number",
+        "part_number": "part_number",
+        "код": "part_number",
+        "описание": "description",
+        "description": "description",
+        "диаметр": "diameter_mm",
+        "diameter": "diameter_mm",
+        "d": "diameter_mm",
+        "ø": "diameter_mm",
+        "длина": "length_mm",
+        "length": "length_mm",
+        "l": "length_mm",
+        "материал": "material",
+        "material": "material",
+        "покрытие": "coating",
+        "coating": "coating",
+        "цена": "price",
+        "price": "price",
+        "стоимость": "price",
+        "валюта": "currency",
+        "currency": "currency",
+        "страница": "catalog_page",
+        "page": "catalog_page",
     }
     return mappings.get(h, re.sub(r"[^a-z0-9_]", "_", h))
 
@@ -2719,23 +2822,52 @@ def _normalize_header(header: str) -> str:
 # специфичные маркеры проверяются первыми («фреза концевая» перед «фреза»,
 # «фреза дисковая» — это уже milling_cutter, а не endmill).
 _TOOL_TYPE_MARKERS: tuple[tuple[str, str], ...] = (
-    ("фреза концев", "endmill"), ("концевая фреза", "endmill"), ("endmill", "endmill"),
-    ("end mill", "endmill"), ("фреза сферическ", "endmill"), ("фреза радиусн", "endmill"),
-    ("фреза дисков", "milling_cutter"), ("фреза торцов", "milling_cutter"),
-    ("фреза червячн", "milling_cutter"), ("фреза шпоночн", "endmill"),
-    ("milling cutter", "milling_cutter"), ("фреза", "milling_cutter"),
-    ("резьбофрез", "thread_mill"), ("thread mill", "thread_mill"),
-    ("сверло", "drill"), ("сверл", "drill"), ("drill", "drill"), ("бор ", "drill"),
-    ("метчик", "tap"), ("tap", "tap"),
-    ("развертк", "reamer"), ("развёртк", "reamer"), ("reamer", "reamer"),
-    ("зенковк", "countersink"), ("зенкер", "countersink"), ("countersink", "countersink"),
-    ("цековк", "counterbore"), ("counterbore", "counterbore"),
-    ("пластина", "insert"), ("пластин", "insert"), ("insert", "insert"), ("смп", "insert"),
-    ("резец", "turning_tool"), ("резц", "turning_tool"), ("turning", "turning_tool"),
-    ("расточн", "boring_bar"), ("boring", "boring_bar"),
-    ("оправк", "holder"), ("патрон", "holder"), ("держател", "holder"),
-    ("цанг", "holder"), ("holder", "holder"), ("chuck", "holder"),
-    ("шлифов", "grinder"), ("круг", "grinder"), ("grind", "grinder"),
+    ("фреза концев", "endmill"),
+    ("концевая фреза", "endmill"),
+    ("endmill", "endmill"),
+    ("end mill", "endmill"),
+    ("фреза сферическ", "endmill"),
+    ("фреза радиусн", "endmill"),
+    ("фреза дисков", "milling_cutter"),
+    ("фреза торцов", "milling_cutter"),
+    ("фреза червячн", "milling_cutter"),
+    ("фреза шпоночн", "endmill"),
+    ("milling cutter", "milling_cutter"),
+    ("фреза", "milling_cutter"),
+    ("резьбофрез", "thread_mill"),
+    ("thread mill", "thread_mill"),
+    ("сверло", "drill"),
+    ("сверл", "drill"),
+    ("drill", "drill"),
+    ("бор ", "drill"),
+    ("метчик", "tap"),
+    ("tap", "tap"),
+    ("развертк", "reamer"),
+    ("развёртк", "reamer"),
+    ("reamer", "reamer"),
+    ("зенковк", "countersink"),
+    ("зенкер", "countersink"),
+    ("countersink", "countersink"),
+    ("цековк", "counterbore"),
+    ("counterbore", "counterbore"),
+    ("пластина", "insert"),
+    ("пластин", "insert"),
+    ("insert", "insert"),
+    ("смп", "insert"),
+    ("резец", "turning_tool"),
+    ("резц", "turning_tool"),
+    ("turning", "turning_tool"),
+    ("расточн", "boring_bar"),
+    ("boring", "boring_bar"),
+    ("оправк", "holder"),
+    ("патрон", "holder"),
+    ("держател", "holder"),
+    ("цанг", "holder"),
+    ("holder", "holder"),
+    ("chuck", "holder"),
+    ("шлифов", "grinder"),
+    ("круг", "grinder"),
+    ("grind", "grinder"),
 )
 
 
@@ -2760,7 +2892,7 @@ async def _infer_tool_types_via_llm(names: list[str]) -> dict[str, str]:
         "Classify each item name into one tool type. Return JSON only: "
         '{"types": {"<name>": "<type>"}}. The type must be one of: '
         + ", ".join(sorted(allowed))
-        + ". Use \"other\" when the name is not a cutting/measuring tool. "
+        + '. Use "other" when the name is not a cutting/measuring tool. '
         "Never invent names that were not given."
     )
 
@@ -2810,19 +2942,35 @@ def _normalize_tool_type(value: str) -> str:
     """Map Russian/mixed tool type names to ToolTypeEnum values."""
     v = value.lower().strip()
     mappings = {
-        "сверло": "drill", "drill": "drill",
-        "фреза": "endmill", "endmill": "endmill", "концевая фреза": "endmill",
-        "пластина": "insert", "insert": "insert", "режущая пластина": "insert",
-        "оправка": "holder", "holder": "holder",
-        "метчик": "tap", "tap": "tap",
-        "развёртка": "reamer", "reamer": "reamer",
-        "расточная оправка": "boring_bar", "boring_bar": "boring_bar",
-        "резьбофреза": "thread_mill", "thread_mill": "thread_mill",
-        "шлифовальный": "grinder", "grinder": "grinder",
-        "токарный резец": "turning_tool", "turning_tool": "turning_tool", "резец": "turning_tool",
-        "фреза дисковая": "milling_cutter", "milling_cutter": "milling_cutter",
-        "зенковка": "countersink", "countersink": "countersink",
-        "цековка": "counterbore", "counterbore": "counterbore",
+        "сверло": "drill",
+        "drill": "drill",
+        "фреза": "endmill",
+        "endmill": "endmill",
+        "концевая фреза": "endmill",
+        "пластина": "insert",
+        "insert": "insert",
+        "режущая пластина": "insert",
+        "оправка": "holder",
+        "holder": "holder",
+        "метчик": "tap",
+        "tap": "tap",
+        "развёртка": "reamer",
+        "reamer": "reamer",
+        "расточная оправка": "boring_bar",
+        "boring_bar": "boring_bar",
+        "резьбофреза": "thread_mill",
+        "thread_mill": "thread_mill",
+        "шлифовальный": "grinder",
+        "grinder": "grinder",
+        "токарный резец": "turning_tool",
+        "turning_tool": "turning_tool",
+        "резец": "turning_tool",
+        "фреза дисковая": "milling_cutter",
+        "milling_cutter": "milling_cutter",
+        "зенковка": "countersink",
+        "countersink": "countersink",
+        "цековка": "counterbore",
+        "counterbore": "counterbore",
     }
     for key, mapped in mappings.items():
         if key in v:
@@ -2848,7 +2996,9 @@ def _build_feature_embed_text(feature: Any, feat_data: dict) -> str:
     """Build text for feature embedding."""
     parts = [feature.feature_type.value, feature.name, feature.description or ""]
     for dim in feat_data.get("dimensions", [])[:3]:
-        parts.append(dim.get("label", "") or f"{dim.get('nominal', '')} {dim.get('fit_system', '')}")
+        parts.append(
+            dim.get("label", "") or f"{dim.get('nominal', '')} {dim.get('fit_system', '')}"
+        )
     for surf in feat_data.get("surfaces", [])[:2]:
         parts.append(f"{surf.get('roughness_type', 'Ra')} {surf.get('value', '')}")
     return " ".join(p for p in parts if p)
@@ -2919,7 +3069,9 @@ def ingest_web_catalog_sources(
         # "running"/"queued" is indistinguishable from one still in progress.
         for url in urls:
             record_source_status(
-                supplier_id, url, status="error",
+                supplier_id,
+                url,
+                status="error",
                 message="Разбор прерван по таймауту — источник слишком большой.",
             )
         raise
@@ -2948,7 +3100,9 @@ async def _ingest_web_catalog_sources_async(
             )
         except Exception as exc:  # noqa: BLE001 — one dead link can't stop the rest
             record_source_status(
-                supplier_id, url, status="error",
+                supplier_id,
+                url,
+                status="error",
                 message=f"Не удалось открыть источник: {str(exc)[:200]}",
             )
             continue
@@ -2956,7 +3110,10 @@ async def _ingest_web_catalog_sources_async(
         text = (fetched.text or "").strip()
         if len(text) < 200:
             record_source_status(
-                supplier_id, url, status="empty", title=fetched.title,
+                supplier_id,
+                url,
+                status="empty",
+                title=fetched.title,
                 message=(
                     f"Читаемого текста нет ({len(text)} симв.) — JS-каталог или файл, "
                     "требующий скачивания."
@@ -2965,7 +3122,10 @@ async def _ingest_web_catalog_sources_async(
             continue
 
         record_source_status(
-            supplier_id, url, status="running", title=fetched.title,
+            supplier_id,
+            url,
+            status="running",
+            title=fetched.title,
             message="Разбираю позиции каталога…",
         )
         try:
@@ -2982,14 +3142,20 @@ async def _ingest_web_catalog_sources_async(
                 await db.commit()
         except Exception as exc:  # noqa: BLE001
             record_source_status(
-                supplier_id, url, status="error", title=fetched.title,
+                supplier_id,
+                url,
+                status="error",
+                title=fetched.title,
                 message=f"Ошибка разбора: {str(exc)[:200]}",
             )
             continue
 
         if result.get("error"):
             record_source_status(
-                supplier_id, url, status="error", title=fetched.title,
+                supplier_id,
+                url,
+                status="error",
+                title=fetched.title,
                 message=str(result["error"])[:200],
             )
             continue
@@ -2999,7 +3165,8 @@ async def _ingest_web_catalog_sources_async(
         totals["created"] += created
         totals["conflicted"] += conflicted
         record_source_status(
-            supplier_id, url,
+            supplier_id,
+            url,
             status="attached" if created or conflicted else "empty",
             title=fetched.title,
             entries_created=created,
@@ -3014,6 +3181,8 @@ async def _ingest_web_catalog_sources_async(
 
     logger.info(
         "web_catalog_sources_ingested",
-        supplier_id=supplier_id, sources=len(urls), created=totals["created"],
+        supplier_id=supplier_id,
+        sources=len(urls),
+        created=totals["created"],
     )
     return totals

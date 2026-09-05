@@ -1,16 +1,18 @@
 """Approvals API — skills: approval.request, approval.status, approval.list_pending"""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import exists, select, func
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
+from app.audit.service import log_action
+from app.auth.jwt import get_current_user, require_role
+from app.auth.models import UserInfo, UserRole
 from app.db.models import (
     AgentAction,
     Approval,
@@ -20,6 +22,7 @@ from app.db.models import (
     Invoice,
     User,
 )
+from app.db.session import get_db
 from app.domain.approvals import (
     ApprovalChainCreate,
     ApprovalChainOut,
@@ -28,9 +31,6 @@ from app.domain.approvals import (
     ApprovalListResponse,
     ApprovalOut,
 )
-from app.audit.service import log_action
-from app.auth.jwt import get_current_user, require_role
-from app.auth.models import UserInfo, UserRole
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -53,8 +53,10 @@ class ApprovalPolicyOut(BaseModel):
 
 async def _read_policy() -> ApprovalPolicyOut:
     import json
+
     try:
         from app.utils.redis_client import get_async_redis
+
         redis = await get_async_redis()
         raw = await redis.get(_POLICY_KEY)
         if raw:
@@ -78,6 +80,7 @@ async def update_approval_policy(
 ):
     """Update trust-score auto-approval policy."""
     import json
+
     policy = ApprovalPolicyOut(
         enabled=payload.enabled,
         trust_threshold=payload.trust_threshold,
@@ -85,6 +88,7 @@ async def update_approval_policy(
     )
     try:
         from app.utils.redis_client import get_async_redis
+
         redis = await get_async_redis()
         await redis.set(_POLICY_KEY, json.dumps(policy.model_dump()))
     except Exception:
@@ -149,8 +153,9 @@ async def request_approval(
 
     # Notify the assigned user
     if assigned_to:
-        from app.services.notifications import create_notification
         from app.db.models import NotificationType
+        from app.services.notifications import create_notification
+
         await create_notification(
             db=db,
             user_sub=assigned_to,
@@ -166,11 +171,14 @@ async def request_approval(
     await db.refresh(approval)
     try:
         from app.domain.memory_builder import build_approval_memory_async
+
         await build_approval_memory_async(db, approval)
         await db.commit()
     except Exception as e:
         logger.warning("approval_memory_build_failed", error=str(e))
-    logger.info("approval_requested", approval_id=str(approval.id), action=payload.action_type.value)
+    logger.info(
+        "approval_requested", approval_id=str(approval.id), action=payload.action_type.value
+    )
     return approval
 
 
@@ -187,6 +195,7 @@ async def list_pending_approvals(
     """Skill: approval.list_pending — List pending approvals (excludes dormant chain steps)."""
     # Exclude dormant chain steps and orphaned approvals (entity deleted)
     from sqlalchemy import or_ as sql_or
+
     query = select(Approval).where(
         Approval.status == ApprovalStatus.pending,
         sql_or(
@@ -195,7 +204,8 @@ async def list_pending_approvals(
         ),
         # Skip approvals whose referenced document/invoice no longer exists
         sql_or(
-            (Approval.entity_type == "document") & exists().where(Document.id == Approval.entity_id),
+            (Approval.entity_type == "document")
+            & exists().where(Document.id == Approval.entity_id),
             (Approval.entity_type == "invoice") & exists().where(Invoice.id == Approval.entity_id),
             ~Approval.entity_type.in_(["document", "invoice"]),
         ),
@@ -233,8 +243,8 @@ async def create_approval_chain(
     db: AsyncSession = Depends(get_db),
 ) -> ApprovalChainOut:
     """Create a sequential approval chain (step 1 active, steps 2..N dormant until previous approved)."""
-    from app.services.notifications import create_notification
     from app.db.models import NotificationType
+    from app.services.notifications import create_notification
 
     # Create step 0 (active — assigned_to set, assigned to first approver)
     root = Approval(
@@ -263,7 +273,7 @@ async def create_approval_chain(
             entity_type=payload.entity_type,
             entity_id=payload.entity_id,
             requested_by=payload.requested_by,
-            assigned_to=None,          # dormant — not yet visible
+            assigned_to=None,  # dormant — not yet visible
             context=payload.context,
             expires_at=payload.expires_at,
             chain_root_id=root.id,
@@ -341,7 +351,7 @@ async def decide_approval(
     approval.status = payload.status
     approval.decision_comment = payload.comment
     approval.decided_by = user.sub
-    approval.decided_at = datetime.now(timezone.utc)
+    approval.decided_at = datetime.now(UTC)
 
     await log_action(
         db,
@@ -353,19 +363,21 @@ async def decide_approval(
     )
     if approval.action_type == ApprovalActionType.agent_tool_call:
         context = approval.context or {}
-        db.add(AgentAction(
-            session_id=str(context.get("session_id") or "builtin-agent"),
-            iteration=int(context.get("iteration") or 0),
-            action_type="approval_decision",
-            tool_name=str(context.get("tool_name") or "") or None,
-            tool_args=context.get("tool_args") or {},
-            tool_result={
-                "approval_id": str(approval.id),
-                "status": payload.status.value,
-                "comment": payload.comment,
-                "decided_by": user.sub,
-            },
-        ))
+        db.add(
+            AgentAction(
+                session_id=str(context.get("session_id") or "builtin-agent"),
+                iteration=int(context.get("iteration") or 0),
+                action_type="approval_decision",
+                tool_name=str(context.get("tool_name") or "") or None,
+                tool_args=context.get("tool_args") or {},
+                tool_result={
+                    "approval_id": str(approval.id),
+                    "status": payload.status.value,
+                    "comment": payload.comment,
+                    "decided_by": user.sub,
+                },
+            )
+        )
         if approval.entity_type == "work_order":
             from app.domain.work_orders import WorkStateError, apply_approval_decision
 
@@ -383,8 +395,9 @@ async def decide_approval(
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
     # Notify the requester about the decision
     if approval.requested_by and approval.requested_by != "sveta":
-        from app.services.notifications import create_notification
         from app.db.models import NotificationType
+        from app.services.notifications import create_notification
+
         status_label = "одобрено" if payload.status == ApprovalStatus.approved else "отклонено"
         await create_notification(
             db=db,
@@ -401,6 +414,7 @@ async def decide_approval(
     await db.refresh(approval)
     try:
         from app.domain.memory_builder import build_approval_memory_async
+
         await build_approval_memory_async(db, approval)
         await db.commit()
     except Exception as e:
@@ -410,6 +424,7 @@ async def decide_approval(
     # Record approval wait time metric
     try:
         from app.core.metrics import approval_wait_seconds
+
         if approval.created_at and approval.decided_at:
             wait = (approval.decided_at - approval.created_at).total_seconds()
             approval_wait_seconds.observe(wait)
@@ -424,7 +439,8 @@ async def decide_approval(
             from app.ai.agent_loop import deliver_external_approval
 
             await deliver_external_approval(
-                str(approval.id), payload.status == ApprovalStatus.approved,
+                str(approval.id),
+                payload.status == ApprovalStatus.approved,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("approval_resume_failed", approval_id=str(approval.id), error=str(exc))
@@ -454,19 +470,18 @@ async def delegate_approval(
     is_admin = UserRole.admin in user.roles
     if not is_owner and not is_admin:
         from fastapi import status as http_status
+
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Only the assigned user or admin can delegate",
         )
 
     # Verify delegate exists and is active before creating the new approval
-    delegate_active = await db.scalar(
-        select(User.is_active).where(User.sub == payload.delegate_to)
-    )
+    delegate_active = await db.scalar(select(User.is_active).where(User.sub == payload.delegate_to))
     if delegate_active is None:
-        raise HTTPException(status_code=404, detail=f"Delegate user not found")
+        raise HTTPException(status_code=404, detail="Delegate user not found")
     if not delegate_active:
-        raise HTTPException(status_code=400, detail=f"Delegate user is deactivated")
+        raise HTTPException(status_code=400, detail="Delegate user is deactivated")
 
     approval.status = ApprovalStatus.delegated
     approval.delegated_to = payload.delegate_to
@@ -492,8 +507,9 @@ async def delegate_approval(
     )
 
     # Notify the new delegate
-    from app.services.notifications import create_notification
     from app.db.models import NotificationType
+    from app.services.notifications import create_notification
+
     await create_notification(
         db=db,
         user_sub=payload.delegate_to,
@@ -533,7 +549,7 @@ async def bulk_decide_approvals(
             approval.status = decision_status
             approval.decision_comment = payload.comment
             approval.decided_by = user.sub
-            approval.decided_at = datetime.now(timezone.utc)
+            approval.decided_at = datetime.now(UTC)
 
             await log_action(
                 db,
@@ -576,11 +592,14 @@ async def _execute_approved_action(approval: Approval, db: AsyncSession) -> None
             if next_step.assigned_to is None:
                 # Fallback: assign to first active manager/admin
                 from app.db.models import User
+
                 mgr_result = await db.execute(
-                    select(User).where(
+                    select(User)
+                    .where(
                         User.is_active == True,  # noqa: E712
                         User.role.in_(["manager", "admin"]),
-                    ).limit(1)
+                    )
+                    .limit(1)
                 )
                 mgr = mgr_result.scalar_one_or_none()
                 if mgr:
@@ -597,8 +616,9 @@ async def _execute_approved_action(approval: Approval, db: AsyncSession) -> None
             await db.commit()
 
             if next_step.assigned_to:
-                from app.services.notifications import create_notification
                 from app.db.models import NotificationType
+                from app.services.notifications import create_notification
+
                 await create_notification(
                     db=db,
                     user_sub=next_step.assigned_to,
@@ -632,9 +652,7 @@ async def _execute_approved_action(approval: Approval, db: AsyncSession) -> None
             else InvoiceStatus.rejected
         )
         try:
-            result = await db.execute(
-                select(Invoice).where(Invoice.id == approval.entity_id)
-            )
+            result = await db.execute(select(Invoice).where(Invoice.id == approval.entity_id))
             invoice = result.scalar_one_or_none()
             if invoice:
                 invoice.status = new_status
@@ -659,15 +677,19 @@ async def _execute_approved_action(approval: Approval, db: AsyncSession) -> None
 
         try:
             draft = (
-                await db.execute(
-                    select(DraftAction)
-                    .where(
-                        DraftAction.approval_id == approval.id,
-                        DraftAction.executed == False,  # noqa: E712
+                (
+                    await db.execute(
+                        select(DraftAction)
+                        .where(
+                            DraftAction.approval_id == approval.id,
+                            DraftAction.executed == False,  # noqa: E712
+                        )
+                        .order_by(DraftAction.created_at.desc())
                     )
-                    .order_by(DraftAction.created_at.desc())
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
             if draft is not None:
                 d = draft.draft_data or {}
                 ok, msg = await apply_cell_writeback(
@@ -679,7 +701,7 @@ async def _execute_approved_action(approval: Approval, db: AsyncSession) -> None
                 )
                 if ok:
                     draft.executed = True
-                    draft.executed_at = datetime.now(timezone.utc)
+                    draft.executed_at = datetime.now(UTC)
                     await db.commit()
                     logger.info(
                         "table_cell_writeback_applied",

@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import io
 import re
-import structlog
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+import structlog
 
 if TYPE_CHECKING:
     from app.ai.router import AIRouter
@@ -32,7 +33,7 @@ class BOMItem:
     material: str | None = None
     drawing_number: str | None = None
     note: str | None = None
-    balloon_coords: list[dict] | None = None   # [{"x": int, "y": int, "r": int}]
+    balloon_coords: list[dict] | None = None  # [{"x": int, "y": int, "r": int}]
     confidence: float = 0.0
 
 
@@ -48,7 +49,7 @@ class BalloonAnnotation:
 class AssemblyBOMResult:
     items: list[BOMItem] = field(default_factory=list)
     balloons: list[BalloonAnnotation] = field(default_factory=list)
-    table_bbox: tuple[int, int, int, int] | None = None   # (x, y, w, h)
+    table_bbox: tuple[int, int, int, int] | None = None  # (x, y, w, h)
     confidence: float = 0.0
 
 
@@ -57,8 +58,8 @@ class AssemblyBOMResult:
 
 async def extract_assembly_bom(
     image_bytes: bytes,
-    router: "AIRouter | None" = None,
-    drawing: "Drawing | None" = None,
+    router: AIRouter | None = None,
+    drawing: Drawing | None = None,
     allow_cloud: bool = False,
 ) -> AssemblyBOMResult:
     """Extract BOM from an assembly drawing image.
@@ -128,7 +129,7 @@ def _detect_bom_table(image_bytes: bytes) -> tuple[bytes | None, tuple[int, int,
         roi_y = 0
         roi_w = w - roi_x
         roi_h = h // 2
-        roi = gray[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
+        roi = gray[roi_y : roi_y + roi_h, roi_x : roi_x + roi_w]
 
         _, binary = cv2.threshold(roi, 180, 255, cv2.THRESH_BINARY_INV)
 
@@ -263,8 +264,8 @@ _ASSEMBLY_BOM_PROMPT = """Ты анализируешь таблицу спец�
 
 async def _extract_bom_via_vlm(
     image_bytes: bytes,
-    router: "AIRouter | None",
-    drawing: "Drawing | None",
+    router: AIRouter | None,
+    drawing: Drawing | None,
     allow_cloud: bool,
 ) -> list[BOMItem]:
     """Call VLM to parse BOM table image into structured items."""
@@ -274,6 +275,7 @@ async def _extract_bom_via_vlm(
 
     if router is None:
         from app.ai.router import ai_router
+
         router = ai_router
 
     is_confidential = getattr(drawing, "is_confidential", True) if drawing else True
@@ -318,16 +320,18 @@ def _parse_bom_json(text: str) -> list[BOMItem]:
         result = []
         for item in raw_items:
             try:
-                result.append(BOMItem(
-                    item_no=int(item.get("item_no", 0)),
-                    designation=str(item.get("designation", ""))[:500],
-                    quantity=float(item.get("quantity", 1)),
-                    unit=item.get("unit"),
-                    material=item.get("material"),
-                    drawing_number=item.get("drawing_number"),
-                    note=item.get("note"),
-                    confidence=float(item.get("confidence", 0.7)),
-                ))
+                result.append(
+                    BOMItem(
+                        item_no=int(item.get("item_no", 0)),
+                        designation=str(item.get("designation", ""))[:500],
+                        quantity=float(item.get("quantity", 1)),
+                        unit=item.get("unit"),
+                        material=item.get("material"),
+                        drawing_number=item.get("drawing_number"),
+                        note=item.get("note"),
+                        confidence=float(item.get("confidence", 0.7)),
+                    )
+                )
             except (TypeError, ValueError):
                 pass
         return result
@@ -393,12 +397,14 @@ def _detect_balloons(
                     continue
             item_no = _ocr_circle(img_np, cx, cy, cr)
             if item_no is not None and item_no > 0:
-                balloons.append(BalloonAnnotation(
-                    item_no=item_no,
-                    x=int(cx),
-                    y=int(cy),
-                    radius=int(cr),
-                ))
+                balloons.append(
+                    BalloonAnnotation(
+                        item_no=item_no,
+                        x=int(cx),
+                        y=int(cy),
+                        radius=int(cr),
+                    )
+                )
 
         logger.info("balloon_detection", found=len(circles), parsed=len(balloons))
         return balloons
@@ -414,9 +420,9 @@ def _detect_balloons(
 def _ocr_circle(img_np: Any, cx: int, cy: int, cr: int) -> int | None:
     """OCR the number inside a circle region."""
     try:
-        import pytesseract
         import cv2
-        import numpy as np
+        import numpy as np  # noqa: F401 — проба доступности пакета
+        import pytesseract
         from PIL import Image
 
         # Crop with padding
@@ -446,7 +452,7 @@ def _ocr_circle(img_np: Any, cx: int, cy: int, cr: int) -> int | None:
         h, w = gray.shape[:2]
         margin = int(min(h, w) * 0.22)
         if h - 2 * margin > 4 and w - 2 * margin > 4:
-            gray = gray[margin:h - margin, margin:w - margin]
+            gray = gray[margin : h - margin, margin : w - margin]
 
         # Binarize
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)

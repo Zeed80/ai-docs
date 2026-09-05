@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 from app.db.models import (
     BlankSpec,
     Drawing,
-    DrawingFeature,
     DrawingTPLink,
     ManufacturingOperation,
     ManufacturingProcessPlan,
@@ -34,104 +33,116 @@ logger = structlog.get_logger()
 # {material_group: {operation_type: {tool_material: (Vc_m_min, fz_mm)}}}
 _CUTTING_PARAMS: dict[str, dict[str, dict[str, tuple[float, float]]]] = {
     "steel_carbon": {
-        "turning":   {"carbide": (220.0, 0.20), "hss": (60.0, 0.15)},
-        "milling":   {"carbide": (180.0, 0.10), "hss": (40.0, 0.08)},
-        "drilling":  {"carbide": (80.0,  0.18), "hss": (25.0, 0.12)},
-        "grinding":  {"abrasive": (25.0, 0.005)},
-        "reaming":   {"carbide": (12.0, 0.30),  "hss": (6.0, 0.20)},
-        "boring":    {"carbide": (200.0, 0.10)},
-        "default":   {"carbide": (150.0, 0.10), "hss": (35.0, 0.08)},
+        "turning": {"carbide": (220.0, 0.20), "hss": (60.0, 0.15)},
+        "milling": {"carbide": (180.0, 0.10), "hss": (40.0, 0.08)},
+        "drilling": {"carbide": (80.0, 0.18), "hss": (25.0, 0.12)},
+        "grinding": {"abrasive": (25.0, 0.005)},
+        "reaming": {"carbide": (12.0, 0.30), "hss": (6.0, 0.20)},
+        "boring": {"carbide": (200.0, 0.10)},
+        "default": {"carbide": (150.0, 0.10), "hss": (35.0, 0.08)},
     },
     "steel_alloy": {
-        "turning":   {"carbide": (160.0, 0.15), "hss": (40.0, 0.10)},
-        "milling":   {"carbide": (120.0, 0.08), "hss": (28.0, 0.06)},
-        "drilling":  {"carbide": (60.0,  0.15), "hss": (18.0, 0.10)},
-        "grinding":  {"abrasive": (20.0, 0.004)},
-        "reaming":   {"carbide": (10.0, 0.25),  "hss": (5.0, 0.15)},
-        "boring":    {"carbide": (150.0, 0.08)},
-        "default":   {"carbide": (110.0, 0.08), "hss": (25.0, 0.06)},
+        "turning": {"carbide": (160.0, 0.15), "hss": (40.0, 0.10)},
+        "milling": {"carbide": (120.0, 0.08), "hss": (28.0, 0.06)},
+        "drilling": {"carbide": (60.0, 0.15), "hss": (18.0, 0.10)},
+        "grinding": {"abrasive": (20.0, 0.004)},
+        "reaming": {"carbide": (10.0, 0.25), "hss": (5.0, 0.15)},
+        "boring": {"carbide": (150.0, 0.08)},
+        "default": {"carbide": (110.0, 0.08), "hss": (25.0, 0.06)},
     },
     "cast_iron": {
-        "turning":   {"carbide": (180.0, 0.25)},
-        "milling":   {"carbide": (150.0, 0.12)},
-        "drilling":  {"carbide": (70.0,  0.20)},
-        "grinding":  {"abrasive": (22.0, 0.006)},
-        "boring":    {"carbide": (160.0, 0.12)},
-        "default":   {"carbide": (120.0, 0.12)},
+        "turning": {"carbide": (180.0, 0.25)},
+        "milling": {"carbide": (150.0, 0.12)},
+        "drilling": {"carbide": (70.0, 0.20)},
+        "grinding": {"abrasive": (22.0, 0.006)},
+        "boring": {"carbide": (160.0, 0.12)},
+        "default": {"carbide": (120.0, 0.12)},
     },
     "aluminum": {
-        "turning":   {"carbide": (600.0, 0.25), "hss": (200.0, 0.20)},
-        "milling":   {"carbide": (500.0, 0.15), "hss": (150.0, 0.12)},
-        "drilling":  {"carbide": (200.0, 0.25), "hss": (80.0,  0.18)},
-        "boring":    {"carbide": (500.0, 0.15)},
-        "default":   {"carbide": (400.0, 0.15)},
+        "turning": {"carbide": (600.0, 0.25), "hss": (200.0, 0.20)},
+        "milling": {"carbide": (500.0, 0.15), "hss": (150.0, 0.12)},
+        "drilling": {"carbide": (200.0, 0.25), "hss": (80.0, 0.18)},
+        "boring": {"carbide": (500.0, 0.15)},
+        "default": {"carbide": (400.0, 0.15)},
     },
     "stainless": {
-        "turning":   {"carbide": (140.0, 0.12)},
-        "milling":   {"carbide": (100.0, 0.07)},
-        "drilling":  {"carbide": (50.0,  0.12)},
-        "grinding":  {"abrasive": (18.0, 0.003)},
-        "boring":    {"carbide": (120.0, 0.08)},
-        "default":   {"carbide": (90.0, 0.08)},
+        "turning": {"carbide": (140.0, 0.12)},
+        "milling": {"carbide": (100.0, 0.07)},
+        "drilling": {"carbide": (50.0, 0.12)},
+        "grinding": {"abrasive": (18.0, 0.003)},
+        "boring": {"carbide": (120.0, 0.08)},
+        "default": {"carbide": (90.0, 0.08)},
     },
 }
 
 # {machining_method: machine resource_type keywords}
 _METHOD_MACHINE_TYPE: dict[str, list[str]] = {
-    "turning":   ["токарный", "lathe", "turning"],
-    "milling":   ["фрезерный", "milling", "machining center"],
-    "drilling":  ["сверлильный", "drilling", "radial drill"],
-    "grinding":  ["шлифовальный", "grinding", "круглошлифовальный"],
-    "boring":    ["расточной", "boring", "jig boring"],
-    "reaming":   ["сверлильный", "drilling"],
-    "honing":    ["хонинговальный", "honing"],
+    "turning": ["токарный", "lathe", "turning"],
+    "milling": ["фрезерный", "milling", "machining center"],
+    "drilling": ["сверлильный", "drilling", "radial drill"],
+    "grinding": ["шлифовальный", "grinding", "круглошлифовальный"],
+    "boring": ["расточной", "boring", "jig boring"],
+    "reaming": ["сверлильный", "drilling"],
+    "honing": ["хонинговальный", "honing"],
     "broaching": ["протяжной", "broaching"],
 }
 
 # Roughness Ra → machining stage mapping
 _RA_TO_STAGE: list[tuple[float, str]] = [
-    (0.2,  "finish"),
-    (0.8,  "finish"),
-    (1.6,  "finish"),
-    (3.2,  "semi-finish"),
-    (6.3,  "semi-finish"),
+    (0.2, "finish"),
+    (0.8, "finish"),
+    (1.6, "finish"),
+    (3.2, "semi-finish"),
+    (6.3, "semi-finish"),
     (12.5, "rough"),
 ]
 
 # Operation type → ГОСТ operation code (three-digit ГОСТ classifier)
 _GOST_OP_CODES: dict[str, str] = {
-    "turning":           "4110",
-    "milling":           "4130",
-    "drilling":          "4140",
-    "grinding":          "4150",
-    "boring":            "4110",
-    "reaming":           "4140",
-    "honing":            "4150",
-    "broaching":         "4160",
+    "turning": "4110",
+    "milling": "4130",
+    "drilling": "4140",
+    "grinding": "4150",
+    "boring": "4110",
+    "reaming": "4140",
+    "honing": "4150",
+    "broaching": "4160",
     "blank_preparation": "0210",
-    "heat_treatment":    "0500",
-    "quality_control":   "0900",
-    "assembly":          "5100",
-    "welding":           "1000",
-    "other":             "0000",
+    "heat_treatment": "0500",
+    "quality_control": "0900",
+    "assembly": "5100",
+    "welding": "1000",
+    "other": "0000",
 }
 
 # Auxiliary time reference (minutes) by operation type and machine class
 _TV_TABLE: dict[str, float] = {
-    "turning": 1.5, "milling": 2.0, "drilling": 1.2,
-    "grinding": 2.5, "boring": 2.0, "reaming": 1.0,
-    "honing": 3.0, "broaching": 1.5, "blank_preparation": 3.0,
-    "quality_control": 2.0, "assembly": 5.0, "default": 2.0,
+    "turning": 1.5,
+    "milling": 2.0,
+    "drilling": 1.2,
+    "grinding": 2.5,
+    "boring": 2.0,
+    "reaming": 1.0,
+    "honing": 3.0,
+    "broaching": 1.5,
+    "blank_preparation": 3.0,
+    "quality_control": 2.0,
+    "assembly": 5.0,
+    "default": 2.0,
 }
 
 # Service + rest fraction (from machining time)
-_K_OB = 0.06   # time for service (6% of To)
+_K_OB = 0.06  # time for service (6% of To)
 _K_OTD = 0.04  # time for rest (4% of To)
 
 # Prep-finish time (Tpz) by operation type, minutes
 _TPZ_TABLE: dict[str, float] = {
-    "turning": 15.0, "milling": 20.0, "drilling": 10.0,
-    "grinding": 25.0, "boring": 20.0, "default": 12.0,
+    "turning": 15.0,
+    "milling": 20.0,
+    "drilling": 10.0,
+    "grinding": 25.0,
+    "boring": 20.0,
+    "default": 12.0,
 }
 
 
@@ -171,10 +182,23 @@ def material_group_with_confidence(material: str) -> tuple[str, bool]:
     # unrelated words — "сплав" (any alloy, incl. non-aluminum ones like
     # tool carbide ВК8) contains "ав" mid-word. Word-bounded so they only
     # match when standing as their own token, not buried inside a word.
-    if (
-        any(k in m for k in ["алюм", "ад3", "ад0", "ад1", "амг", "амц", "дур", "al ", "al-", "aluminum", "aluminium", "д16"])
-        or _ALUMINUM_SHORT_GRADE_PATTERN.search(m)
-    ):
+    if any(
+        k in m
+        for k in [
+            "алюм",
+            "ад3",
+            "ад0",
+            "ад1",
+            "амг",
+            "амц",
+            "дур",
+            "al ",
+            "al-",
+            "aluminum",
+            "aluminium",
+            "д16",
+        ]
+    ) or _ALUMINUM_SHORT_GRADE_PATTERN.search(m):
         return "aluminum", True
     if any(k in m for k in ["чугун", "сч", "кч", "вч", "cast iron", "grey iron"]):
         return "cast_iron", True
@@ -206,7 +230,10 @@ _material_group = material_group
 
 # ── Surface type → machining method ──────────────────────────────────────────
 
-def _surface_to_method(feature_type: str, nominal_mm: float | None, roughness_ra: float | None) -> str:
+
+def _surface_to_method(
+    feature_type: str, nominal_mm: float | None, roughness_ra: float | None
+) -> str:
     if feature_type in ("hole", "pocket"):
         if nominal_mm and nominal_mm < 3:
             return "drilling"
@@ -240,9 +267,18 @@ def _roughness_stage(ra: float | None) -> str:
 
 
 # Feature types that require machining from inside (processed before external surfaces)
-_INTERNAL_FEATURE_TYPES = frozenset({
-    "hole", "pocket", "groove", "slot", "thread", "center_bore", "key_slot", "spline",
-})
+_INTERNAL_FEATURE_TYPES = frozenset(
+    {
+        "hole",
+        "pocket",
+        "groove",
+        "slot",
+        "thread",
+        "center_bore",
+        "key_slot",
+        "spline",
+    }
+)
 
 # Section view label patterns: "A-A", "Б-Б", "section", "разрез", "B-B", etc.
 _SECTION_VIEW_PATTERN = re.compile(r"[A-ЯЁ]-[A-ЯЁ]|section|разрез", re.IGNORECASE)
@@ -258,6 +294,7 @@ def _is_internal_feature(feature_type: str, source_view: str | None) -> bool:
 
 
 # ── Drawing feature → SurfaceMachiningSpec candidates ────────────────────────
+
 
 def extract_tp_features_from_drawing(
     drawing: Drawing,
@@ -292,32 +329,47 @@ def extract_tp_features_from_drawing(
 
         # Internal features: machined from the inside (holes, grooves, key slots, etc.)
         # or confirmed by a section view (source_view like "A-A", "section", "B-B")
-        is_internal = _is_internal_feature(feature.feature_type.value, getattr(feature, "source_view", None))
+        is_internal = _is_internal_feature(
+            feature.feature_type.value, getattr(feature, "source_view", None)
+        )
 
-        specs.append({
-            "process_plan_id": str(plan_id),
-            "drawing_feature_id": str(feature.id),
-            "surface_type": feature.feature_type.value,
-            "nominal_mm": nominal_mm,
-            "upper_tol": upper_tol,
-            "lower_tol": lower_tol,
-            "roughness_ra": roughness_ra,
-            "fit_system": fit_system,
-            "machining_method": method,
-            "machining_stage": stage,
-            "confidence": feature.confidence,
-            "is_internal": is_internal,
-        })
+        specs.append(
+            {
+                "process_plan_id": str(plan_id),
+                "drawing_feature_id": str(feature.id),
+                "surface_type": feature.feature_type.value,
+                "nominal_mm": nominal_mm,
+                "upper_tol": upper_tol,
+                "lower_tol": lower_tol,
+                "roughness_ra": roughness_ra,
+                "fit_system": fit_system,
+                "machining_method": method,
+                "machining_stage": stage,
+                "confidence": feature.confidence,
+                "is_internal": is_internal,
+            }
+        )
 
     return specs
 
 
 _SURFACE_SPEC_COLUMNS = {
-    "process_plan_id", "operation_id", "drawing_feature_id",
-    "surface_type", "nominal_mm", "upper_tol", "lower_tol",
-    "roughness_ra", "fit_system", "machining_method", "machining_stage",
-    "assigned_machine_id", "assigned_tool_id", "allowance_mm",
-    "confidence", "metadata_",
+    "process_plan_id",
+    "operation_id",
+    "drawing_feature_id",
+    "surface_type",
+    "nominal_mm",
+    "upper_tol",
+    "lower_tol",
+    "roughness_ra",
+    "fit_system",
+    "machining_method",
+    "machining_stage",
+    "assigned_machine_id",
+    "assigned_tool_id",
+    "allowance_mm",
+    "confidence",
+    "metadata_",
 }
 
 
@@ -335,6 +387,7 @@ def save_surface_specs(specs: list[dict[str, Any]], db: Session) -> list[Surface
 
 # ── Blank recommendation ──────────────────────────────────────────────────────
 
+
 def recommend_blank(
     material: str,
     dims: dict[str, float],
@@ -348,8 +401,10 @@ def recommend_blank(
     the heuristic dim-based approach with an exact volumetric calculation.
     """
     material_lower = material.lower()
-    if any(k in material_lower for k in ["алюм", "ад3", "ад0", "амг", "дур", "aluminum", "aluminium"]):
-        density = 2.7e-6   # kg/mm³
+    if any(
+        k in material_lower for k in ["алюм", "ад3", "ад0", "амг", "дур", "aluminum", "aluminium"]
+    ):
+        density = 2.7e-6  # kg/mm³
     elif "латун" in material_lower or "бронз" in material_lower:
         density = 8.5e-6
     else:
@@ -360,10 +415,9 @@ def recommend_blank(
         try:
             from app.ai.step_extractor import StepGeometryResult, recommend_blank_from_geometry
 
-            # Build a minimal result object for the helper
-            x_dim = abs(bounding_box_mm.get("x_max", 0) - bounding_box_mm.get("x_min", 0))
-            y_dim = abs(bounding_box_mm.get("y_max", 0) - bounding_box_mm.get("y_min", 0))
-            z_dim = abs(bounding_box_mm.get("z_max", 0) - bounding_box_mm.get("z_min", 0))
+            # Build a minimal result object for the helper: габариты по осям
+            # здесь считались и не использовались — recommend_blank_from_geometry
+            # берёт их сам из bounding_box_mm.
             vol_mm3 = (mass_part_kg / density) if mass_part_kg else 0.0
 
             geo = StepGeometryResult(
@@ -373,7 +427,7 @@ def recommend_blank(
             )
             blank_rec = recommend_blank_from_geometry(geo, density_g_cm3=density * 1e6)
             dims_out = blank_rec["dimensions"]
-            mass_blank = (blank_rec.get("mass_blank_kg") or 0.0)
+            mass_blank = blank_rec.get("mass_blank_kg") or 0.0
             kim = blank_rec.get("kim") or (
                 (mass_part_kg / mass_blank) if mass_part_kg and mass_blank > 0 else 0.5
             )
@@ -408,15 +462,15 @@ def recommend_blank(
             pass  # fall through to heuristic
 
     # Heuristic path: dims dict from drawing text extraction
-    d = dims.get("d_mm") or dims.get("a_mm") or 50.0
-    l = dims.get("l_mm") or dims.get("h_mm") or 100.0
+    diameter = dims.get("d_mm") or dims.get("a_mm") or 50.0
+    length = dims.get("l_mm") or dims.get("h_mm") or 100.0
 
-    mass_blank = density * math.pi * (d / 2) ** 2 * l
+    mass_blank = density * math.pi * (diameter / 2) ** 2 * length
     kim = (mass_part_kg / mass_blank) if mass_part_kg and mass_blank > 0 else 0.5
 
     if kim >= 0.7:
         blank_type = "прокат"
-        std = "ГОСТ 2590-2006" if d <= 250 else "ГОСТ 7502-98"
+        std = "ГОСТ 2590-2006" if diameter <= 250 else "ГОСТ 7502-98"
         reasoning = f"КИМ={kim:.2f} ≥ 0.70 → прокат эффективен"
     elif kim >= 0.5:
         if annual_volume >= 100:
@@ -437,8 +491,8 @@ def recommend_blank(
             std = "ГОСТ 8479-70"
             reasoning = f"КИМ={kim:.2f} < 0.50 → поковка для сокращения припусков"
 
-    dim_d = round(d * 1.1 + 5)
-    dim_l = round(l + 10)
+    dim_d = round(diameter * 1.1 + 5)
+    dim_l = round(length + 10)
 
     return {
         "blank_type": blank_type,
@@ -454,6 +508,7 @@ def recommend_blank(
 
 
 # ── Equipment selection ───────────────────────────────────────────────────────
+
 
 def select_equipment(
     operation_type: str,
@@ -494,6 +549,7 @@ def select_equipment(
 
 # ── Cutting parameters ────────────────────────────────────────────────────────
 
+
 def calculate_cutting_parameters(
     operation_type: str,
     material: str,
@@ -516,8 +572,21 @@ def calculate_cutting_parameters(
             material=material,
             fallback_group=mat_group,
         )
-    op_key = operation_type if operation_type in ("turning", "milling", "drilling", "grinding",
-                                                   "boring", "reaming", "honing", "broaching") else "default"
+    op_key = (
+        operation_type
+        if operation_type
+        in (
+            "turning",
+            "milling",
+            "drilling",
+            "grinding",
+            "boring",
+            "reaming",
+            "honing",
+            "broaching",
+        )
+        else "default"
+    )
 
     params = _CUTTING_PARAMS.get(mat_group, _CUTTING_PARAMS["steel_carbon"])
     op_params = params.get(op_key, params.get("default", {}))
@@ -555,7 +624,9 @@ def calculate_cutting_parameters(
         "competence": {
             "recognized": recognized,
             "code": None if recognized else CompetenceCode.MATERIAL_UNRECOGNIZED,
-            "note": None if recognized else (
+            "note": None
+            if recognized
+            else (
                 f"Материал «{material}» не распознан ни в одной известной группе — "
                 f"параметры резания оценены ПО УМОЛЧАНИЮ как {mat_group}, требуется "
                 "проверка технолога перед использованием"
@@ -565,6 +636,7 @@ def calculate_cutting_parameters(
 
 
 # ── Time norms ────────────────────────────────────────────────────────────────
+
 
 def calculate_time_norms(
     operation_type: str,
@@ -594,6 +666,7 @@ def calculate_time_norms(
 
 
 # ── Operation drafting ────────────────────────────────────────────────────────
+
 
 def _build_route_summary(ops: list[dict[str, Any]]) -> str:
     names = [f"{o['sequence_no']:03d} {o['name']}" for o in ops]
@@ -656,26 +729,41 @@ def draft_operations_from_surfaces(
     stage_order = {"rough": 0, "semi-finish": 1, "finish": 2}
     # Internal-biased method order: drilling/boring first, then turning, then finishing
     method_order = [
-        "drilling", "boring", "reaming",
-        "turning", "milling",
-        "grinding", "honing", "broaching", "other",
+        "drilling",
+        "boring",
+        "reaming",
+        "turning",
+        "milling",
+        "grinding",
+        "honing",
+        "broaching",
+        "other",
     ]
 
     for method in method_order:
         if method not in method_groups:
             continue
-        specs = sorted(method_groups[method], key=lambda s: stage_order.get(s.get("machining_stage", "finish"), 2))
+        specs = sorted(
+            method_groups[method],
+            key=lambda s: stage_order.get(s.get("machining_stage", "finish"), 2),
+        )
 
         name_ru = {
-            "turning": "Токарная", "milling": "Фрезерная", "drilling": "Сверлильная",
-            "boring": "Расточная", "reaming": "Развёрточная", "grinding": "Шлифовальная",
-            "honing": "Хонинговальная", "broaching": "Протяжная",
+            "turning": "Токарная",
+            "milling": "Фрезерная",
+            "drilling": "Сверлильная",
+            "boring": "Расточная",
+            "reaming": "Развёрточная",
+            "grinding": "Шлифовальная",
+            "honing": "Хонинговальная",
+            "broaching": "Протяжная",
         }.get(method, method.capitalize())
 
         # Calculate nominal cutting params from first surface
         first = specs[0]
         cp = calculate_cutting_parameters(
-            method, material,
+            method,
+            material,
             first.get("nominal_mm"),
             first.get("roughness_ra"),
         )
@@ -689,8 +777,7 @@ def draft_operations_from_surfaces(
             name=name_ru,
             operation_type=method,
             setup_description=(
-                f"Установить и закрепить деталь в приспособлении. "
-                f"Обработать {len(specs)} поверхн."
+                f"Установить и закрепить деталь в приспособлении. Обработать {len(specs)} поверхн."
             ),
             transition_text="\n".join(
                 "{n}. Обработать поверхность {st}{dia}{ra}.".format(
@@ -743,27 +830,33 @@ def draft_operations_from_surfaces(
     db.flush()  # populates op.id for the NormControlCheck rows below
 
     for op, cp in unrecognized_material_ops:
-        db.add(NormControlCheck(
-            process_plan_id=plan_id,
-            operation_id=op.id,
-            gost_code="Технологичность",
-            check_code=CompetenceCode.MATERIAL_UNRECOGNIZED,
-            severity="warning",
-            status="open",
-            message=cp["competence"]["note"],
-            recommendation=(
-                "Проверьте группу материала и режимы резания вручную — "
-                "автоматическое распознавание не смогло сопоставить материал "
-                "ни одной известной группе (сталь/нержавейка/алюминий/чугун)."
-            ),
-            evidence={"material_group_assumed": cp["material_group"], "operation_type": op.operation_type},
-            created_by="tp_generator",
-        ))
+        db.add(
+            NormControlCheck(
+                process_plan_id=plan_id,
+                operation_id=op.id,
+                gost_code="Технологичность",
+                check_code=CompetenceCode.MATERIAL_UNRECOGNIZED,
+                severity="warning",
+                status="open",
+                message=cp["competence"]["note"],
+                recommendation=(
+                    "Проверьте группу материала и режимы резания вручную — "
+                    "автоматическое распознавание не смогло сопоставить материал "
+                    "ни одной известной группе (сталь/нержавейка/алюминий/чугун)."
+                ),
+                evidence={
+                    "material_group_assumed": cp["material_group"],
+                    "operation_type": op.operation_type,
+                },
+                created_by="tp_generator",
+            )
+        )
 
     return operations
 
 
 # ── Link surfaces to operations ───────────────────────────────────────────────
+
 
 def link_surfaces_to_operations(
     surface_rows: list[SurfaceMachiningSpec],
@@ -786,6 +879,7 @@ def link_surfaces_to_operations(
 
 # ── Full generation pipeline ──────────────────────────────────────────────────
 
+
 def generate_process_plan_from_drawing(
     drawing_id: uuid.UUID,
     plan_id: uuid.UUID,
@@ -801,7 +895,9 @@ def generate_process_plan_from_drawing(
     if not plan:
         raise ValueError(f"ProcessPlan {plan_id} not found")
 
-    material = plan.material or (drawing.title_block or {}).get("material", "Сталь 45") or "Сталь 45"
+    material = (
+        plan.material or (drawing.title_block or {}).get("material", "Сталь 45") or "Сталь 45"
+    )
 
     # 1. Extract surface specs from drawing features
     surface_dicts = extract_tp_features_from_drawing(drawing, plan_id, db)
@@ -823,9 +919,7 @@ def generate_process_plan_from_drawing(
     plan.blank_type = blank_data["blank_type"]
 
     # 3. Draft operations
-    operations = draft_operations_from_surfaces(
-        surface_dicts, material, batch_size, plan_id, db
-    )
+    operations = draft_operations_from_surfaces(surface_dicts, material, batch_size, plan_id, db)
 
     # 4. Link surfaces to operations
     link_surfaces_to_operations(surface_rows, operations, db)
@@ -844,17 +938,21 @@ def generate_process_plan_from_drawing(
         drawing_id=drawing_id,
         process_plan_id=plan_id,
         link_type="derived_from",
-        surface_mapping={str(s.drawing_feature_id): str(s.operation_id) for s in surface_rows if s.operation_id},
+        surface_mapping={
+            str(s.drawing_feature_id): str(s.operation_id) for s in surface_rows if s.operation_id
+        },
     )
     db.add(link)
 
     # 7. Update plan totals
     plan.drawing_id = drawing_id
     machining_ops = [o for o in operations if o.tsht_k_minutes]
-    plan.total_norm_minutes = round(sum(o.tsht_k_minutes for o in machining_ops if o.tsht_k_minutes), 2)
-    plan.route_summary = _build_route_summary([
-        {"sequence_no": o.sequence_no, "name": o.name} for o in operations
-    ])
+    plan.total_norm_minutes = round(
+        sum(o.tsht_k_minutes for o in machining_ops if o.tsht_k_minutes), 2
+    )
+    plan.route_summary = _build_route_summary(
+        [{"sequence_no": o.sequence_no, "name": o.name} for o in operations]
+    )
 
     db.commit()
 

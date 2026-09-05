@@ -8,6 +8,7 @@ import uuid
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.ai.actor_context import set_acting_user
 from app.ai.orchestrator import AgentOrchestrator
 from app.ai.router import ai_router
 from app.chat.store import (
@@ -19,7 +20,6 @@ from app.chat.store import (
     list_chat_messages,
     update_chat_session_title,
 )
-from app.ai.actor_context import set_acting_user
 from app.chat.user_key import get_ws_user_key
 from app.core.chat_bus import chat_bus
 from app.db.session import _get_session_factory
@@ -74,11 +74,13 @@ async def chat_ws(ws: WebSocket) -> None:
                 title=title,
             )
             await db.commit()
-        await chat_bus.publish({
-            "type": "chat.session_updated",
-            "session_id": str(session_id),
-            "title": title,
-        })
+        await chat_bus.publish(
+            {
+                "type": "chat.session_updated",
+                "session_id": str(session_id),
+                "title": title,
+            }
+        )
 
     async def send(data: dict) -> None:
         try:
@@ -166,6 +168,7 @@ async def chat_ws(ws: WebSocket) -> None:
                 raw_content = data.get("content", "").strip()
                 if raw_content:
                     from app.ai.input_sanitizer import sanitize_user_input
+
                     content, injection_warnings = sanitize_user_input(raw_content)
                     if injection_warnings:
                         logger.warning(
@@ -176,6 +179,7 @@ async def chat_ws(ws: WebSocket) -> None:
                         if len(injection_warnings) >= 2:
                             from app.audit.service import log_action
                             from app.db.session import _get_session_factory as _sf
+
                             async with _sf()() as _audit_db:
                                 await log_action(
                                     _audit_db,
@@ -201,10 +205,12 @@ async def chat_ws(ws: WebSocket) -> None:
                     # either signal — the frame going out, or the task simply
                     # finishing (incl. via exception) — is enough to unblock.
                     if turn_in_progress and current_turn and not current_turn.done():
-                        await send({
-                            "type": "error",
-                            "content": "Предыдущая задача ещё выполняется.",
-                        })
+                        await send(
+                            {
+                                "type": "error",
+                                "content": "Предыдущая задача ещё выполняется.",
+                            }
+                        )
                         continue
                     raw_session_id = data.get("session_id")
                     incoming_session_id: uuid.UUID | None = None
@@ -269,6 +275,7 @@ async def chat_ws(ws: WebSocket) -> None:
                             if attachment_doc_ids:
                                 try:
                                     from app.tasks.extraction import classify_document
+
                                     for doc_id in attachment_doc_ids:
                                         classify_document.apply_async(
                                             args=[str(doc_id)], countdown=1
@@ -296,18 +303,18 @@ async def chat_ws(ws: WebSocket) -> None:
                                     not restored
                                     and chat_session.title.strip().lower() == "новый чат"
                                 ):
-                                    asyncio.create_task(
-                                        generate_session_title(session_id, content)
-                                    )
+                                    asyncio.create_task(generate_session_title(session_id, content))
                             active_agent_session = agent_sessions[session_id]
                     except ChatSessionNotFoundError:
-                        await send({
-                            "type": "error",
-                            "content": (
-                                "Чат не найден или устарел. "
-                                "Выберите чат из списка или создайте новый."
-                            ),
-                        })
+                        await send(
+                            {
+                                "type": "error",
+                                "content": (
+                                    "Чат не найден или устарел. "
+                                    "Выберите чат из списка или создайте новый."
+                                ),
+                            }
+                        )
                         continue
                     await send({"type": "session", "session_id": str(active_session_id)})
                     turn_in_progress = True
@@ -344,11 +351,7 @@ async def chat_ws(ws: WebSocket) -> None:
                             if data.get("approval_id") is not None
                             else None
                         ),
-                        db_id=(
-                            str(data.get("db_id"))
-                            if data.get("db_id") is not None
-                            else None
-                        ),
+                        db_id=(str(data.get("db_id")) if data.get("db_id") is not None else None),
                         args_override=override if isinstance(override, dict) else None,
                     )
 
@@ -361,11 +364,7 @@ async def chat_ws(ws: WebSocket) -> None:
                             if data.get("approval_id") is not None
                             else None
                         ),
-                        db_id=(
-                            str(data.get("db_id"))
-                            if data.get("db_id") is not None
-                            else None
-                        ),
+                        db_id=(str(data.get("db_id")) if data.get("db_id") is not None else None),
                     )
 
     except WebSocketDisconnect:

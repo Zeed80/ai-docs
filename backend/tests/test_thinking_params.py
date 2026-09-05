@@ -18,12 +18,22 @@ from app.ai.thinking_params import (
     thinking_request_params,
 )
 
-
 # ── effective_thinking_levels: automatic provider-class derivation ─────────
 
 
 @pytest.mark.parametrize(
-    "provider", ["anthropic", "openrouter", "openai", "groq", "xai", "dashscope", "qwen", "cerebras", "ollama_cloud"]
+    "provider",
+    [
+        "anthropic",
+        "openrouter",
+        "openai",
+        "groq",
+        "xai",
+        "dashscope",
+        "qwen",
+        "cerebras",
+        "ollama_cloud",
+    ],
 )
 def test_levels_auto_derived_for_guaranteed_providers(provider):
     # No curated_levels needed — these providers accept the level as a
@@ -31,7 +41,9 @@ def test_levels_auto_derived_for_guaranteed_providers(provider):
     assert effective_thinking_levels(True, provider, []) == ["low", "medium", "high"]
 
 
-@pytest.mark.parametrize("provider", ["ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible"])
+@pytest.mark.parametrize(
+    "provider", ["ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible"]
+)
 def test_levels_not_auto_derived_for_local_providers(provider):
     # Empirically verified 2026-08-17: Ollama accepts a string think level
     # without erroring but does not honor it for non-gpt-oss templates —
@@ -45,7 +57,9 @@ def test_curated_levels_always_win_over_derivation():
     # curated list differs from the guaranteed low/medium/high default.
     assert effective_thinking_levels(True, "anthropic", ["low"]) == ["low"]
     assert effective_thinking_levels(True, "ollama", ["low", "medium", "high"]) == [
-        "low", "medium", "high",
+        "low",
+        "medium",
+        "high",
     ]
 
 
@@ -84,18 +98,14 @@ def test_llamacpp_vllm_level_has_no_effect(provider):
 
 
 def test_openrouter_off():
-    assert thinking_request_params("openrouter", False, "high") == {
-        "reasoning": {"enabled": False}
-    }
+    assert thinking_request_params("openrouter", False, "high") == {"reasoning": {"enabled": False}}
 
 
 def test_openrouter_on_with_and_without_level():
     assert thinking_request_params("openrouter", True, "low") == {
         "reasoning": {"enabled": True, "effort": "low"}
     }
-    assert thinking_request_params("openrouter", True, None) == {
-        "reasoning": {"enabled": True}
-    }
+    assert thinking_request_params("openrouter", True, None) == {"reasoning": {"enabled": True}}
 
 
 @pytest.mark.parametrize(

@@ -4,17 +4,17 @@ Revision ID: 5f60718293a4
 Revises: 4e5f60718293
 Create Date: 2026-04-28 00:00:00.000000
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-
 revision: str = "5f60718293a4"
-down_revision: Union[str, None] = "4e5f60718293"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "4e5f60718293"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -27,14 +27,30 @@ def upgrade() -> None:
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
         sa.ForeignKeyConstraint(["document_version_id"], ["document_versions.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_graph_build_statuses_document_id"), "graph_build_statuses", ["document_id"])
-    op.create_index(op.f("ix_graph_build_statuses_document_version_id"), "graph_build_statuses", ["document_version_id"])
+    op.create_index(
+        op.f("ix_graph_build_statuses_document_id"), "graph_build_statuses", ["document_id"]
+    )
+    op.create_index(
+        op.f("ix_graph_build_statuses_document_version_id"),
+        "graph_build_statuses",
+        ["document_version_id"],
+    )
     op.create_index(op.f("ix_graph_build_statuses_status"), "graph_build_statuses", ["status"])
 
     op.create_table(
@@ -43,8 +59,18 @@ def upgrade() -> None:
         sa.Column("mode", sa.String(length=20), nullable=False),
         sa.Column("updated_by", sa.String(length=100), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("singleton_key"),
     )
@@ -60,15 +86,35 @@ def upgrade() -> None:
         sa.Column("source_document_id", PG_UUID(as_uuid=True), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["source_document_id"], ["documents.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_normative_documents_code"), "normative_documents", ["code"])
-    op.create_index(op.f("ix_normative_documents_current_version_id"), "normative_documents", ["current_version_id"])
-    op.create_index(op.f("ix_normative_documents_document_type"), "normative_documents", ["document_type"])
-    op.create_index(op.f("ix_normative_documents_source_document_id"), "normative_documents", ["source_document_id"])
+    op.create_index(
+        op.f("ix_normative_documents_current_version_id"),
+        "normative_documents",
+        ["current_version_id"],
+    )
+    op.create_index(
+        op.f("ix_normative_documents_document_type"), "normative_documents", ["document_type"]
+    )
+    op.create_index(
+        op.f("ix_normative_documents_source_document_id"),
+        "normative_documents",
+        ["source_document_id"],
+    )
     op.create_index(op.f("ix_normative_documents_status"), "normative_documents", ["status"])
     op.create_index(op.f("ix_normative_documents_title"), "normative_documents", ["title"])
 
@@ -82,17 +128,45 @@ def upgrade() -> None:
         sa.Column("text_hash", sa.String(length=64), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["normative_document_id"], ["normative_documents.id"]),
         sa.ForeignKeyConstraint(["source_document_id"], ["documents.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_normative_document_versions_normative_document_id"), "normative_document_versions", ["normative_document_id"])
-    op.create_index(op.f("ix_normative_document_versions_source_document_id"), "normative_document_versions", ["source_document_id"])
-    op.create_index(op.f("ix_normative_document_versions_status"), "normative_document_versions", ["status"])
-    op.create_index(op.f("ix_normative_document_versions_text_hash"), "normative_document_versions", ["text_hash"])
-    op.create_index(op.f("ix_normative_document_versions_version_label"), "normative_document_versions", ["version_label"])
+    op.create_index(
+        op.f("ix_normative_document_versions_normative_document_id"),
+        "normative_document_versions",
+        ["normative_document_id"],
+    )
+    op.create_index(
+        op.f("ix_normative_document_versions_source_document_id"),
+        "normative_document_versions",
+        ["source_document_id"],
+    )
+    op.create_index(
+        op.f("ix_normative_document_versions_status"), "normative_document_versions", ["status"]
+    )
+    op.create_index(
+        op.f("ix_normative_document_versions_text_hash"),
+        "normative_document_versions",
+        ["text_hash"],
+    )
+    op.create_index(
+        op.f("ix_normative_document_versions_version_label"),
+        "normative_document_versions",
+        ["version_label"],
+    )
 
     op.create_table(
         "normative_clauses",
@@ -104,16 +178,34 @@ def upgrade() -> None:
         sa.Column("text", sa.Text(), nullable=False),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["normative_document_id"], ["normative_documents.id"]),
         sa.ForeignKeyConstraint(["parent_clause_id"], ["normative_clauses.id"]),
         sa.ForeignKeyConstraint(["version_id"], ["normative_document_versions.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_normative_clauses_clause_number"), "normative_clauses", ["clause_number"])
-    op.create_index(op.f("ix_normative_clauses_normative_document_id"), "normative_clauses", ["normative_document_id"])
-    op.create_index(op.f("ix_normative_clauses_parent_clause_id"), "normative_clauses", ["parent_clause_id"])
+    op.create_index(
+        op.f("ix_normative_clauses_clause_number"), "normative_clauses", ["clause_number"]
+    )
+    op.create_index(
+        op.f("ix_normative_clauses_normative_document_id"),
+        "normative_clauses",
+        ["normative_document_id"],
+    )
+    op.create_index(
+        op.f("ix_normative_clauses_parent_clause_id"), "normative_clauses", ["parent_clause_id"]
+    )
     op.create_index(op.f("ix_normative_clauses_title"), "normative_clauses", ["title"])
     op.create_index(op.f("ix_normative_clauses_version_id"), "normative_clauses", ["version_id"])
 
@@ -130,18 +222,46 @@ def upgrade() -> None:
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["clause_id"], ["normative_clauses.id"]),
         sa.ForeignKeyConstraint(["normative_document_id"], ["normative_documents.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_normative_requirements_clause_id"), "normative_requirements", ["clause_id"])
-    op.create_index(op.f("ix_normative_requirements_is_active"), "normative_requirements", ["is_active"])
-    op.create_index(op.f("ix_normative_requirements_normative_document_id"), "normative_requirements", ["normative_document_id"])
-    op.create_index(op.f("ix_normative_requirements_requirement_code"), "normative_requirements", ["requirement_code"])
-    op.create_index(op.f("ix_normative_requirements_requirement_type"), "normative_requirements", ["requirement_type"])
-    op.create_index(op.f("ix_normative_requirements_severity"), "normative_requirements", ["severity"])
+    op.create_index(
+        op.f("ix_normative_requirements_clause_id"), "normative_requirements", ["clause_id"]
+    )
+    op.create_index(
+        op.f("ix_normative_requirements_is_active"), "normative_requirements", ["is_active"]
+    )
+    op.create_index(
+        op.f("ix_normative_requirements_normative_document_id"),
+        "normative_requirements",
+        ["normative_document_id"],
+    )
+    op.create_index(
+        op.f("ix_normative_requirements_requirement_code"),
+        "normative_requirements",
+        ["requirement_code"],
+    )
+    op.create_index(
+        op.f("ix_normative_requirements_requirement_type"),
+        "normative_requirements",
+        ["requirement_type"],
+    )
+    op.create_index(
+        op.f("ix_normative_requirements_severity"), "normative_requirements", ["severity"]
+    )
 
     op.create_table(
         "ntd_check_runs",
@@ -155,14 +275,26 @@ def upgrade() -> None:
         sa.Column("findings_open", sa.Integer(), nullable=False),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
         sa.ForeignKeyConstraint(["document_version_id"], ["document_versions.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_ntd_check_runs_document_id"), "ntd_check_runs", ["document_id"])
-    op.create_index(op.f("ix_ntd_check_runs_document_version_id"), "ntd_check_runs", ["document_version_id"])
+    op.create_index(
+        op.f("ix_ntd_check_runs_document_version_id"), "ntd_check_runs", ["document_version_id"]
+    )
     op.create_index(op.f("ix_ntd_check_runs_mode"), "ntd_check_runs", ["mode"])
     op.create_index(op.f("ix_ntd_check_runs_status"), "ntd_check_runs", ["status"])
     op.create_index(op.f("ix_ntd_check_runs_triggered_by"), "ntd_check_runs", ["triggered_by"])
@@ -186,8 +318,18 @@ def upgrade() -> None:
         sa.Column("decision_comment", sa.Text(), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("id", PG_UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["check_id"], ["ntd_check_runs.id"]),
         sa.ForeignKeyConstraint(["clause_id"], ["normative_clauses.id"]),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
@@ -197,10 +339,20 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_ntd_check_findings_check_id"), "ntd_check_findings", ["check_id"])
     op.create_index(op.f("ix_ntd_check_findings_clause_id"), "ntd_check_findings", ["clause_id"])
-    op.create_index(op.f("ix_ntd_check_findings_document_id"), "ntd_check_findings", ["document_id"])
-    op.create_index(op.f("ix_ntd_check_findings_finding_code"), "ntd_check_findings", ["finding_code"])
-    op.create_index(op.f("ix_ntd_check_findings_normative_document_id"), "ntd_check_findings", ["normative_document_id"])
-    op.create_index(op.f("ix_ntd_check_findings_requirement_id"), "ntd_check_findings", ["requirement_id"])
+    op.create_index(
+        op.f("ix_ntd_check_findings_document_id"), "ntd_check_findings", ["document_id"]
+    )
+    op.create_index(
+        op.f("ix_ntd_check_findings_finding_code"), "ntd_check_findings", ["finding_code"]
+    )
+    op.create_index(
+        op.f("ix_ntd_check_findings_normative_document_id"),
+        "ntd_check_findings",
+        ["normative_document_id"],
+    )
+    op.create_index(
+        op.f("ix_ntd_check_findings_requirement_id"), "ntd_check_findings", ["requirement_id"]
+    )
     op.create_index(op.f("ix_ntd_check_findings_severity"), "ntd_check_findings", ["severity"])
     op.create_index(op.f("ix_ntd_check_findings_status"), "ntd_check_findings", ["status"])
 
@@ -209,7 +361,9 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_ntd_check_findings_status"), table_name="ntd_check_findings")
     op.drop_index(op.f("ix_ntd_check_findings_severity"), table_name="ntd_check_findings")
     op.drop_index(op.f("ix_ntd_check_findings_requirement_id"), table_name="ntd_check_findings")
-    op.drop_index(op.f("ix_ntd_check_findings_normative_document_id"), table_name="ntd_check_findings")
+    op.drop_index(
+        op.f("ix_ntd_check_findings_normative_document_id"), table_name="ntd_check_findings"
+    )
     op.drop_index(op.f("ix_ntd_check_findings_finding_code"), table_name="ntd_check_findings")
     op.drop_index(op.f("ix_ntd_check_findings_document_id"), table_name="ntd_check_findings")
     op.drop_index(op.f("ix_ntd_check_findings_clause_id"), table_name="ntd_check_findings")
@@ -222,33 +376,60 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_ntd_check_runs_document_id"), table_name="ntd_check_runs")
     op.drop_table("ntd_check_runs")
     op.drop_index(op.f("ix_normative_requirements_severity"), table_name="normative_requirements")
-    op.drop_index(op.f("ix_normative_requirements_requirement_type"), table_name="normative_requirements")
-    op.drop_index(op.f("ix_normative_requirements_requirement_code"), table_name="normative_requirements")
-    op.drop_index(op.f("ix_normative_requirements_normative_document_id"), table_name="normative_requirements")
+    op.drop_index(
+        op.f("ix_normative_requirements_requirement_type"), table_name="normative_requirements"
+    )
+    op.drop_index(
+        op.f("ix_normative_requirements_requirement_code"), table_name="normative_requirements"
+    )
+    op.drop_index(
+        op.f("ix_normative_requirements_normative_document_id"), table_name="normative_requirements"
+    )
     op.drop_index(op.f("ix_normative_requirements_is_active"), table_name="normative_requirements")
     op.drop_index(op.f("ix_normative_requirements_clause_id"), table_name="normative_requirements")
     op.drop_table("normative_requirements")
     op.drop_index(op.f("ix_normative_clauses_version_id"), table_name="normative_clauses")
     op.drop_index(op.f("ix_normative_clauses_title"), table_name="normative_clauses")
     op.drop_index(op.f("ix_normative_clauses_parent_clause_id"), table_name="normative_clauses")
-    op.drop_index(op.f("ix_normative_clauses_normative_document_id"), table_name="normative_clauses")
+    op.drop_index(
+        op.f("ix_normative_clauses_normative_document_id"), table_name="normative_clauses"
+    )
     op.drop_index(op.f("ix_normative_clauses_clause_number"), table_name="normative_clauses")
     op.drop_table("normative_clauses")
-    op.drop_index(op.f("ix_normative_document_versions_version_label"), table_name="normative_document_versions")
-    op.drop_index(op.f("ix_normative_document_versions_text_hash"), table_name="normative_document_versions")
-    op.drop_index(op.f("ix_normative_document_versions_status"), table_name="normative_document_versions")
-    op.drop_index(op.f("ix_normative_document_versions_source_document_id"), table_name="normative_document_versions")
-    op.drop_index(op.f("ix_normative_document_versions_normative_document_id"), table_name="normative_document_versions")
+    op.drop_index(
+        op.f("ix_normative_document_versions_version_label"),
+        table_name="normative_document_versions",
+    )
+    op.drop_index(
+        op.f("ix_normative_document_versions_text_hash"), table_name="normative_document_versions"
+    )
+    op.drop_index(
+        op.f("ix_normative_document_versions_status"), table_name="normative_document_versions"
+    )
+    op.drop_index(
+        op.f("ix_normative_document_versions_source_document_id"),
+        table_name="normative_document_versions",
+    )
+    op.drop_index(
+        op.f("ix_normative_document_versions_normative_document_id"),
+        table_name="normative_document_versions",
+    )
     op.drop_table("normative_document_versions")
     op.drop_index(op.f("ix_normative_documents_title"), table_name="normative_documents")
     op.drop_index(op.f("ix_normative_documents_status"), table_name="normative_documents")
-    op.drop_index(op.f("ix_normative_documents_source_document_id"), table_name="normative_documents")
+    op.drop_index(
+        op.f("ix_normative_documents_source_document_id"), table_name="normative_documents"
+    )
     op.drop_index(op.f("ix_normative_documents_document_type"), table_name="normative_documents")
-    op.drop_index(op.f("ix_normative_documents_current_version_id"), table_name="normative_documents")
+    op.drop_index(
+        op.f("ix_normative_documents_current_version_id"), table_name="normative_documents"
+    )
     op.drop_index(op.f("ix_normative_documents_code"), table_name="normative_documents")
     op.drop_table("normative_documents")
     op.drop_table("ntd_control_settings")
     op.drop_index(op.f("ix_graph_build_statuses_status"), table_name="graph_build_statuses")
-    op.drop_index(op.f("ix_graph_build_statuses_document_version_id"), table_name="graph_build_statuses")
+    op.drop_index(
+        op.f("ix_graph_build_statuses_document_version_id"), table_name="graph_build_statuses"
+    )
     op.drop_index(op.f("ix_graph_build_statuses_document_id"), table_name="graph_build_statuses")
     op.drop_table("graph_build_statuses")

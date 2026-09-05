@@ -41,12 +41,17 @@ class DuplicatePatchError(ValueError):
 
 
 def _storage_path(graph: EngineeringModelGraph) -> str:
-    return f"engineering-model-graphs/{graph.graph_id}/r{graph.revision}-{graph.canonical_sha256}.json"
+    return (
+        f"engineering-model-graphs/{graph.graph_id}/r{graph.revision}-{graph.canonical_sha256}.json"
+    )
 
 
 def load_graph(row: EngineeringGraphRevision) -> EngineeringModelGraph:
     graph = EngineeringModelGraph.model_validate_json(download_file(row.storage_path))
-    if graph.canonical_sha256 != row.canonical_sha256 or graph.calculated_sha256() != row.canonical_sha256:
+    if (
+        graph.canonical_sha256 != row.canonical_sha256
+        or graph.calculated_sha256() != row.canonical_sha256
+    ):
         raise ValueError("canonical graph hash mismatch")
     return graph
 
@@ -96,39 +101,45 @@ async def persist_graph_revision(
         )
         db.add(row)
         await db.flush()
-        db.add_all([
-            EngineeringGraphNodeRecord(
-                graph_revision_id=row.id,
-                node_id=item.id,
-                node_type=item.type,
-                payload=item.model_dump(mode="json"),
-            )
-            for item in graph.nodes
-        ])
-        db.add_all([
-            EngineeringGraphEdgeRecord(
-                graph_revision_id=row.id,
-                edge_id=item.id,
-                edge_type=item.type,
-                source_node_id=item.source_id,
-                target_node_id=item.target_id,
-                payload=item.model_dump(mode="json"),
-            )
-            for item in graph.edges
-        ])
-        db.add_all([
-            EngineeringGraphAssertionRecord(
-                graph_revision_id=row.id,
-                assertion_id=item.id,
-                subject_node_id=item.subject_id,
-                predicate=item.predicate,
-                origin=item.origin,
-                assurance=item.assurance,
-                state=item.state,
-                payload=item.model_dump(mode="json"),
-            )
-            for item in graph.assertions
-        ])
+        db.add_all(
+            [
+                EngineeringGraphNodeRecord(
+                    graph_revision_id=row.id,
+                    node_id=item.id,
+                    node_type=item.type,
+                    payload=item.model_dump(mode="json"),
+                )
+                for item in graph.nodes
+            ]
+        )
+        db.add_all(
+            [
+                EngineeringGraphEdgeRecord(
+                    graph_revision_id=row.id,
+                    edge_id=item.id,
+                    edge_type=item.type,
+                    source_node_id=item.source_id,
+                    target_node_id=item.target_id,
+                    payload=item.model_dump(mode="json"),
+                )
+                for item in graph.edges
+            ]
+        )
+        db.add_all(
+            [
+                EngineeringGraphAssertionRecord(
+                    graph_revision_id=row.id,
+                    assertion_id=item.id,
+                    subject_node_id=item.subject_id,
+                    predicate=item.predicate,
+                    origin=item.origin,
+                    assurance=item.assurance,
+                    state=item.state,
+                    payload=item.model_dump(mode="json"),
+                )
+                for item in graph.assertions
+            ]
+        )
         await db.flush()
         return row
     except Exception:
@@ -150,7 +161,9 @@ async def create_initial_graph(
     if await latest_graph_revision(db, graph.graph_id):
         raise ValueError("graph already exists")
     return await persist_graph_revision(
-        db, graph.sealed(), engineering_project_id=engineering_project_id,
+        db,
+        graph.sealed(),
+        engineering_project_id=engineering_project_id,
         engineering_revision_id=engineering_revision_id,
     )
 
@@ -209,10 +222,7 @@ async def persist_feature_tree_revision(
     latest = await latest_graph_revision(db, graph_id, lock=True)
     if latest is not None and (
         (expected_base_revision is not None and latest.revision != expected_base_revision)
-        or (
-            expected_base_sha256 is not None
-            and latest.canonical_sha256 != expected_base_sha256
-        )
+        or (expected_base_sha256 is not None and latest.canonical_sha256 != expected_base_sha256)
     ):
         raise ValueError("stale_graph_revision")
     if latest is None:
@@ -238,20 +248,18 @@ async def persist_feature_tree_revision(
         from app.ai.cad_emg_compat import feature_tree_from_graph
 
         current = feature_tree_from_graph(load_graph(latest), target_id="preview")
-        current_operations = [
-            (item.kind, item.params) for item in current.features
-        ]
-        candidate_operations = [
-            (item.kind, item.params) for item in candidate.features
-        ]
+        current_operations = [(item.kind, item.params) for item in current.features]
+        candidate_operations = [(item.kind, item.params) for item in candidate.features]
         if current_operations == candidate_operations:
             return latest
 
     duplicate = (
-        await db.execute(select(GraphPatchRecord).where(
-            GraphPatchRecord.graph_id == graph_id,
-            GraphPatchRecord.idempotency_key == idempotency_key,
-        ))
+        await db.execute(
+            select(GraphPatchRecord).where(
+                GraphPatchRecord.graph_id == graph_id,
+                GraphPatchRecord.idempotency_key == idempotency_key,
+            )
+        )
     ).scalar_one_or_none()
     if duplicate is not None:
         if not duplicate.accepted or duplicate.result_revision_id is None:
@@ -276,12 +284,12 @@ async def persist_feature_tree_revision(
         actor_sub=actor_sub,
     )
     row, errors = await merge_and_persist_patch(
-        db, patch, expected_graph_id=graph_id,
+        db,
+        patch,
+        expected_graph_id=graph_id,
     )
     if row is None:
-        raise ValueError(
-            "graph patch rejected: " + "; ".join(summarize_patch_errors(errors))
-        )
+        raise ValueError("graph patch rejected: " + "; ".join(summarize_patch_errors(errors)))
     return row
 
 
@@ -293,19 +301,23 @@ async def merge_and_persist_patch(
 ) -> tuple[EngineeringGraphRevision | None, list[str]]:
     """Journal and apply a patch. Rejection is a successful persisted outcome."""
     base = (
-        await db.execute(select(EngineeringGraphRevision).where(
-            EngineeringGraphRevision.canonical_sha256 == patch.base_sha256
-        ).with_for_update())
+        await db.execute(
+            select(EngineeringGraphRevision)
+            .where(EngineeringGraphRevision.canonical_sha256 == patch.base_sha256)
+            .with_for_update()
+        )
     ).scalar_one_or_none()
     if not base:
         raise LookupError("base graph revision not found")
     if base.graph_id != expected_graph_id:
         raise LookupError("base revision belongs to another graph")
     duplicate = (
-        await db.execute(select(GraphPatchRecord).where(
-            GraphPatchRecord.graph_id == base.graph_id,
-            GraphPatchRecord.idempotency_key == patch.idempotency_key,
-        ))
+        await db.execute(
+            select(GraphPatchRecord).where(
+                GraphPatchRecord.graph_id == base.graph_id,
+                GraphPatchRecord.idempotency_key == patch.idempotency_key,
+            )
+        )
     ).scalar_one_or_none()
     if duplicate:
         raise DuplicatePatchError("duplicate idempotency key")
@@ -376,29 +388,28 @@ def _domain_rule_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
         return []
     adapter = domain_adapter_for(graph.profile)
     issues: list[dict[str, Any]] = []
-    unsupported_nodes = sorted({
-        item.type for item in graph.nodes
-        if item.type not in adapter.supported_node_types
-    })
-    unsupported_edges = sorted({
-        item.type for item in graph.edges
-        if item.type not in adapter.supported_edge_types
-    })
-    active_predicates = {
-        item.predicate for item in graph.assertions if item.state == "active"
-    }
-    missing_predicates = sorted(
-        set(adapter.mandatory_assertions) - active_predicates
+    unsupported_nodes = sorted(
+        {item.type for item in graph.nodes if item.type not in adapter.supported_node_types}
     )
+    unsupported_edges = sorted(
+        {item.type for item in graph.edges if item.type not in adapter.supported_edge_types}
+    )
+    active_predicates = {item.predicate for item in graph.assertions if item.state == "active"}
+    missing_predicates = sorted(set(adapter.mandatory_assertions) - active_predicates)
     for code, values in (
         ("domain_unsupported_node_type", unsupported_nodes),
         ("domain_unsupported_edge_type", unsupported_edges),
         ("domain_mandatory_assertion_missing", missing_predicates),
     ):
         if values:
-            issues.append({
-                "level": 7, "code": code, "values": values, "severity": "error",
-            })
+            issues.append(
+                {
+                    "level": 7,
+                    "code": code,
+                    "values": values,
+                    "severity": "error",
+                }
+            )
 
     node_type = {item.id: item.type for item in graph.nodes}
     if graph.profile == "assembly":
@@ -406,29 +417,38 @@ def _domain_rule_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
             issues.append({"level": 7, "code": "assembly_product_missing", "severity": "error"})
         instance_ids = {edge.source_id for edge in graph.edges if edge.type == "instance_of"}
         unconstrained = sorted(
-            item_id for item_id in instance_ids
+            item_id
+            for item_id in instance_ids
             if not any(
-                edge.type == "mates_with"
-                and item_id in {edge.source_id, edge.target_id}
+                edge.type == "mates_with" and item_id in {edge.source_id, edge.target_id}
                 for edge in graph.edges
             )
             and len(instance_ids) > 1
         )
         if unconstrained:
-            issues.append({
-                "level": 7, "code": "assembly_instances_without_mate",
-                "node_ids": unconstrained, "severity": "error",
-            })
+            issues.append(
+                {
+                    "level": 7,
+                    "code": "assembly_instances_without_mate",
+                    "node_ids": unconstrained,
+                    "severity": "error",
+                }
+            )
     elif graph.profile == "construction":
         feature_ids = {item.id for item in graph.nodes if item.type == "Feature"}
         located = {edge.source_id for edge in graph.edges if edge.type == "located_in"}
         if missing := sorted(feature_ids - located):
-            issues.append({
-                "level": 7, "code": "construction_element_without_storey",
-                "node_ids": missing, "severity": "error",
-            })
+            issues.append(
+                {
+                    "level": 7,
+                    "code": "construction_element_without_storey",
+                    "node_ids": missing,
+                    "severity": "error",
+                }
+            )
         opening_ids = {
-            item.subject_id for item in graph.assertions
+            item.subject_id
+            for item in graph.assertions
             if item.state == "active"
             and item.predicate == PREDICATE.ELEMENT_KIND
             and item.value.kind == "exact"
@@ -436,10 +456,14 @@ def _domain_rule_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
         }
         hosted = {edge.source_id for edge in graph.edges if edge.type == "opens_in"}
         if missing := sorted(opening_ids - hosted):
-            issues.append({
-                "level": 7, "code": "construction_opening_without_host",
-                "node_ids": missing, "severity": "error",
-            })
+            issues.append(
+                {
+                    "level": 7,
+                    "code": "construction_opening_without_host",
+                    "node_ids": missing,
+                    "severity": "error",
+                }
+            )
     elif graph.profile == "mechanical":
         feature_ids = {item.id for item in graph.nodes if item.type == "Feature"}
         # Warning, not error: represented_by is sourced strictly from a
@@ -452,10 +476,14 @@ def _domain_rule_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
         if feature_ids:
             shown = {edge.source_id for edge in graph.edges if edge.type == "represented_by"}
             if missing := sorted(feature_ids - shown):
-                issues.append({
-                    "level": 7, "code": "mechanical_feature_without_view",
-                    "node_ids": missing, "severity": "warning",
-                })
+                issues.append(
+                    {
+                        "level": 7,
+                        "code": "mechanical_feature_without_view",
+                        "node_ids": missing,
+                        "severity": "warning",
+                    }
+                )
     elif graph.profile in {"mep", "electrical", "hydraulic", "pid"}:
         port_ids = {item.id for item in graph.nodes if item.type == "Port"}
         ownership = defaultdict(int)
@@ -464,28 +492,70 @@ def _domain_rule_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
                 ownership[edge.source_id] += 1
         invalid = sorted(item_id for item_id in port_ids if ownership[item_id] != 1)
         if invalid:
-            issues.append({
-                "level": 7, "code": "system_port_ownership_invalid",
-                "node_ids": invalid, "severity": "error",
-            })
-        if not any(node_type.get(edge.source_id) == "Port" and node_type.get(edge.target_id) == "Port" for edge in graph.edges if edge.type == "connects_to"):
-            connectivity = next((
-                item for item in graph.assertions
-                if item.state == "active"
-                and item.predicate == PREDICATE.SYSTEM_CONNECTIVITY_CLOSED
-            ), None)
-            if connectivity and connectivity.value.kind == "exact" and connectivity.value.value is True:
-                issues.append({
-                    "level": 7, "code": "system_connectivity_claim_without_edges",
+            issues.append(
+                {
+                    "level": 7,
+                    "code": "system_port_ownership_invalid",
+                    "node_ids": invalid,
                     "severity": "error",
-                })
+                }
+            )
+        if not any(
+            node_type.get(edge.source_id) == "Port" and node_type.get(edge.target_id) == "Port"
+            for edge in graph.edges
+            if edge.type == "connects_to"
+        ):
+            connectivity = next(
+                (
+                    item
+                    for item in graph.assertions
+                    if item.state == "active"
+                    and item.predicate == PREDICATE.SYSTEM_CONNECTIVITY_CLOSED
+                ),
+                None,
+            )
+            if (
+                connectivity
+                and connectivity.value.kind == "exact"
+                and connectivity.value.value is True
+            ):
+                issues.append(
+                    {
+                        "level": 7,
+                        "code": "system_connectivity_claim_without_edges",
+                        "severity": "error",
+                    }
+                )
     return issues
 
 
 _GOST_SCALE_LABELS = {
-    "100:1", "50:1", "40:1", "20:1", "10:1", "5:1", "4:1", "2.5:1", "2:1",
-    "1:1", "1:2", "1:2.5", "1:4", "1:5", "1:10", "1:15", "1:20", "1:25",
-    "1:40", "1:50", "1:75", "1:100", "1:200", "1:400", "1:500", "1:1000",
+    "100:1",
+    "50:1",
+    "40:1",
+    "20:1",
+    "10:1",
+    "5:1",
+    "4:1",
+    "2.5:1",
+    "2:1",
+    "1:1",
+    "1:2",
+    "1:2.5",
+    "1:4",
+    "1:5",
+    "1:10",
+    "1:15",
+    "1:20",
+    "1:25",
+    "1:40",
+    "1:50",
+    "1:75",
+    "1:100",
+    "1:200",
+    "1:400",
+    "1:500",
+    "1:1000",
 }
 
 
@@ -493,44 +563,47 @@ def _source_scale_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
     """Validate declared drawing scale without inventing one from raster size."""
     issues: list[dict[str, Any]] = []
     active = [item for item in graph.assertions if item.state == "active"]
-    metric = [
-        item for item in active if item.predicate == PREDICATE.SCALE_MM_PER_PX
-    ]
+    metric = [item for item in active if item.predicate == PREDICATE.SCALE_MM_PER_PX]
     for item in metric:
         value = item.value.value if item.value.kind == "exact" else None
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or float(value) <= 0
-        ):
-            issues.append({
-                "level": 2,
-                "code": "drawing_metric_scale_invalid",
-                "assertion_id": item.id,
-                "severity": "error",
-            })
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or float(value) <= 0:
+            issues.append(
+                {
+                    "level": 2,
+                    "code": "drawing_metric_scale_invalid",
+                    "assertion_id": item.id,
+                    "severity": "error",
+                }
+            )
         elif not item.evidence_ids:
-            issues.append({
-                "level": 2,
-                "code": "drawing_scale_evidence_missing",
-                "assertion_id": item.id,
-                "severity": "warning",
-            })
+            issues.append(
+                {
+                    "level": 2,
+                    "code": "drawing_scale_evidence_missing",
+                    "assertion_id": item.id,
+                    "severity": "warning",
+                }
+            )
 
-    legacy_scale = next((
-        item for item in active
-        if item.subject_id == "product:legacy-spec"
-        and item.predicate == "title_block.scale"
-    ), None)
+    legacy_scale = next(
+        (
+            item
+            for item in active
+            if item.subject_id == "product:legacy-spec" and item.predicate == "title_block.scale"
+        ),
+        None,
+    )
     if legacy_scale is None:
         if graph.profile == "mechanical" and any(
             item.id == "product:legacy-spec" for item in graph.nodes
         ):
-            issues.append({
-                "level": 2,
-                "code": "drawing_scale_not_available",
-                "severity": "warning",
-            })
+            issues.append(
+                {
+                    "level": 2,
+                    "code": "drawing_scale_not_available",
+                    "severity": "warning",
+                }
+            )
         return issues
     label = (
         str(legacy_scale.value.value).strip().replace(" ", "").replace(",", ".")
@@ -538,20 +611,24 @@ def _source_scale_issues(graph: EngineeringModelGraph) -> list[dict[str, Any]]:
         else ""
     )
     if label not in _GOST_SCALE_LABELS:
-        issues.append({
-            "level": 2,
-            "code": "drawing_scale_nonstandard_or_unreadable",
-            "assertion_id": legacy_scale.id,
-            "value": label,
-            "severity": "warning",
-        })
+        issues.append(
+            {
+                "level": 2,
+                "code": "drawing_scale_nonstandard_or_unreadable",
+                "assertion_id": legacy_scale.id,
+                "value": label,
+                "severity": "warning",
+            }
+        )
     elif not legacy_scale.evidence_ids:
-        issues.append({
-            "level": 2,
-            "code": "drawing_scale_evidence_missing",
-            "assertion_id": legacy_scale.id,
-            "severity": "warning",
-        })
+        issues.append(
+            {
+                "level": 2,
+                "code": "drawing_scale_evidence_missing",
+                "assertion_id": legacy_scale.id,
+                "severity": "warning",
+            }
+        )
     return issues
 
 
@@ -564,11 +641,20 @@ def verify_graph(graph: EngineeringModelGraph) -> tuple[VerificationState, list[
     known_units = {None, "mm", "cm", "m", "deg", "rad", "kg", "g", "N", "Pa", "MPa", "%", "1"}
     for item in graph.assertions:
         if item.unit not in known_units:
-            issues.append({"level": 2, "code": "unknown_unit", "assertion_id": item.id, "severity": "error"})
+            issues.append(
+                {"level": 2, "code": "unknown_unit", "assertion_id": item.id, "severity": "error"}
+            )
         if item.coordinate_system and not any(
             node.id == item.coordinate_system for node in graph.nodes
         ):
-            issues.append({"level": 3, "code": "unknown_coordinate_system", "assertion_id": item.id, "severity": "error"})
+            issues.append(
+                {
+                    "level": 3,
+                    "code": "unknown_coordinate_system",
+                    "assertion_id": item.id,
+                    "severity": "error",
+                }
+            )
     issues.extend(_source_scale_issues(graph))
     if _has_cycle(graph):
         issues.append({"level": 4, "code": "dependency_cycle", "severity": "error"})
@@ -577,34 +663,62 @@ def verify_graph(graph: EngineeringModelGraph) -> tuple[VerificationState, list[
         if item.state == "active" and item.assurance != "contradicted":
             active_by_key[(item.subject_id, item.predicate)].append(item)
     for assertions in active_by_key.values():
-        validated = [item for item in assertions if item.assurance in {"constraint_validated", "human_approved"}]
+        validated = [
+            item
+            for item in assertions
+            if item.assurance in {"constraint_validated", "human_approved"}
+        ]
         values = {item.value.model_dump_json() for item in validated}
         if len(values) > 1:
-            issues.append({"level": 5, "code": "contradictory_validated_values", "severity": "error"})
+            issues.append(
+                {"level": 5, "code": "contradictory_validated_values", "severity": "error"}
+            )
     if not any(edge.type == "same_object_across_views" for edge in graph.edges):
         issues.append({"level": 6, "code": "cross_view_not_available", "severity": "warning"})
     if not graph.requirements:
         issues.append({"level": 7, "code": "domain_requirements_missing", "severity": "warning"})
     issues.extend(_domain_rule_issues(graph))
-    traced = [item for item in graph.assertions if item.origin == "traced" and item.state == "active"]
+    traced = [
+        item for item in graph.assertions if item.origin == "traced" and item.state == "active"
+    ]
     evidence = {item.id: item for item in graph.evidence}
     for item in traced:
         kinds = {evidence[eid].kind for eid in item.evidence_ids if eid in evidence}
         if not {"trace_run", "visual_verification"} <= kinds:
-            issues.append({"level": 8, "code": "trace_verification_incomplete", "assertion_id": item.id, "severity": "error"})
+            issues.append(
+                {
+                    "level": 8,
+                    "code": "trace_verification_incomplete",
+                    "assertion_id": item.id,
+                    "severity": "error",
+                }
+            )
     critical_unresolved: set[str] = set()
     for target in graph.build_targets:
         try:
             plan = compile_build_plan(graph, target.id)
             critical_unresolved.update(plan.critical_assumption_ids)
         except (KeyError, ValueError) as exc:
-            issues.append({"level": 9, "code": "build_plan_compile_failed", "detail": str(exc), "severity": "error"})
+            issues.append(
+                {
+                    "level": 9,
+                    "code": "build_plan_compile_failed",
+                    "detail": str(exc),
+                    "severity": "error",
+                }
+            )
     artifact_evidence = {item.kind for item in graph.evidence}
     if "kernel_topology" not in artifact_evidence:
         issues.append({"level": 10, "code": "brep_ifc_reopen_not_available", "severity": "warning"})
     if "projection_comparison" not in artifact_evidence:
-        issues.append({"level": 11, "code": "projection_comparison_not_available", "severity": "warning"})
-    mandatory_2d = [item for item in graph.requirements if item.mandatory and item.kind in {"view", "section", "dimension"}]
+        issues.append(
+            {"level": 11, "code": "projection_comparison_not_available", "severity": "warning"}
+        )
+    mandatory_2d = [
+        item
+        for item in graph.requirements
+        if item.mandatory and item.kind in {"view", "section", "dimension"}
+    ]
     artifact_ids = {node.id for node in graph.nodes if node.type == "Artifact"}
     supported_2d_media = {"application/pdf", "application/dxf", "image/svg+xml"}
     verified_2d_artifacts = {
@@ -623,7 +737,9 @@ def verify_graph(graph: EngineeringModelGraph) -> tuple[VerificationState, list[
 
     errors = [item for item in issues if item["severity"] == "error"]
     contradictions = any(item["code"] == "contradictory_validated_values" for item in errors)
-    comprehension = "contradictory" if contradictions else ("review_needed" if errors else "converged")
+    comprehension = (
+        "contradictory" if contradictions else ("review_needed" if errors else "converged")
+    )
     build = "not_ready" if errors else ("preview_ready" if critical_unresolved else "verified")
     release = "blocked" if errors or critical_unresolved else "approved"
     state = VerificationState(
@@ -688,39 +804,48 @@ def evaluate_build_admission(
     questions: list[BuildAdmissionQuestion] = []
 
     if graph.profile not in _GENERATOR_PROFILES[generator]:
-        blockers.append(BuildAdmissionBlocker(
-            code="generator_profile_incompatible",
-            message=(
-                f"Генератор {generator} не принимает профиль {graph.profile}; "
-                "нужен явный доменный review и совместимый граф."
-            ),
-            details={
-                "actual_profile": graph.profile,
-                "allowed_profiles": sorted(_GENERATOR_PROFILES[generator]),
-            },
-        ))
+        blockers.append(
+            BuildAdmissionBlocker(
+                code="generator_profile_incompatible",
+                message=(
+                    f"Генератор {generator} не принимает профиль {graph.profile}; "
+                    "нужен явный доменный review и совместимый граф."
+                ),
+                details={
+                    "actual_profile": graph.profile,
+                    "allowed_profiles": sorted(_GENERATOR_PROFILES[generator]),
+                },
+            )
+        )
     if target.kind not in _GENERATOR_TARGET_KINDS[generator]:
-        blockers.append(BuildAdmissionBlocker(
-            code="generator_target_incompatible",
-            message=f"Генератор {generator} не выпускает target kind {target.kind}.",
-            details={
-                "actual_target_kind": target.kind,
-                "allowed_target_kinds": sorted(_GENERATOR_TARGET_KINDS[generator]),
-            },
-        ))
+        blockers.append(
+            BuildAdmissionBlocker(
+                code="generator_target_incompatible",
+                message=f"Генератор {generator} не выпускает target kind {target.kind}.",
+                details={
+                    "actual_target_kind": target.kind,
+                    "allowed_target_kinds": sorted(_GENERATOR_TARGET_KINDS[generator]),
+                },
+            )
+        )
     if invalid_pending:
-        blockers.append(BuildAdmissionBlocker(
-            code="invalid_pending_output_assertion",
-            message="В pending outputs переданы невыходные или неизвестные assertions.",
-            details={"assertion_ids": invalid_pending},
-        ))
+        blockers.append(
+            BuildAdmissionBlocker(
+                code="invalid_pending_output_assertion",
+                message="В pending outputs переданы невыходные или неизвестные assertions.",
+                details={"assertion_ids": invalid_pending},
+            )
+        )
 
     _state, issues = verify_graph(graph)
     pending_predicates = {assertions[item_id].predicate for item_id in pending}
-    allowed_missing_2d = bool(pending_predicates & {
-        PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE,
-        PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE,
-    })
+    allowed_missing_2d = bool(
+        pending_predicates
+        & {
+            PREDICATE.ASSEMBLY_REQUIRED_2D_COMPLETE,
+            PREDICATE.CONSTRUCTION_REQUIRED_SHEETS_COMPLETE,
+        }
+    )
     advisory_issue_codes: set[str] = set()
     for issue in issues:
         if issue.get("severity") != "error":
@@ -741,16 +866,19 @@ def evaluate_build_admission(
             # an otherwise evidence-complete geometry preview.
             advisory_issue_codes.add(str(issue["code"]))
             continue
-        blockers.append(BuildAdmissionBlocker(
-            code=f"verification_{issue['code']}",
-            message=f"Проверка графа не пройдена: {issue['code']}.",
-            assertion_id=assertion_id,
-            verification_level=issue.get("level"),
-            details={
-                key: value for key, value in issue.items()
-                if key not in {"code", "severity", "level", "assertion_id"}
-            },
-        ))
+        blockers.append(
+            BuildAdmissionBlocker(
+                code=f"verification_{issue['code']}",
+                message=f"Проверка графа не пройдена: {issue['code']}.",
+                assertion_id=assertion_id,
+                verification_level=issue.get("level"),
+                details={
+                    key: value
+                    for key, value in issue.items()
+                    if key not in {"code", "severity", "level", "assertion_id"}
+                },
+            )
+        )
 
     for assertion_id in plan.critical_assumption_ids:
         if assertion_id in pending:
@@ -760,37 +888,41 @@ def evaluate_build_admission(
         reason = assertion.value.reason if unknown else None
         code = "critical_parameter_unknown" if unknown else "critical_parameter_unvalidated"
         action = "Укажите" if unknown else "Подтвердите"
-        blockers.append(BuildAdmissionBlocker(
-            code=code,
-            message=(
-                f"Критическое assertion {assertion_id} не готово для генерации: "
-                f"{assertion.predicate}."
-            ),
-            assertion_id=assertion.id,
-            subject_id=assertion.subject_id,
-            predicate=assertion.predicate,
-            details={
-                "assurance": assertion.assurance,
-                "value_kind": assertion.value.kind,
-                **({"reason": reason} if reason else {}),
-            },
-        ))
-        questions.append(BuildAdmissionQuestion(
-            assertion_id=assertion.id,
-            subject_id=assertion.subject_id,
-            predicate=assertion.predicate,
-            prompt=f"{action} инженерно подтверждённое значение «{assertion.predicate}».",
-            reason=reason,
-        ))
+        blockers.append(
+            BuildAdmissionBlocker(
+                code=code,
+                message=(
+                    f"Критическое assertion {assertion_id} не готово для генерации: "
+                    f"{assertion.predicate}."
+                ),
+                assertion_id=assertion.id,
+                subject_id=assertion.subject_id,
+                predicate=assertion.predicate,
+                details={
+                    "assurance": assertion.assurance,
+                    "value_kind": assertion.value.kind,
+                    **({"reason": reason} if reason else {}),
+                },
+            )
+        )
+        questions.append(
+            BuildAdmissionQuestion(
+                assertion_id=assertion.id,
+                subject_id=assertion.subject_id,
+                predicate=assertion.predicate,
+                prompt=f"{action} инженерно подтверждённое значение «{assertion.predicate}».",
+                reason=reason,
+            )
+        )
 
     blockers = sorted(
         blockers,
         key=lambda item: (item.code, item.assertion_id or "", item.message),
     )
     questions = sorted(questions, key=lambda item: item.assertion_id)
-    warning_codes = sorted({
-        str(item["code"]) for item in issues if item.get("severity") == "warning"
-    })
+    warning_codes = sorted(
+        {str(item["code"]) for item in issues if item.get("severity") == "warning"}
+    )
     return BuildAdmissionReport(
         graph_id=graph.graph_id,
         revision=graph.revision,

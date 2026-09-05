@@ -75,18 +75,14 @@ def _norm(value: Any) -> str:
 _PARAMETER_GROUPS: dict[str, tuple[str, tuple[str, ...]]] = {
     "outer.diameter_mm": ("outer", ("diameter_mm",)),
     "outer.length_mm": ("outer", ("length_mm",)),
-    "outer.thread.nominal_diameter_mm": (
-        "outer", ("thread", "nominal_diameter_mm")
-    ),
+    "outer.thread.nominal_diameter_mm": ("outer", ("thread", "nominal_diameter_mm")),
     "outer.thread.pitch_mm": ("outer", ("thread", "pitch_mm")),
     "outer.thread.length_mm": ("outer", ("thread", "length_mm")),
     "outer.thread.internal": ("outer", ("thread", "internal")),
     "bore.diameter_mm": ("bore", ("diameter_mm",)),
     "bore.length_mm": ("bore", ("length_mm",)),
     "bore.taper.ratio": ("bore", ("taper", "ratio")),
-    "bore.thread.nominal_diameter_mm": (
-        "bore", ("thread", "nominal_diameter_mm")
-    ),
+    "bore.thread.nominal_diameter_mm": ("bore", ("thread", "nominal_diameter_mm")),
     "bore.thread.pitch_mm": ("bore", ("thread", "pitch_mm")),
     "bore.thread.length_mm": ("bore", ("thread", "length_mm")),
     "bore.thread.internal": ("bore", ("thread", "internal")),
@@ -97,56 +93,30 @@ _PARAMETER_GROUPS: dict[str, tuple[str, tuple[str, ...]]] = {
     "cross_holes.depth_mm": ("cross_holes", ("depth_mm",)),
     "cross_holes.angle_deg": ("cross_holes", ("angle_deg",)),
     "cross_holes.through": ("cross_holes", ("through",)),
-    "cross_holes.counterbore_diameter_mm": (
-        "cross_holes", ("counterbore_diameter_mm",)
-    ),
-    "cross_holes.counterbore_depth_mm": (
-        "cross_holes", ("counterbore_depth_mm",)
-    ),
+    "cross_holes.counterbore_diameter_mm": ("cross_holes", ("counterbore_diameter_mm",)),
+    "cross_holes.counterbore_depth_mm": ("cross_holes", ("counterbore_depth_mm",)),
     "axial_holes.count": ("axial_holes", ("count",)),
-    "axial_holes.bolt_circle_diameter_mm": (
-        "axial_holes", ("bolt_circle_diameter_mm",)
-    ),
+    "axial_holes.bolt_circle_diameter_mm": ("axial_holes", ("bolt_circle_diameter_mm",)),
     "axial_holes.from_face": ("axial_holes", ("from_face",)),
     "axial_holes.through": ("axial_holes", ("through",)),
-    "axial_holes.thread_depth_mm": (
-        "axial_holes", ("thread_depth_mm",)
-    ),
-    "axial_holes.drill_depth_mm": (
-        "axial_holes", ("drill_depth_mm",)
-    ),
-    "axial_holes.entry_offset_mm": (
-        "axial_holes", ("entry_offset_mm",)
-    ),
-    "axial_holes.thread.nominal_diameter_mm": (
-        "axial_holes", ("thread", "nominal_diameter_mm")
-    ),
-    "axial_holes.thread.internal": (
-        "axial_holes", ("thread", "internal")
-    ),
-    "circular_hole_patterns.count": (
-        "circular_hole_patterns", ("count",)
-    ),
-    "circular_hole_patterns.hole_diameter_mm": (
-        "circular_hole_patterns", ("hole_diameter_mm",)
-    ),
+    "axial_holes.thread_depth_mm": ("axial_holes", ("thread_depth_mm",)),
+    "axial_holes.drill_depth_mm": ("axial_holes", ("drill_depth_mm",)),
+    "axial_holes.entry_offset_mm": ("axial_holes", ("entry_offset_mm",)),
+    "axial_holes.thread.nominal_diameter_mm": ("axial_holes", ("thread", "nominal_diameter_mm")),
+    "axial_holes.thread.internal": ("axial_holes", ("thread", "internal")),
+    "circular_hole_patterns.count": ("circular_hole_patterns", ("count",)),
+    "circular_hole_patterns.hole_diameter_mm": ("circular_hole_patterns", ("hole_diameter_mm",)),
     "circular_hole_patterns.bolt_circle_diameter_mm": (
-        "circular_hole_patterns", ("bolt_circle_diameter_mm",)
+        "circular_hole_patterns",
+        ("bolt_circle_diameter_mm",),
     ),
-    "circular_hole_patterns.axis_mode": (
-        "circular_hole_patterns", ("axis_mode",)
-    ),
-    "circular_hole_patterns.through": (
-        "circular_hole_patterns", ("through",)
-    ),
-    "circular_hole_patterns.depth_mm": (
-        "circular_hole_patterns", ("depth_mm",)
-    ),
-    "circular_hole_patterns.inclination_deg": (
-        "circular_hole_patterns", ("inclination_deg",)
-    ),
+    "circular_hole_patterns.axis_mode": ("circular_hole_patterns", ("axis_mode",)),
+    "circular_hole_patterns.through": ("circular_hole_patterns", ("through",)),
+    "circular_hole_patterns.depth_mm": ("circular_hole_patterns", ("depth_mm",)),
+    "circular_hole_patterns.inclination_deg": ("circular_hole_patterns", ("inclination_deg",)),
     "circular_hole_patterns.connection_station_mm": (
-        "circular_hole_patterns", ("connection_station_mm",)
+        "circular_hole_patterns",
+        ("connection_station_mm",),
     ),
     "chamfers.size_mm": ("chamfers", ("size_mm",)),
     "chamfers.angle_deg": ("chamfers", ("angle_deg",)),
@@ -192,6 +162,7 @@ def score_parameters(spec: dict, reference_spec: dict) -> dict[str, Any]:
         remaining = list(predicted.get(name) or [])
         matched = 0
         for wanted in wanted_values:
+
             def equivalent(value: Any) -> bool:
                 if (
                     isinstance(wanted, (int, float))
@@ -206,11 +177,7 @@ def score_parameters(spec: dict, reference_spec: dict) -> dict[str, Any]:
                 return type(value) is type(wanted) and value == wanted
 
             candidate = next(
-                (
-                    index
-                    for index, value in enumerate(remaining)
-                    if equivalent(value)
-                ),
+                (index for index, value in enumerate(remaining) if equivalent(value)),
                 None,
             )
             if candidate is not None:
@@ -261,18 +228,17 @@ def score_spec(spec: dict, truth: dict[str, Any]) -> dict[str, Any]:
     checks["scale"] = _norm(title.get("scale")) == truth["scale"]
 
     rotation_words = ("вращ", "вал", "shaft", "шпинд")
-    checks["body_kind"] = any(
-        any(word in _norm(body.get("type")) for word in rotation_words)
-        for body in bodies
-    ) is truth["rotation_body"]
+    checks["body_kind"] = (
+        any(any(word in _norm(body.get("type")) for word in rotation_words) for body in bodies)
+        is truth["rotation_body"]
+    )
 
-    checks["hollow"] = bool(
-        any((body.get("bore") or []) for body in bodies)
-    ) is truth["hollow"]
+    checks["hollow"] = bool(any((body.get("bore") or []) for body in bodies)) is truth["hollow"]
 
     outer = main.get("outer") or []
     lengths = [
-        float(s["length_mm"]) for s in outer
+        float(s["length_mm"])
+        for s in outer
         if isinstance(s, dict) and isinstance(s.get("length_mm"), (int, float))
     ]
     total = sum(lengths)
@@ -280,7 +246,8 @@ def score_spec(spec: dict, truth: dict[str, Any]) -> dict[str, Any]:
         abs(total - truth["total_length_mm"]) <= truth["total_length_mm"] * 0.05
     )
     diameters = [
-        float(s["diameter_mm"]) for s in outer
+        float(s["diameter_mm"])
+        for s in outer
         if isinstance(s, dict) and isinstance(s.get("diameter_mm"), (int, float))
     ]
     checks["max_diameter"] = bool(diameters) and (
@@ -315,9 +282,7 @@ class _PreferredCadReaderRouter:
     async def run(self, request: Any) -> Any:
         task = getattr(getattr(request, "task", None), "value", request.task)
         if task in {"cad_spec_read", "drawing_analysis_vlm"}:
-            request = request.model_copy(
-                update={"preferred_model": self.model_key}
-            )
+            request = request.model_copy(update={"preferred_model": self.model_key})
         return await self.router.run(request)
 
 
@@ -326,11 +291,13 @@ def reader_trace(raw_spec: dict[str, Any]) -> dict[str, Any]:
     primary_attempts = raw_spec.get("reader_attempts") or []
     embedded_fragment_attempts = raw_spec.get("fragment_reader_attempts") or []
     fragment_attempts = embedded_fragment_attempts or [
-        attempt for attempt in primary_attempts
+        attempt
+        for attempt in primary_attempts
         if isinstance(attempt, dict) and attempt.get("mode") == "fragments"
     ]
     whole_sheet_attempts = [
-        attempt for attempt in primary_attempts
+        attempt
+        for attempt in primary_attempts
         if not isinstance(attempt, dict) or attempt.get("mode") != "fragments"
     ]
     return {
@@ -360,17 +327,17 @@ async def evaluate_model(
         )
     reference_spec = truth.get("reference_spec_data")
     if isinstance(reference_spec, dict):
-        expected_total = sum(
-            len(values) for values in _parameter_groups(reference_spec).values()
-        )
+        expected_total = sum(len(values) for values in _parameter_groups(reference_spec).values())
         # A malformed/empty/invalid answer missed every required parameter; it
         # must stay in the micro denominator instead of looking like an empty
         # corpus with no errors.
-        result.update({
-            "parameters_matched": 0,
-            "parameters_total": expected_total,
-            "parameter_accuracy": 0.0,
-        })
+        result.update(
+            {
+                "parameters_matched": 0,
+                "parameters_total": expected_total,
+                "parameter_accuracy": 0.0,
+            }
+        )
     started = time.monotonic()
     try:
         raw_spec = await read_spec_best_effort(
@@ -401,9 +368,7 @@ async def evaluate_model(
     result["reader_trace"] = reader_trace(raw_spec)
     fragment_attempts = result["reader_trace"]["fragment_attempts"]
     whole_sheet_attempts = result["reader_trace"]["whole_sheet_attempts"]
-    result["attempts_completed"] = (
-        len(fragment_attempts) + len(whole_sheet_attempts)
-    )
+    result["attempts_completed"] = len(fragment_attempts) + len(whole_sheet_attempts)
     result["fragment_questions"] = sum(
         len((attempt.get("spec") or {}).get("fragment_answers") or [])
         for attempt in fragment_attempts
@@ -435,8 +400,11 @@ async def _buildability(spec: dict) -> dict:
 
     candidate = feature_tree_from_spec(spec)
     if candidate is None:
-        return {"solid_built": False, "sheet_drawn": False,
-                "build_error": "no supported body in the reading"}
+        return {
+            "solid_built": False,
+            "sheet_drawn": False,
+            "build_error": "no supported body in the reading",
+        }
     gate = solid_build_gate(spec, candidate, require_source_evidence=True)
     preview = solid_preview_gate(gate)
     if not gate["allowed"]:
@@ -459,8 +427,11 @@ async def _buildability(spec: dict) -> dict:
             },
         )
     except Exception as exc:  # noqa: BLE001 — a failed build is a result
-        return {"solid_built": False, "sheet_drawn": False,
-                "build_error": f"{exc.__class__.__name__}: {exc}"[:200]}
+        return {
+            "solid_built": False,
+            "sheet_drawn": False,
+            "build_error": f"{exc.__class__.__name__}: {exc}"[:200],
+        }
     verification = verify_solid_against_spec(artifacts.report or {}, spec, candidate)
     if not verification.ok:
         return {
@@ -474,9 +445,7 @@ async def _buildability(spec: dict) -> dict:
     out: dict[str, Any] = {
         "solid_built": bool(gate["allowed"]),
         "preview_built": bool(preview["allowed"]),
-        "build_status": (
-            "preview_review_required" if preview["allowed"] else "built_unverified"
-        ),
+        "build_status": ("preview_review_required" if preview["allowed"] else "built_unverified"),
         "build_blockers": gate["blockers"],
         "preview_excluded": preview["excluded"],
         "solid_valid": bool((artifacts.report or {}).get("brep_valid")),
@@ -509,7 +478,8 @@ async def main() -> int:
     parser.add_argument("--models", nargs="+", required=True)
     parser.add_argument("--out", default="test-results/eval_cad_readers.json")
     parser.add_argument(
-        "--single-image", action="store_true",
+        "--single-image",
+        action="store_true",
         help="deprecated; staged production reader always chooses its own crops",
     )
     args = parser.parse_args()
@@ -523,9 +493,7 @@ async def main() -> int:
     results = []
     for model_key in args.models:
         print(f"→ {model_key} ...", flush=True)
-        result = await evaluate_model(
-            model_key, image_bytes, truth, single_image=args.single_image
-        )
+        result = await evaluate_model(model_key, image_bytes, truth, single_image=args.single_image)
         result["success_claimed"] = bool(
             result.get("solid_built")
             and result.get("sheet_drawn")

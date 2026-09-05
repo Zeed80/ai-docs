@@ -71,9 +71,7 @@ def test_non_transient_error_is_not_retried(monkeypatch):
 
     monkeypatch.setattr(img_gen_task, "_run", _raise_final)
 
-    result = img_gen_task.run_image_generation.apply(
-        args=["00000000-0000-0000-0000-000000000002"]
-    )
+    result = img_gen_task.run_image_generation.apply(args=["00000000-0000-0000-0000-000000000002"])
 
     assert calls["n"] == 1  # no retry attempted
     assert result.failed()
@@ -95,7 +93,7 @@ def test_apply_eskd_style_handles_empty_prompt_and_negative():
 
 
 def test_apply_quality_preset_fast_matches_existing_workflow_defaults():
-    """"fast" must reproduce exactly what every builtin workflow already
+    """ "fast" must reproduce exactly what every builtin workflow already
     ships with (steps=4, cfg=1, full Lightning LoRA) — it's a no-op for
     anyone not opting into "quality", not a behavior change."""
     values: dict = {}

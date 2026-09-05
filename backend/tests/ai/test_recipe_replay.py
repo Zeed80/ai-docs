@@ -58,8 +58,9 @@ class FakeExecutor:
             await self._send(event)
 
 
-def _recipe(status: str = "active", slots: dict | None = None,
-            confirmed_replays: int = 5) -> SimpleNamespace:
+def _recipe(
+    status: str = "active", slots: dict | None = None, confirmed_replays: int = 5
+) -> SimpleNamespace:
     return SimpleNamespace(
         id="11111111-1111-1111-1111-111111111111",
         name="invoice_list__invoices_workspace",
@@ -73,18 +74,23 @@ def _recipe(status: str = "active", slots: dict | None = None,
         worker_confirmations=0,
         trigger_examples=["выведи все товары в таблицу по счетам"],
         steps=[
-            {"capability": "invoices", "action": "list",
-             "args_template": {"action": "list"}},
-            {"capability": "workspace", "action": "publish",
-             "args_template": {"action": "publish"}},
+            {"capability": "invoices", "action": "list", "args_template": {"action": "list"}},
+            {
+                "capability": "workspace",
+                "action": "publish",
+                "args_template": {"action": "publish"},
+            },
         ],
     )
 
 
 def _config() -> BuiltinAgentConfig:
     return BuiltinAgentConfig(
-        department_enabled=True, audit_enabled=True,
-        model="mock", backend_url="http://backend", ollama_url="http://ollama",
+        department_enabled=True,
+        audit_enabled=True,
+        model="mock",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
         exposed_skills=[],
     )
 
@@ -106,11 +112,13 @@ async def test_active_recipe_replays_without_planning(monkeypatch):
         replayed["recipe"] = r
         replayed["slots"] = slots
         if on_event:
-            await on_event({
-                "type": "tool_result",
-                "tool": "workspace",
-                "result": {"canvas_id": "agent:invoices", "message": "Таблица обновлена."},
-            })
+            await on_event(
+                {
+                    "type": "tool_result",
+                    "tool": "workspace",
+                    "result": {"canvas_id": "agent:invoices", "message": "Таблица обновлена."},
+                }
+            )
         return True
 
     monkeypatch.setattr(recipes_module, "find_recipe", fake_find)

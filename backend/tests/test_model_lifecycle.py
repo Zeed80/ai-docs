@@ -35,7 +35,7 @@ def test_cloud_orchestrator_not_pinned(monkeypatch):
 def test_keep_alive_pinned_vs_ephemeral(monkeypatch):
     monkeypatch.delenv("OLLAMA_KEEP_ALIVE", raising=False)
     monkeypatch.setattr(ml, "pinned_ollama_models", lambda: {"qwen3.5:9b"})
-    assert ml.keep_alive_for("qwen3.5:9b") == -1          # orchestrator pinned forever
+    assert ml.keep_alive_for("qwen3.5:9b") == -1  # orchestrator pinned forever
     assert ml.keep_alive_for("gemma4:e4b") == ml.ephemeral_keep_alive()
     assert ml.keep_alive_for("nomic-embed-text") == "5m"  # embeddings kept a bit longer
 
@@ -53,6 +53,7 @@ def test_ephemeral_configurable(monkeypatch):
 
 
 # ── gpu_manager eviction preserves pinned ───────────────────────────────────────
+
 
 class _FakeResp:
     status_code = 200
@@ -92,7 +93,7 @@ async def test_unload_all_skips_pinned(monkeypatch):
 
     result = await gpu_manager.unload_all_ollama_models()
     assert "gemma4:e4b" in result
-    assert "qwen3.5:9b" not in result        # pinned preserved
+    assert "qwen3.5:9b" not in result  # pinned preserved
     assert unloaded_calls == ["gemma4:e4b"]
 
 

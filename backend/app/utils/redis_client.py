@@ -15,15 +15,16 @@ Usage:
     from app.utils.redis_client import close_pools
     await close_pools()
 """
+
 from __future__ import annotations
 
 import asyncio
 
 import redis
 import redis.asyncio as aioredis
-from redis.connection import ConnectionPool
 from redis.asyncio.connection import BlockingConnectionPool as AsyncBlockingConnectionPool
 from redis.asyncio.connection import ConnectionPool as AsyncConnectionPool
+from redis.connection import ConnectionPool
 
 _sync_pool: ConnectionPool | None = None
 _async_pool: AsyncConnectionPool | None = None
@@ -37,6 +38,7 @@ def get_sync_redis() -> redis.Redis:
     global _sync_pool
     if _sync_pool is None:
         from app.config import settings
+
         _sync_pool = ConnectionPool.from_url(
             settings.redis_url,
             decode_responses=True,
@@ -65,6 +67,7 @@ def get_async_redis() -> aioredis.Redis:
         if _async_pool is not None:
             _dispose_pool_on_its_loop(_async_pool, _async_pool_loop)
         from app.config import settings
+
         _async_pool = AsyncBlockingConnectionPool.from_url(
             settings.redis_url,
             decode_responses=True,
@@ -91,6 +94,7 @@ def get_async_redis_pubsub() -> aioredis.Redis:
         if _async_pubsub_pool is not None:
             _dispose_pool_on_its_loop(_async_pubsub_pool, _async_pubsub_pool_loop)
         from app.config import settings
+
         _async_pubsub_pool = AsyncConnectionPool.from_url(
             settings.redis_url,
             decode_responses=True,

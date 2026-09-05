@@ -18,18 +18,30 @@ from app.ai.agent_config import BuiltinAgentConfig
 @pytest.mark.asyncio
 async def test_max_steps_emits_final_text(monkeypatch):
     config = BuiltinAgentConfig(
-        enabled=True, agent_name="Света", model="mock", provider="ollama",
-        backend_url="http://backend", ollama_url="http://ollama",
-        memory_enabled=False, audit_enabled=False,
-        context_compression_enabled=False, max_steps=3,
+        enabled=True,
+        agent_name="Света",
+        model="mock",
+        provider="ollama",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
+        memory_enabled=False,
+        audit_enabled=False,
+        context_compression_enabled=False,
+        max_steps=3,
     )
     monkeypatch.setattr(agent_loop, "get_builtin_agent_config", lambda: config)
 
     async def _noop(*a, **k):
         return None
 
-    for name in ("_log_action", "_init_mcp", "_append_memory_context",
-                 "_inject_rating_hint", "_inject_learning_rules", "_remember_latest_turn"):
+    for name in (
+        "_log_action",
+        "_init_mcp",
+        "_append_memory_context",
+        "_inject_rating_hint",
+        "_inject_learning_rules",
+        "_remember_latest_turn",
+    ):
         monkeypatch.setattr(agent_loop.AgentSession, name, _noop, raising=False)
 
     async def fake_execute_skill(skill, args, config):  # noqa: A002
@@ -40,14 +52,27 @@ async def test_max_steps_emits_final_text(monkeypatch):
     # Model behaviour: keep calling a tool while tools are offered (never
     # answering), but when offered NO tools (the forced finalisation call),
     # produce a textual summary.
-    async def fake_stream(messages, tools, system_prompt, config, on_token,
-                          model_override=None, provider_override=None,
-                          disable_thinking_override=None, on_thinking=None, **kw):
+    async def fake_stream(
+        messages,
+        tools,
+        system_prompt,
+        config,
+        on_token,
+        model_override=None,
+        provider_override=None,
+        disable_thinking_override=None,
+        on_thinking=None,
+        **kw,
+    ):
         if tools:
-            return {"tool_calls": [{
-                "type": "function",
-                "function": {"name": "memory", "arguments": {"action": "search"}},
-            }]}
+            return {
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {"name": "memory", "arguments": {"action": "search"}},
+                    }
+                ]
+            }
         await on_token("Итог: по собранным данным аномалий не выявлено.")
         return {"tool_calls": None}
 
@@ -62,5 +87,7 @@ async def test_max_steps_emits_final_text(monkeypatch):
     await session.on_user_message("Проверь аномалии по счетам")
 
     texts = [e.get("content", "") for e in events if e.get("type") == "text"]
-    assert any(t.strip() for t in texts), f"turn ended without a textual reply: {[e.get('type') for e in events]}"
+    assert any(t.strip() for t in texts), (
+        f"turn ended without a textual reply: {[e.get('type') for e in events]}"
+    )
     assert events[-1].get("type") == "done"

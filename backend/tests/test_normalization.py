@@ -194,6 +194,7 @@ async def test_suggest_rules(client: AsyncClient, db_session: AsyncSession):
         )
         # Mark field as corrected
         from sqlalchemy import select
+
         result = await db_session.execute(
             select(ExtractionField).where(ExtractionField.extraction_id == ext_id)
         )

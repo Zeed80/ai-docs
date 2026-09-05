@@ -19,9 +19,7 @@ def cloud_routing(monkeypatch):
     def fake_resolve_model(task):
         return "claude-sonnet-5", "anthropic"
 
-    monkeypatch.setattr(
-        "app.ai.task_routing.resolve_model", fake_resolve_model, raising=True
-    )
+    monkeypatch.setattr("app.ai.task_routing.resolve_model", fake_resolve_model, raising=True)
 
 
 @pytest.mark.parametrize(

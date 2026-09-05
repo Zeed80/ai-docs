@@ -11,9 +11,7 @@ from pathlib import Path
 
 import pytest
 
-_FANS_PATH = (
-    Path(__file__).resolve().parents[2] / "infra" / "gpu-temp-helper" / "fans.py"
-)
+_FANS_PATH = Path(__file__).resolve().parents[2] / "infra" / "gpu-temp-helper" / "fans.py"
 
 
 def _load_fans():
@@ -158,15 +156,19 @@ class FakeBackend(fans.FanBackend):
 
 def _controller(temps, stuck=False, has_tach=True, kind="mobo", role=None):
     channel = fans.FanChannel(
-        id="fake:1", label="Fake", kind=kind,
+        id="fake:1",
+        label="Fake",
+        kind=kind,
         role=role or ("case" if kind == "mobo" else "gpu"),
         controllable=True,
-        min_pct=25.0, max_pct=100.0, has_tach=has_tach,
+        min_pct=25.0,
+        max_pct=100.0,
+        has_tach=has_tach,
         default_sensor="cpu" if kind == "mobo" else "gpu",
     )
     backend = FakeBackend([channel], temps, stuck=stuck)
     controller = fans.FanController()
-    controller.control_enabled = True   # the switch is per-controller state now
+    controller.control_enabled = True  # the switch is per-controller state now
     controller._backends = [backend]
     controller._channels = {channel.id: channel}
     controller._owner = {channel.id: backend}
@@ -176,9 +178,12 @@ def _controller(temps, stuck=False, has_tach=True, kind="mobo", role=None):
         "preset": "test",
         "channels": {
             channel.id: {
-                "mode": "curve", "sensor": channel.default_sensor,
+                "mode": "curve",
+                "sensor": channel.default_sensor,
                 "curve": [{"t": 40, "pct": 30}, {"t": 80, "pct": 100}],
-                "min_pct": 25.0, "allow_stop": False, "stop_below_c": None,
+                "min_pct": 25.0,
+                "allow_stop": False,
+                "stop_below_c": None,
             }
         },
     }
@@ -221,7 +226,7 @@ def test_header_without_a_fan_is_reported_once_not_as_a_fault():
     assert "fake:1" in backend.auto_calls
     notices = [e for e in controller.events() if e["code"] == "no_fan"]
     assert len(notices) == 1
-    assert notices[0]["level"] == "info"          # not an error
+    assert notices[0]["level"] == "info"  # not an error
     assert not any(e["code"] == "channel_failed" for e in controller.events())
 
 
@@ -262,7 +267,7 @@ def test_sensor_loss_reverts_the_channel_to_automatic():
     controller, backend, channel = _controller({"cpu": 60.0})
     controller.tick()
     assert channel.mode == "manual"
-    backend._temps = {}                       # thermometer disappears
+    backend._temps = {}  # thermometer disappears
     for _ in range(fans.SENSOR_TIMEOUT_TICKS + 1):
         controller.tick()
     assert channel.mode == "auto"
@@ -298,10 +303,15 @@ def test_shutdown_reverts_only_channels_this_process_commanded():
 
 def test_sanitize_rejects_floors_below_the_hardware_minimum():
     controller, _, _ = _controller({"cpu": 60.0})
-    cleaned = controller._sanitize_channels({
-        "fake:1": {"mode": "curve", "min_pct": 1,
-                   "curve": [{"t": 30, "pct": 0}, {"t": 90, "pct": 100}]},
-    })
+    cleaned = controller._sanitize_channels(
+        {
+            "fake:1": {
+                "mode": "curve",
+                "min_pct": 1,
+                "curve": [{"t": 30, "pct": 0}, {"t": 90, "pct": 100}],
+            },
+        }
+    )
     assert cleaned["fake:1"]["min_pct"] == 25.0
     assert cleaned["fake:1"]["curve"][0]["pct"] == 25.0
 
@@ -314,8 +324,7 @@ def test_sanitize_drops_channels_that_cannot_be_controlled():
 
 def test_preview_writes_nothing():
     controller, backend, _ = _controller({"cpu": 60.0})
-    result = controller.preview({"channels": controller._config["channels"],
-                                 "temps": [40, 60, 80]})
+    result = controller.preview({"channels": controller._config["channels"], "temps": [40, 60, 80]})
     assert backend.written == []
     assert [p["pct"] for p in result["preview"]["fake:1"]] == [30.0, 65.0, 100.0]
 
@@ -359,7 +368,7 @@ def test_disabling_board_fans_reverts_only_board_channels(monkeypatch):
 
     controller.set_control(allow_hwmon=False)
     assert channel.mode == "auto"
-    assert controller.control_enabled is True   # the other switch is untouched
+    assert controller.control_enabled is True  # the other switch is untouched
 
 
 def test_writes_are_refused_while_control_is_off():
@@ -430,8 +439,15 @@ class FlakyBackend(FakeBackend):
 
 def _flaky(temps, fail_times):
     channel = fans.FanChannel(
-        id="fake:1", label="Fake", kind="mobo", role="case", controllable=True,
-        min_pct=25.0, max_pct=100.0, has_tach=True, default_sensor="cpu",
+        id="fake:1",
+        label="Fake",
+        kind="mobo",
+        role="case",
+        controllable=True,
+        min_pct=25.0,
+        max_pct=100.0,
+        has_tach=True,
+        default_sensor="cpu",
     )
     backend = FlakyBackend([channel], temps, fail_times=fail_times)
     controller = fans.FanController()
@@ -444,8 +460,12 @@ def _flaky(temps, fail_times):
         "enabled": True,
         "channels": {
             channel.id: {
-                "mode": "manual", "pct": 60.0, "sensor": "cpu",
-                "min_pct": 25.0, "allow_stop": False, "stop_below_c": None,
+                "mode": "manual",
+                "pct": 60.0,
+                "sensor": "cpu",
+                "min_pct": 25.0,
+                "allow_stop": False,
+                "stop_below_c": None,
             }
         },
     }
@@ -456,9 +476,9 @@ def test_a_single_write_failure_is_retried_not_fatal():
     controller, backend, channel = _flaky({"cpu": 60.0}, fail_times=1)
     controller.tick()
     assert channel.mode != "failed"
-    assert backend.written == []          # first attempt was refused
+    assert backend.written == []  # first attempt was refused
     controller.tick()
-    assert ("fake:1", 60.0) in backend.written   # second attempt got through
+    assert ("fake:1", 60.0) in backend.written  # second attempt got through
     assert controller._rt["fake:1"].write_failures == 0
 
 
@@ -491,12 +511,26 @@ def test_a_pump_keeps_a_higher_floor_than_a_case_fan():
 
 def test_preset_picks_the_curve_by_role_not_by_kind():
     cpu_ch = fans.FanChannel(
-        id="c", label="CPU", kind="mobo", role="cpu", controllable=True,
-        min_pct=25, max_pct=100, has_tach=True, default_sensor="cpu",
+        id="c",
+        label="CPU",
+        kind="mobo",
+        role="cpu",
+        controllable=True,
+        min_pct=25,
+        max_pct=100,
+        has_tach=True,
+        default_sensor="cpu",
     )
     case_ch = fans.FanChannel(
-        id="s", label="SYS", kind="mobo", role="case", controllable=True,
-        min_pct=25, max_pct=100, has_tach=True, default_sensor="cpu",
+        id="s",
+        label="SYS",
+        kind="mobo",
+        role="case",
+        controllable=True,
+        min_pct=25,
+        max_pct=100,
+        has_tach=True,
+        default_sensor="cpu",
     )
     cfg = fans.preset_config("balanced", [cpu_ch, case_ch])
     assert cfg["c"]["curve"] != cfg["s"]["curve"]
@@ -504,8 +538,15 @@ def test_preset_picks_the_curve_by_role_not_by_kind():
 
 def test_unknown_role_falls_back_to_the_gentle_case_curve():
     odd = fans.FanChannel(
-        id="x", label="X", kind="mobo", role="mystery", controllable=True,
-        min_pct=25, max_pct=100, has_tach=True, default_sensor="cpu",
+        id="x",
+        label="X",
+        kind="mobo",
+        role="mystery",
+        controllable=True,
+        min_pct=25,
+        max_pct=100,
+        has_tach=True,
+        default_sensor="cpu",
     )
     cfg = fans.preset_config("balanced", [odd])
     assert cfg["x"]["curve"] == fans.BUILTIN_PRESETS["balanced"]["curves"]["case"]
@@ -521,19 +562,33 @@ def test_nct6687_headers_are_named_after_the_board_layout():
 def test_an_unknown_chip_gets_a_neutral_name_and_the_safe_role():
     label, role = fans._header_of("it8686", 3)
     assert "канал 3" in label
-    assert role == "case"      # never guess that something is the CPU cooler
+    assert role == "case"  # never guess that something is the CPU cooler
 
 
 # --- presets are chosen per hardware domain -------------------------------
 def _two_domain_controller(monkeypatch):
     """A GPU fan and a board fan on one controller."""
     gpu = fans.FanChannel(
-        id="gpu:0:fan0", label="GPU", kind="gpu", role="gpu", controllable=True,
-        min_pct=30.0, max_pct=100.0, has_tach=False, default_sensor="gpu",
+        id="gpu:0:fan0",
+        label="GPU",
+        kind="gpu",
+        role="gpu",
+        controllable=True,
+        min_pct=30.0,
+        max_pct=100.0,
+        has_tach=False,
+        default_sensor="gpu",
     )
     mobo = fans.FanChannel(
-        id="hwmon:x:pwm1", label="SYS", kind="mobo", role="case", controllable=True,
-        min_pct=25.0, max_pct=100.0, has_tach=True, default_sensor="cpu",
+        id="hwmon:x:pwm1",
+        label="SYS",
+        kind="mobo",
+        role="case",
+        controllable=True,
+        min_pct=25.0,
+        max_pct=100.0,
+        has_tach=True,
+        default_sensor="cpu",
     )
     backend = FakeBackend([gpu, mobo], {"gpu": 50.0, "cpu": 50.0})
     controller = fans.FanController()
@@ -550,12 +605,26 @@ def _two_domain_controller(monkeypatch):
 
 def test_preset_config_can_target_one_domain():
     gpu = fans.FanChannel(
-        id="g", label="G", kind="gpu", role="gpu", controllable=True,
-        min_pct=30, max_pct=100, has_tach=False, default_sensor="gpu",
+        id="g",
+        label="G",
+        kind="gpu",
+        role="gpu",
+        controllable=True,
+        min_pct=30,
+        max_pct=100,
+        has_tach=False,
+        default_sensor="gpu",
     )
     mobo = fans.FanChannel(
-        id="m", label="M", kind="mobo", role="case", controllable=True,
-        min_pct=25, max_pct=100, has_tach=True, default_sensor="cpu",
+        id="m",
+        label="M",
+        kind="mobo",
+        role="case",
+        controllable=True,
+        min_pct=25,
+        max_pct=100,
+        has_tach=True,
+        default_sensor="cpu",
     )
     assert set(fans.preset_config("silent", [gpu, mobo], "gpu")) == {"g"}
     assert set(fans.preset_config("silent", [gpu, mobo], "mobo")) == {"m"}
@@ -570,7 +639,7 @@ def test_applying_to_one_domain_keeps_the_other_curve(monkeypatch):
     controller.apply_config({"preset": "max", "scope": "gpu"})
     cfg = controller._config["channels"]
     assert cfg["gpu:0:fan0"]["curve"] == [{"t": 0.0, "pct": 100.0}]
-    assert cfg["hwmon:x:pwm1"]["curve"] == board_before   # untouched
+    assert cfg["hwmon:x:pwm1"]["curve"] == board_before  # untouched
 
 
 def test_each_domain_remembers_its_own_preset(monkeypatch):

@@ -24,8 +24,18 @@ def upgrade() -> None:
             sa.Column("name", sa.String(200), nullable=False),
             sa.Column("code", sa.String(50), nullable=False),
             sa.Column("parent_id", GUID(), sa.ForeignKey("departments.id"), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
         )
         op.create_index("ix_departments_code", "departments", ["code"], unique=True)
         op.create_index("ix_departments_parent_id", "departments", ["parent_id"])

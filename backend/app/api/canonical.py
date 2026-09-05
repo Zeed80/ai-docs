@@ -6,17 +6,18 @@ from datetime import datetime
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
 from app.db.models import CanonicalItem, InvoiceLine, PriceHistoryEntry
+from app.db.session import get_db
 
 router = APIRouter()
 logger = structlog.get_logger()
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
+
 
 class CanonicalItemOut(BaseModel):
     id: uuid.UUID
@@ -86,6 +87,7 @@ class PriceHistoryPoint(BaseModel):
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
+
 
 @router.get("", response_model=list[CanonicalItemOut])
 async def list_canonical_items(
@@ -262,7 +264,9 @@ async def confirm_mapping(
     if not line:
         raise HTTPException(status_code=404, detail="Invoice line not found")
 
-    res2 = await db.execute(select(CanonicalItem).where(CanonicalItem.id == payload.canonical_item_id))
+    res2 = await db.execute(
+        select(CanonicalItem).where(CanonicalItem.id == payload.canonical_item_id)
+    )
     item = res2.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Canonical item not found")

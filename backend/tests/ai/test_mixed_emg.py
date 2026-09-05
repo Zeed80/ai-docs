@@ -20,7 +20,8 @@ def _member(graph_id: str, profile: str, *, ready: bool = True):
         predicate="member.ready",
         value=(
             ExactValue(kind="exact", value=True)
-            if ready else UnknownValue(kind="unknown", reason="member unresolved")
+            if ready
+            else UnknownValue(kind="unknown", reason="member unresolved")
         ),
         origin="human",
         assurance="human_approved" if ready else "proposed",
@@ -40,7 +41,9 @@ def _member(graph_id: str, profile: str, *, ready: bool = True):
         assertions=[assertion],
         requirements=[requirement],
         build_targets=[
-            BuildTarget(id="preview", kind="pdf", root_node_ids=["product:root"], critical_impacts=[]),
+            BuildTarget(
+                id="preview", kind="pdf", root_node_ids=["product:root"], critical_impacts=[]
+            ),
             BuildTarget(
                 id="production",
                 kind="pdf",
@@ -68,19 +71,23 @@ def _model(left, right, *, approved_order=True):
     ]
     if not approved_order:
         members.reverse()
-    return MixedModel.model_validate({
-        "name": "Machine with hydraulics",
-        "members": members,
-        "links": [{
-            "id": "pump-mounted-on-machine",
-            "type": "depends_on",
-            "source_member": "systems",
-            "source_node_id": "product:root",
-            "target_member": "mechanical",
-            "target_node_id": "product:root",
-            "impact": "connectivity",
-        }],
-    })
+    return MixedModel.model_validate(
+        {
+            "name": "Machine with hydraulics",
+            "members": members,
+            "links": [
+                {
+                    "id": "pump-mounted-on-machine",
+                    "type": "depends_on",
+                    "source_member": "systems",
+                    "source_node_id": "product:root",
+                    "target_member": "mechanical",
+                    "target_node_id": "product:root",
+                    "impact": "connectivity",
+                }
+            ],
+        }
+    )
 
 
 def test_mixed_graph_namespaces_members_and_gates_cross_profile_links():

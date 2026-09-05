@@ -18,29 +18,45 @@ from app.ai.ifc_reader import ifc_to_construction_model, project_ifc
 
 
 def _wall_opening_model() -> ConstructionModel:
-    return ConstructionModel.model_validate({
-        "site_name": "Тестовая площадка",
-        "building_name": "Тестовое здание",
-        "storeys": [{"id": "l1", "name": "Этаж 1", "elevation_mm": 0}],
-        "elements": [
-            {
-                "id": "w1", "kind": "wall", "name": "Стена", "storey_id": "l1",
-                "material": "Бетон",
-                "box": {
-                    "x_mm": 0, "y_mm": 0, "z_mm": 0,
-                    "width_mm": 5000, "depth_mm": 200, "height_mm": 3000,
+    return ConstructionModel.model_validate(
+        {
+            "site_name": "Тестовая площадка",
+            "building_name": "Тестовое здание",
+            "storeys": [{"id": "l1", "name": "Этаж 1", "elevation_mm": 0}],
+            "elements": [
+                {
+                    "id": "w1",
+                    "kind": "wall",
+                    "name": "Стена",
+                    "storey_id": "l1",
+                    "material": "Бетон",
+                    "box": {
+                        "x_mm": 0,
+                        "y_mm": 0,
+                        "z_mm": 0,
+                        "width_mm": 5000,
+                        "depth_mm": 200,
+                        "height_mm": 3000,
+                    },
                 },
-            },
-            {
-                "id": "o1", "kind": "opening", "name": "Дверной проём", "storey_id": "l1",
-                "host_id": "w1",
-                "box": {
-                    "x_mm": 1000, "y_mm": 0, "z_mm": 0,
-                    "width_mm": 900, "depth_mm": 200, "height_mm": 2100,
+                {
+                    "id": "o1",
+                    "kind": "opening",
+                    "name": "Дверной проём",
+                    "storey_id": "l1",
+                    "host_id": "w1",
+                    "box": {
+                        "x_mm": 1000,
+                        "y_mm": 0,
+                        "z_mm": 0,
+                        "width_mm": 900,
+                        "depth_mm": 200,
+                        "height_mm": 2100,
+                    },
                 },
-            },
-        ],
-    })
+            ],
+        }
+    )
 
 
 def test_round_trips_wall_and_opening_geometry_exactly(tmp_path: pathlib.Path):
@@ -84,33 +100,57 @@ def test_round_trips_wall_and_opening_geometry_exactly(tmp_path: pathlib.Path):
 
 
 def test_round_trips_slab_column_space(tmp_path: pathlib.Path):
-    model = ConstructionModel.model_validate({
-        "site_name": "Площадка", "building_name": "Здание",
-        "storeys": [{"id": "l1", "name": "Этаж 1", "elevation_mm": 0}],
-        "elements": [
-            {
-                "id": "s1", "kind": "slab", "name": "Плита", "storey_id": "l1",
-                "box": {
-                    "x_mm": 0, "y_mm": 0, "z_mm": 0,
-                    "width_mm": 8000, "depth_mm": 6000, "height_mm": 250,
+    model = ConstructionModel.model_validate(
+        {
+            "site_name": "Площадка",
+            "building_name": "Здание",
+            "storeys": [{"id": "l1", "name": "Этаж 1", "elevation_mm": 0}],
+            "elements": [
+                {
+                    "id": "s1",
+                    "kind": "slab",
+                    "name": "Плита",
+                    "storey_id": "l1",
+                    "box": {
+                        "x_mm": 0,
+                        "y_mm": 0,
+                        "z_mm": 0,
+                        "width_mm": 8000,
+                        "depth_mm": 6000,
+                        "height_mm": 250,
+                    },
                 },
-            },
-            {
-                "id": "c1", "kind": "column", "name": "Колонна", "storey_id": "l1",
-                "box": {
-                    "x_mm": 500, "y_mm": 500, "z_mm": 250,
-                    "width_mm": 400, "depth_mm": 400, "height_mm": 3350,
+                {
+                    "id": "c1",
+                    "kind": "column",
+                    "name": "Колонна",
+                    "storey_id": "l1",
+                    "box": {
+                        "x_mm": 500,
+                        "y_mm": 500,
+                        "z_mm": 250,
+                        "width_mm": 400,
+                        "depth_mm": 400,
+                        "height_mm": 3350,
+                    },
                 },
-            },
-            {
-                "id": "sp1", "kind": "space", "name": "Помещение", "storey_id": "l1",
-                "box": {
-                    "x_mm": 0, "y_mm": 0, "z_mm": 0,
-                    "width_mm": 8000, "depth_mm": 6000, "height_mm": 3000,
+                {
+                    "id": "sp1",
+                    "kind": "space",
+                    "name": "Помещение",
+                    "storey_id": "l1",
+                    "box": {
+                        "x_mm": 0,
+                        "y_mm": 0,
+                        "z_mm": 0,
+                        "width_mm": 8000,
+                        "depth_mm": 6000,
+                        "height_mm": 3000,
+                    },
                 },
-            },
-        ],
-    })
+            ],
+        }
+    )
     ifc_bytes, compile_report = compile_construction_ifc(model)
     assert compile_report["valid"] is True
     ifc_path = tmp_path / "mixed.ifc"

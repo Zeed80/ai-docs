@@ -7,9 +7,11 @@ import pytest
 from PIL import Image
 
 from app.ai.cad_recognize.axial_dimensions import localize_axial_dimensions
-from app.ai.cad_recognize.diameter_dimensions import localize_diameter_dimensions
-from app.ai.cad_recognize.diameter_dimensions import outer_sections_from_diameter_evidence
-from app.ai.cad_recognize.diameter_dimensions import bore_sections_from_diameter_evidence
+from app.ai.cad_recognize.diameter_dimensions import (
+    bore_sections_from_diameter_evidence,
+    localize_diameter_dimensions,
+    outer_sections_from_diameter_evidence,
+)
 
 
 @pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract is not installed")
@@ -28,21 +30,19 @@ def test_detal_126_diameters_are_classified_against_the_main_profile():
     assert {(102, "outer"), (80, "outer"), (72, "outer")} <= roles
     assert {(56.55, "bore"), (51, "bore"), (44, "bore"), (56, "bore"), (55, "bore")} <= roles
     callout = next(
-        item for item in result["observations"]
-        if item["value_mm"] == 44 and item["role"] == "bore"
+        item
+        for item in result["observations"]
+        if item["value_mm"] == 44
+        and item["role"] == "bore"
         and item["source"] == "vertical_callout_and_vector_contour"
     )
     assert callout["label_bbox"]
     assert callout["profile_measurement_line"]
     assert callout["source"] == "vertical_callout_and_vector_contour"
-    transitions = {
-        item["station_from_left_mm"] for item in result["outer_transition_stations"]
-    }
+    transitions = {item["station_from_left_mm"] for item in result["outer_transition_stations"]}
     assert {14, 470} <= transitions
     sections = outer_sections_from_diameter_evidence(result)
-    assert [
-        (item["diameter_mm"], item["length_mm"]) for item in sections
-    ] == [
+    assert [(item["diameter_mm"], item["length_mm"]) for item in sections] == [
         (102.0, 14.0),
         (98.0, 13.0),
         (80.0, 344.0),
@@ -50,10 +50,7 @@ def test_detal_126_diameters_are_classified_against_the_main_profile():
     ]
     assert all(item["evidence"][0]["bbox"] for item in sections)
     assert all("vector outer contour" in item["evidence"][0]["raw_text"] for item in sections)
-    thread_candidate = next(
-        item for item in result["outer_candidates"]
-        if item["value_mm"] == 75.0
-    )
+    thread_candidate = next(item for item in result["outer_candidates"] if item["value_mm"] == 75.0)
     assert thread_candidate["role"] == "outer_candidate"
     assert thread_candidate["source"] == "interrupted_vector_contour"
     assert 360 < thread_candidate["axial_interval_mm"][0] < 375
@@ -73,13 +70,15 @@ def test_detal_126_diameters_are_classified_against_the_main_profile():
     assert all(item["evidence"][0]["bbox"] for item in bore)
     from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
 
-    validated = EngineeringDrawingSpec.model_validate({
-        "main_view": {
-            "type": "тело вращения (вал)",
-            "outer": sections,
-            "bore": bore,
+    validated = EngineeringDrawingSpec.model_validate(
+        {
+            "main_view": {
+                "type": "тело вращения (вал)",
+                "outer": sections,
+                "bore": bore,
+            }
         }
-    })
+    )
     assert validated.main_view.bore[0].taper is not None
 
 
@@ -109,11 +108,13 @@ def test_profile_recovers_nominals_even_when_upstream_callout_list_missed_them()
     )
 
     outer = {
-        item["value_mm"] for item in result["observations"]
+        item["value_mm"]
+        for item in result["observations"]
         if item["role"] == "outer" and item["confidence"] >= 0.6
     }
     bore = {
-        item["value_mm"] for item in result["observations"]
+        item["value_mm"]
+        for item in result["observations"]
         if item["role"] == "bore" and item["confidence"] >= 0.6
     }
     assert {102, 80, 72} <= outer

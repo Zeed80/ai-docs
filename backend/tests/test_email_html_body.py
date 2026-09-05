@@ -8,7 +8,7 @@ when asked to read a letter — it reported the message as empty.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.message import EmailMessage as MimeMessage
 
 from app.domain.email_html import html_to_text
@@ -84,20 +84,34 @@ async def test_html_only_message_is_findable_by_search(client, db_session):
     """The end this fix exists for: the letter must be searchable."""
     from app.db.models import EmailMessage, EmailThread, MailboxConfig
 
-    db_session.add(MailboxConfig(
-        name="procurement", display_name="Закупки", imap_host="mail.example.com",
-        imap_port=993, imap_user="procurement", imap_password_encrypted="x",
-        imap_ssl=True, is_active=True,
-    ))
+    db_session.add(
+        MailboxConfig(
+            name="procurement",
+            display_name="Закупки",
+            imap_host="mail.example.com",
+            imap_port=993,
+            imap_user="procurement",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            is_active=True,
+        )
+    )
     parsed = parse_email_message(_mime(html=HTML_BODY))
     thread = EmailThread(subject=parsed.subject, mailbox="procurement", message_count=1)
-    db_session.add(EmailMessage(
-        thread=thread, mailbox="procurement", subject=parsed.subject,
-        from_address=parsed.from_address, to_addresses=parsed.to_addresses,
-        body_text=parsed.body_text, body_html=parsed.body_html,
-        body_text_derived=parsed.body_text_derived,
-        received_at=datetime.now(timezone.utc), message_id_header=parsed.message_id,
-    ))
+    db_session.add(
+        EmailMessage(
+            thread=thread,
+            mailbox="procurement",
+            subject=parsed.subject,
+            from_address=parsed.from_address,
+            to_addresses=parsed.to_addresses,
+            body_text=parsed.body_text,
+            body_html=parsed.body_html,
+            body_text_derived=parsed.body_text_derived,
+            received_at=datetime.now(UTC),
+            message_id_header=parsed.message_id,
+        )
+    )
     await db_session.commit()
 
     resp = await client.post("/api/email/search", json={"query": "Труба", "limit": 20})
@@ -142,8 +156,11 @@ def test_reply_threading_uses_the_full_chain():
     from app.domain.email_thread import resolve_threading_headers
 
     parent = EmailMessage(
-        mailbox="procurement", from_address="x@y.z", subject="s",
-        message_id_header="<b@x>", references="<a@x>",
+        mailbox="procurement",
+        from_address="x@y.z",
+        subject="s",
+        message_id_header="<b@x>",
+        references="<a@x>",
     )
     in_reply_to, references = resolve_threading_headers(parent)
     assert in_reply_to == "<b@x>"
@@ -153,26 +170,28 @@ def test_reply_threading_uses_the_full_chain():
 def test_automated_and_bulk_mail_is_recognised_by_headers():
     from app.tasks.imap_client import is_automated_message
 
-    assert is_automated_message(parse_email_message(
-        _mime_with_headers(Auto_Submitted="auto-replied")
-    ).headers_meta)
-    assert is_automated_message(parse_email_message(
-        _mime_with_headers(Precedence="bulk")
-    ).headers_meta)
-    assert is_automated_message(parse_email_message(
-        _mime_with_headers(List_Id="<news.example.com>")
-    ).headers_meta)
+    assert is_automated_message(
+        parse_email_message(_mime_with_headers(Auto_Submitted="auto-replied")).headers_meta
+    )
+    assert is_automated_message(
+        parse_email_message(_mime_with_headers(Precedence="bulk")).headers_meta
+    )
+    assert is_automated_message(
+        parse_email_message(_mime_with_headers(List_Id="<news.example.com>")).headers_meta
+    )
     # A normal letter is not automated, and neither is Auto-Submitted: no
     assert not is_automated_message(parse_email_message(_mime_with_headers()).headers_meta)
-    assert not is_automated_message(parse_email_message(
-        _mime_with_headers(Auto_Submitted="no")
-    ).headers_meta)
+    assert not is_automated_message(
+        parse_email_message(_mime_with_headers(Auto_Submitted="no")).headers_meta
+    )
 
 
 def test_authentication_verdicts_are_extracted():
-    parsed = parse_email_message(_mime_with_headers(
-        Authentication_Results="mx.example.com; spf=fail smtp.mailfrom=evil.example; dkim=none; dmarc=fail",
-    ))
+    parsed = parse_email_message(
+        _mime_with_headers(
+            Authentication_Results="mx.example.com; spf=fail smtp.mailfrom=evil.example; dkim=none; dmarc=fail",
+        )
+    )
     auth = parsed.headers_meta["auth"]
     assert auth["spf"] == "fail"
     assert auth["dkim"] == "none"
@@ -203,12 +222,13 @@ def _mime_with_inline_logo() -> bytes:
         subtype="html",
     )
     msg.get_payload()[1].add_related(
-        b"\x89PNG fake", maintype="image", subtype="png", cid="<logo@firm>",
+        b"\x89PNG fake",
+        maintype="image",
+        subtype="png",
+        cid="<logo@firm>",
         filename="logo.png",
     )
-    msg.add_attachment(
-        b"%PDF-1.4", maintype="application", subtype="pdf", filename="Счёт.pdf"
-    )
+    msg.add_attachment(b"%PDF-1.4", maintype="application", subtype="pdf", filename="Счёт.pdf")
     return msg.as_bytes()
 
 
@@ -220,7 +240,7 @@ def test_inline_logo_is_separated_from_real_attachments():
     assert len(inline) == 1 and inline[0].content_id == "logo@firm"
     assert [a.filename for a in real] == ["Счёт.pdf"]
     # A signature logo must not make the thread list show a paperclip.
-    assert parsed.has_attachments is True   # because of the real PDF
+    assert parsed.has_attachments is True  # because of the real PDF
 
 
 def test_message_with_only_a_logo_has_no_attachments():
@@ -231,9 +251,7 @@ def test_message_with_only_a_logo_has_no_attachments():
     msg["Message-ID"] = f"<{uuid.uuid4()}@y.z>"
     msg.set_content("текст")
     msg.add_alternative('<html><body><img src="cid:sig"></body></html>', subtype="html")
-    msg.get_payload()[1].add_related(
-        b"\x89PNG", maintype="image", subtype="png", cid="<sig>"
-    )
+    msg.get_payload()[1].add_related(b"\x89PNG", maintype="image", subtype="png", cid="<sig>")
     parsed = parse_email_message(msg.as_bytes())
 
     assert parsed.has_attachments is False
@@ -255,15 +273,26 @@ def test_inline_parts_are_hidden_from_the_attachment_list():
     from app.domain.email import EmailAttachmentOut, EmailMessageOut
 
     msg = EmailMessageOut(
-        id=uuid.uuid4(), thread_id=None, message_id_header="<x@y>", mailbox="procurement",
-        from_address="x@y.z", to_addresses=[], cc_addresses=[], subject="s",
-        body_text="t", sent_at=None, received_at=None, has_attachments=True,
-        attachment_count=1, attachments_meta=[],
+        id=uuid.uuid4(),
+        thread_id=None,
+        message_id_header="<x@y>",
+        mailbox="procurement",
+        from_address="x@y.z",
+        to_addresses=[],
+        cc_addresses=[],
+        subject="s",
+        body_text="t",
+        sent_at=None,
+        received_at=None,
+        has_attachments=True,
+        attachment_count=1,
+        attachments_meta=[],
         attachments=[
             EmailAttachmentOut(id=uuid.uuid4(), filename="logo.png", is_inline=True),
             EmailAttachmentOut(id=uuid.uuid4(), filename="Счёт.pdf", is_inline=False),
         ],
-        is_inbound=True, created_at=datetime.now(timezone.utc),
+        is_inbound=True,
+        created_at=datetime.now(UTC),
     )
     assert [a.filename for a in msg.attachments] == ["Счёт.pdf"]
 
@@ -275,7 +304,7 @@ def test_remote_images_are_blocked_but_recoverable():
     from app.domain.email_html import block_remote_images
 
     html = (
-        '<p>Счёт</p>'
+        "<p>Счёт</p>"
         '<img src="https://track.example/pixel.gif?u=42">'
         '<img src="/api/email/messages/M/attachments/cid/logo/content">'
         '<div style="background-image: url(http://track.example/bg.png)">x</div>'
@@ -316,26 +345,45 @@ async def test_message_can_be_downloaded_as_eml(client, db_session, monkeypatch)
     from app.db.models import EmailAttachment, EmailMessage, EmailThread, MailboxConfig
 
     monkeypatch.setattr(storage, "download_file", lambda path: b"%PDF-1.4")
-    db_session.add(MailboxConfig(
-        name="procurement", display_name="Закупки", imap_host="m.example.com",
-        imap_port=993, imap_user="procurement", imap_password_encrypted="x",
-        imap_ssl=True, is_active=True,
-    ))
+    db_session.add(
+        MailboxConfig(
+            name="procurement",
+            display_name="Закупки",
+            imap_host="m.example.com",
+            imap_port=993,
+            imap_user="procurement",
+            imap_password_encrypted="x",
+            imap_ssl=True,
+            is_active=True,
+        )
+    )
     thread = EmailThread(subject="Счёт", mailbox="procurement", message_count=1)
     msg = EmailMessage(
-        thread=thread, mailbox="procurement", subject="Счёт УТ-2562",
-        from_address="sales@romex.example", to_addresses=["procurement@example.com"],
-        body_text="во вложении счёт", body_html="<p>во вложении счёт</p>",
-        references="<a@x> <b@x>", reply_to="sales@romex.example",
-        received_at=datetime.now(timezone.utc), sent_at=datetime.now(timezone.utc),
+        thread=thread,
+        mailbox="procurement",
+        subject="Счёт УТ-2562",
+        from_address="sales@romex.example",
+        to_addresses=["procurement@example.com"],
+        body_text="во вложении счёт",
+        body_html="<p>во вложении счёт</p>",
+        references="<a@x> <b@x>",
+        reply_to="sales@romex.example",
+        received_at=datetime.now(UTC),
+        sent_at=datetime.now(UTC),
         message_id_header=f"<{uuid.uuid4()}@romex.example>",
     )
     db_session.add_all([thread, msg])
     await db_session.flush()
-    db_session.add(EmailAttachment(
-        message_id=msg.id, filename="Счёт.pdf", content_type="application/pdf",
-        size=8, storage_path="documents/aa/bb/cc", sha256="d" * 64,
-    ))
+    db_session.add(
+        EmailAttachment(
+            message_id=msg.id,
+            filename="Счёт.pdf",
+            content_type="application/pdf",
+            size=8,
+            storage_path="documents/aa/bb/cc",
+            sha256="d" * 64,
+        )
+    )
     await db_session.commit()
 
     resp = await client.get(f"/api/email/messages/{msg.id}/raw")

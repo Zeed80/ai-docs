@@ -40,10 +40,7 @@ def test_src_is_rewritten_to_cid_and_the_marker_survives():
 
 
 def test_other_images_are_left_alone():
-    body = (
-        '<img src="blob:1" data-attachment-id="aaa">'
-        '<img src="https://example.com/logo.png">'
-    )
+    body = '<img src="blob:1" data-attachment-id="aaa"><img src="https://example.com/logo.png">'
     out = rewrite_to_cid(body, "aaa")
     assert 'src="https://example.com/logo.png"' in out
 

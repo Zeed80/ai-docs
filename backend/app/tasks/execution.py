@@ -45,10 +45,21 @@ async def _execute_task(
     if job.task_type == "document.process":
         return await _execute_document_process(db, job, ai_router=ai_router, storage=storage)
     if job.task_type == "email.send.request_approval":
-        return {"status": "executed_placeholder", "message": "SMTP send placeholder executed after approval"}
+        return {
+            "status": "executed_placeholder",
+            "message": "SMTP send placeholder executed after approval",
+        }
     if job.task_type == "invoice.export.1c.prepare":
-        return {"status": "executed_placeholder", "message": "1C export placeholder executed after approval"}
-    if job.task_type in {"document.invoice_extraction", "document.drawing_analysis", "email.draft", "invoice.export.xlsx"}:
+        return {
+            "status": "executed_placeholder",
+            "message": "1C export placeholder executed after approval",
+        }
+    if job.task_type in {
+        "document.invoice_extraction",
+        "document.drawing_analysis",
+        "email.draft",
+        "invoice.export.xlsx",
+    }:
         return {
             "status": "planned_placeholder",
             "message": "Safe tool execution placeholder; call explicit API endpoint for full action",
@@ -75,7 +86,10 @@ async def _execute_document_process(
             created_artifacts = create_document_artifacts(
                 db,
                 document,
-                [artifact.model_dump(exclude={"id", "document_id", "created_at"}) for artifact in result.artifacts],
+                [
+                    artifact.model_dump(exclude={"id", "document_id", "created_at"})
+                    for artifact in result.artifacts
+                ],
             )
             result.artifacts = [
                 DocumentArtifactRead(

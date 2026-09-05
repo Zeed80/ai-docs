@@ -51,7 +51,9 @@ async def test_bridge_js_is_served_as_external_script(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_bridge_js_route_is_not_shadowed_by_the_catch_all_proxy(client: AsyncClient, monkeypatch):
+async def test_bridge_js_route_is_not_shadowed_by_the_catch_all_proxy(
+    client: AsyncClient, monkeypatch
+):
     """`/{path:path}` matches `__bridge.js` too — this only passes if the
     specific route was registered (declared) before the catch-all, so it's
     served locally instead of being forwarded to (a possibly unreachable)
@@ -142,7 +144,9 @@ async def test_proxy_forwards_post_body_and_query_params(client: AsyncClient, mo
     def handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         captured["body"] = request.content
-        return httpx.Response(200, json={"queued": True}, headers={"content-type": "application/json"})
+        return httpx.Response(
+            200, json={"queued": True}, headers={"content-type": "application/json"}
+        )
 
     _mock_upstream(monkeypatch, handler)
 
