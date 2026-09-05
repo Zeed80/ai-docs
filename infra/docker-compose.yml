@@ -849,6 +849,11 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Страховка от разрастания одного процесса: на машине 59 ГБ, а
+    # пик потребления этого контейнера — сотни мегабайт. Лимит
+    # щедрый намеренно: он должен ловить утечку, а не убивать
+    # обычную работу.
+    mem_limit: 8g
     # The catalog queue rides on this general-purpose worker rather than the
     # single-slot GPU one: parsing a 200-page price list is CPU/IO work, and in
     # the gpu lane it blocked document recognition for its whole duration.
@@ -901,6 +906,11 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Страховка от разрастания одного процесса: на машине 59 ГБ, а
+    # пик потребления этого контейнера — сотни мегабайт. Лимит
+    # щедрый намеренно: он должен ловить утечку, а не убивать
+    # обычную работу.
+    mem_limit: 8g
     command: celery -A app.tasks.celery_app worker -l info -c 1 -Q gpu_priority,gpu,studio -n gpu@%h
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping -d gpu@$$HOSTNAME || exit 1"]
@@ -937,6 +947,11 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Страховка от разрастания одного процесса: на машине 59 ГБ, а
+    # пик потребления этого контейнера — сотни мегабайт. Лимит
+    # щедрый намеренно: он должен ловить утечку, а не убивать
+    # обычную работу.
+    mem_limit: 12g
     command: celery -A app.tasks.celery_app worker -l info -c 1 -Q lora -n lora@%h
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping -d lora@$$HOSTNAME || exit 1"]
@@ -972,6 +987,11 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Страховка от разрастания одного процесса: на машине 59 ГБ, а
+    # пик потребления этого контейнера — сотни мегабайт. Лимит
+    # щедрый намеренно: он должен ловить утечку, а не убивать
+    # обычную работу.
+    mem_limit: 1g
     command: celery -A app.tasks.celery_app beat -l info
     environment:
       <<: *backend-env
