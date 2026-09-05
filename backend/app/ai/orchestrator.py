@@ -14,7 +14,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 import structlog
@@ -77,6 +77,12 @@ from app.ai import route_table
 from app.ai.router import ai_router
 from app.ai.schemas import AIRequest, AITask, ChatMessage
 from app.domain.workspace import get_workspace_block, list_workspace_blocks, upsert_workspace_block
+
+# Только для аннотаций: имена стоят в строковых типах, поэтому в рантайме
+# не вычисляются — но без импорта их не видят ни type checker, ни IDE, и
+# опечатка в такой аннотации не находится ничем.
+if TYPE_CHECKING:
+    from app.ai.turn_router import TurnDecision
 
 SendFn = Callable[[dict], Awaitable[None]]
 

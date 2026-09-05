@@ -126,6 +126,11 @@ def _export_views(doc: any, output_dir: str) -> None:
     except ImportError:
         # FreeCADGui not available in strict headless mode — use TechDraw fallback
         try:
+            # FreeCAD импортировался только в main(), а этот запасной путь —
+            # отдельная функция. Ниже он используется дважды, поэтому ветка
+            # падала NameError и молча гасилась общим `except Exception`:
+            # запасной экспорт видов не работал ни разу.
+            import FreeCAD  # type: ignore
             import TechDraw  # type: ignore
             import TechDrawGui  # type: ignore
             page = doc.addObject("TechDraw::DrawPage", "Page")

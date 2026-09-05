@@ -5,7 +5,7 @@ Skill: tool_catalog.*, supplier_catalog.*
 
 import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -64,6 +64,12 @@ from app.domain.tool_catalog import (
     ToolSupplierOut,
     ToolSupplierUpdate,
 )
+
+# Только для аннотаций: имена стоят в строковых типах, поэтому в рантайме
+# не вычисляются — но без импорта их не видят ни type checker, ни IDE, и
+# опечатка в такой аннотации не находится ничем.
+if TYPE_CHECKING:
+    from app.db.models import Party
 
 router = APIRouter()
 logger = structlog.get_logger()

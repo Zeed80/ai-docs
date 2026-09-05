@@ -32,6 +32,14 @@ from app.auth.jwt import get_current_user, require_role
 from app.auth.models import UserInfo, UserRole
 from app.domain.access import visibility_filter
 
+from typing import TYPE_CHECKING
+
+# Только для аннотаций: имена стоят в строковых типах, поэтому в рантайме
+# не вычисляются — но без импорта их не видят ни type checker, ни IDE, и
+# опечатка в такой аннотации не находится ничем.
+if TYPE_CHECKING:
+    from app.domain.documents import EmailSourceOut
+
 router = APIRouter()
 logger = structlog.get_logger()
 

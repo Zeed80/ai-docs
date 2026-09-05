@@ -24,6 +24,14 @@ from dataclasses import dataclass
 
 import structlog
 
+from typing import TYPE_CHECKING
+
+# Только для аннотаций: имена стоят в строковых типах, поэтому в рантайме
+# не вычисляются — но без импорта их не видят ни type checker, ни IDE, и
+# опечатка в такой аннотации не находится ничем.
+if TYPE_CHECKING:
+    from PIL import Image
+
 logger = structlog.get_logger()
 
 

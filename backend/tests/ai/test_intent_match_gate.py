@@ -163,36 +163,40 @@ def test_risk_class_cheap_for_spec_table():
 
 def test_risk_class_gated_for_external_actions():
     assert risk_class(_plan(skills=["email.send"])) == "gated"
-    assert risk_class(_plan(skills=["invoice.approve"])) == "gated"
-    assert risk_class(_plan(skills=["anomaly.resolve", "workspace.spec_table"])) == "gated"
+    assert risk_class(_plan(skills=["invoices.approve"])) == "gated"
+    assert risk_class(_plan(skills=["anomalies.resolve", "workspace.spec_table"])) == "gated"
 
 
-def test_risk_class_covers_every_gateway_yml_approval_gate():
-    """A2 regression guard: risk_class must recognise every gate in
-    gateway.yml, not a hand-maintained subset. Before A2 this covered only
-    4 of gateway.yml's 15 gates (email.send/invoice.approve/anomaly.resolve/
-    table.apply_diff) — the other 11 (payment.mark_paid, bom.approve,
-    doc.bulk_delete, ...) were silently classified as "cheap"."""
+def test_risk_class_covers_every_approval_gate_of_the_manifest():
+    """risk_class обязан узнавать КАЖДЫЙ гейт, а не выборку из них.
+
+    Источник правды переехал: `gateway_config.approval_gates` в режиме
+    capabilities считается по `gate_actions` манифеста — по тому же списку,
+    которым руководствуется HTTP-граница. Список в gateway.yml остался от
+    registry-режима и пользовался другой схемой имён (`invoice.approve`
+    против `invoices.approve`): из 31 записи с манифестом совпадали 8, и
+    оркестратор просто не находил большинство гейтов.
+    """
     from app.ai.gateway_config import gateway_config
 
     gates = gateway_config.approval_gates
-    assert "payment.mark_paid" in gates, "fixture assumption: gateway.yml must list this gate"
+    assert "payments.mark_paid" in gates, "манифест обязан объявлять этот гейт"
     for gate in gates:
-        assert risk_class(_plan(skills=[gate])) == "gated", f"{gate} not recognised as gated"
+        assert risk_class(_plan(skills=[gate])) == "gated", f"{gate} не признан gated"
 
 
 def test_risk_class_picks_up_a_new_gate_without_code_changes(monkeypatch):
-    """A2: adding a gate to gateway.yml is enough — no orchestrator.py edit.
+    """Добавить гейт в манифест достаточно — правка orchestrator.py не нужна.
 
-    approval_gates is a read-only @property computed from ``_raw`` (so
-    gateway.yml edits take effect without a restart, see GatewayConfig's
-    docstring) — patch the backing dict, not the property itself.
+    `approval_gates` — вычисляемое свойство, поэтому подменяем источник
+    (загрузку манифеста), а не само свойство.
     """
     from app.ai import gateway_config as gateway_config_module
 
-    monkeypatch.setitem(
-        gateway_config_module.gateway_config._raw.setdefault("skills", {}),
-        "approval_gates", ["widget.self_destruct"],
+    monkeypatch.setattr(
+        type(gateway_config_module.gateway_config),
+        "approval_gates",
+        property(lambda self: {"widget.self_destruct"}),
     )
     assert risk_class(_plan(skills=["widget.self_destruct"])) == "gated"
 

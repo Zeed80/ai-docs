@@ -72,6 +72,10 @@ dev = [
     "testcontainers[postgres]>=4.8",
     "ruff>=0.8",
     "mypy>=1.13",
+    # Конфиг .pre-commit-config.yaml лежал в репозитории с самого начала, но
+    # сам pre-commit нигде не был объявлен зависимостью — поэтому хука в
+    # .git/hooks не появлялось ни у кого, и ruff гонялся только вручную.
+    "pre-commit>=4.0",
 ]
 
 [build-system]
