@@ -33,9 +33,10 @@ async def test_scenario_trace_model_insert_and_retrieve(db_session: AsyncSession
     db_session.add(trace)
     await db_session.flush()
 
-    result = await db_session.execute(
-        select(ScenarioTrace).where(ScenarioTrace.scenario_name == "email_triage")
-    )
+    # По id, а не по имени сценария: «email_triage» запускают и соседние
+    # тесты, часть из них коммитит, и scalar_one() находил несколько строк —
+    # тест падал MultipleResultsFound, хотя своя строка была ровно одна.
+    result = await db_session.execute(select(ScenarioTrace).where(ScenarioTrace.id == trace.id))
     found = result.scalar_one()
     assert found.status == "ok"
     assert found.steps_total == 3

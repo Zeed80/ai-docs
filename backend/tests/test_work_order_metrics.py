@@ -43,12 +43,16 @@ async def test_metrics_counts_status_and_computes_duration_percentiles(client, d
     body = response.json()
     assert body["window_hours"] == 24
     assert sum(body["status_counts"].values()) >= 1
-    # The one attempt above completed almost instantly in this test, so it
-    # should show up as a single-sample group with p50 == p95.
+    # Метрики считаются по всей базе, а не по данным одного теста: соседи
+    # оставляют свои шаги agent_turn, часть из них закоммичена. Проверка
+    # «p50 == p95» молча предполагала, что выборка ровно одна, и падала, как
+    # только рядом оказывался ещё один шаг. Проверяем то, что действительно
+    # обещает эндпоинт: группа есть, попадание учтено, перцентили
+    # упорядочены.
     matching = [d for k, d in body["step_durations"].items() if k.startswith("agent_turn")]
     assert matching, body["step_durations"]
     assert matching[0]["count"] >= 1
-    assert matching[0]["p50_seconds"] == matching[0]["p95_seconds"]
+    assert matching[0]["p50_seconds"] <= matching[0]["p95_seconds"]
 
 
 @pytest.mark.asyncio
