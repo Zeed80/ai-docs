@@ -95,10 +95,14 @@ def test_direct_call_path_uses_the_node_registry(monkeypatch):
     assert model_resolver._provider_api_key("anthropic") == "secret-from-db"
 
 
-def test_hardcoded_table_still_covers_kinds_the_registry_does_not_know(monkeypatch):
+def test_legacy_aliases_reach_the_registry_instead_of_a_second_table():
     """`kimi` и `qwen` — не значения ProviderKind (в enum они moonshot и
-    dashscope). Реестр их не резолвит, и таблица остаётся резервом."""
+    dashscope). Раньше реестр их не резолвил, и они уходили в захардкоженную
+    таблицу, где адрес успел устареть. Теперь это псевдонимы."""
     from app.ai import model_resolver
 
-    assert model_resolver._resolved_node("kimi") is None
-    assert model_resolver._provider_base_url("kimi") == "https://api.moonshot.cn/v1"
+    node = model_resolver._resolved_node("kimi")
+    assert node is not None
+    assert node.kind.value == "moonshot"
+    # Адрес приходит из реестра, а не из таблицы с устаревшим api.moonshot.cn.
+    assert "moonshot.ai" in model_resolver._provider_base_url("kimi")

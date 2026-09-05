@@ -101,3 +101,78 @@ def test_model_pins_survive_a_node_rename(monkeypatch):
     assert store["qwen3_8_27b"] == "gpu-new"
     # Чужие пины не трогаем.
     assert store["embedder"] == "cpu-node"
+
+
+# ── Пин хранится по id, а не по имени ────────────────────────────────────────
+
+
+def test_pin_display_falls_back_to_the_raw_value(monkeypatch):
+    """Пины, записанные до перехода на id, хранят имя — такое значение должно
+    показываться как есть, а не превращаться в пустоту."""
+    from app.api import providers_api
+
+    monkeypatch.setattr(
+        "app.ai.provider_registry._redis_get_instances",
+        lambda: [{"id": "11111111-1111-1111-1111-111111111111", "name": "gpu-node"}],
+    )
+    assert (
+        providers_api._pin_display_name("11111111-1111-1111-1111-111111111111")
+        == "gpu-node"
+    )
+    assert providers_api._pin_display_name("старое-имя-узла") == "старое-имя-узла"
+    assert providers_api._pin_display_name(None) is None
+
+
+def test_resolver_takes_the_address_from_the_registry_only(monkeypatch):
+    """`_provider_base_url`/`_provider_api_key` держали таблицу из 18 адресов и
+    свой набор env-имён параллельно реестру. Две копии разошлись по пяти
+    адресам сразу (api.moonshot.cn против .ai, dashscope без -intl,
+    api.cohere.com против .ai) — и никто не замечал, потому что оба места
+    «работали».
+
+    Проверяем функционально: что вернул реестр, то и отдаёт резолвер. Если
+    вторая таблица появится снова, подменённый реестр перестанет влиять."""
+    from types import SimpleNamespace
+
+    from app.ai import model_resolver
+
+    monkeypatch.setattr(
+        "app.ai.provider_registry.select_instance",
+        lambda kind: SimpleNamespace(
+            base_url="https://registry-decides.example/v1", api_key="key-from-registry"
+        ),
+    )
+    for provider in ("anthropic", "openrouter", "groq", "cohere", "ollama"):
+        assert (
+            model_resolver._provider_base_url(provider)
+            == "https://registry-decides.example"
+        ), provider
+        assert model_resolver._provider_api_key(provider) == "key-from-registry"
+
+
+def test_legacy_provider_aliases_resolve(monkeypatch):
+    """`kimi` и `qwen` — исторические имена для moonshot и dashscope. Реестр их
+    не знал, поэтому они уходили в захардкоженную таблицу с устаревшим
+    адресом."""
+    from app.ai import model_resolver
+
+    seen: list[str] = []
+
+    def fake_select(kind):
+        seen.append(kind.value)
+        return None
+
+    monkeypatch.setattr("app.ai.provider_registry.select_instance", fake_select)
+    model_resolver._resolved_node("kimi")
+    model_resolver._resolved_node("qwen")
+    assert seen == ["moonshot", "dashscope"]
+
+
+def test_unknown_provider_yields_nothing_instead_of_someone_elses_address():
+    """Незнакомый провайдер раньше получал адрес Ollama по умолчанию — так
+    рождалась пара «облачное имя модели на локальном узле», падавшая 404."""
+    from app.ai import model_resolver
+
+    assert model_resolver._resolved_node("несуществующий") is None
+    assert model_resolver._provider_base_url("несуществующий") == ""
+    assert model_resolver._provider_api_key("несуществующий") == ""

@@ -127,106 +127,58 @@ def get_verify_model() -> ModelConfig:
 # Provider URL helpers (used by dispatch functions)
 # ---------------------------------------------------------------------------
 
-def _resolved_node(provider: str):
-    """Узел из provider_instances для этого kind, если он там есть.
+# Legacy-псевдонимы: в каталоге и в вызывающем коде исторически встречаются
+# «kimi» и «qwen», а в ProviderKind те же провайдеры называются moonshot и
+# dashscope. Из-за этого реестр их не резолвил, и они уходили в захардкоженную
+# таблицу — где адрес успел устареть (api.moonshot.cn против api.moonshot.ai,
+# dashscope без -intl).
+_PROVIDER_ALIASES = {
+    "kimi": "moonshot",
+    "qwen": "dashscope",
+}
 
-    Прямой путь вызова (drawing_extractor, telegram, reasoning_generate) шёл
-    мимо реестра узлов: адреса и ключи брались из захардкоженной таблицы ниже.
-    Узел, заведённый в GUI — второй Ollama на другой машине, свой base_url,
-    ключ из зашифрованного хранилища, — на этот путь просто не действовал.
-    Теперь сначала спрашиваем реестр, а таблица остаётся последним резервом
-    для окружений, где узлы ещё не заведены.
+
+def _resolved_node(provider: str):
+    """Узел из provider_instances для этого kind.
+
+    Единственный источник адреса и ключа. Раньше рядом жила таблица из 18
+    захардкоженных URL и свой набор env-имён: узел, заведённый в GUI (второй
+    Ollama на другой машине, свой base_url, ключ из зашифрованного хранилища),
+    на прямой путь вызова не действовал. Хуже того, таблица разошлась с
+    реестром по пяти адресам сразу — она просто устарела и никто этого не
+    замечал, потому что оба места «работали».
+
+    Сам реестр многоуровневый: строка БД → YAML → env, — поэтому отдельный
+    резерв здесь не нужен даже когда Redis или Postgres недоступны.
     """
+    kind_value = _PROVIDER_ALIASES.get(provider, provider)
     try:
         from app.ai.provider_registry import select_instance
         from app.ai.schemas import ProviderKind
 
-        return select_instance(ProviderKind(provider))
-    except Exception as exc:  # noqa: BLE001 — незнакомый kind или нет БД/Redis
-        logger.debug("model_resolver_node_lookup_failed", provider=provider, error=str(exc))
+        return select_instance(ProviderKind(kind_value))
+    except ValueError:
+        # Незнакомый провайдер: молча подставлять чужой адрес нельзя — так
+        # рождается пара «облачное имя модели на локальном узле», которая
+        # падает 404 и выглядит как поломка самой задачи.
+        logger.error("model_resolver_unknown_provider", provider=provider)
+        return None
+    except Exception as exc:  # noqa: BLE001 — реестр недоступен целиком
+        logger.error(
+            "model_resolver_node_lookup_failed", provider=provider, error=str(exc)
+        )
         return None
 
 
 def _provider_base_url(provider: str) -> str:
-    """Return the base URL (without /v1) for OpenAI-compatible providers."""
-    import os
-
+    """Базовый адрес провайдера (без /v1 — потребители дописывают его сами)."""
     node = _resolved_node(provider)
-    if node is not None and node.base_url:
-        return str(node.base_url).rstrip("/").removesuffix("/v1")
-
-    if provider == "llamacpp":
-        return str(settings.llamacpp_url).rstrip("/").rstrip("/v1")
-    if provider == "vllm":
-        url = os.environ.get("VLLM_URL", "").strip()
-        return url.rstrip("/v1") if url else "http://localhost:8001"
-    if provider == "lmstudio":
-        url = os.environ.get("LMSTUDIO_URL", "").strip()
-        return url.rstrip("/v1") if url else "http://localhost:1234"
-    if provider == "openai_compatible":
-        url = os.environ.get("OPENAI_COMPATIBLE_URL", "").strip()
-        return url.rstrip("/v1") if url else "http://localhost:8001"
-    if provider == "anthropic":
-        # Anthropic uses own API (not OpenAI-compat). This URL is used only for display.
-        return "https://api.anthropic.com"
-    if provider == "openrouter":
-        return "https://openrouter.ai/api/v1"
-    if provider == "openai":
-        return "https://api.openai.com/v1"
-    if provider == "deepseek":
-        return "https://api.deepseek.com"
-    if provider == "gemini":
-        return "https://generativelanguage.googleapis.com/openai"
-    if provider == "mistral":
-        return "https://api.mistral.ai/v1"
-    if provider == "groq":
-        return "https://api.groq.com/openai/v1"
-    if provider == "together":
-        return "https://api.together.xyz/v1"
-    if provider == "fireworks":
-        return "https://api.fireworks.ai/inference/v1"
-    if provider == "xai":
-        return "https://api.x.ai/v1"
-    if provider == "cohere":
-        return "https://api.cohere.com/compatibility/v1"
-    if provider == "perplexity":
-        return "https://api.perplexity.ai"
-    if provider == "minimax":
-        return "https://api.minimax.io/v1"
-    if provider == "kimi":
-        return "https://api.moonshot.cn/v1"
-    if provider == "qwen":
-        return "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    # Fallback: ollama via OpenAI-compatible (Ollama 0.1.24+)
-    return str(settings.ollama_url)
+    if node is None or not node.base_url:
+        return ""
+    return str(node.base_url).rstrip("/").removesuffix("/v1")
 
 
 def _provider_api_key(provider: str) -> str:
-    """Return API key for the given cloud provider (empty string for local)."""
-    import os
-
+    """Ключ провайдера; пустая строка для локальных и для незаданного ключа."""
     node = _resolved_node(provider)
-    if node is not None and node.api_key:
-        return str(node.api_key)
-
-    key_map = {
-        "openrouter": settings.openrouter_api_key,
-        "anthropic": settings.anthropic_api_key,
-        "deepseek": settings.deepseek_api_key,
-        "openai": os.environ.get("OPENAI_API_KEY", ""),
-        "gemini": os.environ.get("GEMINI_API_KEY", ""),
-        "mistral": os.environ.get("MISTRAL_API_KEY", ""),
-        "groq": os.environ.get("GROQ_API_KEY", ""),
-        "together": os.environ.get("TOGETHER_API_KEY", ""),
-        "fireworks": os.environ.get("FIREWORKS_API_KEY", ""),
-        "xai": os.environ.get("XAI_API_KEY", ""),
-        "cohere": os.environ.get("COHERE_API_KEY", ""),
-        "perplexity": os.environ.get("PERPLEXITY_API_KEY", ""),
-        "minimax": os.environ.get("MINIMAX_API_KEY", ""),
-        "kimi": os.environ.get("MOONSHOT_API_KEY", ""),
-        "qwen": os.environ.get("DASHSCOPE_API_KEY", ""),
-        "openai_compatible": os.environ.get("OPENAI_COMPATIBLE_API_KEY", ""),
-        "vllm": os.environ.get("VLLM_API_KEY", ""),
-        "lmstudio": os.environ.get("LMSTUDIO_API_KEY", ""),
-    }
-    return key_map.get(provider, "")
+    return str(node.api_key) if node is not None and node.api_key else ""

@@ -465,7 +465,7 @@ async def list_models(
                     cap.thinking_supported, cap.provider.value, cap.thinking_levels
                 ),
                 thinking_level_default=cap.thinking_level_default,
-                preferred_instance=cap.preferred_instance,
+                preferred_instance=_pin_display_name(cap.preferred_instance),
                 quality_score=cap.quality_score,
                 speed_score=cap.speed_score,
                 vram_gb_estimate=cap.vram_gb_estimate,
@@ -641,6 +641,27 @@ class LiveModelOut(BaseModel):
     cost_per_1k_input: float | None = None
     cost_per_1k_output: float | None = None
     notes: str | None = None
+
+
+def _pin_display_name(pin: str | None) -> str | None:
+    """Показать пин узла человеку.
+
+    Хранится id: имя — редактируемое поле, и пин по нему рвался при
+    переименовании узла. В интерфейсе нужно имя — UUID ничего не говорит о
+    том, на какой машине считается модель. Пины, записанные до перехода на id,
+    хранят имя; такое значение возвращаем как есть.
+    """
+    if not pin:
+        return None
+    try:
+        from app.ai.provider_registry import _redis_get_instances
+
+        for row in _redis_get_instances():
+            if str(row.get("id")) == pin:
+                return str(row.get("name") or pin)
+    except Exception as exc:  # noqa: BLE001 — кэш узлов недоступен
+        logger.debug("pin_display_lookup_failed", pin=pin, error=str(exc))
+    return pin
 
 
 def _capability_facts(cap) -> dict:
@@ -990,7 +1011,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                             cap.thinking_supported, kind.value, cap.thinking_levels
                         ),
                         loaded=True, node=inst.name,
-                        preferred_instance=cap.preferred_instance,
+                        preferred_instance=_pin_display_name(cap.preferred_instance),
                         vram_gb_estimate=cap.vram_gb_estimate or vram,
                         **_capability_facts(cap),
                     )
@@ -1032,7 +1053,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                             th.thinking_supported, kind.value, th.thinking_levels
                         ),
                         loaded=True, node=inst.name,
-                        preferred_instance=th.preferred_instance,
+                        preferred_instance=_pin_display_name(th.preferred_instance),
                         vram_gb_estimate=vram,
                         **_capability_facts(th),
                     )
@@ -1059,7 +1080,7 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                 cap.thinking_supported, cap.provider.value, cap.thinking_levels
             ),
             loaded=False, node=None,
-            preferred_instance=cap.preferred_instance,
+            preferred_instance=_pin_display_name(cap.preferred_instance),
             vram_gb_estimate=cap.vram_gb_estimate,
             **_capability_facts(cap),
         )
@@ -1141,21 +1162,46 @@ async def set_model_preferred_instance(
     payload: PreferredInstanceUpdate,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Pin a model to a specific provider node (multi-machine routing)."""
+    """Pin a model to a specific provider node (multi-machine routing).
+
+    Пин сохраняется как id узла, а не как имя. Имя — редактируемое поле:
+    храня его, пин рвался при переименовании узла, и select_instance молча
+    уходил на первый попавшийся узел — модель, прибитая к конкретной машине,
+    начинала считаться на другой. На вход принимаем и то, и другое: интерфейс
+    и старые записи оперируют именами.
+    """
     from app.ai.model_registry import set_preferred_instance
 
     registry = _registry()
     if model_key not in registry.models:
         raise HTTPException(404, f"Unknown model: {model_key}")
-    set_preferred_instance(model_key, payload.instance_name or None)
+
+    pin = await _instance_id_for_pin(db, payload.instance_name)
+    set_preferred_instance(model_key, pin)
     await model_runtime_store.persist_model_override(
         db,
         model_key=model_key,
-        preferred_instance=payload.instance_name or "",
+        preferred_instance=pin or "",
     )
     await db.commit()
     await model_runtime_store.hydrate_runtime_cache(db)
-    return {"ok": True, "model": model_key, "preferred_instance": payload.instance_name or None}
+    return {"ok": True, "model": model_key, "preferred_instance": pin}
+
+
+async def _instance_id_for_pin(db: AsyncSession, value: str | None) -> str | None:
+    """Привести пин к id узла: на вход может прийти имя, id или пустая строка."""
+    if not value:
+        return None
+    rows = (await db.execute(select(ProviderInstance))).scalars().all()
+    for inst in rows:
+        if str(inst.id) == value:
+            return str(inst.id)
+    for inst in rows:
+        if inst.name == value:
+            return str(inst.id)
+    # Узла с таким именем нет — сохранять нечего: пин, который ни на что не
+    # указывает, тише всего ломает маршрутизацию.
+    raise HTTPException(404, f"Unknown provider node: {value}")
 
 
 # ── Simplified assignment slots ─────────────────────────────────────────────
