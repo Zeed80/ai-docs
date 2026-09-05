@@ -1723,7 +1723,7 @@ class AgentSession:
             config,
             _collect,
             model_override=model,
-            provider_override=config.worker_provider,
+            provider_override=config.compression_provider or config.worker_provider,
             disable_thinking_override=config.worker_disable_thinking,
             thinking_level_override=config.worker_thinking_level,
         )

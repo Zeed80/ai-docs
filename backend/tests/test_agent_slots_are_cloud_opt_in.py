@@ -22,6 +22,8 @@ CONTENT_BEARING_SLOTS = [
     "agent_fast",
     "agent_email",
     "agent_large",
+    "agent_compression",
+    "agent_auditor",
     "ocr_fast",
     "structured_extraction",
     "ocr_large",

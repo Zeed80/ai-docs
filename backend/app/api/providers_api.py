@@ -1259,6 +1259,14 @@ _SLOTS = [
      "Генерация деловых писем и черновиков", True),
     ("agent_large", "Агент", "Большая (скиллы/скрипты/ТП)",
      "Генерация кода, навыков, техпроцессов", True),
+    # Обе настройки существовали и раньше, но задавались мимо каталога:
+    # «модель для сжатия» — свободным текстом в настройках агента (опечатка
+    # или имя несуществующей модели молча ломали сжатие), аудитор — вовсе не
+    # был представлен и просто копировал модель агента.
+    ("agent_compression", "Агент", "Сжатие контекста",
+     "Сжимает длинный диалог в конспект, когда контекст подходит к пределу", True),
+    ("agent_auditor", "Агент", "Аудитор ответов",
+     "Проверяет ответ агента на соответствие вопросу перед выдачей", True),
     ("embedding", "Поиск", "Векторизация (embedding)",
      "Семантический поиск по документам", True),
     ("rerank", "Поиск", "Реранкинг",
@@ -1288,6 +1296,8 @@ _SLOT_MODALITY = {
     "agent_fast": "text",
     "agent_email": "text",
     "agent_large": "text",
+    "agent_compression": "text",
+    "agent_auditor": "text",
     "embedding": "embedding",
     "rerank": "rerank",
     "cad_spec_read": "vision",
@@ -1312,12 +1322,14 @@ _SLOT_THINKING_AGENT_FIELDS: dict[str, list[str]] = {
     "agent_orchestrator": ["orchestrator_disable_thinking", "worker_disable_thinking"],
     "agent_fast": ["fast_disable_thinking"],
     "agent_large": ["builder_disable_thinking"],
+    "agent_auditor": ["auditor_disable_thinking"],
 }
 # Same slot→field(s) shape as above, for the reasoning-effort level tri-state.
 _SLOT_THINKING_LEVEL_AGENT_FIELDS: dict[str, list[str]] = {
     "agent_orchestrator": ["orchestrator_thinking_level", "worker_thinking_level"],
     "agent_fast": ["fast_thinking_level"],
     "agent_large": ["builder_thinking_level"],
+    "agent_auditor": ["auditor_thinking_level"],
 }
 
 _THINKING_DISABLE_SUPPORTED_PROVIDERS = {
@@ -1378,6 +1390,10 @@ def _slot_current_model(slot: str, registry) -> str | None:
         return _key_for_raw(registry, cfg.fast_model)
     if slot == "agent_large":
         return _key_for_raw(registry, cfg.builder_model)
+    if slot == "agent_compression":
+        return _key_for_raw(registry, cfg.compression_model)
+    if slot == "agent_auditor":
+        return _key_for_raw(registry, cfg.auditor_model)
     return None
 
 
@@ -1494,6 +1510,21 @@ def _set_slot_cloud_allowed(slot: str, allowed: bool) -> None:
         client.sadd(_SLOT_CLOUD_KEY, slot)
     else:
         client.srem(_SLOT_CLOUD_KEY, slot)
+
+    if slot == "agent_auditor":
+        # У аудитора собственный выключатель облака в конфиге агента, и именно
+        # его читает роутер при вызове (orchestrator.semantic_audit). Без этой
+        # синхронизации разрешение на слоте позволяло ВЫБРАТЬ облачную модель,
+        # а вызов всё равно уходил бы локально — то самое молчаливое
+        # расхождение, ради которого назначение и собирали в одном месте.
+        from app.ai.agent_config import (
+            BuiltinAgentConfigUpdate,
+            update_builtin_agent_config,
+        )
+
+        update_builtin_agent_config(
+            BuiltinAgentConfigUpdate(auditor_allow_cloud=allowed)
+        )
 
 
 def _slot_base_local_only(slot: str) -> bool:
@@ -1779,6 +1810,10 @@ def _slot_affected(slot: str) -> list[str]:
         return ["agent_config.fast_model"]
     if slot == "agent_large":
         return ["agent_config.builder_model", AITask.CODE_GENERATION.value]
+    if slot == "agent_compression":
+        return ["agent_config.compression_model"]
+    if slot == "agent_auditor":
+        return ["agent_config.auditor_model"]
     return []
 
 
@@ -2036,6 +2071,18 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
                 builder_provider=cap.provider.value, builder_model=cap.provider_model,
             ))
             _assign_task(AITask.CODE_GENERATION, key)
+        elif slot == "agent_compression":
+            # Провайдер обязателен: раньше сжатие всегда уходило провайдеру
+            # worker'а, каким бы ни было имя модели — назвать облачную модель
+            # значило отправить её запрос в локальную Ollama.
+            update_builtin_agent_config(BuiltinAgentConfigUpdate(
+                compression_provider=cap.provider.value,
+                compression_model=cap.provider_model,
+            ))
+        elif slot == "agent_auditor":
+            update_builtin_agent_config(BuiltinAgentConfigUpdate(
+                auditor_provider=cap.provider.value, auditor_model=cap.provider_model,
+            ))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -2063,6 +2110,16 @@ def _unset_slot(slot: str, registry) -> None:
     elif slot == "agent_large":
         update_builtin_agent_config(BuiltinAgentConfigUpdate(builder_model=defaults.builder_model))
         reset_task_routing(AITask.CODE_GENERATION)
+    elif slot == "agent_compression":
+        update_builtin_agent_config(BuiltinAgentConfigUpdate(
+            compression_provider=defaults.compression_provider,
+            compression_model=defaults.compression_model,
+        ))
+    elif slot == "agent_auditor":
+        update_builtin_agent_config(BuiltinAgentConfigUpdate(
+            auditor_provider=defaults.auditor_provider,
+            auditor_model=defaults.auditor_model,
+        ))
     else:
         for item in _slot_affected(slot):
             if "." not in item:

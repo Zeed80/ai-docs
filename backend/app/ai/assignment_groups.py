@@ -214,9 +214,13 @@ def _key_to_name_provider(model_key: str) -> tuple[str | None, str | None]:
 def _mirror_ai_config(group: DocumentGroup) -> None:
     """Keep the legacy ``ai_config`` document fields in sync with the group.
 
-    Several consumers (ollama_client reasoning, embeddings, memory rerank) still
-    read model selection from ``ai_config`` rather than ``task_routing``. Mirror
-    the simplified group there so changes made in the UI take effect for them.
+    No code path reads model selection from ``ai_config`` any more: OCR,
+    reasoning, embeddings, rerank, verification and the agent all resolve
+    through task routing. The mirror stays because the store is still exposed
+    over ``/api/ai/config`` for outside consumers, and a stale model name there
+    is worse than none — but it is now write-only, and nothing behaves
+    differently if it falls out of sync.
+
     ``model_ocr``/``model_vlm``/``model_reasoning`` store raw provider names;
     ``embedding_model``/``reranker_model`` store catalog keys.
     """

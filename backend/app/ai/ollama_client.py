@@ -757,12 +757,13 @@ async def reasoning_generate(
 ) -> str:
     """Generate using the reasoning backend.
 
-    Routes based on ai_config model_reasoning_provider (set in Settings → Models UI).
-    When confidential=True, only local providers (ollama/llamacpp) are used.
+    The model and provider come from task routing via ``get_reasoning_model``
+    — the same assignment the Models screen shows. Previously they were read
+    from ``ai_config``, a second store of the same setting that only received
+    a value when someone saved the GUI form, so it drifted away from the
+    assignment and stayed wrong until the next save.
 
-    Provider priority:
-      1. ai_config.model_reasoning_provider  (from Settings → Models tab)
-      2. Legacy settings.ai_reasoning_backend fallback (backward compat)
+    When confidential=True, only local providers (ollama/llamacpp) are used.
     """
     from app.ai.model_resolver import get_reasoning_model
 

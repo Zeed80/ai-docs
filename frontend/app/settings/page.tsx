@@ -21,23 +21,17 @@ const API = getApiBaseUrl();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Поведенческая часть ai_config — та, что этот экран действительно правит.
+ *
+ * Здесь же лежали одиннадцать полей выбора моделей (model_ocr, model_vlm,
+ * embedding_model, …): они фетчились и типизировались, но ни одного контрола
+ * для них на экране не было — модели назначаются в /settings/models, а
+ * читатели давно ходят в маршрутизацию задач, а не сюда.
+ */
 interface AiConfig {
-  model_agent: string;
-  model_ocr: string;
-  model_ocr_provider: string;
-  model_reasoning: string;
-  model_reasoning_provider: string;
-  model_vlm: string;
-  model_vlm_provider: string;
-  embedding_model: string;
-  reranker_model: string | null;
-  verify_model_1: string;
-  verify_model_1_provider: string;
   auto_approve_confidence_threshold: number;
   auto_verify_enabled: boolean;
-  turboquant_enabled: boolean;
-  turboquant_kv_cache_dtype: string;
-  turboquant_max_model_len: number;
 }
 
 interface EmbeddingProfile {
@@ -567,6 +561,7 @@ export default function SettingsPage() {
 
   // AI Config
   const [config, setConfig] = useState<AiConfig | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
 
@@ -667,9 +662,18 @@ export default function SettingsPage() {
 
   async function loadConfig() {
     try {
-      const r = await fetch(`${API}/api/ai/config`);
+      const r = await fetch(`${API}/api/ai/config`, {
+        credentials: "include",
+      });
+      if (!r.ok) throw new Error(`сервер ответил ${r.status}`);
       setConfig(await r.json());
-    } catch {}
+      setConfigError(null);
+    } catch (e) {
+      // Без этого блок автоодобрения просто не отрисовывался, и понять,
+      // включено оно или настройки не загрузились, было нельзя.
+      setConfig(null);
+      setConfigError(String(e));
+    }
   }
 
 
@@ -1154,9 +1158,14 @@ export default function SettingsPage() {
       });
       if (!r.ok) throw new Error(await r.text());
       setConfig(await r.json());
+      setConfigError(null);
       setConfigSaved(true);
       setTimeout(() => setConfigSaved(false), 2000);
-    } catch {}
+    } catch (e) {
+      // Молчаливый catch показывал ровно то же, что успех: переключатель
+      // оставался в новом положении, хотя на сервер ничего не легло.
+      setConfigError(String(e));
+    }
     setConfigSaving(false);
   }
 
@@ -2712,21 +2721,33 @@ export default function SettingsPage() {
                           }
                         />
                       </Field>
+                      {/* Модель сжатия задавалась здесь свободным текстом:
+                          третий способ выбрать модель — без каталога, без
+                          проверки и без провайдера, из-за чего облачное имя
+                          уходило запросом в локальную Ollama. Теперь это
+                          обычный слот назначения. */}
                       <Field
                         label="Модель для сжатия"
-                        hint="Пусто = использовать основную модель агента"
+                        hint="Пусто = основная модель агента"
                       >
-                        <input
-                          className={inputCls}
-                          placeholder="gemma4:e4b  или  claude-haiku-4-5"
-                          value={agentConfig.compression_model ?? ""}
-                          onChange={(e) =>
-                            setAgentConfig({
-                              ...agentConfig,
-                              compression_model: e.target.value.trim() || null,
-                            })
-                          }
-                        />
+                        <p className="pt-2 text-sm text-slate-300">
+                          {agentConfig.compression_model ? (
+                            <span className="font-mono">
+                              {agentConfig.compression_model}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">
+                              основная модель агента
+                            </span>
+                          )}{" "}
+                          ·{" "}
+                          <Link
+                            href="/settings/models"
+                            className="text-blue-400 hover:text-blue-300"
+                          >
+                            изменить в назначении моделей
+                          </Link>
+                        </p>
                       </Field>
                     </div>
                   )}
@@ -3411,6 +3432,11 @@ export default function SettingsPage() {
               ) : undefined
             }
           >
+            {configError && (
+              <p className="mb-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                Настройки авто-утверждения недоступны: {configError}
+              </p>
+            )}
             {config && (
               <div className="space-y-5">
                 <label className="flex items-center gap-3">

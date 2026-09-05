@@ -123,6 +123,10 @@ class BuiltinAgentConfig(BaseModel):
     context_compression_enabled: bool = True
     context_compression_threshold: float = Field(0.85, ge=0.5, le=0.98)
     compression_model: str | None = None  # None = use primary model
+    # Провайдер модели сжатия. Без него сжатие всегда уходило провайдеру
+    # worker'а: имя модели брали из настроек, а адрес — из чужой роли,
+    # и облачное имя молча отправлялось в локальную Ollama.
+    compression_provider: str | None = None  # None = провайдер worker'а
     mcp_servers: list[dict] = Field(default_factory=list)  # [{name, transport, ...}]
     # Ф7 (AGENT_AUTONOMY_ROADMAP.md): a pure response-style modifier — the
     # wording/register of the final answer only. Deliberately NOT in
@@ -197,6 +201,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     context_compression_enabled: bool | None = None
     context_compression_threshold: float | None = Field(default=None, ge=0.5, le=0.98)
     compression_model: str | None = None
+    compression_provider: str | None = None
     mcp_servers: list[dict] | None = None
     agent_tone: Literal["neutral", "friendly", "formal", "concise"] | None = None
 
