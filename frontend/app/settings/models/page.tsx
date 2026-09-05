@@ -8,6 +8,7 @@ import { providerBarColor, providerLabel } from "@/lib/models/labels";
 import { RoutingChains } from "@/components/models/telemetry/RoutingChains";
 import { ToastProvider, useToast } from "@/components/ui/primitives/Toast";
 import { SlotThinkingControl } from "@/components/models/assignment/SlotThinkingControl";
+import { RevisionHistory } from "@/components/models/assignment/RevisionHistory";
 import { useCurrentUser } from "@/lib/auth-context";
 import { hasRole } from "@/lib/rbac";
 import type {
@@ -2883,6 +2884,7 @@ function AssignmentTab() {
   return (
     <div className="space-y-6">
       <RoutingChains />
+      <RevisionHistory onRolledBack={load} />
       <div className="flex items-center justify-between">
         <p className="text-xs text-slate-600">
           <span className="text-emerald-400">●</span> запущен ·{" "}
