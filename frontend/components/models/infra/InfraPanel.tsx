@@ -34,6 +34,7 @@ import type {
   ProviderInstance as ProviderInstanceT,
   ProviderStatus,
 } from "@/lib/models/types";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 const btnPrimary = `${btn} bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50`;
@@ -241,6 +242,11 @@ function TokensPanel() {
         setHf("");
         setMs("");
         load();
+      } else {
+        notifyError(
+          "Лимиты токенов не сохранены",
+          httpDetail(r.status, r.statusText),
+        );
       }
     } catch (e) {
       toast.error("Не удалось обновить состояние серверов", String(e));

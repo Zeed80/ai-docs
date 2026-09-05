@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { apiFetch, mutFetch } from "@/lib/auth";
 import { useHasRole } from "@/lib/rbac";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -64,6 +65,11 @@ export function SignaturesSection() {
     if (res.ok) {
       setEdit(null);
       load();
+    } else {
+      notifyError(
+        "Подпись не сохранена",
+        httpDetail(res.status, res.statusText),
+      );
     }
   }
 
@@ -203,7 +209,11 @@ export function EmailPolicySection() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
-    if (res.ok) setP(await res.json());
+    if (res.ok) {
+      setP(await res.json());
+    } else {
+      notifyError("Политика почты не сохранена", httpDetail(res.status, res.statusText));
+    }
   }
 
   if (!p) return null;

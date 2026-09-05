@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { apiFetch } from "@/lib/auth";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -97,6 +98,11 @@ export function CommandPalette() {
               run: () => go(m.thread_id ? `/email/${m.thread_id}` : "/email"),
             });
           }
+        } else {
+          notifyError(
+            "Поиск по письмам не выполнен",
+            httpDetail(res.status, res.statusText),
+          );
         }
       } catch {
         /* поиск не обязан работать, чтобы палитра открылась */

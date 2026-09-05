@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -90,6 +91,11 @@ export default function AutoApprovalSettingsPage() {
         setShowCreate(false);
         setForm(EMPTY_FORM);
         await load();
+      } else {
+        notifyError(
+          "Правило не сохранено",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setCreating(false);
@@ -109,6 +115,11 @@ export default function AutoApprovalSettingsPage() {
         ),
       );
       showToast(rule.is_active ? "Правило отключено" : "Правило активировано");
+    } else {
+      notifyError(
+        "Правило не переключено",
+        httpDetail(res.status, res.statusText),
+      );
     }
   }
 

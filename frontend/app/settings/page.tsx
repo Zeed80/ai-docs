@@ -16,6 +16,7 @@ import { PersonalMailboxCard } from "@/components/email/personal-mailbox-card";
 import { isGpuBarEnabled, setGpuBarEnabled } from "@/components/gpu-status-bar";
 import { useAgentName, broadcastAgentName } from "@/lib/agent-name";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -553,6 +554,11 @@ export default function SettingsPage() {
         setApprovalPolicy(await res.json());
         setPolicySaved(true);
         setTimeout(() => setPolicySaved(false), 2000);
+      } else {
+        notifyError(
+          "Политика подтверждений не сохранена",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setPolicyLoading(false);
@@ -587,6 +593,10 @@ export default function SettingsPage() {
   const [ntdConfig, setNtdConfig] = useState<NtdControlConfig | null>(null);
   const [ntdSaving, setNtdSaving] = useState(false);
   const [ntdSaved, setNtdSaved] = useState(false);
+  // Полоса ошибки на весь экран. Сохранения на этой странице гасили
+  // исключения пустым catch: кнопка возвращалась в исходное состояние,
+  // значение оставалось новым, а на сервер не уходило ничего.
+  const [pageError, setPageError] = useState<string | null>(null);
 
   // Agent
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
@@ -1142,8 +1152,11 @@ export default function SettingsPage() {
       if (!r.ok) throw new Error(await r.text());
       setNtdConfig(await r.json());
       setNtdSaved(true);
+      setPageError(null);
       setTimeout(() => setNtdSaved(false), 2000);
-    } catch {}
+    } catch (e) {
+      setPageError(`режим нормоконтроля — ${String(e)}`);
+    }
     setNtdSaving(false);
   }
 
@@ -1266,8 +1279,11 @@ export default function SettingsPage() {
       await loadAgentConfigProposals();
       await loadCapabilityProposals();
       setAgentSaved(true);
+      setPageError(null);
       setTimeout(() => setAgentSaved(false), 2000);
-    } catch {}
+    } catch (e) {
+      setPageError(`настройки агента — ${String(e)}`);
+    }
     setAgentSaving(false);
   }
 
@@ -1287,7 +1303,12 @@ export default function SettingsPage() {
       await loadAgentControlPlane();
       await loadAgentRuntime();
       await loadAgentConfigProposals();
-    } catch {}
+      setPageError(null);
+    } catch (e) {
+      // Решение по предложению — защищённое действие: «ничего не произошло»
+      // здесь читается как «отклонено», хотя на деле запрос не дошёл.
+      setPageError(`решение по предложению настроек — ${String(e)}`);
+    }
     setAgentSaving(false);
   }
 
@@ -1611,6 +1632,23 @@ export default function SettingsPage() {
   return (
     <div className="p-6 max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold mb-5">Настройки</h1>
+
+      {pageError && (
+        <div
+          role="alert"
+          className="mb-4 flex items-start gap-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+        >
+          <span className="flex-1">Не сохранено: {pageError}</span>
+          <button
+            type="button"
+            onClick={() => setPageError(null)}
+            className="text-red-400 hover:text-red-200"
+            aria-label="Скрыть сообщение об ошибке"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Tab bar */}
       <div className="flex gap-1 border-b border-slate-700 mb-6">

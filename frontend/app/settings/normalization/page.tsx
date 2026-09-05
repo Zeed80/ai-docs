@@ -63,9 +63,16 @@ export default function NormalizationSettingsPage() {
 
   async function fetchStats() {
     try {
-      const r = await fetch(`${API}/api/normalization/stats`);
-      if (r.ok) setStats(await r.json());
-    } catch {}
+      const r = await fetch(`${API}/api/normalization/stats`, {
+        credentials: "include",
+      });
+      if (!r.ok) throw new Error(`сервер ответил ${r.status}`);
+      setStats(await r.json());
+    } catch (e) {
+      // Раньше цифры просто оставались прежними, и «ничего не изменилось»
+      // выглядело как результат, а не как несостоявшийся запрос.
+      showToast(`Статистика не загружена: ${String(e)}`);
+    }
   }
 
   async function fetchRules() {

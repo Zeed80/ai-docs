@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { mutFetch } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/auth-context";
 import { canUseSection, pathToSectionKey } from "@/lib/nav-catalog";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API_BASE = getApiBaseUrl();
 
@@ -279,6 +280,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       if (res.ok) {
         const data = await res.json();
         setNLResult(data);
+      } else {
+        notifyError(
+          "Запрос не выполнен",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } catch {
       // ignore

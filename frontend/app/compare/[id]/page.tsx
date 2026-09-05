@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -100,7 +101,11 @@ export default function CompareDetailPage() {
       const res = await mutFetch(`${API}/api/compare/${id}/align`, {
         method: "POST",
       });
-      if (res.ok) await loadSession();
+      if (res.ok) {
+        await loadSession();
+      } else {
+        notifyError("Сравнение не пересчитано", httpDetail(res.status, res.statusText));
+      }
     } finally {
       setAligning(false);
     }
@@ -121,6 +126,11 @@ export default function CompareDetailPage() {
       if (res.ok) {
         setShowDecideForm(false);
         await loadSession();
+      } else {
+        notifyError(
+          "Выбор поставщика не сохранён",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setDeciding(false);

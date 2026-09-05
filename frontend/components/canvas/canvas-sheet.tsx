@@ -11,6 +11,7 @@ import type { GridColumn } from "@/components/grid/types";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
 import type { CanvasBlock, CanvasColumn } from "@/lib/canvas-context";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -67,7 +68,13 @@ export function CanvasSheet({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (res.ok) refresh();
+      if (res.ok) {
+        refresh();
+      } else {
+        // Возврат res.ok выше по стеку никто не проверял: правка холста
+        // просто не появлялась, и это выглядело как «ничего не нажалось».
+        notifyError("Изменение не применено", httpDetail(res.status, res.statusText));
+      }
       return res.ok;
     } finally {
       setBusy(false);

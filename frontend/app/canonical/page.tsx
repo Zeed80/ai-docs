@@ -5,6 +5,7 @@ import { mutFetch } from "@/lib/auth";
 import { useEffect, useState, useCallback } from "react";
 import { Sparkline } from "@/components/ui/sparkline";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -99,6 +100,11 @@ export default function CanonicalItemsPage() {
           okpd2_code: "",
           gost: "",
         });
+      } else {
+        notifyError(
+          "Позиция не создана",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setCreating(false);
@@ -114,7 +120,11 @@ export default function CanonicalItemsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ description: suggestText.trim(), limit: 5 }),
       });
-      if (res.ok) setSuggestions(await res.json());
+      if (res.ok) {
+        setSuggestions(await res.json());
+      } else {
+        notifyError("Подсказки не получены", httpDetail(res.status, res.statusText));
+      }
     } finally {
       setSuggesting(false);
     }
@@ -129,6 +139,11 @@ export default function CanonicalItemsPage() {
     if (res.ok) {
       const updated: CanonicalItem = await res.json();
       setItems((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
+    } else {
+      notifyError(
+        "Подтверждение позиции не сохранено",
+        httpDetail(res.status, res.statusText),
+      );
     }
   }
 

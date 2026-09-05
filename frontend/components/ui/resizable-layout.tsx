@@ -24,7 +24,9 @@ function usePersistentWidth(key: string, defaultValue: number) {
     try {
       const stored = localStorage.getItem(key);
       if (stored !== null) setWidth(clamp(Number(stored), 0, 9999));
-    } catch {}
+    } catch {
+      // Хранилище недоступно — панель открывается с шириной по умолчанию.
+    }
   }, [key]);
 
   // Supports functional updater (prev => next) or plain number
@@ -34,7 +36,9 @@ function usePersistentWidth(key: string, defaultValue: number) {
         const next = typeof nextOrFn === "function" ? nextOrFn(prev) : nextOrFn;
         try {
           localStorage.setItem(key, String(next));
-        } catch {}
+        } catch {
+          // Ширина применится, просто не переживёт перезагрузку страницы.
+        }
         return next;
       });
     },

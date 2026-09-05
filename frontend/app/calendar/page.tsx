@@ -5,6 +5,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
@@ -103,6 +104,11 @@ export default function CalendarPage() {
       // Нет отдельной страницы черновика — он появляется во вкладке
       // «Черновики» на /email (тот же конвейер, что и обычные ответы на письма).
       window.open(`/email?panel=draft`, "_blank");
+    } else {
+      notifyError(
+        "Напоминание-продолжение не создано",
+        httpDetail(res.status, res.statusText),
+      );
     }
   };
 
@@ -126,6 +132,11 @@ export default function CalendarPage() {
         setReminderMsg("");
         setReminderAt("");
         setShowReminderForm(false);
+      } else {
+        notifyError(
+          "Напоминание не создано",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setReminderSaving(false);

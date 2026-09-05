@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { apiFetch, mutFetch } from "@/lib/auth";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -176,6 +177,11 @@ export function EmailRulesSection() {
     if (res.ok) {
       setEditing(null);
       load();
+    } else {
+      notifyError(
+        "Правило не сохранено",
+        httpDetail(res.status, res.statusText),
+      );
     }
   }
 
@@ -188,6 +194,11 @@ export function EmailRulesSection() {
     if (res.ok) {
       const d = await res.json();
       setTestResult((s) => ({ ...s, [rule.id]: `${d.matched} из ${d.total}` }));
+    } else {
+      notifyError(
+        "Проверка правила не выполнена",
+        httpDetail(res.status, res.statusText),
+      );
     }
   }
 

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 type TemplateCategory =
   | "payment"
@@ -137,6 +138,11 @@ export function EmailTemplatesSection() {
       if (res.ok) {
         setShowForm(false);
         await load();
+      } else {
+        notifyError(
+          "Шаблон не сохранён",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setSaving(false);
@@ -167,6 +173,11 @@ export function EmailTemplatesSection() {
         setFromEmailId("");
         setFromEmailName("");
         await load();
+      } else {
+        notifyError(
+          "Шаблон из письма не создан",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setCreatingFromEmail(false);

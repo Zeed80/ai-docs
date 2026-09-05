@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -123,6 +124,11 @@ export default function ComparePage() {
         const session: CompareSession = await res.json();
         setShowForm(false);
         router.push(`/compare/${session.id}`);
+      } else {
+        notifyError(
+          "Сравнение не создано",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setCreating(false);

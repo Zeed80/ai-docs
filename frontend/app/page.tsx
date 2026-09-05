@@ -8,6 +8,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AgentWorkspaceBlocks } from "@/components/workspace/agent-workspace-blocks";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -354,6 +355,11 @@ function CreateCaseForm() {
       if (res.ok) {
         const created = await res.json();
         router.push(`/cases/${created.id}`);
+      } else {
+        notifyError(
+          "Дело не создано",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setCreating(false);

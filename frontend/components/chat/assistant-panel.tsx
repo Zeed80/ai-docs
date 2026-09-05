@@ -27,6 +27,7 @@ import {
   type ChatSession,
 } from "@/lib/api";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 type MessageRole =
   | "user"
@@ -1201,6 +1202,11 @@ export function AssistantPanel() {
           if (draft.content_digest) {
             argsOverride = { expected_digest: draft.content_digest };
           }
+        } else {
+          notifyError(
+            "Правка черновика не сохранена",
+            httpDetail(res.status, res.statusText),
+          );
         }
       } catch {
         // Правка не сохранилась — отправляем то, что уже подтверждено, а не

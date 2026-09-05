@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { apiFetch, mutFetch } from "@/lib/auth";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 interface MailboxOut {
   id: string;
@@ -435,6 +436,11 @@ export function MailboxSection() {
       if (res.ok) {
         setShowForm(false);
         await load();
+      } else {
+        notifyError(
+          "Ящик не сохранён",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setSaving(false);
@@ -455,7 +461,11 @@ export function MailboxSection() {
       const res = await mutFetch(`${base}/api/mailbox/configs/${id}/test${qs}`, {
         method: "POST",
       });
-      if (res.ok) setTestResult(await res.json());
+      if (res.ok) {
+        setTestResult(await res.json());
+      } else {
+        notifyError("Проверка ящика не выполнена", httpDetail(res.status, res.statusText));
+      }
     } finally {
       setTesting(false);
     }

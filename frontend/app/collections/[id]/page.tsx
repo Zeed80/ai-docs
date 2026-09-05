@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -149,12 +150,15 @@ export default function CollectionDetailPage() {
     const res = await mutFetch(`${API}/api/collections/${id}/items/${itemId}`, {
       method: "DELETE",
     });
-    if (res.ok)
+    if (res.ok) {
       setColl((prev) =>
         prev
           ? { ...prev, items: prev.items.filter((i) => i.id !== itemId) }
           : prev,
       );
+    } else {
+      notifyError("Документ не убран", httpDetail(res.status, res.statusText));
+    }
   }
 
   async function getSummary() {
@@ -166,6 +170,11 @@ export default function CollectionDetailPage() {
       if (res.ok) {
         const data = await res.json();
         setSummary(data.summary);
+      } else {
+        notifyError(
+          "Сводка по подборке не получена",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setSummarizing(false);
@@ -183,6 +192,11 @@ export default function CollectionDetailPage() {
         setColl(updated);
         setSummary(updated.closure_summary);
         setConfirmClose(false);
+      } else {
+        notifyError(
+          "Подборка не закрыта",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setClosing(false);

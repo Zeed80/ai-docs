@@ -72,7 +72,10 @@ export function isGpuBarEnabled(): boolean {
 export function setGpuBarEnabled(enabled: boolean) {
   try {
     localStorage.setItem(GPU_BAR_STORAGE_KEY, enabled ? "1" : "0");
-  } catch {}
+  } catch {
+    // Приватное окно или заблокированное хранилище: полоса переключится в
+    // этой сессии и вернётся к прежнему виду в следующей.
+  }
   window.dispatchEvent(new Event(GPU_BAR_TOGGLE_EVENT));
 }
 
@@ -92,7 +95,10 @@ function loadUserPresets(storageKey: string): PowerPreset[] {
 function saveUserPresets(storageKey: string, presets: PowerPreset[]) {
   try {
     localStorage.setItem(storageKey, JSON.stringify(presets));
-  } catch {}
+  } catch {
+    // То же: пресеты мощности — удобство, а не данные. Недоступное
+    // хранилище означает «не запомнится», а не ошибку.
+  }
 }
 
 type Level = "ok" | "warn" | "crit";

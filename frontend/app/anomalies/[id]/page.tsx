@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { mutFetch } from "@/lib/auth";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 interface SimilarResult {
   id: string;
@@ -107,6 +108,11 @@ export default function AnomalyDetailPage() {
           suggested_actions: string[];
         };
         setExplainData(d);
+      } else {
+        notifyError(
+          "Объяснение не получено",
+          httpDetail(r.status, r.statusText),
+        );
       }
     } catch {
       // non-critical

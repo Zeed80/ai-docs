@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -248,6 +249,11 @@ export default function WorkOrdersPage() {
         setDescription("");
         setSelected(row.id);
         await loadOrders();
+      } else {
+        notifyError(
+          "Поручение не создано",
+          httpDetail(response.status, response.statusText),
+        );
       }
     } finally {
       setBusy(false);

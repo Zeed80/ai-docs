@@ -5,6 +5,7 @@ import { mutFetch } from "@/lib/auth";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -147,6 +148,11 @@ function SearchPageInner() {
             );
             setTotal(Array.isArray(data) ? data.length : (data.total ?? null));
             setParsedFilter(null);
+          } else {
+            notifyError(
+              "Поиск не выполнен",
+              httpDetail(res.status, res.statusText),
+            );
           }
         }
       } finally {

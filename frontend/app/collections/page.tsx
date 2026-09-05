@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { mutFetch } from "@/lib/auth";
 import { tz } from "@/lib/user-time";
+import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
 const API = getApiBaseUrl();
 
@@ -69,6 +70,11 @@ export default function CollectionsPage() {
         setShowCreate(false);
         setNewName("");
         setNewDesc("");
+      } else {
+        notifyError(
+          "Подборка не создана",
+          httpDetail(res.status, res.statusText),
+        );
       }
     } finally {
       setCreating(false);

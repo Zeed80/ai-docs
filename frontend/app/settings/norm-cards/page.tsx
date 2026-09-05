@@ -360,11 +360,14 @@ export default function NormCardsPage() {
       const res = await mutFetch(
         `${API}/api/normalization/canonical-items?limit=200`,
       ).catch(() => mutFetch(`${API}/api/search/canonical-items?limit=200`));
-      if (res.ok) {
-        const data = await res.json();
-        setItems(data.items ?? data ?? []);
-      }
-    } catch {}
+      if (!res.ok) throw new Error(`сервер ответил ${res.status}`);
+      const data = await res.json();
+      setItems(data.items ?? data ?? []);
+    } catch (e) {
+      // Пустой список позиций и несостоявшийся запрос выглядели одинаково —
+      // «в каталоге ничего нет», хотя каталог просто не загрузился.
+      showToast(`Позиции не загружены: ${String(e)}`);
+    }
   }
 
   useEffect(() => {

@@ -74,6 +74,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     [show],
   );
 
+  // Провайдер один на всё приложение, поэтому он же публикует императивную
+  // ссылку. Она нужна там, где сообщить об ошибке надо из обработчика,
+  // объявленного вне компонента, — переписывать десятки таких обработчиков
+  // ради хука значило бы менять их структуру, а не поведение.
+  liveApi = api;
+
   return (
     <Ctx.Provider value={api}>
       {children}
@@ -109,6 +115,23 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       </div>
     </Ctx.Provider>
   );
+}
+
+let liveApi: ToastApi | null = null;
+
+/**
+ * Сообщение об ошибке без хука.
+ *
+ * До провайдера (SSR, первый рендер) молчит — сообщение не та вещь, ради
+ * которой стоит падать. Внутри компонента предпочтительнее `useToast()`.
+ */
+export function notifyError(text: string, detail?: string): void {
+  liveApi?.error(text, detail);
+}
+
+/** Ответ сервера одной строкой для `detail` сообщения. */
+export function httpDetail(status: number, statusText?: string): string {
+  return statusText ? `HTTP ${status} ${statusText}` : `HTTP ${status}`;
 }
 
 /**

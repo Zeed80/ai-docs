@@ -136,7 +136,11 @@ export default function TechProcessReviewPage() {
             setTaskStatus("failed");
           }
         }
-      } catch {}
+      } catch (e) {
+        // Опрос задачи молча замолкал: экран навсегда оставался в состоянии
+        // «идёт расчёт», хотя связи с сервером уже не было.
+        setLoadError(`Состояние расчёта неизвестно: ${String(e)}`);
+      }
     }, 2500);
     return () => clearInterval(interval);
   }, [taskId, taskStatus, fetchPlan, fetchSurfaces, fetchBlankSpec]);
@@ -185,12 +189,14 @@ export default function TechProcessReviewPage() {
           body: JSON.stringify({}),
         },
       );
-      if (res.ok) {
-        const data = await res.json();
-        setNormcontrol(data);
-        await fetchPlan();
-      }
-    } catch {}
+      if (!res.ok) throw new Error(`сервер ответил ${res.status}`);
+      const data = await res.json();
+      setNormcontrol(data);
+      setLoadError(null);
+      await fetchPlan();
+    } catch (e) {
+      setLoadError(`Нормоконтроль не выполнен: ${String(e)}`);
+    }
   };
 
   const handleResolveCheck = async (
@@ -242,7 +248,11 @@ export default function TechProcessReviewPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ approved_by: "user" }),
     });
-    if (res.ok) await fetchPlan();
+    if (res.ok) {
+      await fetchPlan();
+    } else {
+      setLoadError(`Техпроцесс не утверждён: сервер ответил ${res.status}`);
+    }
   };
 
   if (loading) {
