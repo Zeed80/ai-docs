@@ -9,6 +9,7 @@ import { RoutingChains } from "@/components/models/telemetry/RoutingChains";
 import { ToastProvider, useToast } from "@/components/ui/primitives/Toast";
 import { SlotThinkingControl } from "@/components/models/assignment/SlotThinkingControl";
 import { RevisionHistory } from "@/components/models/assignment/RevisionHistory";
+import { CloudConnectSheet } from "@/components/models/infra/CloudConnectSheet";
 import {
   SlotHealthStrip,
   type SlotHealth,
@@ -1072,6 +1073,7 @@ function CloudProviderDetail({
   const [key, setKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(inst.base_url || "");
   const [showAdv, setShowAdv] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
   const [headersText, setHeadersText] = useState("");
   const [bodyText, setBodyText] = useState("");
   useEffect(() => {
@@ -1227,7 +1229,22 @@ function CloudProviderDetail({
         >
           Подтянуть модели
         </button>
+        {/* Отдельная кнопка для связного потока: ключ → проверка → загрузка.
+            По отдельности эти три шага и раньше были на экране, но человеку
+            приходилось догадываться о порядке и о том, что после ключа нужно
+            ещё и подтянуть каталог. */}
+        <button className={btnSecondary} onClick={() => setConnectOpen(true)}>
+          Подключить пошагово
+        </button>
       </div>
+      <CloudConnectSheet
+        open={connectOpen}
+        onClose={() => setConnectOpen(false)}
+        instanceId={inst.id}
+        kind={inst.kind}
+        hasKey={Boolean(inst.api_key_set)}
+        onConnected={onChanged}
+      />
     </div>
   );
 }
