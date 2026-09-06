@@ -185,9 +185,12 @@ def _set_primary(task: AITask, model_key: str) -> None:
     """
     current = get_routing_for(task)
     tail = [m for m in current.models if m != model_key]
+    primary_is_local = _is_local_key(model_key)
     # Confidential tasks reject cloud models in the chain; the YAML defaults may
     # still list cloud fallbacks, so drop non-local keys from the preserved tail.
-    if task in CONFIDENTIAL_TASKS:
+    # Исключение — когда оператор сам назначил облачную модель первой: тогда
+    # запрета нет и вычищать хвост не от чего.
+    if task in CONFIDENTIAL_TASKS and primary_is_local:
         tail = [m for m in tail if _is_local_key(m)]
     tail, dropped = prune_dead_keys(tail)
     if dropped:
@@ -196,7 +199,17 @@ def _set_primary(task: AITask, model_key: str) -> None:
             task=str(task),
             dropped=dropped,
         )
-    routing = current.model_copy(update={"models": [model_key, *tail]})
+    # Политика следует за моделью — раньше она оставалась прежней, и облачная
+    # модель на конфиденциальной задаче отвергалась валидацией целиком, хотя
+    # выбор был сделан осознанно на экране моделей.
+    routing = current.model_copy(
+        update={
+            "models": [model_key, *tail],
+            "local_only": primary_is_local,
+            "allow_cloud": not primary_is_local,
+            "cloud_override": not primary_is_local,
+        }
+    )
     save_task_routing(task, routing)
 
 

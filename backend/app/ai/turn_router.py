@@ -343,6 +343,22 @@ def _catalog() -> tuple[dict[str, list[str]], dict[str, str]]:
     return action_map, descriptions
 
 
+def _is_cloud_model(name: str | None) -> bool:
+    """Облачная ли это модель по каталогу. Неизвестное имя считаем локальным."""
+    if not name:
+        return False
+    try:
+        from app.ai.router import ai_router
+        from app.ai.task_routing import _LOCAL_PROVIDER_KINDS
+
+        for key, cap in ai_router.registry.models.items():
+            if name in (cap.provider_model, key, cap.name):
+                return cap.provider.value not in _LOCAL_PROVIDER_KINDS
+    except Exception:  # noqa: BLE001 — без каталога считаем локальной
+        return False
+    return False
+
+
 async def route_turn(
     content: str,
     *,
@@ -382,7 +398,13 @@ async def route_turn(
                     ],
                     response_schema=TurnDecision,
                     confidential=False,
-                    allow_cloud=False,  # router runs locally — confidential-safe
+                    # Роутер хода по умолчанию локальный, но модель для него
+                    # выбирает оператор в слоте «Быстрая». Если он выбрал
+                    # облачную, вызов обязан это заявить: иначе политика
+                    # маршрута (оркестратор-то локальный) отвергнет модель, а
+                    # отказ политики — жёсткий стоп на весь ход, без отката на
+                    # локальную модель.
+                    allow_cloud=_is_cloud_model(preferred_model),
                     preferred_model=preferred_model,
                     thinking=thinking,  # per-assignment override (agent_fast slot)
                     thinking_level=thinking_level,

@@ -80,6 +80,8 @@ export interface Slot {
   /** Слот локален по умолчанию, но его можно открыть облаку. */
   cloud_optionable: boolean;
   cloud_allowed: boolean;
+  /** Наружу уходит само содержимое документов, а не производная от него. */
+  document_content?: boolean;
   required_modality: Modality | null;
   thinking_supported_by_slot: boolean;
   thinking_supported_by_model: boolean;

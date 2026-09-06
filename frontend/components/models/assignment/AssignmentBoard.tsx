@@ -104,6 +104,8 @@ interface SlotItem {
   local_only: boolean; // EFFECTIVE policy (base minus admin cloud opt-in)
   cloud_optionable?: boolean; // confidential slot that can be opened to cloud
   cloud_allowed?: boolean; // admin opted this slot into cloud models
+  // Наружу уходит само содержимое документов, а не производная от него.
+  document_content?: boolean;
   required_modality?: string | null; // capability the slot needs (backend = source)
   thinking_capable?: boolean; // slot supports a per-assignment reasoning toggle
   thinking_enabled?: boolean | null; // current override (null = model default)
@@ -714,11 +716,9 @@ export function AssignmentBoard() {
                           nodes={nodes}
                           value={draftValue || null}
                           confidential={Boolean(s.cloud_optionable)}
-                          // Слот локален и облако для него не включается —
-                          // значит задача в CONFIDENTIAL_TASKS.
-                          cloudForbidden={
-                            Boolean(s.local_only) && !s.cloud_optionable
-                          }
+                          // Через эти слоты наружу уходит само содержимое
+                          // документов — предупреждение должно быть другим.
+                          documentContent={Boolean(s.document_content)}
                           requiredModality={
                             (s.required_modality as Modality | null) ?? null
                           }

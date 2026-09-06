@@ -115,6 +115,15 @@ class TaskRouting(BaseModel):
     # semantics as ``thinking``. Only meaningful when ``thinking`` resolves to
     # True and the model declares ``thinking_levels``.
     thinking_level: Literal["low", "medium", "high"] | None = None
+    # Явное решение оператора отправить ЭТУ задачу в облако, несмотря на то что
+    # она читает содержимое документов. Ставится только назначением модели через
+    # экран моделей, где решение подписано предупреждением; по умолчанию False,
+    # то есть конфиденциальная задача остаётся локальной.
+    #
+    # Без этого поля выбор облачной модели для такой задачи был декоративным:
+    # интерфейс её предлагал, а `_enforce_confidential` молча возвращал
+    # local_only, после чего `_validate` отвергал назначение целиком.
+    cloud_override: bool = False
 
     @property
     def primary(self) -> str | None:
@@ -231,6 +240,17 @@ def _invalidate_lifecycle_cache() -> None:
 
 
 def _enforce_confidential(task: AITask, routing: TaskRouting) -> TaskRouting:
+    if task in CONFIDENTIAL_TASKS and routing.cloud_override:
+        # Оператор решил иначе, и решение записано в маршруте. Понижать его
+        # молча нельзя — это ровно тот случай, когда настройка «не работает»
+        # без единого следа. След оставляем в журнале.
+        logger.warning(
+            "task_routing_cloud_override_active",
+            task=task.value,
+            reason="оператор явно разрешил облако для задачи с содержимым документов",
+            models=list(routing.models)[:3],
+        )
+        return routing
     if task in CONFIDENTIAL_TASKS and (not routing.local_only or routing.allow_cloud):
         # Понижение видно в журнале: человек, назначивший облачную модель,
         # иначе увидит в интерфейсе локальную и решит, что настройка не
@@ -302,7 +322,7 @@ def _validate(task: AITask, routing: TaskRouting) -> None:
         raise ValueError(f"Unknown inference profile: {routing.profile}")
     # Confidential tasks must reference only local models — a cloud model would
     # be blocked at dispatch and abort the whole call.
-    if task in CONFIDENTIAL_TASKS:
+    if task in CONFIDENTIAL_TASKS and not routing.cloud_override:
         cloud = [m for m in routing.models if not _is_local_key(m)]
         if cloud:
             raise ValueError(

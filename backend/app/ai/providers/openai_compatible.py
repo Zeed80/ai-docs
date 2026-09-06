@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any
 
@@ -15,6 +16,27 @@ from app.ai.schemas import (
     ProposedToolCall,
     ProviderKind,
 )
+
+_VERSIONED_TAIL = re.compile(r"/(v\d+[a-z]*|openai)$")
+
+
+def openai_endpoint(base_url: object, path: str) -> str:
+    """Собрать URL эндпоинта, не задваивая версию.
+
+    Локальные серверы задаются голым адресом (``http://host:11436``) — им ``/v1``
+    дописать надо. Облачные шлюзы почти все уже несут версию в base_url:
+    ``https://openrouter.ai/api/v1``, ``https://api.groq.com/openai/v1``,
+    ``https://dashscope-intl.aliyuncs.com/compatible-mode/v1``,
+    ``https://generativelanguage.googleapis.com/v1beta/openai``. Безусловный
+    ``/v1`` давал им ``…/api/v1/v1/chat/completions`` и 404 — то есть ни одна
+    облачная модель через этот класс не работала. Ответ при этом приходил:
+    роутер тихо уходил на локальный фолбэк, и со стороны человека облачная
+    модель выглядела назначенной и рабочей.
+    """
+    base = str(base_url).rstrip("/")
+    if _VERSIONED_TAIL.search(base):
+        return f"{base}/{path.lstrip('/')}"
+    return f"{base}/v1/{path.lstrip('/')}"
 
 
 def _thinking_params(request: AIRequest, provider_kind: str) -> dict[str, Any]:
@@ -100,7 +122,7 @@ class OpenAICompatibleProvider(AIProvider):
 
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(
-                f"{str(self.config.base_url).rstrip('/')}/v1/chat/completions",
+                openai_endpoint(self.config.base_url, "chat/completions"),
                 headers=self._headers(),
                 json=payload,
             )
@@ -158,7 +180,7 @@ class OpenAICompatibleProvider(AIProvider):
         }
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(
-                f"{str(self.config.base_url).rstrip('/')}/v1/chat/completions",
+                openai_endpoint(self.config.base_url, "chat/completions"),
                 headers=self._headers(),
                 json=payload,
             )
@@ -179,7 +201,7 @@ class OpenAICompatibleProvider(AIProvider):
         payload = {"model": model, "input": request.input_text or request.prompt or ""}
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(
-                f"{str(self.config.base_url).rstrip('/')}/v1/embeddings",
+                openai_endpoint(self.config.base_url, "embeddings"),
                 headers=self._headers(),
                 json=payload,
             )
@@ -205,7 +227,7 @@ class OpenAICompatibleProvider(AIProvider):
         }
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(
-                f"{str(self.config.base_url).rstrip('/')}/v1/rerank",
+                openai_endpoint(self.config.base_url, "rerank"),
                 headers=self._headers(),
                 json=payload,
             )

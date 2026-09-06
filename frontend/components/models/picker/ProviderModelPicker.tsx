@@ -88,15 +88,14 @@ export function ProviderModelPicker({
   /** Слот видит содержимое документов: облачный выбор требует подтверждения. */
   confidential,
   /**
-   * Облако для слота закрыто наглухо (задача в CONFIDENTIAL_TASKS).
+   * Через слот наружу уходит САМО содержимое документов (задача в
+   * `CONFIDENTIAL_TASKS`), а не производная от него.
    *
-   * Это не то же самое, что `confidential`: там облако включается осознанным
-   * действием, здесь — не включается никак, запрет живёт в роутере. Раньше
-   * разницы не было, и экран предлагал облачные модели для чтения чертежей:
-   * назначение проходило с предупреждениями, а на живой задаче роутер отвергал
-   * модель, и чтение падало целиком — без отката на локальную.
+   * Выбор всё равно за оператором — облако доступно для любого слота. Но
+   * предупреждение здесь другое: у planner'а или генерации письма наружу
+   * уходит запрос, а тут — страница счёта и лист чертежа целиком.
    */
-  cloudForbidden = false,
+  documentContent = false,
   disabled = false,
   nodes = [],
 }: {
@@ -105,7 +104,7 @@ export function ProviderModelPicker({
   onChange: (modelKey: string, opts: { cloud: boolean }) => void;
   requiredModality?: Modality | null;
   confidential: boolean;
-  cloudForbidden?: boolean;
+  documentContent?: boolean;
   disabled?: boolean;
   /**
    * Настроенные узлы провайдеров.
@@ -118,13 +117,8 @@ export function ProviderModelPicker({
   nodes?: { kind: string; enabled: boolean; api_key_set: boolean }[];
 }) {
   const selectable = useMemo(
-    () =>
-      models.filter(
-        (m) =>
-          m.status !== "disabled" &&
-          !(cloudForbidden && !isLocalProvider(m.provider)),
-      ),
-    [models, cloudForbidden],
+    () => models.filter((m) => m.status !== "disabled"),
+    [models],
   );
 
   const selected = selectable.find((m) => m.key === value) ?? null;
@@ -140,7 +134,6 @@ export function ProviderModelPicker({
     // с введённым ключом исчезает из выбора целиком, и причина нигде не
     // названа — а она проста: каталог моделей ещё не загружен.
     for (const node of nodes) {
-      if (cloudForbidden) break;
       if (!node.enabled || isLocalProvider(node.kind)) continue;
       if (!node.api_key_set) continue;
       if (!seen.has(node.kind)) seen.set(node.kind, 0);
@@ -154,7 +147,7 @@ export function ProviderModelPicker({
             ? -1
             : 1,
       );
-  }, [selectable, nodes, cloudForbidden]);
+  }, [selectable, nodes]);
 
   // Провайдер берётся из выбранной модели; пока её нет — первый локальный.
   const activeProvider =
@@ -237,18 +230,16 @@ export function ProviderModelPicker({
                 </option>
               ))}
           </optgroup>
-          {!cloudForbidden && (
-            <optgroup label="Облачные">
-              {providers
-                .filter((p) => !p.local)
-                .map((p) => (
-                  <option key={p.kind} value={p.kind}>
-                    {providerLabel(p.kind)}
-                    {p.count > 0 ? ` · ${p.count}` : " · модели не загружены"}
-                  </option>
-                ))}
-            </optgroup>
-          )}
+          <optgroup label="Облачные">
+            {providers
+              .filter((p) => !p.local)
+              .map((p) => (
+                <option key={p.kind} value={p.kind}>
+                  {providerLabel(p.kind)}
+                  {p.count > 0 ? ` · ${p.count}` : " · модели не загружены"}
+                </option>
+              ))}
+          </optgroup>
         </select>
 
         {/* Своя минимальная ширина: рядом стоят несжимаемые селект
@@ -337,24 +328,15 @@ export function ProviderModelPicker({
         )}
       </div>
 
-      {cloudForbidden && (
-        // Не «нет облачных моделей», а «облако сюда не пускают»: молчаливое
-        // отсутствие варианта человек читает как сбой загрузки каталога.
-        <p className="text-[11px] text-slate-400">
-          🔒 Задача читает содержимое документов или чертежей — облачные
-          провайдеры для неё закрыты.
-        </p>
-      )}
-
       {cloudChosen && confidential && (
         // Отдельной галочки «разрешить облако» больше нет: выбор облачного
         // провайдера и есть это решение. Но слот работает с содержимым
         // документов, поэтому решение должно быть названо вслух — молча
         // отправлять такие данные наружу нельзя.
         <p className="text-[11px] text-amber-400">
-          Через этот слот проходит содержимое документов. Выбрав облачного
-          провайдера, вы разрешаете отправлять их наружу — это применится вместе
-          с назначением.
+          {documentContent
+            ? "Через этот слот наружу уйдёт само содержимое документов и чертежей — страница счёта, лист чертежа. Выбрав облачного провайдера, вы разрешаете это; применится вместе с назначением."
+            : "Через этот слот проходит содержимое документов. Выбрав облачного провайдера, вы разрешаете отправлять их наружу — это применится вместе с назначением."}
         </p>
       )}
     </div>

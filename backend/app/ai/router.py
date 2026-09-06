@@ -315,7 +315,33 @@ class AIRouter:
             candidates = list(routing.models)
 
         # Merge per-call request with the task's configured policy.
-        eff_confidential = request.confidential or routing.local_only
+        #
+        # Обычно вызов может только ужесточить политику: место вызова знает, что
+        # содержимое чувствительно, и ставит confidential=True. Единственное
+        # исключение — явное решение оператора, записанное в маршруте
+        # (`cloud_override`): оно принимается на экране моделей под
+        # предупреждением и должно действовать, иначе выбор облачной модели для
+        # такой задачи остаётся декоративным — назначение видно, а вызов всё
+        # равно уходит локально или падает политикой.
+        operator_allows_cloud = routing.cloud_override and not routing.local_only
+        # Второй способ сказать то же самое — для ролей агента. Их модель живёт
+        # в agent_config, а не в маршруте задачи: слот «Быстрая» и слот
+        # «Оркестратор» делят одну задачу orchestrator_planning, и облачная
+        # модель, назначенная только быстрой роли, не могла быть выражена в
+        # маршруте — оркестратор остаётся локальным. Место вызова знает, какую
+        # именно модель ему дал оператор, и заявляет это явно: названная модель
+        # плюс allow_cloud=True. Ослабить политику так можно только для задач
+        # вне CONFIDENTIAL_TASKS и только для модели, названной поимённо.
+        from app.ai.task_routing import CONFIDENTIAL_TASKS
+
+        caller_named_cloud_model = (
+            bool(request.preferred_model)
+            and request.allow_cloud
+            and request.task not in CONFIDENTIAL_TASKS
+        )
+        eff_confidential = (routing.local_only and not caller_named_cloud_model) or (
+            request.confidential and not (operator_allows_cloud or caller_named_cloud_model)
+        )
         eff_allow_cloud = (not eff_confidential) and (request.allow_cloud or routing.allow_cloud)
         if (eff_confidential, eff_allow_cloud) != (request.confidential, request.allow_cloud):
             request = request.model_copy(
