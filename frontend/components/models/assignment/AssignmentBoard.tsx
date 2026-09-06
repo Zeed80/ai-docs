@@ -431,7 +431,9 @@ export function AssignmentBoard() {
         },
       );
       flash(
-        instanceName ? `Модель закреплена за «${instanceName}»` : "Узел выбирается автоматически",
+        instanceName
+          ? `Модель закреплена за «${instanceName}»`
+          : "Узел выбирается автоматически",
       );
       load();
     } catch (e) {
@@ -692,8 +694,13 @@ export function AssignmentBoard() {
                       <div className="text-sm text-slate-200">{s.label}</div>
                       <div className="text-xs text-slate-400">{s.hint}</div>
                     </div>
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="flex-1 min-w-0">
+                    {/* wrap + минимальная ширина пикера: контрол рассуждения и
+                        значок «значения разошлись» не сжимаются, и в узкой
+                        колонке они выдавливали выбор модели до одной стрелки —
+                        имя модели не помещалось, попасть по кнопке было
+                        нечем. Теперь при нехватке места переносится строка. */}
+                    <div className="flex flex-wrap items-center gap-3 min-w-0">
+                      <div className="min-w-[320px] flex-1">
                         {/* Два шага: провайдер, затем его модель. Единый
                             список всех моделей выглядел короче, но прятал
                             главное решение — локально или в облако. Оно
@@ -725,12 +732,14 @@ export function AssignmentBoard() {
                           modelDefault: selectedModelDefault,
                           override: thinkingOverride,
                           effective: effectiveThinking,
-                          disableSupported: s.thinking_disable_supported ?? true,
+                          disableSupported:
+                            s.thinking_disable_supported ?? true,
                           mixed: Boolean(s.thinking_mixed),
                           warning: thinkingWarning ?? null,
                           levels: selectedThinkingLevels as ThinkingLevel[],
                           levelOverride:
-                            (thinkingLevelOverride as ThinkingLevel | null) ?? null,
+                            (thinkingLevelOverride as ThinkingLevel | null) ??
+                            null,
                           levelEffective:
                             (s.thinking_level_effective as ThinkingLevel | null) ??
                             null,

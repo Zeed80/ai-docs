@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/primitives/Badge";
 import {
   Combobox,
@@ -19,6 +19,13 @@ import type {
   Modality,
 } from "@/lib/models/types";
 import { ModelFacts } from "./ModelFacts";
+import {
+  EMPTY_FILTERS,
+  ModelFilterBar,
+  filtersActive,
+  matchesFilters,
+  type ModelFilters,
+} from "./ModelFilterBar";
 
 const GROUP_AVAILABLE = "Доступно";
 const GROUP_NEEDS_ACTION = "Требует внимания";
@@ -144,9 +151,28 @@ export function ProviderModelPicker({
     [selectable, activeProvider],
   );
 
+  const [filters, setFilters] = useState<ModelFilters>(EMPTY_FILTERS);
+
+  // Фильтры относятся к списку одного провайдера: «до 8 GB» у Ollama и «до $1»
+  // у OpenRouter — разные вопросы, и переносить ответ с одного на другой
+  // нельзя. При смене провайдера список должен открываться целиком.
+  useEffect(() => {
+    setFilters(EMPTY_FILTERS);
+  }, [activeProvider]);
+
+  const visibleModels = useMemo(
+    () =>
+      providerModels.filter(
+        // Назначенная модель остаётся в списке всегда: иначе фильтр «прячет»
+        // текущее назначение, и выбор выглядит потерянным.
+        (m) => m.key === value || matchesFilters(m, filters),
+      ),
+    [providerModels, filters, value],
+  );
+
   const items = useMemo<ComboboxItem<CatalogModel>[]>(
     () =>
-      providerModels.map((m) => {
+      visibleModels.map((m) => {
         const issue = checkModel(m, requiredModality);
         return {
           key: m.key,
@@ -155,7 +181,7 @@ export function ProviderModelPicker({
           value: m,
         };
       }),
-    [providerModels, requiredModality],
+    [visibleModels, requiredModality],
   );
 
   const switchProvider = (kind: string) => {
@@ -206,17 +232,37 @@ export function ProviderModelPicker({
           </optgroup>
         </select>
 
-        <div className="min-w-0 flex-1">
+        {/* Своя минимальная ширина: рядом стоят несжимаемые селект
+            провайдера и бейдж «облако», и в узкой колонке они
+            сплющивали выбор модели до одной стрелки. Ряд с переносом —
+            комбобокс уходит на строку ниже, но остаётся кликабельным. */}
+        <div className="min-w-[220px] flex-1">
           <Combobox
             items={items}
             value={value}
             disabled={disabled}
             groupOrder={GROUP_ORDER}
             placeholder="Найти модель…"
+            filters={
+              <ModelFilterBar
+                value={filters}
+                onChange={setFilters}
+                local={isLocalProvider(activeProvider)}
+              />
+            }
+            footer={
+              filtersActive(filters)
+                ? `Показано ${visibleModels.length} из ${providerModels.length}`
+                : providerModels.length > 20
+                  ? `Всего моделей: ${providerModels.length}`
+                  : null
+            }
             emptyText={
               providerModels.length === 0
                 ? "Модели этого провайдера ещё не загружены — «Провайдеры» → «Загрузить модели»"
-                : "У этого провайдера нет подходящих моделей"
+                : filtersActive(filters)
+                  ? "Под фильтры ничего не подошло — снимите часть условий"
+                  : "У этого провайдера нет подходящих моделей"
             }
             onChange={(key) =>
               onChange(key, {
