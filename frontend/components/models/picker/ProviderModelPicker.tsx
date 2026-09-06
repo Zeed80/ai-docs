@@ -87,6 +87,16 @@ export function ProviderModelPicker({
   requiredModality,
   /** Слот видит содержимое документов: облачный выбор требует подтверждения. */
   confidential,
+  /**
+   * Облако для слота закрыто наглухо (задача в CONFIDENTIAL_TASKS).
+   *
+   * Это не то же самое, что `confidential`: там облако включается осознанным
+   * действием, здесь — не включается никак, запрет живёт в роутере. Раньше
+   * разницы не было, и экран предлагал облачные модели для чтения чертежей:
+   * назначение проходило с предупреждениями, а на живой задаче роутер отвергал
+   * модель, и чтение падало целиком — без отката на локальную.
+   */
+  cloudForbidden = false,
   disabled = false,
   nodes = [],
 }: {
@@ -95,6 +105,7 @@ export function ProviderModelPicker({
   onChange: (modelKey: string, opts: { cloud: boolean }) => void;
   requiredModality?: Modality | null;
   confidential: boolean;
+  cloudForbidden?: boolean;
   disabled?: boolean;
   /**
    * Настроенные узлы провайдеров.
@@ -107,8 +118,13 @@ export function ProviderModelPicker({
   nodes?: { kind: string; enabled: boolean; api_key_set: boolean }[];
 }) {
   const selectable = useMemo(
-    () => models.filter((m) => m.status !== "disabled"),
-    [models],
+    () =>
+      models.filter(
+        (m) =>
+          m.status !== "disabled" &&
+          !(cloudForbidden && !isLocalProvider(m.provider)),
+      ),
+    [models, cloudForbidden],
   );
 
   const selected = selectable.find((m) => m.key === value) ?? null;
@@ -124,6 +140,7 @@ export function ProviderModelPicker({
     // с введённым ключом исчезает из выбора целиком, и причина нигде не
     // названа — а она проста: каталог моделей ещё не загружен.
     for (const node of nodes) {
+      if (cloudForbidden) break;
       if (!node.enabled || isLocalProvider(node.kind)) continue;
       if (!node.api_key_set) continue;
       if (!seen.has(node.kind)) seen.set(node.kind, 0);
@@ -137,7 +154,7 @@ export function ProviderModelPicker({
             ? -1
             : 1,
       );
-  }, [selectable, nodes]);
+  }, [selectable, nodes, cloudForbidden]);
 
   // Провайдер берётся из выбранной модели; пока её нет — первый локальный.
   const activeProvider =
@@ -220,16 +237,18 @@ export function ProviderModelPicker({
                 </option>
               ))}
           </optgroup>
-          <optgroup label="Облачные">
-            {providers
-              .filter((p) => !p.local)
-              .map((p) => (
-                <option key={p.kind} value={p.kind}>
-                  {providerLabel(p.kind)}
-                  {p.count > 0 ? ` · ${p.count}` : " · модели не загружены"}
-                </option>
-              ))}
-          </optgroup>
+          {!cloudForbidden && (
+            <optgroup label="Облачные">
+              {providers
+                .filter((p) => !p.local)
+                .map((p) => (
+                  <option key={p.kind} value={p.kind}>
+                    {providerLabel(p.kind)}
+                    {p.count > 0 ? ` · ${p.count}` : " · модели не загружены"}
+                  </option>
+                ))}
+            </optgroup>
+          )}
         </select>
 
         {/* Своя минимальная ширина: рядом стоят несжимаемые селект
@@ -317,6 +336,15 @@ export function ProviderModelPicker({
           </Badge>
         )}
       </div>
+
+      {cloudForbidden && (
+        // Не «нет облачных моделей», а «облако сюда не пускают»: молчаливое
+        // отсутствие варианта человек читает как сбой загрузки каталога.
+        <p className="text-[11px] text-slate-400">
+          🔒 Задача читает содержимое документов или чертежей — облачные
+          провайдеры для неё закрыты.
+        </p>
+      )}
 
       {cloudChosen && confidential && (
         // Отдельной галочки «разрешить облако» больше нет: выбор облачного

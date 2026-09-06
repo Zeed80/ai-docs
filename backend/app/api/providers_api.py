@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from functools import cache
 from typing import Any, Literal
 
 import httpx
@@ -1649,10 +1650,41 @@ def _slot_base_local_only(slot: str) -> bool:
     return bool(meta[4]) if meta else False
 
 
+@cache
+def _slot_hard_confidential(slot: str) -> bool:
+    """True, если хотя бы одна задача слота лежит в ``CONFIDENTIAL_TASKS``.
+
+    Флаг local_only в ``_SLOTS`` означал две разные вещи сразу: «облако можно
+    включить осознанно» (planner, аудитор, письма — CLAUDE.md это разрешает) и
+    «облако закрыто наглухо» (всё, что читает содержимое документов и
+    чертежей). Отсюда следовала дыра: слот `cad_spec_read` предлагал облачные
+    модели наравне с остальными, назначение проходило с одними
+    предупреждениями, а на вызове роутер отвергал модель как
+    неконфиденциальную — и чтение чертежей падало целиком, потому что ошибка
+    политики намеренно не считается сбоем конкретной модели и локальный
+    фолбэк не пробуется.
+
+    Список не дублируется: он выводится из того же CONFIDENTIAL_TASKS, что и
+    запрет в роутере, через уже существующее отображение слот → задачи.
+    """
+    from app.ai.task_routing import CONFIDENTIAL_TASKS
+
+    confidential = {t.value for t in CONFIDENTIAL_TASKS}
+    # `_slot_affected` отдаёт и служебные пометки («invoice_ocr (запасная)»),
+    # и поля агента («agent_config.worker_model») — задачей считается первое
+    # слово, поля агента задачами не являются.
+    return any(item.split(" ")[0] in confidential for item in _slot_affected(slot))
+
+
 def _slot_effective_local_only(slot: str, cloud_slots: set[str] | None = None) -> bool:
     """A slot is local-only unless it is a cloud-opt-in slot the admin enabled."""
     if not _slot_base_local_only(slot):
         return False
+    # Разрешение на облако не действует на слоты с конфиденциальными задачами,
+    # даже если оно как-то попало в Redis: запрет в роутере всё равно жёстче,
+    # и интерфейс не должен обещать того, чего не будет.
+    if _slot_hard_confidential(slot):
+        return True
     if cloud_slots is None:
         cloud_slots = _cloud_allowed_slots()
     return slot not in cloud_slots
@@ -1821,10 +1853,13 @@ def _build_slot_out(
     correctly and can show the opt-in toggle."""
     applied = _slot_current_model(slot, registry) if current_model is ... else current_model
     thinking = _slot_thinking_state(slot, registry, model)
-    cloud_allowed = bool(local_only) and slot in (
-        cloud_slots if cloud_slots is not None else _cloud_allowed_slots()
+    hard = _slot_hard_confidential(slot)
+    cloud_allowed = (
+        bool(local_only)
+        and not hard
+        and slot in (cloud_slots if cloud_slots is not None else _cloud_allowed_slots())
     )
-    effective_local_only = bool(local_only) and not cloud_allowed
+    effective_local_only = bool(local_only) and (hard or not cloud_allowed)
     return SlotOut(
         slot=slot,
         group=group,
@@ -1833,7 +1868,7 @@ def _build_slot_out(
         model=model,
         current_model=applied,
         local_only=effective_local_only,
-        cloud_optionable=bool(local_only),
+        cloud_optionable=bool(local_only) and not hard,
         cloud_allowed=cloud_allowed,
         required_modality=_SLOT_MODALITY.get(slot),
         **thinking,
@@ -2057,7 +2092,12 @@ async def _validate_assignment_draft(
         # учитывает, а валидация — нет, и она оказывалась строже. Слот, где
         # облако разрешено осознанно, всё равно отвергался.
         cloud_ok = (cloud_overrides or {}).get(slot)
-        slot_local_only = not cloud_ok if cloud_ok is not None else _slot_effective_local_only(slot)
+        hard_confidential = _slot_hard_confidential(slot)
+        slot_local_only = (
+            True
+            if hard_confidential
+            else (not cloud_ok if cloud_ok is not None else _slot_effective_local_only(slot))
+        )
         if slot_local_only and not cap.local_only:
             errors.append(
                 AssignmentIssue(
@@ -2065,7 +2105,12 @@ async def _validate_assignment_draft(
                     model=model_key,
                     code="cloud_for_confidential",
                     message=(
-                        "Слот работает с содержимым документов — облачную модель "
+                        # Для жёстко закрытых слотов «разрешите отдельно» было
+                        # неправдой: разрешать нечем, запрет живёт в роутере.
+                        "Задача читает содержимое документов или чертежей — облако для "
+                        "неё закрыто, выберите локальную модель"
+                        if hard_confidential
+                        else "Слот работает с содержимым документов — облачную модель "
                         "нужно разрешить для него отдельно"
                     ),
                     severity="error",
@@ -3078,6 +3123,15 @@ async def set_slot_allow_cloud(slot: str, payload: SlotCloudWrite) -> dict:
             "cloud_allowed": True,
             "note": "slot already allows cloud",
         }
+    if _slot_hard_confidential(slot) and payload.allowed:
+        # Разрешение, которое роутер всё равно не признает, хуже отказа:
+        # интерфейс показал бы облачные модели как назначаемые, а вызов упал
+        # бы политикой конфиденциальности уже на живой задаче.
+        raise HTTPException(
+            400,
+            "Через этот слот проходит содержимое документов или чертежей — облако "
+            "для него закрыто на уровне маршрутизации, разрешение не действует.",
+        )
     _set_slot_cloud_allowed(slot, payload.allowed)
     return {"ok": True, "slot": slot, "cloud_allowed": payload.allowed}
 

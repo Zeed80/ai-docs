@@ -13,8 +13,20 @@ def test_confidential_slot_defaults_to_local_only(monkeypatch):
 
 
 def test_confidential_slot_opened_to_cloud(monkeypatch):
+    """Открывается тот слот, чья задача облако допускает.
+
+    Раньше примером здесь стоял cad_spec_read — и это была ровно та ошибка,
+    что жила в коде: чтение чертежа лежит в CONFIDENTIAL_TASKS, роутер такую
+    модель отвергает, поэтому «открыть» его нельзя ничем. Проверка того, что
+    он не открывается, — ниже и в test_slot_cloud_policy.py.
+    """
+    monkeypatch.setattr(p, "_cloud_allowed_slots", lambda: {"agent_orchestrator"})
+    assert p._slot_effective_local_only("agent_orchestrator") is False
+
+
+def test_drawing_slot_cannot_be_opened_to_cloud(monkeypatch):
     monkeypatch.setattr(p, "_cloud_allowed_slots", lambda: {"cad_spec_read"})
-    assert p._slot_effective_local_only("cad_spec_read") is False
+    assert p._slot_effective_local_only("cad_spec_read") is True
 
 
 def test_every_content_bearing_slot_is_local_until_opened(monkeypatch):
@@ -36,8 +48,27 @@ def test_email_slot_can_still_be_opened_to_cloud(monkeypatch):
 
 
 def test_slot_out_reports_effective_policy_and_flags(monkeypatch):
-    monkeypatch.setattr(p, "_cloud_allowed_slots", lambda: {"cad_spec_read"})
+    monkeypatch.setattr(p, "_cloud_allowed_slots", lambda: {"agent_orchestrator"})
     registry = p._registry()
+    out = p._build_slot_out(
+        "agent_orchestrator",
+        "Агент",
+        "Оркестратор",
+        "hint",
+        True,
+        None,
+        registry,
+        current_model=None,
+        cloud_slots={"agent_orchestrator"},
+    )
+    assert out.local_only is False  # effective: opened
+    assert out.cloud_optionable is True  # base is confidential
+    assert out.cloud_allowed is True
+
+
+def test_slot_out_hides_the_option_for_a_closed_slot(monkeypatch):
+    """Экран не должен предлагать выбор, которого нет."""
+    monkeypatch.setattr(p, "_cloud_allowed_slots", lambda: {"cad_spec_read"})
     out = p._build_slot_out(
         "cad_spec_read",
         "Оцифровка",
@@ -45,22 +76,32 @@ def test_slot_out_reports_effective_policy_and_flags(monkeypatch):
         "hint",
         True,
         None,
-        registry,
+        p._registry(),
         current_model=None,
         cloud_slots={"cad_spec_read"},
     )
-    assert out.local_only is False  # effective: opened
-    assert out.cloud_optionable is True  # base is confidential
-    assert out.cloud_allowed is True
+    assert out.local_only is True
+    assert out.cloud_optionable is False
+    assert out.cloud_allowed is False
 
 
 @pytest.mark.asyncio
 async def test_allow_cloud_endpoint_toggles_confidential_slot(monkeypatch):
     calls = {}
     monkeypatch.setattr(p, "_set_slot_cloud_allowed", lambda s, a: calls.update(slot=s, allowed=a))
-    res = await p.set_slot_allow_cloud("cad_spec_read", p.SlotCloudWrite(allowed=True))
+    res = await p.set_slot_allow_cloud("agent_orchestrator", p.SlotCloudWrite(allowed=True))
     assert res["cloud_allowed"] is True
-    assert calls == {"slot": "cad_spec_read", "allowed": True}
+    assert calls == {"slot": "agent_orchestrator", "allowed": True}
+
+
+@pytest.mark.asyncio
+async def test_allow_cloud_endpoint_refuses_a_drawing_slot(monkeypatch):
+    """Отказ честнее разрешения, которое роутер не признает."""
+    calls = {}
+    monkeypatch.setattr(p, "_set_slot_cloud_allowed", lambda s, a: calls.update(slot=s, allowed=a))
+    with pytest.raises(Exception):
+        await p.set_slot_allow_cloud("cad_spec_read", p.SlotCloudWrite(allowed=True))
+    assert calls == {}
 
 
 @pytest.mark.asyncio

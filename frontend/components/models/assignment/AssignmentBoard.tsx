@@ -714,6 +714,11 @@ export function AssignmentBoard() {
                           nodes={nodes}
                           value={draftValue || null}
                           confidential={Boolean(s.cloud_optionable)}
+                          // Слот локален и облако для него не включается —
+                          // значит задача в CONFIDENTIAL_TASKS.
+                          cloudForbidden={
+                            Boolean(s.local_only) && !s.cloud_optionable
+                          }
                           requiredModality={
                             (s.required_modality as Modality | null) ?? null
                           }
