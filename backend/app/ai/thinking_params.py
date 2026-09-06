@@ -22,6 +22,7 @@ about the model catalog, only about provider wire formats.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 ThinkingLevel = Literal["low", "medium", "high"]
@@ -55,6 +56,54 @@ ANTHROPIC_THINKING_BUDGET_TOKENS: dict[str, int] = {
     "high": 16384,
 }
 ANTHROPIC_DEFAULT_THINKING_BUDGET = 2048
+
+
+def _anthropic_takes_budget_tokens(provider_model: str) -> bool:
+    """Does THIS Claude model still accept ``thinking.budget_tokens``?
+
+    Anthropic replaced the fixed thinking budget with adaptive thinking. On
+    every model from the 4.6 generation onward the old shape is not merely
+    deprecated: ``{"type": "enabled", "budget_tokens": N}`` returns a 400 on
+    Opus 5 / 4.8 / 4.7, Sonnet 5 and the Fable/Mythos 5 family. We were sending
+    exactly that shape to every Claude model, so any request with thinking on
+    failed at the wire and the router silently moved to the next candidate —
+    the cloud model looked "not chosen" rather than "rejected".
+
+    Only Haiku 4.5 and older still take a budget. Anything we cannot parse is
+    treated as current-generation: every model released from here on is
+    adaptive, so that is the guess that ages correctly.
+    """
+    name = (provider_model or "").lower()
+    # Two naming orders have shipped: "claude-opus-4-6" (family first) and the
+    # older "claude-3-5-sonnet" (version first). Both must parse, or a 3.x model
+    # falls through to the adaptive branch it cannot accept.
+    match = re.search(r"claude-(?:[a-z]+)-(\d+)(?:[-.](\d+))?", name) or re.search(
+        r"claude-(\d+)(?:[-.](\d+))?-[a-z]", name
+    )
+    if not match:
+        return False
+    major = int(match.group(1))
+    minor = int(match.group(2) or 0)
+    return (major, minor) < (4, 6)
+
+
+def anthropic_thinking_payload(provider_model: str, level: ThinkingLevel | None) -> dict[str, Any]:
+    """Request fields that turn thinking ON for one Claude model.
+
+    Returns the adaptive shape plus a reasoning effort for current models, and
+    the legacy budget for pre-4.6 ones. ``max_tokens`` is the caller's business
+    — only the legacy branch needs it raised, and only the caller knows what it
+    already asked for.
+    """
+    if _anthropic_takes_budget_tokens(provider_model):
+        budget = ANTHROPIC_THINKING_BUDGET_TOKENS.get(level, ANTHROPIC_DEFAULT_THINKING_BUDGET)
+        return {"thinking": {"type": "enabled", "budget_tokens": budget}}
+    payload: dict[str, Any] = {"thinking": {"type": "adaptive"}}
+    if level:
+        # `effort` lives inside output_config, not at the top level.
+        payload["output_config"] = {"effort": level}
+    return payload
+
 
 # Provider kinds where the level parameter is a documented, provider-level
 # wire guarantee — ANY thinking-capable model on these providers safely

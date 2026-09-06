@@ -292,8 +292,16 @@ async def test_fragments_win_when_they_produced_geometry(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_fragment_passes_that_disagree_do_not_ship_a_lucky_read(monkeypatch):
-    """The value that changes between passes is exactly the one to withhold."""
+async def test_fragment_passes_that_disagree_ship_the_read_but_flag_it(monkeypatch):
+    """Расходящееся значение помечается, а не уносит с собой всю деталь.
+
+    Смысл прежний — «то, что меняется между проходами, нельзя выдавать за
+    подтверждённое», — но цена изменилась. Раньше проверялось, что профиль
+    исчезает целиком; живой прогон показал, что вместе с одной несогласованной
+    длиной уходит весь прочитанный вал, а оператор видит «чтение не подтвердило
+    осевой ступенчатый профиль». Теперь профиль доезжает, спорная ступень несёт
+    ``review_required``, и причина по-прежнему в ``unresolved``.
+    """
     reads = [
         {
             "main_view": {
@@ -328,8 +336,13 @@ async def test_fragment_passes_that_disagree_do_not_ship_a_lucky_read(monkeypatc
         "app.ai.cad_recognize.spec_vectorize.read_drawing_spec_consensus", fake_whole
     )
     result = await read_spec_best_effort(b"x", passes=3)
-    assert not (result.get("main_view") or {}).get("outer")
+    outer = (result.get("main_view") or {}).get("outer") or []
+    assert outer, "деталь не должна пропадать из-за одной несогласованной длины"
     assert any("профил" in item for item in result["unresolved"])
+    # Первая ступень одинакова во всех трёх проходах — подтверждена.
+    assert outer[0].get("review_required") is not True
+    # Вторая расходится по длине (60 против 95) — выдавать её за прочитанную нельзя.
+    assert outer[1]["review_required"] is True
 
 
 @pytest.mark.asyncio

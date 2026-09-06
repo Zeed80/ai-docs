@@ -95,6 +95,10 @@ export interface Slot {
   thinking_levels: ThinkingLevel[];
   thinking_level_override: ThinkingLevel | null;
   thinking_level_effective: ThinkingLevel | null;
+  /** Слот, без которого конвейер работает: его можно выключить целиком. */
+  optional?: boolean;
+  /** Оператор выключил слот — стадия не выполняется. */
+  disabled?: boolean;
 }
 
 export interface AssignmentDiffItem {

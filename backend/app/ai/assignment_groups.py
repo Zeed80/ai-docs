@@ -27,10 +27,10 @@ from app.ai.agent_config import (
 )
 from app.ai.schemas import AITask
 from app.ai.task_routing import (
-    CONFIDENTIAL_TASKS,
     _catalog_key_for,
     _is_local_key,
     get_routing_for,
+    policy_filtered_tail,
     save_task_routing,
 )
 
@@ -186,12 +186,10 @@ def _set_primary(task: AITask, model_key: str) -> None:
     current = get_routing_for(task)
     tail = [m for m in current.models if m != model_key]
     primary_is_local = _is_local_key(model_key)
-    # Confidential tasks reject cloud models in the chain; the YAML defaults may
-    # still list cloud fallbacks, so drop non-local keys from the preserved tail.
-    # Исключение — когда оператор сам назначил облачную модель первой: тогда
-    # запрета нет и вычищать хвост не от чего.
-    if task in CONFIDENTIAL_TASKS and primary_is_local:
-        tail = [m for m in tail if _is_local_key(m)]
+    # Общее правило с `providers_api._assign_task`: две копии этой логики уже
+    # разошлись однажды — здесь фильтр был, там нет, и слот `cad_text_ocr`,
+    # который идёт вторым путём, оказался невозможно вернуть из облака.
+    tail = policy_filtered_tail(task, model_key, tail)
     tail, dropped = prune_dead_keys(tail)
     if dropped:
         logger.info(

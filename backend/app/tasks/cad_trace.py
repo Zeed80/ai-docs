@@ -39,6 +39,12 @@ _TITLE_BLOCK_H_MM_PX = 55.0 * 4.0
 
 logger = structlog.get_logger()
 
+# Лимит многоэтапного чтения и бюджет внутри него. Держатся вместе и названы
+# один раз: числа стояли в трёх местах, разошлись, и сообщения о таймауте
+# называли оператору 480 с при фактическом лимите 800 с.
+_READER_TIMEOUT_SECONDS = 800
+_READER_BUDGET_SECONDS = 750
+
 _CAD_PROCESS_LOG_VERSION = 1
 _CAD_PROCESS_LOG_MAX_EVENTS = 500
 _CAD_MODEL_OUTPUT_MAX_ITEMS = 160
@@ -3427,13 +3433,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "reader",
                         "started",
                         "Начато многоэтапное чтение чертежа",
-                        {"passes": passes, "timeout_seconds": 800},
+                        {"passes": passes, "timeout_seconds": _READER_TIMEOUT_SECONDS},
                     )
-                    async with asyncio.timeout(800):
+                    async with asyncio.timeout(_READER_TIMEOUT_SECONDS):
                         spec = await read_spec_best_effort(
                             content,
                             passes=passes,
-                            budget_seconds=750,
+                            budget_seconds=_READER_BUDGET_SECONDS,
                         )
                     await _record(
                         "reader",
@@ -3454,11 +3460,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     spec = await _load_cad_partial_spec(gen_uuid)
                     if not spec:
                         return await _fail(
-                            "Метод «по описанию»: чтение остановлено через 480 с.; "
-                            "ни один проход не успел сформировать валидную геометрию."
+                            f"Метод «по описанию»: чтение остановлено через "
+                            f"{_READER_TIMEOUT_SECONDS} с.; ни один проход не успел "
+                            f"сформировать валидную геометрию."
                         )
                     spec.setdefault("optional_unresolved", []).append(
-                        "чтение достигло лимита 480 с.; использован последний сохранённый consensus"
+                        f"чтение достигло лимита {_READER_TIMEOUT_SECONDS} с.; "
+                        f"использован последний сохранённый consensus"
                     )
                     await _record(
                         "reader.timeout_recovery",
@@ -3466,7 +3474,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "Лимит чтения достигнут; работа продолжена с последнего "
                         "сохранённого consensus",
                         {
-                            "timeout_seconds": 480,
+                            "timeout_seconds": _READER_TIMEOUT_SECONDS,
                             "has_geometry": bool((spec.get("main_view") or {}).get("outer")),
                             "partial_spec_sequence": "latest",
                             "_partial_spec": spec,
@@ -3481,38 +3489,46 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # A misconfigured slot and a cut-off answer are both
                     # actionable, and neither means "unreadable drawing".
                     return await _fail(f"Метод «по описанию»: {exc}")
+                if not spec or not (spec.get("main_view") or {}).get("outer"):
+                    # Частичный consensus сохраняется по ходу чтения и лежит в
+                    # params.cad_partial_spec. Раньше его подхватывала ТОЛЬКО
+                    # ветка таймаута, поэтому при «чтение закончилось, а
+                    # геометрии нет» работа выбрасывалась при том, что данные
+                    # лежали в БД. Ветка восстановления одна на оба случая.
+                    recovered = await _load_cad_partial_spec(gen_uuid)
+                    if recovered and (recovered.get("main_view") or {}).get("outer"):
+                        recovered.setdefault("optional_unresolved", []).append(
+                            "итоговое чтение не дало геометрии; использован последний "
+                            "сохранённый consensus"
+                        )
+                        await _record(
+                            "reader.recovered",
+                            "warning",
+                            "Итог чтения без геометрии; работа продолжена с последнего "
+                            "сохранённого consensus",
+                            {
+                                "source": "cad_partial_spec",
+                                "has_geometry": True,
+                                "_partial_spec": recovered,
+                                "_progress_pct": 60,
+                            },
+                        )
+                        spec = recovered
                 if not spec:
                     return await _fail(
                         "Метод «по описанию»: модель чтения чертежа не вернула "
                         "валидный спек. Проверьте назначение CAD reader (Настройки → "
                         "Модели → Оцифровка) и исходный лист."
                     )
-                from app.ai.cad_digitization_type import (
-                    validate_spec_for_digitization_type,
-                )
-
-                type_blockers = validate_spec_for_digitization_type(
-                    spec, digitization_type.normalized
-                )
-                await _record(
-                    "reader.type_gate",
-                    "failed" if type_blockers else "completed",
-                    (
-                        "Прочитанная геометрия не соответствует выбранному типу"
-                        if type_blockers
-                        else "Тип прочитанной геометрии подтверждён"
-                    ),
-                    {
-                        "requested_type": digitization_type.normalized,
-                        "blockers": type_blockers,
-                    },
-                )
-                if type_blockers:
-                    return await _fail("; ".join(type_blockers))
                 # A value the whole-sheet read missed is not the end of the
                 # sheet: asking for that ONE dimension, with its neighbours
                 # named, is a far easier question than the one that failed. An
                 # answer is accepted only if the sheet's own callouts carry it.
+                #
+                # This runs BEFORE the type gate on purpose. It used to sit
+                # after it, so the gate killed the run before the stage whose
+                # entire job is to fill in what the read did not establish —
+                # the repair was placed behind the check it exists to satisfy.
                 from app.ai.cad_recognize.spec_followup import (
                     resolve_missing_dimensions,
                 )
@@ -3554,6 +3570,34 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 spec, assumptions = apply_assumptions(spec)
                 if assumptions:
                     spec = _revalidated_spec(spec)
+
+                # The type gate runs here, once the follow-up and the
+                # assumptions have had their turn: it decides whether what was
+                # read can be built as the type the operator picked, and that
+                # question is only answerable on the finished spec.
+                from app.ai.cad_digitization_type import (
+                    validate_spec_for_digitization_type,
+                )
+
+                type_blockers = validate_spec_for_digitization_type(
+                    spec, digitization_type.normalized
+                )
+                await _record(
+                    "reader.type_gate",
+                    "failed" if type_blockers else "completed",
+                    (
+                        "Прочитанная геометрия не соответствует выбранному типу"
+                        if type_blockers
+                        else "Тип прочитанной геометрии подтверждён"
+                    ),
+                    {
+                        "requested_type": digitization_type.normalized,
+                        "blockers": type_blockers,
+                    },
+                )
+                if type_blockers:
+                    return await _fail("; ".join(type_blockers))
+
                 # Cross-check before anything is built: the sheet's own
                 # arithmetic and the proportions of the traced ink can
                 # contradict a read that all passes agreed on.

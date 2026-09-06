@@ -93,24 +93,87 @@ def test_provenance_maps_tile_evidence_to_full_sheet_coordinates():
     assert evidence["source_bbox"] == [1210.0, 820.0, 1310.0, 870.0]
 
 
-def test_a_profile_that_changes_between_passes_is_refused():
-    """The exact live failure: the same sheet read differently twice."""
+def test_a_profile_that_changes_between_passes_is_kept_for_review():
+    """Разошедшийся профиль сохраняется помеченным, а не исчезает.
+
+    Раньше здесь стояло ``"outer" not in spec["main_view"]``. Живой прогон
+    показал, чего это стоит: два прохода полного чтения листа вернули валидный
+    ступенчатый вал и разошлись на ПЕРВОЙ ступени (Ø15 против Ø18) — весь
+    профиль был отброшен, а оператор получил «выбран тип „тело вращения“, но
+    чтение не подтвердило осевой ступенчатый профиль», то есть обвинение в
+    неверно выбранном типе детали вместо расхождения в одном размере.
+
+    Теперь выживает лучше всего подтверждённое чтение, спорная ступень несёт
+    ``review_required`` со списком значений, а причина по-прежнему в
+    ``unresolved`` — построить из этого геометрию молча нельзя.
+    """
     other = [
         {"diameter_mm": 30, "length_mm": 40},
         {"diameter_mm": 80, "length_mm": 60},
     ]
     third = [{"diameter_mm": 30, "length_mm": 40}]
     spec = consensus_spec([_read(_PROFILE), _read(other), _read(third)])
-    assert "outer" not in spec["main_view"]
+
+    outer = spec["main_view"]["outer"]
+    assert outer, "профиль не должен исчезать целиком из-за одной ступени"
     assert any("не сошлись на профиле" in item for item in spec["unresolved"])
+    # Первая ступень совпала у всех проходов — её помечать не за что.
+    assert outer[0]["diameter_mm"] == 30
+    assert outer[0].get("review_required") is not True
+    # Вторая — разошлась, и это видно в самой ступени.
+    assert outer[1]["review_required"] is True
+    assert sorted(outer[1]["disputed_values"]) == [50.0, 80.0]
+
+
+def test_more_passes_never_produce_less_than_fewer_passes():
+    """Немонотонность, из-за которой «5 проходов» были хуже одного.
+
+    Один пригодный проход проходит целиком и без проверки, а два слегка
+    разошедшихся раньше давали ноль — то есть больше свидетельств давали
+    строго худший ответ, и увеличение числа проходов снижало шанс успеха при
+    впятеро большем времени.
+    """
+    other = [
+        {"diameter_mm": 30, "length_mm": 40},
+        {"diameter_mm": 80, "length_mm": 60},
+    ]
+    one_pass = consensus_spec([_read(_PROFILE)])
+    two_passes = consensus_spec([_read(_PROFILE), _read(other)])
+
+    assert len(one_pass["main_view"]["outer"]) == len(_PROFILE)
+    assert len(two_passes["main_view"]["outer"]) == len(_PROFILE)
+
+
+def test_agreement_threshold_scales_with_usable_passes():
+    """Порог — строгое большинство пришедших проходов, а не константа 2."""
+    from app.ai.cad_recognize.spec_consensus import required_agreement
+
+    assert required_agreement(1) == 1
+    assert required_agreement(2) == 2
+    assert required_agreement(3) == 2
+    assert required_agreement(4) == 3
+    # Ровно тот случай, где константа 2 была не большинством, а парой голосов
+    # против трёх других.
+    assert required_agreement(5) == 3
 
 
 def test_consensus_never_invents_a_profile_no_pass_described():
-    """No chimera of one pass's diameters and another's lengths."""
+    """Никаких химер: результат — список ОДНОГО прохода, взятый целиком.
+
+    Гарантия та же, что и раньше; изменился только способ её проверить. Смешать
+    диаметры одного чтения с длинами другого нельзя — поэтому при расхождении
+    в длине второй ступени возвращается ровно один из двух прочитанных списков,
+    а не третий, которого никто не описывал.
+    """
     a = [{"diameter_mm": 30, "length_mm": 40}, {"diameter_mm": 50, "length_mm": 60}]
     b = [{"diameter_mm": 30, "length_mm": 99}, {"diameter_mm": 50, "length_mm": 60}]
     spec = consensus_spec([_read(a), _read(b)])
-    assert "outer" not in spec["main_view"]
+
+    outer = spec["main_view"]["outer"]
+    lengths = [section["length_mm"] for section in outer]
+    assert lengths in ([40, 60], [99, 60]), "собран профиль, которого не читал ни один проход"
+    assert outer[0]["review_required"] is True
+    assert any("не сошлись на профиле" in item for item in spec["unresolved"])
 
 
 def test_a_value_only_one_pass_saw_is_not_confirmed():

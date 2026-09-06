@@ -1148,6 +1148,18 @@ _OCR_MODEL = "glm-ocr:latest"  # fallback only; the assignment decides
 # blocks are collapsed.
 _OCR_NUM_PREDICT = 700
 
+# Просим координаты явно и в нормализованной сетке 0..1000: она однозначна для
+# любой модели, а qwen3-vl отдаёт свои боксы именно в ней независимо от того,
+# о чём её просили. Модель, которая координаты не умеет, ответит прозой — это
+# предусмотрено и разбирается вторым путём, а не теряется.
+_OCR_PROMPT = (
+    "Прочитай ВСЕ надписи и размеры с этого чертежа.\n"
+    "Верни СТРОГО JSON-массив без markdown, каждый элемент:\n"
+    '{"text": "строка ровно как на чертеже", "bbox": [x1, y1, x2, y2]}\n'
+    "bbox — координаты рамки текста в сетке 0..1000 по каждой оси.\n"
+    "Ничего не выдумывай и не добавляй пояснений. Нет текста — верни []."
+)
+
 
 _SHEET_METADATA_LINE = re.compile(
     r"(?:\bNIST\b|\bPMI\s+(?:test|complex|fully[- ]toleranced)\b|"
@@ -1186,22 +1198,31 @@ def _clean_callout_observations(callouts: dict[str, Any]) -> tuple[dict[str, Any
     return {**callouts, "dimensions": dimensions, "annotations": annotations}, dropped_annotations
 
 
-def _ocr_model_and_url() -> tuple[str, str, str]:
-    """The assigned text-layer model, or the built-in default.
+def _ocr_model_and_url() -> tuple[str, str, str] | None:
+    """The assigned text-layer model, or ``None`` when the slot is off.
 
     This used to be a constant and a direct Ollama call, so the one component
     measured to fix fit and roughness recall could not be swapped, compared or
     even seen from the settings UI. It is a routed task now (cad_text_ocr), and
     the constant survives only as the fallback for a database that has not been
     seeded yet.
+
+    ``None`` means the operator switched the slot off. That was impossible
+    before: an unset slot still fell back to the hardcoded model name and the
+    local Ollama URL, so the stage ran no matter what the settings said, and the
+    only way to stop it was for the model to be missing. A capable vision model
+    reads the sheet's text itself, and paying for a second pass then buys
+    nothing.
     """
     from app.config import settings
 
     url = str(settings.ollama_url).rstrip("/")
     try:
         from app.ai.schemas import AITask
-        from app.ai.task_routing import resolve_model
+        from app.ai.task_routing import get_routing_for, resolve_model
 
+        if get_routing_for(AITask.CAD_TEXT_OCR).disabled:
+            return None
         model, provider = resolve_model(AITask.CAD_TEXT_OCR)
     except Exception as exc:  # noqa: BLE001 — routing must never lose the layer
         logger.warning("cad_ocr_routing_failed", error=str(exc)[:160])
@@ -1231,9 +1252,7 @@ async def _ocr_via_router(image, model: str, *, router: Any = None) -> tuple[str
     image.save(buffer, format="PNG")
     request = AIRequest(
         task=AITask.CAD_TEXT_OCR,
-        messages=[
-            ChatMessage(role="user", content="Прочитай все надписи и размеры с этого чертежа.")
-        ],
+        messages=[ChatMessage(role="user", content=_OCR_PROMPT)],
         images=[base64.b64encode(buffer.getvalue()).decode()],
         confidential=True,
         allow_cloud=False,
@@ -1243,6 +1262,32 @@ async def _ocr_via_router(image, model: str, *, router: Any = None) -> tuple[str
     )
     response = await router.run(request)
     return (response.text or ""), {}
+
+
+def _text_layer_from_answer(answer: str, *, model: str, image: Any):
+    """Ответ текстового слоя — в общий контракт, чем бы он ни был.
+
+    Строгий JSON с координатами и свободная проза приходят от РАЗНЫХ моделей на
+    один и тот же запрос: документная модель на 1.1B координат не умеет, а
+    vision-LLM их отдаёт. Раньше разбор был один — построчный, — поэтому JSON
+    просто рассыпался бы на строки со скобками, а координаты терялись бы в
+    любом случае. Теперь оба ответа приводятся к одному виду, и то, чем именно
+    прочитано, записано в самом слое.
+    """
+    from app.ai.cad_recognize.text_layer import layer_from_prose, layer_from_vlm_json
+    from app.ai.vlm_dimensions import _parse_json_array
+
+    records = _parse_json_array(answer or "")
+    if records:
+        size = (getattr(image, "width", None), getattr(image, "height", None))
+        return layer_from_vlm_json(
+            records,
+            model=model,
+            raw_text=answer or "",
+            image_size=size if all(size) else None,
+            normalized_scale=1000.0 if all(size) else None,
+        )
+    return layer_from_prose(answer or "", model=model)
 
 
 async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
@@ -1256,19 +1301,43 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
     import base64
     import hashlib
     import io as _io
-    import re
     import time
 
     import httpx
 
     from app.ai.cad_process_log import record_cad_process_event
 
-    model, ollama_url, provider = _ocr_model_and_url()
+    assignment = _ocr_model_and_url()
+    if assignment is None:
+        await record_cad_process_event(
+            "reader.text_ocr",
+            "skipped",
+            "Текстовый слой не читается отдельной моделью — выключено в настройках",
+            {"reason": "slot_disabled", "slot": "cad_text_ocr"},
+        )
+        return {}
+    model, ollama_url, provider = assignment
+    # Слепая модель отвечает на картинку пустой строкой и HTTP 200, поэтому
+    # роутер не уходит к следующему кандидату, а слой просто теряется. Для
+    # слота чтения чертежа такая проверка была с самого начала; для текстового
+    # слоя её не было, и назначить сюда текстовую модель можно было незаметно.
+    from app.ai.cad_recognize.spec_vectorize import _first_vision_model
+    from app.ai.schemas import AITask
+
+    _seeing, chain_can_see = _first_vision_model(AITask.CAD_TEXT_OCR)
+    if not chain_can_see:
+        await record_cad_process_event(
+            "reader.text_ocr",
+            "failed",
+            "Слот «Текстовый слой чертежа» назначен на модель без зрения",
+            {"model": model, "reason": "model_has_no_vision", "slot": "cad_text_ocr"},
+        )
+        return {}
     buffer = _io.BytesIO()
     image.save(buffer, format="PNG")
     payload = {
         "model": model,
-        "prompt": "Прочитай все надписи и размеры с этого чертежа.",
+        "prompt": _OCR_PROMPT,
         "images": [base64.b64encode(buffer.getvalue()).decode()],
         "stream": False,
         "think": False,
@@ -1314,36 +1383,13 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
         )
         return {}
 
-    seen: set[str] = set()
-    lines: list[str] = []
-    for raw in text.splitlines():
-        line = raw.strip().strip("`").strip()
-        if not line or line.lower() in seen:
-            continue
-        seen.add(line.lower())
-        lines.append(line)
-
-    kinds = (
-        ("roughness", re.compile(r"\bR[az]\s*\d", re.IGNORECASE)),
-        ("hardness", re.compile(r"\bHRC|\bHB\b|твёрд|тверд", re.IGNORECASE)),
-        ("thread", re.compile(r"\bM\d+\s*[x×]", re.IGNORECASE)),
-        ("material", re.compile(r"сталь|чугун|бронз|латун|алюмин", re.IGNORECASE)),
-    )
-    dimensions: list[dict] = []
-    annotations: list[dict] = []
-    for line in lines:
-        if _is_sheet_metadata_line(line):
-            continue
-        matched = None
-        for kind, pattern in kinds:
-            if pattern.search(line):
-                matched = kind
-                break
-        if matched:
-            annotations.append({"kind": matched, "text": line[:200]})
-            continue
-        if re.search(r"\d", line) and len(line) <= 60:
-            dimensions.append({"value": line[:60], "applies_to": None})
+    # Один контракт на все источники: движок отдаёт координаты сам, vision-LLM
+    # просят вернуть их в JSON, а модель, которая не смогла, даёт bbox=None —
+    # и это видно в слое, а не выясняется потерей значений ниже по конвейеру.
+    layer = _text_layer_from_answer(text, model=model, image=image)
+    callouts = layer.as_callouts()
+    dimensions = callouts["dimensions"]
+    annotations = callouts["annotations"]
     await record_cad_process_event(
         "reader.text_ocr",
         "completed" if text.strip() else "failed",
@@ -1358,6 +1404,9 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
             "output_tokens": raw_body.get("eval_count"),
             "dimensions": len(dimensions),
             "annotations": len(annotations),
+            "tokens": len(layer.tokens),
+            "layer_source": layer.source,
+            "grounded": layer.grounded,
             "_model_output": {
                 "kind": "text_ocr",
                 "model": model,
@@ -1368,7 +1417,7 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
             },
         },
     )
-    return {"dimensions": dimensions, "annotations": annotations}
+    return {"dimensions": dimensions, "annotations": annotations, "text_layer": layer}
 
 
 # A standard's number is not a dimension. "Сталь 55 ГОСТ 1050-2013" and
@@ -4451,6 +4500,18 @@ async def read_spec_by_fragments(
             "cad_fragment_spec_invalid",
             fields=fields,
         )
+        # Before giving up the geometry, try dropping just the auxiliary
+        # feature that failed. The observation-only fallback below keeps the
+        # text but throws the profile away, and on a live sheet the thing that
+        # failed was a groove while the profile was read correctly.
+        from app.ai.cad_recognize.spec_vectorize import validate_spec_lenient
+
+        salvaged, dropped = validate_spec_lenient(assembled)
+        if salvaged is not None:
+            logger.warning("cad_fragment_spec_salvaged", dropped=dropped)
+            salvaged["fragments"] = fragments
+            salvaged["fragment_answers"] = fragment_answers
+            return salvaged
         # Geometry validity gates 3D generation, but it must not erase text and
         # PMI observations already read from the source.  Return a deliberately
         # geometry-free, unresolved spec: downstream build gates still fail
@@ -4495,6 +4556,7 @@ def _observation_only_spec(
                 "value": str(item["value"]).strip(),
                 "applies_to": str(item.get("applies_to") or ""),
                 "evidence": valid_evidence(item.get("evidence")),
+                "bbox": item.get("bbox"),
             }
         )
 
@@ -4518,6 +4580,7 @@ def _observation_only_spec(
                 if isinstance(item.get("datum_refs"), list)
                 else [],
                 "evidence": valid_evidence(item.get("evidence")),
+                "bbox": item.get("bbox"),
             }
         )
 
@@ -5046,6 +5109,8 @@ async def read_spec_best_effort(
     if not whole:
         return _finalize_spec(fragments, image_bytes)
     if fragments:
+        whole_outer_before = len((whole.get("main_view") or {}).get("outer") or [])
+        fragment_outer = len((fragments.get("main_view") or {}).get("outer") or [])
         whole = _merge_fragment_truth(whole, fragments)
         if not (whole.get("title_block") or {}):
             whole["title_block"] = fragments.get("title_block") or {}
@@ -5055,13 +5120,30 @@ async def read_spec_best_effort(
             whole["views"] = fragments.get("views") or []
         whole["fragments"] = fragments.get("fragments")
         whole["fragment_reader_attempts"] = fragments.get("reader_attempts") or []
+        merged_outer = len((whole.get("main_view") or {}).get("outer") or [])
+        # Живой прогон закончился здесь с outer_sections: 0 при двух валидных
+        # whole-sheet чтениях, и по журналу нельзя было понять, чей ноль это
+        # был. Источник профиля называем прямо.
+        if merged_outer == 0:
+            outer_source = "none"
+        elif merged_outer == fragment_outer and fragment_outer != whole_outer_before:
+            outer_source = "fragments"
+        else:
+            outer_source = "whole_sheet"
         await record_cad_process_event(
             "reader.strategy.merge",
-            "completed",
-            "Проверенная fragment-геометрия сохранена поверх whole-sheet fallback",
+            "completed" if merged_outer else "failed",
+            (
+                "Проверенная fragment-геометрия сохранена поверх whole-sheet fallback"
+                if merged_outer
+                else "Слияние не дало профиля: ни фрагментное, ни полное чтение его не принесли"
+            ),
             {
-                "outer_sections": len((whole.get("main_view") or {}).get("outer") or []),
+                "outer_sections": merged_outer,
                 "bore_sections": len((whole.get("main_view") or {}).get("bore") or []),
+                "outer_source": outer_source,
+                "outer_sections_fragments": fragment_outer,
+                "outer_sections_whole_sheet": whole_outer_before,
                 "unresolved": whole.get("unresolved") or [],
             },
         )

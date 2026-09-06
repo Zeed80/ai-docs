@@ -146,12 +146,80 @@ def _rotated_numeric_tokens(image: Any) -> list[dict[str, Any]]:
     return tokens
 
 
+# Минимум пикселей, ниже которого маска считается пустой: одиночные помарки
+# сканера не должны выглядеть как найденная геометрия.
+_MIN_MASK_PIXELS = 1000
+
+
 def _blue_geometry(image: Any):
+    """Геометрия, отрисованная НАСЫЩЕННЫМ цветом поверх чёрных аннотаций.
+
+    Условие было жёстко синим (B≥180, R≤60, G≤60). Это верно для листа,
+    выведенного плоттером с цветным слоем геометрии, и неверно для всего
+    остального: скан, фото и обычный чёрно-белый лист дают ноль подходящих
+    пикселей. В живом прогоне стадия так и падала — пять раз подряд с блокером
+    «геометрия и аннотации не разделены по цвету», — и вся диаметральная
+    привязка на реальных исходниках была мертва.
+
+    Теперь принимается любой насыщенный не-серый цвет: разделение по цвету —
+    это факт «геометрия отличается от текста тоном», а не «она именно синяя».
+    """
     import numpy as np
 
-    rgb = np.asarray(image.convert("RGB"))
-    blue = (rgb[:, :, 2] >= 180) & (rgb[:, :, 0] <= 60) & (rgb[:, :, 1] <= 60)
-    return blue if int(blue.sum()) >= 1000 else None
+    rgb = np.asarray(image.convert("RGB")).astype(np.int16)
+    high = rgb.max(axis=2)
+    low = rgb.min(axis=2)
+    # Насыщенность как разброс каналов: у серого и чёрного она около нуля.
+    coloured = (high - low >= 60) & (high >= 120)
+    return coloured if int(coloured.sum()) >= _MIN_MASK_PIXELS else None
+
+
+def _ink_mask(image: Any, exclusion_boxes: list[tuple[int, int, int, int]] | None):
+    """Чернила листа за вычетом того, что распознано как текст.
+
+    Монохромный путь: цвета для разделения нет, но есть текстовые рамки — то,
+    что не текст, и есть кандидат в геометрию. Грубее цветового разделения и
+    честно им уступает по очереди.
+    """
+    import numpy as np
+
+    grey = np.asarray(image.convert("L"))
+    ink = grey < 160
+    for x0, y0, x1, y1 in exclusion_boxes or []:
+        # Немного расширяем рамку: тесная обрезка оставляет по краям обводку
+        # символов, а она читается как короткие штрихи геометрии.
+        ax0, ay0 = max(0, int(x0) - 2), max(0, int(y0) - 2)
+        ax1, ay1 = min(ink.shape[1], int(x1) + 2), min(ink.shape[0], int(y1) + 2)
+        ink[ay0:ay1, ax0:ax1] = False
+    return ink if int(ink.sum()) >= _MIN_MASK_PIXELS else None
+
+
+def _safe_tokens(image: Any) -> list[dict[str, Any]]:
+    """Текстовые токены листа; пустой список, если OCR недоступен."""
+    try:
+        return _rotated_numeric_tokens(image)
+    except Exception:  # noqa: BLE001 — маска обойдётся и без них
+        return []
+
+
+def _geometry_mask(
+    image: Any, exclusion_boxes: list[tuple[int, int, int, int]] | None = None
+) -> tuple[Any, str]:
+    """Маска геометрии и то, чем она получена.
+
+    Возвращает ``(mask, strategy)``; ``mask is None`` означает «не удалось».
+    Стратегия попадает в журнал: раньше блокер утверждал про цвет независимо
+    от того, что на самом деле пробовали, и по нему нельзя было понять, лист
+    такой или инструмент.
+    """
+    coloured = _blue_geometry(image)
+    if coloured is not None:
+        return coloured, "colour"
+    if exclusion_boxes:
+        ink = _ink_mask(image, exclusion_boxes)
+        if ink is not None:
+            return ink, "ink_minus_text"
+    return None, "none"
 
 
 def _profile_center(blue, left: int, right: int) -> float | None:
@@ -527,7 +595,14 @@ def localize_diameter_dimensions(
             "blockers": ["нет осевого габарита для калибровки диаметров"],
         }
     try:
-        blue = _blue_geometry(image)
+        # Текстовые рамки — второй путь к маске, когда цвета для разделения нет.
+        # Берутся из уже прочитанных токенов: отдельного прохода OCR не нужно.
+        text_boxes = [
+            tuple(int(v) for v in token["label_bbox"])
+            for token in _safe_tokens(image)
+            if isinstance(token.get("label_bbox"), (list, tuple)) and len(token["label_bbox"]) == 4
+        ]
+        blue, mask_strategy = _geometry_mask(image, text_boxes)
     except Exception as exc:  # noqa: BLE001 — evidence aid must fail closed
         return {
             "status": "unavailable",
@@ -538,7 +613,14 @@ def localize_diameter_dimensions(
         return {
             "status": "unresolved",
             "observations": [],
-            "blockers": ["геометрия и аннотации не разделены по цвету"],
+            "mask_strategy": mask_strategy,
+            # Прежний блокер утверждал про цвет независимо от того, что
+            # пробовали, — по нему нельзя было понять, лист такой или
+            # инструмент не умеет.
+            "blockers": [
+                "не удалось отделить геометрию от аннотаций "
+                "(пробовали: цвет, чернила за вычетом текста)"
+            ],
         }
     left, right = int(round(float(datum[0]))), int(round(float(datum[1])))
     left, right = max(0, left), min(image.width - 1, right)
@@ -845,6 +927,9 @@ def localize_diameter_dimensions(
                 }
     return {
         "status": "ok" if accepted else "unresolved",
+        # Чем именно посчитана маска — иначе по журналу не отличить лист с
+        # цветным слоем геометрии от скана, разобранного по чернилам.
+        "mask_strategy": mask_strategy,
         "profile_center_y_px": round(center, 1),
         "px_per_mm": round(px_per_mm, 6),
         "observations": accepted,

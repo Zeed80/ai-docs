@@ -82,7 +82,14 @@ def test_detal_126_diameters_are_classified_against_the_main_profile():
     assert validated.main_view.bore[0].taper is not None
 
 
-def test_monochrome_sheet_is_not_assigned_diameter_roles():
+def test_a_blank_sheet_is_not_assigned_diameter_roles():
+    """Пустому листу приписывать диаметры неоткуда — и блокер это говорит.
+
+    Формулировка изменилась вместе с маской. Прежняя утверждала про ЦВЕТ
+    («геометрия и аннотации не разделены по цвету») независимо от того, что
+    пробовали, — по ней нельзя было понять, лист такой или инструмент умеет
+    только цветные чертежи. Теперь называются все опробованные способы.
+    """
     image = Image.new("RGB", (600, 400), "white")
     axial = {"datum_line": [100, 500], "mm_per_px": 0.5}
 
@@ -90,7 +97,51 @@ def test_monochrome_sheet_is_not_assigned_diameter_roles():
 
     assert result["status"] == "unresolved"
     assert result["observations"] == []
-    assert "не разделены" in result["blockers"][0]
+    assert "не удалось отделить геометрию" in result["blockers"][0]
+    assert result["mask_strategy"] == "none"
+
+
+def test_a_monochrome_sheet_no_longer_fails_on_colour_alone():
+    """Скан не обязан быть синим, чтобы его геометрию можно было выделить.
+
+    Условие было жёстко синим (B≥180, R≤60, G≤60): скан, фото и обычный ч/б
+    лист давали ноль подходящих пикселей, и вся диаметральная привязка на
+    реальных исходниках была мертва — в живом прогоне стадия падала пять раз
+    подряд с блокером про цвет.
+    """
+    import numpy as np
+
+    from app.ai.cad_recognize.diameter_dimensions import _geometry_mask
+
+    # Чёрные штрихи на белом плюс «текст» в правом верхнем углу.
+    array = np.full((400, 600, 3), 255, dtype=np.uint8)
+    array[180:190, 50:550] = 0
+    array[210:220, 50:550] = 0
+    array[20:40, 500:590] = 0
+
+    image = Image.fromarray(array)
+    mask, strategy = _geometry_mask(image, [(500, 20, 590, 40)])
+
+    assert strategy == "ink_minus_text"
+    assert mask is not None
+    # Текст исключён, штрихи остались.
+    assert bool(mask[185, 300]) is True
+    assert bool(mask[30, 545]) is False
+
+
+def test_colour_separation_is_not_limited_to_blue():
+    """Разделение по цвету — это «тон отличается от текста», а не «синий»."""
+    import numpy as np
+
+    from app.ai.cad_recognize.diameter_dimensions import _geometry_mask
+
+    array = np.full((400, 600, 3), 255, dtype=np.uint8)
+    array[180:200, 50:550] = (200, 30, 30)  # красная геометрия
+
+    mask, strategy = _geometry_mask(Image.fromarray(array))
+
+    assert strategy == "colour"
+    assert bool(mask[190, 300]) is True
 
 
 @pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract is not installed")

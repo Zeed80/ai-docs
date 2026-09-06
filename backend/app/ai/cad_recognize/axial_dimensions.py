@@ -330,11 +330,56 @@ def localize_axial_dimensions(
     accepted.sort(key=lambda item: (item["dimension_line"][1], item["dimension_line"][0]))
     for index, item in enumerate(accepted, start=1):
         item["id"] = f"axial-dim-{index}"
+
+    blockers = list(_calibration_blockers(overall_value, known, accepted))
+    if not accepted:
+        blockers.append("осевые размерные линии не связаны с выносками")
     return {
-        "status": "ok" if accepted else "unresolved",
+        # Уверенно неверная калибровка хуже её отсутствия: масштаб уходит
+        # дальше по конвейеру и подмешивается в проверки, а стадия помечена
+        # как успешная. Живой прогон вернул overall_mm 45 для вала, у которого
+        # собственная цепочка чертежа доходит до 195: локализатор поймал
+        # габарит выносного элемента (Б-Б 5:1) и принял его за общий.
+        "status": "ok" if accepted and not blockers else "unresolved",
         "overall_mm": round(overall_value, 3),
         "datum_line": [datum_left, datum_right],
         "mm_per_px": round(mm_per_px, 6),
         "observations": accepted,
-        "blockers": [] if accepted else ["осевые размерные линии не связаны с выносками"],
+        "blockers": blockers,
     }
+
+
+# Доля наблюдений, у которых напечатанное число и независимо измеренная длина
+# линии расходятся сильнее этого, при которой калибровке верить нельзя.
+_SPAN_MISMATCH_TOLERANCE = 0.08
+_SPAN_MISMATCH_SHARE = 0.5
+# Во сколько раз выноска с листа должна превышать «общий» габарит, чтобы стало
+# ясно: за общий приняли не тот размер.
+_OVERALL_UNDERSHOOT = 1.5
+
+
+def _calibration_blockers(
+    overall_value: float, known: list[float], accepted: list[dict[str, Any]]
+) -> list[str]:
+    """Признаки того, что за общий габарит принят не тот размер."""
+    blockers: list[str] = []
+    larger = [value for value in known if value > overall_value * _OVERALL_UNDERSHOOT]
+    if larger:
+        blockers.append(
+            f"общий габарит принят за {overall_value:g} мм, но лист несёт "
+            f"больший размер {max(larger):g} мм — вероятно, измерен выносной элемент"
+        )
+    if accepted:
+        mismatched = sum(
+            1
+            for item in accepted
+            if abs(float(item["span_check_mm"]) - float(item["value_mm"]))
+            / max(float(item["value_mm"]), 1e-6)
+            > _SPAN_MISMATCH_TOLERANCE
+        )
+        if mismatched > len(accepted) * _SPAN_MISMATCH_SHARE:
+            blockers.append(
+                f"длины размерных линий не сходятся с числами на них "
+                f"({mismatched} из {len(accepted)}) — масштаб определён неверно"
+            )
+    return blockers

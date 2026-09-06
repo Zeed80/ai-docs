@@ -6,8 +6,11 @@ This allows swapping models and backends without touching business logic.
 
 from __future__ import annotations
 
+import asyncio as _asyncio
 import json
 import re
+import time as _time
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
@@ -157,6 +160,19 @@ def _fallback_chat_title(first_message: str) -> str:
     )
     words = text.split()[:5]
     return " ".join(words)[:45].strip(" ,.;:!?") or "Новый чат"
+
+
+@dataclass
+class CoerceVerdict:
+    """Удалось ли привести ответ к запрошенной форме.
+
+    Отдельный тип, а не исключение: «не сошлось» — ещё не приговор кандидату,
+    сначала стоит починить локально и переспросить.
+    """
+
+    ok: bool
+    response: AIResponse
+    error: str | None
 
 
 class AIRouter:
@@ -350,9 +366,6 @@ class AIRouter:
 
         last_error: Exception | None = None
 
-        import asyncio as _asyncio
-        import time as _time
-
         # Vector calls answer in seconds or are broken — they must not inherit
         # the provider's 180s conversational timeout. Measured live: a hung
         # Ollama /api/embed held a chat turn for minutes per candidate while the
@@ -442,14 +455,14 @@ class AIRouter:
                 logger.debug("ensure_server_running_failed", model=model_name, error=str(exc))
             started = _time.perf_counter()
             try:
-                response = await (
-                    _asyncio.wait_for(
-                        self._dispatch(provider, request, model), timeout=per_call_timeout
-                    )
-                    if per_call_timeout is not None
-                    else self._dispatch(provider, request, model)
+                deadline = chain_started + chain_budget if chain_budget is not None else None
+                response = await self._run_candidate(
+                    provider,
+                    request,
+                    model,
+                    per_call_timeout=per_call_timeout,
+                    deadline=deadline,
                 )
-                response = self._validate_structured_output(request, response)
                 response.proposed_tool_calls = self._filter_tool_calls(request, response)
                 # Reranking providers deliberately return scores=[] instead of
                 # raising when a model technically responds but can't produce a
@@ -506,7 +519,6 @@ class AIRouter:
         response: AIResponse | None = None,
         error: str | None = None,
     ) -> None:
-        import time as _time
 
         try:
             from app.ai import telemetry
@@ -598,6 +610,261 @@ class AIRouter:
         if request.response_schema is not None:
             return await provider.structured_extract(request, provider_model)
         return await provider.chat(request, provider_model)
+
+    async def _run_candidate(
+        self,
+        provider: AIProvider,
+        request: AIRequest,
+        model: ModelCapability,
+        *,
+        per_call_timeout: float | None,
+        deadline: float | None,
+    ) -> AIResponse:
+        """Одна модель, но несколько попыток получить от неё нужный формат.
+
+        Раньше невалидный ответ означал переход к СЛЕДУЮЩЕЙ модели цепочки —
+        то есть модель, которая прекрасно прочитала лист и лишь оформила ответ
+        не так, теряла свою работу целиком. На живом чтении чертежа это стоило
+        трёх проходов из пяти.
+
+        Порядок восстановления: локальный ремонт (снять markdown-обёртку,
+        достать JSON из прозы) → один переспрос с текстом ошибки → спуск на
+        ступень ниже по лестнице принуждения → и только затем следующий
+        кандидат. Отказ ПРОВОДА (400 на само требование формата) переспрос не
+        тратит: он лечится спуском немедленно.
+
+        Жёсткие стопы (политика конфиденциальности, занятый GPU) сюда не
+        попадают — они поднимаются из `_enforce_policy` до вызова.
+        """
+        from app.ai import output_format as fmt
+
+        contract = fmt.initial_contract(request, model, model.provider.value)
+        attempt_request = fmt.attach(request, contract) if contract else request
+        if contract is not None:
+            logger.debug(
+                "ai_format_contract",
+                task=request.task.value,
+                model=model.name,
+                mechanism=contract.mechanism.value,
+                ladder=[m.value for m in contract.ladder],
+            )
+        max_reasks = self._max_reasks(request)
+        reasks = 0
+
+        while True:
+            started = _time.perf_counter()
+            try:
+                response = await (
+                    _asyncio.wait_for(
+                        self._dispatch(provider, attempt_request, model),
+                        timeout=per_call_timeout,
+                    )
+                    if per_call_timeout is not None
+                    else self._dispatch(provider, attempt_request, model)
+                )
+            except Exception as exc:
+                if contract is not None and fmt.classify_wire_rejection(exc):
+                    lower = fmt.degrade(contract)
+                    if lower is not None and self._budget_left(deadline, started):
+                        logger.warning(
+                            "ai_format_degraded",
+                            task=request.task.value,
+                            model=model.name,
+                            **{"from": contract.mechanism.value},
+                            to=lower.mechanism.value,
+                            cause="wire_rejection",
+                        )
+                        contract = lower
+                        attempt_request = fmt.attach(request, contract)
+                        continue
+                raise
+
+            verdict = self._coerce_structured_output(attempt_request, response)
+            if verdict.ok:
+                self._record_telemetry(request, model, started, ok=True, response=verdict.response)
+                return verdict.response
+
+            self._record_telemetry(request, model, started, ok=True, response=response)
+
+            if reasks < max_reasks and self._budget_left(deadline, started):
+                reasks += 1
+                logger.warning(
+                    "ai_format_reask",
+                    task=request.task.value,
+                    model=model.name,
+                    attempt=reasks,
+                    max_reasks=max_reasks,
+                    error=str(verdict.error)[:300],
+                )
+                attempt_request = self._with_correction(
+                    attempt_request, response, verdict.error, contract
+                )
+                if contract is not None:
+                    contract = fmt.with_attempt(contract, reasks)
+                continue
+
+            lower = fmt.degrade(contract) if contract is not None else None
+            if lower is not None and self._budget_left(deadline, started):
+                logger.warning(
+                    "ai_format_degraded",
+                    task=request.task.value,
+                    model=model.name,
+                    **{"from": contract.mechanism.value},
+                    to=lower.mechanism.value,
+                    cause="schema_mismatch",
+                )
+                contract = lower
+                attempt_request = fmt.attach(request, contract)
+                reasks = 0
+                continue
+
+            logger.warning(
+                "ai_format_exhausted",
+                task=request.task.value,
+                model=model.name,
+                error=str(verdict.error)[:300],
+            )
+            return self._final_verdict(request, verdict)
+
+    @staticmethod
+    def _budget_left(deadline: float | None, last_started: float) -> bool:
+        """Хватит ли бюджета цепочки ещё на одну попытку такой же длины.
+
+        Без этой оценки переспрос съедал бы бюджет, отведённый на ВСЮ цепочку,
+        и следующие кандидаты не пробовались бы вовсе.
+        """
+        if deadline is None:
+            return True
+        now = _time.perf_counter()
+        return now + (now - last_started) < deadline
+
+    @staticmethod
+    def _max_reasks(request: AIRequest) -> int:
+        """Сколько раз переспрашивать ОДНУ модель при невалидном ответе."""
+        per_call = (request.metadata or {}).get("format_max_reasks")
+        if isinstance(per_call, int) and per_call >= 0:
+            return per_call
+        try:
+            from app.config import settings
+
+            return max(0, int(getattr(settings, "ai_format_max_reasks", 1)))
+        except Exception:  # noqa: BLE001 — настройка не должна ронять маршрут
+            return 1
+
+    @staticmethod
+    def _with_correction(
+        request: AIRequest,
+        response: AIResponse,
+        error: str | None,
+        contract: Any,
+    ) -> AIRequest:
+        """Тот же запрос плюс неудачный ответ и требование его исправить.
+
+        Именно ДОБАВЛЕННЫЕ сообщения, а не заменённый промпт: подмена промпта
+        потеряла бы картинку и системную часть — то есть у читателя чертежа не
+        осталось бы ни листа, ни роли.
+
+        Последним обязан быть `user`: заканчивать историю сообщением
+        ассистента — это assistant prefill, который на всех актуальных моделях
+        Claude возвращает 400.
+        """
+        from app.ai.schemas import ChatMessage
+        from app.ai.structured_output import correction_prompt
+
+        schema = getattr(contract, "schema", None) or request.response_schema
+        failed = (response.text or "")[:2000]
+        messages = [*request.messages]
+        if failed:
+            messages.append(ChatMessage(role="assistant", content=failed))
+        messages.append(
+            ChatMessage(
+                role="user", content=correction_prompt(error or "ответ не по схеме", schema)
+            )
+        )
+        return request.model_copy(update={"messages": messages})
+
+    def _coerce_structured_output(self, request: AIRequest, response: AIResponse) -> CoerceVerdict:
+        """Привести ответ к запрошенной схеме, ничего не бросая.
+
+        Отделено от `_final_verdict`, потому что «не сошлось» — ещё не приговор:
+        сначала стоит починить локально и переспросить, и только потом решать,
+        считать ли кандидата провалившимся.
+        """
+        from app.ai.structured_output import parse_json_output
+
+        schema = request.response_schema
+        if schema is not None:
+            if isinstance(response.data, schema):
+                return CoerceVerdict(True, response, None)
+            payload = response.data
+            if payload is None or isinstance(payload, str):
+                text = response.text or "{}"
+                payload = parse_json_output(text)
+                if payload is None:
+                    try:
+                        payload = json.loads(text)
+                    except Exception:
+                        payload = {}
+            try:
+                response.data = schema.model_validate(payload)
+            except Exception as exc:
+                # Данные были, но схему не прошли — раньше текст ответа тут не
+                # пробовали вовсе, хотя починка часто спасает именно его.
+                repaired = parse_json_output(response.text or "")
+                if repaired is not None and repaired is not payload:
+                    try:
+                        response.data = schema.model_validate(repaired)
+                        return CoerceVerdict(True, response, None)
+                    except Exception:  # noqa: BLE001 — ремонт не помог
+                        pass
+                logger.warning(
+                    "structured_output_validation_failed",
+                    schema=getattr(schema, "__name__", str(schema)),
+                    error=str(exc),
+                )
+                return CoerceVerdict(False, response, str(exc))
+            return CoerceVerdict(True, response, None)
+
+        # Схема пришла словарём (весь cad_recognize так и делает) — раньше
+        # такой запрос роутер не проверял ВООБЩЕ, и негодный ответ молча
+        # уходил вызывающему как успех.
+        from app.ai.output_format import requested_schema
+        from app.ai.structured_output import validate_against_schema
+
+        raw_schema = requested_schema(request)
+        if raw_schema is None:
+            return CoerceVerdict(True, response, None)
+        payload = response.data if isinstance(response.data, dict) else None
+        if payload is None:
+            payload = parse_json_output(response.text or "")
+        if payload is None:
+            return CoerceVerdict(False, response, "ответ не разобран как JSON")
+        problem = validate_against_schema(payload, raw_schema)
+        if problem:
+            return CoerceVerdict(False, response, problem)
+        return CoerceVerdict(True, response, None)
+
+    def _final_verdict(self, request: AIRequest, verdict: CoerceVerdict) -> AIResponse:
+        """Что делать, когда починить формат не удалось.
+
+        Правило прежнее: для конфиденциальных задач и извлечения невалидный
+        ответ — отказ кандидата, для остальных — предупреждение и ответ как
+        есть.
+        """
+        if request.response_schema is not None and (
+            request.confidential
+            or request.task
+            in {
+                AITask.INVOICE_OCR,
+                AITask.STRUCTURED_EXTRACTION,
+                AITask.DRAWING_ANALYSIS,
+                AITask.DRAWING_ANALYSIS_VLM,
+            }
+        ):
+            raise AIStructuredOutputValidationError(
+                f"Structured output validation failed for {request.task.value}: {verdict.error}"
+            )
+        return verdict.response
 
     def _validate_structured_output(self, request: AIRequest, response: AIResponse) -> AIResponse:
         schema = request.response_schema

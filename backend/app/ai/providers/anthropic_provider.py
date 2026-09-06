@@ -14,6 +14,12 @@ from typing import Any
 
 import httpx
 
+from app.ai.output_format import (
+    FormatMechanism,
+    contract_of,
+    inline_schema_defs,
+    schema_hint_text,
+)
 from app.ai.providers.base import AIProvider
 from app.ai.schemas import (
     AIRequest,
@@ -27,6 +33,98 @@ from app.ai.schemas import (
 _ANTHROPIC_API = "https://api.anthropic.com/v1"
 _ANTHROPIC_VERSION = "2023-06-01"
 _MAX_TOKENS = 4096
+# Anthropic's own ceiling on the current generation. Clamping here beats a 400
+# from the wire when a caller asks for more than the model can produce.
+_MAX_TOKENS_CEILING = 128000
+
+
+def _resolve_max_tokens(request: AIRequest) -> int:
+    """Output ceiling the CALLER asked for, not a constant.
+
+    ``max_tokens`` was hardcoded at 4096 while the drawing reader asks for 6000
+    and 8000 — every structured read through Claude was truncated mid-JSON and
+    counted as a failed pass. Both channels the rest of the project uses are
+    honoured: ``inference_params.max_tokens`` and ``metadata["num_predict"]``.
+    """
+    meta = request.metadata or {}
+    params = meta.get("inference_params") or {}
+    requested = params.get("max_tokens") or meta.get("num_predict")
+    try:
+        value = int(requested)
+    except (TypeError, ValueError):
+        return _MAX_TOKENS
+    return max(256, min(value, _MAX_TOKENS_CEILING))
+
+
+def _system_and_question(request: AIRequest) -> tuple[str, str]:
+    """System text and the user's question, read from ``messages`` first.
+
+    Same defect that was fixed for the OpenAI-compatible provider: the question
+    was taken only from ``prompt``/``input_text``, while the drawing reader asks
+    through ``messages``. On this path that meant Claude received the sheet with
+    no question attached at all, and the system prompt was dropped outright.
+    """
+    system_text = ""
+    user_parts: list[str] = []
+    for message in request.messages:
+        if message.role == "system":
+            system_text = message.content
+        elif message.role in ("user", "assistant"):
+            user_parts.append(message.content)
+    question = "\n\n".join(user_parts) or request.prompt or request.input_text or ""
+    return system_text, question
+
+
+def _format_payload(request: AIRequest) -> dict[str, Any]:
+    """Поля запроса, которые требуют от Claude нужной формы ответа.
+
+    Схема не передавалась ВООБЩЕ: ни параметром, ни инструментом, ни словами.
+    Модель получала просьбу «ответь JSON» только в том виде, в каком её написал
+    вызывающий, — то есть как пожелание. Ollama в это время клала схему в
+    `format` и получала JSON принудительно.
+
+    Три ступени, потому что ни одна не работает везде:
+      * `output_config.format` — настоящий структурированный вывод (устаревший
+        top-level `output_format` не использовать);
+      * принудительный инструмент — на новейших моделях `tool_choice` типа
+        `tool`/`any` возвращает 400, поэтому он средняя ступень, не вершина;
+      * схема словами — когда не осталось ничего.
+    """
+    contract = contract_of(request)
+    if contract is None or not contract.schema:
+        return {}
+    if contract.mechanism is FormatMechanism.NATIVE_SCHEMA:
+        return {"output_config": {"format": inline_schema_defs(contract.schema)}}
+    if contract.mechanism is FormatMechanism.FORCED_TOOL:
+        return {
+            "tools": [
+                {
+                    "name": contract.schema_name,
+                    "description": "Верни ответ строго по этой схеме.",
+                    "input_schema": inline_schema_defs(contract.schema),
+                }
+            ],
+            "tool_choice": {"type": "tool", "name": contract.schema_name},
+        }
+    return {}
+
+
+def _answer_from_forced_tool(body: dict, request: AIRequest) -> tuple[str, dict | None]:
+    """Ответ, отданный принудительным инструментом, — как текст И как данные.
+
+    Текстовый разбор ниже по потоку рассчитан на строку, поэтому аргументы
+    инструмента сериализуются обратно: иначе ответ, полученный самым надёжным
+    способом, оказался бы единственным, который никто не читает.
+    """
+    contract = contract_of(request)
+    if contract is None or contract.mechanism is not FormatMechanism.FORCED_TOOL:
+        return "", None
+    for block in body.get("content") or []:
+        if block.get("type") == "tool_use" and block.get("name") == contract.schema_name:
+            data = block.get("input")
+            if isinstance(data, dict):
+                return json.dumps(data, ensure_ascii=False), data
+    return "", None
 
 
 class AnthropicProvider(AIProvider):
@@ -181,24 +279,31 @@ class AnthropicProvider(AIProvider):
         payload: dict[str, Any] = {
             "model": model,
             "messages": anthropic_msgs,
-            "max_tokens": _MAX_TOKENS,
+            "max_tokens": _resolve_max_tokens(request),
+            **_format_payload(request),
         }
+        hint = schema_hint_text(contract_of(request))
+        if hint and anthropic_msgs:
+            # Схема словами дописывается к ПОСЛЕДНЕМУ сообщению пользователя:
+            # прикреплённая к первому, она уезжает из внимания модели на длинном
+            # диалоге ровно тогда, когда нужна больше всего.
+            for message in reversed(anthropic_msgs):
+                if message.get("role") == "user" and isinstance(message.get("content"), str):
+                    message["content"] = f"{message['content']}{hint}"
+                    break
         # Extended thinking: enabled when the caller/catalog asks for CoT.
-        # The level maps to a token budget (a UX convenience — Anthropic's API
-        # itself only understands the raw number). No level resolved (e.g. no
-        # catalog entry marks the model as level-capable yet) keeps the
-        # original flat 2048 default for backward compatibility.
+        # Which shape the model accepts depends on its generation — see
+        # thinking_params.anthropic_thinking_payload.
         if request.thinking:
-            from app.ai.thinking_params import (
-                ANTHROPIC_DEFAULT_THINKING_BUDGET,
-                ANTHROPIC_THINKING_BUDGET_TOKENS,
-            )
+            from app.ai.thinking_params import anthropic_thinking_payload
 
-            budget = ANTHROPIC_THINKING_BUDGET_TOKENS.get(
-                request.thinking_level, ANTHROPIC_DEFAULT_THINKING_BUDGET
-            )
-            payload["max_tokens"] = max(_MAX_TOKENS, budget + 1024)
-            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            thinking_payload = anthropic_thinking_payload(model, request.thinking_level)
+            payload.update(thinking_payload)
+            budget = (thinking_payload.get("thinking") or {}).get("budget_tokens")
+            if budget:
+                # The legacy budget is spent out of max_tokens, so the ceiling
+                # has to clear it or the answer itself has no room left.
+                payload["max_tokens"] = max(payload["max_tokens"], int(budget) + 1024)
         if system_text:
             payload["system"] = self._build_system(system_text)
         if request.tools:
@@ -237,12 +342,23 @@ class AnthropicProvider(AIProvider):
                     )
                 )
 
+        forced_text, forced_data = _answer_from_forced_tool(body, request)
+        if forced_text:
+            # Ответ пришёл принудительным инструментом: отдаём его и текстом, и
+            # данными — весь разбор ниже по потоку рассчитан на строку. Из
+            # `proposed_tool_calls` его надо убрать: там это читалось бы как
+            # «модель просит вызвать инструмент», чего она не делала.
+            text_out = forced_text
+            answer_name = contract_of(request).schema_name
+            tool_calls = [call for call in tool_calls if call.name != answer_name]
+
         usage = body.get("usage", {})
         return AIResponse(
             task=request.task,
             provider=self.kind,
             model=model,
             text=text_out or None,
+            data=forced_data,
             proposed_tool_calls=tool_calls,
             usage=AIUsage(
                 input_tokens=usage.get("input_tokens"),
@@ -268,13 +384,25 @@ class AnthropicProvider(AIProvider):
                 )
             else:
                 content.append({"type": "image", "source": {"type": "url", "url": img}})
-        content.append({"type": "text", "text": request.prompt or request.input_text or ""})
+        system_text, question = _system_and_question(request)
+        content.append({"type": "text", "text": question + schema_hint_text(contract_of(request))})
 
         payload: dict[str, Any] = {
             "model": model,
             "messages": [{"role": "user", "content": content}],
-            "max_tokens": _MAX_TOKENS,
+            "max_tokens": _resolve_max_tokens(request),
+            **_format_payload(request),
         }
+        if system_text:
+            payload["system"] = self._build_system(system_text)
+        if request.thinking:
+            from app.ai.thinking_params import anthropic_thinking_payload
+
+            thinking_payload = anthropic_thinking_payload(model, request.thinking_level)
+            payload.update(thinking_payload)
+            budget = (thinking_payload.get("thinking") or {}).get("budget_tokens")
+            if budget:
+                payload["max_tokens"] = max(payload["max_tokens"], int(budget) + 1024)
 
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             resp = await client.post(
@@ -286,11 +414,15 @@ class AnthropicProvider(AIProvider):
         text_out = "".join(
             b.get("text", "") for b in body.get("content", []) if b.get("type") == "text"
         )
+        tool_text, tool_data = _answer_from_forced_tool(body, request)
+        if tool_text:
+            text_out = tool_text
         return AIResponse(
             task=request.task,
             provider=self.kind,
             model=model,
             text=text_out or None,
+            data=tool_data,
             usage=AIUsage(latency_ms=int((time.perf_counter() - started) * 1000)),
             raw=body,
         )

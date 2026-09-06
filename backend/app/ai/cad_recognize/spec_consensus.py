@@ -26,9 +26,32 @@ from typing import Any
 _NUMERIC_TOLERANCE = 0.005
 _NUMERIC_FLOOR = 0.05
 
-# Minimum passes that must agree before a value is kept. With the default of
-# three reads this means a strict majority.
+# Minimum passes that must agree before a value is kept. Kept as the floor and
+# as the explicit override tests pass in; the effective threshold now scales
+# with how many passes actually came back usable — see required_agreement.
 MIN_AGREEMENT = 2
+
+
+def required_agreement(usable: int) -> int:
+    """Strict majority of the passes that actually returned something.
+
+    A fixed 2 was wrong in both directions at once. The pipeline runs five
+    passes by default and the UI offers up to five, so 2 of 5 is not a majority
+    — it is a pair agreeing while three others say something else. And when
+    only two passes survive validation, the same 2 demands unanimity, which is
+    how a live shaft read correctly by both surviving passes produced no
+    profile at all: they differed on one step out of six.
+
+    Worse, the two failures compose into a perverse rule. A single usable pass
+    is passed through whole and unchecked (see ``consensus_spec``), so two
+    slightly-disagreeing reads used to yield strictly LESS than one read —
+    more evidence produced a worse answer, and asking for more passes made
+    success less likely while costing five times the time.
+
+    1 -> 1, 2 -> 2, 3 -> 2, 4 -> 3, 5 -> 3.
+    """
+    return 1 if usable <= 1 else max(2, usable // 2 + 1)
+
 
 _PROVENANCE_SKIP = {
     "consensus",
@@ -109,14 +132,62 @@ def _sections_agree(left: list[dict], right: list[dict]) -> bool:
     return True
 
 
+def _disputed_values(reads: list[list[dict]], index: int, field: str) -> list[float]:
+    """Distinct values the passes gave for one field of one step."""
+    seen: list[float] = []
+    for read in reads:
+        if index >= len(read):
+            continue
+        value = read[index].get(field)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        if not any(_numbers_agree(value, known) for known in seen):
+            seen.append(float(value))
+    return seen
+
+
+def _mark_disputed_sections(
+    accepted: list[dict], populated: list[list[dict]], label: str
+) -> list[str]:
+    """Flag the steps the passes disagreed on; return the review notes.
+
+    The whole profile is kept — a part the operator can look at and correct
+    beats no part at all — but every step that is not backed by agreement says
+    so, in the spec and in ``unresolved``, so it can never pass silently into
+    geometry.
+    """
+    notes: list[str] = []
+    for index, section in enumerate(accepted):
+        disputed: list[str] = []
+        for field, caption in (("diameter_mm", "Ø"), ("length_mm", "L")):
+            values = _disputed_values(populated, index, field)
+            if len(values) > 1:
+                disputed.append(f"{caption}: {', '.join(f'{v:g}' for v in values)}")
+        if not disputed:
+            continue
+        section["review_required"] = True
+        section["disputed_values"] = _disputed_values(populated, index, "diameter_mm")
+        notes.append(f"{label}: ступень {index + 1} не подтверждена ({'; '.join(disputed)})")
+    return notes
+
+
 def _vote_sections(
-    reads: list[list[dict]], *, minimum: int
+    reads: list[list[dict]], *, minimum: int, label: str = "профиль"
 ) -> tuple[list[dict] | None, int, str | None]:
-    """A stepped profile is kept only when whole passes agree on ALL of it.
+    """Keep the best-supported stepped profile, marking what did not agree.
 
     Merging section-by-section across disagreeing reads would silently build a
-    part that no pass actually described — a chimera with one read's diameters
-    and another's lengths.
+    part no pass described — a chimera with one read's diameters and another's
+    lengths — so the accepted profile is still ONE pass's list, taken whole.
+    That part has not changed.
+
+    What changed is the else-branch. Returning ``None`` when no list won a
+    majority threw away every step, including the ones every pass agreed on,
+    and the caller then reported "the drawing has no stepped profile" — which
+    on a live A3 shaft became "you picked the wrong part type" while the reader
+    had in fact read the shaft correctly twice. Now the best-supported list
+    survives with its unconfirmed steps flagged ``review_required``, and the
+    disagreement is still recorded so nothing unverified reaches the kernel.
     """
     populated = [read for read in reads if read]
     if not populated:
@@ -131,29 +202,56 @@ def _vote_sections(
         if best is None or agreeing > best[1]:
             best = (candidate, agreeing)
     assert best is not None
-    if best[1] < minimum:
-        counts = sorted({len(read) for read in populated})
-        return (
-            None,
-            best[1],
-            (
-                "проходы чтения не сошлись на профиле "
-                f"(ступеней по проходам: {counts}, совпало {best[1]} из {len(reads)})"
-            ),
-        )
     accepted = [dict(item) for item in best[0]]
     agreeing_reads = [read for read in populated if _sections_agree(read, best[0])]
+    # Threads are voted the same way in both outcomes: a thread is an annotation
+    # on a step, and it needs its own agreement whether or not the profile as a
+    # whole won one. Below the threshold that vote simply has fewer voters.
     for index, section in enumerate(accepted):
         thread_reads = [
             [read[index]["thread"]] if isinstance(read[index].get("thread"), dict) else []
             for read in agreeing_reads
         ]
-        agreed_threads = _agreed_feature_items(thread_reads, minimum=minimum)
+        agreed_threads = _agreed_feature_items(
+            thread_reads, minimum=min(minimum, len(agreeing_reads))
+        )
         if agreed_threads:
             section["thread"] = agreed_threads[0]
         else:
             section.pop("thread", None)
-    return accepted, best[1], None
+
+    if best[1] >= minimum:
+        return accepted, best[1], None
+
+    # "The passes disagree about WHAT is here" and "most passes say nothing is
+    # here" are different findings and must not share an outcome. Keeping the
+    # best-supported list is right for the first: every pass saw a stepped
+    # profile and they differed on a step, so the operator gets the part with
+    # that step flagged. It would be wrong for the second: a bore only one pass
+    # out of three ever saw is a cavity two passes deny, and adding it marked
+    # still adds it. Below a majority of passes populating the field at all, the
+    # old fail-closed answer stands.
+    if len(populated) < minimum:
+        counts = sorted({len(read) for read in populated})
+        return (
+            None,
+            best[1],
+            (
+                "элемент увидели не все проходы "
+                f"(увидели {len(populated)} из {len(reads)}, ступеней: {counts})"
+            ),
+        )
+
+    counts = sorted({len(read) for read in populated})
+    disputed_notes = _mark_disputed_sections(accepted, populated, label)
+    problem = (
+        "проходы чтения не сошлись на профиле "
+        f"(ступеней по проходам: {counts}, совпало {best[1]} из {len(reads)}); "
+        "профиль сохранён под ревью"
+    )
+    if disputed_notes:
+        problem = f"{problem}. {'. '.join(disputed_notes)}"
+    return accepted, best[1], problem
 
 
 def _body_consensus(
@@ -167,19 +265,25 @@ def _body_consensus(
     merged["type"] = body_type or ""
 
     outer, _agreed, problem = _vote_sections(
-        [body.get("outer") or [] for body in bodies], minimum=minimum
+        [body.get("outer") or [] for body in bodies], minimum=minimum, label=label
     )
+    # `problem` is recorded whether or not sections survived: the profile can
+    # now come back marked-for-review rather than absent, and an `elif` here
+    # would drop exactly the note that says so. Keeping the geometry must never
+    # cost the record of why it is not confirmed.
     if outer is not None:
         merged["outer"] = outer
-    elif problem:
+    if problem:
         disagreements.append(f"{label}: {problem}")
 
     bore_reads = [body.get("bore") or [] for body in bodies]
     if any(bore_reads):
-        bore, _agreed_bore, bore_problem = _vote_sections(bore_reads, minimum=minimum)
+        bore, _agreed_bore, bore_problem = _vote_sections(
+            bore_reads, minimum=minimum, label=f"{label} (расточка)"
+        )
         if bore is not None:
             merged["bore"] = bore
-        elif bore_problem:
+        if bore_problem:
             # A cavity only some passes saw is a review item, not a silent solid.
             disagreements.append(f"{label} (расточка): {bore_problem}")
 
@@ -403,16 +507,22 @@ def _profile_consensus(
     return merged, None
 
 
-def consensus_spec(specs: list[dict], *, minimum: int = MIN_AGREEMENT) -> dict:
+def consensus_spec(specs: list[dict], *, minimum: int | None = None) -> dict:
     """Intersect several reads of the same sheet into one conservative spec.
 
     The result carries a ``consensus`` block describing what agreed, and every
     disagreement is appended to ``unresolved`` so the fail-closed contract stops
     construction exactly where the reads stopped agreeing.
+
+    ``minimum`` defaults to :func:`required_agreement` of the usable passes —
+    a strict majority of the reads that came back, not a fixed 2. Callers (and
+    tests) may still pin it explicitly.
     """
     usable = [spec for spec in specs if isinstance(spec, dict) and spec]
     if not usable:
         return {}
+    if minimum is None:
+        minimum = required_agreement(len(usable))
     if len(usable) == 1:
         merged = dict(usable[0])
         merged["consensus"] = {

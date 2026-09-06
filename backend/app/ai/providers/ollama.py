@@ -13,14 +13,47 @@ from app.ai.schemas import AIRequest, AIResponse, AIUsage, ProviderKind
 logger = structlog.get_logger(__name__)
 
 
+# Верхняя граница запрошенного лимита вывода и значение по умолчанию.
+# Потолок поднят с 8192 на 2026-07-25: полный EngineeringDrawingSpec для
+# реального листа A3 в него не влезал — Ollama экранирует кириллицу как
+# \uXXXX, поэтому JSON обрывался посреди объекта, а вызывающий мог сообщить об
+# этом только как «чертёж не читается».
+_NUM_PREDICT_CEILING = 32768
+_NUM_PREDICT_DEFAULT = 8192
+
+
+def _num_predict(request: AIRequest) -> int:
+    """Лимит вывода, запрошенный вызывающим.
+
+    Читался ТОЛЬКО в `vision`. В `chat`/`structured_extract` значение
+    `metadata["num_predict"]` игнорировалось полностью, поэтому обрыв ответа на
+    середине JSON ловился на одном пути и молча случался на двух других.
+    """
+    requested = (request.metadata or {}).get("num_predict")
+    if requested is None:
+        return _NUM_PREDICT_DEFAULT
+    try:
+        return max(1, min(int(requested), _NUM_PREDICT_CEILING))
+    except (TypeError, ValueError):
+        return _NUM_PREDICT_DEFAULT
+
+
 def _inference_options(request: AIRequest, default_temperature: float = 0.2) -> dict[str, Any]:
     """Build Ollama options dict from request inference_params metadata."""
     params = (request.metadata or {}).get("inference_params") or {}
-    opts: dict[str, Any] = {"temperature": params.get("temperature", default_temperature)}
+    opts: dict[str, Any] = {
+        "temperature": params.get("temperature", default_temperature),
+        "num_predict": _num_predict(request),
+    }
     if "top_p" in params:
         opts["top_p"] = params["top_p"]
     if "top_k" in params:
         opts["top_k"] = params["top_k"]
+    if "min_p" in params:
+        # Профили объявляли min_p, но он не доходил ни до одного провайдера:
+        # объявленный и молча отброшенный параметр хуже отсутствующего — по
+        # настройкам видно одно, работает другое.
+        opts["min_p"] = params["min_p"]
     if "repeat_penalty" in params:
         opts["repeat_penalty"] = params["repeat_penalty"]
     if "num_ctx" in params:
@@ -58,6 +91,9 @@ def _thinking_payload(request: AIRequest) -> dict[str, Any]:
 
     enabled = _think_flag(request)
     return thinking_request_params("ollama", enabled, request.thinking_level if enabled else None)
+
+
+from app.ai.output_format import FormatMechanism, contract_of
 
 
 def _pydantic_to_ollama_format(schema_cls: Any) -> dict[str, Any] | None:
@@ -167,7 +203,15 @@ class OllamaProvider(AIProvider):
         messages = [message.model_dump() for message in request.messages]
         if not messages:
             messages = [{"role": "user", "content": request.prompt or request.input_text or ""}]
-        fmt = _pydantic_to_ollama_format(request.response_schema)
+        contract = contract_of(request)
+        if contract is not None and contract.mechanism is FormatMechanism.JSON_MODE:
+            fmt = "json"
+        elif contract is not None and contract.mechanism is FormatMechanism.PROMPT_ONLY:
+            fmt = None
+        elif contract is not None and contract.schema:
+            fmt = contract.schema
+        else:
+            fmt = _pydantic_to_ollama_format(request.response_schema)
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -232,17 +276,6 @@ class OllamaProvider(AIProvider):
             prompt_text = "\n\n".join(user_parts)
 
         opts = _inference_options(request, default_temperature=0.0)
-        requested_num_predict = (request.metadata or {}).get("num_predict")
-        # Ceiling raised from 8192 on 2026-07-25: a full EngineeringDrawingSpec
-        # for a real A3 sheet does not fit — Ollama escapes Cyrillic as \uXXXX,
-        # so the JSON ran out of output room and came back truncated mid-object,
-        # which the caller could only report as "unreadable drawing". The
-        # DEFAULT is unchanged; only an explicit request can go higher.
-        opts["num_predict"] = (
-            max(1, min(int(requested_num_predict), 32768))
-            if requested_num_predict is not None
-            else 8192
-        )
         payload: dict = {
             "model": model,
             "prompt": prompt_text,
@@ -263,9 +296,19 @@ class OllamaProvider(AIProvider):
         # thickness the free-form answer had left null. It stays opt-in because
         # the claim may still hold for some model in the catalogue — a caller
         # that asks for a schema has measured its own model.
-        json_schema = (request.metadata or {}).get("json_schema")
-        if json_schema:
-            payload["format"] = json_schema
+        contract = contract_of(request)
+        if contract is not None:
+            # Ступень выбирает роутер: на верхней схема уходит движку, ниже —
+            # просим просто JSON, а форму сообщаем словами (это делает вызов
+            # `schema_hint_text` в сборке вопроса ниже по стеку).
+            if contract.mechanism is FormatMechanism.NATIVE_SCHEMA and contract.schema:
+                payload["format"] = contract.schema
+            elif contract.mechanism is FormatMechanism.JSON_MODE:
+                payload["format"] = "json"
+        else:
+            json_schema = (request.metadata or {}).get("json_schema")
+            if json_schema:
+                payload["format"] = json_schema
 
         # Vision inference needs much more time than text tasks. Raised from
         # 660 s on 2026-07-25: reading a full A3 sheet with qwen3-vl:32b timed

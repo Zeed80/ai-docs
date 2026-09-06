@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     # gated repo; klein/Qwen download without it).
     hf_token: str | None = None
 
+    # Формат ответа модели: сколько раз переспрашивать ОДНУ модель, когда её
+    # ответ не сошёлся со схемой. Переспрос по чертежу — это повторная отправка
+    # картинки, то есть удвоение стоимости прохода; поэтому один, а не три.
+    # Пер-запросное переопределение — `AIRequest.metadata["format_max_reasks"]`.
+    ai_format_max_reasks: int = 1
+
     # Ollama
     ollama_url: str = "http://localhost:11434"
     # Дефолты — только реально используемые модели. gemma4 держалась здесь

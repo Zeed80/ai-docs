@@ -467,10 +467,10 @@ async def _analyze_drawing_async(
                     name=feat_data.get("name") or f"Элемент {idx + 1}",
                     description=feat_data.get("description"),
                     sort_order=idx,
-                    confidence=float(feat_data.get("confidence", 0.5)),
+                    confidence=_number_or(feat_data.get("confidence"), 0.5),
                     source_view=feat_data.get("source_view"),
                     confirmed_by_views=feat_data.get("confirmed_by_views"),
-                    confidence_votes=int(feat_data.get("confidence_votes", 1)),
+                    confidence_votes=_safe_int_or(feat_data.get("confidence_votes"), 1),
                     ai_raw=feat_data,
                 )
                 db.add(feature)
@@ -492,7 +492,7 @@ async def _analyze_drawing_async(
                     dim = FeatureDimension(
                         feature_id=feature.id,
                         dim_type=_safe_dim_type(d_data.get("dim_type", "linear")),
-                        nominal=float(d_data.get("nominal", 0)),
+                        nominal=_number_or(d_data.get("nominal"), 0.0),
                         upper_tol=_safe_float(d_data.get("upper_tol")),
                         lower_tol=_safe_float(d_data.get("lower_tol")),
                         unit=d_data.get("unit", "mm"),
@@ -507,7 +507,7 @@ async def _analyze_drawing_async(
                     surf = FeatureSurface(
                         feature_id=feature.id,
                         roughness_type=_safe_roughness_type(s_data.get("roughness_type", "Ra")),
-                        value=float(s_data.get("value", 0)),
+                        value=_number_or(s_data.get("value"), 0.0),
                         direction=s_data.get("direction"),
                         lay_symbol=s_data.get("lay_symbol"),
                         machining_required=bool(s_data.get("machining_required", True)),
@@ -520,7 +520,7 @@ async def _analyze_drawing_async(
                     gdt = FeatureGDT(
                         feature_id=feature.id,
                         symbol=g_data.get("symbol", ""),
-                        tolerance_value=float(g_data.get("tolerance_value", 0)),
+                        tolerance_value=_number_or(g_data.get("tolerance_value"), 0.0),
                         tolerance_zone=g_data.get("tolerance_zone"),
                         datum_reference=g_data.get("datum_reference"),
                         material_condition=g_data.get("material_condition"),
@@ -2770,6 +2770,26 @@ def _safe_float(value: Any) -> float | None:
         return float(text)
     except (ValueError, TypeError):
         return None
+
+
+def _number_or(value: Any, default: float) -> float:
+    """A model's ``null`` is a missing value, not a number.
+
+    ``dict.get(key, default)`` returns the default only when the KEY is absent.
+    A VLM that answers ``{"confidence": null}`` — which it does, and which is the
+    honest answer to "how sure are you" — puts ``None`` past that default and
+    into ``float()``. Both DXF ingests on this stand died exactly there, with
+    ``float() argument must be a string or a real number, not 'NoneType'`` shown
+    to the operator as the drawing's analysis error.
+    """
+    parsed = _safe_float(value)
+    return default if parsed is None else parsed
+
+
+def _safe_int_or(value: Any, default: int) -> int:
+    """Integer counterpart of :func:`_number_or` — same ``null`` trap."""
+    parsed = _safe_int(value)
+    return default if parsed is None else parsed
 
 
 def _safe_int(value: Any) -> int | None:

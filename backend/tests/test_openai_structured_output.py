@@ -226,3 +226,38 @@ def test_unresolvable_candidate_does_not_abort_the_chain(monkeypatch) -> None:
         )
     )
     assert response.model == "local_working"
+
+
+# ── Сэмплирующие параметры по видам шлюзов ───────────────────────────────────
+
+
+def test_nonstandard_sampling_params_do_not_reach_a_strict_gateway():
+    """`top_k`/`min_p` в спецификации OpenAI отсутствуют.
+
+    Локальные серверы принимают их как расширение, а строгий облачный шлюз
+    отвечает 400 — то есть параметр, отправленный «на всякий случай», стоит
+    целого кандидата цепочки.
+    """
+    from app.ai.providers.openai_compatible import _inference_params
+    from app.ai.schemas import AIRequest, AITask
+
+    request = AIRequest(
+        task=AITask.CAD_SPEC_READ,
+        metadata={"inference_params": {"temperature": 0, "top_k": 1, "min_p": 0.05}},
+    )
+
+    strict = _inference_params(request, provider_kind="openai")
+    assert "top_k" not in strict
+    assert "min_p" not in strict
+
+    lenient = _inference_params(request, provider_kind="vllm")
+    assert lenient["top_k"] == 1
+    assert lenient["min_p"] == 0.05
+
+
+def test_the_output_limit_is_sent_to_every_gateway():
+    from app.ai.providers.openai_compatible import _inference_params
+    from app.ai.schemas import AIRequest, AITask
+
+    request = AIRequest(task=AITask.CAD_SPEC_READ, metadata={"num_predict": 6000})
+    assert _inference_params(request, provider_kind="openai")["max_tokens"] == 6000

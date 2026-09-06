@@ -107,3 +107,56 @@ def test_direct_dimension_line_ocr_wins_over_nearby_unrelated_callout():
     assert 35.0 in local_values
     assert local_values[35.0]["raw_text"] == "35"
     assert local_values[35.0]["value_source"] == "dimension_line_ocr"
+
+
+# ── Калибровка не имеет права быть уверенно неверной ─────────────────────────
+
+
+def test_an_overall_smaller_than_a_callout_is_not_reported_as_ok():
+    """Живой прогон z4-r4.jpg: overall_mm = 45 при цепочке чертежа до 195.
+
+    Локализатор поймал габарит выносного элемента (Б-Б 5:1) и принял его за
+    общий, а стадия отчиталась `status: ok` с mm_per_px 0.0427. Неверный
+    масштаб уходил дальше по конвейеру и подмешивался в проверки — это хуже,
+    чем отсутствие калибровки, потому что выглядит как успех.
+    """
+    from app.ai.cad_recognize.axial_dimensions import _calibration_blockers
+
+    blockers = _calibration_blockers(45.0, [10.0, 34.0, 90.0, 195.0], [])
+
+    assert blockers
+    assert "195" in blockers[0]
+
+
+def test_a_consistent_overall_passes():
+    from app.ai.cad_recognize.axial_dimensions import _calibration_blockers
+
+    assert _calibration_blockers(195.0, [10.0, 34.0, 90.0, 195.0], []) == []
+
+
+def test_lines_that_disagree_with_their_own_labels_block_the_scale():
+    """`span_check_mm: 8.03` против `raw_text: "10"` — расхождение 20 %.
+
+    Оно считалось и записывалось, но ни на что не влияло.
+    """
+    from app.ai.cad_recognize.axial_dimensions import _calibration_blockers
+
+    observations = [
+        {"value_mm": 10.0, "span_check_mm": 8.03},
+        {"value_mm": 20.0, "span_check_mm": 16.1},
+        {"value_mm": 30.0, "span_check_mm": 29.9},
+    ]
+    blockers = _calibration_blockers(195.0, [195.0], observations)
+
+    assert blockers
+    assert "масштаб определён неверно" in blockers[0]
+
+
+def test_small_reading_noise_does_not_block_the_scale():
+    from app.ai.cad_recognize.axial_dimensions import _calibration_blockers
+
+    observations = [
+        {"value_mm": 10.0, "span_check_mm": 10.2},
+        {"value_mm": 20.0, "span_check_mm": 19.6},
+    ]
+    assert _calibration_blockers(195.0, [195.0], observations) == []

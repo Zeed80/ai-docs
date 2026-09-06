@@ -124,6 +124,15 @@ class TaskRouting(BaseModel):
     # интерфейс её предлагал, а `_enforce_confidential` молча возвращал
     # local_only, после чего `_validate` отвергал назначение целиком.
     cloud_override: bool = False
+    # Оператор выключил этот слот: стадия не выполняется вовсе. Отдельное
+    # состояние, а не пустой список моделей и не сброс к дефолту — сброс
+    # (`reset_task_routing`) возвращает цепочку из model_registry.yaml, то есть
+    # снова включает стадию, а пустой список неотличим от «ещё не настроено».
+    #
+    # Осмысленно только для слотов, без которых конвейер работает: текстовый
+    # слой чертежа умная vision-модель читает сама, и платить за отдельный
+    # проход незачем. Слот чтения чертежа выключить нельзя — см. `_SLOTS`.
+    disabled: bool = False
 
     @property
     def primary(self) -> str | None:
@@ -227,6 +236,40 @@ def _is_local_key(key: str) -> bool:
         return cap is not None and cap.provider.value in _LOCAL_PROVIDER_KINDS
     except Exception:
         return True  # be permissive if catalog unavailable
+
+
+def policy_filtered_tail(task: AITask, primary_key: str, tail: list[str]) -> list[str]:
+    """Fallbacks that can actually run under the policy the primary implies.
+
+    Assigning a model also decides the task's local/cloud policy: a local
+    primary makes a confidential task local-only. The FALLBACK chain used to be
+    carried over untouched, so a chain left over from a cloud assignment kept
+    its cloud entries — and ``_validate`` then refused the whole assignment with
+    "Confidential task ... cannot use non-local models", naming models the
+    operator had not just chosen and was not trying to keep.
+
+    Live on this stand: ``cad_text_ocr`` held
+    ``[ollama_cloud deepseek-v3.1, openrouter minimax-m3:free, glm_ocr]``.
+    Picking the local glm-ocr as primary — the fix for a slot that needs vision
+    — was rejected because of the two cloud entries behind it. The operator
+    could not get OUT of the cloud assignment through the screen at all.
+
+    Those entries are not merely invalid on paper: under a local-only policy the
+    router rejects each of them at dispatch, so they are dead weight either way.
+    Dropping them is the only reading that lets the assignment mean what it says.
+    """
+    if task in CONFIDENTIAL_TASKS and _is_local_key(primary_key):
+        kept = [key for key in tail if _is_local_key(key)]
+        dropped = [key for key in tail if key not in kept]
+        if dropped:
+            logger.info(
+                "task_routing_cloud_fallbacks_dropped",
+                task=task.value,
+                dropped=dropped,
+                reason="локальная модель назначена первой — облачный запас недостижим",
+            )
+        return kept
+    return list(tail)
 
 
 def _invalidate_lifecycle_cache() -> None:

@@ -93,3 +93,85 @@ def test_a_broken_response_degrades_to_unknown_instead_of_crashing():
     )
     assert cap.capabilities_unknown is True
     assert cap.provider_model == "x"
+
+
+# ── Семейства, добавленные после аудита оцифровки ────────────────────────────
+#
+# Разбирался только OpenRouter, поэтому у всех остальных облаков терялось даже
+# то, что они публикуют прямым текстом. Теперь три уровня честности вместо
+# двух: полный разбор, «известно только окно контекста», «не знаем ничего».
+
+
+def test_mistral_capabilities_are_read_not_guessed():
+    item = {
+        "id": "pixtral-large-latest",
+        "max_context_length": 131072,
+        "capabilities": {
+            "completion_chat": True,
+            "vision": True,
+            "function_calling": True,
+            "structured_outputs": True,
+        },
+    }
+    cap = capability_from_listing("k", ProviderKind.MISTRAL, item)
+
+    assert cap.capabilities_unknown is False
+    assert {m.value for m in cap.modalities} == {"text", "vision", "tool_calling"}
+    assert cap.supports_tool_calling is True
+    assert cap.supports_structured_output is True
+    assert cap.max_context_tokens == 131072
+
+
+def test_mistral_without_vision_does_not_claim_it():
+    item = {"id": "mistral-small", "capabilities": {"function_calling": True}}
+    cap = capability_from_listing("k", ProviderKind.MISTRAL, item)
+
+    assert {m.value for m in cap.modalities} == {"text", "tool_calling"}
+    assert cap.supports_structured_output is False
+
+
+def test_anthropic_listing_with_capabilities_is_parsed():
+    item = {
+        "id": "claude-opus-5",
+        "max_input_tokens": 1000000,
+        "capabilities": {"vision": True, "extended_thinking": True},
+    }
+    cap = capability_from_listing("k", ProviderKind.ANTHROPIC, item)
+
+    assert cap.capabilities_unknown is False
+    assert cap.max_context_tokens == 1000000
+    assert "vision" in {m.value for m in cap.modalities}
+    assert cap.supports_structured_output is True
+    assert cap.thinking_supported is True
+
+
+def test_anthropic_old_listing_keeps_capabilities_unknown():
+    """До марта 2026 листинг нёс только id и display_name.
+
+    Провайдер за прокси может отдавать ровно эту форму до сих пор — и тогда
+    честный ответ «не проверяли», а не набор возможностей, угаданный по имени.
+    """
+    cap = capability_from_listing(
+        "k", ProviderKind.ANTHROPIC, {"id": "claude-opus-5", "display_name": "Claude Opus 5"}
+    )
+    assert cap.capabilities_unknown is True
+    assert cap.modalities == set()
+
+
+def test_context_window_survives_where_capabilities_do_not():
+    """Groq не описывает возможности, но окно публикует — терять его незачем."""
+    item = {"id": "llama-3.3-70b", "context_window": 131072}
+    cap = capability_from_listing("k", ProviderKind.GROQ, item)
+
+    assert cap.max_context_tokens == 131072
+    # Окно — измеримый факт; возможности по-прежнему не подтверждены.
+    assert cap.capabilities_unknown is True
+    assert cap.modalities == set()
+    assert cap.supports_tool_calling is False
+
+
+def test_openai_stays_unknown_because_its_listing_says_nothing():
+    """Листинг OpenAI несёт id/created/owned_by — догадка по имени запрещена."""
+    cap = capability_from_listing("k", ProviderKind.OPENAI, {"id": "gpt-4o", "owned_by": "openai"})
+    assert cap.capabilities_unknown is True
+    assert cap.max_context_tokens is None

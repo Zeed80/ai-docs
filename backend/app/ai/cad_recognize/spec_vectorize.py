@@ -13,6 +13,7 @@ spec) lives alongside the existing VLM text reader.
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import re
@@ -291,6 +292,13 @@ class SpecSection(BaseModel):
     tolerance: str | None = None
     roughness: str | None = None
     evidence: list[SpecEvidence] = Field(default_factory=list)
+    # Consensus output, never read from the model: this step survived as the
+    # best-supported reading, but the passes did not agree on it. It must be a
+    # real schema field — consensus_spec rebuilds the spec from the contract's
+    # own keys, so a flag attached on the side would vanish on the multi-pass
+    # path (the same trap documented for reader_raw_response below).
+    review_required: bool = False
+    disputed_values: list[float] = Field(default_factory=list)
 
 
 class SpecHole(BaseModel):
@@ -550,10 +558,18 @@ class SpecView(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
 
+# Место надписи на листе: [x1, y1, x2, y2] в пикселях полного листа. None —
+# источник координат не дал (модель без grounding). Поле обязано быть в СХЕМЕ:
+# pydantic отбрасывает неизвестные ключи молча, поэтому bbox, приложенный сбоку,
+# исчезал бы ровно там, где его нельзя заметить.
+_Bbox = list[float] | None
+
+
 class SpecDimension(BaseModel):
     value: str = Field(min_length=1)
     applies_to: str = ""
     evidence: list[SpecEvidence] = Field(default_factory=list)
+    bbox: _Bbox = None
 
 
 class SpecAnnotation(BaseModel):
@@ -572,6 +588,7 @@ class SpecAnnotation(BaseModel):
     symbol: str | None = None
     datum_refs: list[str] = Field(default_factory=list, max_length=8)
     evidence: list[SpecEvidence] = Field(default_factory=list)
+    bbox: _Bbox = None
 
 
 def prismatic_profile_is_complete(profile: SpecPrismaticProfile | None) -> bool:
@@ -689,17 +706,20 @@ def _whole_sheet_reader_schema() -> dict[str, Any]:
             field for field in required if field not in {"dimensions", "annotations", "title_block"}
         ]
 
+    # review_required/disputed_values are conclusions the CONSENSUS draws about
+    # the reads; asking a single read to fill them in would invite it to declare
+    # its own answer confirmed.
+    _audit_only = {"evidence", "features", "review_required", "disputed_values", "bbox"}
+
     def strip_audit_fields(node: Any) -> None:
         if isinstance(node, dict):
             node_properties = node.get("properties")
             if isinstance(node_properties, dict):
-                node_properties.pop("evidence", None)
-                node_properties.pop("features", None)
+                for field in _audit_only:
+                    node_properties.pop(field, None)
             node_required = node.get("required")
             if isinstance(node_required, list):
-                node["required"] = [
-                    field for field in node_required if field not in {"evidence", "features"}
-                ]
+                node["required"] = [field for field in node_required if field not in _audit_only]
             for value in node.values():
                 strip_audit_fields(value)
         elif isinstance(node, list):
@@ -1302,20 +1322,45 @@ async def read_drawing_spec(
         return {}
     try:
         validated = EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
+        dropped: list[str] = []
     except ValidationError as exc:
         _log_spec_rejected("drawing_image", exc)
+        # Одна негодная канавка не должна уносить прочитанный вал — снимаем
+        # виновника и оставляем геометрию; ошибка внутри самой геометрии
+        # по-прежнему фатальна.
+        salvaged, dropped = validate_spec_lenient(parsed)
+        # В журнал раньше уходило только КОЛИЧЕСТВО ошибок, а поле и текст —
+        # лишь в лог воркера. Оператор видел «не прошёл EngineeringDrawingSpec»
+        # и не мог узнать, что дело в канавке.
+        details = {
+            "validation_errors": len(exc.errors()),
+            "validation_details": [
+                {
+                    "loc": ".".join(str(part) for part in err["loc"]),
+                    "msg": str(err.get("msg") or ""),
+                }
+                for err in exc.errors()[:6]
+            ],
+            "dropped": dropped,
+            "model": response.model or seeing_model,
+            "answer_sha256": answer_sha256,
+            "answer_preview": answer[:2000],
+        }
+        if salvaged is None:
+            await record_cad_process_event(
+                "reader.whole_sheet.request",
+                "failed",
+                "JSON полного чтения не прошёл EngineeringDrawingSpec",
+                details,
+            )
+            return {}
+        validated = salvaged
         await record_cad_process_event(
             "reader.whole_sheet.request",
-            "failed",
-            "JSON полного чтения не прошёл EngineeringDrawingSpec",
-            {
-                "validation_errors": len(exc.errors()),
-                "model": response.model or seeing_model,
-                "answer_sha256": answer_sha256,
-                "answer_preview": answer[:2000],
-            },
+            "completed",
+            f"Ответ принят без {len(dropped)} негодных элементов; геометрия сохранена",
+            details,
         )
-        return {}
     # A sheet the reader was only shown in part explains a missing value better
     # than any guess about the model. Optional: it never blocks geometry, but it
     # must be visible when something turns out to be missing.
@@ -2170,6 +2215,150 @@ def _section_wall_loops(
 
 # Gap between projections, in millimetres of the part (scaled with it).
 _VIEW_GAP_MM = 15.0
+
+
+# Списки вспомогательных элементов: их можно снять поштучно, не трогая деталь.
+# Геометрия (outer/bore/profile/parts) сюда НЕ входит — она и есть то, ради чего
+# лист читали, и «починить» её удалением нельзя.
+_DROPPABLE_LISTS = frozenset(
+    {
+        "grooves",
+        "keyways",
+        "chamfers",
+        "fillets",
+        "cross_holes",
+        "axial_holes",
+        "circular_hole_patterns",
+        "holes",
+        "hole_patterns",
+        "slots",
+        "views",
+        "dimensions",
+        "annotations",
+    }
+)
+
+# «keyway 0 runs past the end of the part», «groove 2 sits at ... outside the
+# ...» — валидаторы уровня тела называют виновника в тексте, а не в `loc`.
+_INDEXED_FEATURE_MESSAGE = re.compile(
+    r"\b(groove|keyway|chamfer|fillet|cross[_ ]hole|axial[_ ]hole|slot)s?\s+(\d+)\b",
+    re.IGNORECASE,
+)
+_MESSAGE_FIELD_ALIASES = {
+    "groove": "grooves",
+    "keyway": "keyways",
+    "chamfer": "chamfers",
+    "fillet": "fillets",
+    "cross_hole": "cross_holes",
+    "cross hole": "cross_holes",
+    "axial_hole": "axial_holes",
+    "axial hole": "axial_holes",
+    "slot": "slots",
+}
+
+
+def _drop_target(error: dict, payload: dict) -> tuple[tuple, str] | None:
+    """Path of the ONE list item this validation error blames, if any.
+
+    Two shapes have to be handled. A field-level error points straight at the
+    item (``main_view.grooves.0.depth_mm``). A body-level validator raises a
+    plain ValueError, so pydantic reports ``loc = ("main_view",)`` and hides the
+    culprit in the message — those name the index in words, and that is where
+    the live failure came from: ``keyway 0 runs past the end of the part``.
+    """
+    loc = tuple(error.get("loc") or ())
+    for index in range(len(loc) - 1, -1, -1):
+        if isinstance(loc[index], int) and index >= 1 and loc[index - 1] in _DROPPABLE_LISTS:
+            return loc[: index + 1], str(loc[index - 1])
+
+    match = _INDEXED_FEATURE_MESSAGE.search(str(error.get("msg") or ""))
+    if not match:
+        return None
+    field = _MESSAGE_FIELD_ALIASES.get(match.group(1).lower().replace(" ", "_"))
+    if field is None:
+        return None
+    container = payload
+    for part in loc:
+        if isinstance(container, dict) and part in container:
+            container = container[part]
+        elif isinstance(container, list) and isinstance(part, int) and part < len(container):
+            container = container[part]
+        else:
+            return None
+    if not isinstance(container, dict) or not isinstance(container.get(field), list):
+        return None
+    return (*loc, field, int(match.group(2))), field
+
+
+def _remove_at(payload: dict, path: tuple) -> bool:
+    node: Any = payload
+    for part in path[:-1]:
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        elif isinstance(node, list) and isinstance(part, int) and part < len(node):
+            node = node[part]
+        else:
+            return False
+    last = path[-1]
+    if isinstance(node, list) and isinstance(last, int) and last < len(node):
+        node.pop(last)
+        return True
+    if isinstance(node, dict) and last in node:
+        node.pop(last)
+        return True
+    return False
+
+
+def validate_spec_lenient(payload: dict, *, max_drops: int = 8) -> tuple[dict | None, list[str]]:
+    """Validate a spec, dropping ONLY the items it actually trips over.
+
+    The contract was all-or-nothing: one bad optional feature and the entire
+    sheet was discarded. Live on a real A3 shaft that cost three passes out of
+    five — ``groove needs exactly one of depth_mm / root_diameter_mm`` twice and
+    ``keyway 0 runs past the end of the part`` once. Each time the whole stepped
+    profile, read correctly, went with the groove, and the sample the consensus
+    had left to work with shrank from five reads to two.
+
+    A groove is an annotation on a shaft. Losing it is a review item; losing the
+    shaft is a failed digitisation. So a failing auxiliary feature is removed and
+    recorded, while an error inside the geometry itself is still fatal — that one
+    cannot be repaired by deletion, only reported.
+
+    Returns ``(spec, dropped)``; ``spec`` is ``None`` when the payload could not
+    be saved, and ``dropped`` describes every removal in the operator's terms.
+    """
+    working = copy.deepcopy(payload)
+    dropped: list[str] = []
+
+    for _ in range(max_drops + 1):
+        try:
+            validated = EngineeringDrawingSpec.model_validate(working).model_dump(mode="json")
+        except ValidationError as exc:
+            removed_any = False
+            # Highest index first: removing an earlier item would shift the
+            # positions the remaining errors were reported against.
+            targets = []
+            for error in exc.errors():
+                target = _drop_target(error, working)
+                if target is not None:
+                    targets.append((target[0], target[1], str(error.get("msg") or "")))
+            for path, field, message in sorted(targets, key=lambda t: t[0], reverse=True):
+                if _remove_at(working, path):
+                    dropped.append(f"{'.'.join(str(p) for p in path)}: {message}")
+                    removed_any = True
+            if not removed_any:
+                return None, dropped
+            continue
+
+        if dropped:
+            unresolved = list(validated.get("unresolved") or [])
+            unresolved.extend(f"dropped:{item}" for item in dropped)
+            validated["unresolved"] = sorted(set(unresolved))
+            errors = list(validated.get("geometry_validation_errors") or [])
+            validated["geometry_validation_errors"] = errors + dropped
+        return validated, dropped
+
+    return None, dropped
 
 
 def _log_spec_rejected(source: str, exc: ValidationError) -> None:

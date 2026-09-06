@@ -330,6 +330,51 @@ async def test_provider(instance_id: str, db: AsyncSession = Depends(get_db)) ->
 # ── Refresh models (cloud auto-fetch / local sync) ──────────────────────────
 
 
+async def _enrich_ollama_cloud_capability(
+    kind: ProviderKind,
+    base_url: str,
+    api_key: str | None,
+    provider_model: str,
+    cap: ModelCapability,
+) -> ModelCapability:
+    """Спросить у Ollama Cloud то, чего нет в её OpenAI-совместимом листинге.
+
+    ``/v1/models`` у неё отдаёт один ``id``, поэтому модель попадала в каталог
+    как «возможности неизвестны» — а по факту `deepseek-v3.1:671b` числился без
+    зрения и при этом читал чертёж. Ровно этот случай и чинится: тот же узел
+    отвечает на ``/api/show``, откуда возможности берутся из метаданных GGUF,
+    а не угадываются по имени.
+
+    Молчание узла оставляет запись как есть: «не удалось спросить» — не то же
+    самое, что «не умеет».
+    """
+    if kind is not ProviderKind.OLLAMA_CLOUD:
+        return cap
+    native = base_url[: -len("/v1")] if base_url.endswith("/v1") else base_url
+    real_caps = await _ollama_show_capabilities(native, provider_model, api_key=api_key)
+    if not real_caps:
+        return cap
+
+    from app.ai.schemas import Modality
+
+    modalities: set[Modality] = {Modality.TEXT}
+    if "vision" in real_caps:
+        modalities.add(Modality.VISION)
+    if "tools" in real_caps:
+        modalities.add(Modality.TOOL_CALLING)
+    if "embedding" in real_caps:
+        modalities.add(Modality.EMBEDDING)
+    return cap.model_copy(
+        update={
+            "modalities": modalities,
+            "supports_tool_calling": "tools" in real_caps,
+            "thinking_supported": "thinking" in real_caps,
+            "capabilities_unknown": False,
+            "notes": f"{cap.notes} Возможности прочитаны из /api/show.".strip(),
+        }
+    )
+
+
 @router.post("/{instance_id}/refresh-models", dependencies=_admin)
 async def refresh_models(instance_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     inst = await _get_or_404(db, instance_id)
@@ -368,6 +413,7 @@ async def refresh_models(instance_id: str, db: AsyncSession = Depends(get_db)) -
         # берутся из ответа, а где их нет — возможности честно помечаются
         # неподтверждёнными.
         cap = capability_from_listing(key, kind, item)
+        cap = await _enrich_ollama_cloud_capability(kind, base, api_key, provider_model, cap)
         registry.add_model(key, cap, persist=True)
         await model_runtime_store.persist_catalog_entry(
             db,
@@ -746,7 +792,9 @@ def _synth_key(provider: str, provider_model: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in raw).strip("_")
 
 
-async def _ollama_show_capabilities(base_url: str, provider_model: str) -> set[str] | None:
+async def _ollama_show_capabilities(
+    base_url: str, provider_model: str, *, api_key: str | None = None
+) -> set[str] | None:
     """Ollama's own ``/api/show`` reports a ``capabilities`` list (e.g.
     ``["completion","vision","tools","thinking"]``) straight from the GGUF
     metadata — ground truth, unlike guessing from the model tag. Name-based
@@ -760,7 +808,11 @@ async def _ollama_show_capabilities(base_url: str, provider_model: str) -> set[s
     base = base_url.rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.post(f"{base}/api/show", json={"model": provider_model})
+            # Ollama Cloud требует ключ там, где локальный узел его не спрашивает.
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+            resp = await client.post(
+                f"{base}/api/show", json={"model": provider_model}, headers=headers
+            )
             resp.raise_for_status()
             caps = resp.json().get("capabilities")
     except Exception:
@@ -1302,6 +1354,23 @@ class SlotOut(BaseModel):
     thinking_levels: list[str] = []  # levels the SELECTED model supports (empty = none)
     thinking_level_override: str | None = None  # this slot's explicit level override
     thinking_level_effective: str | None = None  # resolved level actually in effect
+    # Слот, без которого конвейер работает: его можно выключить целиком.
+    optional: bool = False
+    # Оператор выключил слот — стадия не выполняется, модель не выбирается.
+    disabled: bool = False
+
+
+# Слоты, которые можно выключить целиком. Список короткий намеренно: выключать
+# можно только то, без чего конвейер работает.
+#
+# `cad_text_ocr` — отдельный проход, который транскрибирует надписи листа.
+# Модель чтения чертежа со зрением делает это сама, и тогда второй проход стоит
+# времени и денег, не добавляя ничего. Слот чтения чертежа (`cad_spec_read`) в
+# этот список не входит и входить не должен: без него метода «по описанию» нет.
+#
+# Агентские слоты сжатия и аудитора здесь не нужны — у них уже есть
+# «не задано → та же модель, что у оркестратора».
+_OPTIONAL_SLOTS = frozenset({"cad_text_ocr"})
 
 
 # local_only=True → слот видит содержимое документов и потому локален по
@@ -1545,6 +1614,9 @@ class SlotDraft(BaseModel):
     thinking_level: Literal["low", "medium", "high"] | None = None
     allow_cloud: bool | None = None
     preferred_instance: str | None = None
+    # «Не использовать» — отдельное решение, а не сброс модели. Сброс вернул бы
+    # цепочку из model_registry.yaml, то есть снова включил бы стадию.
+    disabled: bool | None = None
 
 
 def _as_slot_draft(value: SlotDraft | str | None) -> SlotDraft:
@@ -1829,6 +1901,42 @@ def _slot_thinking_state(slot: str, registry, model_key: str | None) -> dict[str
     }
 
 
+def _set_slot_disabled(slot: str, disabled: bool) -> None:
+    """Записать решение «не использовать этот слот» в маршрут задачи."""
+    if slot not in _OPTIONAL_SLOTS:
+        raise HTTPException(400, f"Слот «{slot}» нельзя выключить: без него конвейер не работает")
+    from app.ai.schemas import AITask
+    from app.ai.task_routing import get_routing_for, save_task_routing
+
+    for task_value in _SLOT_THINKING_TASKS.get(slot) or []:
+        task = AITask(task_value)
+        routing = get_routing_for(task)
+        save_task_routing(task, routing.model_copy(update={"disabled": bool(disabled)}))
+    logger.info("slot_disabled_changed", slot=slot, disabled=bool(disabled))
+
+
+def _slot_disabled(slot: str) -> bool:
+    """Выключен ли слот оператором.
+
+    Состояние живёт в маршруте задачи, а не отдельным ключом: так оно едет тем
+    же путём, что и сама модель, — через `persist_task_routing` в Postgres, —
+    и переживает перезапуск. Ключ только в Redis откатился бы при первом
+    старте, восстановившись из БД.
+    """
+    if slot not in _OPTIONAL_SLOTS:
+        return False
+    tasks = _SLOT_THINKING_TASKS.get(slot) or []
+    if not tasks:
+        return False
+    from app.ai.schemas import AITask
+    from app.ai.task_routing import get_routing_for
+
+    try:
+        return bool(get_routing_for(AITask(tasks[0])).disabled)
+    except Exception:  # noqa: BLE001 — недоступная маршрутизация не выключает слот
+        return False
+
+
 def _build_slot_out(
     slot: str,
     group: str,
@@ -1864,6 +1972,8 @@ def _build_slot_out(
         cloud_allowed=cloud_allowed,
         document_content=_slot_hard_confidential(slot),
         required_modality=_SLOT_MODALITY.get(slot),
+        optional=slot in _OPTIONAL_SLOTS,
+        disabled=_slot_disabled(slot),
         **thinking,
     )
 
@@ -2130,13 +2240,38 @@ async def _validate_assignment_draft(
                         ),
                     )
                 )
+            elif getattr(cap, "capability_source", "") == "verified":
+                # Проверено живой пробой: модель этого действительно не умеет.
+                # Раньше это было предупреждением, и назначение проходило —
+                # так на слот «Текстовый слой чертежа» (нужен vision) встала
+                # модель, объявленная без зрения. Гейт, который ничего не
+                # гейтит, хуже отсутствующего: он создаёт видимость проверки.
+                errors.append(
+                    AssignmentIssue(
+                        slot=slot,
+                        model=model_key,
+                        code="modality_mismatch",
+                        message=(
+                            f"Модель проверена и не умеет «{required}» — "
+                            f"для этого слота она не годится"
+                        ),
+                        severity="error",
+                    )
+                )
             else:
+                # Каталог заполнен автоматически и ошибается в обе стороны:
+                # на стенде ollama_cloud deepseek-v3.1 объявлен без зрения и
+                # при этом прочитал чертёж. Пока возможности не подтверждены
+                # пробой, это повод предупредить, а не запретить.
                 warnings.append(
                     AssignmentIssue(
                         slot=slot,
                         model=model_key,
                         code="modality_mismatch",
-                        message=f"Модель не заявляет capability '{required}'",
+                        message=(
+                            f"Модель не заявляет capability '{required}' "
+                            f"(каталог заполнен автоматически — проверьте пробным запросом)"
+                        ),
                     )
                 )
         # A loaded local model has proven it runs → suppress catalog-status and
@@ -2181,7 +2316,7 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
     from app.ai.agent_config import BuiltinAgentConfigUpdate, update_builtin_agent_config
     from app.ai.assignment_groups import DocumentGroup, _mirror_ai_config, _set_primary
     from app.ai.schemas import AITask
-    from app.ai.task_routing import get_routing_for, save_task_routing
+    from app.ai.task_routing import get_routing_for, policy_filtered_tail, save_task_routing
 
     def _assign_task(
         task: AITask,
@@ -2205,6 +2340,12 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
             )
         source_tail = current.models if fallback_keys is None else fallback_keys
         tail = [m for m in source_tail if m != model_key and m in valid_keys]
+        # Политика следует за выбранной моделью, а хвост цепочки — нет: после
+        # облачного назначения в нём оставались облачные модели, и назначение
+        # ЛОКАЛЬНОЙ модели на конфиденциальную задачу отвергалось валидацией
+        # целиком, с перечислением моделей, которые оператор как раз и хотел
+        # убрать. Выйти из облачного назначения через экран было нельзя.
+        tail = policy_filtered_tail(task, model_key, tail)
         routing = current.model_copy(
             update={
                 "models": [model_key, *tail],
@@ -2585,6 +2726,9 @@ async def apply_assignment_draft(
     await _apply_draft_atomic(db, diff, before, registry)  # rolls back Redis on error
 
     for slot, d in payload.drafts.items():
+        if d.disabled is not None:
+            _set_slot_disabled(slot, d.disabled)
+            await _persist_slot_durable(db, slot)
         if d.thinking is not None or d.thinking_level is not None:
             try:
                 _apply_slot_thinking(slot, d.thinking, d.thinking_level)

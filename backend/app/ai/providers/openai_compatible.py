@@ -55,6 +55,15 @@ def _thinking_params(request: AIRequest, provider_kind: str) -> dict[str, Any]:
     return thinking_request_params(provider_kind, request.thinking, request.thinking_level)
 
 
+from app.ai.output_format import (
+    FormatMechanism,
+    contract_of,
+    inline_schema_defs,
+    schema_hint_text,
+    strictify_schema,
+)
+
+
 def _requested_schema(request: AIRequest) -> dict[str, Any] | None:
     """JSON-схема, которую просит вызывающий: сырая из metadata или из модели."""
     schema = (request.metadata or {}).get("json_schema")
@@ -75,6 +84,9 @@ def _schema_hint(request: AIRequest) -> str:
     валидным, но чужим JSON: читатель чертежа ждёт ``{"frames": [...]}``, а
     приходил голый массив, и слой PMI терялся целиком.
     """
+    contract = contract_of(request)
+    if contract is not None:
+        return schema_hint_text(contract)
     if (request.metadata or {}).get("structured_output_supported"):
         return ""
     schema = _requested_schema(request)
@@ -105,6 +117,27 @@ def _response_format(request: AIRequest) -> dict[str, Any]:
     поэтому без подтверждённой поддержки просим просто валидный JSON: этого
     достаточно, чтобы ответ разобрался, а схему проверит вызывающий.
     """
+    contract = contract_of(request)
+    if contract is not None:
+        if contract.mechanism is FormatMechanism.NATIVE_SCHEMA and contract.schema:
+            # `strict: true` требует закрытых объектов и всех свойств в
+            # `required`; схема Pydantic этому не отвечает, и без подготовки
+            # строгий режим просто возвращает 400.
+            prepared = strictify_schema(inline_schema_defs(contract.schema))
+            return {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": contract.schema_name,
+                        "strict": True,
+                        "schema": prepared,
+                    },
+                }
+            }
+        if contract.mechanism is FormatMechanism.JSON_MODE:
+            return {"response_format": {"type": "json_object"}}
+        return {}
+
     meta = request.metadata or {}
     schema = _requested_schema(request)
     if not schema and request.response_schema is None:
@@ -119,7 +152,21 @@ def _response_format(request: AIRequest) -> dict[str, Any]:
     return {"response_format": {"type": "json_object"}}
 
 
-def _inference_params(request: AIRequest, default_temperature: float = 0.2) -> dict[str, Any]:
+# Шлюзы, которые принимают НЕстандартные для OpenAI сэмплирующие параметры.
+# `top_k`/`min_p` в спецификации OpenAI отсутствуют: локальные серверы их
+# принимают как расширение, а строгий облачный шлюз отвечает на них 400 —
+# то есть параметр, отправленный «на всякий случай», стоит целого кандидата.
+_EXTRA_SAMPLING_KINDS = frozenset(
+    {"vllm", "llamacpp", "openai_compatible", "lmstudio", "openrouter"}
+)
+
+
+def _inference_params(
+    request: AIRequest,
+    default_temperature: float = 0.2,
+    *,
+    provider_kind: str | None = None,
+) -> dict[str, Any]:
     """Extract inference parameters from request metadata."""
     params = (request.metadata or {}).get("inference_params") or {}
     result: dict[str, Any] = {"temperature": params.get("temperature", default_temperature)}
@@ -132,8 +179,11 @@ def _inference_params(request: AIRequest, default_temperature: float = 0.2) -> d
     result["max_tokens"] = int(max_tokens)
     if "top_p" in params:
         result["top_p"] = params["top_p"]
-    if "top_k" in params:
-        result["top_k"] = params["top_k"]
+    if provider_kind is None or provider_kind in _EXTRA_SAMPLING_KINDS:
+        if "top_k" in params:
+            result["top_k"] = params["top_k"]
+        if "min_p" in params:
+            result["min_p"] = params["min_p"]
     if "repeat_penalty" in params:
         result["frequency_penalty"] = (
             params["repeat_penalty"] - 1.0
@@ -176,7 +226,9 @@ class OpenAICompatibleProvider(AIProvider):
         payload: dict[str, Any] = {
             "model": model,
             "messages": self._messages(request),
-            **_inference_params(request, default_temperature=0.2),
+            **_inference_params(
+                request, default_temperature=0.2, provider_kind=self.config.kind.value
+            ),
             **_thinking_params(request, self.config.kind.value),
             **_response_format(request),
         }
@@ -267,7 +319,9 @@ class OpenAICompatibleProvider(AIProvider):
         payload = {
             "model": model,
             "messages": messages,
-            **_inference_params(request, default_temperature=0.0),
+            **_inference_params(
+                request, default_temperature=0.0, provider_kind=self.config.kind.value
+            ),
             **_thinking_params(request, self.config.kind.value),
             **_response_format(request),
         }

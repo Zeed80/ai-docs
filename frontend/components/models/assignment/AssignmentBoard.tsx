@@ -27,6 +27,7 @@ import {
   input,
   select,
 } from "@/components/ui/primitives/tokens";
+import { buildDraftPayload } from "@/lib/models/draft";
 import { detailText } from "@/lib/models/format";
 import { providerLabel } from "@/lib/models/labels";
 import type {
@@ -123,6 +124,8 @@ interface SlotItem {
   thinking_levels?: string[]; // reasoning-effort levels the SELECTED model supports (empty = none)
   thinking_level_override?: string | null; // this slot's explicit level override
   thinking_level_effective?: string | null; // resolved level actually in effect
+  optional?: boolean; // слот можно выключить целиком — конвейер без него работает
+  disabled?: boolean; // оператор выключил слот: стадия не выполняется
 }
 
 interface ProvModel extends CatalogEntry {
@@ -160,6 +163,11 @@ export function AssignmentBoard() {
   // Разрешение облака по слотам — часть черновика, а не отдельное
   // немедленное действие: применяется вместе с моделью.
   const [draftCloud, setDraftCloud] = useState<Record<string, boolean>>({});
+  // «Не использовать»: слот выключается целиком, модель при этом остаётся
+  // выбранной — включить обратно можно, ничего не выбирая заново.
+  const [draftDisabled, setDraftDisabled] = useState<Record<string, boolean>>(
+    {},
+  );
   const [models, setModels] = useState<ProvModel[]>([]);
   // Nodes of each local provider kind — a kind can have several (e.g. the GPU
   // Ollama and the CPU-only one), and a model can be pinned to one of them.
@@ -278,15 +286,18 @@ export function AssignmentBoard() {
   // Черновик в форме, которую ждёт сервер: слот теперь несёт не только модель,
   // но и решение об облаке — раньше оно применялось отдельным немедленным
   // запросом, из-за чего в одной карточке было два разных поведения.
-  const draftPayload = () =>
-    Object.fromEntries(
-      Object.entries(draft).map(([slot, model]) => [
-        slot,
-        draftCloud[slot] === undefined
-          ? { model }
-          : { model, allow_cloud: draftCloud[slot] },
-      ]),
-    );
+  const draftPayload = () => buildDraftPayload(draft, draftCloud, draftDisabled);
+
+  const slotDisabled = (s: SlotItem) =>
+    draftDisabled[s.slot] ?? Boolean(s.disabled);
+
+  const setSlotOff = (slot: string, off: boolean) => {
+    setDraftDisabled((prev) => ({ ...prev, [slot]: off }));
+    setDirty(true);
+    setDiff([]);
+    setWarnings([]);
+    setErrors([]);
+  };
 
   const validateDraft = async () => {
     setBusy("validate");
@@ -689,6 +700,7 @@ export function AssignmentBoard() {
                   ? (draftChosen.thinking_levels ?? [])
                   : (s.thinking_levels ?? []);
                 const thinkingLevelOverride = s.thinking_level_override ?? null;
+                const off = slotDisabled(s);
                 return (
                   <div
                     key={s.slot}
@@ -697,6 +709,23 @@ export function AssignmentBoard() {
                     <div className="min-w-0">
                       <div className="text-sm text-slate-200">{s.label}</div>
                       <div className="text-xs text-slate-400">{s.hint}</div>
+                      {/* Выключаемы только те слоты, без которых конвейер
+                          работает: у текстового слоя чертежа способная
+                          vision-модель читает надписи сама, и второй проход
+                          тогда стоит времени, не добавляя ничего. */}
+                      {s.optional && (
+                        <label className="mt-1 flex items-center gap-1.5 text-xs text-slate-400">
+                          <input
+                            type="checkbox"
+                            className="accent-slate-500"
+                            checked={off}
+                            onChange={(e) =>
+                              setSlotOff(s.slot, e.target.checked)
+                            }
+                          />
+                          Не использовать
+                        </label>
+                      )}
                     </div>
                     {/* wrap + минимальная ширина пикера: контрол рассуждения и
                         значок «значения разошлись» не сжимаются, и в узкой
@@ -704,7 +733,10 @@ export function AssignmentBoard() {
                         имя модели не помещалось, попасть по кнопке было
                         нечем. Теперь при нехватке места переносится строка. */}
                     <div className="flex flex-wrap items-center gap-3 min-w-0">
-                      <div className="min-w-[320px] flex-1">
+                      <div
+                        className={`min-w-[320px] flex-1 ${off ? "opacity-40 pointer-events-none" : ""}`}
+                        aria-disabled={off}
+                      >
                         {/* Два шага: провайдер, затем его модель. Единый
                             список всех моделей выглядел короче, но прятал
                             главное решение — локально или в облако. Оно
@@ -732,6 +764,7 @@ export function AssignmentBoard() {
                           черновик
                         </span>
                       )}
+                      {!off && (
                       <SlotThinkingControl
                         state={{
                           supportedBySlot: slotSupportsThinking,
@@ -756,6 +789,7 @@ export function AssignmentBoard() {
                           setSlotThinking(s.slot, thinkingOverride, level)
                         }
                       />
+                      )}
                     </div>
                     <div className="sm:col-span-2">
                       <SlotHealthStrip health={health[s.slot] ?? null} />

@@ -219,10 +219,15 @@ def _force_drawing_status(drawing_id: str, status: str) -> None:
 
 def _get_drawing_from_db(drawing_id: str) -> dict:
     """Read drawing fields directly from DB for verification."""
+    # Элементы чертежа лежат в СВОЕЙ таблице (drawing_features), а не колонкой
+    # `features` на drawings — такой колонки нет и не было. Запрос падал с
+    # `column "features" does not exist`, и шаг 2 сообщал RuntimeError вместо
+    # настоящей причины: анализ чертежа упал, и его текст лежал рядом, в
+    # analysis_error.
     row = _psql_exec(
-        f"SELECT status, drawing_type, part_class, analysis_error, "
-        f"       jsonb_array_length(COALESCE(features::jsonb, '[]'::jsonb)) "
-        f"FROM drawings WHERE id = '{drawing_id}';"
+        f"SELECT d.status, d.drawing_type, d.part_class, d.analysis_error, "
+        f"       (SELECT count(*) FROM drawing_features f WHERE f.drawing_id = d.id) "
+        f"FROM drawings d WHERE d.id = '{drawing_id}';"
     )
     if not row:
         return {}
