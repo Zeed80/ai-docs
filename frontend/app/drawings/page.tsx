@@ -147,11 +147,13 @@ export default function DrawingsPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="flex items-center gap-4 px-6 py-4 bg-zinc-900 border-b border-white/10">
+      {/* Шапка переносится: заголовок, поиск, фильтр и две кнопки стояли в
+          одной несжимаемой строке и на телефоне уезжали за правый край. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-6 py-4 bg-zinc-900 border-b border-white/10">
         <h1 className="text-xl font-semibold text-white">Чертежи</h1>
         <span className="text-white/50 text-sm">{total} шт.</span>
 
-        <div className="flex items-center gap-2 ml-auto">
+        <div className="flex flex-wrap items-center gap-2 ml-auto">
           {/* Search */}
           <input
             value={search}
@@ -160,7 +162,7 @@ export default function DrawingsPage() {
               setPage(1);
             }}
             placeholder="Обозначение чертежа..."
-            className="bg-zinc-800 border border-white/10 rounded px-3 py-1.5 text-sm text-white placeholder-white/50 focus:outline-none focus:border-blue-500/50 w-48"
+            className="bg-zinc-800 border border-white/10 rounded px-3 py-1.5 text-sm text-white placeholder-white/50 focus:outline-none focus:border-blue-500/50 min-w-0 flex-1 sm:w-48 sm:flex-none"
           />
 
           {/* Status filter */}

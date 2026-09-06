@@ -8,8 +8,14 @@
 
 export const card = "border border-slate-700 rounded-lg overflow-hidden";
 
+/**
+ * `flex-wrap` и `gap` здесь не украшение: в шапке карточки почти всегда стоят
+ * заголовок и подпись-примечание, и на ширине телефона они налезали друг на
+ * друга — «Документы» читалось сквозь «конфиденциально — только локальные
+ * модели».
+ */
 export const cardHeader =
-  "px-4 py-2 bg-slate-800 border-b border-slate-700 flex items-center justify-between";
+  "px-4 py-2 bg-slate-800 border-b border-slate-700 flex flex-wrap items-center justify-between gap-x-3 gap-y-1";
 
 export const input =
   "w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm " +

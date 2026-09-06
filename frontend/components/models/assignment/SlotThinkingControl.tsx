@@ -86,8 +86,13 @@ export function SlotThinkingControl({
       : "применится: рассуждение выключено";
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-center gap-2">
+    // min-w-0: контрол стоит в flex-строке, а flex-элемент по умолчанию не
+    // сжимается уже своего содержимого — на узком экране подписи вылезали
+    // за край карточки вместо того, чтобы переноситься.
+    <div className="flex min-w-0 max-w-full flex-col gap-1.5">
+      {/* wrap: на телефоне бейдж «значения разошлись» не помещался рядом с
+          сегментами и уезжал под край карточки — текст обрезался. */}
+      <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-slate-400">Рассуждение</span>
         <Segmented
           label="Рассуждение для этого слота"

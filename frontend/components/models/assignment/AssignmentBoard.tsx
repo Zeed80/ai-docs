@@ -523,14 +523,16 @@ export function AssignmentBoard() {
     <div className="space-y-6">
       <RoutingChains />
       <RevisionHistory onRolledBack={load} />
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-slate-400">
+      {/* wrap + gap: на телефоне пояснение и кнопки стояли в одной несжимаемой
+          строке и налезали друг на друга — текст читался сквозь кнопки. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="min-w-[200px] flex-1 text-xs text-slate-400">
           <span className="text-emerald-400">●</span> запущен ·{" "}
           <span className="text-slate-400">○</span> остановлен — vLLM и
           llama.cpp стартуют по требованию. Изменения сначала попадают в
           черновик.
         </p>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {msg && <span className="text-xs text-emerald-400">{msg}</span>}
           {lastRevision && (
             <button

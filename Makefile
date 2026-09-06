@@ -4,7 +4,7 @@
         clean rebuild nuke \
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
-        test test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression agent-regression agent-test agent-ws-smoke \
+        test test-frontend test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression agent-regression agent-test agent-ws-smoke \
         studio-queue-smoke cad-kernel-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval cad-emg-corruption emg-artifact-regression emg-mechanical-live emg-domain-builds cad-class-balanced-dev cad-class-balanced-check cad-class-balanced-cycle \
         cad-final-freeze cad-final-leakage \
         cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
@@ -74,7 +74,8 @@ help:
 	@echo "    make seed             — load seed data"
 	@echo ""
 	@echo "  TESTS"
-	@echo "    make test             — backend unit + API tests"
+	@echo "    make test             — backend unit + API tests + frontend unit tests"
+	@echo "    make test-frontend    — frontend unit tests only (vitest)"
 	@echo "    make test-cov         — backend tests with HTML coverage report"
 	@echo "    make e2e              — Playwright E2E tests"
 	@echo "    make regression       — manifest regression checks"
@@ -232,6 +233,10 @@ seed:
 # ──────────────────────────────────────────────────────────────────────────────
 test:
 	python3 -m pytest backend/tests -m "not live and not llamacpp and not vllm" --tb=short
+	cd frontend && npm test
+
+test-frontend:  ## Frontend unit tests (vitest); e2e — see `make e2e`
+	cd frontend && npm test
 
 test-live:  ## Live tests (need Ollama/llama.cpp/vLLM + the running stack)
 	python3 -m pytest backend/tests -m "live or llamacpp or vllm" -s --tb=short

@@ -36,3 +36,13 @@ repos:
         entry: bash -c 'cd frontend && npm run typecheck'
         files: \.(ts|tsx)$
         pass_filenames: false
+
+      # Юнит-тесты фронта идут вместе с проверкой типов: они быстрые (~3 с) и
+      # закрывают то, что типы не ловят, — правила фильтрации каталога и то,
+      # что выпадающий список рендерится порталом, а не внутри карточки.
+      - id: frontend-unit-tests
+        name: Vitest (frontend)
+        language: system
+        entry: bash -c 'cd frontend && npm test'
+        files: ^frontend/.*\.(ts|tsx)$
+        pass_filenames: false
