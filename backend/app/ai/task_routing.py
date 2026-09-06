@@ -239,18 +239,32 @@ def _invalidate_lifecycle_cache() -> None:
         pass
 
 
+# Задачи, для которых решение об облаке уже названо в журнале. Сбрасывается
+# при снятии разрешения, поэтому повторное включение снова будет видно.
+_cloud_override_logged: set[str] = set()
+
+
 def _enforce_confidential(task: AITask, routing: TaskRouting) -> TaskRouting:
     if task in CONFIDENTIAL_TASKS and routing.cloud_override:
         # Оператор решил иначе, и решение записано в маршруте. Понижать его
         # молча нельзя — это ровно тот случай, когда настройка «не работает»
-        # без единого следа. След оставляем в журнале.
-        logger.warning(
-            "task_routing_cloud_override_active",
-            task=task.value,
-            reason="оператор явно разрешил облако для задачи с содержимым документов",
-            models=list(routing.models)[:3],
-        )
+        # без единого следа.
+        #
+        # Пишем один раз на задачу, а не на каждое чтение: `get_task_routing`
+        # зовётся из каждого запроса и из фонового опроса, и предупреждение на
+        # каждый вызов забило журнал так, что настоящие ошибки чтения чертежа
+        # в нём было не найти. Момент, который стоит видеть, — включение
+        # решения, а не факт его существования.
+        if task.value not in _cloud_override_logged:
+            _cloud_override_logged.add(task.value)
+            logger.warning(
+                "task_routing_cloud_override_active",
+                task=task.value,
+                reason="оператор явно разрешил облако для задачи с содержимым документов",
+                models=list(routing.models)[:3],
+            )
         return routing
+    _cloud_override_logged.discard(task.value)
     if task in CONFIDENTIAL_TASKS and (not routing.local_only or routing.allow_cloud):
         # Понижение видно в журнале: человек, назначивший облачную модель,
         # иначе увидит в интерфейсе локальную и решит, что настройка не

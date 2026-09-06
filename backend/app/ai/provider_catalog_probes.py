@@ -61,7 +61,12 @@ def _openrouter_capability(key: str, kind: ProviderKind, item: dict, today: str)
         modalities=modalities,
         max_context_tokens=item.get("context_length") or None,
         supports_tool_calling=tools,
-        supports_structured_output="response_format" in params,
+        # У OpenRouter это ДВА разных параметра: `response_format` — просьба
+        # «ответь валидным JSON», `structured_outputs` — настоящая схема с
+        # проверкой. Мы записывали первый как второй, и читатель чертежа слал
+        # строгую схему модели, которая её молча игнорирует: ответ приходил
+        # вольным текстом, а каталог утверждал, что схема поддержана.
+        supports_structured_output="structured_outputs" in params,
         thinking_supported="reasoning" in params or "include_reasoning" in params,
         cost_per_1k_input=cost_in * 1000 if cost_in else None,
         cost_per_1k_output=cost_out * 1000 if cost_out else None,

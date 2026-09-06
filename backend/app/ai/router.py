@@ -379,13 +379,22 @@ class AIRouter:
             try:
                 model = self.registry.get_model(model_name)
                 provider, resolved = self._resolve_provider(model)
-            except (KeyError, ValueError) as exc:
+            except (KeyError, ValueError, RuntimeError) as exc:
+                # RuntimeError сюда добавлен по живому разбору: «модель не
+                # обслуживается ни одним узлом» приходит именно им, и раньше
+                # она НЕ ловилась. Достаточно было, чтобы второй кандидат
+                # цепочки оказался не скачан, — и он обрывал перебор, подменяя
+                # собой настоящую причину. В журнале оцифровки чертежа стояло
+                # «Model qwen3-vl … is not served by any enabled ollama node»,
+                # тогда как в действительности первый кандидат упёрся в
+                # дневной лимит облачного провайдера. Диагноз указывал на
+                # чужую модель.
                 last_error = exc
                 logger.warning(
                     "ai_route_model_unresolved",
                     task=request.task.value,
                     model=model_name,
-                    error=str(exc),
+                    error=str(exc) or exc.__class__.__name__,
                 )
                 continue
             self._enforce_policy(
@@ -553,6 +562,17 @@ class AIRouter:
         model: ModelCapability,
     ) -> AIResponse:
         provider_model = model.provider_model
+        # Провайдер знает только имя модели, а формат ответа зависит от её
+        # возможностей: строгую JSON-схему принимает не каждая. Передаём факт
+        # из каталога, чтобы OpenAI-совместимый шлюз не выбирал вслепую.
+        request = request.model_copy(
+            update={
+                "metadata": {
+                    **(request.metadata or {}),
+                    "structured_output_supported": bool(model.supports_structured_output),
+                }
+            }
+        )
         # Inject inference parameters from profile unless caller explicitly set them
         if not request.metadata.get("inference_params"):
             try:

@@ -1186,7 +1186,7 @@ def _clean_callout_observations(callouts: dict[str, Any]) -> tuple[dict[str, Any
     return {**callouts, "dimensions": dimensions, "annotations": annotations}, dropped_annotations
 
 
-def _ocr_model_and_url() -> tuple[str, str]:
+def _ocr_model_and_url() -> tuple[str, str, str]:
     """The assigned text-layer model, or the built-in default.
 
     This used to be a constant and a direct Ollama call, so the one component
@@ -1202,11 +1202,47 @@ def _ocr_model_and_url() -> tuple[str, str]:
         from app.ai.schemas import AITask
         from app.ai.task_routing import resolve_model
 
-        model, _provider = resolve_model(AITask.CAD_TEXT_OCR)
+        model, provider = resolve_model(AITask.CAD_TEXT_OCR)
     except Exception as exc:  # noqa: BLE001 — routing must never lose the layer
         logger.warning("cad_ocr_routing_failed", error=str(exc)[:160])
-        model = None
-    return (model or _OCR_MODEL), url
+        model, provider = None, None
+    return (model or _OCR_MODEL), url, (provider or "ollama")
+
+
+_LOCAL_PROVIDER_KINDS = {"ollama", "llamacpp", "vllm", "openai_compatible", "lmstudio"}
+
+
+async def _ocr_via_router(image, model: str, *, router: Any = None) -> tuple[str, dict]:
+    """Тот же текстовый слой, но через AIRouter — для нелокальной модели.
+
+    Роутер сам выберет провайдера, ключ и адрес; здесь остаётся только та же
+    просьба и то же изображение.
+    """
+    import base64
+    import io as _io
+
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
+
+    if router is None:
+        from app.ai.router import ai_router
+
+        router = ai_router
+    buffer = _io.BytesIO()
+    image.save(buffer, format="PNG")
+    request = AIRequest(
+        task=AITask.CAD_TEXT_OCR,
+        messages=[
+            ChatMessage(role="user", content="Прочитай все надписи и размеры с этого чертежа.")
+        ],
+        images=[base64.b64encode(buffer.getvalue()).decode()],
+        confidential=True,
+        allow_cloud=False,
+        preferred_model=model,
+        thinking=False,
+        metadata={"num_predict": _OCR_NUM_PREDICT, "inference_params": {"temperature": 0}},
+    )
+    response = await router.run(request)
+    return (response.text or ""), {}
 
 
 async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
@@ -1227,7 +1263,7 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
 
     from app.ai.cad_process_log import record_cad_process_event
 
-    model, ollama_url = _ocr_model_and_url()
+    model, ollama_url, provider = _ocr_model_and_url()
     buffer = _io.BytesIO()
     image.save(buffer, format="PNG")
     payload = {
@@ -1251,11 +1287,19 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
         {"model": model, "num_predict": _OCR_NUM_PREDICT},
     )
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as client:
-            response = await client.post(f"{ollama_url}/api/generate", json=payload)
-            response.raise_for_status()
-            raw_body = response.json()
-            text = raw_body.get("response") or ""
+        if provider in _LOCAL_PROVIDER_KINDS:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as client:
+                response = await client.post(f"{ollama_url}/api/generate", json=payload)
+                response.raise_for_status()
+                raw_body = response.json()
+                text = raw_body.get("response") or ""
+        else:
+            # Маршрут отдаёт и модель, и провайдера, а этот слой брал только
+            # имя и всегда стучался в локальную Ollama. Облачная модель,
+            # назначенная на слот «Текст на чертеже», давала 404 на
+            # host-gateway:11434 — текстовый слой терялся молча, а причина в
+            # журнале выглядела как недоступный узел.
+            text, raw_body = await _ocr_via_router(image, model, router=router)
     except Exception as exc:  # noqa: BLE001 — one lost layer, not the sheet
         logger.warning("cad_ocr_layer_failed", error=str(exc)[:200])
         await record_cad_process_event(

@@ -55,6 +55,70 @@ def _thinking_params(request: AIRequest, provider_kind: str) -> dict[str, Any]:
     return thinking_request_params(provider_kind, request.thinking, request.thinking_level)
 
 
+def _requested_schema(request: AIRequest) -> dict[str, Any] | None:
+    """JSON-схема, которую просит вызывающий: сырая из metadata или из модели."""
+    schema = (request.metadata or {}).get("json_schema")
+    if schema is None and request.response_schema is not None:
+        try:
+            schema = request.response_schema.model_json_schema()
+        except Exception:  # noqa: BLE001 — схема необязательна, JSON важнее
+            schema = None
+    return schema if isinstance(schema, dict) else None
+
+
+def _schema_hint(request: AIRequest) -> str:
+    """Схема словами — для модели, которая не умеет строгий структурный вывод.
+
+    Когда провайдер подтверждает ``structured_outputs``, схема уходит в
+    ``response_format`` и соблюдается принудительно. Когда нет, остаётся один
+    способ сообщить форму — сказать её в тексте. Без этого модель отвечала
+    валидным, но чужим JSON: читатель чертежа ждёт ``{"frames": [...]}``, а
+    приходил голый массив, и слой PMI терялся целиком.
+    """
+    if (request.metadata or {}).get("structured_output_supported"):
+        return ""
+    schema = _requested_schema(request)
+    if not schema:
+        return ""
+    import json as _json
+
+    return (
+        "\n\nОтветь ОДНИМ объектом JSON строго по этой схеме, без пояснений и "
+        "без markdown-ограждений:\n" + _json.dumps(schema, ensure_ascii=False)
+    )
+
+
+def _response_format(request: AIRequest) -> dict[str, Any]:
+    """Требование структурированного ответа для OpenAI-совместимого шлюза.
+
+    Найдено на живом чтении чертежа: облачная модель прекрасно ВИДЕЛА лист —
+    узнала ступенчатый вал, обозначение, сталь 45, резьбы M18×1.5 и M24×1.5 —
+    но отвечала markdown-отчётом на английском, потому что схему ей никто не
+    передавал. Ollama-провайдер кладёт её в ``format``, а здесь и
+    ``response_schema``, и ``metadata["json_schema"]`` просто игнорировались:
+    все 29 запросов чтения были отброшены как «не JSON», и деталь осталась
+    неопознанной. Просьба «ответь одной строкой JSON» в тексте промпта — не
+    ограничение, а пожелание.
+
+    Строгую схему принимает не каждая модель (у OpenRouter это отдельный
+    параметр ``structured_outputs``, и у бесплатных вариантов его обычно нет),
+    поэтому без подтверждённой поддержки просим просто валидный JSON: этого
+    достаточно, чтобы ответ разобрался, а схему проверит вызывающий.
+    """
+    meta = request.metadata or {}
+    schema = _requested_schema(request)
+    if not schema and request.response_schema is None:
+        return {}
+    if meta.get("structured_output_supported") and isinstance(schema, dict):
+        return {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "answer", "strict": True, "schema": schema},
+            }
+        }
+    return {"response_format": {"type": "json_object"}}
+
+
 def _inference_params(request: AIRequest, default_temperature: float = 0.2) -> dict[str, Any]:
     """Extract inference parameters from request metadata."""
     params = (request.metadata or {}).get("inference_params") or {}
@@ -92,12 +156,20 @@ class OpenAICompatibleProvider(AIProvider):
 
     def _messages(self, request: AIRequest) -> list[dict[str, Any]]:
         if request.messages:
-            return [message.model_dump() for message in request.messages]
-        if request.prompt:
-            return [ChatMessage(role="user", content=request.prompt).model_dump()]
-        if request.input_text:
-            return [ChatMessage(role="user", content=request.input_text).model_dump()]
-        return []
+            messages = [message.model_dump() for message in request.messages]
+        elif request.prompt:
+            messages = [ChatMessage(role="user", content=request.prompt).model_dump()]
+        elif request.input_text:
+            messages = [ChatMessage(role="user", content=request.input_text).model_dump()]
+        else:
+            return []
+        hint = _schema_hint(request)
+        if hint:
+            for message in reversed(messages):
+                if message.get("role") == "user":
+                    message["content"] = f"{message.get('content') or ''}{hint}"
+                    break
+        return messages
 
     async def chat(self, request: AIRequest, model: str) -> AIResponse:
         started = time.perf_counter()
@@ -106,6 +178,7 @@ class OpenAICompatibleProvider(AIProvider):
             "messages": self._messages(request),
             **_inference_params(request, default_temperature=0.2),
             **_thinking_params(request, self.config.kind.value),
+            **_response_format(request),
         }
         if request.tools:
             payload["tools"] = [
@@ -171,12 +244,32 @@ class OpenAICompatibleProvider(AIProvider):
                 else f"data:image/png;base64,{image}"
             )
             content.append({"type": "image_url", "image_url": {"url": url}})
-        content.append({"type": "text", "text": request.prompt or request.input_text or ""})
+        # Вопрос к картинке брался ТОЛЬКО из `prompt`/`input_text`, а читатель
+        # чертежа задаёт его через `messages` — как и всё остальное в проекте.
+        # Для облачной модели это значило пустой текст: она получала лист без
+        # единого вопроса и отвечала вольным описанием, в разной раскладке и на
+        # разном языке. Снаружи выглядело как «умная модель не смогла даже тип
+        # детали определить» — при том что её ни о чём не спросили. Ollama-путь
+        # читает messages с самого начала, поэтому дефект жил только в облаке.
+        system_text = ""
+        user_parts: list[str] = []
+        for message in request.messages:
+            if message.role == "system":
+                system_text = message.content
+            elif message.role in ("user", "assistant"):
+                user_parts.append(message.content)
+        question = "\n\n".join(user_parts) or request.prompt or request.input_text or ""
+        content.append({"type": "text", "text": question + _schema_hint(request)})
+        messages: list[dict[str, Any]] = []
+        if system_text:
+            messages.append({"role": "system", "content": system_text})
+        messages.append({"role": "user", "content": content})
         payload = {
             "model": model,
-            "messages": [{"role": "user", "content": content}],
+            "messages": messages,
             **_inference_params(request, default_temperature=0.0),
             **_thinking_params(request, self.config.kind.value),
+            **_response_format(request),
         }
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(

@@ -15,7 +15,7 @@ OPENROUTER_ITEM = {
     "id": "anthropic/claude-sonnet-4",
     "context_length": 200000,
     "architecture": {"input_modalities": ["text", "image"]},
-    "supported_parameters": ["tools", "response_format", "reasoning"],
+    "supported_parameters": ["tools", "response_format", "structured_outputs", "reasoning"],
     "pricing": {"prompt": "0.000003", "completion": "0.000015"},
 }
 
@@ -36,6 +36,21 @@ def test_price_is_converted_from_per_token_to_per_thousand():
     cap = capability_from_listing("k", ProviderKind.OPENROUTER, OPENROUTER_ITEM)
     assert cap.cost_per_1k_input == 0.003
     assert round(cap.cost_per_1k_output, 6) == 0.015
+
+
+def test_json_object_alone_is_not_structured_output():
+    """`response_format` — «ответь валидным JSON», `structured_outputs` — схема.
+
+    Мы записывали первое как второе, и читатель чертежа слал строгую схему
+    модели, которая её молча игнорирует: ответ приходил вольным текстом.
+    """
+    item = {
+        "id": "vendor/free-model",
+        "architecture": {"input_modalities": ["text", "image"]},
+        "supported_parameters": ["response_format", "reasoning"],
+    }
+    cap = capability_from_listing("k", ProviderKind.OPENROUTER, item)
+    assert cap.supports_structured_output is False
 
 
 def test_a_text_only_model_gets_no_invented_abilities():
