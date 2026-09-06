@@ -52,8 +52,9 @@ infra/             — docker-compose, traefik, scripts
 ## Команды (целевые)
 ```bash
 make dev          # весь стек
-make test         # unit + API + integration
-make e2e          # Playwright
+make test         # backend unit + API + integration, затем vitest фронта
+make test-frontend # только vitest (frontend/tests/unit)
+make e2e          # Playwright (в т.ч. mobile-layout: 320/412 px)
 make regression   # extraction quality
 make emg-regression       # deterministic four-domain EMG golden gate
 make emg-live-regression  # live CAD/STEP/IFC/system production matrix
