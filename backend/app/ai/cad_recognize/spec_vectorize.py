@@ -2399,14 +2399,20 @@ def _first_vision_model(task: Any) -> tuple[str | None, bool]:
         registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
     except Exception:  # noqa: BLE001 — never block drafting on a config read
         return None, True
+    # Проверяем НАЗНАЧЕННУЮ модель, а не ищем зрячую по цепочке. Автоматического
+    # запаса больше нет: работаем на том, что выбрал оператор, и если выбрана
+    # слепая модель — это надо сказать, а не тихо взять другую. Раньше поиск по
+    # хвосту прятал ошибку назначения до тех пор, пока хвост не кончится.
     chain = list(get_routing_for(task).models or [])
     if not chain:
         return None, True
-    for key in chain:
-        capability = registry.models.get(key)
-        if capability is None or "vision" in {m.value for m in capability.modalities}:
-            return key, True
-    return None, False
+    key = chain[0]
+    capability = registry.models.get(key)
+    # Модель, которой нет в каталоге, считаем зрячей: каталог неполон, и
+    # отказать из-за отсутствующей записи хуже, чем попробовать.
+    if capability is None or "vision" in {m.value for m in capability.modalities}:
+        return key, True
+    return key, False
 
 
 def _model_supports_thinking(model_key: str | None) -> bool:

@@ -160,14 +160,21 @@ def test_openrouter_probe_separates_json_object_from_real_schema() -> None:
     assert cap(["response_format", "structured_outputs"]).supports_structured_output is True
 
 
-def test_unresolvable_candidate_does_not_abort_the_chain(monkeypatch) -> None:
-    """Нескачанная модель в середине цепочки не должна обрывать перебор.
+def test_only_the_assigned_model_runs_and_its_own_error_is_reported(monkeypatch) -> None:
+    """Автоматического запаса нет: работает только назначенная модель.
 
-    Живой случай: цепочка чтения чертежа была [облачная, qwen3-vl, gemma4].
-    Облачная упёрлась в дневной лимит, qwen3-vl не скачана ни на один узел — и
-    её RuntimeError не ловился, поэтому третий кандидат не пробовался вовсе. В
-    журнале осталось «Model qwen3-vl … is not served by any enabled ollama
-    node»: диагноз указывал на чужую модель, а исправная третья простаивала.
+    Раньше здесь проверялось обратное — что перебор доходит до третьего
+    кандидата. Такая цепочка и была источником целого класса дефектов: диагноз
+    называл чужую модель («Model gemma4:e4b is not served» при том, что
+    отвечала голова), проба возможностей мерила ответ запасного, политика
+    обрывала ход из-за облачной записи в хвосте. И главное — подмена шла
+    молча: в настройках одна модель, в работе другая, и по результату этого
+    не видно.
+
+    Решение принято по итогам разбора: конвейер работает только на моделях,
+    которые выбрал оператор. Осознанный второй проход (слот «Повторное
+    извлечение») остаётся — он читает свою модель сам и вызывает её напрямую,
+    это шаг конвейера, а не тихая замена при сбое.
     """
     import asyncio
 
@@ -220,12 +227,18 @@ def test_unresolvable_candidate_does_not_abort_the_chain(monkeypatch) -> None:
     monkeypatch.setattr(router_mod.AIRouter, "_enforce_policy", lambda *a, **kw: None)
     monkeypatch.setattr(router_mod.AIRouter, "_dispatch", _dispatch)
 
-    response = asyncio.run(
-        router_mod.ai_router.run(
-            AIRequest(task=AITask.CAD_SPEC_READ, prompt="x", confidential=False)
+    import pytest
+
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(
+            router_mod.ai_router.run(
+                AIRequest(task=AITask.CAD_SPEC_READ, prompt="x", confidential=False)
+            )
         )
-    )
-    assert response.model == "local_working"
+
+    # Причина — своя у назначенной модели, а не «третий кандидат не сработал».
+    assert "daily limit" in str(exc.value)
+    assert "local_working" not in str(exc.value)
 
 
 # ── Сэмплирующие параметры по видам шлюзов ───────────────────────────────────

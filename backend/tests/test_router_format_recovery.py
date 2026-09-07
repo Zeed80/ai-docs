@@ -258,115 +258,24 @@ def test_a_dict_schema_is_validated_too():
     assert '"kind"' in (response.text or "")
 
 
-# ── Недостижимый кандидат не должен подменять собой причину ──────────────────
+# ── Автоматического запаса нет ──────────────────────────────────────────────
 
 
-def test_a_cloud_fallback_is_skipped_on_a_confidential_task(monkeypatch):
-    """Мёртвая запись в хвосте обрывала ход и называла себя причиной.
+def test_only_the_operators_model_is_ever_called(monkeypatch):
+    """Работаем только на выбранной модели: хвост цепочки роутер не обходит.
 
-    `drawing_analysis_vlm` — задача из CONFIDENTIAL_TASKS, а её дефолтная
-    цепочка несла `claude_sonnet_anthropic`, которая здесь не может выполниться
-    никогда. Дойдя до неё после отказа всех локальных кандидатов, роутер
-    обрывал ход с «Confidential task ... cannot use non-local model
-    claude_sonnet» — то есть называл причиной модель, которую оператор не
-    выбирал, вместо настоящей: не сработал ни один локальный кандидат.
+    Что давала цепочка на практике: диагноз называл чужую модель (10 из 13
+    упавших вопросов на живом чтении чертежа сообщили «Model gemma4:e4b is not
+    served», хотя отвечала голова), проба возможностей мерила не ту модель,
+    политика обрывала ход из-за облачной записи в хвосте. И главное — подмена
+    была молчаливой: в настройках одна модель, работает другая.
     """
     from app.ai.model_registry import ModelRegistry
     from app.ai.router import AIRouter
     from app.ai.task_routing import TaskRouting
 
-    registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
     router = AIRouter.__new__(AIRouter)
-    router.registry = registry
-
-    routing = TaskRouting(
-        task="drawing_analysis_vlm",
-        models=["qwen3_5_9b_ollama", "claude_sonnet_anthropic"],
-        local_only=True,
-    )
-    monkeypatch.setattr("app.ai.task_routing.get_routing_for", lambda _t: routing)
-
-    tried: list[str] = []
-
-    async def _always_fails(provider, request, model, **kwargs):
-        tried.append(model.name)
-        raise RuntimeError("локальный узел не ответил")
-
-    monkeypatch.setattr(router, "_run_candidate", _always_fails)
-    monkeypatch.setattr(router, "_resolve_provider", lambda model: (object(), None))
-    monkeypatch.setattr(router, "_enforce_policy", lambda *a, **k: None)
-
-    request = AIRequest(
-        task=AITask.DRAWING_ANALYSIS_VLM,
-        messages=[ChatMessage(role="user", content="?")],
-        confidential=True,
-    )
-    with pytest.raises(RuntimeError) as exc:
-        asyncio.run(router.run(request))
-
-    # Причина названа настоящая, а не чужая модель.
-    assert "локальный узел не ответил" in str(exc.value)
-    assert tried == ["qwen3_5_9b_ollama"]
-    assert "claude_sonnet_anthropic" not in tried
-
-
-def test_a_model_the_caller_named_still_fails_loudly(monkeypatch):
-    """Осознанный выбор облачной модели обязан падать громко, а не пропускаться.
-
-    Иначе назначение станет декоративным: оператор выбрал модель, а вызов молча
-    ушёл на другую.
-    """
-    from app.ai.model_registry import ModelRegistry
-    from app.ai.router import AIRouter
-    from app.ai.task_routing import TaskRouting
-
-    registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
-    router = AIRouter.__new__(AIRouter)
-    router.registry = registry
-
-    routing = TaskRouting(
-        task="drawing_analysis_vlm", models=["claude_sonnet_anthropic"], local_only=True
-    )
-    monkeypatch.setattr("app.ai.task_routing.get_routing_for", lambda _t: routing)
-
-    seen: list[str] = []
-
-    async def _record(provider, request, model, **kwargs):
-        seen.append(model.name)
-        raise RuntimeError("не дошло")
-
-    monkeypatch.setattr(router, "_run_candidate", _record)
-    monkeypatch.setattr(router, "_resolve_provider", lambda model: (object(), None))
-
-    request = AIRequest(
-        task=AITask.DRAWING_ANALYSIS_VLM,
-        messages=[ChatMessage(role="user", content="?")],
-        confidential=True,
-        preferred_model="claude_sonnet_anthropic",
-    )
-    with pytest.raises(Exception) as exc:
-        asyncio.run(router.run(request))
-
-    # Названная модель не отсеяна молча: политика сказала своё слово.
-    assert "claude_sonnet_anthropic" in str(exc.value) or seen == ["claude_sonnet_anthropic"]
-
-
-def test_the_reason_comes_from_the_model_that_tried(monkeypatch):
-    """Нескачанный запасной в хвосте не должен подменять собой причину.
-
-    Живой прогон чтения чертежа: 10 из 13 упавших фрагментных вопросов
-    сообщили «Model gemma4:e4b is not served by any enabled ollama node» —
-    про модель, которая к делу не относится вовсе. Отвечать пыталась голова
-    цепочки и падала по своей причине, но `last_error` перезаписывался каждым
-    следующим кандидатом, и наружу уходил последний.
-    """
-    from app.ai.model_registry import ModelRegistry
-    from app.ai.router import AIRouter
-    from app.ai.task_routing import TaskRouting
-
-    registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
-    router = AIRouter.__new__(AIRouter)
-    router.registry = registry
+    router.registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
 
     routing = TaskRouting(
         task="cad_spec_read",
@@ -375,17 +284,15 @@ def test_the_reason_comes_from_the_model_that_tried(monkeypatch):
     )
     monkeypatch.setattr("app.ai.task_routing.get_routing_for", lambda _t: routing)
     monkeypatch.setattr(router, "_enforce_policy", lambda *a, **k: None)
+    monkeypatch.setattr(router, "_resolve_provider", lambda model: (object(), None))
 
-    def _resolve(model):
-        if model.name == "gemma4_e4b_ollama":
-            raise RuntimeError("Model gemma4:e4b is not served by any enabled ollama node")
-        return (object(), None)
+    tried: list[str] = []
 
-    async def _head_fails(provider, request, model, **kwargs):
+    async def _fails(provider, request, model, **kwargs):
+        tried.append(model.name)
         raise RuntimeError("модель ответила пустой строкой")
 
-    monkeypatch.setattr(router, "_resolve_provider", _resolve)
-    monkeypatch.setattr(router, "_run_candidate", _head_fails)
+    monkeypatch.setattr(router, "_run_candidate", _fails)
 
     request = AIRequest(
         task=AITask.CAD_SPEC_READ,
@@ -395,5 +302,41 @@ def test_the_reason_comes_from_the_model_that_tried(monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         asyncio.run(router.run(request))
 
+    # Вызвана ровно одна модель — та, что назначена.
+    assert tried == ["qwen3_5_9b_ollama"]
+    # И причина названа её собственная, а не «gemma4 не скачана».
     assert "пустой строкой" in str(exc.value)
-    assert "gemma4" not in str(exc.value)
+
+
+def test_a_caller_named_model_wins_over_the_route(monkeypatch):
+    """Место вызова знает, какую модель ему дал оператор для ЭТОГО шага."""
+    from app.ai.model_registry import ModelRegistry
+    from app.ai.router import AIRouter
+    from app.ai.task_routing import TaskRouting
+
+    router = AIRouter.__new__(AIRouter)
+    router.registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
+    monkeypatch.setattr(
+        "app.ai.task_routing.get_routing_for",
+        lambda _t: TaskRouting(task="cad_spec_read", models=["qwen3_5_9b_ollama"]),
+    )
+    monkeypatch.setattr(router, "_enforce_policy", lambda *a, **k: None)
+    monkeypatch.setattr(router, "_resolve_provider", lambda model: (object(), None))
+
+    tried: list[str] = []
+
+    async def _ok(provider, request, model, **kwargs):
+        tried.append(model.name)
+        return AIResponse(task=request.task, provider=model.provider, model=model.name, text="ok")
+
+    monkeypatch.setattr(router, "_run_candidate", _ok)
+
+    request = AIRequest(
+        task=AITask.CAD_SPEC_READ,
+        messages=[ChatMessage(role="user", content="?")],
+        confidential=True,
+        preferred_model="glm_ocr_ollama",
+    )
+    asyncio.run(router.run(request))
+
+    assert tried == ["glm_ocr_ollama"]

@@ -319,16 +319,42 @@ class AIRouter:
         from app.ai.task_routing import get_routing_for
 
         routing = get_routing_for(request.task)
-        # A caller-supplied preferred_model is tried first, but the task's
-        # configured models (the UI source of truth in task_routing) stay as a
-        # fallback chain. Previously preferred_model *replaced* the chain, so a
-        # single dead/unresolvable model (e.g. an agent slot pointing at a model
-        # that is down) hard-failed the whole turn instead of degrading to the
-        # configured route. Dedup while preserving order.
-        if request.preferred_model:
-            candidates = list(dict.fromkeys([request.preferred_model, *routing.models]))
-        else:
-            candidates = list(routing.models)
+        # Работаем ТОЛЬКО на модели, которую выбрал оператор. Автоматического
+        # запаса нет — решение принято по итогам разбора, и оно снимает целый
+        # класс дефектов сразу.
+        #
+        # Что давала цепочка на практике. Диагноз называл чужую модель: на
+        # живом чтении чертежа 10 из 13 упавших вопросов сообщили «Model
+        # gemma4:e4b is not served», хотя отвечать пыталась голова, а gemma4
+        # просто не скачана. Проба возможностей мерила не ту модель: ответ
+        # запасного засчитывался проверяемой. Политика обрывала ход, называя
+        # причиной облачную запись из хвоста. И главное — подмена молчаливая:
+        # оператор видит в настройках одну модель, а работает другая, и по
+        # результату этого не понять.
+        #
+        # Запас, который нужен осознанно, остаётся: слот «Повторное извлечение»
+        # (`ocr_large`) читает второй элемент цепочки САМ и вызывает модель
+        # напрямую — это отдельный шаг конвейера, а не тихая замена при сбое.
+        # Поэтому хвост по-прежнему хранится, просто роутер его не обходит.
+        head = routing.models[0] if routing.models else None
+        chosen = request.preferred_model or head
+        # Битая ссылка — не выбор оператора. `preferred_model` приходит из
+        # agent_config и из резолва слота, где хранится сырое имя модели, и
+        # может отстать от каталога. Тогда действующим назначением остаётся
+        # маршрут задачи: это не подмена одной рабочей модели другой, а
+        # разыменование ссылки, которая никуда не указывает.
+        if chosen and chosen != head:
+            try:
+                self.registry.get_model(chosen)
+            except Exception:  # noqa: BLE001 — нет в каталоге
+                logger.warning(
+                    "ai_route_preferred_model_unknown",
+                    task=request.task.value,
+                    preferred=chosen,
+                    using=head,
+                )
+                chosen = head
+        candidates = [chosen] if chosen else []
 
         # Merge per-call request with the task's configured policy.
         #
@@ -365,14 +391,6 @@ class AIRouter:
             )
 
         last_error: Exception | None = None
-        # Ошибка от кандидата, который РЕАЛЬНО пытался ответить. Нужна отдельно
-        # от `last_error`: тот перезаписывается каждым следующим кандидатом, и
-        # если хвост цепочки не скачан, наружу уходит «Model gemma4:e4b is not
-        # served by any enabled ollama node» — про модель, которая к делу не
-        # относится вовсе. Живой прогон чтения чертежа: 10 из 13 упавших
-        # фрагментных вопросов сообщили именно это, тогда как отвечать пыталась
-        # голова цепочки и падала по своей причине.
-        first_attempt_error: Exception | None = None
 
         # Vector calls answer in seconds or are broken — they must not inherit
         # the provider's 180s conversational timeout. Measured live: a hung
@@ -384,44 +402,6 @@ class AIRouter:
         chain_started = _time.perf_counter()
 
         filtered_candidates = [name for name in candidates if name]
-        # Кандидаты, которых политика не пропустит, отсеиваются ДО перебора.
-        #
-        # `_enforce_policy` бросает жёсткий стоп, и это правильно, когда
-        # облачную модель назвал сам вызывающий: молча подменить её локальной
-        # значило бы сделать выбор декоративным. Но ровно тот же стоп срабатывал
-        # и на СТАРОЙ записи в хвосте цепочки — например `claude_sonnet` в
-        # дефолтном chain'е `drawing_analysis_vlm`, задачи из CONFIDENTIAL_TASKS,
-        # где эта модель не может выполниться никогда. Дойдя до неё после того,
-        # как все локальные кандидаты отказали, роутер обрывал ход с
-        # «Confidential task ... cannot use non-local model claude_sonnet» —
-        # то есть называл причиной модель, которую оператор не выбирал, вместо
-        # настоящей: не сработал ни один локальный кандидат.
-        #
-        # Тот же урок, что записан двумя блоками выше про RuntimeError: чужая
-        # модель в диагнозе дороже пропущенного кандидата.
-        if eff_confidential or not eff_allow_cloud:
-            named = request.preferred_model
-            usable, skipped = [], []
-            for name in filtered_candidates:
-                try:
-                    capability = self.registry.get_model(name)
-                except Exception:  # noqa: BLE001 — нерешаемое отсеет сам перебор
-                    usable.append(name)
-                    continue
-                # Названную вызывающим модель не трогаем: её отказ обязан быть
-                # громким, это осознанный выбор, а не наследие цепочки.
-                if capability.local_only or name == named:
-                    usable.append(name)
-                else:
-                    skipped.append(name)
-            if skipped:
-                logger.info(
-                    "ai_route_cloud_candidates_skipped",
-                    task=request.task.value,
-                    skipped=skipped,
-                    reason="политика задачи локальная — эти кандидаты недостижимы",
-                )
-            filtered_candidates = usable
         for model_name in filtered_candidates:
             if chain_budget is not None and _time.perf_counter() - chain_started > chain_budget:
                 logger.warning(
@@ -542,8 +522,6 @@ class AIRouter:
                 # an empty log line and an unexplained fallback. Always carry
                 # the type so the reason survives.
                 error_text = str(exc) or exc.__class__.__name__
-                if first_attempt_error is None:
-                    first_attempt_error = exc
                 self._record_telemetry(request, model, started, ok=False, error=error_text)
                 logger.warning(
                     "ai_route_model_failed",
@@ -553,10 +531,6 @@ class AIRouter:
                     error_type=exc.__class__.__name__,
                 )
 
-        # Диагноз даёт тот, кто пробовал: нерешаемый кандидат в хвосте
-        # («модель не скачана») не должен подменять собой настоящую причину.
-        if first_attempt_error is not None:
-            raise first_attempt_error
         if last_error:
             raise last_error
         raise KeyError(f"No model configured for task {request.task.value}")

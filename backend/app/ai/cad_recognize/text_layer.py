@@ -210,6 +210,143 @@ def layer_from_vlm_json(
     )
 
 
+# Модель, зациклившаяся на промпте, повторяет одну строку десятками. Это не
+# содержимое листа, а вырождение ответа, и в слое ему не место.
+_MAX_REPEATS = 2
+
+
+def _json_fragments(raw: str) -> list[dict[str, Any]]:
+    """Все JSON-объекты из ответа — массивом, россыпью или в ```-ограждениях.
+
+    Формы, встреченные вживую на одном и том же запросе:
+
+    * ``[{"text": ..., "bbox": [...]}, ...]`` — то, о чём просили;
+    * несколько отдельных ```json {"text": "строка\nстрока"} ``` подряд —
+      так отвечает glm-ocr, документная модель на 1.1B: массив она собрать не
+      может, но текст читает верно;
+    * проза без единой скобки.
+
+    Разбирать только первую форму значило терять две остальные целиком: на
+    живом прогоне из богатой транскрипции штампа доезжало пять мусорных
+    токенов, потому что фигурные скобки и кавычки разбирались как строки.
+    """
+    import json
+
+    text = (raw or "").strip()
+    out: list[dict[str, Any]] = []
+
+    try:
+        value = json.loads(text)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            return [value]
+    except Exception:  # noqa: BLE001 — дальше разбираем по кускам
+        pass
+
+    # Массив целиком, если он утонул в пояснениях.
+    start, end = text.find("["), text.rfind("]")
+    if 0 <= start < end:
+        try:
+            value = json.loads(text[start : end + 1])
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Россыпь объектов: балансируем скобки и разбираем каждый отдельно.
+    depth, buffer = 0, []
+    for char in text:
+        if char == "{":
+            depth += 1
+        if depth:
+            buffer.append(char)
+        if char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    value = json.loads("".join(buffer))
+                    if isinstance(value, dict):
+                        out.append(value)
+                except Exception:  # noqa: BLE001 — кусок оказался не JSON
+                    pass
+                buffer = []
+    return out
+
+
+def _drop_degenerate(tokens: list[TextToken], prompt: str = "") -> list[TextToken]:
+    """Убрать эхо промпта и зацикленные повторы.
+
+    Модель, которой задали непосильный вопрос, повторяет его же формулировку —
+    на живом прогоне glm-ocr выдала «Все надписи и размеры с этого чертежа»
+    четырнадцать раз подряд. Принять это за прочитанное с листа нельзя.
+    """
+    prompt_words = {w for w in re.split(r"\W+", (prompt or "").lower()) if len(w) > 3}
+    seen: dict[str, int] = {}
+    kept: list[TextToken] = []
+    for token in tokens:
+        key = token.text.lower()
+        seen[key] = seen.get(key, 0) + 1
+        if seen[key] > _MAX_REPEATS:
+            continue
+        words = {w for w in re.split(r"\W+", key) if len(w) > 3}
+        # Строка, целиком состоящая из слов промпта, — эхо, а не надпись.
+        if words and prompt_words and words <= prompt_words:
+            continue
+        kept.append(token)
+    return kept
+
+
+def layer_from_answer(
+    raw_text: str,
+    *,
+    model: str,
+    prompt: str = "",
+    image_size: tuple[int, int] | None = None,
+    normalized_scale: float | None = None,
+) -> TextLayer:
+    """Ответ ЛЮБОЙ модели — в общий контракт, какой бы формы он ни был.
+
+    Единая точка входа: сначала пробуем разобрать структуру (с координатами или
+    без), затем — прозу. Что удалось, записано в ``source``/``grounded``, а не
+    выясняется потерей значений ниже по конвейеру.
+    """
+    fragments = _json_fragments(raw_text)
+    if fragments:
+        tokens: list[TextToken] = []
+        for record in fragments:
+            raw_box = record.get("bbox")
+            if not _is_bbox(raw_box):
+                raw_box = record.get("bbox_2d")
+            bbox = _rescaled_bbox(raw_box, image_size, normalized_scale)
+            # `text` может нести сразу несколько строк — так отвечает документная
+            # модель, у которой на объект приходится целый блок штампа.
+            for line in str(record.get("text") or "").splitlines():
+                text = clean_token_text(line)
+                if not text or is_sheet_metadata(text):
+                    continue
+                tokens.append(
+                    TextToken(
+                        text=text,
+                        bbox=bbox,
+                        confidence=_as_confidence(record.get("confidence")),
+                        source="vlm" if bbox else "vlm_ungrounded",
+                    )
+                )
+        tokens = _drop_degenerate(_dedup(tokens), prompt)
+        if tokens:
+            grounded = any(token.bbox is not None for token in tokens)
+            return TextLayer(
+                tokens=tokens,
+                raw_text=raw_text or "",
+                model=model,
+                source="vlm" if grounded else "vlm_ungrounded",
+            )
+
+    layer = layer_from_prose(raw_text, model=model)
+    return layer.model_copy(update={"tokens": _drop_degenerate(layer.tokens, prompt)})
+
+
 def layer_from_prose(raw_text: str, *, model: str) -> TextLayer:
     """Свободный текст модели, которая не смогла вернуть координаты.
 

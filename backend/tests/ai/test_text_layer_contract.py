@@ -165,3 +165,83 @@ def test_an_empty_answer_yields_an_empty_layer_not_an_error():
     layer = layer_from_prose("", model="m")
     assert layer.tokens == []
     assert layer.grounded is False
+
+
+# ── Вопрос подбирается под модель, ответ приводится к одному виду ────────────
+
+
+def test_a_document_ocr_model_gets_a_plain_ask():
+    """Просить координаты у модели, которая их не умеет, — портить ответ.
+
+    Живой прогон: glm-ocr (документная модель на 1.1B) на просьбу вернуть
+    JSON-массив с bbox выдала разрозненные объекты без координат, а потом
+    зациклилась, повторив формулировку запроса четырнадцать раз.
+    """
+    from app.ai.cad_recognize.spec_fragments import _ocr_prompt_for
+
+    prompt, grounded = _ocr_prompt_for("glm_ocr_ollama")
+    assert grounded is False
+    assert "JSON" not in prompt
+
+
+def test_a_model_that_holds_a_schema_is_asked_for_coordinates():
+    from app.ai.cad_recognize.spec_fragments import _ocr_prompt_for
+
+    prompt, grounded = _ocr_prompt_for("claude_sonnet_anthropic")
+    assert grounded is True
+    assert "bbox" in prompt
+
+
+def test_an_unknown_model_is_asked_the_safe_way():
+    from app.ai.cad_recognize.spec_fragments import _ocr_prompt_for
+
+    _prompt, grounded = _ocr_prompt_for("модели-такой-нет")
+    assert grounded is False
+
+
+# ── Один разбор на все формы ответа ──────────────────────────────────────────
+
+
+def test_scattered_json_objects_are_read_too():
+    """Форма, которой отвечает glm-ocr: несколько объектов подряд, не массив.
+
+    Разбирать только массив значило терять такой ответ целиком — фигурные
+    скобки и кавычки уходили в «токены», и от богатой транскрипции штампа
+    оставался мусор.
+    """
+    from app.ai.cad_recognize.text_layer import layer_from_answer
+
+    answer = (
+        '```json\n{"text": "ПЗ-137.04.10.02.008.09\\nВал\\nСталь 45 ГОСТ 1050-2014"}\n```\n'
+        '```json\n{"text": "Ra 6,3"}\n```'
+    )
+    layer = layer_from_answer(answer, model="glm-ocr")
+
+    assert [t.text for t in layer.tokens] == [
+        "ПЗ-137.04.10.02.008.09",
+        "Вал",
+        "Сталь 45 ГОСТ 1050-2014",
+        "Ra 6,3",
+    ]
+    assert layer.grounded is False
+
+
+def test_a_looping_model_does_not_fill_the_layer_with_its_own_prompt():
+    """Зациклившаяся модель повторяет вопрос — это не содержимое листа."""
+    from app.ai.cad_recognize.text_layer import layer_from_answer
+
+    prompt = "Прочитай все надписи и размеры с этого чертежа."
+    answer = "Ø25\n" + "Все надписи и размеры с этого чертежа\n" * 14
+    layer = layer_from_answer(answer, model="m", prompt=prompt)
+
+    assert [t.text for t in layer.tokens] == ["Ø25"]
+
+
+def test_a_grounded_array_still_wins_when_the_model_can_do_it():
+    from app.ai.cad_recognize.text_layer import layer_from_answer
+
+    answer = '[{"text": "Ø25", "bbox": [100, 200, 300, 400]}]'
+    layer = layer_from_answer(answer, model="vlm", image_size=(1000, 500), normalized_scale=1000.0)
+
+    assert layer.grounded is True
+    assert layer.tokens[0].bbox == [100.0, 100.0, 300.0, 200.0]

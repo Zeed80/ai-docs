@@ -1146,17 +1146,58 @@ _OCR_MODEL = "glm-ocr:latest"  # fallback only; the assignment decides
 # blocks are collapsed.
 _OCR_NUM_PREDICT = 700
 
-# Просим координаты явно и в нормализованной сетке 0..1000: она однозначна для
-# любой модели, а qwen3-vl отдаёт свои боксы именно в ней независимо от того,
-# о чём её просили. Модель, которая координаты не умеет, ответит прозой — это
-# предусмотрено и разбирается вторым путём, а не теряется.
-_OCR_PROMPT = (
+# Вопрос подбирается под модель, ответ приводится к одному контракту.
+#
+# Просить координаты имеет смысл только у той модели, которая их умеет.
+# Живой прогон: glm-ocr — документная модель на 1.1B — на просьбу вернуть
+# JSON-массив с bbox выдала несколько разрозненных объектов без координат, а
+# потом зациклилась, повторив формулировку запроса четырнадцать раз. При этом
+# на простую просьбу «прочитай надписи» та же модель читает штамп верно.
+# Непосильный вопрос портит ответ сильнее, чем отсутствие координат.
+_OCR_PROMPT_GROUNDED = (
     "Прочитай ВСЕ надписи и размеры с этого чертежа.\n"
     "Верни СТРОГО JSON-массив без markdown, каждый элемент:\n"
     '{"text": "строка ровно как на чертеже", "bbox": [x1, y1, x2, y2]}\n'
     "bbox — координаты рамки текста в сетке 0..1000 по каждой оси.\n"
     "Ничего не выдумывай и не добавляй пояснений. Нет текста — верни []."
 )
+_OCR_PROMPT_PLAIN = (
+    "Прочитай все надписи и размеры с этого чертежа. "
+    "Каждую надпись — с новой строки, ровно как на листе, без пояснений."
+)
+
+
+def _ocr_model_key() -> str | None:
+    """Ключ каталога у назначенной модели текстового слоя."""
+    try:
+        from app.ai.schemas import AITask
+        from app.ai.task_routing import get_routing_for
+
+        return get_routing_for(AITask.CAD_TEXT_OCR).primary
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ocr_prompt_for(model_key: str | None) -> tuple[str, bool]:
+    """(промпт, ждём ли координаты) — по тому, что модель реально умеет.
+
+    Каталог уже несёт этот факт: у glm-ocr стоит
+    ``supports_structured_output: false``. Спрашивать вопреки ему — значит
+    осознанно портить ответ.
+    """
+    if not model_key:
+        return _OCR_PROMPT_PLAIN, False
+    try:
+        from app.ai.model_registry import ModelRegistry
+
+        cap = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml").models.get(
+            model_key
+        )
+    except Exception:  # noqa: BLE001 — без каталога спрашиваем осторожнее
+        return _OCR_PROMPT_PLAIN, False
+    if cap is not None and cap.supports_structured_output and not cap.capabilities_unknown:
+        return _OCR_PROMPT_GROUNDED, True
+    return _OCR_PROMPT_PLAIN, False
 
 
 _SHEET_METADATA_LINE = re.compile(
@@ -1231,7 +1272,9 @@ def _ocr_model_and_url() -> tuple[str, str, str] | None:
 _LOCAL_PROVIDER_KINDS = {"ollama", "llamacpp", "vllm", "openai_compatible", "lmstudio"}
 
 
-async def _ocr_via_router(image, model: str, *, router: Any = None) -> tuple[str, dict]:
+async def _ocr_via_router(
+    image, model: str, *, prompt: str, router: Any = None
+) -> tuple[str, dict]:
     """Тот же текстовый слой, но через AIRouter — для нелокальной модели.
 
     Роутер сам выберет провайдера, ключ и адрес; здесь остаётся только та же
@@ -1250,7 +1293,7 @@ async def _ocr_via_router(image, model: str, *, router: Any = None) -> tuple[str
     image.save(buffer, format="PNG")
     request = AIRequest(
         task=AITask.CAD_TEXT_OCR,
-        messages=[ChatMessage(role="user", content=_OCR_PROMPT)],
+        messages=[ChatMessage(role="user", content=prompt)],
         images=[base64.b64encode(buffer.getvalue()).decode()],
         confidential=True,
         allow_cloud=False,
@@ -1263,30 +1306,24 @@ async def _ocr_via_router(image, model: str, *, router: Any = None) -> tuple[str
     return (response.text or ""), {}
 
 
-def _text_layer_from_answer(answer: str, *, model: str, image: Any):
+def _text_layer_from_answer(answer: str, *, model: str, image: Any, prompt: str = ""):
     """Ответ текстового слоя — в общий контракт, чем бы он ни был.
 
-    Строгий JSON с координатами и свободная проза приходят от РАЗНЫХ моделей на
-    один и тот же запрос: документная модель на 1.1B координат не умеет, а
-    vision-LLM их отдаёт. Раньше разбор был один — построчный, — поэтому JSON
-    просто рассыпался бы на строки со скобками, а координаты терялись бы в
-    любом случае. Теперь оба ответа приводятся к одному виду, и то, чем именно
-    прочитано, записано в самом слое.
+    Строгий JSON с координатами, россыпь объектов без них и свободная проза
+    приходят от РАЗНЫХ моделей на один и тот же вопрос: документная модель на
+    1.1B координат не умеет, vision-LLM их отдаёт. Разбор один на все формы, и
+    то, чем именно прочитано, записано в самом слое.
     """
-    from app.ai.cad_recognize.text_layer import layer_from_prose, layer_from_vlm_json
-    from app.ai.vlm_dimensions import _parse_json_array
+    from app.ai.cad_recognize.text_layer import layer_from_answer
 
-    records = _parse_json_array(answer or "")
-    if records:
-        size = (getattr(image, "width", None), getattr(image, "height", None))
-        return layer_from_vlm_json(
-            records,
-            model=model,
-            raw_text=answer or "",
-            image_size=size if all(size) else None,
-            normalized_scale=1000.0 if all(size) else None,
-        )
-    return layer_from_prose(answer or "", model=model)
+    size = (getattr(image, "width", None), getattr(image, "height", None))
+    return layer_from_answer(
+        answer or "",
+        model=model,
+        prompt=prompt,
+        image_size=size if all(size) else None,
+        normalized_scale=1000.0 if all(size) else None,
+    )
 
 
 async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
@@ -1332,11 +1369,12 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
             {"model": model, "reason": "model_has_no_vision", "slot": "cad_text_ocr"},
         )
         return {}
+    prompt, _wants_grounding = _ocr_prompt_for(_ocr_model_key())
     buffer = _io.BytesIO()
     image.save(buffer, format="PNG")
     payload = {
         "model": model,
-        "prompt": _OCR_PROMPT,
+        "prompt": prompt,
         "images": [base64.b64encode(buffer.getvalue()).decode()],
         "stream": False,
         "think": False,
@@ -1367,7 +1405,7 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
             # назначенная на слот «Текст на чертеже», давала 404 на
             # host-gateway:11434 — текстовый слой терялся молча, а причина в
             # журнале выглядела как недоступный узел.
-            text, raw_body = await _ocr_via_router(image, model, router=router)
+            text, raw_body = await _ocr_via_router(image, model, prompt=prompt, router=router)
     except Exception as exc:  # noqa: BLE001 — one lost layer, not the sheet
         logger.warning("cad_ocr_layer_failed", error=str(exc)[:200])
         await record_cad_process_event(
@@ -1385,7 +1423,7 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
     # Один контракт на все источники: движок отдаёт координаты сам, vision-LLM
     # просят вернуть их в JSON, а модель, которая не смогла, даёт bbox=None —
     # и это видно в слое, а не выясняется потерей значений ниже по конвейеру.
-    layer = _text_layer_from_answer(text, model=model, image=image)
+    layer = _text_layer_from_answer(text, model=model, image=image, prompt=prompt)
     callouts = layer.as_callouts()
     dimensions = callouts["dimensions"]
     annotations = callouts["annotations"]
