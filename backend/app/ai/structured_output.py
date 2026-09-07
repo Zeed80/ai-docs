@@ -246,6 +246,33 @@ def correction_prompt(error: str, schema: type[BaseModel] | dict | None) -> str:
     return _CORRECTION_TEMPLATE.format(error=error, schema=schema_to_str(schema))
 
 
+_TYPE_CHECKS: dict[str, Any] = {
+    "string": str,
+    "integer": int,
+    "number": (int, float),
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
+
+
+def _declared_types(node: dict) -> set[str]:
+    """Объявленные типы поля.
+
+    В JSON Schema ``type`` — это строка ИЛИ список: ``["string", "null"]`` для
+    необязательного поля пишется именно так, и Pydantic генерирует такие схемы
+    сам. Использовать это значение ключом словаря нельзя — список не хешируется,
+    и живой прогон падал ровно на этом: `TypeError: unhashable type: 'list'`
+    десять раз подряд, по разу на каждый фрагментный вопрос.
+    """
+    raw = node.get("type")
+    if isinstance(raw, str):
+        return {raw}
+    if isinstance(raw, list):
+        return {item for item in raw if isinstance(item, str)}
+    return set()
+
+
 def validate_against_schema(payload: Any, schema: dict) -> str | None:
     """Лёгкая проверка ответа против JSON-схемы; ``None`` — претензий нет.
 
@@ -258,10 +285,10 @@ def validate_against_schema(payload: Any, schema: dict) -> str | None:
     чтобы отличить «модель ответила не тем» от «модель ответила тем»; полную
     валидацию делает вызывающий своей Pydantic-моделью.
     """
-    expected = schema.get("type")
-    if expected == "array" and not isinstance(payload, list):
+    expected = _declared_types(schema)
+    if expected == {"array"} and not isinstance(payload, list):
         return "ожидался JSON-массив"
-    if expected == "object" and not isinstance(payload, dict):
+    if expected == {"object"} and not isinstance(payload, dict):
         return "ожидался объект JSON"
     if not isinstance(payload, dict):
         return None
@@ -275,25 +302,22 @@ def validate_against_schema(payload: Any, schema: dict) -> str | None:
     properties = schema.get("properties")
     if not isinstance(properties, dict):
         return None
-    checks = {
-        "string": str,
-        "integer": int,
-        "number": (int, float),
-        "boolean": bool,
-        "array": list,
-        "object": dict,
-    }
     for key, spec in properties.items():
         if key not in payload or not isinstance(spec, dict):
             continue
         value = payload[key]
         if value is None:
             continue
-        expected_type = checks.get(spec.get("type"))
-        if expected_type is None:
+        declared = _declared_types(spec)
+        allowed = tuple(_TYPE_CHECKS[name] for name in declared if name in _TYPE_CHECKS)
+        if not allowed:
             continue
-        if expected_type is int and isinstance(value, bool):
-            return f"поле «{key}»: ожидалось целое, пришло логическое"
-        if not isinstance(value, expected_type):
-            return f"поле «{key}»: ожидался тип {spec.get('type')}"
+        # bool — подкласс int в Python, но не целое в JSON Schema.
+        if isinstance(value, bool) and "boolean" not in declared:
+            return f"поле «{key}»: ожидалось {'/'.join(sorted(declared))}, пришло логическое"
+        flat: tuple = tuple(
+            item for entry in allowed for item in (entry if isinstance(entry, tuple) else (entry,))
+        )
+        if not isinstance(value, flat):
+            return f"поле «{key}»: ожидался тип {'/'.join(sorted(declared))}"
     return None

@@ -261,3 +261,52 @@ def test_an_unrelated_error_is_not_mistaken_for_a_format_refusal():
 
 def test_a_server_error_is_never_a_format_refusal():
     assert classify_wire_rejection(_http_error(500, "response_format")) is False
+
+
+# ── Проверка ответа против схемы-словаря ─────────────────────────────────────
+
+
+def test_a_list_valued_type_does_not_crash_the_check():
+    """`"type": ["string", "null"]` — обычная форма необязательного поля.
+
+    Список нельзя использовать ключом словаря, и живой прогон падал ровно на
+    этом: `TypeError: unhashable type: 'list'` десять раз подряд, по разу на
+    каждый фрагментный вопрос чтения чертежа. Ошибку было видно только потому,
+    что перед этим убрали ложный диагноз про нескачанную модель, — до того она
+    пряталась за ним.
+    """
+    from app.ai.structured_output import validate_against_schema
+
+    schema = {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {"kind": {"type": ["string", "null"]}},
+    }
+
+    assert validate_against_schema({"kind": "вал"}, schema) is None
+    assert validate_against_schema({"kind": None}, schema) is None
+    assert "kind" in (validate_against_schema({"kind": 5}, schema) or "")
+
+
+def test_a_missing_required_field_is_named():
+    from app.ai.structured_output import validate_against_schema
+
+    schema = {"type": "object", "required": ["a", "b"], "properties": {}}
+    problem = validate_against_schema({"a": 1}, schema)
+    assert problem and "b" in problem
+
+
+def test_bool_is_not_an_integer_here():
+    """В Python bool — подкласс int, в JSON Schema — нет."""
+    from app.ai.structured_output import validate_against_schema
+
+    schema = {"type": "object", "properties": {"n": {"type": "integer"}}}
+    assert validate_against_schema({"n": 42}, schema) is None
+    assert validate_against_schema({"n": True}, schema) is not None
+
+
+def test_an_unknown_type_is_not_second_guessed():
+    from app.ai.structured_output import validate_against_schema
+
+    schema = {"type": "object", "properties": {"x": {"type": "какой-то-свой"}}}
+    assert validate_against_schema({"x": "что угодно"}, schema) is None
