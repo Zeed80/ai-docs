@@ -4520,6 +4520,13 @@ class ModelRuntimeOverride(UUIDPrimaryKey, TimestampMixin, Base):
     # wins over via setdefault).
     thinking_levels: Mapped[list | None] = mapped_column(JSON)
     preferred_instance: Mapped[str | None] = mapped_column(String(150))
+    # Возможности, установленные ЖИВОЙ пробой: {"modalities": [...],
+    # "supports_structured_output": bool, "checked_at": "YYYY-MM-DD"}.
+    # Отдельно от model_catalog_runtime_entries по той же причине, что и
+    # thinking_levels: тот оверлей применяется через setdefault и запись из
+    # model_registry.yaml исправить не может.
+    capabilities: Mapped[dict | None] = mapped_column(JSON)
+    capabilities_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     verification_status: Mapped[str] = mapped_column(
         String(40), nullable=False, default="discovered"
     )

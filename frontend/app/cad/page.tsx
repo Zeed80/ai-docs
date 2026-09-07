@@ -57,6 +57,9 @@ export default function CadListPage() {
   const [sheetTitle, setSheetTitle] = useState("");
   const [digitizationType, setDigitizationType] =
     useState<DigitizationType>("auto");
+  // Растеризация PDF была зашита числом 300. Плотному A1 этого мало: мелкие
+  // выноски сливаются, и лист, который читается глазом, не читается моделью.
+  const [pdfDpi, setPdfDpi] = useState<number>(300);
   const [digitizeSheetFormat, setDigitizeSheetFormat] = useState<
     "" | SheetFormat
   >("");
@@ -165,7 +168,7 @@ export default function CadListPage() {
             vectorize_method: vectorizeMethod,
             source_filename: file.name,
             pdf_page: pdfPage,
-            pdf_dpi: 300,
+            pdf_dpi: pdfDpi,
             ...(vectorizeMethod === "spec" ? { read_passes: readPasses } : {}),
             ...(digitizeSheetFormat
               ? { sheet_format: digitizeSheetFormat }
@@ -181,6 +184,7 @@ export default function CadListPage() {
     [
       digitizationType,
       digitizeSheetFormat,
+      pdfDpi,
       vectorizeMethod,
       readPasses,
       router,
@@ -269,6 +273,18 @@ export default function CadListPage() {
             {(["A4", "A3", "A2", "A1"] as const).map((format) => (
               <option key={format} value={format}>
                 {format}
+              </option>
+            ))}
+          </select>
+          <select
+            value={pdfDpi}
+            onChange={(e) => setPdfDpi(Number(e.target.value))}
+            className="rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"
+            title={t("pdf_dpi")}
+          >
+            {[150, 300, 600].map((dpi) => (
+              <option key={dpi} value={dpi}>
+                {t("pdf_dpi_option", { dpi })}
               </option>
             ))}
           </select>

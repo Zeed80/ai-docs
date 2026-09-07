@@ -1230,6 +1230,69 @@ class ThinkingUpdate(BaseModel):
     level: str | None = None  # reasoning-effort level; only valid for the model's thinking_levels
 
 
+class ModelVerifyOut(BaseModel):
+    model_key: str
+    vision: bool | None = None
+    structured_output: bool | None = None
+    checked_at: str
+    details: dict[str, Any] = {}
+
+
+@router.post("/models/{model_key}/verify", response_model=ModelVerifyOut, dependencies=_admin)
+async def verify_model_capabilities(
+    model_key: str,
+    db: AsyncSession = Depends(get_db),
+) -> ModelVerifyOut:
+    """Спросить у модели, что она умеет, вместо того чтобы верить каталогу.
+
+    Кнопка «Проверить» существовала как контракт данных — `fix_action` со
+    значением `verify_model` порождался в вердикте кандидата, — но обработчика
+    у неё не было ни на одной стороне. Без пробы гейт модальности не может быть
+    строгим: запретить модель по недостоверным метаданным значит запретить
+    работающую.
+
+    ``None`` в ответе означает «не установили»: сетевой сбой не должен
+    закешироваться как приговор модели.
+    """
+    from app.ai.capability_probe import apply_probe, probe_model
+
+    registry = _registry()
+    cap = registry.models.get(model_key)
+    if cap is None:
+        raise HTTPException(404, f"Unknown model: {model_key}")
+
+    checks = {"structured"}
+    # Зрение проверяем у всех, кроме embedding/rerank: у них картинки не бывает,
+    # и проба стоила бы вызова впустую.
+    if not ({"embedding", "rerank"} & {m.value for m in cap.modalities}):
+        checks.add("vision")
+
+    result = await probe_model(model_key, checks=frozenset(checks))
+    apply_probe(model_key, result, current_modalities={m.value for m in cap.modalities})
+
+    overrides = {}
+    if result.vision is not None or result.structured is not None:
+        from app.ai.model_registry import _load_capability_overrides
+
+        overrides = _load_capability_overrides().get(model_key) or {}
+        await model_runtime_store.persist_model_override(
+            db,
+            model_key=model_key,
+            capabilities=overrides,
+            verification_status="verified",
+        )
+        await db.commit()
+        await model_runtime_store.hydrate_runtime_cache(db)
+
+    return ModelVerifyOut(
+        model_key=model_key,
+        vision=result.vision,
+        structured_output=result.structured,
+        checked_at=result.checked_at,
+        details=result.details or {},
+    )
+
+
 @router.patch("/models/{model_key}/thinking", dependencies=_admin)
 async def set_model_thinking(
     model_key: str,

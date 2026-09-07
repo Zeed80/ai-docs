@@ -19,6 +19,54 @@ import { Generation, getGeneration } from "@/lib/studio-api";
  * generation's params, unseen. The stamp, the callouts and the requirements
  * are usually right even when the geometry is not, and seeing them is what
  * lets a person tell a bad read from a hard drawing. */
+/** Частичное чтение — когда прогон упал раньше, чем спек попал в params.
+ *
+ * Consensus сохраняется по ходу чтения и лежит в `params.cad_partial_spec`, но
+ * из публичных params он вырезан (большой, а список генераций опрашивается раз
+ * в 2.5 с) и наружу не отдавался вовсе. При отказе оператор терял всю работу
+ * прогона — минуты чтения, — хотя она всё это время лежала в базе. Грузим по
+ * требованию: на экране отказа это нужно, в списке — нет. */
+function PartialRead({
+  generationId,
+  note,
+}: {
+  generationId: string;
+  note: string;
+}) {
+  const [spec, setSpec] = useState<Record<string, unknown> | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "empty">("idle");
+
+  useEffect(() => {
+    let cancelled = false;
+    setState("loading");
+    fetch(`${API}/api/image-gen/${generationId}/cad-partial-spec`, {
+      credentials: "include",
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        const partial = data?.spec as Record<string, unknown> | undefined;
+        if (partial) setSpec(partial);
+        else setState("empty");
+      })
+      .catch(() => {
+        if (!cancelled) setState("empty");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [generationId]);
+
+  if (!spec) {
+    return state === "loading" ? (
+      <div className="rounded border border-zinc-800 px-3 py-2 text-xs text-zinc-500">
+        Загружаем то, что успело прочитаться…
+      </div>
+    ) : null;
+  }
+  return <ReadSoFar spec={spec} note={note} />;
+}
+
 function ReadSoFar({
   spec,
   note,
@@ -284,6 +332,11 @@ export default function CadEditorPage() {
                   className="max-h-full max-w-full object-contain"
                 />
               </div>
+              {!(gen.params?.spec as Record<string, unknown> | undefined) && (
+                <div className="min-h-0 space-y-2 overflow-auto lg:w-[46%]">
+                  <PartialRead generationId={gen.id} note={t("reading_kept_note")} />
+                </div>
+              )}
               {(gen.params?.spec as Record<string, unknown> | undefined) && (
                 <div className="min-h-0 space-y-2 overflow-auto lg:w-[46%]">
                   <ReadSoFar

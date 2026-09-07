@@ -18,6 +18,8 @@ logger = structlog.get_logger(__name__)
 # реального листа A3 в него не влезал — Ollama экранирует кириллицу как
 # \uXXXX, поэтому JSON обрывался посреди объекта, а вызывающий мог сообщить об
 # этом только как «чертёж не читается».
+# Верхняя граница окна контекста, когда каталог о модели молчит.
+_CTX_CEILING = 65536
 _NUM_PREDICT_CEILING = 32768
 _NUM_PREDICT_DEFAULT = 8192
 
@@ -57,6 +59,13 @@ def _inference_options(request: AIRequest, default_temperature: float = 0.2) -> 
     if "repeat_penalty" in params:
         opts["repeat_penalty"] = params["repeat_penalty"]
     if "num_ctx" in params:
+        # Потолок берётся из каталога модели, когда он известен: константа на
+        # всех либо режет модель с большим окном, либо обещает окно, которого у
+        # модели нет.
+        catalog_window = (request.metadata or {}).get("model_max_context_tokens")
+        ceiling = _CTX_CEILING
+        if isinstance(catalog_window, int) and catalog_window > 0:
+            ceiling = min(ceiling, catalog_window)
         # Per-task context prevents a short CAD JSON question from allocating
         # the service-wide KV cache. Keep a safe lower bound for images and an
         # upper bound matching the production service configuration. Raised
@@ -66,7 +75,7 @@ def _inference_options(request: AIRequest, default_temperature: float = 0.2) -> 
         # (measured ~100MB extra VRAM going 8192→32768 on this GPU), so a
         # bigger context here is comparatively cheap for models built that
         # way — still capped, not unlimited.
-        opts["num_ctx"] = max(4096, min(int(params["num_ctx"]), 65536))
+        opts["num_ctx"] = max(4096, min(int(params["num_ctx"]), ceiling))
     return opts
 
 

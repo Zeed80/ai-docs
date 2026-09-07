@@ -9,6 +9,10 @@ type Section = {
   diameter_mm?: number | null;
   length_mm?: number | null;
   tolerance?: string | null;
+  /** Проходы чтения разошлись на этой ступени: значение под ревью. */
+  review_required?: boolean | null;
+  /** Что именно они дали — чтобы человек выбрал, а не гадал. */
+  disputed_values?: number[] | null;
   [key: string]: unknown;
 };
 
@@ -424,6 +428,12 @@ export default function SpecEditorPanel({
           </td>
           {(["diameter_mm", "length_mm"] as const).map((field) => {
             const assumed = assumedFields.has(`${path}.${field}`);
+            // Ступень, на которой проходы чтения разошлись. Раньше такой
+            // профиль просто исчезал целиком; теперь он доезжает до человека,
+            // и место расхождения должно быть видно, иначе «сохранён под
+            // ревью» — пустые слова.
+            const disputed = Boolean(section.review_required);
+            const options = (section.disputed_values ?? []) as number[];
             return (
               <td key={field} className="py-1 pr-2">
                 <input
@@ -433,9 +443,23 @@ export default function SpecEditorPanel({
                   }
                   disabled={busy || saving}
                   className={`w-24 rounded border bg-zinc-900 px-1.5 py-0.5 text-right text-zinc-200 ${
-                    assumed ? "border-amber-500/50" : "border-white/10"
+                    disputed
+                      ? "border-rose-500/60"
+                      : assumed
+                        ? "border-amber-500/50"
+                        : "border-white/10"
                   }`}
-                  title={assumed ? t("vector.spec_editor_assumed") : undefined}
+                  title={
+                    disputed
+                      ? `Проходы чтения разошлись${
+                          field === "diameter_mm" && options.length
+                            ? `: ${options.map((v) => `⌀${v}`).join(", ")}`
+                            : ""
+                        }`
+                      : assumed
+                        ? t("vector.spec_editor_assumed")
+                        : undefined
+                  }
                 />
               </td>
             );

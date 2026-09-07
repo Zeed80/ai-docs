@@ -28,6 +28,7 @@ logger = structlog.get_logger()
 CATALOG_OVERLAY_KEY = "model_catalog_overlay"
 THINKING_OVERLAY_KEY = "model_thinking_overrides"
 PREFERRED_INSTANCE_KEY = "model_preferred_instances"
+CAPABILITY_OVERLAY_KEY = "model_capability_overrides"
 _AGENT_CONFIG_SINGLETON = "default"
 
 
@@ -103,9 +104,14 @@ async def hydrate_runtime_cache(db: AsyncSession) -> None:
     preferred = {
         row.model_key: row.preferred_instance for row in override_rows if row.preferred_instance
     }
+    # Проверенные пробой возможности переживают перезапуск тем же путём, что и
+    # thinking-оверрайды: иначе результат пробы держался бы только в Redis и
+    # откатывался при первом старте, восстановившись из Postgres.
+    capabilities = {row.model_key: row.capabilities for row in override_rows if row.capabilities}
     _redis_set_json(CATALOG_OVERLAY_KEY, catalog)
     _redis_set_json(THINKING_OVERLAY_KEY, thinking)
     _redis_set_json(PREFERRED_INSTANCE_KEY, preferred)
+    _redis_set_json(CAPABILITY_OVERLAY_KEY, capabilities)
 
     # Assignments: restore the task_routing overlay and agent_config blob into
     # the same Redis keys the (sync) routing/config modules read.
@@ -188,6 +194,7 @@ async def persist_model_override(
     thinking_level: str | None = None,
     thinking_levels: list[str] | None = None,
     preferred_instance: str | None = None,
+    capabilities: dict[str, Any] | None = None,
     verification_status: str | None = None,
     notes: str | None = None,
 ) -> None:
@@ -221,6 +228,11 @@ async def persist_model_override(
         row.thinking_levels = thinking_levels
     if preferred_instance is not None:
         row.preferred_instance = preferred_instance or None
+    if capabilities is not None:
+        from datetime import UTC, datetime
+
+        row.capabilities = capabilities
+        row.capabilities_checked_at = datetime.now(UTC)
     if verification_status is not None:
         row.verification_status = verification_status
     if notes is not None:

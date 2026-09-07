@@ -28,6 +28,7 @@ import {
   select,
 } from "@/components/ui/primitives/tokens";
 import { buildDraftPayload } from "@/lib/models/draft";
+import { verifyModel } from "@/lib/models/api";
 import { detailText } from "@/lib/models/format";
 import { providerLabel } from "@/lib/models/labels";
 import type {
@@ -290,6 +291,29 @@ export function AssignmentBoard() {
 
   const slotDisabled = (s: SlotItem) =>
     draftDisabled[s.slot] ?? Boolean(s.disabled);
+
+  const [verifying, setVerifying] = useState<string | null>(null);
+  const [verified, setVerified] = useState<Record<string, string>>({});
+
+  const verifyModelForSlot = async (slot: string, modelKey: string) => {
+    setVerifying(slot);
+    try {
+      const r = await verifyModel(modelKey);
+      // `null` — «не установили» (сетевой сбой), а не «не умеет»: показывать
+      // это как приговор модели значит врать оператору.
+      const say = (label: string, value: boolean | null) =>
+        value === null ? `${label}: не определили` : `${label}: ${value ? "да" : "нет"}`;
+      setVerified((prev) => ({
+        ...prev,
+        [slot]: `${say("зрение", r.vision)}, ${say("схема", r.structured_output)} · ${r.checked_at}`,
+      }));
+      load();
+    } catch (e) {
+      toast.error("Проверка не удалась", String(e));
+    } finally {
+      setVerifying(null);
+    }
+  };
 
   const setSlotOff = (slot: string, off: boolean) => {
     setDraftDisabled((prev) => ({ ...prev, [slot]: off }));
@@ -713,6 +737,25 @@ export function AssignmentBoard() {
                           работает: у текстового слоя чертежа способная
                           vision-модель читает надписи сама, и второй проход
                           тогда стоит времени, не добавляя ничего. */}
+                      {/* Цепочки в model_registry.yaml подобраны замерами и
+                          снабжены заметками, кто и на чём проиграл; вернуться к
+                          ним можно было только через историю ревизий, если
+                          нужная там ещё осталась. Пустая модель в черновике —
+                          это и есть «сбросить к дефолту реестра», backend её
+                          так и понимает (_unset_slot → reset_task_routing). */}
+                      {/* У выключенного слота эта ссылка сбила бы и само
+                          выключение: reset_task_routing снимает весь оверрайд,
+                          вместе с `disabled`. Пока слот off, управляет им
+                          галочка, а не сброс. */}
+                      {!off && (draftValue || s.current_model) && (
+                        <button
+                          type="button"
+                          className="mt-1 block text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2"
+                          onClick={() => setDraftModel(s.slot, "")}
+                        >
+                          к дефолту реестра
+                        </button>
+                      )}
                       {s.optional && (
                         <label className="mt-1 flex items-center gap-1.5 text-xs text-slate-400">
                           <input
@@ -791,8 +834,35 @@ export function AssignmentBoard() {
                       />
                       )}
                     </div>
-                    <div className="sm:col-span-2">
+                    <div className="sm:col-span-2 flex flex-wrap items-center gap-3">
                       <SlotHealthStrip health={health[s.slot] ?? null} />
+                      {/* Проба существовала только как контракт данных: вердикт
+                          кандидата возвращал fix_action="verify_model", а
+                          обработчика не было ни на одной стороне. Без неё гейт
+                          модальности не может быть строгим — запретить модель по
+                          недостоверным метаданным значит запретить работающую. */}
+                      {(draftValue || s.current_model) && (
+                        <button
+                          type="button"
+                          disabled={verifying === s.slot}
+                          className="text-xs text-slate-400 hover:text-slate-200 underline underline-offset-2 disabled:opacity-50"
+                          onClick={() =>
+                            verifyModelForSlot(
+                              s.slot,
+                              (draftValue || s.current_model) as string,
+                            )
+                          }
+                        >
+                          {verifying === s.slot
+                            ? "Проверяем…"
+                            : "Проверить возможности"}
+                        </button>
+                      )}
+                      {verified[s.slot] && (
+                        <span className="text-xs text-slate-500">
+                          {verified[s.slot]}
+                        </span>
+                      )}
                     </div>
                   </div>
                 );

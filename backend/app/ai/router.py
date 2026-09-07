@@ -582,6 +582,11 @@ class AIRouter:
                 "metadata": {
                     **(request.metadata or {}),
                     "structured_output_supported": bool(model.supports_structured_output),
+                    # Окно контекста модели знает только каталог, а ограничивает
+                    # его провайдер — до сих пор одной константой на всех.
+                    # Модель с окном 131072 получала 65536, а модель с окном
+                    # 8192 могла получить запрос вчетверо больше, чем держит.
+                    "model_max_context_tokens": model.max_context_tokens,
                 }
             }
         )

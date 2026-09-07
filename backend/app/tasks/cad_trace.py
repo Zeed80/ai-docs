@@ -149,7 +149,25 @@ async def _append_cad_process_event(
                 "message": message,
                 "details": event_details,
             }
-            events.append(event)
+            # Пять одинаковых `reader.diameter_dimensions / failed` подряд — это
+            # не пять фактов, а один, повторённый на каждом проходе консенсуса.
+            # В журнале из 141 события такие серии съедали место, в котором
+            # надо было искать настоящую причину отказа.
+            previous = events[-1] if events else None
+            if (
+                previous is not None
+                and previous.get("stage") == stage
+                and previous.get("status") == status
+                and previous.get("message") == message
+            ):
+                previous["repeat"] = int(previous.get("repeat") or 1) + 1
+                previous["at"] = now
+                # Держим ПОСЛЕДНИЕ детали: у повтора они могут отличаться
+                # (другой проход, другой блокер), и терять свежие ради первых
+                # значит показывать оператору устаревшее.
+                previous["details"] = event_details
+            else:
+                events.append(event)
             progress_pct = _progress_for_event(
                 stage,
                 status,
@@ -3102,9 +3120,32 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
     recorder_token = install_cad_process_recorder(_record)
 
-    async def _fail(message: str) -> dict:
+    async def _summary(spec: dict[str, Any] | None) -> dict[str, Any]:
+        """Одной записью: что прочитано, что под ревью, что потеряно и почему.
+
+        Журнал прогона — это 141 событие; понять по нему, чем кончилось дело,
+        можно было только прочитав всё подряд. Итог должен читаться сразу, а не
+        собираться глазами.
+        """
+        body = (spec or {}).get("main_view") or {}
+        outer = [item for item in (body.get("outer") or []) if isinstance(item, dict)]
+        return {
+            "outer_sections": len(outer),
+            "bore_sections": len(body.get("bore") or []),
+            "dimensions": len((spec or {}).get("dimensions") or []),
+            "annotations": len((spec or {}).get("annotations") or []),
+            "review_required": [
+                index + 1 for index, item in enumerate(outer) if item.get("review_required")
+            ],
+            "dropped": list((spec or {}).get("geometry_validation_errors") or [])[:6],
+            "unresolved": list((spec or {}).get("unresolved") or [])[:6],
+            "observation_only": bool((spec or {}).get("observation_only")),
+        }
+
+    async def _fail(message: str, spec: dict[str, Any] | None = None) -> dict:
         from app.tasks.image_generation import _mark_failed
 
+        await _record("pipeline.summary", "failed", "Итог прогона", await _summary(spec))
         await _record("pipeline", "failed", message, {"terminal": True})
         await _mark_failed(gen_uuid, message, owner_sub)
         return {"error": message}
@@ -3596,7 +3637,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     },
                 )
                 if type_blockers:
-                    return await _fail("; ".join(type_blockers))
+                    return await _fail("; ".join(type_blockers), spec)
 
                 # Cross-check before anything is built: the sheet's own
                 # arithmetic and the proportions of the traced ink can
@@ -3744,7 +3785,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 if spec_ir is None:
                     return await _fail(
                         "Оцифровка: деталь собрана, но CAD-ядро не смогло построить "
-                        "по ней лист. Проверьте доступность cad-kernel."
+                        "по ней лист. Проверьте доступность cad-kernel.",
+                        spec,
                     )
                 spec_ir.source.generation_id = generation_id
                 sheet_without_geometry = False
@@ -3899,6 +3941,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     job = await studio_queue.job_for_generation(db, gen_uuid)
                     await studio_queue.mark_job_done(db, job)
                     await db.commit()
+                await _record("pipeline.summary", "completed", "Итог прогона", await _summary(spec))
                 await _record(
                     "pipeline",
                     "completed",

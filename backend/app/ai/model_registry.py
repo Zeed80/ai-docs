@@ -9,6 +9,7 @@ import yaml
 
 from app.ai.schemas import (
     AITask,
+    Modality,
     ModelCapability,
     ModelStatus,
     ProviderConfig,
@@ -27,6 +28,13 @@ _CATALOG_OVERLAY_KEY = "model_catalog_overlay"
 # full-model overlay so a YAML model's CoT flag can be flipped from the UI without
 # shadowing the rest of its (canonical) YAML definition.
 _THINKING_OVERLAY_KEY = "model_thinking_overrides"
+
+# Возможности, ПРОВЕРЕННЫЕ живой пробой. Отдельный оверлей, а не
+# `model_catalog_overlay`: тот применяется через `setdefault`, поэтому запись,
+# определённую в model_registry.yaml, он исправить не может в принципе — YAML
+# всегда выигрывает. Тот же механизм, что у thinking-оверрайдов, по той же
+# причине.
+_CAPABILITY_OVERLAY_KEY = "model_capability_overrides"
 
 
 def _load_catalog_overlay() -> dict[str, dict[str, Any]]:
@@ -47,6 +55,57 @@ def _save_catalog_overlay(overlay: dict[str, dict[str, Any]]) -> None:
         get_sync_redis().set(_CATALOG_OVERLAY_KEY, json.dumps(overlay, ensure_ascii=False))
     except Exception as exc:
         logger.warning("model_catalog_overlay_write_failed", error=str(exc))
+
+
+def _load_capability_overrides() -> dict[str, dict[str, Any]]:
+    """Проверенные пробой возможности моделей.
+
+    Каталог заполняется автоматически и ошибается в обе стороны: на этом стенде
+    `ollama_cloud deepseek-v3.1` числился без зрения и при этом прочитал
+    чертёж, а `openrouter minimax-m3:free` объявлен пригодным и строгую схему
+    не держит. Проба — единственный источник, которому можно верить, поэтому
+    её результат хранится отдельно и применяется поверх YAML.
+    """
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        raw = get_sync_redis().get(_CAPABILITY_OVERLAY_KEY)
+        data = json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+    return {key: value for key, value in data.items() if isinstance(value, dict)}
+
+
+def set_capability_override(
+    model_key: str,
+    *,
+    modalities: list[str] | None = None,
+    supports_structured_output: bool | None = None,
+    supports_tool_calling: bool | None = None,
+    checked_at: str | None = None,
+) -> None:
+    """Записать результат пробы. ``None`` — «не определяли», а не «не умеет».
+
+    Разница существенная: инфраструктурная икота не должна закешироваться как
+    приговор модели.
+    """
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        overrides = _load_capability_overrides()
+        current = dict(overrides.get(model_key) or {})
+        if modalities is not None:
+            current["modalities"] = sorted(set(modalities))
+        if supports_structured_output is not None:
+            current["supports_structured_output"] = bool(supports_structured_output)
+        if supports_tool_calling is not None:
+            current["supports_tool_calling"] = bool(supports_tool_calling)
+        if checked_at is not None:
+            current["checked_at"] = checked_at
+        overrides[model_key] = current
+        get_sync_redis().set(_CAPABILITY_OVERLAY_KEY, json.dumps(overrides, ensure_ascii=False))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("model_capability_override_write_failed", key=model_key, error=str(exc))
 
 
 def _load_thinking_overrides() -> dict[str, dict[str, Any]]:
@@ -207,6 +266,25 @@ class ModelRegistry:
             if override.get("level") and override["level"] in effective_levels:
                 update["thinking_level_default"] = override["level"]
             if update:
+                models[key] = models[key].model_copy(update=update)
+        # Проверенные возможности — поверх YAML, как и thinking-оверрайды.
+        for key, override in _load_capability_overrides().items():
+            if key not in models:
+                continue
+            update: dict[str, Any] = {}
+            declared = override.get("modalities")
+            if isinstance(declared, list) and declared:
+                known = {item.value for item in Modality}
+                update["modalities"] = {Modality(m) for m in declared if m in known}
+            for field in ("supports_structured_output", "supports_tool_calling"):
+                if isinstance(override.get(field), bool):
+                    update[field] = override[field]
+            if update:
+                checked = override.get("checked_at")
+                update["capability_source"] = "verified"
+                update["capabilities_unknown"] = False
+                if checked:
+                    update["notes"] = f"Возможности проверены пробным запросом {checked}."
                 models[key] = models[key].model_copy(update=update)
         # Apply per-model node pins from the UI.
         for key, inst in _load_preferred_instances().items():

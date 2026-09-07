@@ -1676,6 +1676,36 @@ async def get_cad_model_outputs(
     }
 
 
+@router.get("/{generation_id}/cad-partial-spec")
+async def get_cad_partial_spec(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Лучшее, что чтение успело собрать, — даже когда прогон упал.
+
+    Частичный consensus сохраняется по ходу чтения и лежит в
+    `params.cad_partial_spec`, но из публичных params он вырезан (он большой, а
+    список генераций опрашивается раз в 2.5 с) и отдельного пути наружу не имел.
+    При отказе оператор терял всю работу прогона, хотя она лежала в базе.
+    """
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    spec = (gen.params or {}).get("cad_partial_spec")
+    if not isinstance(spec, dict) or not spec:
+        raise HTTPException(404, "Частичное чтение не сохранялось")
+    body = spec.get("main_view") or {}
+    return {
+        "generation_id": str(generation_id),
+        "sequence": (gen.params or {}).get("cad_partial_spec_sequence"),
+        "outer_sections": len(body.get("outer") or []),
+        "bore_sections": len(body.get("bore") or []),
+        "spec": spec,
+    }
+
+
 @router.get("/{generation_id}/cad-reading")
 async def get_cad_reading(
     generation_id: uuid.UUID,

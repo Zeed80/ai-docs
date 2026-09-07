@@ -107,3 +107,31 @@ def test_min_p_from_the_profile_actually_reaches_ollama():
         metadata={"inference_params": {"min_p": 0.05}},
     )
     assert _inference_options(request)["min_p"] == 0.05
+
+
+def test_the_context_ceiling_follows_the_models_own_window():
+    """Константа на всех врала в обе стороны.
+
+    Модель с окном 131072 получала 65536, а модель с окном 8192 могла получить
+    запрос вчетверо больше, чем она держит. Окно знает каталог, ограничивает
+    провайдер — значит каталог должен до него доехать.
+    """
+    big = AIRequest(
+        task=AITask.CAD_SPEC_READ,
+        metadata={"inference_params": {"num_ctx": 100_000}, "model_max_context_tokens": 131072},
+    )
+    assert _inference_options(big)["num_ctx"] == 65536  # общий потолок всё ещё держит
+
+    small = AIRequest(
+        task=AITask.CAD_SPEC_READ,
+        metadata={"inference_params": {"num_ctx": 32768}, "model_max_context_tokens": 8192},
+    )
+    assert _inference_options(small)["num_ctx"] == 8192
+
+
+def test_an_unknown_window_keeps_the_previous_ceiling():
+    request = AIRequest(
+        task=AITask.CAD_SPEC_READ,
+        metadata={"inference_params": {"num_ctx": 100_000}},
+    )
+    assert _inference_options(request)["num_ctx"] == 65536

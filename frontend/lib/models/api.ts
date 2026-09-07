@@ -209,3 +209,20 @@ export const setModelThinking = (
 /** Кандидаты для слота с вердиктом пригодности, посчитанным сервером. */
 export const listSlotCandidates = (slot: string) =>
   request<ModelCandidate[]>(`/api/providers/slots/${slot}/candidates`);
+
+/**
+ * Живая проба возможностей модели.
+ *
+ * Каталог заполняется автоматически и ошибается в обе стороны: на стенде одна
+ * модель числилась без зрения и читала чертёж, другая объявлена пригодной и не
+ * держала строгую схему. `null` в ответе — «не установили» (сетевой сбой), а не
+ * «не умеет».
+ */
+export const verifyModel = (modelKey: string) =>
+  request<{
+    model_key: string;
+    vision: boolean | null;
+    structured_output: boolean | null;
+    checked_at: string;
+    details: Record<string, string>;
+  }>(`/api/providers/models/${modelKey}/verify`, { method: "POST" });
