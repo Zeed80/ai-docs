@@ -274,6 +274,7 @@ export function AssignmentBoard() {
   // Решение об облаке едет вместе с моделью в черновике: применится вместе с
   // ней, одним подтверждением, и попадёт в ту же ревизию.
   const setDraftModel = (slot: string, model: string, cloud?: boolean) => {
+    setNotApplied(false);
     setDraft((prev) => ({ ...prev, [slot]: model || null }));
     if (cloud !== undefined) {
       setDraftCloud((prev) => ({ ...prev, [slot]: cloud }));
@@ -292,6 +293,8 @@ export function AssignmentBoard() {
   const slotDisabled = (s: SlotItem) =>
     draftDisabled[s.slot] ?? Boolean(s.disabled);
 
+  // Применение отклонено сервером: на экране черновик, в работе прежние модели.
+  const [notApplied, setNotApplied] = useState(false);
   const [verifying, setVerifying] = useState<string | null>(null);
   const [verified, setVerified] = useState<Record<string, string>>({});
 
@@ -381,9 +384,16 @@ export function AssignmentBoard() {
         return;
       }
       if (!r.ok) {
+        // Черновик НЕ сбрасываем — иначе оператор потеряет свой выбор и не
+        // сможет его поправить. Но и делать вид, что он применён, нельзя:
+        // после отказа экран продолжал показывать выбранную модель, отличаясь
+        // от рабочей только маленькой надписью «черновик» сбоку. Ровно так
+        // рождается «я же давно поменял, а оно всё ещё старое».
+        setNotApplied(true);
         toast.error("Назначения не применены", detailText(d));
         return;
       }
+      setNotApplied(false);
       setLastRevision(d.revision_id || null);
       flash("Назначения применены");
       load();
@@ -616,6 +626,15 @@ export function AssignmentBoard() {
           </button>
         </div>
       </div>
+
+      {notApplied && (
+        <div className="rounded border border-red-500/50 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+          <b>Изменения не применены.</b> На экране показан черновик, а в работе
+          остались прежние модели. Исправьте причину ниже и примените снова —
+          или нажмите «Сбросить», чтобы вернуть экран к тому, что работает
+          сейчас.
+        </div>
+      )}
 
       {(diff.length > 0 || warnings.length > 0 || errors.length > 0) && (
         <div className={card}>

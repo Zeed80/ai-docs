@@ -376,6 +376,44 @@ class AIRouter:
         chain_started = _time.perf_counter()
 
         filtered_candidates = [name for name in candidates if name]
+        # Кандидаты, которых политика не пропустит, отсеиваются ДО перебора.
+        #
+        # `_enforce_policy` бросает жёсткий стоп, и это правильно, когда
+        # облачную модель назвал сам вызывающий: молча подменить её локальной
+        # значило бы сделать выбор декоративным. Но ровно тот же стоп срабатывал
+        # и на СТАРОЙ записи в хвосте цепочки — например `claude_sonnet` в
+        # дефолтном chain'е `drawing_analysis_vlm`, задачи из CONFIDENTIAL_TASKS,
+        # где эта модель не может выполниться никогда. Дойдя до неё после того,
+        # как все локальные кандидаты отказали, роутер обрывал ход с
+        # «Confidential task ... cannot use non-local model claude_sonnet» —
+        # то есть называл причиной модель, которую оператор не выбирал, вместо
+        # настоящей: не сработал ни один локальный кандидат.
+        #
+        # Тот же урок, что записан двумя блоками выше про RuntimeError: чужая
+        # модель в диагнозе дороже пропущенного кандидата.
+        if eff_confidential or not eff_allow_cloud:
+            named = request.preferred_model
+            usable, skipped = [], []
+            for name in filtered_candidates:
+                try:
+                    capability = self.registry.get_model(name)
+                except Exception:  # noqa: BLE001 — нерешаемое отсеет сам перебор
+                    usable.append(name)
+                    continue
+                # Названную вызывающим модель не трогаем: её отказ обязан быть
+                # громким, это осознанный выбор, а не наследие цепочки.
+                if capability.local_only or name == named:
+                    usable.append(name)
+                else:
+                    skipped.append(name)
+            if skipped:
+                logger.info(
+                    "ai_route_cloud_candidates_skipped",
+                    task=request.task.value,
+                    skipped=skipped,
+                    reason="политика задачи локальная — эти кандидаты недостижимы",
+                )
+            filtered_candidates = usable
         for model_name in filtered_candidates:
             if chain_budget is not None and _time.perf_counter() - chain_started > chain_budget:
                 logger.warning(

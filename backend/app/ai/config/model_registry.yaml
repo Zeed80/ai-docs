@@ -866,7 +866,12 @@ routes:
       - "gemma4_e4b_ollama"
       - "qwen3_5_9b_ollama"
       - "qwen3_vl_32b_ollama"
-      - "claude_sonnet_anthropic"
+    # claude_sonnet_anthropic убран: drawing_analysis_vlm входит в
+    # CONFIDENTIAL_TASKS, то есть эта модель здесь не может выполниться
+    # никогда. Мёртвая запись в хвосте не безобидна — дойдя до неё после
+    # отказа всех локальных кандидатов, роутер обрывал ход с «Confidential
+    # task ... cannot use non-local model claude_sonnet», называя причиной
+    # модель, которую оператор не выбирал.
     manual_review_fallback: true
   cad_text_ocr:
     required_modalities: ["vision"]
