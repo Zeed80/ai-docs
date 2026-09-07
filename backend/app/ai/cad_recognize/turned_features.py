@@ -210,13 +210,25 @@ def localize_turned_features(
         }
 
     rgb = np.asarray(image.convert("RGB"))
-    blue = ((rgb[:, :, 2] >= 180) & (rgb[:, :, 0] <= 60) & (rgb[:, :, 1] <= 60)).astype("uint8")
-    if int(blue.sum()) < 1000:
+    # Та же маска, что и у диаметральной привязки: жёстко синий порог
+    # (B≥180, R≤60, G≤60) работал только на чертеже с цветным слоем геометрии,
+    # а на скане, фото и обычном ч/б листе давал ноль подходящих пикселей —
+    # локализация шпоночных пазов на реальных исходниках была мертва так же,
+    # как и диаметральная. Третья копия этого условия в проекте; теперь одна.
+    from app.ai.cad_recognize.diameter_dimensions import _geometry_mask
+
+    mask, mask_strategy = _geometry_mask(image)
+    if mask is None:
         return {
             "status": "unresolved",
             "keyway_candidates": [],
-            "blockers": ["геометрия не отделена от аннотаций по цвету"],
+            "mask_strategy": mask_strategy,
+            "blockers": [
+                "не удалось отделить геометрию от аннотаций "
+                "(пробовали: цвет, чернила за вычетом текста)"
+            ],
         }
+    blue = mask.astype("uint8")
 
     left, right = float(datum[0]), float(datum[1])
     px_per_mm = (right - left) / float(overall)

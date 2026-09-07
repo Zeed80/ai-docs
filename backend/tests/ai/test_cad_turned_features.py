@@ -92,3 +92,26 @@ def test_monochrome_feature_detection_fails_closed():
 
     assert evidence["status"] == "unresolved"
     assert evidence["keyway_candidates"] == []
+
+
+def test_keyway_localisation_is_not_limited_to_blue_sheets():
+    """Третья копия жёстко синего порога — та же слепота на сканах.
+
+    Локализация шпоночных пазов требовала B≥180, R≤60, G≤60, как и
+    диаметральная привязка: на скане, фото и обычном ч/б листе подходящих
+    пикселей ноль. В живом прогоне это давало «геометрия не отделена от
+    аннотаций по цвету» в unresolved на каждом чертеже без цветного слоя.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from app.ai.cad_recognize.diameter_dimensions import _geometry_mask
+
+    array = np.full((400, 600, 3), 255, dtype=np.uint8)
+    array[180:190, 50:550] = 0
+    array[210:220, 50:550] = 0
+
+    mask, strategy = _geometry_mask(Image.fromarray(array), [(0, 0, 1, 1)])
+
+    assert mask is not None, "монохромный лист обязан давать маску"
+    assert strategy == "ink_minus_text"
