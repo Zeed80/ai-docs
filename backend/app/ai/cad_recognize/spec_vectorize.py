@@ -965,6 +965,26 @@ def _tile_budget_boxes(
     return [boxes[index] for index in sorted(keep)]
 
 
+def _model_takes_many_images(model_key: str | None) -> bool:
+    """Принимает ли модель несколько изображений за один запрос.
+
+    Неизвестная модель считается одноизображенческой: прислать девять кадров
+    той, что берёт один, — потерять восемь молча, а спросить при этом про весь
+    лист. Ошибиться в сторону меньшего здесь дешевле.
+    """
+    if not model_key:
+        return False
+    try:
+        from app.ai.model_registry import ModelRegistry
+
+        cap = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml").models.get(
+            model_key
+        )
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(cap is not None and cap.supports_multi_image)
+
+
 def _spec_images(
     image, *, tile_size: int = 1400, overlap: int = 160
 ) -> tuple[list[bytes], list[str], float]:
@@ -1218,6 +1238,23 @@ async def read_drawing_spec(
             f"({get_routing_for(read_task).primary}). Назначьте vision-модель "
             "в Настройки → Модели → Оцифровка."
         )
+    # Несколько картинок принимает не всякая модель, и каталог об этом знает:
+    # `supports_multi_image` по умолчанию False. Читатель же слал все тайлы не
+    # глядя — модель, берущая одно изображение, видела первое и молча теряла
+    # остальные, а спрошена была про весь лист. Тот же учёт возможности уже
+    # делает drawing_extractor (`_extract_sequential_and_merge`); здесь дешевле
+    # честно показать лист целиком в обзорном кадре и сказать, чем за это
+    # заплатили.
+    multi_image_note: str | None = None
+    if len(images) > 1 and not _model_takes_many_images(seeing_model):
+        multi_image_note = (
+            f"модель принимает одно изображение: из {len(images)} кадров показан "
+            f"только обзорный — мелкие выноски могли не читаться"
+        )
+        images = images[:1]
+        tile_descriptions = tile_descriptions[:1]
+        source_images = source_images[:1]
+        tile_coverage = 1.0
     known_diameters_hint = _known_diameters_hint(known_diameters_mm)
     full_prompt = (
         _SPEC_PROMPT + "\nДЛЯ ЭТОГО ПОЛНОГО ПРОХОДА верни только геометрию: "
@@ -1245,7 +1282,13 @@ async def read_drawing_spec(
         # keeps enough room for escaped Cyrillic while bounding a runaway pass.
         max_output_tokens=6000,
         inference_params={"temperature": 0, "num_ctx": 16384},
-        metadata={"json_schema": _whole_sheet_reader_schema()},
+        metadata={
+            "json_schema": _whole_sheet_reader_schema(),
+            # Полное чтение листа делает несколько проходов с ОДНИМ префиксом:
+            # та же картинка, тот же вопрос, та же схема. Кэш префикса нужен
+            # ровно здесь; на одиночном вызове он был бы лишней платой.
+            "cache_prefix": True,
+        },
     )
     started = time.monotonic()
     await record_cad_process_event(
@@ -1369,6 +1412,8 @@ async def read_drawing_spec(
         validated.setdefault("optional_unresolved", []).append(
             f"лист показан модели не полностью: покрыто {tile_coverage:.0%} площади"
         )
+    if multi_image_note:
+        validated.setdefault("optional_unresolved", []).append(multi_image_note)
     validated["source_images"] = source_images
     # Keep the exact model answer beside the validated interpretation. This is
     # audit data, never geometry input: consensus rebuilds the accepted spec and

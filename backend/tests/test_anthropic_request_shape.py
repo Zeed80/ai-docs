@@ -314,3 +314,38 @@ def test_a_request_without_a_schema_is_unchanged(capture) -> None:
 
     assert "output_config" not in capture
     assert "tools" not in capture
+
+
+# ── 5. Кэш префикса — там, где запрос повторяется ────────────────────────────
+
+
+def test_a_repeated_prefix_is_marked_for_caching(capture) -> None:
+    """Чтение листа делает пять проходов с одним префиксом.
+
+    Та же картинка, тот же вопрос, та же схема — повторное чтение префикса
+    стоит около десятой доли обычного.
+    """
+    request = AIRequest(
+        task=AITask.CAD_SPEC_READ,
+        messages=[ChatMessage(role="user", content="?")],
+        metadata={"cache_prefix": True},
+    )
+    asyncio.run(_provider().chat(request, "claude-opus-5"))
+
+    assert capture["cache_control"] == {"type": "ephemeral"}
+
+
+def test_a_one_off_call_pays_nothing_for_the_cache(capture) -> None:
+    """Запись в кэш дороже обычного чтения — на одиночном вызове не за что."""
+    request = AIRequest(task=AITask.CAD_SPEC_READ, messages=[ChatMessage(role="user", content="?")])
+    asyncio.run(_provider().chat(request, "claude-opus-5"))
+
+    assert "cache_control" not in capture
+
+
+def test_vision_marks_the_prefix_too(capture) -> None:
+    """Основной объём префикса — картинка, и она идёт именно этим путём."""
+    request = _image_request(prompt="?", metadata={"cache_prefix": True})
+    asyncio.run(_provider().vision(request, "claude-opus-5"))
+
+    assert capture["cache_control"] == {"type": "ephemeral"}

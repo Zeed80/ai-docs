@@ -56,6 +56,26 @@ def _resolve_max_tokens(request: AIRequest) -> int:
     return max(256, min(value, _MAX_TOKENS_CEILING))
 
 
+def _cache_control(request: AIRequest) -> dict[str, Any]:
+    """Пометить запрос как повторяющийся, чтобы префикс кэшировался.
+
+    Чтение чертежа делает пять проходов с ОДНИМ и тем же префиксом: та же
+    картинка, тот же вопрос, та же схема. Это идеальный случай для кэша —
+    повторное чтение префикса стоит около десятой доли обычного.
+
+    Флагом, а не всегда: запись в кэш дороже обычного чтения примерно на
+    четверть, и на одиночном вызове платить эту четверть не за что. Ставит его
+    то место, которое ЗНАЕТ, что повторит запрос.
+
+    Верхнеуровневый ``cache_control`` кэширует последний пригодный блок сам —
+    отдельные отметки на блоках здесь не нужны и только промахивались бы мимо
+    картинки, которая и составляет основной объём.
+    """
+    if (request.metadata or {}).get("cache_prefix"):
+        return {"cache_control": {"type": "ephemeral"}}
+    return {}
+
+
 def _system_and_question(request: AIRequest) -> tuple[str, str]:
     """System text and the user's question, read from ``messages`` first.
 
@@ -281,6 +301,7 @@ class AnthropicProvider(AIProvider):
             "messages": anthropic_msgs,
             "max_tokens": _resolve_max_tokens(request),
             **_format_payload(request),
+            **_cache_control(request),
         }
         hint = schema_hint_text(contract_of(request))
         if hint and anthropic_msgs:
@@ -392,6 +413,7 @@ class AnthropicProvider(AIProvider):
             "messages": [{"role": "user", "content": content}],
             "max_tokens": _resolve_max_tokens(request),
             **_format_payload(request),
+            **_cache_control(request),
         }
         if system_text:
             payload["system"] = self._build_system(system_text)
