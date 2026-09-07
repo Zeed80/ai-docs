@@ -245,3 +245,50 @@ def test_a_grounded_array_still_wins_when_the_model_can_do_it():
 
     assert layer.grounded is True
     assert layer.tokens[0].bbox == [100.0, 100.0, 300.0, 200.0]
+
+
+# ── Ссылка на стандарт — не размер ───────────────────────────────────────────
+
+
+def test_a_standard_citation_never_becomes_a_dimension():
+    """Живой прогон: «Смаль 45 ГОСТ 1050-2014» уехало в список размеров.
+
+    «Сталь», прочитанное с опечаткой, не попало в материалы по словарю — и
+    строка со ссылкой на стандарт стала размером, отдав в пул чисел и номер
+    стандарта, и год издания. Из этого пула выбираются диаметры и осевые
+    станции; проверка калибровки потом честно отвергла масштаб, но причиной
+    назвала «лист несёт больший размер 2014 мм».
+    """
+    from app.ai.cad_recognize.text_layer import layer_from_prose
+
+    layer = layer_from_prose("Смаль 45 ГОСТ 1050-2014\nØ25", model="m")
+    callouts = layer.as_callouts()
+
+    assert [d["value"] for d in callouts["dimensions"]] == ["Ø25"]
+    assert any("ГОСТ" in a["text"] for a in callouts["annotations"])
+
+
+def test_a_correctly_read_material_line_is_still_a_material():
+    from app.ai.cad_recognize.text_layer import layer_from_prose
+
+    layer = layer_from_prose("Материал: Сталь 45 ГОСТ 1050-2014", model="m")
+    kinds = {a["kind"] for a in layer.as_callouts()["annotations"]}
+
+    assert kinds == {"material"}
+
+
+def test_a_non_breaking_hyphen_does_not_leak_the_year():
+    """`ГОСТ 1050‑2014` через U+2011 вычищался только до «ГОСТ 1050».
+
+    Хвост «‑2014» доезжал до списка размеров как число: класс дефисов в
+    регулярном выражении покрывал обычный, en- и em-dash, но не неразрывный,
+    который вставляют и модели, и типографика.
+    """
+    from app.ai.cad_recognize.spec_fragments import _STANDARD_REFERENCE
+
+    for dash in ("-", "‐", "‑", "‒", "–", "—", "−"):
+        cleaned = _STANDARD_REFERENCE.sub(" ", f"Сталь 45 ГОСТ 1050{dash}2014")
+        assert "2014" not in cleaned, f"год пережил дефис {dash!r}"
+        assert "1050" not in cleaned
+    # Настоящий размер рядом со ссылкой не страдает.
+    assert "470" in _STANDARD_REFERENCE.sub(" ", "470 h14 ГОСТ 1050-2014")

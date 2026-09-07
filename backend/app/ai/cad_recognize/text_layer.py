@@ -110,10 +110,24 @@ def _annotation_kind(text: str) -> str | None:
     for kind, pattern in _ANNOTATION_KINDS:
         if pattern.search(text):
             return kind
+    # Строка со ссылкой на стандарт — надпись, а не размер: она несёт номер и
+    # год, которые иначе попадут в пул чисел, из которого выбираются диаметры и
+    # осевые станции.
+    if _STANDARD_CITATION.search(text):
+        return "other"
     return None
 
 
+# Ссылка на стандарт — не размер, каким бы дефисом её ни записали и как бы OCR
+# ни исказил соседние слова. Живой прогон: «Смаль 45 ГОСТ 1050-2014» — «Сталь»,
+# прочитанное с опечаткой, — не попало в материалы по словарю и уехало в список
+# размеров вместе с номером и годом стандарта.
+_STANDARD_CITATION = re.compile(r"\b(?:ГОСТ|ОСТ|СТП|ТУ|ISO|DIN|EN|ANSI|ASME)\b", re.IGNORECASE)
+
+
 def _looks_like_dimension(text: str) -> bool:
+    if _STANDARD_CITATION.search(text):
+        return False
     return bool(re.search(r"\d", text)) and len(text) <= 60
 
 

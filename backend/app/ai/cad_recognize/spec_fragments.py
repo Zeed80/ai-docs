@@ -1462,8 +1462,15 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
 # the reader is told to choose its diameters and axial positions from — on the
 # spindle sheet the three largest "dimensions" offered were 19860, 2013 and
 # 1050, all of them citations.
+# Дефисы, которыми реально записывают номер стандарта. Класс был `[.\-–—]` —
+# обычный дефис, en- и em-dash, — и не покрывал НЕРАЗРЫВНЫЙ дефис U+2011,
+# который вставляют и модели, и типографика. «ГОСТ 1050‑2014» тогда вычищался
+# только до «ГОСТ 1050», а хвост «‑2014» доезжал до списка размеров как число.
+# Живой прогон: проверка калибровки честно отвергла масштаб, но причиной
+# назвала «лист несёт больший размер 2014 мм» — год издания стандарта.
 _STANDARD_REFERENCE = re.compile(
-    r"(?:ГОСТ|ОСТ|СТП|ТУ|ISO|DIN|EN|ANSI|ASME)\s*[Рр]?\s*[\d]+(?:[.\-–—]\d+)*",
+    r"(?:ГОСТ|ОСТ|СТП|ТУ|ISO|DIN|EN|ANSI|ASME)\s*[Рр]?\s*[\d]+"
+    r"(?:[.\u2010-\u2015\u2212\-]\d+)*",
     re.IGNORECASE,
 )
 
