@@ -48,6 +48,32 @@ _STRUCTURED_SCHEMA: dict[str, Any] = {
 }
 
 
+def _answered_by_the_named_model(model_key: str, response: Any) -> bool:
+    """Ответила ли именно та модель, о которой спрашивали.
+
+    `preferred_model` ставит модель ПЕРВОЙ в цепочку, но цепочкой не
+    ограничивает: если названная модель отказала, роутер молча берёт следующего
+    кандидата. Для обычного вызова это правильно, для пробы — губительно.
+    Поймано живьём: проба embedding-модели вернула «зрение есть», хотя в журнале
+    стояло `ai_route_model_failed` с 400 на ней самой, а цифру назвал фолбэк.
+
+    Приписать чужой ответ проверяемой модели — ровно тот молчаливый подлог,
+    ради борьбы с которым проба и заводилась.
+    """
+    from app.ai.model_registry import ModelRegistry
+
+    try:
+        cap = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml").models.get(
+            model_key
+        )
+    except Exception:  # noqa: BLE001 — без каталога сверить не с чем
+        return True
+    if cap is None:
+        return True
+    answered = str(getattr(response, "model", "") or "")
+    return answered in ("", model_key, cap.provider_model)
+
+
 @dataclass(frozen=True)
 class ProbeResult:
     """Что удалось установить. ``None`` — «не определили»."""
@@ -100,6 +126,8 @@ async def probe_vision(model_key: str, *, router: Any = None) -> tuple[bool | No
     except Exception as exc:  # noqa: BLE001 — «не смогли спросить» ≠ «не умеет»
         logger.info("capability_probe_vision_unavailable", model=model_key, error=str(exc)[:200])
         return None, f"проба не выполнена: {type(exc).__name__}"
+    if not _answered_by_the_named_model(model_key, response):
+        return None, f"ответил другой кандидат цепочки ({response.model}) — проба недействительна"
     answer = (response.text or "").strip()
     if not answer:
         # Слепая модель отвечает на картинку пустой строкой и HTTP 200 — это
@@ -140,6 +168,9 @@ async def probe_structured(model_key: str, *, router: Any = None) -> tuple[bool 
             "capability_probe_structured_unavailable", model=model_key, error=str(exc)[:200]
         )
         return None, f"проба не выполнена: {type(exc).__name__}"
+
+    if not _answered_by_the_named_model(model_key, response):
+        return None, f"ответил другой кандидат цепочки ({response.model}) — проба недействительна"
 
     from app.ai.structured_output import parse_json_output, validate_against_schema
 

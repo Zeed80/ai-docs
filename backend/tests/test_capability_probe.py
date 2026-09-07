@@ -154,3 +154,47 @@ def test_an_undetermined_probe_writes_nothing(monkeypatch):
     apply_probe("k", ProbeResult(checked_at="2026-09-07"), current_modalities={"text"})
 
     assert calls == []
+
+
+# ── Подмена кандидата ────────────────────────────────────────────────────────
+
+
+def test_an_answer_from_a_different_candidate_is_not_a_verdict(monkeypatch):
+    """`preferred_model` ставит модель первой, но цепочкой не ограничивает.
+
+    Поймано живьём: проба embedding-модели вернула «зрение есть», хотя в журнале
+    стоял `ai_route_model_failed` с 400 на ней самой — цифру назвал следующий
+    кандидат цепочки. Приписать чужой ответ проверяемой модели — ровно тот
+    молчаливый подлог, ради борьбы с которым проба и заводилась.
+    """
+
+    class _Substitute:
+        async def run(self, request):
+            return AIResponse(
+                task=request.task,
+                provider=ProviderKind.OLLAMA,
+                model="совсем-другая-модель",
+                text="7",
+            )
+
+    result = asyncio.run(
+        probe_model("qwen3_5_9b_ollama", checks=frozenset({"vision"}), router=_Substitute())
+    )
+
+    assert result.vision is None
+    assert "другой кандидат" in result.details["vision"]
+
+
+def test_the_named_model_answering_is_accepted():
+    """Провайдер отдаёт `provider_model`, а не ключ каталога — оба годятся."""
+
+    class _Named:
+        async def run(self, request):
+            return AIResponse(
+                task=request.task, provider=ProviderKind.OLLAMA, model="qwen3.5:9b", text="7"
+            )
+
+    result = asyncio.run(
+        probe_model("qwen3_5_9b_ollama", checks=frozenset({"vision"}), router=_Named())
+    )
+    assert result.vision is True
