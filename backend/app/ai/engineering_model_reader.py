@@ -176,9 +176,9 @@ async def read_focused_assertions(
             confidential=True,
             allow_cloud=False,
             thinking=False,
+            max_output_tokens=2048,
             metadata={
                 "contract": "engineering-model-focused-reader-v1",
-                "num_predict": 2048,
                 "graph_id": graph.graph_id,
                 "graph_revision": graph.revision,
                 "pass_kind": plan.kind,

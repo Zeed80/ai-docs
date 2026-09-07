@@ -115,11 +115,9 @@ async def probe_vision(model_key: str, *, router: Any = None) -> tuple[bool | No
         allow_cloud=True,
         preferred_model=model_key,
         thinking=False,
-        metadata={
-            "num_predict": 16,
-            "inference_params": {"temperature": 0},
-            "format_max_reasks": 0,
-        },
+        max_output_tokens=16,
+        inference_params={"temperature": 0},
+        metadata={"format_max_reasks": 0},
     )
     try:
         response = await router.run(request)
@@ -151,10 +149,10 @@ async def probe_structured(model_key: str, *, router: Any = None) -> tuple[bool 
         allow_cloud=True,
         preferred_model=model_key,
         thinking=False,
+        max_output_tokens=64,
+        inference_params={"temperature": 0},
         metadata={
             "json_schema": _STRUCTURED_SCHEMA,
-            "num_predict": 64,
-            "inference_params": {"temperature": 0},
             # Проба должна измерить модель, а не спасательный контур роутера:
             # с переспросами она бы показала, чего модель добивается со второй
             # попытки, а не что она делает сразу.

@@ -1057,11 +1057,9 @@ async def _ask(
         allow_cloud=False,
         preferred_model=seeing_model,
         thinking=effective_thinking,
-        metadata={
-            "num_predict": num_predict,
-            "json_schema": schema,
-            "inference_params": {"temperature": 0, "num_ctx": 8192},
-        },
+        max_output_tokens=num_predict,
+        inference_params={"temperature": 0, "num_ctx": 8192},
+        metadata={"json_schema": schema},
     )
     question = prompt.splitlines()[0][:200]
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
@@ -1258,7 +1256,8 @@ async def _ocr_via_router(image, model: str, *, router: Any = None) -> tuple[str
         allow_cloud=False,
         preferred_model=model,
         thinking=False,
-        metadata={"num_predict": _OCR_NUM_PREDICT, "inference_params": {"temperature": 0}},
+        max_output_tokens=_OCR_NUM_PREDICT,
+        inference_params={"temperature": 0},
     )
     response = await router.run(request)
     return (response.text or ""), {}

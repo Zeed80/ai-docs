@@ -129,6 +129,16 @@ class AIRequest(BaseModel):
     # (``ModelCapability.thinking_levels``); ignored otherwise. None → inherit
     # the per-task/catalog default.
     thinking_level: Literal["low", "medium", "high"] | None = None
+    # Потолок вывода и параметры сэмплирования. Раньше жили только в
+    # ``metadata`` строковыми ключами: без проверки типов и без всякой
+    # подсказки вызывающему, что они вообще существуют. Оттуда и брались
+    # молчаливые потери — ``num_predict`` читался лишь в одном методе одного
+    # провайдера, а ``min_p`` не читался нигде.
+    #
+    # ``metadata`` остаётся рабочим входом: роутер сводит оба канала в один в
+    # ``_dispatch``, поэтому существующие вызовы менять не обязательно.
+    max_output_tokens: int | None = None
+    inference_params: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

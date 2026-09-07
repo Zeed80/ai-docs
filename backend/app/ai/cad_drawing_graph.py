@@ -1125,9 +1125,9 @@ async def verify_graph_evidence_with_vlm(
             confidential=True,
             allow_cloud=False,
             thinking=False,
+            max_output_tokens=1024,
             metadata={
                 "contract": "vlm-graph-evidence-verifier-v1",
-                "num_predict": 1024,
                 "entity_id": entity.id,
                 "evidence_id": evidence_id,
             },
@@ -1370,7 +1370,8 @@ async def read_drawing_graph_staged_attempt(
         confidential=confidential,
         allow_cloud=False,
         thinking=False,
-        metadata={"contract": "drawing-graph-layout-v1", "num_predict": 2048},
+        max_output_tokens=2048,
+        metadata={"contract": "drawing-graph-layout-v1"},
     )
     layout_raw = ""
     try:
@@ -1445,9 +1446,9 @@ async def read_drawing_graph_staged_attempt(
             confidential=confidential,
             allow_cloud=False,
             thinking=False,
+            max_output_tokens=8192,
             metadata={
                 "contract": "drawing-graph-fragment-v1",
-                "num_predict": 8192,
                 "tile_id": tile.tile_id,
                 "source_region": tile.source_region.model_dump(mode="json"),
                 "ownership_region": tile.ownership_region.model_dump(mode="json"),

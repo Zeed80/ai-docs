@@ -358,9 +358,9 @@ async def _verify_proposal(
             confidential=True,
             allow_cloud=False,
             thinking=False,
+            max_output_tokens=1024,
             metadata={
                 "contract": "engineering-hybrid-visual-verifier-v1",
-                "num_predict": 1024,
                 "proposal_id": proposal.id,
             },
         )

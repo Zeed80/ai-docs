@@ -349,3 +349,51 @@ def test_a_model_the_caller_named_still_fails_loudly(monkeypatch):
 
     # Названная модель не отсеяна молча: политика сказала своё слово.
     assert "claude_sonnet_anthropic" in str(exc.value) or seen == ["claude_sonnet_anthropic"]
+
+
+def test_the_reason_comes_from_the_model_that_tried(monkeypatch):
+    """Нескачанный запасной в хвосте не должен подменять собой причину.
+
+    Живой прогон чтения чертежа: 10 из 13 упавших фрагментных вопросов
+    сообщили «Model gemma4:e4b is not served by any enabled ollama node» —
+    про модель, которая к делу не относится вовсе. Отвечать пыталась голова
+    цепочки и падала по своей причине, но `last_error` перезаписывался каждым
+    следующим кандидатом, и наружу уходил последний.
+    """
+    from app.ai.model_registry import ModelRegistry
+    from app.ai.router import AIRouter
+    from app.ai.task_routing import TaskRouting
+
+    registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
+    router = AIRouter.__new__(AIRouter)
+    router.registry = registry
+
+    routing = TaskRouting(
+        task="cad_spec_read",
+        models=["qwen3_5_9b_ollama", "gemma4_e4b_ollama"],
+        local_only=True,
+    )
+    monkeypatch.setattr("app.ai.task_routing.get_routing_for", lambda _t: routing)
+    monkeypatch.setattr(router, "_enforce_policy", lambda *a, **k: None)
+
+    def _resolve(model):
+        if model.name == "gemma4_e4b_ollama":
+            raise RuntimeError("Model gemma4:e4b is not served by any enabled ollama node")
+        return (object(), None)
+
+    async def _head_fails(provider, request, model, **kwargs):
+        raise RuntimeError("модель ответила пустой строкой")
+
+    monkeypatch.setattr(router, "_resolve_provider", _resolve)
+    monkeypatch.setattr(router, "_run_candidate", _head_fails)
+
+    request = AIRequest(
+        task=AITask.CAD_SPEC_READ,
+        messages=[ChatMessage(role="user", content="?")],
+        confidential=True,
+    )
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(router.run(request))
+
+    assert "пустой строкой" in str(exc.value)
+    assert "gemma4" not in str(exc.value)

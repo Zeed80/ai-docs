@@ -365,6 +365,14 @@ class AIRouter:
             )
 
         last_error: Exception | None = None
+        # Ошибка от кандидата, который РЕАЛЬНО пытался ответить. Нужна отдельно
+        # от `last_error`: тот перезаписывается каждым следующим кандидатом, и
+        # если хвост цепочки не скачан, наружу уходит «Model gemma4:e4b is not
+        # served by any enabled ollama node» — про модель, которая к делу не
+        # относится вовсе. Живой прогон чтения чертежа: 10 из 13 упавших
+        # фрагментных вопросов сообщили именно это, тогда как отвечать пыталась
+        # голова цепочки и падала по своей причине.
+        first_attempt_error: Exception | None = None
 
         # Vector calls answer in seconds or are broken — they must not inherit
         # the provider's 180s conversational timeout. Measured live: a hung
@@ -534,6 +542,8 @@ class AIRouter:
                 # an empty log line and an unexplained fallback. Always carry
                 # the type so the reason survives.
                 error_text = str(exc) or exc.__class__.__name__
+                if first_attempt_error is None:
+                    first_attempt_error = exc
                 self._record_telemetry(request, model, started, ok=False, error=error_text)
                 logger.warning(
                     "ai_route_model_failed",
@@ -543,6 +553,10 @@ class AIRouter:
                     error_type=exc.__class__.__name__,
                 )
 
+        # Диагноз даёт тот, кто пробовал: нерешаемый кандидат в хвосте
+        # («модель не скачана») не должен подменять собой настоящую причину.
+        if first_attempt_error is not None:
+            raise first_attempt_error
         if last_error:
             raise last_error
         raise KeyError(f"No model configured for task {request.task.value}")
@@ -619,6 +633,20 @@ class AIRouter:
             update={
                 "metadata": {
                     **(request.metadata or {}),
+                    # Поля запроса и ключи metadata — один и тот же канал,
+                    # сведённый здесь: провайдеры читают metadata, а вызывающий
+                    # волен пользоваться типизованными полями. Поле выигрывает у
+                    # ключа, потому что оно явнее.
+                    **(
+                        {"num_predict": request.max_output_tokens}
+                        if request.max_output_tokens is not None
+                        else {}
+                    ),
+                    **(
+                        {"inference_params": request.inference_params}
+                        if request.inference_params is not None
+                        else {}
+                    ),
                     "structured_output_supported": bool(model.supports_structured_output),
                     # Окно контекста модели знает только каталог, а ограничивает
                     # его провайдер — до сих пор одной константой на всех.

@@ -1243,11 +1243,9 @@ async def read_drawing_spec(
         # The old 24k budget let a misrouted thinking model burn the entire
         # Celery deadline on one answer.  Real valid specs are far smaller; 6k
         # keeps enough room for escaped Cyrillic while bounding a runaway pass.
-        metadata={
-            "num_predict": 6000,
-            "json_schema": _whole_sheet_reader_schema(),
-            "inference_params": {"temperature": 0, "num_ctx": 16384},
-        },
+        max_output_tokens=6000,
+        inference_params={"temperature": 0, "num_ctx": 16384},
+        metadata={"json_schema": _whole_sheet_reader_schema()},
     )
     started = time.monotonic()
     await record_cad_process_event(
@@ -3923,10 +3921,8 @@ async def _draft_generative(
         preferred_model=draft_model,
         confidential=True,
         allow_cloud=False,
-        metadata={
-            "num_predict": 6000,
-            "inference_params": {"temperature": 0, "num_ctx": 16384},
-        },
+        max_output_tokens=6000,
+        inference_params={"temperature": 0, "num_ctx": 16384},
     )
     started = time.monotonic()
     await record_cad_process_event(
