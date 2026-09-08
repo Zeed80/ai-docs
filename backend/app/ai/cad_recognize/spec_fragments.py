@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 import io
 import re
+from collections.abc import Sequence
 from typing import Any
 
 import structlog
@@ -1600,12 +1601,15 @@ async def _read_cut_features(
                 (_num(item.get("diameter_mm")) or 0.0) / (2.0 * mm_per_px) for item in outer
             )
             left_x = float(datum[0])
-            bbox = [
-                max(0, int(left_x - 16)),
-                max(0, int(center_y - max_radius_px - 24)),
-                min(source_image.width, int(left_x + 54)),
-                min(source_image.height, int(center_y + max_radius_px + 24)),
-            ]
+            bbox = _sheet_crop_box(
+                source_image,
+                (
+                    left_x - 16,
+                    center_y - max_radius_px - 24,
+                    left_x + 54,
+                    center_y + max_radius_px + 24,
+                ),
+            )
             for item in chamfers:
                 if (
                     item.get("location") == "left_end"
@@ -1719,19 +1723,26 @@ async def _read_cut_features(
     ]
     radial_candidates = feature_evidence.get("radial_opening_candidates") or []
     radial_hypotheses: list[dict[str, Any]] = []
+    radial_crop_box = None
     if radial_candidates and source_image is not None:
-        x0 = max(0, min(item["bbox"][0] for item in radial_candidates) - 160)
-        x1 = min(
-            source_image.width,
-            max(item["bbox"][2] for item in radial_candidates) + 260,
-        )
         center_y = int(
             (profile_evidence or {})
             .get("diameter_map", {})
             .get("profile_center_y_px", source_image.height / 2)
         )
-        y0 = max(0, center_y - 480)
-        y1 = min(source_image.height, center_y + 330)
+        # Область вне листа = вопроса не будет, но уже прочитанные фаски,
+        # канавки и пазы не теряются: это отдельная гипотеза, а не всё чтение.
+        radial_crop_box = _sheet_crop_box(
+            source_image,
+            (
+                min(item["bbox"][0] for item in radial_candidates) - 160,
+                center_y - 480,
+                max(item["bbox"][2] for item in radial_candidates) + 260,
+                center_y + 330,
+            ),
+        )
+    if radial_crop_box is not None:
+        x0, y0, x1, y1 = radial_crop_box
         crop_box = [x0, y0, x1, y1]
         mapped_candidates = [
             {
@@ -1861,7 +1872,7 @@ async def _read_cut_features(
                     source_image.width,
                     max(top_counterbores[0]["bbox"][2], pilot_candidate["bbox"][2]) + 70,
                 ),
-                min(source_image.height, center_y + 130),
+                min(source_image.height, max(0, center_y + 130)),
             ]
             counterbore_answer = await _ask(
                 _COUNTERBORE_PROMPT.format(
@@ -2374,12 +2385,10 @@ async def _resolve_axial_pattern_geometry_from_source(
         float((item.get("dimension_line") or item["label_bbox"])[1]) for _t, _d, item in plausible
     )
     pad_x, pad_top, pad_bottom = 80, 35, 115
-    crop_box = [
-        max(0, int(x0 - pad_x)),
-        max(0, int(y0 - pad_top)),
-        min(source_image.width, int(x1 + pad_x)),
-        min(source_image.height, int(y1 + pad_bottom)),
-    ]
+    clamped = _sheet_crop_box(source_image, (x0 - pad_x, y0 - pad_top, x1 + pad_x, y1 + pad_bottom))
+    if clamped is None:
+        return pattern
+    crop_box = list(clamped)
     crop = source_image.crop(tuple(crop_box))
     candidate_pairs = sorted({(thread, drill) for thread, drill, _item in plausible})
     prompt = (
@@ -2531,12 +2540,15 @@ def _resolve_axial_pattern_entry_offset(
         *(resolved.get("evidence") or []),
         {
             "image_index": 0,
-            "bbox": [
-                max(0, mouth_x - 4),
-                max(0, int(min(centers) - half_band)),
-                min(source_image.width, mouth_x + 5),
-                min(source_image.height, int(max(centers) + half_band)),
-            ],
+            "bbox": _sheet_crop_box(
+                source_image,
+                (
+                    mouth_x - 4,
+                    min(centers) - half_band,
+                    mouth_x + 5,
+                    max(centers) + half_band,
+                ),
+            ),
             "raw_text": (
                 f"opposed longitudinal hole mouths measured at {measured:.3f} mm; "
                 f"recessed entry plane retained as measured {offset:g} mm"
@@ -2598,6 +2610,33 @@ def _chamfer_edge_candidates(outer: list[dict], bore: list[dict]) -> list[dict[s
     return candidates
 
 
+def _sheet_crop_box(image: Any, box: Sequence[float]) -> tuple[int, int, int, int] | None:
+    """Обрезка внутри листа, либо ничего — но никогда перевёрнутый прямоугольник.
+
+    Живой `detal_126.png` падал здесь с ValueError: Coordinate 'lower' is less
+    than 'upper'. Боксы контактных листов строились зажатыми с ОДНОЙ стороны:
+    `max(0, y - h)` и `min(image.height, y + h)`. Пока центр лежит на листе,
+    этого хватает. Но центр считается из прочитанного масштаба и диаметра, и
+    достаточно одному из них разъехаться, чтобы `y + h` ушёл в минус: тогда
+    нижняя граница `min(height, -12)` оказывается ВЫШЕ верхней `max(0, …) = 0`,
+    и PIL справедливо отказывается.
+
+    Возвращать None вместо пустой картинки — намеренно: обрезок за пределами
+    листа не несёт свидетельства, и подсовывать модели белый прямоугольник как
+    доказательство хуже, чем честно его не показать.
+    """
+    if image is None:
+        return None
+    left, top, right, bottom = (int(round(float(value))) for value in box)
+    left, right = sorted((left, right))
+    top, bottom = sorted((top, bottom))
+    left, top = max(0, left), max(0, top)
+    right, bottom = min(int(image.width), right), min(int(image.height), bottom)
+    if right - left < 2 or bottom - top < 2:
+        return None
+    return left, top, right, bottom
+
+
 def _chamfer_candidate_contact_sheet(
     source_image: Any,
     candidates: list[dict[str, Any]],
@@ -2650,12 +2689,22 @@ def _chamfer_candidate_contact_sheet(
             fill="black",
         )
         for position, source_y in enumerate((center_y - radial_px, center_y + radial_px)):
-            crop_box = (
-                max(0, int(source_x - half_width)),
-                max(0, int(source_y - half_height)),
-                min(source_image.width, int(source_x + half_width)),
-                min(source_image.height, int(source_y + half_height)),
+            crop_box = _sheet_crop_box(
+                source_image,
+                (
+                    source_x - half_width,
+                    source_y - half_height,
+                    source_x + half_width,
+                    source_y + half_height,
+                ),
             )
+            if crop_box is None:
+                draw.text(
+                    (tile_x + 6, tile_y + 30 + position * 60),
+                    "профиль вне листа",
+                    fill=(180, 0, 0),
+                )
+                continue
             crop = source_image.crop(crop_box).resize((288, 55))
             sheet.paste(crop, (tile_x + 6, tile_y + 23 + position * 60))
             marker_y = tile_y + 50 + position * 60
@@ -3225,12 +3274,10 @@ async def _recover_external_thread_carrier(
 
     px0, px1 = map(int, candidate["profile_interval_px"])
     center_y = int(diameter_evidence.get("profile_center_y_px") or source_image.height / 2)
-    crop_box = [
-        max(0, px0 - 180),
-        max(0, center_y - 260),
-        min(source_image.width, px1 + 260),
-        min(source_image.height, center_y + 390),
-    ]
+    clamped = _sheet_crop_box(source_image, (px0 - 180, center_y - 260, px1 + 260, center_y + 390))
+    if clamped is None:
+        return False
+    crop_box = list(clamped)
     answer = await _ask(
         _THREAD_CARRIER_PROMPT.format(
             designation=designation,

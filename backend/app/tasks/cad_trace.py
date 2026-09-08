@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import math
 import re
+import traceback
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -4461,7 +4462,15 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             "recognizer_used": arbitration.recognizer_used,
         }
     except Exception as exc:  # noqa: BLE001
-        logger.warning("cad_trace_failed", generation_id=generation_id, error=str(exc))
+        # Со стеком: без него сообщение вида «Coordinate 'lower' is less than
+        # 'upper'» не указывает ни на стадию, ни на файл, а обрезок изображения
+        # в конвейере полтора десятка. Единственный прогон стоит минуты.
+        logger.warning(
+            "cad_trace_failed",
+            generation_id=generation_id,
+            error=str(exc),
+            traceback=traceback.format_exc(limit=25),
+        )
         return await _fail(f"{type(exc).__name__}: {exc}")
     finally:
         reset_cad_process_recorder(recorder_token)
