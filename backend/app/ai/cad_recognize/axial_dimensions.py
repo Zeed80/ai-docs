@@ -52,7 +52,17 @@ def _plausible_ocr_correction(raw_text: str, candidate: float) -> bool:
     return sum(left != right for left, right in zip(raw_digits, candidate_text, strict=True)) <= 1
 
 
-def _ocr_numeric_tokens(image: Any) -> list[dict[str, Any]]:
+# Высота цифры, при которой Tesseract работает уверенно. Это свойство самого
+# движка (его документация просит примерно 20-30 px на строчную букву), а не
+# какого-то листа, поэтому число здесь и не подбиралось под чертёж.
+_OCR_TARGET_TEXT_PX = 24.0
+# Дальше растягивать бессмысленно: интерполяция не добавляет штрихов, а время
+# растёт квадратично.
+_OCR_MAX_UPSCALE = 3.0
+
+
+def _read_numeric_tokens(image: Any) -> list[dict[str, Any]]:
+    """Один проход OCR по листу как он есть."""
     import pytesseract
     from pytesseract import Output
 
@@ -77,7 +87,12 @@ def _ocr_numeric_tokens(image: Any) -> list[dict[str, Any]]:
         y = int(data["top"][index])
         width = int(data["width"][index])
         height = int(data["height"][index])
-        if not (0 < value <= 100_000 and 0 < width <= 160 and 0 < height <= 90):
+        # Отсев в долях высоты самого текста, а не в пикселях: раньше пороги
+        # 160×90 были ограничением конкретного разрешения и на крупном скане
+        # выбрасывали обычные размерные числа.
+        if not (0 < value <= 100_000 and width > 0 and height > 0):
+            continue
+        if width > 16 * height or height > 90 * max(1.0, image.height / 850.0):
             continue
         tokens.append(
             {
@@ -88,6 +103,44 @@ def _ocr_numeric_tokens(image: Any) -> list[dict[str, Any]]:
             }
         )
     return tokens
+
+
+def _ocr_numeric_tokens(image: Any) -> list[dict[str, Any]]:
+    """Числа на листе, прочитанные в масштабе, в котором Tesseract их видит.
+
+    Замерено на корпусе: на листах 1100×850 высота цифры — десять пикселей, и
+    OCR находит четыре-семнадцать чисел там, где их два десятка. Это не
+    свойство чертежей, а рабочий диапазон движка: ниже примерно двадцати
+    пикселей он перестаёт различать штрихи.
+
+    Поэтому масштаб подбирается по САМОМУ листу: первый проход измеряет высоту
+    цифры, и если она мала — лист растягивается ровно настолько, чтобы попасть
+    в рабочий диапазон, а координаты возвращаются в исходные. Ни одного числа,
+    привязанного к разрешению: единственная константа — свойство Tesseract.
+    """
+    tokens = _read_numeric_tokens(image)
+    unit = _text_unit(tokens) if tokens else 0.0
+    if unit >= _OCR_TARGET_TEXT_PX:
+        return tokens
+
+    # Нечего измерить — пробуем разумную растяжку один раз: пустой результат
+    # чаще означает «слишком мелко», чем «чисел нет».
+    scale = _OCR_TARGET_TEXT_PX / unit if unit > 0 else 2.0
+    scale = min(_OCR_MAX_UPSCALE, max(1.0, scale))
+    if scale <= 1.0:
+        return tokens
+
+    from PIL import Image as _Image
+
+    enlarged = image.resize((int(image.width * scale), int(image.height * scale)), _Image.LANCZOS)
+    rescanned = _read_numeric_tokens(enlarged)
+    if len(rescanned) <= len(tokens):
+        # Растяжка не помогла — оставляем то, что прочитано в натуральном
+        # масштабе. Меньше найденного не бывает лучше.
+        return tokens
+    for token in rescanned:
+        token["label_bbox"] = [round(value / scale, 1) for value in token["label_bbox"]]
+    return rescanned
 
 
 def _hough_lines(image: Any) -> tuple[list[list[float]], list[list[float]]]:
@@ -129,46 +182,111 @@ def _hough_lines(image: Any) -> tuple[list[list[float]], list[list[float]]]:
     return horizontal, vertical
 
 
+def _text_unit(tokens: list[dict[str, Any]]) -> float:
+    """Высота цифры на этом листе — естественная единица длины чертежа.
+
+    Все пороги спаривания раньше стояли в АБСОЛЮТНЫХ пикселях: подпись искалась
+    в полосе 3..35 px над линией, выносные — в окнах ±60/±20, минимальный
+    пролёт 35. Числа были подобраны под лист, у которого высота цифры около
+    десяти пикселей, и на любом другом разрешении переставали значить то, что
+    задумано: на крупном скане подпись отстоит от линии дальше тридцати пяти
+    пикселей, и линия просто не находится.
+
+    ГОСТ 2.304/2.307 задаёт остальное ОТНОСИТЕЛЬНО высоты шрифта: и зазор между
+    числом и линией, и выход выносных за размерную. Поэтому единица измерения
+    здесь — сам текст, а не пиксель.
+    """
+    heights = sorted(
+        float(token["label_bbox"][3] - token["label_bbox"][1])
+        for token in tokens
+        if token["label_bbox"][3] > token["label_bbox"][1]
+    )
+    if not heights:
+        return 10.0
+    return max(4.0, heights[len(heights) // 2])
+
+
 def _pair_tokens_with_lines(
     tokens: list[dict[str, Any]],
     horizontal: list[list[float]],
     vertical: list[list[float]],
 ) -> list[dict[str, Any]]:
+    """Связать число с его размерной линией, где бы оно ни стояло.
+
+    Раньше число искалось строго НАД линией. Это основная посадка по
+    ГОСТ 2.307, но не единственная: когда между выносными тесно, число выносят
+    вбок или под линию, а на разрезах и видах снизу так делают и без тесноты.
+    Замерено на корпусе: у `welded_bracket.png` девять подписей из
+    одиннадцати стоят ПОД линией, у `bearing_housing_section.png` — пять из
+    шести. Обе стадии честно отдавали «размерные линии не связаны с выносками»,
+    хотя линии и числа на листе были.
+    """
+    # Окна — исходные абсолютные, с пропорциональным ПОЛОМ, а не заменой.
+    # Проверено замером: зазор между числом и его размерной линией с высотой
+    # текста не растёт. На `detal_126.png` высота цифры тридцать пикселей, а
+    # зазор укладывается в те же тридцать пять, что и на листах с высотой
+    # десять; заменив окна на кратные высоте, я утроил допуск по зазору и
+    # утроил порог пролёта — и потерял 78, 99, 150 и 270, которые до того
+    # находились. Множители ниже включаются только там, где текст ЗАМЕТНО
+    # крупнее, и на сегодняшнем корпусе ничего не меняют.
+    unit = _text_unit(tokens)
+    gap_min, gap_max = 3.0, max(35.0, 1.2 * unit)
+    side_margin = max(15.0, 0.8 * unit)
+    outward, inward = max(60.0, 2.0 * unit), max(20.0, 0.8 * unit)
+    reach = max(15.0, 0.5 * unit)
+    min_span = max(35.0, 1.2 * unit)
+
     paired: list[dict[str, Any]] = []
     for token in tokens:
-        x0, _y0, x1, y1 = token["label_bbox"]
+        x0, y0, x1, y1 = token["label_bbox"]
         center_x = (x0 + x1) / 2.0
-        candidates = [
-            line
+        above = [
+            (line, line[1] - y1)
             for line in horizontal
-            if y1 + 3 <= line[1] <= y1 + 35 and line[0] - 15 <= center_x <= line[2] + 15
+            if gap_min <= line[1] - y1 <= gap_max
+            and line[0] - side_margin <= center_x <= line[2] + side_margin
         ]
-        if not candidates:
-            continue
+        # Число ПОД линией — та же связь, но посадка не основная, поэтому она
+        # рассматривается только когда основная связи не дала. Иначе чужая
+        # линия, случайно оказавшаяся ближе сверху, перебивает свою: замерено
+        # на `detal_126.png`, где так терялись 78, 99, 150 и 270.
+        below = [
+            (line, y0 - line[1])
+            for line in horizontal
+            if gap_min <= y0 - line[1] <= gap_max
+            and line[0] - side_margin <= center_x <= line[2] + side_margin
+        ]
         paired_line = None
-        for line in sorted(candidates, key=lambda item: (item[1] - y1, -(item[2] - item[0]))):
-            line_x0, line_y, line_x1 = line
-            left_extensions = [
-                item
-                for item in vertical
-                if line_x0 - 60 <= item[0] <= line_x0 + 20
-                and item[1] - 15 <= line_y <= item[2] + 15
-            ]
-            right_extensions = [
-                item
-                for item in vertical
-                if line_x1 - 20 <= item[0] <= line_x1 + 60
-                and item[1] - 15 <= line_y <= item[2] + 15
-            ]
-            if left_extensions and right_extensions:
-                paired_line = (line, left_extensions, right_extensions)
+        for group in (above, below):
+            if paired_line is not None:
                 break
+            # Ближайшая линия, а среди равноудалённых — самая длинная: короткий
+            # штрих рядом с числом чаще выноска, чем размерная линия.
+            for line, _distance in sorted(
+                group, key=lambda item: (item[1], -(item[0][2] - item[0][0]))
+            ):
+                line_x0, line_y, line_x1 = line
+                left_extensions = [
+                    item
+                    for item in vertical
+                    if line_x0 - outward <= item[0] <= line_x0 + inward
+                    and item[1] - reach <= line_y <= item[2] + reach
+                ]
+                right_extensions = [
+                    item
+                    for item in vertical
+                    if line_x1 - inward <= item[0] <= line_x1 + outward
+                    and item[1] - reach <= line_y <= item[2] + reach
+                ]
+                if left_extensions and right_extensions:
+                    paired_line = (line, left_extensions, right_extensions)
+                    break
         if paired_line is None:
             continue
         (line_x0, line_y, line_x1), left_extensions, right_extensions = paired_line
         left = min(left_extensions, key=lambda item: abs(item[0] - line_x0))
         right = min(right_extensions, key=lambda item: abs(item[0] - line_x1))
-        if right[0] - left[0] < 35:
+        if right[0] - left[0] < min_span:
             continue
         paired.append(
             {
@@ -191,24 +309,88 @@ def _deduplicate(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(best.values())
 
 
+def _merge_callout_tokens(
+    tokens: list[dict[str, Any]],
+    callout_entries: list[tuple[float, list[float] | None]] | None,
+) -> list[dict[str, Any]]:
+    """Добавить числа, прочитанные моделью, там где она вернула координаты.
+
+    Замерено на корпусе: на листах, где высота цифры десять пикселей,
+    tesseract читает «12885», «95006», «Ва0.8», «АДЗ1» — и геометрическая
+    проверка честно их отбрасывает, оставляя стадию пустой на чертежах,
+    которые модель читает верно (у `flange_detail.png` она взяла все пять
+    фактов эталона). Разные варианты подготовки изображения — растяжка,
+    Otsu, размытие с порогом — проверены и не помогают: движок эти листы
+    просто не читает.
+
+    Числа из текстового слоя приходят уже отобранными (`_callout_entries`):
+    диаметры, шероховатость, углы и количества отверстий отсеяны там же, где
+    и для остального конвейера, — второго расходящегося отбора здесь нет.
+    Уверенность им ставится высокая, но не единица: геометрическая сверка с
+    пролётом линии остаётся обязательной, потому что связь «число ↔ линия»
+    по-прежнему выводится, а не прочитана.
+
+    Когда текстовый слой координат не вернул (`bbox` пуст — так делает
+    документная OCR-модель без grounding), список пуст, и всё остаётся ровно
+    как было. Это единственная причина, по которой стадия не чинится
+    полностью: связывать нечего.
+    """
+    if not callout_entries:
+        return tokens
+    merged = list(tokens)
+    for value, bbox in callout_entries:
+        if not bbox or value <= 0:
+            continue
+        # Токен tesseract на том же месте вытесняется: число модели вернее.
+        merged = [item for item in merged if not _boxes_overlap(item["label_bbox"], bbox)]
+        merged.append(
+            {
+                "raw_text": f"{value:g}",
+                "ocr_value_mm": float(value),
+                "ocr_confidence": 0.95,
+                "label_bbox": [float(item) for item in bbox],
+                "value_from": "callout",
+            }
+        )
+    return merged
+
+
+def _boxes_overlap(left: list[float], right: list[float]) -> bool:
+    """Пересекаются ли рамки хотя бы наполовину меньшей из них."""
+    x0 = max(float(left[0]), float(right[0]))
+    y0 = max(float(left[1]), float(right[1]))
+    x1 = min(float(left[2]), float(right[2]))
+    y1 = min(float(left[3]), float(right[3]))
+    if x1 <= x0 or y1 <= y0:
+        return False
+    intersection = (x1 - x0) * (y1 - y0)
+    areas = [
+        max(1e-6, (float(box[2]) - float(box[0])) * (float(box[3]) - float(box[1])))
+        for box in (left, right)
+    ]
+    return intersection >= 0.5 * min(areas)
+
+
 def _calibration_base(candidates: list[dict[str, Any]]) -> dict[str, Any]:
-    """Линия, чей масштаб разделяет большинство остальных.
+    """Линия из самой многочисленной группы, согласной по масштабу.
 
     Раньше базой была просто САМАЯ ШИРОКАЯ линия, а число на ней принималось
     на веру. Одна ошибка локализации — и весь лист получал чужой масштаб.
-    Живой `shaft_detail.png`: за общий габарит было принято 3.2 мм. Это Ra,
-    шероховатость, затесавшаяся в список линейных выносок; её подпись
-    оказалась связана с широкой линией, и вал длиной в сотни миллиметров был
-    откалиброван по значку чистоты поверхности.
+    Живой `shaft_detail.png`: за общий габарит бралось 3.2 мм, то есть Ra,
+    затесавшаяся в список линейных выносок, — вал длиной в сотни миллиметров
+    калибровался по значку чистоты поверхности.
 
-    Физический инвариант надёжнее любого отдельного наблюдения: на одном виде
-    и в одном масштабе длина размерной линии пропорциональна числу на ней.
-    Значит масштаб — это медиана отношений, а база — самая широкая линия среди
-    тех, кто с этой медианой согласен. Одиночный выброс перестаёт быть точкой
-    отказа, оставаясь при этом видимым: не согласованные наблюдения дальше
-    отсеет проверка невязки.
+    Инвариант: на одном виде и в одном масштабе длина размерной линии
+    пропорциональна числу на ней. Но брать МЕДИАНУ отношений нельзя — верных
+    наблюдений не обязано быть большинство. На `detal_126.png` верный масштаб
+    0.339 мм/px разделяют пять наблюдений (470, 270, 240, 99, 78), а неверных
+    спариваний больше, и медиана уезжает к ним: база получалась 20 мм при
+    габарите листа 470.
 
-    Меньше двух кандидатов — согласовывать не с чем, поведение прежнее.
+    Поэтому берётся не середина, а самая многочисленная согласованная группа,
+    при равенстве — та, чьи линии длиннее: длинная размерная линия — более
+    сильное свидетельство, чем короткий штрих. База — самая широкая линия
+    внутри группы-победителя.
     """
     usable = [
         item
@@ -218,20 +400,28 @@ def _calibration_base(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     if len(usable) < 2:
         return max(candidates, key=lambda item: item["span_px"])
 
-    ratios = sorted(float(item["ocr_value_mm"]) / float(item["span_px"]) for item in usable)
-    median = ratios[len(ratios) // 2]
-    inliers = [
-        item
-        for item in usable
-        if abs(float(item["ocr_value_mm"]) / float(item["span_px"]) - median)
-        <= median * _SCALE_AGREEMENT_TOLERANCE
-    ]
-    return max(inliers or usable, key=lambda item: item["span_px"])
+    best: tuple[int, float] | None = None
+    winners: list[dict[str, Any]] = []
+    for item in usable:
+        ratio = float(item["ocr_value_mm"]) / float(item["span_px"])
+        group = [
+            other
+            for other in usable
+            if abs(float(other["ocr_value_mm"]) / float(other["span_px"]) - ratio)
+            <= ratio * _SCALE_AGREEMENT_TOLERANCE
+        ]
+        score = (len(group), sum(float(other["span_px"]) for other in group))
+        if best is None or score > best:
+            best = score
+            winners = group
+    return max(winners or usable, key=lambda item: item["span_px"])
 
 
 def localize_axial_dimensions(
     image: Any,
     known_linear_values: list[float],
+    *,
+    callout_entries: list[tuple[float, list[float] | None]] | None = None,
 ) -> dict[str, Any]:
     """Return datum-relative dimension observations with pixel evidence.
 
@@ -243,7 +433,7 @@ def localize_axial_dimensions(
     """
     known = sorted({round(float(value), 3) for value in known_linear_values if value > 0})
     try:
-        tokens = _ocr_numeric_tokens(image)
+        tokens = _merge_callout_tokens(_ocr_numeric_tokens(image), callout_entries)
         horizontal, vertical = _hough_lines(image)
     except Exception as exc:  # noqa: BLE001 — localisation is an optional reader aid
         return {

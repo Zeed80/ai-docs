@@ -529,7 +529,7 @@ async def test_dimension_chain_receives_localized_datum_evidence(monkeypatch):
 
     captured = {}
 
-    def fake_localize(_image, _known):
+    def fake_localize(_image, _known, **_kwargs):
         return {
             "status": "ok",
             "overall_mm": 50,
@@ -573,7 +573,7 @@ async def test_dimension_chain_receives_localized_datum_evidence(monkeypatch):
     monkeypatch.setattr(
         diameter_dimensions,
         "localize_diameter_dimensions",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "status": "ok",
             "observations": [
                 {"value_mm": 30, "role": "outer", "confidence": 0.95},
@@ -613,7 +613,7 @@ async def test_dimension_chain_rejects_diameter_assigned_to_wrong_contour(monkey
     monkeypatch.setattr(
         axial_dimensions,
         "localize_axial_dimensions",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "status": "ok",
             "observations": [
                 {"station_from_left_mm": 20, "confidence": 0.95},
@@ -624,7 +624,7 @@ async def test_dimension_chain_rejects_diameter_assigned_to_wrong_contour(monkey
     monkeypatch.setattr(
         diameter_dimensions,
         "localize_diameter_dimensions",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "status": "ok",
             "observations": [
                 {"value_mm": 30, "role": "outer", "confidence": 0.95},
@@ -669,7 +669,7 @@ async def test_dimension_chain_rejects_station_without_localized_line(monkeypatc
     monkeypatch.setattr(
         axial_dimensions,
         "localize_axial_dimensions",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "status": "ok",
             "overall_mm": 50,
             "blockers": [],

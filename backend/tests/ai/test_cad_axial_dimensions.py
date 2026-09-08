@@ -208,3 +208,104 @@ def test_a_single_candidate_behaves_exactly_as_before():
 
     only = {"ocr_value_mm": 3.2, "span_px": 700.0}
     assert _calibration_base([only]) is only
+
+
+# ── Числа берутся у того, кто читает вернее ──────────────────────────────────
+
+
+def test_a_model_read_number_displaces_the_ocr_guess_at_the_same_place():
+    """Замерено на корпусе: tesseract читает «12885» и «АДЗ1» вместо размеров.
+
+    На листах, где высота цифры десять пикселей, движок находит четыре-семнадцать
+    чисел там, где их два десятка, и половина прочитанного — мусор.
+    Геометрическая проверка мусор честно отбрасывает, поэтому стадия остаётся
+    пустой на чертежах, которые ЧИТАЮТСЯ: у `flange_detail.png` модель взяла
+    все пять фактов эталона. Растяжка, Otsu и размытие с порогом проверены —
+    не помогают, движок эти листы просто не читает.
+    """
+    from app.ai.cad_recognize.axial_dimensions import _merge_callout_tokens
+
+    ocr = [
+        {
+            "raw_text": "12885",
+            "ocr_value_mm": 12885.0,
+            "ocr_confidence": 0.31,
+            "label_bbox": [100, 200, 160, 220],
+        }
+    ]
+    merged = _merge_callout_tokens(ocr, [(185.0, [102, 201, 158, 219])])
+
+    assert [item["ocr_value_mm"] for item in merged] == [185.0]
+    assert merged[0]["value_from"] == "callout"
+    # Не единица: связь «число ↔ линия» по-прежнему выводится, а не прочитана,
+    # поэтому сверка с пролётом остаётся обязательной.
+    assert merged[0]["ocr_confidence"] < 1.0
+
+
+def test_an_ocr_token_elsewhere_on_the_sheet_survives():
+    from app.ai.cad_recognize.axial_dimensions import _merge_callout_tokens
+
+    ocr = [
+        {
+            "raw_text": "50",
+            "ocr_value_mm": 50.0,
+            "ocr_confidence": 0.9,
+            "label_bbox": [900, 700, 940, 720],
+        }
+    ]
+    merged = _merge_callout_tokens(ocr, [(185.0, [102, 201, 158, 219])])
+
+    assert sorted(item["ocr_value_mm"] for item in merged) == [50.0, 185.0]
+
+
+def test_a_text_layer_without_coordinates_changes_nothing():
+    """Документная OCR-модель без grounding возвращает текст без рамок.
+
+    Связывать тогда нечего, и это единственная причина, по которой стадия
+    чинится не полностью. Молча подставлять числа без координат нельзя: они
+    попали бы на чужие линии.
+    """
+    from app.ai.cad_recognize.axial_dimensions import _merge_callout_tokens
+
+    ocr = [
+        {
+            "raw_text": "50",
+            "ocr_value_mm": 50.0,
+            "ocr_confidence": 0.9,
+            "label_bbox": [10, 20, 40, 40],
+        }
+    ]
+
+    assert _merge_callout_tokens(ocr, [(185.0, None)]) == ocr
+    assert _merge_callout_tokens(ocr, None) == ocr
+
+
+# ── Масштаб определяет группа, а не середина ────────────────────────────────
+
+
+def test_the_largest_agreeing_group_wins_over_the_median():
+    """Верных наблюдений не обязано быть большинство.
+
+    Живой `detal_126.png`: верный масштаб 0.339 мм/px разделяют пять
+    наблюдений (470, 270, 240, 99, 78), а неверных спариваний больше. Медиана
+    отношений уезжала к шуму, и базой становились 20 мм при габарите листа 470.
+    """
+    from app.ai.cad_recognize.axial_dimensions import _calibration_base
+
+    consistent = [
+        {"ocr_value_mm": 470.0, "span_px": 1386.0},
+        {"ocr_value_mm": 270.0, "span_px": 795.0},
+        {"ocr_value_mm": 240.0, "span_px": 712.0},
+        {"ocr_value_mm": 99.0, "span_px": 293.0},
+        {"ocr_value_mm": 78.0, "span_px": 228.5},
+    ]
+    noise = [
+        {"ocr_value_mm": 25.0, "span_px": 795.0},
+        {"ocr_value_mm": 50.0, "span_px": 441.0},
+        {"ocr_value_mm": 12.0, "span_px": 296.0},
+        {"ocr_value_mm": 8.0, "span_px": 189.0},
+        {"ocr_value_mm": 1.0, "span_px": 161.0},
+        {"ocr_value_mm": 20.0, "span_px": 60.0},
+    ]
+
+    assert _calibration_base(consistent + noise)["ocr_value_mm"] == 470.0

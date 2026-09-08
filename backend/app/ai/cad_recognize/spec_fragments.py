@@ -3552,11 +3552,36 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
     everything (used where the distinction does not apply, e.g. plausibility
     checks that just need to know a number was on the sheet).
     """
+    return sorted(
+        {round(value, 3) for value, _bbox in _callout_entries(callouts, kind)}, reverse=True
+    )
+
+
+def _callout_entries(callouts: dict, kind: str = "all") -> list[tuple[float, list[float] | None]]:
+    """То же, но с координатами на листе, когда модель их вернула.
+
+    Понадобилось осевому локализатору: он ищет числа на листе тессерактом, и
+    замерено на корпусе, что тот читает «12885», «95006», «АДЗ1» там, где
+    высота цифры десять пикселей. Геометрическая проверка такой мусор честно
+    отбрасывает — и стадия остаётся пустой на чертежах, которые модель
+    читает верно.
+
+    Числа из выносок — те же самые, что уже прошли отбор на «диаметр против
+    линейного», шероховатость, углы и количества отверстий. Дублировать здесь
+    этот отбор значило бы завести второй расходящийся источник правды,
+    поэтому обе функции — один проход.
+    """
     import re as _re
 
-    values: list[float] = []
+    values: list[tuple[float, list[float] | None]] = []
     for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or []):
         text = str((item or {}).get("value") or (item or {}).get("text") or "")
+        raw_bbox = (item or {}).get("bbox")
+        bbox = (
+            [float(value) for value in raw_bbox]
+            if isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) == 4
+            else None
+        )
         annotation_kind = str((item or {}).get("kind") or "").lower()
         text = _STANDARD_REFERENCE.sub(" ", text)
         # Fits are diameter callouts even when OCR drops the leading Ø. The
@@ -3607,7 +3632,7 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
             if nominal:
                 value = float(nominal.group().replace(",", "."))
                 if 0 < value <= 100_000:
-                    values.append(value)
+                    values.append((value, bbox))
             continue
         for match in _re.finditer(r"\d+(?:[.,]\d+)?", text):
             try:
@@ -3615,8 +3640,8 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
             except ValueError:
                 continue
             if 0 < value <= 100_000:
-                values.append(value)
-    return sorted({round(v, 3) for v in values}, reverse=True)
+                values.append((value, bbox))
+    return values
 
 
 # Isolates one Ø/fit-code token per match, unlike a naive whole-line split —
@@ -3813,7 +3838,11 @@ async def _sections_from_chain(
     from app.ai.cad_recognize.axial_dimensions import localize_axial_dimensions
     from app.ai.cad_recognize.diameter_dimensions import localize_diameter_dimensions
 
-    axial_map = localize_axial_dimensions(source_image or image, lengths_seen)
+    axial_map = localize_axial_dimensions(
+        source_image or image,
+        lengths_seen,
+        callout_entries=_callout_entries(callouts, "linear"),
+    )
     localized_lengths = [
         float(item["value_mm"])
         for item in (axial_map.get("observations") or [])
@@ -4907,7 +4936,9 @@ def _enrich_post_consensus_source_geometry(
     from app.ai.cad_recognize.axial_dimensions import localize_axial_dimensions
     from app.ai.cad_recognize.diameter_dimensions import localize_diameter_dimensions
 
-    axial_map = localize_axial_dimensions(image, linear)
+    axial_map = localize_axial_dimensions(
+        image, linear, callout_entries=_callout_entries(callouts, "linear")
+    )
     diameter_map = localize_diameter_dimensions(image, diameters, axial_map, linear)
     body["axial_holes"] = [
         _resolve_axial_pattern_entry_offset(item, image, callouts, axial_map, diameter_map)
