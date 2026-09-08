@@ -223,6 +223,7 @@ export const verifyModel = (modelKey: string) =>
     model_key: string;
     vision: boolean | null;
     structured_output: boolean | null;
+    multi_image: boolean | null;
     checked_at: string;
     details: Record<string, string>;
   }>(`/api/providers/models/${modelKey}/verify`, { method: "POST" });

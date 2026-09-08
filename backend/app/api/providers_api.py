@@ -1234,6 +1234,7 @@ class ModelVerifyOut(BaseModel):
     model_key: str
     vision: bool | None = None
     structured_output: bool | None = None
+    multi_image: bool | None = None
     checked_at: str
     details: dict[str, Any] = {}
 
@@ -1266,12 +1267,17 @@ async def verify_model_capabilities(
     # и проба стоила бы вызова впустую.
     if not ({"embedding", "rerank"} & {m.value for m in cap.modalities}):
         checks.add("vision")
+        # Сколько кадров модель читает — не косметика: чтение чертежа режет
+        # плотный лист на тайлы, и модель, смотрящая только на первый, молча
+        # теряет остальные, отвечая правдоподобно по четверти листа. Каталог
+        # почти всегда наследует этот флаг дефолтом, то есть не знает.
+        checks.add("multi_image")
 
     result = await probe_model(model_key, checks=frozenset(checks))
     apply_probe(model_key, result, current_modalities={m.value for m in cap.modalities})
 
     overrides = {}
-    if result.vision is not None or result.structured is not None:
+    if result.vision is not None or result.structured is not None or result.multi_image is not None:
         from app.ai.model_registry import _load_capability_overrides
 
         overrides = _load_capability_overrides().get(model_key) or {}
@@ -1288,6 +1294,7 @@ async def verify_model_capabilities(
         model_key=model_key,
         vision=result.vision,
         structured_output=result.structured,
+        multi_image=result.multi_image,
         checked_at=result.checked_at,
         details=result.details or {},
     )

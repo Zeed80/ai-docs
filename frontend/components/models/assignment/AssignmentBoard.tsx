@@ -308,7 +308,9 @@ export function AssignmentBoard() {
         value === null ? `${label}: не определили` : `${label}: ${value ? "да" : "нет"}`;
       setVerified((prev) => ({
         ...prev,
-        [slot]: `${say("зрение", r.vision)}, ${say("схема", r.structured_output)} · ${r.checked_at}`,
+        [slot]:
+          `${say("зрение", r.vision)}, ${say("схема", r.structured_output)}, ` +
+          `${say("несколько кадров", r.multi_image)} · ${r.checked_at}`,
       }));
       load();
     } catch (e) {

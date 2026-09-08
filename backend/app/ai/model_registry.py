@@ -82,6 +82,7 @@ def set_capability_override(
     modalities: list[str] | None = None,
     supports_structured_output: bool | None = None,
     supports_tool_calling: bool | None = None,
+    supports_multi_image: bool | None = None,
     checked_at: str | None = None,
 ) -> None:
     """Записать результат пробы. ``None`` — «не определяли», а не «не умеет».
@@ -100,6 +101,8 @@ def set_capability_override(
             current["supports_structured_output"] = bool(supports_structured_output)
         if supports_tool_calling is not None:
             current["supports_tool_calling"] = bool(supports_tool_calling)
+        if supports_multi_image is not None:
+            current["supports_multi_image"] = bool(supports_multi_image)
         if checked_at is not None:
             current["checked_at"] = checked_at
         overrides[model_key] = current
@@ -276,7 +279,11 @@ class ModelRegistry:
             if isinstance(declared, list) and declared:
                 known = {item.value for item in Modality}
                 update["modalities"] = {Modality(m) for m in declared if m in known}
-            for field in ("supports_structured_output", "supports_tool_calling"):
+            for field in (
+                "supports_structured_output",
+                "supports_tool_calling",
+                "supports_multi_image",
+            ):
                 if isinstance(override.get(field), bool):
                     update[field] = override[field]
             if update:

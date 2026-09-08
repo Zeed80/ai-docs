@@ -198,3 +198,54 @@ def test_the_named_model_answering_is_accepted():
         probe_model("qwen3_5_9b_ollama", checks=frozenset({"vision"}), router=_Named())
     )
     assert result.vision is True
+
+
+# ── Сколько кадров модель читает на самом деле ───────────────────────────────
+
+
+def test_a_model_that_names_both_digits_reads_every_frame():
+    result = _probe(_Router("7, 4"), checks=frozenset({"multi_image"}))
+    assert result.multi_image is True
+
+
+def test_a_model_that_names_only_the_first_frame_is_caught():
+    """Живой замер: `qwen3.8:27b` при двух кадрах называет только первую цифру.
+
+    В любом порядке — и «7 затем 4», и «4 затем 7» дают первую, — хотя каждую
+    картинку по отдельности модель читает верно. Отказа при этом нет: ответ
+    правдоподобен, просто половина листа не увидена. Ровно та молчаливая
+    потеря, ради которой флаг и меряется, а не наследуется дефолтом каталога.
+    """
+    result = _probe(_Router("7"), checks=frozenset({"multi_image"}))
+    assert result.multi_image is False
+
+
+def test_naming_no_digit_at_all_says_nothing_about_frames():
+    """Это ответ про зрение; записать его как факт о кадрах — подлог."""
+    result = _probe(_Router("не вижу цифр"), checks=frozenset({"multi_image"}))
+    assert result.multi_image is None
+
+
+def test_a_blind_model_is_not_asked_about_frames():
+    """Иначе про кадры был бы записан вывод, сделанный из слепоты."""
+    router = _Router("", "не важно")
+    result = _probe(router, checks=frozenset({"vision", "multi_image"}))
+
+    assert result.vision is False
+    assert result.multi_image is None
+    assert "не видит" in result.details["multi_image"]
+    assert len(router.requests) == 1  # второго вызова не было
+
+
+def test_a_confirmed_frame_capability_is_written(monkeypatch):
+    written: dict = {}
+    monkeypatch.setattr(
+        "app.ai.model_registry.set_capability_override",
+        lambda key, **kw: written.update(key=key, **kw),
+    )
+
+    apply_probe(
+        "k", ProbeResult(multi_image=True, checked_at="2026-09-08"), current_modalities={"vision"}
+    )
+
+    assert written["supports_multi_image"] is True
