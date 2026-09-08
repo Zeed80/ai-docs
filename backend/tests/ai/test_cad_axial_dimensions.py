@@ -340,3 +340,31 @@ def test_a_candidate_the_sheet_itself_dwarfs_is_not_considered_the_overall(monke
     assert "840" in result["blockers"][0]
     # Негодный кандидат не назван причиной — он ею и не был.
     assert "3.2" not in result["blockers"][0]
+
+
+def test_a_scale_resting_on_one_observation_says_so(monkeypatch):
+    """Проверке невязки нужны минимум два наблюдения, иначе сравнивать нечего.
+
+    На `shaft_detail.png` единственное наблюдение даёт верные 840 мм — те же,
+    что в эталоне, — поэтому отвергать такую калибровку нельзя. Но и выдавать
+    её за проверенную нельзя: она проверена сама собой.
+    """
+    from app.ai.cad_recognize import axial_dimensions as axial
+
+    token = {
+        "raw_text": "840",
+        "ocr_value_mm": 840.0,
+        "ocr_confidence": 0.9,
+        "label_bbox": [10, 10, 60, 30],
+    }
+    paired = {**token, "line": [10.0, 40.0, 300.0, 40.0], "span_px": 290.0}
+    monkeypatch.setattr(axial, "_ocr_numeric_tokens", lambda *_a, **_k: [token])
+    monkeypatch.setattr(axial, "_hough_lines", lambda *_a, **_k: ([[10.0, 40.0, 300.0]], []))
+    monkeypatch.setattr(axial, "_pair_tokens_with_lines", lambda *_a, **_k: [paired])
+
+    result = axial.localize_axial_dimensions(Image.new("RGB", (400, 200), "white"), [840.0])
+
+    assert result["status"] == "ok"
+    assert result["overall_mm"] == 840
+    assert result["scale_support"] == 1
+    assert result["scale_verified"] is False
