@@ -20,6 +20,11 @@ from typing import Any
 
 _NUMBER_TOKEN = re.compile(r"[^0-9]*([0-9]+(?:[.,][0-9]+)?)[^0-9]*")
 
+# Насколько отношение «мм на пиксель» одной линии может отличаться от медианы,
+# чтобы считаться тем же масштабом. Разброс тут от округления подписей и
+# толщины штриха, а не от разных видов: чужой вид ошибается кратно.
+_SCALE_AGREEMENT_TOLERANCE = 0.12
+
 
 def _matches(value: float, candidates: list[float], relative: float = 0.005) -> bool:
     return any(
@@ -186,6 +191,44 @@ def _deduplicate(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(best.values())
 
 
+def _calibration_base(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Линия, чей масштаб разделяет большинство остальных.
+
+    Раньше базой была просто САМАЯ ШИРОКАЯ линия, а число на ней принималось
+    на веру. Одна ошибка локализации — и весь лист получал чужой масштаб.
+    Живой `shaft_detail.png`: за общий габарит было принято 3.2 мм. Это Ra,
+    шероховатость, затесавшаяся в список линейных выносок; её подпись
+    оказалась связана с широкой линией, и вал длиной в сотни миллиметров был
+    откалиброван по значку чистоты поверхности.
+
+    Физический инвариант надёжнее любого отдельного наблюдения: на одном виде
+    и в одном масштабе длина размерной линии пропорциональна числу на ней.
+    Значит масштаб — это медиана отношений, а база — самая широкая линия среди
+    тех, кто с этой медианой согласен. Одиночный выброс перестаёт быть точкой
+    отказа, оставаясь при этом видимым: не согласованные наблюдения дальше
+    отсеет проверка невязки.
+
+    Меньше двух кандидатов — согласовывать не с чем, поведение прежнее.
+    """
+    usable = [
+        item
+        for item in candidates
+        if float(item.get("span_px") or 0.0) > 0 and float(item.get("ocr_value_mm") or 0.0) > 0
+    ]
+    if len(usable) < 2:
+        return max(candidates, key=lambda item: item["span_px"])
+
+    ratios = sorted(float(item["ocr_value_mm"]) / float(item["span_px"]) for item in usable)
+    median = ratios[len(ratios) // 2]
+    inliers = [
+        item
+        for item in usable
+        if abs(float(item["ocr_value_mm"]) / float(item["span_px"]) - median)
+        <= median * _SCALE_AGREEMENT_TOLERANCE
+    ]
+    return max(inliers or usable, key=lambda item: item["span_px"])
+
+
 def localize_axial_dimensions(
     image: Any,
     known_linear_values: list[float],
@@ -224,7 +267,7 @@ def localize_axial_dimensions(
             "observations": [],
             "blockers": ["не найдена размерная линия общего осевого габарита"],
         }
-    overall = max(overall_candidates, key=lambda item: item["span_px"])
+    overall = _calibration_base(overall_candidates)
     overall_value = float(overall["ocr_value_mm"])
     overall_span = float(overall["span_px"])
     if overall_value <= 0 or overall_span <= 0:

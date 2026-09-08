@@ -160,3 +160,51 @@ def test_small_reading_noise_does_not_block_the_scale():
         {"value_mm": 20.0, "span_check_mm": 19.6},
     ]
     assert _calibration_blockers(195.0, [195.0], observations) == []
+
+
+# ── Масштаб берётся согласием, а не одной линией ─────────────────────────────
+
+
+def test_the_scale_is_not_taken_from_a_single_widest_line():
+    """Живой `shaft_detail.png`: за общий габарит принято 3.2 мм.
+
+    3.2 — это Ra, шероховатость, затесавшаяся в список линейных выносок. Её
+    подпись оказалась связана с широкой линией, и вал длиной в сотни
+    миллиметров был откалиброван по значку чистоты поверхности. Раньше базой
+    была просто самая широкая линия, и число на ней принималось на веру:
+    одна ошибка локализации задавала масштаб всему листу.
+
+    На одном виде длина размерной линии пропорциональна числу на ней — этого
+    инварианта достаточно, чтобы выброс перестал быть точкой отказа.
+    """
+    from app.ai.cad_recognize.axial_dimensions import _calibration_base
+
+    # Три согласованных наблюдения около 0.2 мм/px и один выброс на широкой
+    # линии — ровно форма живого отказа.
+    candidates = [
+        {"ocr_value_mm": 50.0, "span_px": 250.0},
+        {"ocr_value_mm": 30.0, "span_px": 150.0},
+        {"ocr_value_mm": 120.0, "span_px": 600.0},
+        {"ocr_value_mm": 3.2, "span_px": 700.0},
+    ]
+
+    assert _calibration_base(candidates)["ocr_value_mm"] == 120.0
+
+
+def test_the_widest_agreeing_line_still_wins():
+    """Согласие отсеивает выброс, а не заменяет правило «самая широкая»."""
+    from app.ai.cad_recognize.axial_dimensions import _calibration_base
+
+    candidates = [
+        {"ocr_value_mm": 20.0, "span_px": 100.0},
+        {"ocr_value_mm": 60.0, "span_px": 300.0},
+    ]
+    assert _calibration_base(candidates)["ocr_value_mm"] == 60.0
+
+
+def test_a_single_candidate_behaves_exactly_as_before():
+    """Согласовывать не с чем — прежнее поведение, без выдуманной строгости."""
+    from app.ai.cad_recognize.axial_dimensions import _calibration_base
+
+    only = {"ocr_value_mm": 3.2, "span_px": 700.0}
+    assert _calibration_base([only]) is only
