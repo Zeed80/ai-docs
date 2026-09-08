@@ -451,6 +451,32 @@ def localize_axial_dimensions(
         overall_candidates = [
             item for item in paired if float(item.get("ocr_confidence") or 0.0) >= 0.45
         ]
+    # Габаритом не может быть число, которое сам лист многократно превосходит.
+    # Живой `shaft_detail.png`: единственным кандидатом оказалось 3.2 — Ra,
+    # затесавшаяся в линейные выноски, — и стадия сначала калибровалась по
+    # ней, а потом сама же себя отвергала, называя причиной 3.2, будто это был
+    # рассмотренный вариант. Отбор и объяснение должны совпадать: заведомо
+    # непригодное отсекается ДО выбора базы, и тогда честный ответ —
+    # «подходящей линии нет», а не разбор негодного кандидата.
+    largest_known = max(known) if known else 0.0
+    if largest_known > 0:
+        plausible = [
+            item
+            for item in overall_candidates
+            if float(item["ocr_value_mm"]) * _OVERALL_UNDERSHOOT >= largest_known
+        ]
+        if plausible:
+            overall_candidates = plausible
+        else:
+            return {
+                "status": "unresolved",
+                "observations": [],
+                "blockers": [
+                    "не найдена размерная линия общего осевого габарита: "
+                    f"лист несёт {largest_known:g} мм, а ни одна связанная с "
+                    "выноской линия такого размера не подписана"
+                ],
+            }
     if not overall_candidates:
         return {
             "status": "unresolved",

@@ -309,3 +309,34 @@ def test_the_largest_agreeing_group_wins_over_the_median():
     ]
 
     assert _calibration_base(consistent + noise)["ocr_value_mm"] == 470.0
+
+
+def test_a_candidate_the_sheet_itself_dwarfs_is_not_considered_the_overall(monkeypatch):
+    """Живой `shaft_detail.png`: единственным кандидатом оказалось 3.2 — Ra.
+
+    Стадия калибровалась по нему, а потом сама же себя отвергала, называя
+    причиной 3.2, будто это был рассмотренный вариант. Отбор и объяснение
+    обязаны совпадать: заведомо непригодное отсекается ДО выбора базы, и
+    честный ответ — «подходящей линии нет».
+    """
+    from app.ai.cad_recognize import axial_dimensions as axial
+
+    token = {
+        "raw_text": "3.2",
+        "ocr_value_mm": 3.2,
+        "ocr_confidence": 0.9,
+        "label_bbox": [10, 10, 40, 30],
+    }
+    paired = {**token, "line": [10.0, 40.0, 300.0, 40.0], "span_px": 290.0}
+    # monkeypatch, а не присваивание: подменённый атрибут модуля переживает
+    # тест и ломает соседние файлы необратимо.
+    monkeypatch.setattr(axial, "_ocr_numeric_tokens", lambda *_a, **_k: [token])
+    monkeypatch.setattr(axial, "_hough_lines", lambda *_a, **_k: ([[10.0, 40.0, 300.0]], []))
+    monkeypatch.setattr(axial, "_pair_tokens_with_lines", lambda *_a, **_k: [paired])
+
+    result = axial.localize_axial_dimensions(Image.new("RGB", (400, 200), "white"), [3.2, 840.0])
+
+    assert result["status"] == "unresolved"
+    assert "840" in result["blockers"][0]
+    # Негодный кандидат не назван причиной — он ею и не был.
+    assert "3.2" not in result["blockers"][0]
