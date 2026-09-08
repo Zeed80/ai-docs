@@ -2,8 +2,9 @@
 
 These run offline (no live providers): a stub provider replaces the real ones
 and the routing store is monkeypatched. They prove the contract that PR1/PR2
-rely on — the model AIRouter picks, the fallback order, the confidentiality
-gate, and telemetry recording all follow task_routing.
+rely on — какую модель выбирает AIRouter, что заменять её при сбое он не
+имеет права, гейт конфиденциальности и запись телеметрии — всё по
+task_routing.
 
 Live, real-invoice coverage lives in test_real_invoice_pipeline.py (marked
 @pytest.mark.live) and additionally exercises this same routing path.
@@ -98,16 +99,29 @@ async def test_router_uses_configured_primary(router, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_router_falls_back_on_failure(router, monkeypatch):
-    router._stub.fail_models = {"gemma4:e4b"}  # primary fails
+async def test_a_failing_model_is_not_silently_replaced_by_the_next_one(router, monkeypatch):
+    """Хвост маршрута ХРАНИТСЯ, но заменой при сбое не служит.
+
+    Решение принято 2026-09-07 по итогам разбора: цепочка давала молчаливую
+    подмену — в настройках одна модель, в работе другая, — и целый класс
+    ложных диагнозов, когда причиной отказа называлась чужая, часто просто
+    нескачанная модель. Конвейер работает ТОЛЬКО на той модели, которую
+    выбрал оператор; отказ виден как отказ.
+
+    Хвост читает тот, кому он нужен как осознанный шаг: слот «Повторное
+    извлечение» берёт второй элемент сам и вызывает модель напрямую.
+    """
+    router._stub.fail_models = {"gemma4:e4b"}
     _route(
         monkeypatch,
         AITask.CLASSIFICATION,
         ["gemma4_e4b_ollama", "gemma4_26b_ollama"],
     )
-    resp = await router.run(_req())
-    assert resp.model == "gemma4:26b"
-    assert router._stub.calls == ["gemma4:e4b", "gemma4:26b"]
+
+    with pytest.raises(RuntimeError, match="gemma4:e4b"):
+        await router.run(_req())
+
+    assert router._stub.calls == ["gemma4:e4b"]
 
 
 @pytest.mark.asyncio
@@ -137,15 +151,32 @@ async def test_telemetry_recorded_on_success(router, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_telemetry_records_failure_then_success(router, monkeypatch):
+async def test_a_failure_is_recorded_once_and_only_for_the_chosen_model(router, monkeypatch):
     router._stub.fail_models = {"gemma4:e4b"}
     _route(
         monkeypatch,
         AITask.CLASSIFICATION,
         ["gemma4_e4b_ollama", "gemma4_26b_ollama"],
     )
+
+    with pytest.raises(RuntimeError):
+        await router.run(_req())
+
+    assert [(r["model"], r["ok"]) for r in router._recorded] == [("gemma4_e4b_ollama", False)]
+
+
+@pytest.mark.asyncio
+async def test_a_successful_call_is_counted_once(router, monkeypatch):
+    """Замер писался и в `_run_candidate`, и в `run`.
+
+    Каждый успешный вызов попадал в счётчики дважды — латентность, токены и
+    стоимость удваивались. Владелец записи один: `_run_candidate`, по ПОПЫТКЕ,
+    иначе переспросы и спуски по лестнице формата в счётчиках не видны.
+    """
+    _route(monkeypatch, AITask.CLASSIFICATION, ["gemma4_26b_ollama"])
     await router.run(_req())
-    assert [r["ok"] for r in router._recorded] == [False, True]
+
+    assert len(router._recorded) == 1
 
 
 # ---------------------------------------------------------------------------

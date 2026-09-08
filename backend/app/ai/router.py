@@ -513,7 +513,11 @@ class AIRouter:
                     )
                     if model_name != filtered_candidates[-1]:
                         continue
-                self._record_telemetry(request, model, started, ok=True, response=response)
+                # Успех записан внутри `_run_candidate` — по попытке, а не по
+                # кандидату: иначе переспросы и спуски по лестнице формата не
+                # видны в счётчиках. Второй записи здесь быть не должно, и
+                # именно она удваивала латентность, токены и стоимость каждого
+                # успешного вызова.
                 return response
             except Exception as exc:
                 last_error = exc
