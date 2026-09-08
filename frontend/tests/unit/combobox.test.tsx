@@ -23,11 +23,13 @@ function Harness({
   items = ITEMS,
   filters,
   footer,
+  onOpen,
 }: {
   onChange?: (key: string) => void;
   items?: ComboboxItem<string>[];
   filters?: React.ReactNode;
   footer?: React.ReactNode;
+  onOpen?: () => void;
 }) {
   const [value, setValue] = useState<string | null>("a");
   return (
@@ -45,6 +47,7 @@ function Harness({
         renderItem={(item) => <span>{item.value}</span>}
         filters={filters}
         footer={footer}
+        onOpen={onOpen}
       />
     </div>
   );
@@ -148,5 +151,31 @@ describe("Combobox", () => {
     open();
     expect(screen.getByText("бесплатные")).toBeInTheDocument();
     expect(screen.getByText("Показано 2 из 431")).toBeInTheDocument();
+  });
+});
+
+describe("ленивое раскрытие", () => {
+  it("не зовёт onOpen, пока список не раскрыли", () => {
+    const onOpen = vi.fn();
+    render(<Harness onOpen={onOpen} />);
+
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("зовёт onOpen при раскрытии — и не зовёт при закрытии", () => {
+    const onOpen = vi.fn();
+    render(<Harness onOpen={onOpen} />);
+    const toggle = () =>
+      fireEvent.click(screen.getByRole("button", { name: /не назначена|a/ }));
+
+    toggle();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+
+    // Закрытие — не повод считать пригодность заново.
+    toggle();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+
+    toggle();
+    expect(onOpen).toHaveBeenCalledTimes(2);
   });
 });

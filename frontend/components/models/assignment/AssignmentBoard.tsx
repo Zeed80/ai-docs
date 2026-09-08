@@ -288,7 +288,8 @@ export function AssignmentBoard() {
   // Черновик в форме, которую ждёт сервер: слот теперь несёт не только модель,
   // но и решение об облаке — раньше оно применялось отдельным немедленным
   // запросом, из-за чего в одной карточке было два разных поведения.
-  const draftPayload = () => buildDraftPayload(draft, draftCloud, draftDisabled);
+  const draftPayload = () =>
+    buildDraftPayload(draft, draftCloud, draftDisabled);
 
   const slotDisabled = (s: SlotItem) =>
     draftDisabled[s.slot] ?? Boolean(s.disabled);
@@ -305,7 +306,9 @@ export function AssignmentBoard() {
       // `null` — «не установили» (сетевой сбой), а не «не умеет»: показывать
       // это как приговор модели значит врать оператору.
       const say = (label: string, value: boolean | null) =>
-        value === null ? `${label}: не определили` : `${label}: ${value ? "да" : "нет"}`;
+        value === null
+          ? `${label}: не определили`
+          : `${label}: ${value ? "да" : "нет"}`;
       setVerified((prev) => ({
         ...prev,
         [slot]:
@@ -810,6 +813,7 @@ export function AssignmentBoard() {
                         <ProviderModelPicker
                           models={allModelsFor(s) as unknown as CatalogModel[]}
                           nodes={nodes}
+                          slot={s.slot}
                           value={draftValue || null}
                           confidential={Boolean(s.cloud_optionable)}
                           // Через эти слоты наружу уходит само содержимое
@@ -829,30 +833,32 @@ export function AssignmentBoard() {
                         </span>
                       )}
                       {!off && (
-                      <SlotThinkingControl
-                        state={{
-                          supportedBySlot: slotSupportsThinking,
-                          supportedByModel: selectedSupportsThinking,
-                          modelDefault: selectedModelDefault,
-                          override: thinkingOverride,
-                          effective: effectiveThinking,
-                          disableSupported:
-                            s.thinking_disable_supported ?? true,
-                          mixed: Boolean(s.thinking_mixed),
-                          warning: thinkingWarning ?? null,
-                          levels: selectedThinkingLevels as ThinkingLevel[],
-                          levelOverride:
-                            (thinkingLevelOverride as ThinkingLevel | null) ??
-                            null,
-                          levelEffective:
-                            (s.thinking_level_effective as ThinkingLevel | null) ??
-                            null,
-                        }}
-                        onChange={(enabled) => setSlotThinking(s.slot, enabled)}
-                        onLevelChange={(level) =>
-                          setSlotThinking(s.slot, thinkingOverride, level)
-                        }
-                      />
+                        <SlotThinkingControl
+                          state={{
+                            supportedBySlot: slotSupportsThinking,
+                            supportedByModel: selectedSupportsThinking,
+                            modelDefault: selectedModelDefault,
+                            override: thinkingOverride,
+                            effective: effectiveThinking,
+                            disableSupported:
+                              s.thinking_disable_supported ?? true,
+                            mixed: Boolean(s.thinking_mixed),
+                            warning: thinkingWarning ?? null,
+                            levels: selectedThinkingLevels as ThinkingLevel[],
+                            levelOverride:
+                              (thinkingLevelOverride as ThinkingLevel | null) ??
+                              null,
+                            levelEffective:
+                              (s.thinking_level_effective as ThinkingLevel | null) ??
+                              null,
+                          }}
+                          onChange={(enabled) =>
+                            setSlotThinking(s.slot, enabled)
+                          }
+                          onLevelChange={(level) =>
+                            setSlotThinking(s.slot, thinkingOverride, level)
+                          }
+                        />
                       )}
                     </div>
                     <div className="sm:col-span-2 flex flex-wrap items-center gap-3">

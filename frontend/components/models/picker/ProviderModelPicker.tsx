@@ -18,6 +18,7 @@ import type {
   ModelCandidate,
   Modality,
 } from "@/lib/models/types";
+import { listSlotCandidates } from "@/lib/models/api";
 import { ModelFacts } from "./ModelFacts";
 import {
   EMPTY_FILTERS,
@@ -98,6 +99,13 @@ export function ProviderModelPicker({
   documentContent = false,
   disabled = false,
   nodes = [],
+  /**
+   * Слот, для которого выбирается модель. Задан — вердикт пригодности
+   * приходит с сервера (`/slots/{slot}/candidates`), где живут те же правила,
+   * что и в валидации черновика. Не задан — остаётся своя упрощённая
+   * проверка, повторяющая лишь самое очевидное.
+   */
+  slot,
 }: {
   models: CatalogModel[];
   value: string | null;
@@ -115,7 +123,26 @@ export function ProviderModelPicker({
    * человек не мог понять, почему подключённое облако не предлагается.
    */
   nodes?: { kind: string; enabled: boolean; api_key_set: boolean }[];
+  slot?: string;
 }) {
+  // Вердикты подгружаются при первом раскрытии списка, а не при отрисовке:
+  // на экране четырнадцать слотов, а откроют один. Считать пригодность для
+  // всех сразу — четырнадцать запросов ради одного нужного.
+  const [verdicts, setVerdicts] = useState<Record<string, ModelCandidate>>({});
+  const [verdictsAsked, setVerdictsAsked] = useState(false);
+
+  const loadVerdicts = () => {
+    if (!slot || verdictsAsked) return;
+    setVerdictsAsked(true);
+    listSlotCandidates(slot)
+      .then((items) =>
+        setVerdicts(Object.fromEntries(items.map((item) => [item.key, item]))),
+      )
+      .catch(() => {
+        // Вердиктов нет — остаётся своя проверка. Молча: невозможность
+        // спросить сервер не делает модель непригодной.
+      });
+  };
   const selectable = useMemo(
     () => models.filter((m) => m.status !== "disabled"),
     [models],
@@ -183,7 +210,7 @@ export function ProviderModelPicker({
   const items = useMemo<ComboboxItem<CatalogModel>[]>(
     () =>
       visibleModels.map((m) => {
-        const issue = checkModel(m, requiredModality);
+        const issue = checkModel(verdicts[m.key] ?? m, requiredModality);
         return {
           key: m.key,
           group: issue ? GROUP_NEEDS_ACTION : GROUP_AVAILABLE,
@@ -191,7 +218,7 @@ export function ProviderModelPicker({
           value: m,
         };
       }),
-    [visibleModels, requiredModality],
+    [visibleModels, requiredModality, verdicts],
   );
 
   const switchProvider = (kind: string) => {
@@ -199,7 +226,9 @@ export function ProviderModelPicker({
     // слот после переключения выглядел бы как потеря назначения.
     const candidates = selectable.filter((m) => m.provider === kind);
     const best =
-      candidates.find((m) => !checkModel(m, requiredModality)) ?? candidates[0];
+      candidates.find(
+        (m) => !checkModel(verdicts[m.key] ?? m, requiredModality),
+      ) ?? candidates[0];
     if (best) onChange(best.key, { cloud: !isLocalProvider(kind) });
   };
 
@@ -252,6 +281,7 @@ export function ProviderModelPicker({
             value={value}
             disabled={disabled}
             groupOrder={GROUP_ORDER}
+            onOpen={loadVerdicts}
             placeholder="Найти модель…"
             filters={
               <ModelFilterBar
@@ -296,7 +326,10 @@ export function ProviderModelPicker({
             }
             renderItem={(item) => {
               const model = item.value;
-              const issue = checkModel(model, requiredModality);
+              const issue = checkModel(
+                verdicts[model.key] ?? model,
+                requiredModality,
+              );
               return (
                 <div className="flex flex-col gap-0.5">
                   <span className="flex items-center gap-2">

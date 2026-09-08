@@ -65,6 +65,7 @@ export function Combobox<T>({
   groupOrder,
   filters,
   footer,
+  onOpen,
 }: {
   items: ComboboxItem<T>[];
   value: string | null;
@@ -81,6 +82,12 @@ export function Combobox<T>({
   filters?: ReactNode;
   /** Подпись под списком — например «показано 12 из 431». */
   footer?: ReactNode;
+  /**
+   * Список раскрыли. Для ленивой подгрузки того, что нужно только при выборе:
+   * считать это на каждый отрисованный список значило бы делать работу за все
+   * четырнадцать слотов ради одного, который откроют.
+   */
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -262,7 +269,12 @@ export function Combobox<T>({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() =>
+          setOpen((v) => {
+            if (!v) onOpen?.();
+            return !v;
+          })
+        }
         className={`${input} ${focusRing} flex items-center justify-between text-left disabled:cursor-not-allowed`}
       >
         <span className="min-w-0 flex-1 truncate">{buttonLabel}</span>
