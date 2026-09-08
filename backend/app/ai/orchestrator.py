@@ -1938,7 +1938,7 @@ class AgentOrchestrator:
                         # full prompt (history + skill registry + hint) rather
                         # than truncating it to whatever Ollama's own default
                         # context happens to be.
-                        metadata={"inference_params": {"num_ctx": 65536}},
+                        inference_params={"num_ctx": 65536},
                     )
                 ),
                 timeout=_plan_timeout,
