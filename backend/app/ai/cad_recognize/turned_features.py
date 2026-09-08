@@ -535,6 +535,14 @@ def localize_turned_features(
 
     diameter_labels: list[dict[str, Any]] = []
     if small_diameters:
+        # `import pytesseract` стоял ТОЛЬКО в двух условных ветках выше, а имя
+        # использовалось здесь безусловно — значит для Python оно локальное и
+        # незаполненное, когда те ветки не выполнились. На цветном чертеже это
+        # не всплывало: функция раньше выходила по блокеру «геометрия не
+        # отделена по цвету» и до этого места не доходила вовсе. Общая маска
+        # довела выполнение сюда, и латентный дефект сработал сразу —
+        # `UnboundLocalError` на первом же реальном скане (detal_126.png).
+        import pytesseract
         from pytesseract import Output
 
         label_data = pytesseract.image_to_data(

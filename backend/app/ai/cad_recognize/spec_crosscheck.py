@@ -446,9 +446,22 @@ def check_spec_against_raster(spec: dict, circle_radii_px: list[float]) -> list[
     """Compare the spec's diameter RATIOS with the ones measured on the sheet.
 
     Scale-free on purpose: nobody has calibrated mm-per-pixel at this point, and
-    a ratio needs no calibration. Only the largest-to-smallest ratio is checked,
-    because that is the one a misread bore or outline distorts most and the one
-    least sensitive to a missed circle in the middle.
+    a ratio needs no calibration.
+
+    Comparable populations, or no verdict. The extremes of two sets only mean
+    the same thing when both sets cover the same circles, and here they often
+    do not: the classical tracer decomposes large circles into segments by
+    design, so on a flange sheet it fits ONLY the bolt holes. Measured on
+    `flange_detail.png`, where the reading was exactly right — Ø560, PCD 200,
+    4×Ø18, Ø80H7, 20±0.1, every fact of the reference — and this check called
+    it an error anyway: read 560/18 = 31.11 against 1.41 measured across a
+    handful of bolt holes. A correct reading was being sent back for review by
+    comparing a whole flange against its own bolt circle.
+
+    So the extremes are compared only when the counts match and the sets are
+    therefore rank-comparable. A measured subset yields an explicit "could not
+    verify" note instead — silence here has already been mistaken for
+    confirmation once, and that is the other half of the same defect.
     """
     findings: list[CrossCheckFinding] = []
     stated = _spec_circle_diameters(spec)
@@ -461,6 +474,26 @@ def check_spec_against_raster(spec: dict, circle_radii_px: list[float]) -> list[
         # the tiny bolt holes. Preprocessing is not the cause — channel-min
         # binarisation moved the ink fraction from 0.0164 to 0.0166 and still
         # produced one circle.
+        return findings
+
+    if len(measured) != len(stated):
+        # Разное число окружностей — измерено подмножество, крайние члены
+        # несопоставимы. Сказать об этом, а не выдавать вердикт.
+        findings.append(
+            CrossCheckFinding(
+                code="circle_ratio_unverified",
+                message=(
+                    "пропорции окружностей не проверены: прочитано "
+                    f"{len(stated)} диаметров, на изображении выделено "
+                    f"{len(measured)} окружностей"
+                ),
+                severity="warn",
+                details={
+                    "stated_diameters_mm": stated[:6],
+                    "measured_radii_px": measured[:6],
+                },
+            )
+        )
         return findings
 
     stated_ratio = stated[0] / stated[-1]

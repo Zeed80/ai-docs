@@ -502,3 +502,44 @@ def test_cross_check_spec_carries_view_correspondence():
 
     assert "view_correspondence" in report
     assert report["view_correspondence"]["correspondences"]
+
+
+# ── Сравнивать можно только сопоставимые множества ───────────────────────────
+
+
+def test_a_measured_subset_of_circles_does_not_condemn_a_correct_reading():
+    """Живой `flange_detail.png`: чтение точное, а проверка звала его ошибкой.
+
+    Прочитано было ровно то, что в эталоне — Ø560, PCD 200, 4×Ø18, Ø80H7,
+    20±0.1, все пять фактов. Но трассировщик разбирает крупные окружности на
+    сегменты и на фланце выделяет ТОЛЬКО болтовые отверстия. Проверка брала
+    крайние члены двух множеств: 560/18 = 31.11 против 1.41 по горстке
+    одинаковых отверстий — и отправляла верный результат на ревизию.
+    """
+    from app.ai.cad_recognize.spec_crosscheck import check_spec_against_raster
+
+    spec = {
+        "main_view": {
+            "profile": {
+                "diameter_mm": 560.0,
+                "holes": [{"diameter_mm": 80.0}],
+                "hole_patterns": [{"hole_diameter_mm": 18.0}],
+            }
+        }
+    }
+    # Четыре болтовых отверстия примерно одного размера — всё, что видно.
+    findings = check_spec_against_raster(spec, [9.0, 9.1, 8.9, 6.4])
+
+    assert not [f for f in findings if f.severity == "error"]
+    assert [f.code for f in findings] == ["circle_ratio_unverified"]
+
+
+def test_a_genuinely_wrong_ratio_is_still_an_error():
+    """Сопоставимые множества — вердикт выносится по-прежнему."""
+    from app.ai.cad_recognize.spec_crosscheck import check_spec_against_raster
+
+    spec = {"main_view": {"profile": {"diameter_mm": 100.0, "holes": [{"diameter_mm": 2.0}]}}}
+    findings = check_spec_against_raster(spec, [50.0, 40.0])
+
+    assert [f.code for f in findings] == ["circle_ratio_mismatch"]
+    assert findings[0].severity == "error"

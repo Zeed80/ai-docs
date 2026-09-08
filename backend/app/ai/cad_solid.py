@@ -293,7 +293,6 @@ def _profile_volume_from_points(points: list[dict]) -> float:
 
 def _profile_volume_mm3(sections: list[dict]) -> float:
     """Exact volume of coaxial cylindrical/frustum sections before cuts."""
-    import math
 
     volume = 0.0
     for section in sections:
@@ -1080,7 +1079,6 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
         spacing = _num(pattern.get("spacing_deg"))
         start_angle = _num(pattern.get("start_angle_deg")) or 0.0
         step = spacing if spacing is not None else 360.0 / count
-        import math
 
         cut_diameter = pilot or float(thread_geometry["minor_diameter_mm"])
         pitch = _num(thread.get("pitch_mm"))
@@ -1250,7 +1248,6 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                 + ") — не построен"
             )
             continue
-        import math
 
         step = spacing if spacing is not None else 360.0 / count
         for index in range(count):
