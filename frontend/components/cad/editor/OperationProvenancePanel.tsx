@@ -251,10 +251,16 @@ export default function OperationProvenancePanel({
                           : " · точный ROI"}
                       </p>
                       <a
+                        // Режим должен совпадать с подписью: «полный лист» —
+                        // это `sheet`. Стоял `overlay`, а он требует
+                        // предложения гибридной трассировки, которых у
+                        // оцифровки «по описанию» не бывает вовсе, — и ссылка
+                        // отвечала «Trace proposal для overlay не найден»
+                        // вместо того, чтобы показать лист.
                         href={engineeringApi.generationAssertionOverlayUrl(
                           generationId,
                           assertion.id,
-                          "overlay",
+                          "sheet",
                         )}
                         target="_blank"
                         rel="noreferrer"

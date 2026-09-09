@@ -1296,7 +1296,19 @@ async def get_generation_assertion_source_overlay(
             (await db.execute(query.order_by(TraceProposalRecord.rank))).scalars().first()
         )
         if proposal_row is None:
-            raise HTTPException(404, "Trace proposal для overlay не найден")
+            # «Не найден» читалось как потерянный файл, хотя предложений
+            # трассировки у этой оцифровки не бывает в принципе: их создаёт
+            # только проход гибридной трассировки (engineering_model_reader),
+            # а путь «по описанию» через него не идёт. Режимы candidate /
+            # overlay / difference сравнивают ПЕРЕЧЕРЧЕННЫЙ кандидат с
+            # исходником — без кандидата сравнивать нечего.
+            raise HTTPException(
+                404,
+                f"Наложение недоступно: режим «{mode}» сравнивает предложение "
+                "гибридной трассировки с исходным фрагментом, а для этой "
+                "оцифровки такие предложения не создавались. Исходный фрагмент "
+                "и полный лист доступны в режимах source и sheet.",
+            )
         try:
             proposal = TraceProposal.model_validate(proposal_row.payload)
             from app.ai.engineering_hybrid_trace import _comparison_images
