@@ -88,7 +88,7 @@ def step_for(stations: list[tuple[float, float, dict]], start: float, length: fl
     return holder, contained
 
 
-def ground_keyways(body: dict[str, Any], unresolved: list[str]) -> None:
+def ground_keyways(body: dict[str, Any], unresolved: list[str]) -> dict[str, int]:
     """Привязать пазы к ступеням и свести их сечение с ГОСТ 23360.
 
     Меняются только те числа, за которыми не стоит свидетельства: прочитанное
@@ -96,14 +96,16 @@ def ground_keyways(body: dict[str, Any], unresolved: list[str]) -> None:
     подмены не происходит ни в одном из двух случаев — обе ветки пишут в
     ``unresolved``.
     """
+    summary = {"examined": 0, "straddling": 0, "corrected": 0, "flagged": 0}
     keyways = [item for item in (body.get("keyways") or []) if isinstance(item, dict)]
     if not keyways:
-        return
+        return summary
     stations = steps_with_stations(
         [item for item in (body.get("outer") or []) if isinstance(item, dict)]
     )
     if not stations:
-        return
+        return summary
+    summary["examined"] = len(keyways)
 
     for index, keyway in enumerate(keyways):
         start = _num(keyway.get("axial_start_mm"))
@@ -121,6 +123,7 @@ def ground_keyways(body: dict[str, Any], unresolved: list[str]) -> None:
         diameter = _num(section.get("diameter_mm"))
         keyway["on_section_id"] = section.get("id")
         if not contained:
+            summary["straddling"] += 1
             keyway["review_required"] = True
             unresolved.append(
                 f"шпоночный паз {index}: {start:g}..{start + length:g} мм выходит за "
@@ -132,7 +135,9 @@ def ground_keyways(body: dict[str, Any], unresolved: list[str]) -> None:
         standard = standard_section(diameter)
         if standard is None:
             continue
-        _reconcile_section(keyway, index, diameter, standard, unresolved)
+        _reconcile_section(keyway, index, diameter, standard, unresolved, summary)
+
+    return summary
 
 
 def _reconcile_section(
@@ -141,6 +146,7 @@ def _reconcile_section(
     diameter: float,
     standard: tuple[float, float],
     unresolved: list[str],
+    summary: dict[str, int],
 ) -> None:
     width_std, depth_std = standard
     backed = bool(keyway.get("evidence"))
@@ -154,12 +160,14 @@ def _reconcile_section(
         if abs(value - expected) <= expected * _SECTION_TOLERANCE:
             continue
         if backed:
+            summary["flagged"] += 1
             keyway["review_required"] = True
             unresolved.append(
                 f"шпоночный паз {index}: {title} {value:g} мм при Ø{diameter:g}, "
                 f"а ГОСТ 23360 даёт {expected:g} мм — проверьте выноску"
             )
             continue
+        summary["corrected"] += 1
         keyway[field] = expected
         keyway["standard_ref"] = "ГОСТ 23360"
         unresolved.append(

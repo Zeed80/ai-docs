@@ -88,8 +88,10 @@ def test_the_live_keyways_are_reported_as_straddling_and_mispatterned():
     }
     unresolved: list[str] = []
 
-    ground_keyways(body, unresolved)
+    summary = ground_keyways(body, unresolved)
 
+    assert summary["examined"] == 2
+    assert summary["straddling"] == 2
     straddling = [item for item in unresolved if "выходит за ступень" in item]
     assert len(straddling) == 2
     # Названы обе величины: где паз и какая это ступень.
@@ -198,3 +200,35 @@ def test_the_same_keyway_on_the_thick_step_is_allowed():
     )
 
     assert body.keyways[0].depth_mm == 12.0
+
+
+# ── Холостой прогон должен быть виден ───────────────────────────────────────
+
+
+def test_a_body_without_keyways_reports_that_it_examined_nothing():
+    """Вызов, поставленный ДО того, как пазы попадают в тело, молчал.
+
+    Поймано живьём: поля on_section_id и review_required появились в ответе,
+    но пустые — функция возвращалась на первой строке, потому что keyways в
+    теле ещё не было. Сводка делает такой холостой проход видимым в журнале
+    вместо того, чтобы выглядеть как «проверено, всё хорошо».
+    """
+    summary = ground_keyways({"outer": OUTER, "keyways": []}, [])
+
+    assert summary["examined"] == 0
+
+
+def test_the_summary_counts_what_actually_happened():
+    body = {
+        "outer": OUTER,
+        "keyways": [
+            {"axial_start_mm": 58.0, "length_mm": 12.0, "width_mm": 3.5, "depth_mm": 4.0},
+            {"axial_start_mm": 20.0, "length_mm": 8.0, "width_mm": 8.0, "depth_mm": 4.0},
+        ],
+    }
+
+    summary = ground_keyways(body, [])
+
+    assert summary["examined"] == 2
+    assert summary["corrected"] == 1
+    assert summary["straddling"] == 0

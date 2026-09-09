@@ -4486,12 +4486,6 @@ async def read_spec_by_fragments(
             body["outer"] = outer
         else:
             unresolved.append("ступенчатый контур не прочитан")
-        # Паз фрезеруется в ОДНОЙ ступени, и его сечение однозначно задано её
-        # диаметром. До этого не проверялось ни то, ни другое: паз мог лежать
-        # верхом на границе двух ступеней, а ширина — прийти с чужой выноски.
-        from app.ai.cad_recognize.keyway_standard import ground_keyways
-
-        ground_keyways(body, unresolved)
         if bore:
             body["bore"] = bore
         elif bore_problem:
@@ -4523,6 +4517,22 @@ async def read_spec_by_fragments(
                 bore=bore,
             )
             body.update(feature_result)
+            # ПОСЛЕ update, а не раньше: пазы попадают в тело именно здесь.
+            # Поставленный выше вызов отрабатывал вхолостую — тело ещё не
+            # содержало keyways, и функция молча возвращалась на первой строке.
+            # Поймано живьём: поля появились, но пустые.
+
+            from app.ai.cad_recognize.keyway_standard import ground_keyways
+
+            keyway_summary = ground_keyways(body, unresolved)
+            from app.ai.cad_process_log import record_cad_process_event
+
+            await record_cad_process_event(
+                "reader.keyways",
+                "completed" if keyway_summary["examined"] else "skipped",
+                "Шпоночные пазы сверены со ступенями и ГОСТ 23360",
+                keyway_summary,
+            )
             unresolved.extend(
                 f"малые элементы: {item}"
                 for item in profile_evidence.get("feature_unresolved") or []
