@@ -5211,7 +5211,7 @@ def _ground_all_keyways(spec: dict) -> dict[str, int]:
     from app.ai.cad_recognize.keyway_standard import ground_keyways
 
     unresolved = spec.setdefault("unresolved", [])
-    total = {"examined": 0, "straddling": 0, "corrected_values": 0, "flagged": 0}
+    total = {"examined": 0, "straddling": 0, "flagged": 0}
     bodies = [spec.get("main_view"), *(spec.get("parts") or [])]
     for body in bodies:
         if not isinstance(body, dict):

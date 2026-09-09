@@ -102,8 +102,16 @@ def test_the_live_keyways_are_reported_as_straddling_and_mispatterned():
     assert all(item["review_required"] for item in body["keyways"])
 
 
-def test_an_unbacked_width_is_replaced_by_the_standard_and_the_swap_is_recorded():
-    """Ширина 3,5 мм на Ø30 не подтверждена ничем — берётся табличная 8."""
+def test_a_width_that_disagrees_with_the_table_is_reported_not_rewritten():
+    """Подстановка табличного значения ломала сборку и угадывала.
+
+    Ширина 3,5 → 8 мм — единственное, что изменилось между последним успешным
+    прогоном и первым, где cad-kernel ответил HTTP 500: тело детали перестало
+    строиться вообще. И даже без этого подстановка неверна по существу —
+    расхождение означает, что неверно прочитано ЧТО-ТО одно: ширина паза,
+    диаметр ступени или её положение. Выбирая ширину, мы гадаем и отправляем
+    в ядро геометрию, которой на чертеже нет.
+    """
     body = {
         "outer": OUTER,
         "keyways": [{"axial_start_mm": 58.0, "length_mm": 12.0, "width_mm": 3.5, "depth_mm": 4.0}],
@@ -112,9 +120,10 @@ def test_an_unbacked_width_is_replaced_by_the_standard_and_the_swap_is_recorded(
 
     ground_keyways(body, unresolved)
 
-    assert body["keyways"][0]["width_mm"] == 8.0
+    assert body["keyways"][0]["width_mm"] == 3.5  # прочитанное остаётся
     assert body["keyways"][0]["standard_ref"] == "ГОСТ 23360"
-    assert any("принята табличная" in item and "8" in item for item in unresolved)
+    assert body["keyways"][0]["review_required"] is True
+    assert any("ГОСТ 23360 даёт 8 мм" in item for item in unresolved)
 
 
 def test_a_width_backed_by_evidence_is_kept_and_shown_to_a_human():
@@ -230,7 +239,7 @@ def test_the_summary_counts_what_actually_happened():
     summary = ground_keyways(body, [])
 
     assert summary["examined"] == 2
-    assert summary["corrected_values"] == 1
+    assert summary["flagged"] == 1
     assert summary["straddling"] == 0
 
 
@@ -276,8 +285,8 @@ def test_every_body_is_grounded_not_just_the_main_view():
     total = _ground_all_keyways(spec)
 
     assert total["examined"] == 2
-    assert spec["main_view"]["keyways"][0]["width_mm"] == 8.0
-    assert spec["parts"][0]["keyways"][0]["width_mm"] == 8.0
+    assert spec["main_view"]["keyways"][0]["review_required"] is True
+    assert spec["parts"][0]["keyways"][0]["review_required"] is True
 
 
 # ── Корень целого класса жалоб: профиль короче листа ────────────────────────

@@ -46,6 +46,16 @@ _MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 _MAX_MEMBER_BYTES = 80 * 1024 * 1024
 
 
+def _error_tail(response: Any, limit: int = 600) -> str:
+    """Хвост ответа ядра — то место трассировки, где названа причина."""
+    try:
+        text = response.text or ""
+    except Exception:  # noqa: BLE001 — бинарный ответ тоже бывает
+        return "(тело не читается)"
+    text = " ".join(text.split())
+    return text[-limit:] if text else "(пустое тело)"
+
+
 def _decode_artifacts(content: bytes) -> CadKernelArtifacts:
     if len(content) > _MAX_ARCHIVE_BYTES:
         raise CadKernelError("cad-kernel вернул слишком большой пакет")
@@ -123,7 +133,13 @@ async def compile_candidate(
             detail = None
         raise CadKernelRejected(str(detail or "CAD-ядро отклонило некорректную геометрию"))
     if response.status_code != 200:
-        raise CadKernelUnavailable(f"cad-kernel вернул HTTP {response.status_code}")
+        # С телом ответа. Без него «HTTP 500» не говорит НИЧЕГО: ядро пишет в
+        # свой журнал только строку доступа, и причину падения приходилось
+        # угадывать, сравнивая спеки соседних прогонов. Тело обрезается —
+        # трассировка ядра длинная, а нужен её хвост.
+        raise CadKernelUnavailable(
+            f"cad-kernel вернул HTTP {response.status_code}: {_error_tail(response)}"
+        )
     metrics.cad_kernel_compile_total.labels(status="ok").inc()
     return _decode_artifacts(response.content)
 
@@ -180,7 +196,13 @@ async def project_candidate(
             detail = None
         raise CadKernelRejected(str(detail or "CAD-ядро отклонило проекцию"))
     if response.status_code != 200:
-        raise CadKernelUnavailable(f"cad-kernel вернул HTTP {response.status_code}")
+        # С телом ответа. Без него «HTTP 500» не говорит НИЧЕГО: ядро пишет в
+        # свой журнал только строку доступа, и причину падения приходилось
+        # угадывать, сравнивая спеки соседних прогонов. Тело обрезается —
+        # трассировка ядра длинная, а нужен её хвост.
+        raise CadKernelUnavailable(
+            f"cad-kernel вернул HTTP {response.status_code}: {_error_tail(response)}"
+        )
     return response.json().get("views")
 
 
@@ -224,5 +246,11 @@ async def draw_candidate_sheet(
             detail = None
         raise CadKernelRejected(str(detail or "CAD-ядро отклонило построение листа"))
     if response.status_code != 200:
-        raise CadKernelUnavailable(f"cad-kernel вернул HTTP {response.status_code}")
+        # С телом ответа. Без него «HTTP 500» не говорит НИЧЕГО: ядро пишет в
+        # свой журнал только строку доступа, и причину падения приходилось
+        # угадывать, сравнивая спеки соседних прогонов. Тело обрезается —
+        # трассировка ядра длинная, а нужен её хвост.
+        raise CadKernelUnavailable(
+            f"cad-kernel вернул HTTP {response.status_code}: {_error_tail(response)}"
+        )
     return response.json()

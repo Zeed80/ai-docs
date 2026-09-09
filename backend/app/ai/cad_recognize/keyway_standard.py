@@ -96,7 +96,7 @@ def ground_keyways(body: dict[str, Any], unresolved: list[str]) -> dict[str, int
     подмены не происходит ни в одном из двух случаев — обе ветки пишут в
     ``unresolved``.
     """
-    summary = {"examined": 0, "straddling": 0, "corrected_values": 0, "flagged": 0}
+    summary = {"examined": 0, "straddling": 0, "flagged": 0}
     keyways = [item for item in (body.get("keyways") or []) if isinstance(item, dict)]
     if not keyways:
         return summary
@@ -155,8 +155,26 @@ def _reconcile_section(
     unresolved: list[str],
     summary: dict[str, int],
 ) -> None:
+    """Сообщить о расхождении с таблицей, НЕ переписывая геометрию.
+
+    Сначала здесь стояла подстановка: неподтверждённое число заменялось
+    табличным. Это оказалось неверно по двум причинам, и обе выяснились на
+    живом прогоне.
+
+    Во-первых, она ломала сборку. Ширина 3,5 → 8 мм — единственное, что
+    изменилось между последним успешным прогоном и первым, где cad-kernel
+    ответил HTTP 500. Тело детали перестало строиться вообще.
+
+    Во-вторых, она угадывала. Расхождение с таблицей означает, что неверно
+    прочитано ЧТО-ТО одно: ширина паза, диаметр ступени или его положение.
+    Подставляя ширину, мы выбираем первый вариант без всяких оснований — и
+    отправляем в ядро геометрию, которой на чертеже нет.
+
+    Поэтому расхождение только называется. Числа остаются прочитанными,
+    сборка продолжает работать, а человек видит и величину с листа, и
+    табличную, и решает сам.
+    """
     width_std, depth_std = standard
-    backed = bool(keyway.get("evidence"))
     for field, expected, title in (
         ("width_mm", width_std, "ширина"),
         ("depth_mm", depth_std, "глубина"),
@@ -166,21 +184,13 @@ def _reconcile_section(
             continue
         if abs(value - expected) <= expected * _SECTION_TOLERANCE:
             continue
-        if backed:
-            summary["flagged"] += 1
-            keyway["review_required"] = True
-            unresolved.append(
-                f"шпоночный паз {index}: {title} {value:g} мм при Ø{diameter:g}, "
-                f"а ГОСТ 23360 даёт {expected:g} мм — проверьте выноску"
-            )
-            continue
-        summary["corrected_values"] += 1
-        keyway[field] = expected
+        summary["flagged"] += 1
+        keyway["review_required"] = True
         keyway["standard_ref"] = "ГОСТ 23360"
+        backing = "" if keyway.get("evidence") else " и ничем не подтверждена"
         unresolved.append(
-            f"шпоночный паз {index}: {title} {value:g} мм ничем не подтверждена и "
-            f"не сходится с ГОСТ 23360 для Ø{diameter:g}; принята табличная "
-            f"{expected:g} мм"
+            f"шпоночный паз {index}: {title} {value:g} мм при Ø{diameter:g}"
+            f"{backing}, а ГОСТ 23360 даёт {expected:g} мм — проверьте выноску"
         )
 
 
