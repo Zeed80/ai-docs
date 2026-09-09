@@ -940,6 +940,9 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             )
         )
 
+    from app.ai.cad_recognize.keyway_standard import step_for, steps_with_stations
+
+    keyway_stations = steps_with_stations([item for item in outer if isinstance(item, dict)])
     for keyway in body.get("keyways") or []:
         start = _num(keyway.get("axial_start_mm"))
         length = _num(keyway.get("length_mm"))
@@ -948,6 +951,25 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
         if start is None or not (length and width and depth):
             missing.append("шпоночный паз прочитан не полностью — не построен")
             continue
+        # Паз, режущий ЧЕРЕЗ уступ, — невозможная геометрия, и ядро это
+        # подтверждает: замерено на z4-r4.jpg, что паз шириной 8 мм внутри
+        # одной ступени строится, а он же через уступ Ø35/Ø30 даёт
+        # `brep_valid: False` и HTTP 500 на всю сборку. Узкий паз (3,5 мм)
+        # проходил только потому, что не успевал развалить оболочку —
+        # то есть тело собиралось с молча неверным вырезом.
+        #
+        # Пропускаем его, а не весь прогон: остальная деталь прочитана верно,
+        # и маркер «— не построен» отдаёт паз в excluded_geometry, где человек
+        # его увидит.
+        if keyway_stations:
+            holder, contained = step_for(keyway_stations, start, length)
+            if holder is not None and not contained:
+                missing.append(
+                    f"шпоночный паз {start:g}..{start + length:g} мм пересекает уступ "
+                    f"Ø{holder[2].get('diameter_mm')} ({holder[0]:g}..{holder[1]:g} мм) — "
+                    "не построен"
+                )
+                continue
         features.append(
             Feature3D(
                 kind="keyway",
