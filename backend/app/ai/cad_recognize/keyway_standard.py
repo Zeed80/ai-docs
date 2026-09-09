@@ -61,11 +61,20 @@ def standard_section(shaft_diameter_mm: float) -> tuple[float, float] | None:
 
 
 def steps_with_stations(outer: list[dict[str, Any]]) -> list[tuple[float, float, dict]]:
-    """Ступени с их осевыми границами слева направо."""
+    """Ступени с их осевыми границами слева направо.
+
+    Понимает обе формы записи ступени, которые живут в конвейере: спек с
+    ``length_mm``/``diameter_mm`` и нормализованная для ядра с ``l``/``d``.
+    Проверено живьём: помощник, знавший только первую, молча возвращал пустой
+    список на второй — и проверка «паз через уступ» ничего не делала, хотя
+    была вызвана.
+    """
     stations: list[tuple[float, float, dict]] = []
     position = 0.0
     for section in outer:
         length = _num(section.get("length_mm"))
+        if length is None:
+            length = _num(section.get("l"))
         if not length or length <= 0:
             continue
         stations.append((position, position + length, section))
